@@ -1,0 +1,1116 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>
+<CodeBlocks_project_file>
+   <FileVersion major="1" minor="6" />
+   <Project>
+      <Option title="QtMeshEditor" />
+      <Option makefile_is_custom="1" />
+      <Option compiler="gcc" />
+      <Option virtualFolders="CMake Files\;CMake Files\Qt\;CMake Files\Qt\Qt5.3.2\;CMake Files\Qt\Qt5.3.2\5.3\;CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\;CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\;CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\;CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Core\;CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Widgets\;CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\;CMake Files\CMakeModules\;CMake Files\ui_files\;CMake Files\src\;CMake Files\src\OgreXML\;CMake Files\src\ogre-procedural\;CMake Files\src\ogre-assimp\;CMake Files\resources\;CMake Files\media\;CMake Files\cfg\;" />
+      <Build>
+      <Target title="all">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 all" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="edit_cache">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 edit_cache" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="install">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 install" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="install/local">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 install/local" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="install/strip">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 install/strip" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="list_install_components">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 list_install_components" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="readMeFile">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 readMeFile" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="rebuild_cache">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 rebuild_cache" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="ui">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/ui_files" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/ui_files/Makefile&quot;  VERBOSE=1 ui" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/ui_files/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/ui_files/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/ui_files/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="QtMeshEditor">
+         <Option output="E:/Desenvolvimento/QtMeshEditor/bin/QtMeshEditor.exe" prefix_auto="0" extension_auto="0" />
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/bin" />
+         <Option object_output="./" />
+         <Option type="0" />
+         <Option compiler="gcc" />
+         <Compiler>
+            <Add option="-DQT_CORE_LIB" />
+            <Add option="-DQT_GUI_LIB" />
+            <Add option="-DQT_WIDGETS_LIB" />
+            <Add option="-DQTMESHEDITOR_VERSION=&quot;1.4.6&quot;" />
+            <Add option="-DQT_NO_DEBUG" />
+            <Add option="-DQT_NO_DEBUG_OUTPUT" />
+            <Add option="-DQT_NO_WARNING_OUTPUT" />
+            <Add option="-DBOOST_ALL_NO_LIB" />
+            <Add directory="E:/Desenvolvimento/Assimp/include" />
+            <Add directory="E:/Desenvolvimento/Assimp/include/assimp" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55/boost" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include/OGRE" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/ui_files" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/include" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/include/QtCore" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/include/QtGui" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/include/QtWidgets" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/mkspecs/win32-g++" />
+         </Compiler>
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 QtMeshEditor" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="QtMeshEditor/fast">
+         <Option output="E:/Desenvolvimento/QtMeshEditor/bin/QtMeshEditor.exe" prefix_auto="0" extension_auto="0" />
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/bin" />
+         <Option object_output="./" />
+         <Option type="0" />
+         <Option compiler="gcc" />
+         <Compiler>
+            <Add option="-DQT_CORE_LIB" />
+            <Add option="-DQT_GUI_LIB" />
+            <Add option="-DQT_WIDGETS_LIB" />
+            <Add option="-DQTMESHEDITOR_VERSION=&quot;1.4.6&quot;" />
+            <Add option="-DQT_NO_DEBUG" />
+            <Add option="-DQT_NO_DEBUG_OUTPUT" />
+            <Add option="-DQT_NO_WARNING_OUTPUT" />
+            <Add option="-DBOOST_ALL_NO_LIB" />
+            <Add directory="E:/Desenvolvimento/Assimp/include" />
+            <Add directory="E:/Desenvolvimento/Assimp/include/assimp" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55/boost" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include/OGRE" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/ui_files" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/include" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/include/QtCore" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/include/QtGui" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/include/QtWidgets" />
+            <Add directory="F:/Qt/Qt5.3.2/5.3/mingw482_32/mkspecs/win32-g++" />
+         </Compiler>
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 QtMeshEditor/fast" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="QtMeshEditor_automoc">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/src" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 QtMeshEditor_automoc" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="OgreProcedural">
+         <Option output="E:/Desenvolvimento/QtMeshEditor/bin/OgreProcedural.dll" prefix_auto="0" extension_auto="0" />
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural" />
+         <Option object_output="./" />
+         <Option type="3" />
+         <Option compiler="gcc" />
+         <Compiler>
+            <Add option="-DQTMESHEDITOR_VERSION=&quot;1.4.6&quot;" />
+            <Add option="-DQT_NO_DEBUG" />
+            <Add option="-DQT_NO_DEBUG_OUTPUT" />
+            <Add option="-DQT_NO_WARNING_OUTPUT" />
+            <Add option="-DBOOST_ALL_NO_LIB" />
+            <Add option="-DOgreProcedural_SHARED" />
+            <Add directory="E:/Desenvolvimento/Assimp/include" />
+            <Add directory="E:/Desenvolvimento/Assimp/include/assimp" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55/boost" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include/OGRE" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/ui_files" />
+         </Compiler>
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 OgreProcedural" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="OgreProcedural/fast">
+         <Option output="E:/Desenvolvimento/QtMeshEditor/bin/OgreProcedural.dll" prefix_auto="0" extension_auto="0" />
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural" />
+         <Option object_output="./" />
+         <Option type="3" />
+         <Option compiler="gcc" />
+         <Compiler>
+            <Add option="-DQTMESHEDITOR_VERSION=&quot;1.4.6&quot;" />
+            <Add option="-DQT_NO_DEBUG" />
+            <Add option="-DQT_NO_DEBUG_OUTPUT" />
+            <Add option="-DQT_NO_WARNING_OUTPUT" />
+            <Add option="-DBOOST_ALL_NO_LIB" />
+            <Add option="-DOgreProcedural_SHARED" />
+            <Add directory="E:/Desenvolvimento/Assimp/include" />
+            <Add directory="E:/Desenvolvimento/Assimp/include/assimp" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55/boost" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include/OGRE" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/ui_files" />
+         </Compiler>
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 OgreProcedural/fast" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="OgreProcedural_automoc">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 OgreProcedural_automoc" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="OgreAssimpLoader">
+         <Option output="E:/Desenvolvimento/QtMeshEditor/lib/libOgreAssimpLoader.a" prefix_auto="0" extension_auto="0" />
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp" />
+         <Option object_output="./" />
+         <Option type="2" />
+         <Option compiler="gcc" />
+         <Compiler>
+            <Add option="-DQTMESHEDITOR_VERSION=&quot;1.4.6&quot;" />
+            <Add option="-DQT_NO_DEBUG" />
+            <Add option="-DQT_NO_DEBUG_OUTPUT" />
+            <Add option="-DQT_NO_WARNING_OUTPUT" />
+            <Add option="-DBOOST_ALL_NO_LIB" />
+            <Add directory="E:/Desenvolvimento/Assimp/include" />
+            <Add directory="E:/Desenvolvimento/Assimp/include/assimp" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55/boost" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include/OGRE" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/ui_files" />
+         </Compiler>
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 OgreAssimpLoader" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="OgreAssimpLoader/fast">
+         <Option output="E:/Desenvolvimento/QtMeshEditor/lib/libOgreAssimpLoader.a" prefix_auto="0" extension_auto="0" />
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp" />
+         <Option object_output="./" />
+         <Option type="2" />
+         <Option compiler="gcc" />
+         <Compiler>
+            <Add option="-DQTMESHEDITOR_VERSION=&quot;1.4.6&quot;" />
+            <Add option="-DQT_NO_DEBUG" />
+            <Add option="-DQT_NO_DEBUG_OUTPUT" />
+            <Add option="-DQT_NO_WARNING_OUTPUT" />
+            <Add option="-DBOOST_ALL_NO_LIB" />
+            <Add directory="E:/Desenvolvimento/Assimp/include" />
+            <Add directory="E:/Desenvolvimento/Assimp/include/assimp" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55" />
+            <Add directory="E:/Desenvolvimento/Boost/include/boost-1_55/boost" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include" />
+            <Add directory="E:/Desenvolvimento/Ogre/SDK/include/OGRE" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include" />
+            <Add directory="E:/Desenvolvimento/QtMeshEditor/ui_files" />
+         </Compiler>
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 OgreAssimpLoader/fast" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="OgreAssimpLoader_automoc">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 OgreAssimpLoader_automoc" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="media">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/media" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/media/Makefile&quot;  VERBOSE=1 media" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/media/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/media/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/media/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      <Target title="_cfg">
+         <Option working_dir="E:/Desenvolvimento/QtMeshEditor/cfg" />
+         <Option type="4" />
+         <MakeCommands>
+            <Build command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/cfg/Makefile&quot;  VERBOSE=1 _cfg" />
+            <CompileFile command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/cfg/Makefile&quot;  VERBOSE=1 &quot;$file&quot;" />
+            <Clean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/cfg/Makefile&quot;  VERBOSE=1 clean" />
+            <DistClean command="E:/Desenvolvimento/mingw32/bin/mingw32-make.exe -f &quot;E:/Desenvolvimento/QtMeshEditor/cfg/Makefile&quot;  VERBOSE=1 clean" />
+         </MakeCommands>
+      </Target>
+      </Build>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/AnimationWidget.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/EditorViewport.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/Manager.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MaterialComboDelegate.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MaterialHighlighter.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MaterialWidget.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MeshImporterExporter.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MeshTransform.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ObjectItemModel.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreWidget.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/OgreXMLMeshSerializer.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/OgreXMLSkeletonSerializer.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/tinystr.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/tinyxml.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/tinyxmlerror.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/tinyxmlparser.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/PrimitiveObject.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/PrimitivesWidget.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/QtInputManager.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/RotationGizmo.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SelectionBoxObject.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SelectionSet.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SkeletonDebug.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SkeletonTransform.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SpaceCamera.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/TransformOperator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/TransformWidget.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/TranslationGizmo.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ViewportGrid.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/about.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/main.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/mainwindow.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/material.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/materialeditor.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/AssimpLoader.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralBoxGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralCapsuleGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralConeGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralCylinderGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralExtruder.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralGeometryHelpers.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralIcoSphereGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralLathe.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralMultiShape.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralPath.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralPathGenerators.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralPlaneGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralPrecompiledHeaders.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralRoot.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralRoundedBoxGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralShape.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralShapeGenerators.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralSphereGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralTorusGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralTorusKnotGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralTrack.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralTriangulator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralTubeGenerator.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/src/ProceduralUtils.cpp">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/README">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/CMakeFiles">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/CMakeLists.txt">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/Makefile">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/cmake_install.cmake">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/plugins.cfg.in">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/plugins_d.cfg.in">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/resources.cfg.in">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/resources_d.cfg.in">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/version.txt.in">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/CMakeFiles/CMakeDirectoryInformation.cmake">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/CMakeFiles/media.dir/DependInfo.cmake">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/CMakeFiles/media.dir/build.make">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/CMakeFiles/media.dir/cmake_clean.cmake">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/CMakeFiles/media.dir/progress.make">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/CMakeFiles/progress.marks">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/CMakeLists.txt">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/Makefile">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/cmake_install.cmake">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/AmbientOneTexture.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/Example_Basic.cg">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL/DiffuseOneTexture.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL/PassthroughFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL/skinningTwoWeightsShadowCasterVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ASCIIFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/AmbientOneTexture.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/AmbientOneTextureWithUV.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Bloom2_ps20.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Blur0_vs.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Blur1_vs.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/BlurH_ps20.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/BlurV_ps20.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Blur_ps.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Blur_vs.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/BrightBloom2_ps20.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/BumpMapVPTangentParity.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ColdCasterFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ColdCasterVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Combine_fp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DepthShadowObjectFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DepthShadowObjectVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DepthShadowmapCasterFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DepthShadowmapCasterVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DepthShadowmapNormalMapReceiverFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DepthShadowmapNormalMapReceiverVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DepthShadowmapReceiverFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DepthShadowmapReceiverVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DiffuseOneTexture.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DitherFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DualQuaternion.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DualQuaternion_Common.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DualQuaternion_ShadowCaster.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DualQuaternion_TwoPhase.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/DualQuaternion_TwoPhaseShadowCaster.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Dyn-TextFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Dyn-TextVP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/EmbossedFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_BumpMappingFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_BumpMappingShadowRcvFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_BumpMappingShadowRcvVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_BumpMappingSpecularFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_BumpMappingSpecularVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_BumpMappingVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_CelShadingFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_CelShadingVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_FresnelFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_FresnelVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_TextureArrayPS.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Example_TextureArrayVS.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GlassFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrassAmbientFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrassAmbientVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrassCasterFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrassCasterVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrassFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrassReceiverFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrassReceiverVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrassTexVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrassVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/GrayScale.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HWBasicInstancing.vert">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HW_VTFInstancing.vert">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HalftoneFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HardwareMorphAnimationVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HardwareMorphAnimationWithNormalsVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HardwarePoseAnimationVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HardwarePoseAnimationWithNormalsVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HeatBlurFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HeatBlurVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HeatCasterFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/HeatCasterVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Instancing.frag">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/InstancingMisc.vert">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/InvertFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/LaplaceFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/LightToHeatFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/LightToHeatVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/MetaballFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/NightVisionFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Ocean2GLSL.frag">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Ocean2GLSL.vert">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/OffsetMappingFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/OffsetMappingShadowsFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/OffsetMappingShadowsVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/OffsetMappingVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/OffsetMapping_specular.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/OldMovieFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/OldTV.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ParticleGS_DisplayGS.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ParticleGS_DisplayPS.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ParticleGS_DisplayVS.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ParticleGS_GenerateGS.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ParticleGS_GenerateVS.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/PassthroughFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/PassthroughVP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/PosterizeFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/Radial_Blur_FP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/SampleFieldVS.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ShaderInstancing.vert">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/SharpenEdgesFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ShowNormals.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ShowTangents.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ShowUV.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/ShowUVdir3D.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/StdQuad_Tex2_vp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/StdQuad_Tex2a_vp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/StdQuad_Tex3_vp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/StdQuad_Tex4_vp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/StdQuad_vp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/SwizzleGP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/TessellateTetrahedraGS.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/TilingFP.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/VTFInstancing.vert">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/crowdVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/hdr_bloom.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/hdr_downscale2x2luminence.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/hdr_downscale3x3.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/hdr_downscale3x3brightpass.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/hdr_finalToneMapping.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/hdr_tonemap_util.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/instancingVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/mrttestfp_quad.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/mrttestfp_scene.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/oceanGLSL.frag">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/oceanGLSL.vert">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/pssmCasterFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/pssmCasterVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/pssmReceiverFp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/pssmReceiverVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/shadows.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/skinningTwoWeightsShadowCasterVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/GLSL150/skinningTwoWeightsVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/programs/skinningTwoWeightsVp.glsl">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/scripts/QBuild.material">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/materials/textures/grass_1024.jpg">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/models/ninja.mesh">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/models/ninja.skeleton">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/models/robot.mesh">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/models/robot.skeleton">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/packs/OgreCore.zip">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/packs/SdkTrays.zip">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/addVertice.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/capsule.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/cone.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/cube.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/cylinder.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/icone.ico">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/icone.rc">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/move.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/pause.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/play.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/remove.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/resource.qrc">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/rotacionar.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/roundedbox.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/selecionar.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/sphere.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/square.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/torus.png">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/AnimationWidget.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/EditorViewport.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/Euler.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/GlobalDefinitions.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/Manager.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MaterialComboDelegate.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MaterialHighlighter.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MaterialWidget.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MeshImporterExporter.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/MeshTransform.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ObjectItemModel.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreWidget.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/OgreXMLMeshSerializer.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/OgreXMLPrerequisites.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/OgreXMLSkeletonSerializer.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/tinystr.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/tinyxml.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/PrimitiveObject.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/PrimitivesWidget.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/QtInputManager.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/QtKeyListener.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/QtMouseListener.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/RotationGizmo.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SelectionBoxObject.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SelectionSet.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SkeletonDebug.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SkeletonTransform.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/SpaceCamera.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/TransformOperator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/TransformWidget.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/TranslationGizmo.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ViewportGrid.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/about.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/mainwindow.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/material.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/materialeditor.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/AssimpLoader.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/Procedural.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralBoxGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralCapsuleGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralConeGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralCylinderGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralExtruder.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralGeometryHelpers.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralIcoSphereGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralLathe.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralMeshGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralMultiShape.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralPath.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralPathGenerators.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralPlaneGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralPlatform.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralRoot.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralRoundedBoxGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralShape.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralShapeGenerators.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralSphereGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralSplines.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralStableHeaders.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralTorusGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralTorusKnotGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralTrack.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralTriangleBuffer.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralTriangulator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralTubeGenerator.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/include/ProceduralUtils.h">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/ui_files/PrimitivesWidget.ui">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/ui_files/TransformWidget.ui">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/ui_files/about.ui">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/ui_files/animationwidget.ui">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/ui_files/mainwindow.ui">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/ui_files/material.ui">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/ui_files/materialeditor.ui">
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/CMakeLists.txt">
+          <Option virtualFolder="CMake Files\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Core/Qt5CoreConfigVersion.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Core\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Core/Qt5CoreConfig.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Core\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Core/Qt5CoreConfigExtras.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Core\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Core/Qt5CoreConfigExtrasMkspecDir.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Core\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Core/Qt5CoreMacros.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Core\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Widgets/Qt5WidgetsConfigVersion.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Widgets\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Widgets/Qt5WidgetsConfig.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Widgets\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Widgets/Qt5WidgetsConfigExtras.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Widgets\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Widgets/Qt5Widgets_AccessibleFactory.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Widgets\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Widgets/Qt5WidgetsMacros.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Widgets\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5GuiConfigVersion.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5GuiConfig.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QDDSPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QICNSPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QJp2Plugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QMngPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QTgaPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QTiffPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QWbmpPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QWebpPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QGifPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QICOPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QJpegPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QMinimalIntegrationPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QOffscreenIntegrationPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5Gui_QWindowsIntegrationPlugin.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5GuiConfigExtras.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5GuiConfigVersion.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/Qt/Qt5.3.2/5.3/mingw482_32/lib/cmake/Qt5Gui/Qt5GuiConfig.cmake">
+          <Option virtualFolder="CMake Files\Qt\Qt5.3.2\5.3\mingw482_32\lib\cmake\Qt5Gui\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/CMakeModules/FindOGRE.cmake">
+          <Option virtualFolder="CMake Files\CMakeModules\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/CMakeModules/FindPkgMacros.cmake">
+          <Option virtualFolder="CMake Files\CMakeModules\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/CMakeModules/PreprocessorUtils.cmake">
+          <Option virtualFolder="CMake Files\CMakeModules\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/CMakeModules/FindASSIMP.cmake">
+          <Option virtualFolder="CMake Files\CMakeModules\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/CMakeModules/FindPkgMacros.cmake">
+          <Option virtualFolder="CMake Files\CMakeModules\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/ui_files/CMakeLists.txt">
+          <Option virtualFolder="CMake Files\ui_files\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/CMakeLists.txt">
+          <Option virtualFolder="CMake Files\src\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/OgreXML/CMakeLists.txt">
+          <Option virtualFolder="CMake Files\src\OgreXML\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-procedural/CMakeLists.txt">
+          <Option virtualFolder="CMake Files\src\ogre-procedural\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/src/ogre-assimp/CMakeLists.txt">
+          <Option virtualFolder="CMake Files\src\ogre-assimp\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/resources/resource.qrc">
+          <Option virtualFolder="CMake Files\resources\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/media/CMakeLists.txt">
+          <Option virtualFolder="CMake Files\media\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/CMakeLists.txt">
+          <Option virtualFolder="CMake Files\cfg\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/plugins.cfg.in">
+          <Option virtualFolder="CMake Files\cfg\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/resources.cfg.in">
+          <Option virtualFolder="CMake Files\cfg\" />
+      </Unit>
+      <Unit filename="E:/Desenvolvimento/QtMeshEditor/cfg/version.txt.in">
+          <Option virtualFolder="CMake Files\cfg\" />
+      </Unit>
+   </Project>
+</CodeBlocks_project_file>
