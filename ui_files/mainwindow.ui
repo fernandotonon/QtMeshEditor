@@ -1,0 +1,382 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1010</width>
+    <height>660</height>
+   </rect>
+  </property>
+  <property name="mouseTracking">
+   <bool>true</bool>
+  </property>
+  <property name="contextMenuPolicy">
+   <enum>Qt::NoContextMenu</enum>
+  </property>
+  <property name="acceptDrops">
+   <bool>true</bool>
+  </property>
+  <property name="windowTitle">
+   <string>QtMeshEditor</string>
+  </property>
+  <property name="windowIcon">
+   <iconset resource="../resources/resource.qrc">
+    <normaloff>:/icones/icone.ico</normaloff>:/icones/icone.ico</iconset>
+  </property>
+  <property name="documentMode">
+   <bool>false</bool>
+  </property>
+  <widget class="QWidget" name="centralWidget">
+   <property name="mouseTracking">
+    <bool>true</bool>
+   </property>
+   <property name="focusPolicy">
+    <enum>Qt::StrongFocus</enum>
+   </property>
+   <property name="acceptDrops">
+    <bool>true</bool>
+   </property>
+  </widget>
+  <widget class="QMenuBar" name="menuBar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1010</width>
+     <height>21</height>
+    </rect>
+   </property>
+   <property name="mouseTracking">
+    <bool>false</bool>
+   </property>
+   <widget class="QMenu" name="menuOp_es">
+    <property name="title">
+     <string>Options</string>
+    </property>
+    <widget class="QMenu" name="menuView">
+     <property name="title">
+      <string>View</string>
+     </property>
+     <addaction name="actionObjects_Toolbar"/>
+     <addaction name="actionTools_Toolbar"/>
+     <addaction name="actionMeshEditor"/>
+    </widget>
+    <widget class="QMenu" name="menuViewport_Layout">
+     <property name="title">
+      <string>Viewport Layout</string>
+     </property>
+     <addaction name="actionSingle"/>
+     <addaction name="action1x1_Side_by_Side"/>
+     <addaction name="action1x1_Upper_and_Lower"/>
+    </widget>
+    <addaction name="actionShow_Grid"/>
+    <addaction name="actionChange_BG_Color"/>
+    <addaction name="menuView"/>
+    <addaction name="separator"/>
+    <addaction name="actionAdd_Viewport"/>
+    <addaction name="menuViewport_Layout"/>
+   </widget>
+   <widget class="QMenu" name="menuFile">
+    <property name="title">
+     <string>File</string>
+    </property>
+    <addaction name="actionImport"/>
+    <addaction name="actionExport_Selected"/>
+    <addaction name="actionAdd_Resource_location"/>
+   </widget>
+   <widget class="QMenu" name="menuHelp">
+    <property name="title">
+     <string>Help</string>
+    </property>
+    <addaction name="actionAbout"/>
+   </widget>
+   <addaction name="menuFile"/>
+   <addaction name="menuOp_es"/>
+   <addaction name="menuHelp"/>
+  </widget>
+  <widget class="QToolBar" name="objectsToolbar">
+   <property name="windowTitle">
+    <string>Objects</string>
+   </property>
+   <property name="toolButtonStyle">
+    <enum>Qt::ToolButtonIconOnly</enum>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>LeftToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+  </widget>
+  <widget class="QToolBar" name="toolToolbar">
+   <property name="sizePolicy">
+    <sizepolicy hsizetype="Minimum" vsizetype="Fixed">
+     <horstretch>0</horstretch>
+     <verstretch>0</verstretch>
+    </sizepolicy>
+   </property>
+   <property name="windowTitle">
+    <string>Tools</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionTranslate_Object"/>
+   <addaction name="actionRotate_Object"/>
+   <addaction name="actionSelect_Object"/>
+   <addaction name="actionRemove_Object"/>
+   <addaction name="actionMaterial_Editor"/>
+  </widget>
+  <widget class="QDockWidget" name="meshEditorWidget">
+   <property name="sizePolicy">
+    <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+     <horstretch>0</horstretch>
+     <verstretch>0</verstretch>
+    </sizepolicy>
+   </property>
+   <property name="minimumSize">
+    <size>
+     <width>300</width>
+     <height>315</height>
+    </size>
+   </property>
+   <property name="maximumSize">
+    <size>
+     <width>300</width>
+     <height>524287</height>
+    </size>
+   </property>
+   <property name="mouseTracking">
+    <bool>false</bool>
+   </property>
+   <property name="floating">
+    <bool>false</bool>
+   </property>
+   <property name="features">
+    <set>QDockWidget::DockWidgetFeatureMask</set>
+   </property>
+   <property name="allowedAreas">
+    <set>Qt::LeftDockWidgetArea|Qt::RightDockWidgetArea</set>
+   </property>
+   <property name="windowTitle">
+    <string>MeshEditor</string>
+   </property>
+   <attribute name="dockWidgetArea">
+    <number>2</number>
+   </attribute>
+   <widget class="QWidget" name="dockWidgetContents">
+    <property name="sizePolicy">
+     <sizepolicy hsizetype="Expanding" vsizetype="Preferred">
+      <horstretch>0</horstretch>
+      <verstretch>0</verstretch>
+     </sizepolicy>
+    </property>
+    <property name="mouseTracking">
+     <bool>false</bool>
+    </property>
+    <layout class="QVBoxLayout" name="verticalLayout">
+     <item>
+      <widget class="QTabWidget" name="tabWidget">
+       <property name="currentIndex">
+        <number>-1</number>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </widget>
+  </widget>
+  <widget class="QStatusBar" name="statusBar"/>
+  <action name="actionShow_Grid">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Show Grid</string>
+   </property>
+  </action>
+  <action name="actionImport">
+   <property name="text">
+    <string>Import Mesh</string>
+   </property>
+  </action>
+  <action name="actionAdd_Primitive">
+   <property name="icon">
+    <iconset resource="../resources/resource.qrc">
+     <normaloff>:/icones/cube.png</normaloff>:/icones/cube.png</iconset>
+   </property>
+   <property name="text">
+    <string>Add Primitive</string>
+   </property>
+   <property name="toolTip">
+    <string>Add Primitive</string>
+   </property>
+  </action>
+  <action name="actionMaterial_Editor">
+   <property name="text">
+    <string>Material Editor</string>
+   </property>
+  </action>
+  <action name="actionAbout">
+   <property name="text">
+    <string>About</string>
+   </property>
+  </action>
+  <action name="actionObjects_Toolbar">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Objects</string>
+   </property>
+  </action>
+  <action name="actionTools_Toolbar">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Tools</string>
+   </property>
+  </action>
+  <action name="actionMeshEditor">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>MeshEditor</string>
+   </property>
+  </action>
+  <action name="actionTranslate_Object">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="../resources/resource.qrc">
+     <normaloff>:/icones/move.png</normaloff>:/icones/move.png</iconset>
+   </property>
+   <property name="text">
+    <string>Move Object</string>
+   </property>
+   <property name="toolTip">
+    <string>Move Object</string>
+   </property>
+   <property name="autoRepeat">
+    <bool>true</bool>
+   </property>
+  </action>
+  <action name="actionRotate_Object">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="../resources/resource.qrc">
+     <normaloff>:/icones/rotacionar.png</normaloff>:/icones/rotacionar.png</iconset>
+   </property>
+   <property name="text">
+    <string>Rotate Object</string>
+   </property>
+   <property name="toolTip">
+    <string>Rotate Object</string>
+   </property>
+  </action>
+  <action name="actionSelect_Object">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="icon">
+    <iconset resource="../resources/resource.qrc">
+     <normaloff>:/icones/selecionar.png</normaloff>:/icones/selecionar.png</iconset>
+   </property>
+   <property name="text">
+    <string>Select Object</string>
+   </property>
+   <property name="toolTip">
+    <string>Select Object</string>
+   </property>
+  </action>
+  <action name="actionRemove_Object">
+   <property name="icon">
+    <iconset resource="../resources/resource.qrc">
+     <normaloff>:/icones/remove.png</normaloff>:/icones/remove.png</iconset>
+   </property>
+   <property name="text">
+    <string>Remove Object</string>
+   </property>
+   <property name="toolTip">
+    <string>Remove Object</string>
+   </property>
+  </action>
+  <action name="actionExport_Selected">
+   <property name="text">
+    <string>Export Selected</string>
+   </property>
+  </action>
+  <action name="actionChange_BG_Color">
+   <property name="text">
+    <string>Change BG Color</string>
+   </property>
+  </action>
+  <action name="actionAdd_Viewport">
+   <property name="text">
+    <string>Add Viewport</string>
+   </property>
+  </action>
+  <action name="actionSingle">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Single</string>
+   </property>
+  </action>
+  <action name="action1x1_Side_by_Side">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>1x1 Side by Side</string>
+   </property>
+  </action>
+  <action name="action1x1_Upper_and_Lower">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>1x1 Upper and Lower</string>
+   </property>
+  </action>
+  <action name="actionAdd_Resource_location">
+   <property name="text">
+    <string>Add Resource Location</string>
+   </property>
+  </action>
+ </widget>
+ <layoutdefault spacing="6" margin="11"/>
+ <resources>
+  <include location="../resources/resource.qrc"/>
+ </resources>
+ <connections/>
+</ui>

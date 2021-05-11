@@ -1,0 +1,14 @@
+# Resource locations to be added to the 'boostrap' path
+# This also contains the minimum you need to use the Ogre example framework
+#[Essential]
+#Zip=OgreCore.zip
+#Zip=SdkTrays.zip
+
+
+# Resource locations to be added to the default path
+[General]
+#FileSystem=media/models
+#FileSystem=media/materials/programs
+#FileSystem=media/materials/programs/GLSL
+FileSystem=media/materials/scripts
+FileSystem=media/materials/textures

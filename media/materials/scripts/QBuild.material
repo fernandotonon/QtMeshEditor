@@ -1,0 +1,89 @@
+material BaseFlatOutlined
+{
+        technique
+        {
+                pass
+                {
+                        ambient 0.5 0.5 0.5 1.0
+                        diffuse 0.6 0.6 0.6 1.0
+                        emissive 0.25 0.25 0.25 1.0
+                        shading  flat
+                }
+
+                pass
+                {
+                        ambient 0.2 0.2 0.2
+                        diffuse 0.2 0.2 0.2
+                        emissive 0.4 0.4 0.4
+                        polygon_mode wireframe
+                        depth_bias 10
+                }
+        }
+}
+
+material BaseOutlined
+{
+        technique
+        {
+                pass
+                {
+                        ambient 0.5 0.5 0.5 1.0
+                        diffuse 0.6 0.6 0.6 1.0
+                        emissive 0.25 0.25 0.25 1.0
+                }
+
+                pass
+                {
+                        ambient 0.2 0.2 0.2
+                        diffuse 0.2 0.2 0.2
+                        emissive 0.4 0.4 0.4
+                        polygon_mode wireframe
+                        depth_bias 10
+                }
+        }
+}
+
+material BaseMaterial
+{
+	technique
+	{
+		pass
+		{
+			lighting on
+                        ambient 0.5 0.5 0.5 1.0
+                        diffuse 0.6 0.6 0.6 1.0
+                        emissive 0.25 0.25 0.25 1.0
+		}
+	}
+}
+
+
+material Examples/GrassFloor
+{
+        technique
+        {
+                pass
+                {
+                        texture_unit
+                        {
+                                texture grass_1024.jpg
+                        }
+                }
+        }
+}
+
+
+material Red
+{
+   technique
+   {
+      pass
+      {
+         lighting on
+
+         ambient 0.3 0.1 0.1 1.0
+         diffuse 0.8 0.05 0.05 1.0
+         emissive 0.0 0.0 0.0 1.0
+      }
+   }
+}

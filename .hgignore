@@ -1,0 +1,21 @@
+syntax: glob
+*.dll
+*.obj
+*.exe
+*.cfg
+*.pro
+*.pro.*
+*.docx
+Dependencies/*
+release/*
+debug/*
+src/ogre-assimp/CMakeFiles/
+src\moc_*
+CMakeCache.txt
+CMakeFiles/
+moc_*
+ui_files/
+ui_*
+*.log
+*.cmake
+*.user

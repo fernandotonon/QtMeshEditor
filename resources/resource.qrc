@@ -1,0 +1,20 @@
+<RCC>
+    <qresource prefix="/icones">
+        <file>cube.png</file>
+        <file>sphere.png</file>
+        <file>square.png</file>
+        <file>move.png</file>
+        <file>selecionar.png</file>
+        <file>rotacionar.png</file>
+        <file>icone.ico</file>
+        <file>pause.png</file>
+        <file>play.png</file>
+        <file>remove.png</file>
+        <file>cylinder.png</file>
+        <file>cone.png</file>
+        <file>torus.png</file>
+        <file>capsule.png</file>
+        <file>roundedbox.png</file>
+        <file>addVertice.png</file>
+    </qresource>
+</RCC>
