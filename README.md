@@ -19,7 +19,7 @@ A 3D editor for Ogre Mesh made with Qt Framework
 	http://www.boost.org/
 
 ### Download and Install masm32: (version: 11) -- To build boost
-	http://www.masm32.com/masmdl.htm
+	[http://www.masm32.com/masmdl.htm](http://www.oby.ro/masm32/masm32v11r.zip)
 	After installing you have to include the bin folder to the system variable: Path
 
 ### Download and install DirectXSDK:
