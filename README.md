@@ -24,6 +24,7 @@ A 3D editor for Ogre Mesh made with Qt Framework
 
 ### Download and install DirectXSDK:
 	http://www.microsoft.com/en-us/download/details.aspx?id=6812
+	https://archive.org/download/dx81sdk_full/dx81sdk_full.exe
 
 ### Clone the QtMeshEditor repository:
 	https://bitbucket.org/fernandot/qtmesheditor
