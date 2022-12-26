@@ -34,6 +34,7 @@
 
 #include "Manager.h"
 #include "MaterialHighlighter.h"
+#include <OgreScriptCompiler.h>
 
 MaterialEditor::MaterialEditor(QWidget *parent) :
     QDialog(parent)
@@ -431,10 +432,14 @@ void MaterialEditor::on_saveButton_clicked()
     Ogre::MemoryDataStream *memoryStream = new Ogre::MemoryDataStream((void*)script.c_str(), script.length() * sizeof(char));
     Ogre::DataStreamPtr dataStream(memoryStream);
 
-    Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data());
+    if(Ogre::MaterialManager::getSingleton().resourceExists(mMaterialName.toStdString().data()))
+        Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data());
 
-    Ogre::MaterialSerializer ms;
-    ms.parseScript(dataStream,Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+   // Ogre::ScriptCompilerManager scriptCompiler;
+    Ogre::MaterialManager::getSingleton().parseScript(dataStream,Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    //TODO: Fix this removed in 1.11 - https://github.com/OGRECave/ogre/commit/26f4587e25ce3b1565b0fdeb07685968371ee259
+    //scriptCompiler.parseScript(dataStream,Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     mMaterialName = ui->textMaterial->toPlainText();
     mMaterialName = mMaterialName.remove(0,mMaterialName.indexOf("material")+9);
@@ -447,11 +452,13 @@ void MaterialEditor::on_saveButton_clicked()
     Ogre::MaterialManager::getSingleton().reloadAll(true);
     Ogre::MeshManager::getSingleton().reloadAll(true);
 
-    foreach(Ogre::SceneNode * sn, Manager::getSingleton()->getSceneNodes())
+    for(Ogre::SceneNode * sn : Manager::getSingleton()->getSceneNodes())
     {
         Ogre::LogManager::getSingleton().logMessage(sn->getName());
-        Ogre::Entity *e = static_cast<Ogre::Entity *>(sn->getAttachedObject(0));
-        e->setMaterialName(e->getSubEntity(0)->getMaterialName());
+        if(!sn->getAttachedObjects().empty()) {
+            Ogre::Entity *e = static_cast<Ogre::Entity *>(sn->getAttachedObject(0));
+            e->setMaterialName(e->getSubEntity(0)->getMaterialName());
+        }
     }
 
     setMaterial(mMaterialName);
@@ -664,12 +671,12 @@ void MaterialEditor::on_selectTexture_clicked()
         QFileInfo file;
         file.setFile(filePath);
 
-        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.filePath().toStdString().data(),"FileSystem",file.filePath().toStdString().data(),false);
+        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
         Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
 
         Ogre::Image i;
-        i.load(filePath.toStdString().data(),file.filePath().toStdString().data());
-        Ogre::TextureManager::getSingleton().loadImage(file.fileName().toStdString().data(),file.filePath().toStdString().data(),i);
+        i.load(file.fileName().toStdString().data(),file.path().toStdString().data());
+        Ogre::TextureManager::getSingleton().loadImage(file.fileName().toStdString().data(),file.path().toStdString().data(),i);
 
         ui->textureName->setText(file.fileName());
         mSelectedTextureUnit->setTextureName(file.fileName().toStdString().data());

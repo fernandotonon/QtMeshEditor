@@ -23,6 +23,8 @@
 /// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
+//TODO: fix this
+#define OGRE_NODELESS_POSITIONING
 
 #include "MeshImporterExporter.h"
 #include <QMessageBox>
@@ -31,7 +33,7 @@
 #include <QDebug>
 
 #include "Manager.h"
-#include "AssimpLoader.h"
+#include <OgreAssimpLoader.h>
 #include "OgreXML/OgreXMLMeshSerializer.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 
@@ -97,7 +99,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                         #endif
 
                     Ogre::XMLMeshSerializer xmlMS;
-                    xmlMS.importMesh(file.filePath().toStdString().data(),Manager::getSingleton()->getRoot()->getRenderSystem()->getColourVertexElementType(),importedMesh);
+                    xmlMS.importMesh(file.filePath().toStdString().data(),importedMesh);
                     mesh = importedMesh->clone(sn->getName());
 
                 }
@@ -124,34 +126,27 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
             else
             {
                 assimp:
-                    AssimpLoader::AssOptions opts;
-                    opts.quietMode = false;
-                    opts.logFile = "ass.log";
+                    Ogre::AssimpLoader::Options opts;
                     opts.customAnimationName = "";
-                    opts.dest = "";
                     opts.animationSpeedModifier = 1.0;
-                    opts.lodValue = 250000;
-                    opts.lodFixed = 0;
-                    opts.lodPercent = 20;
-                    opts.lodStrategy = "Distance";
-                    opts.numLods = 0;
-                    opts.usePercent = true;
-                    opts.params = (AssimpLoader::LP_GENERATE_SINGLE_MESH);
-                    opts.source = file.filePath().toStdString().data();
+                    opts.postProcessSteps = 0;
+                    opts.maxEdgeAngle = 30;
+                    opts.params = (Ogre::AssimpLoader::LP_CUT_ANIMATION_WHERE_NO_FURTHER_CHANGE|Ogre::AssimpLoader::LP_QUIET_MODE);
 
-                    Ogre::MeshPtr mesh;
+                    Ogre::MeshPtr mesh =  Ogre::MeshManager::getSingleton().createManual(file.baseName().toStdString(), "General");
                     Ogre::SkeletonPtr skeleton;
+                    Ogre::String filePath = file.filePath().toStdString();
 
-                    AssimpLoader loader;
-                    if(loader.convert(opts, &mesh, &skeleton))
+                    Ogre::AssimpLoader loader;
+                    if(loader.load(filePath, mesh.get(), skeleton,opts))
                     {
-                        if(skeleton.getPointer())
+                        if(skeleton.get())
                         {
-                            mesh.getPointer()->_notifySkeleton(skeleton);
-                            mesh.getPointer()->setSkeletonName(skeleton.getPointer()->getName());
+                            mesh->_notifySkeleton(skeleton);
+                            mesh->setSkeletonName(skeleton.get()->getName());
                         }
                         sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
-                        mesh = mesh.getPointer()->clone(sn->getName());
+                        mesh = mesh->clone("Mesh_"+sn->getName());
                         Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, mesh);
 
                         sn->setPosition(0,0,0);
@@ -173,7 +168,6 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                         QMessageBox::warning(NULL,"Error when importing 3d file","Not supported by assimp, look into the asslog for details",QMessageBox::Ok);
                     }
             }
-
         }
     }
 }
@@ -190,6 +184,7 @@ void MeshImporterExporter::exporter(Ogre::SceneNode *_sn)
     QString fileName = QFileDialog::getSaveFileName(NULL, QObject::tr("Export Mesh"),
                                                      _sn->getName().data(),
                                                      QObject::tr("Ogre Mesh (*.mesh);;"\
+                                                        "Ogre Mesh v1.10+(*.mesh);;"\
                                                         "Ogre Mesh v1.8+(*.mesh);;"\
                                                         "Ogre Mesh v1.7+(*.mesh);;"\
                                                         "Ogre Mesh v1.4+(*.mesh);;"\
@@ -236,10 +231,11 @@ void MeshImporterExporter::exporter(Ogre::SceneNode *_sn)
 
                 unsigned int version = 0;
                 if(filter=="Ogre Mesh (*.mesh)")version=0;
-                if(filter=="Ogre Mesh v1.8+(*.mesh)")version=1;
-                if(filter=="Ogre Mesh v1.7+(*.mesh)")version=2;
-                if(filter=="Ogre Mesh v1.4+(*.mesh)")version=3;
-                if(filter=="Ogre Mesh v1.0+(*.mesh)")version=4;
+                if(filter=="Ogre Mesh v1.10+(*.mesh)")version=1;
+                if(filter=="Ogre Mesh v1.8+(*.mesh)")version=2;
+                if(filter=="Ogre Mesh v1.7+(*.mesh)")version=3;
+                if(filter=="Ogre Mesh v1.4+(*.mesh)")version=4;
+                if(filter=="Ogre Mesh v1.0+(*.mesh)")version=5;
 
                 if(e->hasSkeleton())
                 {

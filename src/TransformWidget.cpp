@@ -35,9 +35,6 @@
 #include "ObjectItemModel.h"
 #include "ui_TransformWidget.h"
 
-#include "mainwindow.h"//TODO remove (only required for updateAnimation)
-
-
 TransformWidget::TransformWidget(QWidget *parent) :
     QWidget(parent),
     ui(new Ui::TransformWidget), m_pObjectTreeModel(0)

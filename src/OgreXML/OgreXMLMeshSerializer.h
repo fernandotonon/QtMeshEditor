@@ -4,7 +4,7 @@ This source file is part of OGRE
     (Object-oriented Graphics Rendering Engine)
 For the latest info, see http://www.ogre3d.org/
 
-Copyright (c) 2000-2013 Torus Knot Software Ltd
+Copyright (c) 2000-2014 Torus Knot Software Ltd
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -36,7 +36,7 @@ THE SOFTWARE.
 namespace Ogre {
 
     /** Class for serializing a Mesh to/from XML.
-    @remarks
+
         This class behaves the same way as MeshSerializer in the main project,
         but is here to allow conversions to / from XML. This class is 
         deliberately not included in the main project because <UL>
@@ -54,57 +54,54 @@ namespace Ogre {
         virtual ~XMLMeshSerializer();
         /** Imports a Mesh from the given XML file.
         @param filename The name of the file to import, expected to be in XML format.
-		@param colourElementType The vertex element to use for packed colours
         @param pMesh The pre-created Mesh object to be populated.
         */
-        void importMesh(const String& filename, VertexElementType colourElementType, Mesh* pMesh);
+        void importMesh(const String& filename, Mesh* pMesh);
 
         /** Exports a mesh to the named XML file. */
         void exportMesh(const Mesh* pMesh, const String& filename);
 
     protected:
-        // State for export
-        TiXmlDocument* mXMLDoc;
         // State for import
         Mesh* mMesh;
-		VertexElementType mColourElementType;
+        VertexElementType mColourElementType;
 
         // Internal methods
-        void writeMesh(const Mesh* pMesh);
-        void writeSubMesh(TiXmlElement* mSubmeshesNode, const SubMesh* s);
-        void writeGeometry(TiXmlElement* mParentNode, const VertexData* pData);
-        void writeSkeletonLink(TiXmlElement* mMeshNode, const String& skelName);
-        void writeBoneAssignment(TiXmlElement* mBoneAssignNode, const VertexBoneAssignment* assign);
-        void writeTextureAliases(TiXmlElement* mSubmeshesNode, const SubMesh* s);
-		void writeLodInfo(TiXmlElement* mMeshNode, const Mesh* pMesh);
-		void writeLodUsageManual(TiXmlElement* usageNode, unsigned short levelNum, 
-			const MeshLodUsage& usage);
-		void writeLodUsageGenerated(TiXmlElement* usageNode, unsigned short levelNum,  
-			const MeshLodUsage& usage, const Mesh* pMesh);
-        void writeSubMeshNames(TiXmlElement* mMeshNode, const Mesh* m);
-		void writePoses(TiXmlElement* meshNode, const Mesh* m);
-		void writeAnimations(TiXmlElement* meshNode, const Mesh* m);
-		void writeMorphKeyFrames(TiXmlElement* trackNode, const VertexAnimationTrack* track);
-		void writePoseKeyFrames(TiXmlElement* trackNode, const VertexAnimationTrack* track);
-        void writeExtremes(TiXmlElement* mMeshNode, const Mesh* m);
+        void writeMesh(const Mesh* pMesh, pugi::xml_node& rootNode);
+        void writeSubMesh(pugi::xml_node& mSubmeshesNode, const SubMesh* s);
+        void writeGeometry(pugi::xml_node& mParentNode, const VertexData* pData);
+        void writeSkeletonLink(pugi::xml_node& mMeshNode, const String& skelName);
+        void writeBoneAssignment(pugi::xml_node& mBoneAssignNode, const VertexBoneAssignment* assign);
+        void writeTextureAliases(pugi::xml_node& mSubmeshesNode, const SubMesh* s);
+        void writeLodInfo(pugi::xml_node& mMeshNode, const Mesh* pMesh);
+        void writeLodUsageManual(pugi::xml_node& usageNode, unsigned short levelNum,
+            const MeshLodUsage& usage);
+        void writeLodUsageGenerated(pugi::xml_node& usageNode, unsigned short levelNum,
+            const MeshLodUsage& usage, const Mesh* pMesh);
+        void writeSubMeshNames(pugi::xml_node& mMeshNode, const Mesh* m);
+        void writePoses(pugi::xml_node& meshNode, const Mesh* m);
+        void writeAnimations(pugi::xml_node& meshNode, const Mesh* m);
+        void writeMorphKeyFrames(pugi::xml_node& trackNode, const VertexAnimationTrack* track);
+        void writePoseKeyFrames(pugi::xml_node& trackNode, const VertexAnimationTrack* track);
+        void writeExtremes(pugi::xml_node& mMeshNode, const Mesh* m);
 
-        void readSubMeshes(TiXmlElement* mSubmeshesNode);
-        void readGeometry(TiXmlElement* mGeometryNode, VertexData* pData);
-        void readSkeletonLink(TiXmlElement* mSkelNode);
-        void readBoneAssignments(TiXmlElement* mBoneAssignmentsNode);
-        void readBoneAssignments(TiXmlElement* mBoneAssignmentsNode, SubMesh* sm);
-        void readTextureAliases(TiXmlElement* mTextureAliasesNode, SubMesh* sm);
-		void readLodInfo(TiXmlElement*  lodNode);
-		void readLodUsageManual(TiXmlElement* manualNode, unsigned short index);
-		void readLodUsageGenerated(TiXmlElement* genNode, unsigned short index);
-		void readSubMeshNames(TiXmlElement* mMeshNamesNode, Mesh* sm);
-		void readPoses(TiXmlElement* posesNode, Mesh *m);
-		void readAnimations(TiXmlElement* mAnimationsNode, Mesh *m);
-		void readTracks(TiXmlElement* tracksNode, Mesh *m, Animation* anim);
-		void readMorphKeyFrames(TiXmlElement* keyframesNode, VertexAnimationTrack* track, 
-			size_t vertexCount);
-		void readPoseKeyFrames(TiXmlElement* keyframesNode, VertexAnimationTrack* track);
-        void readExtremes(TiXmlElement* extremesNode, Mesh *m);
+        void readSubMeshes(pugi::xml_node& mSubmeshesNode);
+        void readGeometry(pugi::xml_node& mGeometryNode, VertexData* pData);
+        void readSkeletonLink(pugi::xml_node& mSkelNode);
+        void readBoneAssignments(pugi::xml_node& mBoneAssignmentsNode);
+        void readBoneAssignments(pugi::xml_node& mBoneAssignmentsNode, SubMesh* sm);
+        void readTextureAliases(pugi::xml_node& mTextureAliasesNode, SubMesh* sm);
+        void readLodInfo(pugi::xml_node&  lodNode);
+        void readLodUsageManual(pugi::xml_node& manualNode, unsigned short index);
+        void readLodUsageGenerated(pugi::xml_node& genNode, unsigned short index);
+        void readSubMeshNames(pugi::xml_node& mMeshNamesNode, Mesh* sm);
+        void readPoses(pugi::xml_node& posesNode, Mesh *m);
+        void readAnimations(pugi::xml_node& mAnimationsNode, Mesh *m);
+        void readTracks(pugi::xml_node& tracksNode, Mesh *m, Animation* anim);
+        void readMorphKeyFrames(pugi::xml_node& keyframesNode, VertexAnimationTrack* track,
+            size_t vertexCount);
+        void readPoseKeyFrames(pugi::xml_node& keyframesNode, VertexAnimationTrack* track);
+        void readExtremes(pugi::xml_node& extremesNode, Mesh *m);
     };
 }
 

@@ -4,7 +4,7 @@ This source file is part of OGRE
     (Object-oriented Graphics Rendering Engine)
 For the latest info, see http://www.ogre3d.org/
 
-Copyright (c) 2000-2013 Torus Knot Software Ltd
+Copyright (c) 2000-2014 Torus Knot Software Ltd
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -37,7 +37,7 @@ THE SOFTWARE.
 namespace Ogre {
 
     /** Class for serializing a Skeleton to/from XML.
-    @remarks
+
         This class behaves the same way as SkeletonSerializer in the main project,
         but is here to allow conversions to / from XML. This class is 
         deliberately not included in the main project because <UL>
@@ -63,25 +63,22 @@ namespace Ogre {
         void exportSkeleton(const Skeleton* pSkeleton, const String& filename);
 
     private:
-        // State for export
-        TiXmlDocument* mXMLDoc;
-
-        void writeSkeleton(const Skeleton* pSkel);
-        void writeBone(TiXmlElement* bonesElement, const Bone* pBone);
-        void writeBoneParent(TiXmlElement* boneHierarchyNode, String boneName , String parentName);
-        void writeAnimation(TiXmlElement* animsNode, const Animation* anim);
-        void writeAnimationTrack(TiXmlElement* tracksNode, 
-			const NodeAnimationTrack* track);
-        void writeKeyFrame(TiXmlElement* keysNode, const TransformKeyFrame* key);
-		void writeSkeletonAnimationLink(TiXmlElement* linksNode, 
-			const LinkedSkeletonAnimationSource& link);
-		
-		void readBones(Skeleton* skel, TiXmlElement* mBonesNode);
-		void readBones2(Skeleton* skel, TiXmlElement* mBonesNode);
-		void createHierarchy(Skeleton* skel, TiXmlElement* mHierNode);
-		void readKeyFrames(NodeAnimationTrack* track, TiXmlElement* mKeyfNode);
-		void readAnimations(Skeleton* skel, TiXmlElement* mAnimNode) ;
-		void readSkeletonAnimationLinks(Skeleton* skel, TiXmlElement* linksNode);
+        void writeSkeleton(const Skeleton* pSkel, pugi::xml_node& root);
+        void writeBone(pugi::xml_node& bonesElement, const Bone* pBone);
+        void writeBoneParent(pugi::xml_node& boneHierarchyNode, String boneName , String parentName);
+        void writeAnimation(pugi::xml_node& animsNode, const Animation* anim);
+        void writeAnimationTrack(pugi::xml_node& tracksNode,
+            const NodeAnimationTrack* track);
+        void writeKeyFrame(pugi::xml_node& keysNode, const TransformKeyFrame* key);
+        void writeSkeletonAnimationLink(pugi::xml_node& linksNode,
+            const LinkedSkeletonAnimationSource& link);
+        
+        void readBones(Skeleton* skel, pugi::xml_node& mBonesNode);
+        void readBones2(Skeleton* skel, pugi::xml_node& mBonesNode);
+        void createHierarchy(Skeleton* skel, pugi::xml_node& mHierNode);
+        void readKeyFrames(NodeAnimationTrack* track, const pugi::xml_node& mKeyfNode);
+        void readAnimations(Skeleton* skel, pugi::xml_node& mAnimNode) ;
+        void readSkeletonAnimationLinks(Skeleton* skel, pugi::xml_node& linksNode);
 
     };
 

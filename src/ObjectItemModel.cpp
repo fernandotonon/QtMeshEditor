@@ -73,7 +73,7 @@ void ObjectItemModel::reloadSceneNode()
 
     m_pRootNode = Manager::getSingleton()->getSceneMgr()->getRootSceneNode();
     mRootItem = new QStandardItem(QIcon(":/icones/square.png"),QString(tr("Scene")));
-    mRootItem->setData(qVariantFromValue((void *) m_pRootNode));
+    mRootItem->setData(QVariant::fromValue((void*)m_pRootNode));
     mRootItem->setSelectable(false);        //TODO set this to true to allow the entire Scene selection
     invisibleRootItem()->appendRow(mRootItem);
 
@@ -86,12 +86,14 @@ void ObjectItemModel::appendAllChildFromParent(Ogre::SceneNode* const& parentNod
 
     while (nodeIterator.hasMoreElements())
     {
-        QString name = (static_cast<Ogre::SceneNode*>(nodeIterator.peekNextValue()))->getName().data();
-        if(!(Manager::getSingleton()->isForbidenNodeName(name)))
+        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(nodeIterator.getNext());
+        QString name = pSN->getName().data();
+
+        if(name.length() && !(Manager::getSingleton()->isForbidenNodeName(name)))
         {
-            Ogre::SceneNode* currentNode = static_cast<Ogre::SceneNode*>(nodeIterator.peekNextValue());
+            Ogre::SceneNode* currentNode = pSN;
             QStandardItem* newItem = new QStandardItem(QIcon(":/icones/cube.png"),currentNode->getName().data()+tr(" (Node)"));
-            newItem->setData(qVariantFromValue((void *) currentNode), NODE_DATA);
+            newItem->setData(QVariant::fromValue((void*)currentNode), NODE_DATA);
             parentItem->appendRow(newItem);
 
             //Adding entities
@@ -101,7 +103,6 @@ void ObjectItemModel::appendAllChildFromParent(Ogre::SceneNode* const& parentNod
                 appendAllChildFromParent(currentNode,newItem);
 
         }
-        nodeIterator.moveNext();
     }
 }
 
@@ -112,7 +113,7 @@ void ObjectItemModel::appendEntitiesFromNode(Ogre::SceneNode* const& parentNode,
         mOgreEntity = static_cast<Ogre::Entity*>(parentNode->getAttachedObject(entIndex));
 
         QStandardItem* newEntity = new QStandardItem(QIcon(":/icones/cylinder.png"),mOgreEntity->getName().data()+tr(" (Mesh)"));
-        newEntity->setData(qVariantFromValue((void *) mOgreEntity), ENTITY_DATA);
+        newEntity->setData(QVariant::fromValue((void*)mOgreEntity), ENTITY_DATA);
         parentItem->appendRow(newEntity);
         // adding subentities
         appendSubEntitiesFromEntity(mOgreEntity, newEntity);
@@ -126,7 +127,7 @@ void ObjectItemModel::appendSubEntitiesFromEntity(Ogre::Entity* const& parentEnt
     for(unsigned int subEntIndex = 0; parentEntity && subEntIndex < parentEntity->getNumSubEntities();subEntIndex++)
     {
         QStandardItem* newSubEntity = new QStandardItem(QIcon(":/icones/torus.png"),QString::number(subEntIndex)+tr(" (Submesh)"));
-        newSubEntity->setData(qVariantFromValue((void *) parentEntity->getSubEntity(subEntIndex)),SUBENTITY_DATA); //TODO add data here !!!
+        newSubEntity->setData(QVariant::fromValue((void*)parentEntity->getSubEntity(subEntIndex)),SUBENTITY_DATA); //TODO add data here !!!
         parentItem->appendRow(newSubEntity);
     }
 }
@@ -135,10 +136,9 @@ void ObjectItemModel::appendSubEntitiesFromEntity(Ogre::Entity* const& parentEnt
 void ObjectItemModel::newObjectNode(Ogre::SceneNode* const& newNode)
 {
     QStandardItem* newItem = new QStandardItem(QIcon(":/icones/cube.png"),newNode->getName().data()+tr(" (Node)"));
-    newItem->setData(qVariantFromValue((void *) newNode),NODE_DATA);
+    newItem->setData(QVariant::fromValue((void*)newNode),NODE_DATA);
     mRootItem->appendRow(newItem);
     appendAllChildFromParent(newNode, newItem);
-
 }
 
 void ObjectItemModel::objectNodeRemoved(Ogre::SceneNode* const& node)
@@ -147,7 +147,7 @@ void ObjectItemModel::objectNodeRemoved(Ogre::SceneNode* const& node)
     QModelIndexList index;
 
     index = match(start, Qt::UserRole + 1,
-                  qVariantFromValue((void *) node),
+                  QVariant::fromValue((void*)node),
                   1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
     if(!index.isEmpty())

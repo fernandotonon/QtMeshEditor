@@ -23,6 +23,9 @@
 /// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
+//Workaround to migrate the version, need to remove and proper fix the light direction
+// Need to build ogre setting this as true - need to fix it
+#define OGRE_NODELESS_POSITIONING
 
 #include <QCoreApplication>
 #include <QDebug>
@@ -35,7 +38,6 @@
 #include "SelectionSet.h"
 #include "mainwindow.h"
 #include "ViewportGrid.h"
-
 
 ////////////////////////////////////////
 // Static variable initialisation
@@ -165,7 +167,7 @@ Ogre::SceneNode* Manager::addSceneNode(const QString &_name)
     while(hasSceneNode(QString(_name+(number?QString::number(number):""))))
         ++number;
 
-    sn = getSceneMgr()->getRootSceneNode()->createChildSceneNode(QString(_name+(number?QString::number(number):"")).toStdString().data());
+    sn = getSceneMgr()->getRootSceneNode()->createChildSceneNode(QString(_name+(number?QString::number(number):"")).toStdString());
 
     emit sceneNodeCreated(sn);
     SelectionSet::getSingleton()->selectOne(sn);
@@ -190,9 +192,9 @@ Ogre::SceneNode* Manager::addSceneNode(const QString &_name, const Ogre::Any& an
 
 Ogre::Entity* Manager::createEntity(Ogre::SceneNode* const& sceneNode, const Ogre::MeshPtr& mesh)
 {
-    Ogre::Entity* ent=0;
+    Ogre::Entity* ent;
 
-    ent = mSceneMgr->createEntity(sceneNode->getName(),mesh.getPointer()->clone(sceneNode->getName()));
+    ent = mSceneMgr->createEntity(sceneNode->getName(),mesh);
 
     sceneNode->attachObject(ent);
     emit entityCreated(ent);
@@ -278,10 +280,10 @@ QList<Ogre::SceneNode *> &Manager::getSceneNodes()
     Ogre::Node::ChildNodeIterator nodeIterator = getSceneMgr()->getRootSceneNode()->getChildIterator();
     while (nodeIterator.hasMoreElements())
     {
-        QString name = (static_cast<Ogre::SceneNode*>(nodeIterator.peekNextValue()))->getName().data();
+        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(nodeIterator.getNext());
+        QString name = pSN->getName().data();
         if(!(isForbidenNodeName(name)))
-            mSceneNodesList.append(static_cast<Ogre::SceneNode*>(nodeIterator.peekNextValue()));
-        nodeIterator.moveNext();
+            mSceneNodesList.append(pSN);
     }
     return mSceneNodesList;
 }
@@ -293,16 +295,16 @@ QList<Ogre::Entity *> &Manager::getEntities()
     Ogre::Node::ChildNodeIterator nodeIterator = getSceneMgr()->getRootSceneNode()->getChildIterator();
     while (nodeIterator.hasMoreElements())
     {
-        QString name = (static_cast<Ogre::SceneNode*>(nodeIterator.peekNextValue()))->getName().data();
+        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(nodeIterator.getNext());
+        QString name = pSN->getName().data();
         if(!(isForbidenNodeName(name)))
         {
-            Ogre::SceneNode *parentNode = static_cast<Ogre::SceneNode*>(nodeIterator.peekNextValue());
+            Ogre::SceneNode *parentNode = pSN;
             for(int entIndex = 0;  entIndex < parentNode->numAttachedObjects();entIndex++)
             {
                 mEntitiesList.append(static_cast<Ogre::Entity*>(parentNode->getAttachedObject(entIndex)));
             }
         }
-        nodeIterator.moveNext();
     }
     return mEntitiesList;
 }
@@ -403,6 +405,8 @@ void Manager::initRenderSystem()
     mRoot->saveConfig();
     mRoot->initialise(false); // don't create a window
 
+    mRoot->loadPlugin("Codec_STBI"); //TODO: Find a better way (or better place) to load this plugin (this allow loading image formats)
+
     // All objects will be build on this flag
     Ogre::MovableObject::setDefaultQueryFlags(SCENE_QUERY_FLAGS);
 }
@@ -417,7 +421,7 @@ void Manager::initSceneMgr()
 
     try
     {
-        mSceneMgr = mRoot->createSceneManager(Ogre::ST_EXTERIOR_CLOSE);
+        mSceneMgr = mRoot->createSceneManager(2);//TODO: workaround - restore the use of enum Ogre::ST_EXTERIOR_CLOSE);
         //std::cout<<"init here\n\n\n";
         if (!mSceneMgr)
         {

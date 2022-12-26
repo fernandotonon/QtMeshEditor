@@ -76,14 +76,14 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH
 ##############################################################
 #  Processing ogre-procedural
 ##############################################################
-ADD_SUBDIRECTORY(ogre-procedural)
-include_directories(${OGRE_PROCEDURAL_INCLUDE_DIRS})
+#ADD_SUBDIRECTORY(ogre-procedural)
+#include_directories("${OgreProcedural_SOURCE_DIR}/library/include" "${OgreProcedural_BINARY_DIR}/include")
 
 ##############################################################
 #  Processing ogre-assimp
 ##############################################################
-ADD_SUBDIRECTORY(ogre-assimp)
-include_directories(${OGRE_ASSIMP_INCLUDE_DIRS})
+#ADD_SUBDIRECTORY(ogre-assimp)
+#include_directories(${OGRE_ASSIMP_INCLUDE_DIRS})
 
 ##############################################################
 #  Adding Resources
@@ -121,7 +121,6 @@ endif()
 if(UNIX)
     qt5_use_modules(${CMAKE_PROJECT_NAME} Core Gui Widgets X11Extras)
     target_link_libraries(${CMAKE_PROJECT_NAME}
-    ${OGREASSIMP_LIBRARY}
     ${ASSIMP_LIBRARIES}
     ${Boost_SYSTEM_LIBRARY}
     ${OGRE_LIBRARIES}
@@ -134,7 +133,7 @@ if(UNIX)
 elseif(WIN32)
     qt5_use_modules(${CMAKE_PROJECT_NAME} Core Gui Widgets)
     target_link_libraries(${CMAKE_PROJECT_NAME}
-    ${OGREASSIMP_LIBRARY}
+    "${OGRE_DIR}/../bin/libCodec_Assimp.dll.a" #TODO: find a better way to link ogreassimp
     ${ASSIMP_LIBRARIES}
     ${Boost_SYSTEM_LIBRARY}
     ${OGRE_LIBRARIES}

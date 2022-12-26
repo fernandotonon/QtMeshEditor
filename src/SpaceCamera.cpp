@@ -23,6 +23,8 @@
 /// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
+//TODO: Fix this workaround
+#define OGRE_NODELESS_POSITIONING
 
 #include <QMouseEvent>
 #include <QWheelEvent>

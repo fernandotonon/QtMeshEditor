@@ -28,6 +28,7 @@
 #define TRANSFORM_WIDGET_H
 
 #include <QWidget>
+#include <Ogre.h>
 
 namespace Ui {
 class TransformWidget;
@@ -38,7 +39,7 @@ class ObjectItemModel;
 
 namespace Ogre {
 class SceneNode;
-class Vector3;
+//class Vector3;
 }
 class TransformWidget : public QWidget
 {

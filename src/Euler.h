@@ -13,7 +13,7 @@ Extracted From: http://www.ogre3d.org/tikiwiki/tiki-ind ... e=Cookbook
 #define HGUARD_OGRE_MATHS_EULER_H
 
 #include <OgreMath.h>
-#include <OgreVector3.h>
+#include <Ogre.h>
 #include <OgreQuaternion.h>
 #include <OgreMatrix3.h>
 

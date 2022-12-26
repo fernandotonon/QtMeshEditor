@@ -155,7 +155,7 @@ bool PrimitiveObject::isPrimitive(const Ogre::SceneNode* node)
         else
             return false;
     }
-    catch(Ogre::Exception& /*e*/)
+    catch(...)
     {
        //We've got something else in userAny
         return false;
@@ -517,9 +517,9 @@ void PrimitiveObject::updatePrimitive()
     //TODO check if no issue with sub entity (we are only at primitive stage so I assume that there is no issue)
     Ogre::MaterialPtr entMaterial = oldEntity->getSubEntity(0)->getMaterial();
 
-    //if(oldEntity->getMesh().getPointer()->isManuallyLoaded())
-    Manager::getSingleton()->getSceneMgr()->destroyManualObject(mName.toStdString().data());
-    Ogre::MeshManager::getSingleton().remove(mName.toStdString().data());
+    //if(oldEntity->getMesh().get()->isManuallyLoaded())
+        Manager::getSingleton()->getSceneMgr()->destroyManualObject(mName.toStdString());
+    Ogre::MeshManager::getSingleton().remove(mName.toStdString());
 
     //We don't use the Manager
     Manager::getSingleton()->getSceneMgr()->destroyEntity(oldEntity);
@@ -529,14 +529,12 @@ void PrimitiveObject::updatePrimitive()
     mSceneNode->getUserObjectBindings().setUserAny(Ogre::Any(this));
 
     Ogre::MeshPtr mp = createMesh();
-    if(!mp.isNull())
+    if(mp)
     {
-        Ogre::Entity* ent=0;
-        //We don't use the Manager::dreateEntity to avoid triggering signal (old has been destroyed silently)
-        ent = Manager::getSingleton()->getSceneMgr()->createEntity(mName.toStdString().data(),mp.getPointer()->clone(mName.toStdString().data()));
+        Ogre::Entity* ent;
+        ent = Manager::getSingleton()->createEntity(mSceneNode,mp);
 
         ent->setMaterial(entMaterial);
-        mSceneNode->attachObject(ent);
     }
 
 }
@@ -544,7 +542,7 @@ void PrimitiveObject::updatePrimitive()
 Ogre::MeshPtr PrimitiveObject::createMesh()
 {
     Ogre::MeshPtr mp;
-    Ogre::String name = mName.toStdString().data();
+    Ogre::String name = mName.toStdString();
     switch(mType)
     {
         case AP_CUBE:
@@ -609,7 +607,7 @@ Ogre::MeshPtr PrimitiveObject::createMesh()
                     .realizeMesh(name.data());
             break;
         default:
-            mp.setNull();
+            mp.reset();
             break;
     }
     return mp;
@@ -625,14 +623,14 @@ Ogre::SceneNode* PrimitiveObject::createPrimitive()
     mName = mSceneNode->getName().data();
 
     Ogre::MeshPtr mp;
-    mp.setNull();
+    mp.reset();
     mp = createMesh();
 
-    if(!mp.isNull())
+    if(mp)
     {
         Ogre::Entity* ent = Manager::getSingleton()->createEntity(mSceneNode,mp);
 
-        ent->setMaterialName("BaseMaterial");
+        ent->setMaterialName("BaseWhite");
         mSceneNode->setPosition(0,0,0);
         return mSceneNode;
     }

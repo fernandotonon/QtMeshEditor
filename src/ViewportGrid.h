@@ -30,7 +30,7 @@
 #include <QObject>
 #include <OgrePrerequisites.h>
 #include <OgreBlendMode.h>
-#include <OgreVector3.h>
+#include <Ogre.h>
 
 
 namespace Ogre{

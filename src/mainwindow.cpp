@@ -71,7 +71,6 @@ MainWindow::MainWindow(QWidget *parent) :
     m_pTimer = new QTimer(this);
     connect(m_pTimer, SIGNAL(timeout()), this, SLOT(ogreUpdate()));
     m_pTimer->start(0);
-
 }
 /////////////////////////// TODO Clean up the code of MainWindow
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)

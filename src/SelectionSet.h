@@ -30,7 +30,7 @@
 #include <QObject>
 #include <QList>
 
-#include <OgreVector3.h>
+#include <Ogre.h>
 namespace Ogre
 {    class SceneNode;   }
 

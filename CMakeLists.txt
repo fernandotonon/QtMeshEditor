@@ -6,7 +6,9 @@
 # - ASSIMP_HOME (C:\Program Files\Assimp)
 # - BOOST_ROOT (It is recommended that you use the Boost library coming with ogre)
 # - CMAKE_PREFIX_PATH (C:\Qt\Qt5.3.1\5.3\mingw482_32\lib\cmake)
+# - OgreProcedural_HOME (Ogre Procedural SDK Folder)
 #
+# TODO: Add ogre-procedural as dependency
 ##############################################################
 #  Versions
 ##############################################################
@@ -14,7 +16,7 @@ CMAKE_POLICY(SET CMP0005 NEW)
 
 project(QtMeshEditor)
 
-set(QTMESHEDITOR_VERSION_STRING "\"1.4.6\"")
+set(QTMESHEDITOR_VERSION_STRING "\"1.4.7\"")
 
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
 message(STATUS "Building QtMeshEditor version ${QTMESHEDITOR_VERSION_STRING}")
@@ -25,7 +27,7 @@ message(STATUS "Building QtMeshEditor version ${QTMESHEDITOR_VERSION_STRING}")
 if(WIN32)
     cmake_policy(SET CMP0020 NEW)   # to avoid cmake warning
 endif()
-cmake_minimum_required(VERSION 2.8.11)
+cmake_minimum_required(VERSION 2.8.12)
 
 enable_language(CXX)
 
@@ -56,6 +58,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 #  Searching Qt dependencies
 ##############################################################
 #Find Qt Packages
+#find_package(Qt5 COMPONENTS Core Widgets Gui REQUIRED)
 find_package(Qt REQUIRED)
 find_package(Qt5Core REQUIRED)
 find_package(Qt5Widgets REQUIRED)
@@ -70,6 +73,13 @@ endif()
 
 
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_PATH}")
+
+
+##############################################################
+#  Find OgreProcedural
+##############################################################
+find_package(OgreProcedural REQUIRED)
+include_directories(${OgreProcedural_INCLUDE_DIRS})
 
 ##############################################################
 #  Find OIS
@@ -120,11 +130,11 @@ endif()
 
 find_package(OGRE REQUIRED)
 
-include_directories(${OGRE_INCLUDE_DIRS})
+include_directories(${OGRE_INCLUDE_DIRS} "${OGRE_INCLUDE_DIR}/Plugins/Assimp")
 
-if(NOT ((${OGRE_VERSION} VERSION_EQUAL "1.8.0") OR (${OGRE_VERSION} VERSION_GREATER "1.8.0")))
-    message(SEND_ERROR "You need Ogre 1.8.0 or later to build this. You can get it from sinbad's repository here: https://bitbucket.org/sinbad/ogre")
-endif()
+#if(NOT ((${OGRE_VERSION} VERSION_EQUAL "1.8.0") OR (${OGRE_VERSION} VERSION_GREATER "1.8.0")))
+#    message(SEND_ERROR "You need Ogre 1.8.0 or later to build this. You can get it from sinbad's repository here: https://bitbucket.org/sinbad/ogre")
+#endif()
 
         #Required by OGRE lib (don't know why....)
       #  LINK_DIRECTORIES(
@@ -151,7 +161,7 @@ endif()
 ##############################################################
 #  Adding ReadMe file
 ##############################################################
-add_custom_target(readMeFile SOURCES README)
+#add_custom_target(readMeFile SOURCES README)
 ##############################################################
 #  Processing Subdirs
 ##############################################################
