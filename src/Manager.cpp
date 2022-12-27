@@ -405,8 +405,6 @@ void Manager::initRenderSystem()
     mRoot->saveConfig();
     mRoot->initialise(false); // don't create a window
 
-    mRoot->loadPlugin("Codec_STBI"); //TODO: Find a better way (or better place) to load this plugin (this allow loading image formats)
-
     // All objects will be build on this flag
     Ogre::MovableObject::setDefaultQueryFlags(SCENE_QUERY_FLAGS);
 }

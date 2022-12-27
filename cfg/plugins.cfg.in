@@ -1,9 +1,11 @@
 # Defines plugins to load
 
 # Define plugin folder
-PluginFolder=@OGRE_PLUGIN_DIR@
+# PluginFolder=@OGRE_PLUGIN_DIR@
+PluginFolder=../
 
 # Define plugins
 Plugin=RenderSystem_GL
 Plugin=Plugin_OctreeSceneManager
+Plugin=Codec_STBI
 #Plugin=Plugin_CgProgramManager
