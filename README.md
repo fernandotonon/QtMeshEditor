@@ -25,6 +25,9 @@ A 3D editor for Ogre Mesh made with Qt Framework
 ### Clone the Ogre repository: (v. 13.5.3)
 	git clone https://github.com/OGRECave/ogre.git
 
+### Clone the Ogre Procedural:
+	git clone https://github.com/OGRECave/ogre-procedural.git
+
 ### Clone the Assimp repository:
 	git clone https://github.com/assimp/assimp.git
 
@@ -37,11 +40,28 @@ A 3D editor for Ogre Mesh made with Qt Framework
 	b2 toolset=gcc variant=release -j4
 	wait some time :)
 
+### Add BOOST_ROOT to the system environment variables
+	BOOST_ROOT=C:/Boost (for windows)
+
+### Build Assimp
+	Configure and Generate using CMake
+	mingw32-make install
+
+### Add ASSIMP_HOME to the system environment variables
+	ASSIMP_HOME=C:/Program Files (x86)/Assimp (for windows, or the path configured in the CMAKE_INSTALL_PREFIX)	
+
 ### Build Ogre
 	Open CMake
 	Drag and Drop CMakeLists.txt to CMake GUI
 	Press Configure
 	Select MingW Compiler
-	Change CMAKE_BUILD_TYPE to "Release"
+	Make sure the Assimp_DIR is configured (C:/Assimp/lib/cmake/assimp-5.2)
 	Complete all NOTFOUND components that are essential (You may ask for help if you don't know how to do this step)
 	Press Generate
+	mingw32-make install
+
+### Build Ogre Procedural
+
+### Add OgreProcedural_HOME to the system environment variables
+
+### Build QtMeshEditor
