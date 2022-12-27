@@ -360,7 +360,7 @@ void Manager::initRoot()
                                          , QString(file+"/cfg/Graphics.log").toStdString().data());
         if (!mRoot)
         {
-            throw std::logic_error("Erro: Iniciando Root\nFILE: "+std::string(__FILE__)+"\nLINE: "+QString(__LINE__).toStdString());
+            throw std::logic_error("Erro: Iniciando Root\nFILE: "+std::string(__FILE__)+"\nLINE: "+QString::number(__LINE__).toStdString());
         }
     }
     catch (std::logic_error const& le)
@@ -423,7 +423,7 @@ void Manager::initSceneMgr()
         //std::cout<<"init here\n\n\n";
         if (!mSceneMgr)
         {
-            throw std::logic_error("Erro: Iniciando SceneManager\nFILE: "+std::string(__FILE__)+"\nLINE: "+QString(__LINE__).toStdString());
+            throw std::logic_error("Erro: Iniciando SceneManager\nFILE: "+std::string(__FILE__)+"\nLINE: "+QString::number(__LINE__).toStdString());
         }
     }
     catch (std::logic_error const& /*le*/)

@@ -93,7 +93,7 @@ void TransformWidget::updateTreeViewFromSelection()
     foreach(node,SelectionSet::getSingleton()->getNodesSelectionList())
     {
         index = m_pObjectTreeModel->match(start, NODE_DATA,
-                      qVariantFromValue((void *) node),
+                      QVariant::fromValue((void *) node),
                       1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
         if(!index.isEmpty())
@@ -107,7 +107,7 @@ void TransformWidget::updateTreeViewFromSelection()
     foreach(entity,SelectionSet::getSingleton()->getEntitiesSelectionList())
     {
         index = m_pObjectTreeModel->match(start, ENTITY_DATA,
-                      qVariantFromValue((void *) entity),
+                      QVariant::fromValue((void *) entity),
                       1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
         if(!index.isEmpty())
@@ -121,7 +121,7 @@ void TransformWidget::updateTreeViewFromSelection()
     foreach(subEntity,SelectionSet::getSingleton()->getSubEntitiesSelectionList())
     {
         index = m_pObjectTreeModel->match(start, SUBENTITY_DATA,
-                      qVariantFromValue((void *) subEntity),
+                      QVariant::fromValue((void *) subEntity),
                       1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
         if(!index.isEmpty())

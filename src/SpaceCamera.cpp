@@ -176,7 +176,7 @@ void SpaceCamera::mouseMoveEvent(QMouseEvent *event)
         Ogre::Real deltaX = (event->pos().x() - mOldPos.x()) * mCameraSpeed;
         Ogre::Real deltaY = (event->pos().y() - mOldPos.y()) * mCameraSpeed;
 
-        if(event->buttons().testFlag(Qt::MidButton))
+        if(event->buttons().testFlag(Qt::MiddleButton))
         {   // if Shift is pressed, translate, else Alt => roll, else rotate
             if(event->modifiers().testFlag(Qt::ShiftModifier))                
                 roll(deltaX);               //Shift =>Roll (obviously locally)
@@ -205,8 +205,7 @@ void SpaceCamera::mouseMoveEvent(QMouseEvent *event)
 
 void SpaceCamera::wheelEvent(QWheelEvent *event)
 {
-    //TODO delta is deprecated use angledelta instead
-    int delta = event->delta()*10 / 60 * mCameraSpeed;
+    int delta = event->angleDelta().manhattanLength() * 10 / 60 * mCameraSpeed;
     zoom(delta);
 
     event->accept();

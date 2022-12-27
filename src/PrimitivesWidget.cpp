@@ -79,7 +79,7 @@ PrimitivesWidget::~PrimitivesWidget()
 
 void PrimitivesWidget::setUiEmpty()
 {
-    edit_type->setText(QString::null);
+    edit_type->setText(QString());
 
     gb_Geometry->hide();
     gb_Mesh->hide();
@@ -529,20 +529,20 @@ void PrimitivesWidget::updateUiFromParams()
     {
         PrimitiveObject* primitive = mSelectedPrimitive.at(0);
 
-        edit_sizeX->setSpecialValueText(QString::null);
-        edit_sizeY->setSpecialValueText(QString::null);
-        edit_sizeZ->setSpecialValueText(QString::null);
+        edit_sizeX->setSpecialValueText(QString());
+        edit_sizeY->setSpecialValueText(QString());
+        edit_sizeZ->setSpecialValueText(QString());
 
-        edit_radius->setSpecialValueText(QString::null);
-        edit_radius2->setSpecialValueText(QString::null);
-        edit_height->setSpecialValueText(QString::null);
+        edit_radius->setSpecialValueText(QString());
+        edit_radius2->setSpecialValueText(QString());
+        edit_height->setSpecialValueText(QString());
 
-        edit_numSegX->setSpecialValueText(QString::null);
-        edit_numSegY->setSpecialValueText(QString::null);
-        edit_numSegZ->setSpecialValueText(QString::null);
+        edit_numSegX->setSpecialValueText(QString());
+        edit_numSegY->setSpecialValueText(QString());
+        edit_numSegZ->setSpecialValueText(QString());
 
-        edit_UTile->setSpecialValueText(QString::null);
-        edit_VTile->setSpecialValueText(QString::null);
+        edit_UTile->setSpecialValueText(QString());
+        edit_VTile->setSpecialValueText(QString());
 
         edit_sizeX->setValue(primitive->getSizeX());
         edit_sizeY->setValue(primitive->getSizeY());

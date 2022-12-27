@@ -91,7 +91,7 @@ void MaterialWidget::onSubEntitySelected()
 
             newItem = new QTableWidgetItem(QString::number(subIndex));
             newItem->setFlags(newItem->flags() & ~Qt::ItemIsEditable);
-            newItem->setData(SUBENTITY_DATA,qVariantFromValue((void *) subEntity));
+            newItem->setData(SUBENTITY_DATA,QVariant::fromValue((void *) subEntity));
             setItem(row,1,newItem);
 
         }

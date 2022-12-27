@@ -7,6 +7,7 @@
 *.docx
 Dependencies/*
 release/*
+bin/*
 debug/*
 src/ogre-assimp/CMakeFiles/
 src\moc_*

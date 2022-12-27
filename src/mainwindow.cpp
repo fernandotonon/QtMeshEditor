@@ -312,7 +312,7 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
 void MainWindow::dropEvent(QDropEvent *event)
 {
     QString mime = event->mimeData()->data("text/uri-list");
-    QStringList uris = mime.split("\n",QString::SkipEmptyParts);
+    QStringList uris = mime.split("\n",Qt::SkipEmptyParts);
 
     for(int c=uris.size()-1;c>=0;--c)
     {

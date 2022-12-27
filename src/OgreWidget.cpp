@@ -278,7 +278,7 @@ void OgreWidget::mousePressEvent(QMouseEvent *e)
 
     mCamera->mousePressEvent(e);
 
-    if(e->buttons().testFlag(Qt::MidButton))
+    if(e->buttons().testFlag(Qt::MiddleButton))
     {
         QCursor cursor = this->cursor();
         cursor.setShape(Qt::SizeAllCursor);

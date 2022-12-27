@@ -79,16 +79,11 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH
 #ADD_SUBDIRECTORY(ogre-procedural)
 #include_directories("${OgreProcedural_SOURCE_DIR}/library/include" "${OgreProcedural_BINARY_DIR}/include")
 
-##############################################################
-#  Processing ogre-assimp
-##############################################################
-#ADD_SUBDIRECTORY(ogre-assimp)
-#include_directories(${OGRE_ASSIMP_INCLUDE_DIRS})
 
 ##############################################################
 #  Adding Resources
 ##############################################################
-qt5_add_resources(RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../resources/resource.qrc")
+qt_add_resources(RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../resources/resource.qrc")
 
 #if(WIN32)
         file(GLOB RES "${CMAKE_CURRENT_SOURCE_DIR}/../resources/*.rc")
@@ -119,28 +114,26 @@ endif()
 #  Linking the executable
 ##############################################################
 if(UNIX)
-    qt5_use_modules(${CMAKE_PROJECT_NAME} Core Gui Widgets X11Extras)
     target_link_libraries(${CMAKE_PROJECT_NAME}
     ${ASSIMP_LIBRARIES}
     ${Boost_SYSTEM_LIBRARY}
     ${OGRE_LIBRARIES}
     ${OgreProcedural_LIBRARY}
-    Qt5::Gui
-    Qt5::Core
-    Qt5::Widgets
-    Qt5::X11Extras
+    Qt::Gui
+    Qt::Core
+    Qt::Widgets
+    Qt::X11Extras
     )
 elseif(WIN32)
-    qt5_use_modules(${CMAKE_PROJECT_NAME} Core Gui Widgets)
     target_link_libraries(${CMAKE_PROJECT_NAME}
-    "${OGRE_DIR}/../bin/libCodec_Assimp.dll.a" #TODO: find a better way to link ogreassimp
+    "${OGRE_Codec_Assimp_LIBRARY_REL}" #TODO: find a better way to link ogreassimp
     ${ASSIMP_LIBRARIES}
     ${Boost_SYSTEM_LIBRARY}
     ${OGRE_LIBRARIES}
     ${OgreProcedural_LIBRARY}
-    Qt5::Gui
-    Qt5::Core
-    Qt5::Widgets
+    Qt::Gui
+    Qt::Core
+    Qt::Widgets
     )
 endif()
 
@@ -156,13 +149,18 @@ ui
 ##############################################################
 IF(WIN32)
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        SET(OGRELIBLIST
+        IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
+            SET(OGRELIBLIST cg
+                Plugin_CgProgramManager_d
+            )
+        ENDIF()
+        SET(OGRELIBLIST ${OGRELIBLIST}
             OgreMain_d
-            cg
+            Codec_Assimp_d
+            Codec_STBI_d
             RenderSystem_GL_d
             Plugin_OctreeSceneManager_d
             Plugin_BSPSceneManager_d
-            Plugin_CgProgramManager_d
             Plugin_ParticleFX_d
             Plugin_PCZSceneManager_d
             Plugin_OctreeZone_d
@@ -177,14 +175,19 @@ IF(WIN32)
             INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         ENDFOREACH(ogrelib)
     else()
-        SET(OGRELIBLIST
+        IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
+            SET(OGRELIBLIST cg
+                Plugin_CgProgramManager
+            )
+        ENDIF()
+        SET(OGRELIBLIST ${OGRELIBLIST}
+            libzlib
             OgreMain
-            OIS
-            cg
+            Codec_Assimp
+            Codec_STBI
             RenderSystem_GL
             Plugin_OctreeSceneManager
             Plugin_BSPSceneManager
-            Plugin_CgProgramManager
             Plugin_ParticleFX
             Plugin_PCZSceneManager
             Plugin_OctreeZone
@@ -196,14 +199,15 @@ IF(WIN32)
             OgreOverlay)
 
         FOREACH(ogrelib ${OGRELIBLIST})
-            INSTALL(FILES $ENV{OGRE_HOME}/bin/Release/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         ENDFOREACH(ogrelib)
     endif()
 
     GET_FILENAME_COMPONENT(ASSIMP_DLL_DIR ${ASSIMP_INCLUDE_DIR} PATH)
     find_file(ASSIMP_DLL_FILE NAMES libassim.dll assimp.dll Assimp32.dll PATHS "${ASSIMP_DLL_DIR}/../bin" "${ASSIMP_DLL_DIR}/../bin/x86")
-    find_file(ASSIMP_EXE_FILE NAMES assimp.exe PATHS "${ASSIMP_DLL_DIR}/../bin/x86" "${ASSIMP_DLL_DIR}/../bin32")
 
-    INSTALL(FILES ${ASSIMP_DLL_FILE} ${ASSIMP_EXE_FILE} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+    INSTALL(FILES ${ASSIMP_DLL_FILE} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+
+    INSTALL(FILES ${OgreProcedural_BINARY_REL} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
 endif(WIN32)

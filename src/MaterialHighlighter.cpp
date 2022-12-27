@@ -26,8 +26,8 @@
 
 #include "MaterialHighlighter.h"
 #include <stdio.h>
+#include <QRegularExpression>
 #include <QDebug>
-
 
 MaterialHighlighter::MaterialHighlighter(QObject *parent) :
     QSyntaxHighlighter(parent)
@@ -74,11 +74,10 @@ void MaterialHighlighter::highlightBlock(const QString &text)
 
 void MaterialHighlighter::applyHighlight(const QTextCharFormat &format, const QString &pattern, const QString &text)
 {
-    QRegExp expression(pattern);
-    int index = text.indexOf(expression);
-    while (index >= 0) {
-        int length = expression.matchedLength();
-        setFormat(index, length, format);
-        index = text.indexOf(expression, index + length);
+    QRegularExpression expression(pattern);
+    QRegularExpressionMatchIterator i = expression.globalMatch(text);
+    while(i.hasNext()){
+        QRegularExpressionMatch match = i.next();
+        setFormat(match.capturedStart(),match.capturedLength(),format);
     }
 }

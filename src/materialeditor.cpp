@@ -217,22 +217,22 @@ void MaterialEditor::setPassFields(Ogre::Pass* _pass)
     QPalette Pal(palette());
 
     Color.setRgbF(_pass->getAmbient().r,_pass->getAmbient().g,_pass->getAmbient().b);
-    Pal.setColor(QPalette::Background, Color);
+    Pal.setColor(QPalette::Window, Color);
     ui->ambientColorWidget->setPalette(Pal);
     ambientColorDialog->setCurrentColor(Color);
 
     Color.setRgbF(_pass->getDiffuse().r,_pass->getDiffuse().g,_pass->getDiffuse().b);
-    Pal.setColor(QPalette::Background, Color);
+    Pal.setColor(QPalette::Window, Color);
     ui->difuseColorWidget->setPalette(Pal);
     difuseColorDialog->setCurrentColor(Color);
 
     Color.setRgbF(_pass->getSpecular().r,_pass->getSpecular().g,_pass->getSpecular().b);
-    Pal.setColor(QPalette::Background, Color);
+    Pal.setColor(QPalette::Window, Color);
     ui->specularColorWidget->setPalette(Pal);
     specularColorDialog->setCurrentColor(Color);
 
     Color.setRgbF(_pass->getEmissive().r,_pass->getEmissive().g,_pass->getEmissive().b);
-    Pal.setColor(QPalette::Background, Color);
+    Pal.setColor(QPalette::Window, Color);
     ui->emissiveColorWidget->setPalette(Pal);
     emissiveColorDialog->setCurrentColor(Color);
 
@@ -379,7 +379,7 @@ void MaterialEditor::on_ComboTextureUnit_currentIndexChanged(int index)
 void MaterialEditor::on_Ambient_Color_Selected(const QColor &arg1)
 {
     QPalette Pal(palette());
-    Pal.setColor(QPalette::Background, arg1);
+    Pal.setColor(QPalette::Window, arg1);
     ui->ambientColorWidget->setPalette(Pal);
     if(mSelectedPass)
         mSelectedPass->setAmbient(arg1.redF(),arg1.greenF(),arg1.blueF());
@@ -389,7 +389,7 @@ void MaterialEditor::on_Ambient_Color_Selected(const QColor &arg1)
 void MaterialEditor::on_Difuse_Color_Selected(const QColor &arg1)
 {
     QPalette Pal(palette());
-    Pal.setColor(QPalette::Background, arg1);
+    Pal.setColor(QPalette::Window, arg1);
     ui->difuseColorWidget->setPalette(Pal);
     if(mSelectedPass)
         mSelectedPass->setDiffuse(arg1.redF(),arg1.greenF(),arg1.blueF(),ui->alphaDifuse->text().toFloat());
@@ -399,7 +399,7 @@ void MaterialEditor::on_Difuse_Color_Selected(const QColor &arg1)
 void MaterialEditor::on_Specular_Color_Selected(const QColor &arg1)
 {
     QPalette Pal(palette());
-    Pal.setColor(QPalette::Background, arg1);
+    Pal.setColor(QPalette::Window, arg1);
     ui->specularColorWidget->setPalette(Pal);
     if(mSelectedPass)
         mSelectedPass->setSpecular(arg1.redF(),arg1.greenF(),arg1.blueF(),ui->alphaSpecular->text().toFloat());
@@ -409,7 +409,7 @@ void MaterialEditor::on_Specular_Color_Selected(const QColor &arg1)
 void MaterialEditor::on_Emissive_Color_Selected(const QColor &arg1)
 {
     QPalette Pal(palette());
-    Pal.setColor(QPalette::Background, arg1);
+    Pal.setColor(QPalette::Window, arg1);
     ui->emissiveColorWidget->setPalette(Pal);
     if(mSelectedPass)
         mSelectedPass->setEmissive(arg1.redF(),arg1.greenF(),arg1.blueF());

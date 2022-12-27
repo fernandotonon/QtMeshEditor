@@ -128,7 +128,7 @@ endif ()
 
 # redo search if any of the environmental hints changed
 set(OGRE_COMPONENTS Paging Terrain Volume Overlay 
-  Plugin_BSPSceneManager Plugin_CgProgramManager Plugin_OctreeSceneManager
+  Plugin_BSPSceneManager Plugin_CgProgramManager Plugin_OctreeSceneManager Codec_Assimp
   Plugin_OctreeZone Plugin_PCZSceneManager Plugin_ParticleFX
   RenderSystem_Direct3D11 RenderSystem_Direct3D9 RenderSystem_GL RenderSystem_GL3Plus RenderSystem_GLES RenderSystem_GLES2)
 set(OGRE_RESET_VARS 
@@ -485,6 +485,7 @@ ogre_find_plugin(RenderSystem_GLES OgreGLESRenderSystem.h RenderSystems/GLES/inc
 ogre_find_plugin(RenderSystem_GLES2 OgreGLES2RenderSystem.h RenderSystems/GLES2/include)
 ogre_find_plugin(RenderSystem_Direct3D9 OgreD3D9RenderSystem.h RenderSystems/Direct3D9/include)
 ogre_find_plugin(RenderSystem_Direct3D11 OgreD3D11RenderSystem.h RenderSystems/Direct3D11/include)
+ogre_find_plugin(Codec_Assimp OgreAssimpLoader.h PlugIns/Assimp)
 
 if (OGRE_STATIC)
   # check if dependencies for plugins are met

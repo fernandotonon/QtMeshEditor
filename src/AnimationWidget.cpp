@@ -86,7 +86,7 @@ void AnimationWidget::updateAnimationTable()
             {
                 QTableWidgetItem *entityItem = new QTableWidgetItem;
                 entityItem->setText(entity->getName().data());
-                entityItem->setData(ENTITY_DATA,qVariantFromValue((void *) entity));
+                entityItem->setData(ENTITY_DATA,QVariant::fromValue((void *) entity));
                 entityItem->setFlags(entityItem->flags() & ~Qt::ItemIsEditable);
 
                 Ogre::AnimationState * animationState = iter.getNext();
@@ -135,7 +135,7 @@ void AnimationWidget::updateSkeletonTable()
         QString str = entity->getName().data();
         QTableWidgetItem *entityItem = new QTableWidgetItem;
         entityItem->setText(str);
-        entityItem->setData(ENTITY_DATA,qVariantFromValue((void *) entity));
+        entityItem->setData(ENTITY_DATA,QVariant::fromValue((void *) entity));
         entityItem->setFlags(entityItem->flags() & ~Qt::ItemIsEditable);
 
         QTableWidgetItem* showSkeletonCB = new QTableWidgetItem(0);
@@ -194,7 +194,6 @@ void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
 
         if(!checked && mShowSkeleton.contains(entity))
         {
-            delete sd;
             mShowSkeleton.remove(entity);
         }
     }

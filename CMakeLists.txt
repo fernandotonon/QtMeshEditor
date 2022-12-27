@@ -27,7 +27,7 @@ message(STATUS "Building QtMeshEditor version ${QTMESHEDITOR_VERSION_STRING}")
 if(WIN32)
     cmake_policy(SET CMP0020 NEW)   # to avoid cmake warning
 endif()
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 3.20.0)
 
 enable_language(CXX)
 
@@ -58,17 +58,17 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 #  Searching Qt dependencies
 ##############################################################
 #Find Qt Packages
-#find_package(Qt5 COMPONENTS Core Widgets Gui REQUIRED)
-find_package(Qt REQUIRED)
-find_package(Qt5Core REQUIRED)
-find_package(Qt5Widgets REQUIRED)
-find_package(Qt5Gui REQUIRED)
-# find_package(Qt5Network REQUIRED)
-# find_package(Qt5OpenGL REQUIRED)
-# find_package(Qt5Svg REQUIRED)
+find_package(QT NAMES Qt6 Qt5)
+find_package(Qt6 COMPONENTS Core Widgets Gui)
+if (NOT Qt6_FOUND)
+    find_package(Qt5 5.15 REQUIRED COMPONENTS Core Widgets Gui)
+endif()
 
 if(UNIX)
-    find_package(Qt5X11Extras REQUIRED)
+    find_package(Qt6 COMPONENTS X11Extras)
+    if (NOT Qt6_FOUND)
+        find_package(Qt5X11Extras REQUIRED)
+    endif()
 endif()
 
 
@@ -82,20 +82,10 @@ find_package(OgreProcedural REQUIRED)
 include_directories(${OgreProcedural_INCLUDE_DIRS})
 
 ##############################################################
-#  Find OIS
-##############################################################
-#find_package(OIS REQUIRED)
-
-#if(NOT OIS_FOUND)
-#        message(SEND_ERROR "Failed to find OIS.")
-#endif()
-
-##############################################################
 #  Find BOOST
 ##############################################################
 if(NOT OGRE_BUILD_PLATFORM_IPHONE)
         if(WIN32 OR APPLE)
-                #set(BOOST_ROOT $ENV{OGRE_HOME}/boost)
                 set(Boost_USE_STATIC_LIBS TRUE)
         else()
                 # Statically linking boost to a dynamic Ogre build doesn't work on Linux 64bit
@@ -132,16 +122,6 @@ find_package(OGRE REQUIRED)
 
 include_directories(${OGRE_INCLUDE_DIRS} "${OGRE_INCLUDE_DIR}/Plugins/Assimp")
 
-#if(NOT ((${OGRE_VERSION} VERSION_EQUAL "1.8.0") OR (${OGRE_VERSION} VERSION_GREATER "1.8.0")))
-#    message(SEND_ERROR "You need Ogre 1.8.0 or later to build this. You can get it from sinbad's repository here: https://bitbucket.org/sinbad/ogre")
-#endif()
-
-        #Required by OGRE lib (don't know why....)
-      #  LINK_DIRECTORIES(
-       #     "${OGRE_HOME}\\lib\\Release"
-        #    "${OGRE_HOME}\\lib\\debug"
-         #   "${OGRE_HOME}\\boost\\lib"
-        #)
 ##############################################################
 #  Find ASSIMP
 ##############################################################
@@ -161,7 +141,7 @@ endif()
 ##############################################################
 #  Adding ReadMe file
 ##############################################################
-#add_custom_target(readMeFile SOURCES README)
+add_custom_target(readMeFile SOURCES README.md)
 ##############################################################
 #  Processing Subdirs
 ##############################################################
@@ -173,30 +153,21 @@ ADD_SUBDIRECTORY(cfg)
 ##############################################################
 #  Install Qt dependencies
 ##############################################################
-
 IF(WIN32)
-    GET_FILENAME_COMPONENT(QT_DLL_DIR ${QT_QMAKE_EXECUTABLE_FINDQT} PATH)
-ENDIF(WIN32)
-
-IF(DEFINED QT_QMAKE_EXECUTABLE_FINDQT)
         SET (QTLIBLIST
-        Qt5GUI
-        Qt5Core
-        Qt5Widgets
-        Qt5OpenGL)
+        Qt${QT_VERSION_MAJOR}GUI
+        Qt${QT_VERSION_MAJOR}Core
+        Qt${QT_VERSION_MAJOR}Widgets)
         FOREACH(qtlib ${QTLIBLIST})
-          IF (WIN32)
-                INSTALL(FILES ${QT_DLL_DIR}/${qtlib}.dll DESTINATION ${CMAKE_INSTALL_PREFIX})
-          ENDIF (WIN32)
+                INSTALL(FILES ${QT_DIR}/../../../bin/${qtlib}.dll DESTINATION ${CMAKE_INSTALL_PREFIX})
         ENDFOREACH(qtlib)
-endif(DEFINED QT_QMAKE_EXECUTABLE_FINDQT)
-
+endif()
 IF(WIN32)
         SET (QTPLATFORMSLIST
                 qminimal
                 qoffscreen
                 qwindows)
         FOREACH(platform ${QTPLATFORMSLIST})
-                INSTALL(FILES $ENV{QTDIR}/plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
+                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
         ENDFOREACH(platform)
 ENDIF(WIN32)

@@ -120,6 +120,6 @@ QString MaterialComboDelegate::materialNameFromIndex(const QModelIndex& index) c
 
     if(subEntity)
         return subEntity->getMaterialName().data();
-    else
-        return QString::null;
+
+    return QString();
 }
