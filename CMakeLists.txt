@@ -65,15 +65,12 @@ if (NOT Qt6_FOUND)
 endif()
 
 if(UNIX)
-    find_package(Qt6 COMPONENTS X11Extras)
     if (NOT Qt6_FOUND)
         find_package(Qt5X11Extras REQUIRED)
     endif()
 endif()
 
-
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_PATH}")
-
 
 ##############################################################
 #  Find OgreProcedural
