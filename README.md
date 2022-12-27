@@ -1,7 +1,7 @@
 # QtMeshEditor
 A 3D editor for Ogre Mesh made with Qt Framework
 
-### Download and Install Qt: (version: 5.15.2)
+### Download and Install Qt: (version: 5.15.2 or Qt6)
 	http://qt-project.org/downloads
 
 	You may use the Qt's mingw version.
@@ -9,15 +9,11 @@ A 3D editor for Ogre Mesh made with Qt Framework
 ### Download and Install CMake (Version 3.25.1)
 	http://www.cmake.org/cmake/resources/software.html
 
-### Download and Install TortoiseGIT: (version: 1.8.7)
-	http://code.google.com/p/tortoisegit/
+### Download and Install Git:
+	https://git-scm.com/downloads
 
-### Download and Extract Boost: (version: 1.55.0)
+### Download and Extract Boost: (version: 1.81.0)
 	http://www.boost.org/
-
-### Download and Install masm32: (version: 11) -- To build boost
-	[http://www.masm32.com/masmdl.htm](http://www.oby.ro/masm32/masm32v11r.zip)
-	After installing you have to include the bin folder to the system variable: Path
 
 ### Download and install DirectXSDK:
 	http://www.microsoft.com/en-us/download/details.aspx?id=6812
@@ -26,36 +22,24 @@ A 3D editor for Ogre Mesh made with Qt Framework
 ### Clone the QtMeshEditor repository:
 	`git clone https://github.com/fernandotonon/QtMeshEditor.git`
 
-### Clone the Ogre repository:
-	https://bitbucket.org/sinbad/ogre
-
-### Clone the Ogredeps repository:
-	https://bitbucket.org/cabalistic/ogredeps
+### Clone the Ogre repository: (v. 13.5.3)
+	`git clone https://github.com/OGRECave/ogre.git`
 
 ### Clone the Assimp repository:
-	https://github.com/assimp/assimp.git
+	`git clone https://github.com/assimp/assimp.git`
 
 
 ### Verify GCC Version, if it is not right try reinstalling it or ask for help :)
+### Tip: use the one provided by Qt
 
-### Build Boost
+### Build Boost (Windows)
+	```
 	bootstrap.bat mingw
 	b2 toolset=gcc variant=release -j4
+	```
 	wait some time :)
 
-
-### Build Ogredeps
-	Open CMake
-	Drag and Drop CMakeLists.txt to CMake GUI
-	Press Configure again
-	Press Generate
-	Open command
-	Enter into the folder and type "mingw32-make install"
-	Set the OGRE_DEPENDENCIES_DIR into the system variables
-
 ### Build Ogre
-	Open command
-	type "hg checkout v1-9" on the ogre's folder
 	Open CMake
 	Drag and Drop CMakeLists.txt to CMake GUI
 	Press Configure
