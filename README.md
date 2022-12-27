@@ -1,16 +1,13 @@
 # QtMeshEditor
 A 3D editor for Ogre Mesh made with Qt Framework
 
-### Download and Install Qt: (version: 5.2.1)
+### Download and Install Qt: (version: 5.15.2)
 	http://qt-project.org/downloads
 
 	You may use the Qt's mingw version.
 
-### Download and Install CMake (Version 2.8.12.2)
+### Download and Install CMake (Version 3.25.1)
 	http://www.cmake.org/cmake/resources/software.html
-
-### Download and Install TortoiseHg: (version: 2.11.0)
-	http://mercurial.selenic.com/wiki/Download
 
 ### Download and Install TortoiseGIT: (version: 1.8.7)
 	http://code.google.com/p/tortoisegit/
@@ -27,7 +24,7 @@ A 3D editor for Ogre Mesh made with Qt Framework
 	https://archive.org/download/dx81sdk_full/dx81sdk_full.exe
 
 ### Clone the QtMeshEditor repository:
-	https://bitbucket.org/fernandot/qtmesheditor
+	`git clone https://github.com/fernandotonon/QtMeshEditor.git`
 
 ### Clone the Ogre repository:
 	https://bitbucket.org/sinbad/ogre
@@ -38,14 +35,12 @@ A 3D editor for Ogre Mesh made with Qt Framework
 ### Clone the Assimp repository:
 	https://github.com/assimp/assimp.git
 
-### Clone the OgreAssimp repository:
-	https://bitbucket.org/jacmoe/ogreassimp
 
 ### Verify GCC Version, if it is not right try reinstalling it or ask for help :)
 
 ### Build Boost
 	bootstrap.bat mingw
-	b2 toolset=gcc variant=release -j3
+	b2 toolset=gcc variant=release -j4
 	wait some time :)
 
 
