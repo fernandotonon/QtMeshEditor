@@ -20,23 +20,21 @@ A 3D editor for Ogre Mesh made with Qt Framework
 	https://archive.org/download/dx81sdk_full/dx81sdk_full.exe
 
 ### Clone the QtMeshEditor repository:
-	`git clone https://github.com/fernandotonon/QtMeshEditor.git`
+	git clone https://github.com/fernandotonon/QtMeshEditor.git
 
 ### Clone the Ogre repository: (v. 13.5.3)
-	`git clone https://github.com/OGRECave/ogre.git`
+	git clone https://github.com/OGRECave/ogre.git
 
 ### Clone the Assimp repository:
-	`git clone https://github.com/assimp/assimp.git`
+	git clone https://github.com/assimp/assimp.git
 
 
 ### Verify GCC Version, if it is not right try reinstalling it or ask for help :)
 ### Tip: use the one provided by Qt
 
 ### Build Boost (Windows)
-	```
 	bootstrap.bat mingw
 	b2 toolset=gcc variant=release -j4
-	```
 	wait some time :)
 
 ### Build Ogre
