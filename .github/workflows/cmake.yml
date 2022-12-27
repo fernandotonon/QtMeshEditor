@@ -28,7 +28,6 @@ jobs:
         host: 'windows'
         target: 'desktop'
         arch: 'win64_mingw'
-        modules: 'Qt 3D for MinGW 11.2.0 64-bit'
         tools: 'tools_cmake'
 
     - name: Configure CMake
