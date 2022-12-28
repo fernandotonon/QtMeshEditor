@@ -40,7 +40,9 @@
 #include "QtInputManager.h"
 
 #ifdef __gnu_linux__
-    #include <QX11Info>
+    #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        #include <QX11Info>
+    #endif
 #endif
 
 OgreWidget::OgreWidget( QWidget *parent ):
@@ -118,16 +120,17 @@ void OgreWidget::initOgreWindow(void)
   Ogre::String winHandle;
 #ifdef WIN32
   // Windows code
-  winHandle += Ogre::StringConverter::toString((unsigned long)(this->parentWidget()->winId()));
+  winHandle = Ogre::StringConverter::toString((unsigned long)(this->parentWidget()->winId()));
 #elif MACOS
   // Mac code, tested on Mac OSX 10.6 using Qt 4.7.4 and Ogre 1.7.3
-  Ogre::String winHandle  = Ogre::StringConverter::toString(winId());
+  winHandle  = Ogre::StringConverter::toString(winId());
 #else
+    #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        winHandle = Ogre::StringConverter::toString((unsigned long)(QX11Info::display())) + ":";
+        winHandle += Ogre::StringConverter::toString((unsigned int)(QX11Info::appScreen()))+ ":";
+    #endif
 
-  winHandle = Ogre::StringConverter::toString((unsigned long)(QX11Info::display())) + ":";
-  winHandle += Ogre::StringConverter::toString((unsigned int)(QX11Info::appScreen()))+ ":";
   winHandle += Ogre::StringConverter::toString((unsigned long)(winId()));
-
 #endif
 
   Ogre::NameValuePairList params;

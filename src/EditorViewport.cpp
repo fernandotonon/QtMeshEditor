@@ -34,7 +34,9 @@
 #include <Ogre.h>
 
 #ifdef __gnu_linux__
-    #include <QX11Info>
+    #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
+        #include <QX11Info>
+    #endif
 #endif
 
 EditorViewport::EditorViewport(MainWindow* parent, int index)

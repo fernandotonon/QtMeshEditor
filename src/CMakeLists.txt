@@ -101,7 +101,7 @@ if(WIN32)
 	${HEADER_FILES}
 	${SRC_FILES}
         ${RESOURCE_SRCS}
-	)
+        )
 else()
         add_executable(${CMAKE_PROJECT_NAME}
 	${HEADER_FILES}
@@ -116,19 +116,20 @@ endif()
 if(UNIX)
     target_link_libraries(${CMAKE_PROJECT_NAME}
     ${ASSIMP_LIBRARIES}
-    ${Boost_SYSTEM_LIBRARY}
     ${OGRE_LIBRARIES}
     ${OgreProcedural_LIBRARY}
+    "${OGRE_Codec_Assimp_LIBRARY_REL}" #TODO: find a better way to link ogreassimp
     Qt::Gui
     Qt::Core
     Qt::Widgets
-    Qt::X11Extras
     )
+    IF(NOT Qt6_FOUND)
+        target_link_libraries(${CMAKE_PROJECT_NAME} Qt5::X11Extras)
+    ENDIF()
 elseif(WIN32)
     target_link_libraries(${CMAKE_PROJECT_NAME}
     "${OGRE_Codec_Assimp_LIBRARY_REL}" #TODO: find a better way to link ogreassimp
     ${ASSIMP_LIBRARIES}
-    ${Boost_SYSTEM_LIBRARY}
     ${OGRE_LIBRARIES}
     ${OgreProcedural_LIBRARY}
     Qt::Gui

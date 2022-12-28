@@ -37,6 +37,10 @@
 #include "OgreXML/OgreXMLMeshSerializer.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 
+#ifndef WIN32
+    #include <unistd.h>
+#endif
+
 //TODO add this in a library with this interface
 MeshImporterExporter::MeshImporterExporter()
 {
@@ -94,7 +98,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                         #ifdef WIN32
                             Sleep(1000);
                         #else
-                            sleep(1);  //usleep(1000000)
+                            sleep(1);
                         #endif
 
                     Ogre::XMLMeshSerializer xmlMS;
