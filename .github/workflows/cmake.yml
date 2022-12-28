@@ -30,6 +30,14 @@ jobs:
         arch: 'win64_mingw'
         tools: 'tools_cmake'
 
+    - name: Check out Assimp repo
+      uses: actions/checkout@master
+      with:
+          repository: assimp/assimp
+          
+    - name: Build Assimp repo
+      run: cmake -B assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+          
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
@@ -64,6 +72,14 @@ jobs:
         arch: 'gcc_64'
         tools: 'tools_cmake'
 
+    - name: Check out Assimp repo
+      uses: actions/checkout@master
+      with:
+          repository: assimp/assimp
+          
+    - name: Build Assimp repo
+      run: cmake -B assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
@@ -97,6 +113,14 @@ jobs:
         target: 'desktop'
         arch: 'clang_64'
         tools: 'tools_cmake'
+        
+    - name: Check out Assimp repo
+      uses: actions/checkout@master
+      with:
+          repository: assimp/assimp
+          
+    - name: Build Assimp repo
+      run: cmake -B assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
