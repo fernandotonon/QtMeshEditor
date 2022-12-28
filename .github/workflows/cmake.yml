@@ -64,16 +64,16 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-    
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v3
-      with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
-        host: 'linux'
-        target: 'desktop'
-        arch: 'gcc_64'
-        tools: 'tools_cmake'
+# ok    
+#     - name: Install Qt
+#       uses: jurplel/install-qt-action@v3
+#       with:
+#         aqtversion: '==2.1.*'
+#         version: '6.5.0'
+#         host: 'linux'
+#         target: 'desktop'
+#         arch: 'gcc_64'
+#         tools: 'tools_cmake'
 
     - name: Check out Assimp repo
       uses: actions/checkout@master
@@ -84,27 +84,30 @@ jobs:
       run: cmake -B assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
       
     - name: Build and install Assimp
-      run: cmake --build assimp --config ${{env.BUILD_TYPE}} --install
+      run: cmake --build assimp --config ${{env.BUILD_TYPE}}
       
-    - name: Configure CMake
-      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-
-    - name: Build
-      # Build your program with the given configuration
-      run: cmake --build ${{github.workspace}} --config ${{env.BUILD_TYPE}}
-
     - name: Download Artifacts
       uses: actions/download-artifact@v3
-      with:
-        path: ${{github.workspace}}/bin
+      
+#     - name: Configure CMake
+#       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+#       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+#       run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
-    - name: Test
-      working-directory: ${{github.workspace}}
-      # Execute tests defined by the CMake configuration.
-      # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
-      run: ctest -C ${{env.BUILD_TYPE}}
+#     - name: Build
+#       # Build your program with the given configuration
+#       run: cmake --build ${{github.workspace}} --config ${{env.BUILD_TYPE}}
+
+#     - name: Download Artifacts
+#       uses: actions/download-artifact@v3
+#       with:
+#         path: ${{github.workspace}}/bin
+
+#     - name: Test
+#       working-directory: ${{github.workspace}}
+#       # Execute tests defined by the CMake configuration.
+#       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
+#       run: ctest -C ${{env.BUILD_TYPE}}
 
 #  build-macos:
 #     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
