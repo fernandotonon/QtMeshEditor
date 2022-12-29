@@ -104,13 +104,14 @@ jobs:
           ${{ runner.os }}-
 
     - name: Check out Assimp repo
+      if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
           path: ./assimp
           
-#     - name: Build Assimp repo
-#       run: cmake -B assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+    - name: Build Assimp repo
+      run: cmake -B ./assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
       
 #     - name: Build and install Assimp
 #       run: cmake --build assimp --config ${{env.BUILD_TYPE}}
