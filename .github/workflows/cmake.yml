@@ -78,16 +78,17 @@ jobs:
           ${{ runner.os }}-build-${{ env.cache-name }}-
           ${{ runner.os }}-build-
           ${{ runner.os }}-
-# ok    
-#     - name: Install Qt
-#       uses: jurplel/install-qt-action@v3
-#       with:
-#         aqtversion: '==2.1.*'
-#         version: '6.5.0'
-#         host: 'linux'
-#         target: 'desktop'
-#         arch: 'gcc_64'
-#         tools: 'tools_cmake'
+    
+    - name: Install Qt
+      if: steps.cache-qt-linux.outputs.cache-hit != 'true'
+      uses: jurplel/install-qt-action@v3
+      with:
+        aqtversion: '==2.1.*'
+        version: '6.5.0'
+        host: 'linux'
+        target: 'desktop'
+        arch: 'gcc_64'
+        tools: 'tools_cmake'
 
     - name: Cache Assimp
       id: cache-assimp
