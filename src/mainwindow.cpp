@@ -403,7 +403,7 @@ void MainWindow::chooseBgColor()
     if(!mDockWidgetList.isEmpty())
     {
         QColor prevColor =  mDockWidgetList.at(0)->getOgreWidget()->getBackgroundColor();
-        QColor c = QColorDialog::getColor(prevColor, this, tr("Choose background color"));
+        QColor c = QColorDialog::getColor(prevColor, this, tr("Choose background color"), QColorDialog::DontUseNativeDialog);
         if(c.isValid())
             foreach(EditorViewport* pDockWidget, mDockWidgetList)
                 pDockWidget->getOgreWidget()->setBackgroundColor(c);
@@ -566,7 +566,7 @@ void MainWindow::on_action1x1_Upper_and_Lower_toggled(bool arg1)
 void MainWindow::on_actionAdd_Resource_location_triggered()
 {
     try{
-        QString path = QFileDialog::getExistingDirectory(this, "", "", QFileDialog::ShowDirsOnly);
+        QString path = QFileDialog::getExistingDirectory(this, "", "", QFileDialog::DontUseNativeDialog|QFileDialog::ShowDirsOnly);
 
         try{
             Ogre::ResourceGroupManager::getSingleton().destroyResourceGroup(path.toStdString().data());

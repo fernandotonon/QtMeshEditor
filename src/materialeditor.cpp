@@ -49,6 +49,11 @@ MaterialEditor::MaterialEditor(QWidget *parent) :
 {
     ui->setupUi(this);
 
+    ambientColorDialog->setOption(QColorDialog::DontUseNativeDialog);
+    difuseColorDialog->setOption(QColorDialog::DontUseNativeDialog);
+    specularColorDialog->setOption(QColorDialog::DontUseNativeDialog);
+    emissiveColorDialog->setOption(QColorDialog::DontUseNativeDialog);
+
     QObject::connect(ambientColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Ambient_Color_Selected(QColor)));
     QObject::connect(difuseColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Difuse_Color_Selected(QColor)));
     QObject::connect(specularColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Specular_Color_Selected(QColor)));
@@ -663,7 +668,8 @@ void MaterialEditor::on_selectTexture_clicked()
 {
     QString filePath = QFileDialog::getOpenFileName(this, tr("Select a texture"),
                                                      "",
-                                                     tr("Image File (*.bmp *.jpg *.gif *.raw *.png *.tga *.dds)"));
+                                                     tr("Image File (*.bmp *.jpg *.gif *.raw *.png *.tga *.dds)"),
+                                                    nullptr, QFileDialog::DontUseNativeDialog);
 
     if(filePath.size()&&mSelectedTextureUnit)
     {
