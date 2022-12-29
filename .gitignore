@@ -5,6 +5,7 @@
 *.pro
 *.pro.*
 *.docx
+*Makefile
 Dependencies/*
 release/*
 bin/*
