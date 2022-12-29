@@ -72,7 +72,7 @@ private slots:
 
     void chooseBgColor(void);
 
-    void setTransformState(int newState);
+    void setTransformState(TransformOperator::TransformState newState);
     void createEditorViewport(void);
     void onWidgetClosing(EditorViewport* const& widget);
     void ogreUpdate(void);

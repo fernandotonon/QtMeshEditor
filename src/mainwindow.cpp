@@ -139,7 +139,10 @@ void MainWindow::initToolBar()
     // Transform Property tab
     m_pTransformWidget = new TransformWidget(this->ui->tabWidget);
     ui->tabWidget->addTab(m_pTransformWidget, tr("Transform"));
-    setTransformState(static_cast<int> (TransformOperator::TS_SELECT));
+    setTransformState(TransformOperator::TS_SELECT);
+    connect(ui->actionSelect_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_SELECT);});
+    connect(ui->actionTranslate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_TRANSLATE);});
+    connect(ui->actionRotate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_ROTATE);});
     connect(ui->actionRemove_Object, SIGNAL(triggered()), TransformOperator::getSingleton(), SLOT(removeSelected()));
     // TODO improve that : the first connection could not be done in the first call of createEditorViewport
     // because m_pTransformOperator doesn't exist yet, but m_pTransformOperator need the ressources to be created...
@@ -210,20 +213,6 @@ void MainWindow::initToolBar()
 
     // show grid
     connect(ui->actionShow_Grid, SIGNAL(toggled(bool)),Manager::getSingleton()->getViewportGrid(),SLOT(setVisible(bool)));
-
-    //Signal mapping Implementation is done so that there is always a action selected
-    QSignalMapper* mapper = new QSignalMapper(this);
-
-    connect(ui->actionSelect_Object, SIGNAL(triggered()), mapper, SLOT(map()));
-    mapper->setMapping(ui->actionSelect_Object, static_cast<int> (TransformOperator::TS_SELECT));
-
-    connect(ui->actionTranslate_Object, SIGNAL(triggered()), mapper, SLOT(map()));
-    mapper->setMapping(ui->actionTranslate_Object, static_cast<int>(TransformOperator::TS_TRANSLATE));
-
-    connect(ui->actionRotate_Object, SIGNAL(triggered()), mapper, SLOT(map()));
-    mapper->setMapping(ui->actionRotate_Object, static_cast<int> (TransformOperator::TS_ROTATE));
-
-    connect(mapper, SIGNAL(mapped(int)), this, SLOT(setTransformState(int)));
 }
 
 // TODO we have to make a choice : use the standard Ogre loop (no timer, mRoot->startRendering();)
@@ -417,9 +406,9 @@ void MainWindow::chooseBgColor()
 
 }
 
-void MainWindow::setTransformState(int newState)
+void MainWindow::setTransformState(TransformOperator::TransformState newState)
 {
-    switch ( static_cast<TransformOperator::TransformState> (newState) ) {
+    switch ( newState ) {
     case TransformOperator::TS_SELECT:
         ui->actionSelect_Object->setChecked(true);
         ui->actionTranslate_Object->setChecked(false);
