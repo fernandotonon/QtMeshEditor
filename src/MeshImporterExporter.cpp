@@ -192,7 +192,8 @@ void MeshImporterExporter::exporter(Ogre::SceneNode *_sn)
                                                         "Ogre Mesh v1.7+(*.mesh);;"\
                                                         "Ogre Mesh v1.4+(*.mesh);;"\
                                                         "Ogre Mesh v1.0+(*.mesh);;"\
-                                                        "Ogre XML (*.mesh.xml)"),&filter);
+                                                        "Ogre XML (*.mesh.xml)"),&filter,
+                                                    QFileDialog::DontUseNativeDialog);
     if(fileName.size())
     {
         QFileInfo file;

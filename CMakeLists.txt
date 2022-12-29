@@ -15,7 +15,7 @@ CMAKE_POLICY(SET CMP0005 NEW)
 
 project(QtMeshEditor)
 
-set(QTMESHEDITOR_VERSION_STRING "\"1.4.7\"")
+set(QTMESHEDITOR_VERSION_STRING "\"1.4.8\"")
 
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
 message(STATUS "Building QtMeshEditor version ${QTMESHEDITOR_VERSION_STRING}")
@@ -125,8 +125,7 @@ IF(WIN32)
         FOREACH(qtlib ${QTLIBLIST})
                 INSTALL(FILES ${QT_DIR}/../../../bin/${qtlib}.dll DESTINATION ${CMAKE_INSTALL_PREFIX})
         ENDFOREACH(qtlib)
-endif()
-IF(WIN32)
+
         SET (QTPLATFORMSLIST
                 qminimal
                 qoffscreen
@@ -134,4 +133,22 @@ IF(WIN32)
         FOREACH(platform ${QTPLATFORMSLIST})
                 INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
         ENDFOREACH(platform)
-ENDIF(WIN32)
+ELSEIF(UNIX)
+        SET (QTLIBLIST
+        Qt${QT_VERSION_MAJOR}Gui
+        Qt${QT_VERSION_MAJOR}Core
+        Qt${QT_VERSION_MAJOR}OpenGL
+        Qt${QT_VERSION_MAJOR}XcbQpa)
+        FOREACH(qtlib ${QTLIBLIST})
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
+        ENDFOREACH(qtlib)
+
+        SET (QTPLATFORMSLIST
+                qminimal
+                qxcb
+                qeglfs
+                qwayland-generic)
+        FOREACH(platform ${QTPLATFORMSLIST})
+                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/lib${platform}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
+        ENDFOREACH(platform)
+ENDIF()

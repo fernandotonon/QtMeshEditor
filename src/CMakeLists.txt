@@ -79,7 +79,17 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH
 #ADD_SUBDIRECTORY(ogre-procedural)
 #include_directories("${OgreProcedural_SOURCE_DIR}/library/include" "${OgreProcedural_BINARY_DIR}/include")
 
-
+##############################################################
+# Determine Ogre version for creating the symlinks in linux
+##############################################################
+IF(UNIX)
+  file(READ /usr/local/include/OGRE/OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
+  get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MAJOR OGRE_VERSION_MAJOR)
+  get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MINOR OGRE_VERSION_MINOR)
+  get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_PATCH OGRE_VERSION_PATCH)
+  get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_NAME OGRE_VERSION_NAME)
+  set(OGRE_VERSION "${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR}.${OGRE_VERSION_PATCH}")
+ENDIF()
 ##############################################################
 #  Adding Resources
 ##############################################################
@@ -144,11 +154,10 @@ endif()
 ADD_DEPENDENCIES(${CMAKE_PROJECT_NAME}
 ui
 )
-
 ##############################################################
 #  Install libraries
 ##############################################################
-IF(WIN32)
+
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
             SET(OGRELIBLIST cg
@@ -173,7 +182,9 @@ IF(WIN32)
             OgreOverlay_d)
 
         FOREACH(ogrelib ${OGRELIBLIST})
-            INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            IF(WIN32)
+                INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            ENDIF()
         ENDFOREACH(ogrelib)
     else()
         IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
@@ -200,15 +211,23 @@ IF(WIN32)
             OgreOverlay)
 
         FOREACH(ogrelib ${OGRELIBLIST})
-            INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            IF(WIN32)
+                INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            ELSEIF(UNIX)
+                IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
+                    INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+                ENDIF()
+                IF(EXISTS ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so)
+                    INSTALL(FILES ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+                ENDIF()
+            ENDIF()
         ENDFOREACH(ogrelib)
     endif()
-
+IF(WIN32)
     GET_FILENAME_COMPONENT(ASSIMP_DLL_DIR ${ASSIMP_INCLUDE_DIR} PATH)
     find_file(ASSIMP_DLL_FILE NAMES libassim.dll assimp.dll Assimp32.dll PATHS "${ASSIMP_DLL_DIR}/../bin" "${ASSIMP_DLL_DIR}/../bin/x86")
 
     INSTALL(FILES ${ASSIMP_DLL_FILE} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
 
     INSTALL(FILES ${OgreProcedural_BINARY_REL} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-
 endif(WIN32)
