@@ -96,7 +96,7 @@ jobs:
         cache-name: cache-assimp-linux
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
-        path: /home/runner/work/QtMeshEditor/assimp
+        path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/assimp') }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
@@ -107,7 +107,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
-          path: /assimp
+          path: ./assimp
           
 #     - name: Build Assimp repo
 #       run: cmake -B assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
