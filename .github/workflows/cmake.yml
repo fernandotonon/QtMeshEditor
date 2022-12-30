@@ -1,10 +1,10 @@
 name: CMake
 
-on:
-#   push:
-#     branches: [ "master" ]
-  pull_request:
-    branches: [ "master" ]
+on: 
+   push:
+     branches: [ "workflow" ]
+#    pull_request:
+#      branches: [ "master" ]
 
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
@@ -64,30 +64,61 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-# ok    
-#     - name: Install Qt
-#       uses: jurplel/install-qt-action@v3
-#       with:
-#         aqtversion: '==2.1.*'
-#         version: '6.5.0'
-#         host: 'linux'
-#         target: 'desktop'
-#         arch: 'gcc_64'
-#         tools: 'tools_cmake'
+    
+    - name: Cache Qt
+      id: cache-qt
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-qt-linux
+      with:
+        # qt cache files are stored in `/home/runner/work/QtMeshEditor/Qt` on Linux/macOS
+        path: /home/runner/work/QtMeshEditor/Qt
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/Qt') }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+          ${{ runner.os }}-build-
+          ${{ runner.os }}-
+    
+    - name: Install Qt
+      if: steps.cache-qt-linux.outputs.cache-hit != 'true'
+      uses: jurplel/install-qt-action@v3
+      with:
+        aqtversion: '==2.1.*'
+        version: '6.5.0'
+        host: 'linux'
+        target: 'desktop'
+        arch: 'gcc_64'
+        tools: 'tools_cmake'
+
+    - name: Cache Assimp
+      id: cache-assimp
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-linux
+      with:
+        # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
+        path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/assimp') }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+          ${{ runner.os }}-build-
+          ${{ runner.os }}-
 
     - name: Check out Assimp repo
+      if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
+          path: ./assimp
           
     - name: Build Assimp repo
-      run: cmake -B assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      run: cmake -B ./assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
       
-    - name: Build and install Assimp
-      run: cmake --build assimp --config ${{env.BUILD_TYPE}}
+#     - name: Build and install Assimp
+#       run: cmake --build assimp --config ${{env.BUILD_TYPE}}
       
-    - name: Download Artifacts
-      uses: actions/download-artifact@v3
+#     - name: Download Artifacts
+#       uses: actions/download-artifact@v3
       
 #     - name: Configure CMake
 #       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
