@@ -569,3 +569,12 @@ void MainWindow::on_actionAdd_Resource_location_triggered()
        QMessageBox::critical(this, "Error on loading resources", ex.what());
     }
 }
+
+void MainWindow::on_actionChange_Ambient_Light_triggered()
+{
+    Ogre::ColourValue ambientLightColour = Manager::getSingleton()->getSceneMgr()->getAmbientLight();
+    QColor c = QColorDialog::getColor(QColor::fromRgbF(ambientLightColour.r, ambientLightColour.g, ambientLightColour.b), this, tr("Choose background color"), QColorDialog::DontUseNativeDialog);
+    if(c.isValid())
+        Manager::getSingleton()->getSceneMgr()->setAmbientLight( Ogre::ColourValue(c.redF(),c.greenF(),c.blueF()) );
+}
+

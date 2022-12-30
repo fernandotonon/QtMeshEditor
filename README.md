@@ -56,7 +56,6 @@ A 3D editor for Ogre Mesh made with Qt Framework
 ### Build Ogre
 	Open CMake
 	Drag and Drop CMakeLists.txt to CMake GUI
-	As a temporary workaround, it is needed to set OGRE_NODELESS_POSITIONING to true when building to make it compatible with the QtMeshEditor code
 	Press Configure
 	Select MingW Compiler
 	Make sure the Assimp_DIR is configured (C:/Assimp/lib/cmake/assimp-5.2)

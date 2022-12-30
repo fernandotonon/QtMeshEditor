@@ -85,6 +85,8 @@ private slots:
 
     void on_actionAdd_Resource_location_triggered();
 
+    void on_actionChange_Ambient_Light_triggered();
+
 public slots:
     void setPlaying(bool playing);
 

@@ -23,10 +23,6 @@
 /// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
-//Workaround to migrate the version, need to remove and proper fix the light direction
-// Need to build ogre setting this as true - need to fix it
-#define OGRE_NODELESS_POSITIONING
-
 #include <QCoreApplication>
 #include <QDebug>
 
@@ -106,9 +102,7 @@ Manager::~Manager()
 
 void Manager::CreateEmptyScene()
 {
-    //mSceneMgr->setAmbientLight( Ogre::ColourValue(.2,.2,.2) );
-
-    {
+    { //TODO: Add the hability of the user adding/removing lights
         Ogre::Light* light = mSceneMgr->createLight();
 
         light->setType(Ogre::Light::LT_DIRECTIONAL);
@@ -116,46 +110,12 @@ void Manager::CreateEmptyScene()
         light->setDiffuseColour(1.0f, 1.0f, 1.0f);
         light->setSpecularColour(.8f, .8f, .8f);// color of 'reflected' light
 
-        light->setDirection(Ogre::Vector3( 1, -1, 1 ));
-        /*
-        Ogre::SceneNode* lightSceneNode = mSceneMgr->getRootSceneNode()->createChildSceneNode(tr("light"));
-        lightSceneNode->setPosition(0.0,10.0,10.0);
-        lightSceneNode->attachObject(lLight);
-        */
+        Ogre::SceneNode* lightSceneNode = mSceneMgr->getRootSceneNode()->createChildSceneNode();
+        lightSceneNode->attachObject(light);
+        lightSceneNode->setDirection(1, -1, 1);
     }
 
     m_pViewportGrid = new ViewportGrid();
-
-    /////////////////////////////////////////////////////////////////////
-    // DEBUG
-    /////////////////////////////////////////////////////////////////////
-
-/*
-    Ogre::SceneNode* pRootNode = mSceneMgr->getRootSceneNode();
-    Ogre::SceneNode* pBaseNode = pRootNode->createChildSceneNode("baseNode1");
-
-    //pRootNode->createChildSceneNode("baseNode2");
-    //pRootNode->createChildSceneNode("baseNode3");
-
-    pBaseNode->createChildSceneNode("child1");
-    pBaseNode->createChildSceneNode("child2");
-    Ogre::SceneNode* childNode = pBaseNode->createChildSceneNode("child3");
-    childNode->createChildSceneNode("subchild1");
-    childNode->createChildSceneNode("subchild2");
-
-
-    Ogre::Node::ChildNodeIterator nodeIterator = mSceneMgr->getRootSceneNode()->getChildIterator();
-    while (nodeIterator.hasMoreElements())
-    {
-
-            qDebug()<<((static_cast<Ogre::SceneNode*>(nodeIterator.peekNextValue()))->getName().data());
-        nodeIterator.moveNext();
-    }
-*/
-    /////////////////////////////////////////////////////////////////////
-    // DEBUG
-    /////////////////////////////////////////////////////////////////////
-
 }
 
 

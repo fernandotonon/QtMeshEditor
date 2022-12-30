@@ -46,7 +46,7 @@
      <x>0</x>
      <y>0</y>
      <width>1010</width>
-     <height>21</height>
+     <height>22</height>
     </rect>
    </property>
    <property name="mouseTracking">
@@ -73,6 +73,7 @@
      <addaction name="action1x1_Upper_and_Lower"/>
     </widget>
     <addaction name="actionShow_Grid"/>
+    <addaction name="actionChange_Ambient_Light"/>
     <addaction name="actionChange_BG_Color"/>
     <addaction name="menuView"/>
     <addaction name="separator"/>
@@ -371,6 +372,11 @@
   <action name="actionAdd_Resource_location">
    <property name="text">
     <string>Add Resource Location</string>
+   </property>
+  </action>
+  <action name="actionChange_Ambient_Light">
+   <property name="text">
+    <string>Change Ambient Light</string>
    </property>
   </action>
  </widget>

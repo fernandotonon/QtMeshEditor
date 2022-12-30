@@ -23,9 +23,6 @@
 /// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
-//TODO: fix this
-#define OGRE_NODELESS_POSITIONING
-
 #include "MeshImporterExporter.h"
 #include <QMessageBox>
 #include <QFileInfo>
@@ -41,9 +38,22 @@
     #include <unistd.h>
 #endif
 
-//TODO add this in a library with this interface
 MeshImporterExporter::MeshImporterExporter()
 {
+}
+
+void MeshImporterExporter::configureCamera(Ogre::Entity *en)
+{
+    Ogre::SceneManager::CameraIterator it = Manager::getSingleton()->getSceneMgr()->getCameraIterator();
+    Ogre::Real size = std::max(std::max(en->getBoundingBox().getSize().y,en->getBoundingBox().getSize().x),en->getBoundingBox().getSize().z)    ;
+    while(it.hasMoreElements())
+    {
+        Ogre::Camera* camera = it.getNext();
+        const Ogre::Radian fov = camera->getFOVy();
+        Ogre::Real distance = size/(2*std::tan(fov.valueRadians()/2));
+        camera->getParentSceneNode()->setPosition(0,0,0);
+        camera->getParentSceneNode()->translate(camera->getParentSceneNode()->getOrientation().zAxis()*-distance*1.2);
+    }
 }
 
 void MeshImporterExporter::importer(const QStringList &_uriList)
@@ -63,23 +73,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
             if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
             {
                 sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
-                Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(),
-                                                                                                        file.path().toStdString().data()));
-
+                Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(),                                                                                        file.path().toStdString().data()));
                 sn->setPosition(0,0,0);
 
-                Ogre::SceneManager::CameraIterator it = Manager::getSingleton()->getSceneMgr()->getCameraIterator();
-                Ogre::Real size = std::max(std::max(en->getBoundingBox().getSize().y,en->getBoundingBox().getSize().x),en->getBoundingBox().getSize().z)    ;
-                while(it.hasMoreElements())
-                {
-                    Ogre::Camera* camera = it.getNext();
-                    const Ogre::Radian fov = camera->getFOVy();
-                    Ogre::Real distance = size/(2*std::tan(fov.valueRadians()/2));
-                    camera->setPosition(0,0,0);
-                    camera->move(camera->getDirection().normalisedCopy()*-distance*1.2);
-
-                }
-
+                configureCamera(en);
             }
             else if(!file.suffix().compare("xml",Qt::CaseInsensitive))
             {
@@ -114,17 +111,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                 Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, mesh);
                 sn->setPosition(0,0,0);
 
-                Ogre::SceneManager::CameraIterator it = Manager::getSingleton()->getSceneMgr()->getCameraIterator();
-                Ogre::Real size = std::max(std::max(en->getBoundingBox().getSize().y,en->getBoundingBox().getSize().x),en->getBoundingBox().getSize().z)    ;
-                while(it.hasMoreElements())
-                {
-                    Ogre::Camera* camera = it.getNext();
-                    const Ogre::Radian fov = camera->getFOVy();
-                    Ogre::Real distance = size/(2*std::tan(fov.valueRadians()/2));
-                    camera->setPosition(0,0,0);
-                    camera->move(camera->getDirection().normalisedCopy()*-distance*1.2);
-
-                }
+                configureCamera(en);
             }
             else
             {
@@ -154,17 +141,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
 
                         sn->setPosition(0,0,0);
 
-                        Ogre::SceneManager::CameraIterator it = Manager::getSingleton()->getSceneMgr()->getCameraIterator();
-                        Ogre::Real size = std::max(std::max(en->getBoundingBox().getSize().y,en->getBoundingBox().getSize().x),en->getBoundingBox().getSize().z)    ;
-                        while(it.hasMoreElements())
-                        {
-                            Ogre::Camera* camera = it.getNext();
-                            const Ogre::Radian fov = camera->getFOVy();
-                            Ogre::Real distance = size/(2*std::tan(fov.valueRadians()/2));
-                            camera->setPosition(0,0,0);
-                            camera->move(camera->getDirection().normalisedCopy()*-distance*1.2);
-
-                        }
+                        configureCamera(en);
                     }
                     else
                     {

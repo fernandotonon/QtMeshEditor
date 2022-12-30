@@ -23,9 +23,6 @@
 /// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
-//TODO: Fix this workaround
-#define OGRE_NODELESS_POSITIONING
-
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QKeyEvent>
@@ -57,19 +54,15 @@ SpaceCamera::SpaceCamera(OgreWidget* parent)
         throw std::logic_error("TPCamera::TPCamera - 'Ogre::Camera* camera' == NULL");
 
     mCamera->setFarClipDistance(999999999.9f);
+    mCamera->setNearClipDistance( 1.0f );
 
     mTarget = mSceneMgr->getRootSceneNode()->createChildSceneNode();
     mTarget->setPosition(Ogre::Vector3(0.0f,1.0f,0.0f));
 
     mCameraNode = mTarget->createChildSceneNode();
-    mCameraNode->translate(Ogre::Vector3(0.0f,0.0f,-10.0f),Ogre::Node::TS_PARENT);
-
-    mCamera->setPosition(mTarget->convertLocalToWorldPosition(mCameraNode->getPosition()));
-
-    mCamera->lookAt(mTarget->getPosition());
+    mCameraNode->translate(Ogre::Vector3(0.0f,0.0f,-20.0f),Ogre::Node::TS_PARENT);
+    mCameraNode->lookAt(mTarget->getPosition(),Ogre::Node::TS_WORLD);
     mCameraNode->attachObject(mCamera);
-
-    mCamera->setNearClipDistance( 1.0f );
 
     Manager::getSingleton()->getRoot()->addFrameListener(this);
 
@@ -205,7 +198,7 @@ void SpaceCamera::mouseMoveEvent(QMouseEvent *event)
 
 void SpaceCamera::wheelEvent(QWheelEvent *event)
 {
-    int delta = event->angleDelta().manhattanLength() * 10 / 60 * mCameraSpeed;
+    int delta = event->angleDelta().y() * 10 / 60 * mCameraSpeed;
     zoom(delta);
 
     event->accept();

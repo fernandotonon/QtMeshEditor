@@ -4,7 +4,7 @@
 #
 # - OGRE_HOME (C:\OgreSDK)
 # - ASSIMP_HOME (C:\Program Files\Assimp)
-# - CMAKE_PREFIX_PATH (C:\Qt\Qt5.3.1\5.3\mingw482_32\lib\cmake)
+# - CMAKE_PREFIX_PATH (to Qt <version>\<compiler>\lib\cmake folder)
 # - OgreProcedural_HOME (Ogre Procedural SDK Folder)
 #
 # TODO: Add ogre-procedural as dependency
@@ -15,7 +15,7 @@ CMAKE_POLICY(SET CMP0005 NEW)
 
 project(QtMeshEditor)
 
-set(QTMESHEDITOR_VERSION_STRING "\"1.4.8\"")
+set(QTMESHEDITOR_VERSION_STRING "\"1.4.9\"")
 
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
 message(STATUS "Building QtMeshEditor version ${QTMESHEDITOR_VERSION_STRING}")
