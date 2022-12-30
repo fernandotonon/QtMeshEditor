@@ -56,6 +56,7 @@ A 3D editor for Ogre Mesh made with Qt Framework
 ### Build Ogre
 	Open CMake
 	Drag and Drop CMakeLists.txt to CMake GUI
+	For Linux, set OGRE_GLSUPPORT_USE_EGL to FALSE (it craches on trying to use multiple viewports)
 	Press Configure
 	Select MingW Compiler
 	Make sure the Assimp_DIR is configured (C:/Assimp/lib/cmake/assimp-5.2)
