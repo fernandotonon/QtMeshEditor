@@ -44,6 +44,7 @@ int main(int argc, char *argv[])
     newPalette.setColor(QPalette::AlternateBase,   QColor( 45,  45,  45));
     newPalette.setColor(QPalette::PlaceholderText, QColor(127, 127, 127));
     newPalette.setColor(QPalette::Text,            QColor(212, 212, 212));
+    newPalette.setColor(QPalette::Link,            QColor(100, 100, 100));
     newPalette.setColor(QPalette::Button,          QColor( 45,  45,  45));
     newPalette.setColor(QPalette::ButtonText,      QColor(212, 212, 212));
     newPalette.setColor(QPalette::BrightText,      QColor(240, 240, 240));

@@ -366,7 +366,7 @@ void MainWindow::on_actionMaterial_Editor_triggered()
 
         materialIterator.moveNext();
     }
-    m->setWindowTitle("Material Editor");
+    m->setWindowTitle("Material List");
     m->SetMaterialList(List);
 
     m->show();

@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>272</width>
+    <width>300</width>
     <height>90</height>
    </rect>
   </property>
@@ -18,13 +18,13 @@
   </property>
   <property name="minimumSize">
    <size>
-    <width>272</width>
+    <width>300</width>
     <height>90</height>
    </size>
   </property>
   <property name="maximumSize">
    <size>
-    <width>272</width>
+    <width>300</width>
     <height>90</height>
    </size>
   </property>
@@ -32,40 +32,39 @@
    <string>About</string>
   </property>
   <property name="windowIcon">
-   <iconset resource="../resource.qrc">
+   <iconset resource="../resources/resource.qrc">
     <normaloff>:/icones/icone.ico</normaloff>:/icones/icone.ico</iconset>
   </property>
   <widget class="QLabel" name="label">
    <property name="geometry">
     <rect>
-     <x>60</x>
+     <x>70</x>
      <y>30</y>
      <width>171</width>
      <height>16</height>
     </rect>
    </property>
    <property name="text">
-    <string>Developed by: Fernando Tonon</string>
+    <string>Developed by: Fernando</string>
    </property>
   </widget>
   <widget class="QLabel" name="label_2">
    <property name="geometry">
     <rect>
-     <x>50</x>
+     <x>20</x>
      <y>50</y>
-     <width>171</width>
+     <width>271</width>
      <height>21</height>
     </rect>
    </property>
    <property name="font">
     <font>
      <pointsize>12</pointsize>
-     <weight>75</weight>
      <bold>true</bold>
     </font>
    </property>
    <property name="text">
-    <string>&lt;a href=&quot;http://www.hogpog.com.br&quot;&gt;www.HogPog.com.br&lt;/a&gt;</string>
+    <string>&lt;html&gt;&lt;head/&gt;&lt;body&gt;&lt;p&gt;&lt;a href=&quot;https://github.com/fernandotonon&quot;&gt;&lt;span style=&quot; text-decoration: underline; &quot;&gt;https://github.com/fernandotonon&lt;/span&gt;&lt;/a&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
    </property>
    <property name="openExternalLinks">
     <bool>true</bool>
@@ -74,9 +73,9 @@
   <widget class="QLabel" name="versionText">
    <property name="geometry">
     <rect>
-     <x>90</x>
+     <x>100</x>
      <y>10</y>
-     <width>70</width>
+     <width>101</width>
      <height>20</height>
     </rect>
    </property>
@@ -86,7 +85,7 @@
   </widget>
  </widget>
  <resources>
-  <include location="../resource.qrc"/>
+  <include location="../resources/resource.qrc"/>
  </resources>
  <connections/>
 </ui>
