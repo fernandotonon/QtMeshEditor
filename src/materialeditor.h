@@ -74,17 +74,11 @@ private slots:
 
     void on_saveButton_clicked();
 
-    void on_radioLightninOn_toggled(bool checked);
-
     void on_buttonEditDifuseColor_clicked();
 
     void on_buttonEditSpecularColor_clicked();
 
     void on_buttonEditEmissiveColor_clicked();
-
-    void on_radioDepthWriteOn_toggled(bool checked);
-
-    void on_radioDepthCheckOn_toggled(bool checked);
 
     void on_srcSceneBlendBox_currentIndexChanged(int index);
 
@@ -119,6 +113,14 @@ private slots:
     void on_ComboTextureUnit_currentIndexChanged(int index);
 
     void on_removeTexture_clicked();
+
+    void on_checkBoxLightning_toggled(bool checked);
+
+    void on_checkBoxDepthWrite_toggled(bool checked);
+
+    void on_checkBoxDepthCheck_toggled(bool checked);
+
+    void on_comboPolygonMode_currentIndexChanged(int index);
 
 private:
     Ui::MaterialEditor *ui;

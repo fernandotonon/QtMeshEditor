@@ -33,10 +33,11 @@
     <widget class="QTextEdit" name="textMaterial">
      <property name="html">
       <string>&lt;!DOCTYPE HTML PUBLIC &quot;-//W3C//DTD HTML 4.0//EN&quot; &quot;http://www.w3.org/TR/REC-html40/strict.dtd&quot;&gt;
-&lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
+&lt;html&gt;&lt;head&gt;&lt;meta name=&quot;qrichtext&quot; content=&quot;1&quot; /&gt;&lt;meta charset=&quot;utf-8&quot; /&gt;&lt;style type=&quot;text/css&quot;&gt;
 p, li { white-space: pre-wrap; }
-&lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'MS Shell Dlg 2'; font-size:8.25pt; font-weight:400; font-style:normal;&quot;&gt;
-&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-size:8pt;&quot;&gt; &lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+hr { height: 1px; border-width: 0; }
+&lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'Ubuntu'; font-size:11pt; font-weight:400; font-style:normal;&quot;&gt;
+&lt;p style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-family:'MS Shell Dlg 2'; font-size:8pt;&quot;&gt; &lt;/span&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
      </property>
     </widget>
    </item>
@@ -82,6 +83,9 @@ p, li { white-space: pre-wrap; }
    </item>
    <item>
     <widget class="QScrollArea" name="scrollArea">
+     <property name="enabled">
+      <bool>true</bool>
+     </property>
      <property name="minimumSize">
       <size>
        <width>0</width>
@@ -96,7 +100,7 @@ p, li { white-space: pre-wrap; }
        <rect>
         <x>0</x>
         <y>0</y>
-        <width>563</width>
+        <width>671</width>
         <height>372</height>
        </rect>
       </property>
@@ -162,7 +166,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QComboBox" name="passComboBox">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="sizePolicy">
             <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
@@ -178,7 +182,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QPushButton" name="passNewButton">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>New</string>
@@ -210,52 +214,78 @@ p, li { white-space: pre-wrap; }
           </widget>
          </item>
          <item>
-          <widget class="QWidget" name="widget" native="true">
-           <property name="minimumSize">
+          <widget class="QCheckBox" name="checkBoxLightning">
+           <property name="text">
+            <string/>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="horizontalSpacer_7">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
             <size>
-             <width>100</width>
-             <height>0</height>
+             <width>40</width>
+             <height>20</height>
             </size>
            </property>
-           <widget class="QRadioButton" name="radioLightninOn">
-            <property name="enabled">
-             <bool>false</bool>
-            </property>
-            <property name="geometry">
-             <rect>
-              <x>10</x>
-              <y>0</y>
-              <width>37</width>
-              <height>17</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>On</string>
-            </property>
-            <property name="autoRepeat">
-             <bool>false</bool>
-            </property>
-            <property name="autoExclusive">
-             <bool>true</bool>
-            </property>
-           </widget>
-           <widget class="QRadioButton" name="radioLightninOff">
-            <property name="enabled">
-             <bool>false</bool>
-            </property>
-            <property name="geometry">
-             <rect>
-              <x>50</x>
-              <y>0</y>
-              <width>39</width>
-              <height>17</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>Off</string>
-            </property>
-           </widget>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_16">
+           <property name="text">
+            <string>Depth Write:</string>
+           </property>
           </widget>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="checkBoxDepthWrite">
+           <property name="text">
+            <string/>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="horizontalSpacer_8">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+         <item>
+          <widget class="QLabel" name="label_17">
+           <property name="text">
+            <string>Depth Check:</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QCheckBox" name="checkBoxDepthCheck">
+           <property name="text">
+            <string/>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="horizontalSpacer_16">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
          </item>
          <item>
           <spacer name="horizontalSpacer_3">
@@ -273,131 +303,57 @@ p, li { white-space: pre-wrap; }
         </layout>
        </item>
        <item>
-        <layout class="QHBoxLayout" name="horizontalLayout_6">
+        <layout class="QHBoxLayout" name="horizontalLayout_13">
          <item>
-          <widget class="QLabel" name="label_6">
+          <widget class="QLabel" name="label_18">
            <property name="text">
-            <string>Depth Write:</string>
+            <string>Polygon Mode</string>
            </property>
           </widget>
          </item>
          <item>
-          <widget class="QWidget" name="widget_3" native="true">
-           <property name="minimumSize">
-            <size>
-             <width>100</width>
-             <height>0</height>
-            </size>
+          <widget class="QComboBox" name="comboPolygonMode">
+           <property name="enabled">
+            <bool>true</bool>
            </property>
-           <widget class="QRadioButton" name="radioDepthWriteOn">
-            <property name="enabled">
-             <bool>false</bool>
-            </property>
-            <property name="geometry">
-             <rect>
-              <x>0</x>
-              <y>0</y>
-              <width>37</width>
-              <height>17</height>
-             </rect>
-            </property>
+           <property name="sizePolicy">
+            <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
+             <horstretch>0</horstretch>
+             <verstretch>0</verstretch>
+            </sizepolicy>
+           </property>
+           <property name="currentText">
+            <string>solid</string>
+           </property>
+           <property name="currentIndex">
+            <number>2</number>
+           </property>
+           <item>
             <property name="text">
-             <string>On</string>
+             <string>points</string>
             </property>
-           </widget>
-           <widget class="QRadioButton" name="radioDepthWriteOff">
-            <property name="enabled">
-             <bool>false</bool>
-            </property>
-            <property name="geometry">
-             <rect>
-              <x>40</x>
-              <y>0</y>
-              <width>39</width>
-              <height>17</height>
-             </rect>
-            </property>
+           </item>
+           <item>
             <property name="text">
-             <string>Off</string>
+             <string>wireframe</string>
             </property>
-           </widget>
+           </item>
+           <item>
+            <property name="text">
+             <string>solid</string>
+            </property>
+           </item>
           </widget>
          </item>
          <item>
-          <spacer name="horizontalSpacer_8">
+          <spacer name="horizontalSpacer_15">
            <property name="orientation">
             <enum>Qt::Horizontal</enum>
            </property>
            <property name="sizeHint" stdset="0">
             <size>
-             <width>40</width>
-             <height>20</height>
-            </size>
-           </property>
-          </spacer>
-         </item>
-        </layout>
-       </item>
-       <item>
-        <layout class="QHBoxLayout" name="horizontalLayout_5">
-         <item>
-          <widget class="QLabel" name="label_5">
-           <property name="text">
-            <string>Depth Check:</string>
-           </property>
-          </widget>
-         </item>
-         <item>
-          <widget class="QWidget" name="widget_2" native="true">
-           <property name="minimumSize">
-            <size>
-             <width>100</width>
-             <height>0</height>
-            </size>
-           </property>
-           <widget class="QRadioButton" name="radioDepthCheckOn">
-            <property name="enabled">
-             <bool>false</bool>
-            </property>
-            <property name="geometry">
-             <rect>
-              <x>0</x>
-              <y>0</y>
-              <width>37</width>
-              <height>17</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>On</string>
-            </property>
-           </widget>
-           <widget class="QRadioButton" name="radioDepthCheckOff">
-            <property name="enabled">
-             <bool>false</bool>
-            </property>
-            <property name="geometry">
-             <rect>
-              <x>40</x>
-              <y>0</y>
-              <width>39</width>
-              <height>17</height>
-             </rect>
-            </property>
-            <property name="text">
-             <string>Off</string>
-            </property>
-           </widget>
-          </widget>
-         </item>
-         <item>
-          <spacer name="horizontalSpacer_7">
-           <property name="orientation">
-            <enum>Qt::Horizontal</enum>
-           </property>
-           <property name="sizeHint" stdset="0">
-            <size>
-             <width>40</width>
-             <height>20</height>
+             <width>379</width>
+             <height>15</height>
             </size>
            </property>
           </spacer>
@@ -416,7 +372,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QComboBox" name="srcSceneBlendBox">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="sizePolicy">
             <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
@@ -509,7 +465,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QComboBox" name="dstSceneBlendBox">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="sizePolicy">
             <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
@@ -614,7 +570,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QPushButton" name="buttonEditAmbientColor">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Edit</string>
@@ -624,7 +580,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QCheckBox" name="checkBoxUseVertexColorToAmbient">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Use Vertex Color</string>
@@ -671,7 +627,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QPushButton" name="buttonEditDifuseColor">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Edit</string>
@@ -688,7 +644,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QDoubleSpinBox" name="alphaDifuse">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -704,7 +660,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QCheckBox" name="checkBoxUseVertexColorToDifuse">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Use Vertex Color</string>
@@ -751,7 +707,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QPushButton" name="buttonEditSpecularColor">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Edit</string>
@@ -768,7 +724,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QDoubleSpinBox" name="alphaSpecular">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="frame">
             <bool>true</bool>
@@ -794,7 +750,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QDoubleSpinBox" name="shineSpecular">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="decimals">
             <number>4</number>
@@ -810,7 +766,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QCheckBox" name="checkBoxUseVertexColorToSpecular">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Use Vertex Color</string>
@@ -857,7 +813,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QPushButton" name="buttonEditEmissiveColor">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Edit</string>
@@ -867,7 +823,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QCheckBox" name="checkBoxUseVertexColorToEmissive">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Use Vertex Color</string>
@@ -901,7 +857,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QComboBox" name="ComboTextureUnit">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="sizePolicy">
             <sizepolicy hsizetype="MinimumExpanding" vsizetype="Fixed">
@@ -917,7 +873,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QPushButton" name="TextureUnitNewButton">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>New</string>
@@ -963,7 +919,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QPushButton" name="selectTexture">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Select</string>
@@ -973,7 +929,7 @@ p, li { white-space: pre-wrap; }
          <item>
           <widget class="QPushButton" name="removeTexture">
            <property name="enabled">
-            <bool>false</bool>
+            <bool>true</bool>
            </property>
            <property name="text">
             <string>Remove</string>

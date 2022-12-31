@@ -237,14 +237,15 @@ QList<Ogre::SceneNode *> &Manager::getSceneNodes()
 {
     mSceneNodesList.clear();
 
-    Ogre::Node::ChildNodeIterator nodeIterator = getSceneMgr()->getRootSceneNode()->getChildIterator();
-    while (nodeIterator.hasMoreElements())
+    auto nodes = getSceneMgr()->getRootSceneNode()->getChildren();
+    for(Ogre::Node* node : nodes)
     {
-        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(nodeIterator.getNext());
+        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(node);
         QString name = pSN->getName().data();
         if(!(isForbidenNodeName(name)))
             mSceneNodesList.append(pSN);
     }
+
     return mSceneNodesList;
 }
 
@@ -252,10 +253,10 @@ QList<Ogre::Entity *> &Manager::getEntities()
 {
     mEntitiesList.clear();
 
-    Ogre::Node::ChildNodeIterator nodeIterator = getSceneMgr()->getRootSceneNode()->getChildIterator();
-    while (nodeIterator.hasMoreElements())
+    auto nodes = getSceneMgr()->getRootSceneNode()->getChildren();
+    for(Ogre::Node* node : nodes)
     {
-        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(nodeIterator.getNext());
+        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(node);
         QString name = pSN->getName().data();
         if(!(isForbidenNodeName(name)))
         {

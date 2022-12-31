@@ -130,12 +130,12 @@ void OgreWidget::initOgreWindow(void)
         winHandle += Ogre::StringConverter::toString((unsigned int)(QX11Info::appScreen()))+ ":";
     #endif
 
-  winHandle += Ogre::StringConverter::toString((unsigned long)(winId()));
+    winHandle += Ogre::StringConverter::toString(winId());
 #endif
 
   Ogre::NameValuePairList params;
-#ifndef MACOS
 
+#ifndef MACOS
   params["externalWindowHandle"] = winHandle;
 
   QString name = "Viewport " + QString::number(getIndex());

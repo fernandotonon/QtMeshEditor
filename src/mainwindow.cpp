@@ -362,7 +362,7 @@ void MainWindow::on_actionMaterial_Editor_triggered()
     Ogre::ResourceManager::ResourceMapIterator materialIterator = Ogre::MaterialManager::getSingleton().getResourceIterator();
     while (materialIterator.hasMoreElements())
     {
-        List.append(materialIterator.peekNextValue().staticCast<Ogre::Material>()->getName().data());
+        List.append(Ogre::static_pointer_cast<Ogre::Material>(materialIterator.peekNextValue())->getName().data());
 
         materialIterator.moveNext();
     }
@@ -393,9 +393,10 @@ void MainWindow::chooseBgColor()
     {
         QColor prevColor =  mDockWidgetList.at(0)->getOgreWidget()->getBackgroundColor();
         QColor c = QColorDialog::getColor(prevColor, this, tr("Choose background color"), QColorDialog::DontUseNativeDialog);
-        if(c.isValid())
+        if(c.isValid()){
             foreach(EditorViewport* pDockWidget, mDockWidgetList)
                 pDockWidget->getOgreWidget()->setBackgroundColor(c);
+        }
     }
     else
     {
@@ -453,10 +454,8 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     EditorViewport* pOgreViewport = new EditorViewport(this, nextIndex);
     //OgreWidget* pOgreWidget = pOgreViewport->getOgreWidget();
 
-
     connect(pOgreViewport, SIGNAL(widgetAboutToClose(EditorViewport* const&)), this, SLOT(onWidgetClosing(EditorViewport* const&)));
     connect(pOgreViewport->getOgreWidget(), SIGNAL(focusOnWidget(OgreWidget*)), TransformOperator::getSingleton(), SLOT(setActiveWidget(OgreWidget*)));
-
 
     if(!mDockWidgetList.isEmpty())
     {
@@ -468,18 +467,17 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     mDockWidgetList.insert(widgetIterator, pOgreViewport);
 
     //before adding, we look where are the other ones
- /*
-    QList<Qt::DockWidgetArea> existingWidgetPosList;
-    foreach (OgreWidget* pOgreWidget, mOgreWidgetList)
-        existingWidgetPosList.append(dockWidgetArea(pOgreWidget));
-*/
+
+//    QList<Qt::DockWidgetArea> existingWidgetPosList;
+//    foreach (OgreWidget* pOgreWidget, mOgreWidgetList)
+//        existingWidgetPosList.append(dockWidgetArea(pOgreWidget));
+
     //dock->setWidget(pOgreWidget);
 
     addDockWidget(Qt::LeftDockWidgetArea,pOgreViewport);
 
     // TODO add some procedure to determine where to create the new widget so that it looks like 2x2 matrix view
     // it should determine the position of the existing Docked Widget
-
 }
 
 void MainWindow::onWidgetClosing(EditorViewport* const& widget)

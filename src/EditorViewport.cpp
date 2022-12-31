@@ -29,7 +29,6 @@
 #include "EditorViewport.h"
 #include "OgreWidget.h"
 #include "mainwindow.h"
-#include "Manager.h"
 
 #include <Ogre.h>
 
@@ -46,8 +45,6 @@ EditorViewport::EditorViewport(MainWindow* parent, int index)
     // Essential behavior of dock widget
     setAllowedAreas( Qt::AllDockWidgetAreas);
     setFeatures( DockWidgetClosable | DockWidgetMovable | DockWidgetFloatable);
-
-    //setFocusPolicy(Qt::NoFocus); //Default behavior
 
     m_pOgreWidget = new OgreWidget(this);
 

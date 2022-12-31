@@ -94,7 +94,7 @@ void MaterialEditor::setMaterial(const QString &_material)
 
         mMaterialName = _material;
 
-        Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()).staticCast<Ogre::Material>();
+        Ogre::MaterialPtr m = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()));
 
         Ogre::MaterialSerializer ms;
         ms.queueForExport(m,false,false,_material.toStdString().data());
@@ -180,36 +180,13 @@ void MaterialEditor::setTechFields(const QMap<int, Ogre::Pass *> &_techMap, cons
 void MaterialEditor::setPassFields(Ogre::Pass* _pass)
 {
     mSelectedPass = _pass;
-    ui->radioLightninOn->setEnabled(true);
-    ui->radioLightninOff->setEnabled(true);
-    ui->srcSceneBlendBox->setEnabled(true);
-    ui->dstSceneBlendBox->setEnabled(true);
-    ui->radioDepthWriteOn->setEnabled(true);
-    ui->radioDepthWriteOff->setEnabled(true);
-    ui->radioDepthCheckOn->setEnabled(true);
-    ui->radioDepthCheckOff->setEnabled(true);
-    ui->buttonEditAmbientColor->setEnabled(true);
-    ui->buttonEditDifuseColor->setEnabled(true);
-    ui->buttonEditSpecularColor->setEnabled(true);
-    ui->buttonEditEmissiveColor->setEnabled(true);
-    ui->ComboTextureUnit->setEnabled(true);
-    ui->TextureUnitNewButton->setEnabled(true);
-    ui->checkBoxUseVertexColorToAmbient->setEnabled(true);
-    ui->checkBoxUseVertexColorToDifuse->setEnabled(true);
-    ui->checkBoxUseVertexColorToSpecular->setEnabled(true);
-    ui->checkBoxUseVertexColorToEmissive->setEnabled(true);
-    ui->alphaDifuse->setEnabled(true);
-    ui->alphaSpecular->setEnabled(true);
-    ui->shineSpecular->setEnabled(true);
+    ui->scrollArea->setEnabled(true);
 
-    ui->radioLightninOn->setChecked(_pass->getLightingEnabled());
-    ui->radioLightninOff->setChecked(!_pass->getLightingEnabled());
+    ui->checkBoxLightning->setChecked(_pass->getLightingEnabled());
     ui->srcSceneBlendBox->setCurrentIndex(_pass->getSourceBlendFactor()+6);
     ui->dstSceneBlendBox->setCurrentIndex(_pass->getDestBlendFactor()+1);
-    ui->radioDepthWriteOn->setChecked(_pass->getDepthCheckEnabled());
-    ui->radioDepthWriteOff->setChecked(!_pass->getDepthCheckEnabled());
-    ui->radioDepthCheckOn->setChecked(_pass->getDepthWriteEnabled());
-    ui->radioDepthCheckOff->setChecked(!_pass->getDepthWriteEnabled());
+    ui->checkBoxDepthWrite->setChecked(_pass->getDepthWriteEnabled());
+    ui->checkBoxDepthCheck->setChecked(_pass->getDepthCheckEnabled());
     ui->checkBoxUseVertexColorToAmbient->setChecked(_pass->getVertexColourTracking()&1);
     ui->checkBoxUseVertexColorToDifuse->setChecked(_pass->getVertexColourTracking()&2);
     ui->checkBoxUseVertexColorToSpecular->setChecked(_pass->getVertexColourTracking()&4);
@@ -263,7 +240,7 @@ void MaterialEditor::updateMaterialText()
 {
     Ogre::LogManager::getSingleton().logMessage("void MaterialEditor::updateMaterialText()");
 
-    Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()).staticCast<Ogre::Material>();
+    Ogre::MaterialPtr m = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()));
 
     Ogre::MaterialSerializer ms;
     ms.queueForExport(m,false,false,mMaterialName.toStdString().data());
@@ -275,9 +252,9 @@ void MaterialEditor::on_techComboBox_currentIndexChanged(int index)
 {
     if(index>0)
     {
-        Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()).staticCast<Ogre::Material>();
+        Ogre::MaterialPtr m = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()));
 
-        mSelectedTechnique = m.getPointer()->getTechnique(index-1);
+        mSelectedTechnique = m.get()->getTechnique(index-1);
 
         setTechFields(mTechMap[index-1],mTechMapName[index-1]);
     }
@@ -306,38 +283,13 @@ void MaterialEditor::on_passComboBox_currentIndexChanged(int index)
     {
         mSelectedPass = NULL;
 
-        ui->radioLightninOn->setEnabled(false);
-        ui->radioLightninOff->setEnabled(false);
-        ui->srcSceneBlendBox->setEnabled(false);
-        ui->dstSceneBlendBox->setEnabled(false);
-        ui->radioDepthWriteOn->setEnabled(false);
-        ui->radioDepthWriteOff->setEnabled(false);
-        ui->radioDepthCheckOn->setEnabled(false);
-        ui->radioDepthCheckOff->setEnabled(false);
-        ui->buttonEditAmbientColor->setEnabled(false);
-        ui->buttonEditDifuseColor->setEnabled(false);
-        ui->buttonEditSpecularColor->setEnabled(false);
-        ui->buttonEditEmissiveColor->setEnabled(false);
-        ui->ComboTextureUnit->setEnabled(false);
-        ui->TextureUnitNewButton->setEnabled(false);
-        ui->checkBoxUseVertexColorToAmbient->setEnabled(false);
-        ui->checkBoxUseVertexColorToDifuse->setEnabled(false);
-        ui->checkBoxUseVertexColorToSpecular->setEnabled(false);
-        ui->checkBoxUseVertexColorToEmissive->setEnabled(false);
-        ui->alphaDifuse->setEnabled(false);
-        ui->alphaSpecular->setEnabled(false);
-        ui->shineSpecular->setEnabled(false);
-        ui->selectTexture->setEnabled(false);
-        ui->removeTexture->setEnabled(false);
+        ui->scrollArea->setEnabled(false);
 
-        ui->radioLightninOn->setChecked(false);
-        ui->radioLightninOff->setChecked(false);
+        ui->checkBoxLightning->setChecked(false);
         ui->srcSceneBlendBox->setCurrentIndex(0);
         ui->dstSceneBlendBox->setCurrentIndex(0);
-        ui->radioDepthWriteOn->setChecked(false);
-        ui->radioDepthWriteOff->setChecked(false);
-        ui->radioDepthCheckOn->setChecked(false);
-        ui->radioDepthCheckOff->setChecked(false);
+        ui->checkBoxDepthWrite->setChecked(false);
+        ui->checkBoxDepthCheck->setChecked(false);
         ui->checkBoxUseVertexColorToAmbient->setChecked(false);
         ui->checkBoxUseVertexColorToDifuse->setChecked(false);
         ui->checkBoxUseVertexColorToSpecular->setChecked(false);
@@ -450,45 +402,24 @@ void MaterialEditor::on_saveButton_clicked()
     mMaterialName = mMaterialName.remove(0,mMaterialName.indexOf("material")+9);
     mMaterialName.remove(mMaterialName.indexOf("\n"),mMaterialName.size());
 
-    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()).staticCast<Ogre::Material>();
+    Ogre::MaterialPtr material = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()));
 
     material->compile();
 
     Ogre::MaterialManager::getSingleton().reloadAll(true);
     Ogre::MeshManager::getSingleton().reloadAll(true);
 
+    //Reaply all materials after reloading
     for(Ogre::SceneNode * sn : Manager::getSingleton()->getSceneNodes())
     {
         Ogre::LogManager::getSingleton().logMessage(sn->getName());
-        if(!sn->getAttachedObjects().empty()) {
+        if(!sn->getName().empty()&&!sn->getAttachedObjects().empty()) {
             Ogre::Entity *e = static_cast<Ogre::Entity *>(sn->getAttachedObject(0));
             e->setMaterialName(e->getSubEntity(0)->getMaterialName());
         }
     }
 
     setMaterial(mMaterialName);
-}
-
-void MaterialEditor::on_radioLightninOn_toggled(bool checked)
-{
-    if(mSelectedPass)
-        mSelectedPass->setLightingEnabled(checked);
-    updateMaterialText();
-}
-
-
-void MaterialEditor::on_radioDepthWriteOn_toggled(bool checked)
-{
-    if(mSelectedPass)
-        mSelectedPass->setDepthWriteEnabled(checked);
-    updateMaterialText();
-}
-
-void MaterialEditor::on_radioDepthCheckOn_toggled(bool checked)
-{
-    if(mSelectedPass)
-        mSelectedPass->setDepthCheckEnabled(checked);
-    updateMaterialText();
 }
 
 void MaterialEditor::on_srcSceneBlendBox_currentIndexChanged(int index)
@@ -617,9 +548,9 @@ void MaterialEditor::on_newTechnique_clicked()
 #if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
         Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data());
 #else
-        Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()).staticCast<Ogre::Material>();
+        Ogre::MaterialPtr m = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()));
 #endif
-        Ogre::Technique *t = m.getPointer()->createTechnique();
+        Ogre::Technique *t = m.get()->createTechnique();
         t->setName(text.toStdString().data());
 
         setMaterial(mMaterialName);
@@ -697,3 +628,34 @@ void MaterialEditor::on_removeTexture_clicked()
         ui->textureName->setText("*Select a texture*");
     }
 }
+
+void MaterialEditor::on_checkBoxLightning_toggled(bool checked)
+{
+    if(mSelectedPass)
+        mSelectedPass->setLightingEnabled(checked);
+    updateMaterialText();
+}
+
+
+void MaterialEditor::on_checkBoxDepthWrite_toggled(bool checked)
+{
+    if(mSelectedPass)
+        mSelectedPass->setDepthWriteEnabled(checked);
+    updateMaterialText();
+}
+
+
+void MaterialEditor::on_checkBoxDepthCheck_toggled(bool checked)
+{
+    if(mSelectedPass)
+        mSelectedPass->setDepthCheckEnabled(checked);
+    updateMaterialText();
+}
+
+void MaterialEditor::on_comboPolygonMode_currentIndexChanged(int index)
+{
+    if(mSelectedPass)
+        mSelectedPass->setPolygonMode(static_cast<Ogre::PolygonMode>(index+1));
+    updateMaterialText();
+}
+

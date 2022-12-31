@@ -44,15 +44,14 @@ MeshImporterExporter::MeshImporterExporter()
 
 void MeshImporterExporter::configureCamera(Ogre::Entity *en)
 {
-    Ogre::SceneManager::CameraIterator it = Manager::getSingleton()->getSceneMgr()->getCameraIterator();
     Ogre::Real size = std::max(std::max(en->getBoundingBox().getSize().y,en->getBoundingBox().getSize().x),en->getBoundingBox().getSize().z)    ;
-    while(it.hasMoreElements())
+    auto cameras = Manager::getSingleton()->getSceneMgr()->getCameras();
+    for(const auto &tuple : cameras)
     {
-        Ogre::Camera* camera = it.getNext();
+        Ogre::Camera* camera = tuple.second;
         const Ogre::Radian fov = camera->getFOVy();
         Ogre::Real distance = size/(2*std::tan(fov.valueRadians()/2));
-        camera->getParentSceneNode()->setPosition(0,0,0);
-        camera->getParentSceneNode()->translate(camera->getParentSceneNode()->getOrientation().zAxis()*-distance*1.2);
+        camera->getParentSceneNode()->setPosition(0,0,-distance);
     }
 }
 
