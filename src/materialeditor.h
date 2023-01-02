@@ -122,6 +122,10 @@ private slots:
 
     void on_comboPolygonMode_currentIndexChanged(int index);
 
+    void on_scrollAnimUSpeed_valueChanged(double arg1);
+
+    void on_scrollAnimVSpeed_valueChanged(double arg1);
+
 private:
     Ui::MaterialEditor *ui;
 

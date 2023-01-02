@@ -218,13 +218,12 @@ void MaterialEditor::setPassFields(Ogre::Pass* _pass)
     ui->emissiveColorWidget->setPalette(Pal);
     emissiveColorDialog->setCurrentColor(Color);
 
-    Ogre::Pass::TextureUnitStateIterator itTU = _pass->getTextureUnitStateIterator();
+    auto itTU = _pass->getTextureUnitStates();
     int tcount=0;
-    while (itTU.hasMoreElements())
+    for (Ogre::TextureUnitState *textureUnit : itTU)
     {
         ++tcount;
 
-        Ogre::TextureUnitState *textureUnit = itTU.getNext();
         QString TUName = textureUnit->getName().size()?textureUnit->getName().data():QString("Texture_Unit%1").arg(tcount);
         mTexUnitMap[TUName]=textureUnit;
     }
@@ -283,7 +282,7 @@ void MaterialEditor::on_passComboBox_currentIndexChanged(int index)
     {
         mSelectedPass = NULL;
 
-        ui->scrollArea->setEnabled(false);
+     //   ui->scrollArea->setEnabled(false);
 
         ui->checkBoxLightning->setChecked(false);
         ui->srcSceneBlendBox->setCurrentIndex(0);
@@ -323,6 +322,16 @@ void MaterialEditor::on_ComboTextureUnit_currentIndexChanged(int index)
         }
         ui->selectTexture->setEnabled(true);
         ui->removeTexture->setEnabled(true);
+
+        auto effects = mSelectedTextureUnit->getEffects();
+        for(auto effectPair : effects){
+            if(effectPair.first==Ogre::TextureUnitState::ET_UVSCROLL ||
+                    effectPair.first==Ogre::TextureUnitState::ET_USCROLL)
+                ui->scrollAnimUSpeed->setValue(effectPair.second.arg1);
+            else if(effectPair.first==Ogre::TextureUnitState::ET_UVSCROLL ||
+                    effectPair.first==Ogre::TextureUnitState::ET_VSCROLL)
+                ui->scrollAnimVSpeed->setValue(effectPair.second.arg1);
+        }
     }
     else
     {
@@ -608,13 +617,16 @@ void MaterialEditor::on_selectTexture_clicked()
         QFileInfo file;
         file.setFile(filePath);
 
-        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
-        Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+        try {
+            Ogre::TextureManager::getSingleton().getByName(file.fileName().toStdString().data(),file.path().toStdString().data());
+        } catch (...) {
+            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
+            Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
 
-        Ogre::Image i;
-        i.load(file.fileName().toStdString().data(),file.path().toStdString().data());
-        Ogre::TextureManager::getSingleton().loadImage(file.fileName().toStdString().data(),file.path().toStdString().data(),i);
-
+            Ogre::Image i;
+            i.load(file.fileName().toStdString().data(),file.path().toStdString().data());
+            Ogre::TextureManager::getSingleton().loadImage(file.fileName().toStdString().data(),file.path().toStdString().data(),i);
+        }
         ui->textureName->setText(file.fileName());
         mSelectedTextureUnit->setTextureName(file.fileName().toStdString().data());
     }
@@ -656,6 +668,20 @@ void MaterialEditor::on_comboPolygonMode_currentIndexChanged(int index)
 {
     if(mSelectedPass)
         mSelectedPass->setPolygonMode(static_cast<Ogre::PolygonMode>(index+1));
+    updateMaterialText();
+}
+
+
+void MaterialEditor::on_scrollAnimUSpeed_valueChanged(double arg1)
+{
+    mSelectedTextureUnit->setScrollAnimation(ui->scrollAnimUSpeed->value(),ui->scrollAnimVSpeed->value());
+    updateMaterialText();
+}
+
+
+void MaterialEditor::on_scrollAnimVSpeed_valueChanged(double arg1)
+{
+    mSelectedTextureUnit->setScrollAnimation(ui->scrollAnimUSpeed->value(),ui->scrollAnimVSpeed->value());
     updateMaterialText();
 }
 
