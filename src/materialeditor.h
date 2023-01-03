@@ -72,7 +72,7 @@ private slots:
 
     void on_textMaterial_textChanged();
 
-    void on_saveButton_clicked();
+    void on_applyButton_clicked();
 
     void on_buttonEditDifuseColor_clicked();
 

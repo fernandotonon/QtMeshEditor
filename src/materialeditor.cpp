@@ -35,6 +35,7 @@
 #include "Manager.h"
 #include "MaterialHighlighter.h"
 #include <OgreScriptCompiler.h>
+#include <OgreScriptTranslator.h>
 
 MaterialEditor::MaterialEditor(QWidget *parent) :
     QDialog(parent)
@@ -75,7 +76,7 @@ void MaterialEditor::setMaterialText(const QString &_mat)
     ui->textMaterial->setText(_mat);
 
     ui->scrollArea->setEnabled(true);
-    ui->saveButton->setEnabled(false);
+    ui->applyButton->setEnabled(false);
 }
 
 
@@ -86,6 +87,7 @@ void MaterialEditor::setMaterial(const QString &_material)
     {
         setMaterialText("material material_name\n{\n}");
         mMaterialName = "material_name";
+        ui->scrollArea->setEnabled(false);
     }
     else
     {
@@ -101,28 +103,22 @@ void MaterialEditor::setMaterial(const QString &_material)
 
         setMaterialText(ms.getQueuedAsString().data());
 
-        Ogre::Material::TechniqueIterator it = m->getTechniqueIterator();
+        auto techniques = m->getTechniques();
         int tcount=0;//technique
         int pcount=0;//pass
         QMap <int, Ogre::Pass*> passMap;
         QList <QString> passMapName;
-        while (it.hasMoreElements())
+        for (Ogre::Technique* tech : techniques)
         {
             pcount=0;
-
-            Ogre::Technique* tech = it.getNext();
-            Ogre::Technique::PassIterator itP = tech->getPassIterator();
 
             QString techname = tech->getName().size()?tech->getName().data():QString("technique%1").arg(tcount);
 
             ui->techComboBox->addItem(techname);
 
-            while (itP.hasMoreElements())
+            auto passes = tech->getPasses();
+            for(Ogre::Pass* pass : passes)
             {
-
-
-                Ogre::Pass* pass = itP.getNext();
-
                 QString passname = pass->getName().size()?pass->getName().data():QString("pass%1").arg(pcount);
 
                 passMap[pcount] = pass;
@@ -384,15 +380,13 @@ void MaterialEditor::on_Emissive_Color_Selected(const QColor &arg1)
 
 void MaterialEditor::on_textMaterial_textChanged()
 {
-    Ogre::LogManager::getSingleton().logMessage("void MaterialEditor::on_textMaterial_textChanged()");
-    ui->scrollArea->setEnabled(false);
-    ui->saveButton->setEnabled(true);
+    ui->applyButton->setEnabled(true);
 }
 
-void MaterialEditor::on_saveButton_clicked()
-{
+void MaterialEditor::on_applyButton_clicked()
+{   
     ui->scrollArea->setEnabled(true);
-    ui->saveButton->setEnabled(false);
+    ui->applyButton->setEnabled(false);
 
     Ogre::String script = ui->textMaterial->toPlainText().toStdString().data();
     Ogre::MemoryDataStream *memoryStream = new Ogre::MemoryDataStream((void*)script.c_str(), script.length() * sizeof(char));
@@ -401,11 +395,7 @@ void MaterialEditor::on_saveButton_clicked()
     if(Ogre::MaterialManager::getSingleton().resourceExists(mMaterialName.toStdString().data()))
         Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data());
 
-   // Ogre::ScriptCompilerManager scriptCompiler;
     Ogre::MaterialManager::getSingleton().parseScript(dataStream,Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-
-    //TODO: Fix this removed in 1.11 - https://github.com/OGRECave/ogre/commit/26f4587e25ce3b1565b0fdeb07685968371ee259
-    //scriptCompiler.parseScript(dataStream,Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     mMaterialName = ui->textMaterial->toPlainText();
     mMaterialName = mMaterialName.remove(0,mMaterialName.indexOf("material")+9);
@@ -554,14 +544,9 @@ void MaterialEditor::on_newTechnique_clicked()
                                          "", &ok);
     if (ok)
     {
-#if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-        Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data());
-#else
         Ogre::MaterialPtr m = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()));
-#endif
         Ogre::Technique *t = m.get()->createTechnique();
         t->setName(text.toStdString().data());
-
         setMaterial(mMaterialName);
     }
 }

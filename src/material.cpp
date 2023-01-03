@@ -51,11 +51,7 @@ void Material::UpdateMaterialList()
     Ogre::ResourceManager::ResourceMapIterator materialIterator = Ogre::MaterialManager::getSingleton().getResourceIterator();
     while (materialIterator.hasMoreElements())
     {
-#if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-        List.append((static_cast<Ogre::MaterialPtr>(materialIterator.peekNextValue()))->getName().data());
-#else
-        List.append(materialIterator.peekNextValue().staticCast<Ogre::Material>()->getName().data());
-#endif
+        List.append(Ogre::static_pointer_cast<Ogre::Material>(materialIterator.peekNextValue())->getName().data());
         materialIterator.moveNext();
     }
     SetMaterialList(List);
@@ -88,11 +84,8 @@ void Material::on_buttonExport_clicked()
                                                     nullptr, QFileDialog::DontUseNativeDialog);
     if(fileName.size())
     {
-#if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-        Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(ui->listMaterial->selectedItems()[0]->text().toStdString().data());
-#else
+
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(ui->listMaterial->selectedItems()[0]->text().toStdString().data()).staticCast<Ogre::Material>();
-#endif
         Ogre::MaterialSerializer ms;
         ms.exportMaterial(material,fileName.toStdString().data());
     }
