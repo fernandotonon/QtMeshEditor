@@ -135,7 +135,8 @@ void PrimitiveObject::setDefaultParams()
             mNumSegX = 1;   mNumSegY = 1;       mNumSegZ = 1;
             mUTile = 1.0f;  mVTile = 1.0f;      mSwitchUV = false;
             break;
-
+        case AP_NONE:
+        break;
     }
 }
 

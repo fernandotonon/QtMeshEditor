@@ -30,6 +30,7 @@
 #include <QMainWindow>
 #include <QComboBox>
 #include <QTableWidget>
+#include <QColorDialog>
 #include <OgreFrameListener.h>
 
 #include "TransformOperator.h"
@@ -87,6 +88,14 @@ private slots:
 
     void on_actionChange_Ambient_Light_triggered();
 
+    void on_actionLight_toggled(bool arg1);
+
+    void on_actionDark_toggled(bool arg1);
+
+    void on_actionCustom_toggled(bool arg1);
+
+    void on_Custom_Palette_Color_Selected(const QColor& color);
+
 public slots:
     void setPlaying(bool playing);
 
@@ -104,7 +113,8 @@ private:
     QStringList                 mUriList;
 
     bool                        isPlaying;
-
+    QString                     mCurrentPalette;
+    QColorDialog*               customPaletteColorDialog;
 protected:
     bool frameStarted(const Ogre::FrameEvent& evt);
     bool frameRenderingQueued(const Ogre::FrameEvent &evt);
@@ -117,6 +127,7 @@ protected:
 
 private:
     void initToolBar();
+    const QPalette& darkPalette();
 
 };
 

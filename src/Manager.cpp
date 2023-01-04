@@ -195,10 +195,10 @@ void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
        return;
 
    // Destroy all the attached objects
-   Ogre::SceneNode::ObjectIterator itObject = node->getAttachedObjectIterator();
+   auto attachedObjects = node->getAttachedObjects();
 
-   while ( itObject.hasMoreElements() )
-      node->getCreator()->destroyMovableObject(itObject.getNext());
+   for(auto attachedObject : attachedObjects)
+      node->getCreator()->destroyMovableObject(attachedObject);
    /* TODO check to free up the meshmanager
    if(ent->getMesh().getPointer()->isManuallyLoaded())
    {
@@ -207,11 +207,10 @@ void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
    }*/
 
    // Recurse to child SceneNodes
-   Ogre::SceneNode::ChildNodeIterator itChild = node->getChildIterator();
-
-   while ( itChild.hasMoreElements() )
+   auto children = node->getChildren();
+   for(auto child : children)
    {
-      Ogre::SceneNode* pChildNode = static_cast<Ogre::SceneNode*>(itChild.getNext());
+      Ogre::SceneNode* pChildNode = static_cast<Ogre::SceneNode*>(child);
       destroyAllAttachedMovableObjects( pChildNode );
    }
 }
@@ -223,10 +222,9 @@ Ogre::SceneNode *Manager::getSceneNode(const QString &_name)
 
 bool Manager::hasSceneNode(const QString &_name)
 {
-    Ogre::Node::ChildNodeIterator it = getSceneMgr()->getRootSceneNode()->getChildIterator();
-    while(it.hasMoreElements())
+    auto children = getSceneMgr()->getRootSceneNode()->getChildren();
+    for(auto node : children)
     {
-        Ogre::Node* node = it.getNext();
         if(_name==node->getName().data())
             return true;
     }

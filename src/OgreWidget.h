@@ -54,7 +54,7 @@ class OgreWidget : public QWidget, public Ogre::FrameListener
   void setBackgroundColor(const QColor& c);
 
 protected:
-  virtual void initOgreWindow(void);
+  /*virtual*/ void initOgreWindow(void);
 
   QPaintEngine* paintEngine() const;
   virtual void resizeEvent(QResizeEvent *e);

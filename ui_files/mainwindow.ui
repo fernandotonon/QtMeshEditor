@@ -72,10 +72,19 @@
      <addaction name="action1x1_Side_by_Side"/>
      <addaction name="action1x1_Upper_and_Lower"/>
     </widget>
+    <widget class="QMenu" name="menuEditor_Palette">
+     <property name="title">
+      <string>Editor Palette</string>
+     </property>
+     <addaction name="actionLight"/>
+     <addaction name="actionDark"/>
+     <addaction name="actionCustom"/>
+    </widget>
     <addaction name="actionShow_Grid"/>
     <addaction name="actionChange_Ambient_Light"/>
     <addaction name="actionChange_BG_Color"/>
     <addaction name="menuView"/>
+    <addaction name="menuEditor_Palette"/>
     <addaction name="separator"/>
     <addaction name="actionAdd_Viewport"/>
     <addaction name="menuViewport_Layout"/>
@@ -377,6 +386,33 @@
   <action name="actionChange_Ambient_Light">
    <property name="text">
     <string>Change Ambient Light</string>
+   </property>
+  </action>
+  <action name="actionLight">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Light</string>
+   </property>
+  </action>
+  <action name="actionDark">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Dark</string>
+   </property>
+  </action>
+  <action name="actionCustom">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Custom</string>
    </property>
   </action>
  </widget>
