@@ -30,6 +30,7 @@
 #include <QDebug>
 #include <QInputDialog>
 #include <QFileDialog>
+#include <QMessageBox>
 #include "OgreLog.h"
 
 #include "Manager.h"
@@ -243,6 +244,59 @@ void MaterialEditor::updateMaterialText()
     setMaterialText(ms.getQueuedAsString().data());
 }
 
+bool MaterialEditor::validateScript(Ogre::DataStreamPtr& dataStream)
+{
+
+    try{
+        class MyListener: public Ogre::ScriptCompilerListener
+        {
+            private:
+                std::vector<Ogre::Exception> errors;
+            public:
+            virtual void handleError(Ogre::ScriptCompiler *compiler, Ogre::uint32 code, const Ogre::String &file, int line, const Ogre::String &msg){
+                Ogre::LogManager::getSingleton().logError("Listener: "+msg);
+                Ogre::Exception e{0,msg,"ScriptCompilerListener","error",file.c_str(),line};
+                //throw(e);
+                errors.push_back(e);
+            }
+                const std::vector<Ogre::Exception> &getErrors(){return errors;};
+        };
+
+        if(!Ogre::ResourceGroupManager::getSingleton().resourceGroupExists("Test_Script"))
+            Ogre::ResourceGroupManager::getSingleton().createResourceGroup("Test_Script");
+        if(Ogre::MaterialManager::getSingleton().resourceExists(mMaterialName.toStdString().data(),"Test_Script"))
+            Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data(),"Test_Script");
+
+        MyListener *l = new MyListener();
+        Ogre::ScriptCompilerManager::getSingleton().setListener(l);
+        Ogre::ScriptCompilerManager::getSingleton().parseScript(dataStream,"Test_Script");
+        Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data(),"Test_Script");
+
+        QString errorMessages;
+        auto errors = l->getErrors();
+        for(const auto &e : errors){
+            errorMessages+="Error on line ("+QString::number(e.getLine())+"): "+e.getDescription().c_str()+"\n";
+        }
+        if(!l->getErrors().empty()){
+            QMessageBox mBox;
+            mBox.setText(errorMessages);
+            mBox.exec();
+        }
+        return l->getErrors().empty();
+    } catch(Ogre::Exception &e){
+        QMessageBox mBox;
+        mBox.setText(QString("Error: ")+e.what()+"\n");
+        mBox.exec();
+        return false;
+    } catch(...){
+        QMessageBox mBox;
+        mBox.setText("Unknown error\n");
+        mBox.exec();
+        return false;
+    }
+    return true;
+}
+
 void MaterialEditor::on_techComboBox_currentIndexChanged(int index)
 {
     if(index>0)
@@ -384,13 +438,14 @@ void MaterialEditor::on_textMaterial_textChanged()
 }
 
 void MaterialEditor::on_applyButton_clicked()
-{   
-    ui->scrollArea->setEnabled(true);
-    ui->applyButton->setEnabled(false);
-
+{
     Ogre::String script = ui->textMaterial->toPlainText().toStdString().data();
     Ogre::MemoryDataStream *memoryStream = new Ogre::MemoryDataStream((void*)script.c_str(), script.length() * sizeof(char));
     Ogre::DataStreamPtr dataStream(memoryStream);
+
+    if(!validateScript(dataStream)){
+        return;
+    }
 
     if(Ogre::MaterialManager::getSingleton().resourceExists(mMaterialName.toStdString().data()))
         Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data());
@@ -419,6 +474,9 @@ void MaterialEditor::on_applyButton_clicked()
     }
 
     setMaterial(mMaterialName);
+
+    ui->scrollArea->setEnabled(true);
+    ui->applyButton->setEnabled(false);
 }
 
 void MaterialEditor::on_srcSceneBlendBox_currentIndexChanged(int index)

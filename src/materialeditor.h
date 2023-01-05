@@ -146,6 +146,7 @@ private:
     void setTechFields(const QMap<int, Ogre::Pass *> &_techMap, const QList<QString> &_passList);
     void setPassFields(Ogre::Pass *_pass);
     void updateMaterialText();
+    bool validateScript(Ogre::DataStreamPtr &dataStream);
 
     MaterialHighlighter* mMaterialHighlighter;
 };
