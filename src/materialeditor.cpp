@@ -256,7 +256,6 @@ bool MaterialEditor::validateScript(Ogre::DataStreamPtr& dataStream)
             virtual void handleError(Ogre::ScriptCompiler *compiler, Ogre::uint32 code, const Ogre::String &file, int line, const Ogre::String &msg){
                 Ogre::LogManager::getSingleton().logError("Listener: "+msg);
                 Ogre::Exception e{0,msg,"ScriptCompilerListener","error",file.c_str(),line};
-                //throw(e);
                 errors.push_back(e);
             }
                 const std::vector<Ogre::Exception> &getErrors(){return errors;};
