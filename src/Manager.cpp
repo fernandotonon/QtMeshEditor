@@ -24,7 +24,7 @@
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
 #include <QCoreApplication>
-#include <QDebug>
+#include <QMessageBox>
 
 #include "GlobalDefinitions.h"
 
@@ -75,7 +75,6 @@ Manager::Manager(MainWindow* parent):
     initRoot();         // Init Ogre Root
     initRenderSystem(); // Init Ogre Render System
     initSceneMgr();     // Init Ogre SceneManager
-
 }
 Manager::~Manager()
 {
@@ -324,28 +323,16 @@ void Manager::initRoot()
     }
     catch (std::logic_error const& le)
     {
-        Ogre::String str = le.what();
-        #if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-            //MessageBox( NULL, (LPCWSTR)le.what(), "An exception has occured!", MB_OK | MB_ICONERROR | MB_TASKMODAL);
-        #else
-            //std::cerr << "An exception has occured: " << le.what().c_str() << std::endl;
-        #endif
+        QMessageBox mBox;
+        mBox.setText(le.what());
+        mBox.exec();
     }
 }
 
 void Manager::initRenderSystem()
 {
     // setup a renderer
-    Ogre::RenderSystemList::const_iterator renderers = mRoot->getAvailableRenderers().begin();
-    while(renderers != mRoot->getAvailableRenderers().end())
-    {
-          Ogre::String rName = (*renderers)->getName();
-            if (rName == "OpenGL Rendering Subsystem")
-                break;
-            renderers++;
-    }
-
-    Ogre::RenderSystem *renderSystem = *renderers;
+    Ogre::RenderSystem *renderSystem = mRoot->getRenderSystemByName("OpenGL Rendering Subsystem"); //TODO: Add OpenGL 3+, and allow the user to select the render system.
 
     assert( renderSystem ); // user might pass back a null renderer, which would be bad!
 
@@ -378,26 +365,23 @@ void Manager::initSceneMgr()
 
     try
     {
-        mSceneMgr = mRoot->createSceneManager(2);//TODO: workaround - restore the use of enum Ogre::ST_EXTERIOR_CLOSE);
-        //std::cout<<"init here\n\n\n";
+        mSceneMgr = mRoot->createSceneManager(/*"OctreeSceneManager"*/); //TODO: Creating with the default scene manager, verify if it would be good to change. Before it was using ST_EXTERIOR_CLOSE
+
         if (!mSceneMgr)
         {
             throw std::logic_error("Erro: Iniciando SceneManager\nFILE: "+std::string(__FILE__)+"\nLINE: "+QString::number(__LINE__).toStdString());
         }
     }
-    catch (std::logic_error const& /*le*/)
+    catch (std::logic_error const& le)
     {
-        #if OGRE_PLATFORM == OGRE_PLATFORM_WIN32
-           // MessageBox( NULL, le.what(), "An exception has occured!", MB_OK | MB_ICONERROR | MB_TASKMODAL);
-        #else
-            //std::cerr << "An exception has occured: " << le.what().c_str() << std::endl;
-        #endif
+        QMessageBox mBox;
+        mBox.setText(QString("Logic error - ")+le.what());
+        mBox.exec();
     }
 }
 
 void Manager::loadResources()
 {
-
     QString file = QCoreApplication::applicationDirPath();
 
     // Load resource paths from config file
@@ -405,15 +389,15 @@ void Manager::loadResources()
     cf.load(QString(file+"/cfg/"+mResourcesCfg).toStdString().data());
 
     // Go through all sections & settings in the file
-    Ogre::ConfigFile::SectionIterator seci = cf.getSectionIterator();
+    auto seci = cf.getSettingsBySection();
 
     Ogre::String secName, typeName, archName;
-    while (seci.hasMoreElements())
+    for(const auto &settingsPair : seci)
     {
-        secName = seci.peekNextKey();
-        Ogre::ConfigFile::SettingsMultiMap *settings = seci.getNext();
+        secName = settingsPair.first;
+        Ogre::ConfigFile::SettingsMultiMap settings = static_cast<Ogre::ConfigFile::SettingsMultiMap>(settingsPair.second);
         Ogre::ConfigFile::SettingsMultiMap::iterator i;
-        for (i = settings->begin(); i != settings->end(); ++i)
+        for (i = settings.begin(); i != settings.end(); ++i)
         {
             typeName = i->first;
             archName = i->second;
@@ -430,49 +414,13 @@ void Manager::loadResources()
         }
     }
 
-/*
-    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.toStdString().data(),"FileSystem");
-    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(QString(file+"/media/OgreCore.zip").toStdString().data(),"Zip");
-    Ogre::ResourceGroupManager::getSingleton().addResourceLocation(QString(file+"/media/SdkTrays.zip").toStdString().data(),"Zip");
-*/
     Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
 
     // Material for all the GUI object
-    Ogre::MaterialPtr matptr = Ogre::MaterialManager::getSingleton().create(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME).staticCast<Ogre::Material>();
+    Ogre::MaterialPtr matptr = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().create(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME));
     matptr->getTechnique(0)->setLightingEnabled(false);
     matptr->getTechnique(0)->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
     matptr->getTechnique(0)->setDepthCheckEnabled( false );  //IMPORTANT when setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
-/*
-    Ogre::MaterialManager& lMaterialManager = Ogre::MaterialManager::getSingleton();
-    {
-                Ogre::MaterialPtr lMaterial = lMaterialManager.create("BaseMaterial",Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-                Ogre::Technique* lFirstTechnique = lMaterial->getTechnique(0);
-                Ogre::Pass* lFirstPass = lFirstTechnique->getPass(0);
-
-                //CustomMaterial->getTechnique(0)->getPass(0)->setPolygonMode(PM_WIREFRAME);
-
-                // Lighting is allowed on this pass.
-                lFirstPass->setLightingEnabled(true);
-
-                Ogre::ColourValue lSelfIllumnationColour(0.1f, 0.1f, 0.1f, 0.0f);
-                lFirstPass->setSelfIllumination(lSelfIllumnationColour);    
-
-                // diffuse color is the traditionnal color of the lit object.
-                Ogre::ColourValue lDiffuseColour(0.4f, 0.4f, 0.4f, 0.0f);
-                lFirstPass->setDiffuse(lDiffuseColour);
-
-
-                Ogre::ColourValue lAmbientColour(0.4f, 0.4f, 0.4f, 0.0f);
-                lFirstPass->setAmbient(lAmbientColour);
-
-                Ogre::ColourValue lSpecularColour(1.0f, 1.0f, 1.0f, 1.0f);
-                lFirstPass->setSpecular(lSpecularColour);
-
-
-                lFirstPass->setShininess(64.0f);
-
-    }
-*/
 }
 /*
 Ogre::Plane &Manager::getGroundPlane()

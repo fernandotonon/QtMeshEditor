@@ -82,11 +82,10 @@ void ObjectItemModel::reloadSceneNode()
 
 void ObjectItemModel::appendAllChildFromParent(Ogre::SceneNode* const& parentNode, QStandardItem* const& parentItem)
 {
-    Ogre::Node::ChildNodeIterator nodeIterator = parentNode->getChildIterator();
-
-    while (nodeIterator.hasMoreElements())
+    auto children = parentNode->getChildren();
+    for(const auto &child : children)
     {
-        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(nodeIterator.getNext());
+        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(child);
         QString name = pSN->getName().data();
 
         if(name.length() && !(Manager::getSingleton()->isForbidenNodeName(name)))
@@ -150,8 +149,7 @@ void ObjectItemModel::objectNodeRemoved(Ogre::SceneNode* const& node)
                   QVariant::fromValue((void*)node),
                   1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
-    if(!index.isEmpty())
-        if(index.at(0).isValid())
+    if(!index.isEmpty() && index.at(0).isValid())
         {
            removeRow(index.at(0).row(),parent(index.at(0)));
         }

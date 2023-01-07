@@ -83,7 +83,7 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH
 # Determine Ogre version for creating the symlinks in linux
 ##############################################################
 IF(UNIX)
-  file(READ /usr/local/include/OGRE/OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
+  file(READ ${OGRE_INCLUDE_DIR}OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MAJOR OGRE_VERSION_MAJOR)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MINOR OGRE_VERSION_MINOR)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_PATCH OGRE_VERSION_PATCH)
@@ -158,71 +158,74 @@ ui
 #  Install libraries
 ##############################################################
 
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
-            SET(OGRELIBLIST cg
-                Plugin_CgProgramManager_d
-            )
-        ENDIF()
-        SET(OGRELIBLIST ${OGRELIBLIST}
-            OgreMain_d
-            Codec_Assimp_d
-            Codec_STBI_d
-            RenderSystem_GL_d
-            Plugin_OctreeSceneManager_d
-            Plugin_BSPSceneManager_d
-            Plugin_ParticleFX_d
-            Plugin_PCZSceneManager_d
-            Plugin_OctreeZone_d
-            OgrePaging_d
-            OgreProperty_d
-            OgreTerrain_d
-            OgreRTShaderSystem_d
-            OgreVolume_d
-            OgreOverlay_d)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
+        SET(OGRELIBLIST cg
+            Plugin_CgProgramManager_d
+        )
+    ENDIF()
+    SET(OGRELIBLIST ${OGRELIBLIST}
+        OgreMain_d
+        Codec_Assimp_d
+        Codec_STBI_d
+        RenderSystem_GL_d
+        RenderSystem_GL3Plus_d
+        Plugin_OctreeSceneManager_d
+        Plugin_BSPSceneManager_d
+        Plugin_ParticleFX_d
+        Plugin_PCZSceneManager_d
+        Plugin_OctreeZone_d
+        OgrePaging_d
+        OgreProperty_d
+        OgreTerrain_d
+        OgreRTShaderSystem_d
+        OgreVolume_d
+        OgreOverlay_d)
 
-        FOREACH(ogrelib ${OGRELIBLIST})
-            IF(WIN32)
-                INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-            ENDIF()
-        ENDFOREACH(ogrelib)
-    else()
-        IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
-            SET(OGRELIBLIST cg
-                Plugin_CgProgramManager
-            )
+    FOREACH(ogrelib ${OGRELIBLIST})
+        IF(WIN32)
+            INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         ENDIF()
-        SET(OGRELIBLIST ${OGRELIBLIST}
-            libzlib
-            OgreMain
-            Codec_Assimp
-            Codec_STBI
-            RenderSystem_GL
-            Plugin_OctreeSceneManager
-            Plugin_BSPSceneManager
-            Plugin_ParticleFX
-            Plugin_PCZSceneManager
-            Plugin_OctreeZone
-            OgrePaging
-            OgreProperty
-            OgreTerrain
-            OgreRTShaderSystem
-            OgreVolume
-            OgreOverlay)
+    ENDFOREACH(ogrelib)
+else()
+    IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
+        SET(OGRELIBLIST cg
+            Plugin_CgProgramManager
+        )
+    ENDIF()
+    SET(OGRELIBLIST ${OGRELIBLIST}
+        libzlib
+        OgreMain
+        Codec_Assimp
+        Codec_STBI
+        RenderSystem_GL
+        RenderSystem_GL3Plus
+        Plugin_OctreeSceneManager
+        Plugin_BSPSceneManager
+        Plugin_ParticleFX
+        Plugin_PCZSceneManager
+        Plugin_OctreeZone
+        OgrePaging
+        OgreProperty
+        OgreTerrain
+        OgreRTShaderSystem
+        OgreVolume
+        OgreOverlay)
 
-        FOREACH(ogrelib ${OGRELIBLIST})
-            IF(WIN32)
-                INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-            ELSEIF(UNIX)
-                IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
-                    INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-                ENDIF()
-                IF(EXISTS ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so)
-                    INSTALL(FILES ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-                ENDIF()
+    FOREACH(ogrelib ${OGRELIBLIST})
+        IF(WIN32)
+            INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        ELSEIF(UNIX)
+            IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
+                INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
             ENDIF()
-        ENDFOREACH(ogrelib)
-    endif()
+            IF(EXISTS ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so)
+                INSTALL(FILES ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            ENDIF()
+        ENDIF()
+    ENDFOREACH(ogrelib)
+endif()
+
 IF(WIN32)
     GET_FILENAME_COMPONENT(ASSIMP_DLL_DIR ${ASSIMP_INCLUDE_DIR} PATH)
     find_file(ASSIMP_DLL_FILE NAMES libassim.dll assimp.dll Assimp32.dll PATHS "${ASSIMP_DLL_DIR}/../bin" "${ASSIMP_DLL_DIR}/../bin/x86")

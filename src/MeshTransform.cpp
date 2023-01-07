@@ -35,7 +35,7 @@ MeshTransform::MeshTransform()
 
 void MeshTransform::scaleMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_scale)
 {
-    Ogre::Mesh* mesh = _ent->getMesh().getPointer();
+    Ogre::Mesh* mesh = _ent->getMesh().get();
     scaleMesh(mesh,_scale);
 
     //Process Skeleton
@@ -103,7 +103,7 @@ void MeshTransform::scaleMesh(Ogre::Mesh *_mesh, const Ogre::Vector3 &_scale)
 void MeshTransform::translateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_translate)
 {
     bool added_shared = false;
-    Ogre::Mesh* mesh = _ent->getMesh().getPointer();
+    Ogre::Mesh* mesh = _ent->getMesh().get();
     Ogre::Vector3 Minimum=mesh->getBounds().getMaximum();
     Ogre::Vector3 Maximum=mesh->getBounds().getMinimum();
 
@@ -163,7 +163,7 @@ void MeshTransform::translateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 
 void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate)
 {
     bool added_shared = false;
-    Ogre::Mesh* mesh = _ent->getMesh().getPointer();
+    Ogre::Mesh* mesh = _ent->getMesh().get();
     Ogre::Vector3 Minimum = mesh->getBounds().getMaximum();
     Ogre::Vector3 Maximum = mesh->getBounds().getMinimum();
     Ogre::Vector3 Center = mesh->getBounds().getCenter();

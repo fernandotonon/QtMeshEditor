@@ -85,7 +85,7 @@ void Material::on_buttonExport_clicked()
     if(fileName.size())
     {
 
-        Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(ui->listMaterial->selectedItems()[0]->text().toStdString().data()).staticCast<Ogre::Material>();
+        Ogre::MaterialPtr material = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(ui->listMaterial->selectedItems()[0]->text().toStdString().data()));
         Ogre::MaterialSerializer ms;
         ms.exportMaterial(material,fileName.toStdString().data());
     }
