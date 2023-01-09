@@ -6,8 +6,6 @@ A 3D editor for Ogre Mesh made with Qt Framework
 
 ![QtMeshEditor1 5 0](https://user-images.githubusercontent.com/996529/210196572-7b49da4c-c5db-406d-9ab4-7fa20bacb6ae.gif)
 
-https://user-images.githubusercontent.com/996529/210194857-367cdaa1-4a0d-4baf-8bcf-7980954aa462.mp4
-
 
 ### Download and Install Qt: (version: 5.15.2 or Qt6)
 	http://qt-project.org/downloads
