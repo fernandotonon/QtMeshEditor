@@ -82,7 +82,7 @@ if (WIN32)
     ${ENV_PROGRAMFILES}/OGRE
     C:/OgreSDK
   )
-elseif (UNIX)
+elseif (UNIX OR APPLE)
   set(OGRE_PREFIX_GUESSES
     /opt/ogre
     /opt/OGRE

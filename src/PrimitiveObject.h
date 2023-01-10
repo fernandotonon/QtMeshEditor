@@ -31,6 +31,19 @@
 
 class QString;
 
+namespace Procedural{
+class BoxGenerator;
+class SphereGenerator;
+class PlaneGenerator;
+class CylinderGenerator;
+class ConeGenerator;
+class TorusGenerator;
+class TubeGenerator;
+class CapsuleGenerator;
+class IcoSphereGenerator;
+class RoundedBoxGenerator;
+}
+
 class PrimitiveObject
 {
 public:

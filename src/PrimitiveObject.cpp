@@ -24,19 +24,25 @@
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
 
-#include <QDebug>
 
 #include <QString>
 
 #include <OgreAny.h>
 #include <OgreUserObjectBindings.h>
 
-#include "ProceduralStableHeaders.h"
-#include "Procedural.h"
-
 #include "Manager.h"
 #include "PrimitiveObject.h"
 
+#include "ProceduralBoxGenerator.h"
+#include "ProceduralSphereGenerator.h"
+#include "ProceduralPlaneGenerator.h"
+#include "ProceduralCylinderGenerator.h"
+#include "ProceduralConeGenerator.h"
+#include "ProceduralTorusGenerator.h"
+#include "ProceduralTubeGenerator.h"
+#include "ProceduralIcoSphereGenerator.h"
+#include "ProceduralCapsuleGenerator.h"
+#include "ProceduralRoundedBoxGenerator.h"
 
 
 // TODO add spring primitive
