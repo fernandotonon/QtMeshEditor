@@ -24,17 +24,12 @@
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
 
-#include <QDebug>
-
 #include <QInputDialog>
 #include <QHBoxLayout>
 #include <QLabel>
 
 #include <OgreAny.h>
 #include <OgreUserObjectBindings.h>
-
-#include "ProceduralStableHeaders.h" ///REMOVE
-#include "Procedural.h"             ///REMOVE
 
 #include "SelectionSet.h"
 #include "Manager.h"

@@ -35,6 +35,33 @@
 #include "mainwindow.h"
 #include "ViewportGrid.h"
 
+#if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
+ #include <CoreFoundation/CoreFoundation.h>
+ 
+ // This function will locate the path to our application on OS X,
+ // unlike windows you cannot rely on the current working directory
+ // for locating your configuration files and resources.
+ std::string macBundlePath()
+ {
+     char path[1024];
+     CFBundleRef mainBundle = CFBundleGetMainBundle();
+     assert(mainBundle);
+ 
+     CFURLRef mainBundleURL = CFBundleCopyBundleURL(mainBundle);
+     assert(mainBundleURL);
+ 
+     CFStringRef cfStringRef = CFURLCopyFileSystemPath( mainBundleURL, kCFURLPOSIXPathStyle);
+     assert(cfStringRef);
+ 
+     CFStringGetCString(cfStringRef, path, 1024, kCFStringEncodingASCII);
+ 
+     CFRelease(mainBundleURL);
+     CFRelease(cfStringRef);
+ 
+     return std::string(path);
+ }
+ #endif
+
 ////////////////////////////////////////
 // Static variable initialisation
 Manager* Manager:: m_pSingleton = 0;

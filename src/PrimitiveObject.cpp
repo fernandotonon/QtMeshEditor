@@ -24,19 +24,25 @@
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
 
-#include <QDebug>
 
 #include <QString>
 
 #include <OgreAny.h>
 #include <OgreUserObjectBindings.h>
 
-#include "ProceduralStableHeaders.h"
-#include "Procedural.h"
-
 #include "Manager.h"
 #include "PrimitiveObject.h"
 
+#include "ProceduralBoxGenerator.h"
+#include "ProceduralSphereGenerator.h"
+#include "ProceduralPlaneGenerator.h"
+#include "ProceduralCylinderGenerator.h"
+#include "ProceduralConeGenerator.h"
+#include "ProceduralTorusGenerator.h"
+#include "ProceduralTubeGenerator.h"
+#include "ProceduralIcoSphereGenerator.h"
+#include "ProceduralCapsuleGenerator.h"
+#include "ProceduralRoundedBoxGenerator.h"
 
 
 // TODO add spring primitive
@@ -135,7 +141,12 @@ void PrimitiveObject::setDefaultParams()
             mNumSegX = 1;   mNumSegY = 1;       mNumSegZ = 1;
             mUTile = 1.0f;  mVTile = 1.0f;      mSwitchUV = false;
             break;
-
+        default:
+            mSizeX = 1.0f;  mSizeY = 1.0f;      mSizeZ = 1.0f;
+            mRadius = 1.0f; mRadius2 = 1.0f;    mHeight = 1.0f;
+            mNumSegX = 1;   mNumSegY = 1;       mNumSegZ = 1;
+            mUTile = 1.0f;  mVTile = 1.0f;      mSwitchUV = false;
+            break;
     }
 }
 

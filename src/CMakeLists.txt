@@ -82,8 +82,8 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH
 ##############################################################
 # Determine Ogre version for creating the symlinks in linux
 ##############################################################
-IF(UNIX)
-  file(READ /usr/local/include/OGRE/OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
+IF(UNIX OR APPLE)
+  file(READ ${OGRE_INCLUDE_DIR}OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MAJOR OGRE_VERSION_MAJOR)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MINOR OGRE_VERSION_MINOR)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_PATCH OGRE_VERSION_PATCH)
@@ -124,29 +124,19 @@ endif()
 #  Linking the executable
 ##############################################################
 if(UNIX)
-    target_link_libraries(${CMAKE_PROJECT_NAME}
-    ${ASSIMP_LIBRARIES}
-    ${OGRE_LIBRARIES}
-    ${OgreProcedural_LIBRARY}
-    "${OGRE_Codec_Assimp_LIBRARY_REL}" #TODO: find a better way to link ogreassimp
-    Qt::Gui
-    Qt::Core
-    Qt::Widgets
-    )
     IF(NOT Qt6_FOUND)
         target_link_libraries(${CMAKE_PROJECT_NAME} Qt5::X11Extras)
     ENDIF()
-elseif(WIN32)
-    target_link_libraries(${CMAKE_PROJECT_NAME}
-    "${OGRE_Codec_Assimp_LIBRARY_REL}" #TODO: find a better way to link ogreassimp
-    ${ASSIMP_LIBRARIES}
-    ${OGRE_LIBRARIES}
-    ${OgreProcedural_LIBRARY}
-    Qt::Gui
-    Qt::Core
-    Qt::Widgets
-    )
 endif()
+target_link_libraries(${CMAKE_PROJECT_NAME}
+${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
+${ASSIMP_LIBRARY_REL}
+${OGRE_LIBRARIES}
+${OgreProcedural_LIBRARY}
+Qt::Gui
+Qt::Core
+Qt::Widgets
+)
 
 ##############################################################
 #  make sure that UI files will be processed first

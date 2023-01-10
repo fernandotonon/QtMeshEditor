@@ -218,7 +218,7 @@ bool SkeletonTransform::renameAnimation(Ogre::Entity *_ent, const QString &_oldN
         sk->unload();
 
         _ent->getAllAnimationStates()->removeAllAnimationStates();
-        _ent->getMesh().getPointer()->removeAllAnimations();
+        _ent->getMesh().get()->removeAllAnimations();
 
         for(int c = _ent->getSkeleton()->getNumAnimations()-1; c >=0; --c)
         {
@@ -229,7 +229,7 @@ bool SkeletonTransform::renameAnimation(Ogre::Entity *_ent, const QString &_oldN
 
         _ent->refreshAvailableAnimationState();
         _ent->_updateAnimation();
-        _ent->getMesh().getPointer()->_dirtyState();
+        _ent->getMesh().get()->_dirtyState();
 
         //Delete the temp file
         xmlFile = new QFile("_temp.xml");
