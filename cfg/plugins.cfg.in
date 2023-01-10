@@ -6,6 +6,7 @@ PluginFolder=../
 
 # Define plugins
 Plugin=RenderSystem_GL
+Plugin=RenderSystem_GL3Plus
 Plugin=Plugin_OctreeSceneManager
 Plugin=Codec_STBI
 #Plugin=Plugin_CgProgramManager

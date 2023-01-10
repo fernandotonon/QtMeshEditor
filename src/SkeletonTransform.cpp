@@ -59,22 +59,17 @@ void SkeletonTransform::scaleSkeleton(const Ogre::Entity *_ent, const Ogre::Vect
 
         Manager::getSingleton()->getRoot()->renderOneFrame();
 
-        Ogre::Skeleton::BoneIterator it = sk->getBoneIterator();
-        while (it.hasMoreElements())
+        auto bones = sk->getBones();
+        for(const auto &bone : bones)
         {
-            Ogre::Bone* bone = it.getNext();
-
-            if(bone->getParent()==NULL)
+            if(bone->getParent()==nullptr)
             {
                 bone->setPosition(bone->getPosition()*_scale);
             }
         }
-        it = sk->getBoneIterator();
-        while (it.hasMoreElements())
+        for(const auto &bone : bones)
         {
-            Ogre::Bone* bone = it.getNext();
-
-            if(bone->getParent()!=NULL)
+            if(bone->getParent()!=nullptr)
             {
                 bone->_setDerivedPosition(bone->_getDerivedPosition()*_scale);
             }
@@ -91,7 +86,6 @@ void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::
         Ogre::Skeleton* sk = _ent->getSkeleton();
 
         ///Process Bone
-        Ogre::Skeleton::BoneIterator it = sk->getBoneIterator();
 
         //Disable all animations
         Ogre::AnimationStateSet *set=_ent->getAllAnimationStates();
@@ -106,10 +100,9 @@ void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::
 
         Manager::getSingleton()->getRoot()->renderOneFrame();
 
-        while (it.hasMoreElements())
+        auto bones = sk->getBones();
+        for(const auto &bone : bones)
         {
-            Ogre::Bone* bone = it.getNext();
-
             if(bone->getParent()==NULL)
             {
                 if(_translate.isZeroLength())
@@ -130,7 +123,6 @@ void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vec
         Ogre::Skeleton* sk = _ent->getSkeleton();
 
         ///Process Bone
-        Ogre::Skeleton::BoneIterator it = sk->getBoneIterator();
 
         //Disable all animations
         Ogre::AnimationStateSet *set=_ent->getAllAnimationStates();
@@ -145,10 +137,9 @@ void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vec
 
         Manager::getSingleton()->getRoot()->renderOneFrame();
 
-        while (it.hasMoreElements())
+        auto bones = sk->getBones();
+        for(const auto &bone : bones)
         {
-            Ogre::Bone* bone = it.getNext();
-
             if(bone->getParent()==NULL)
             {
                 if(_rotate.x!=0)

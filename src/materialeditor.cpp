@@ -30,11 +30,13 @@
 #include <QDebug>
 #include <QInputDialog>
 #include <QFileDialog>
+#include <QMessageBox>
 #include "OgreLog.h"
 
 #include "Manager.h"
 #include "MaterialHighlighter.h"
 #include <OgreScriptCompiler.h>
+#include <OgreScriptTranslator.h>
 
 MaterialEditor::MaterialEditor(QWidget *parent) :
     QDialog(parent)
@@ -75,7 +77,7 @@ void MaterialEditor::setMaterialText(const QString &_mat)
     ui->textMaterial->setText(_mat);
 
     ui->scrollArea->setEnabled(true);
-    ui->saveButton->setEnabled(false);
+    ui->applyButton->setEnabled(false);
 }
 
 
@@ -86,6 +88,7 @@ void MaterialEditor::setMaterial(const QString &_material)
     {
         setMaterialText("material material_name\n{\n}");
         mMaterialName = "material_name";
+        ui->scrollArea->setEnabled(false);
     }
     else
     {
@@ -101,28 +104,22 @@ void MaterialEditor::setMaterial(const QString &_material)
 
         setMaterialText(ms.getQueuedAsString().data());
 
-        Ogre::Material::TechniqueIterator it = m->getTechniqueIterator();
+        auto techniques = m->getTechniques();
         int tcount=0;//technique
         int pcount=0;//pass
         QMap <int, Ogre::Pass*> passMap;
         QList <QString> passMapName;
-        while (it.hasMoreElements())
+        for (Ogre::Technique* tech : techniques)
         {
             pcount=0;
-
-            Ogre::Technique* tech = it.getNext();
-            Ogre::Technique::PassIterator itP = tech->getPassIterator();
 
             QString techname = tech->getName().size()?tech->getName().data():QString("technique%1").arg(tcount);
 
             ui->techComboBox->addItem(techname);
 
-            while (itP.hasMoreElements())
+            auto passes = tech->getPasses();
+            for(Ogre::Pass* pass : passes)
             {
-
-
-                Ogre::Pass* pass = itP.getNext();
-
                 QString passname = pass->getName().size()?pass->getName().data():QString("pass%1").arg(pcount);
 
                 passMap[pcount] = pass;
@@ -218,13 +215,12 @@ void MaterialEditor::setPassFields(Ogre::Pass* _pass)
     ui->emissiveColorWidget->setPalette(Pal);
     emissiveColorDialog->setCurrentColor(Color);
 
-    Ogre::Pass::TextureUnitStateIterator itTU = _pass->getTextureUnitStateIterator();
+    auto itTU = _pass->getTextureUnitStates();
     int tcount=0;
-    while (itTU.hasMoreElements())
+    for (Ogre::TextureUnitState *textureUnit : itTU)
     {
         ++tcount;
 
-        Ogre::TextureUnitState *textureUnit = itTU.getNext();
         QString TUName = textureUnit->getName().size()?textureUnit->getName().data():QString("Texture_Unit%1").arg(tcount);
         mTexUnitMap[TUName]=textureUnit;
     }
@@ -246,6 +242,58 @@ void MaterialEditor::updateMaterialText()
     ms.queueForExport(m,false,false,mMaterialName.toStdString().data());
 
     setMaterialText(ms.getQueuedAsString().data());
+}
+
+bool MaterialEditor::validateScript(Ogre::DataStreamPtr& dataStream)
+{
+
+    try{
+        class MyListener: public Ogre::ScriptCompilerListener
+        {
+            private:
+                std::vector<Ogre::Exception> errors;
+            public:
+            virtual void handleError(Ogre::ScriptCompiler *compiler, Ogre::uint32 code, const Ogre::String &file, int line, const Ogre::String &msg){
+                Ogre::LogManager::getSingleton().logError("Listener: "+msg);
+                Ogre::Exception e{0,msg,"ScriptCompilerListener","error",file.c_str(),line};
+                errors.push_back(e);
+            }
+                const std::vector<Ogre::Exception> &getErrors(){return errors;};
+        };
+
+        if(!Ogre::ResourceGroupManager::getSingleton().resourceGroupExists("Test_Script"))
+            Ogre::ResourceGroupManager::getSingleton().createResourceGroup("Test_Script");
+        if(Ogre::MaterialManager::getSingleton().resourceExists(mMaterialName.toStdString().data(),"Test_Script"))
+            Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data(),"Test_Script");
+
+        MyListener *l = new MyListener();
+        Ogre::ScriptCompilerManager::getSingleton().setListener(l);
+        Ogre::ScriptCompilerManager::getSingleton().parseScript(dataStream,"Test_Script");
+        Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data(),"Test_Script");
+
+        QString errorMessages;
+        auto errors = l->getErrors();
+        for(const auto &e : errors){
+            errorMessages+="Error on line ("+QString::number(e.getLine())+"): "+e.getDescription().c_str()+"\n";
+        }
+        if(!l->getErrors().empty()){
+            QMessageBox mBox;
+            mBox.setText(errorMessages);
+            mBox.exec();
+        }
+        return l->getErrors().empty();
+    } catch(Ogre::Exception &e){
+        QMessageBox mBox;
+        mBox.setText(QString("Error: ")+e.what()+"\n");
+        mBox.exec();
+        return false;
+    } catch(...){
+        QMessageBox mBox;
+        mBox.setText("Unknown error\n");
+        mBox.exec();
+        return false;
+    }
+    return true;
 }
 
 void MaterialEditor::on_techComboBox_currentIndexChanged(int index)
@@ -283,7 +331,7 @@ void MaterialEditor::on_passComboBox_currentIndexChanged(int index)
     {
         mSelectedPass = NULL;
 
-        ui->scrollArea->setEnabled(false);
+     //   ui->scrollArea->setEnabled(false);
 
         ui->checkBoxLightning->setChecked(false);
         ui->srcSceneBlendBox->setCurrentIndex(0);
@@ -323,6 +371,16 @@ void MaterialEditor::on_ComboTextureUnit_currentIndexChanged(int index)
         }
         ui->selectTexture->setEnabled(true);
         ui->removeTexture->setEnabled(true);
+
+        auto effects = mSelectedTextureUnit->getEffects();
+        for(auto effectPair : effects){
+            if(effectPair.first==Ogre::TextureUnitState::ET_UVSCROLL ||
+                    effectPair.first==Ogre::TextureUnitState::ET_USCROLL)
+                ui->scrollAnimUSpeed->setValue(effectPair.second.arg1);
+            else if(effectPair.first==Ogre::TextureUnitState::ET_UVSCROLL ||
+                    effectPair.first==Ogre::TextureUnitState::ET_VSCROLL)
+                ui->scrollAnimVSpeed->setValue(effectPair.second.arg1);
+        }
     }
     else
     {
@@ -375,28 +433,23 @@ void MaterialEditor::on_Emissive_Color_Selected(const QColor &arg1)
 
 void MaterialEditor::on_textMaterial_textChanged()
 {
-    Ogre::LogManager::getSingleton().logMessage("void MaterialEditor::on_textMaterial_textChanged()");
-    ui->scrollArea->setEnabled(false);
-    ui->saveButton->setEnabled(true);
+    ui->applyButton->setEnabled(true);
 }
 
-void MaterialEditor::on_saveButton_clicked()
+void MaterialEditor::on_applyButton_clicked()
 {
-    ui->scrollArea->setEnabled(true);
-    ui->saveButton->setEnabled(false);
-
     Ogre::String script = ui->textMaterial->toPlainText().toStdString().data();
     Ogre::MemoryDataStream *memoryStream = new Ogre::MemoryDataStream((void*)script.c_str(), script.length() * sizeof(char));
     Ogre::DataStreamPtr dataStream(memoryStream);
 
+    if(!validateScript(dataStream)){
+        return;
+    }
+
     if(Ogre::MaterialManager::getSingleton().resourceExists(mMaterialName.toStdString().data()))
         Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data());
 
-   // Ogre::ScriptCompilerManager scriptCompiler;
     Ogre::MaterialManager::getSingleton().parseScript(dataStream,Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-
-    //TODO: Fix this removed in 1.11 - https://github.com/OGRECave/ogre/commit/26f4587e25ce3b1565b0fdeb07685968371ee259
-    //scriptCompiler.parseScript(dataStream,Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     mMaterialName = ui->textMaterial->toPlainText();
     mMaterialName = mMaterialName.remove(0,mMaterialName.indexOf("material")+9);
@@ -420,6 +473,9 @@ void MaterialEditor::on_saveButton_clicked()
     }
 
     setMaterial(mMaterialName);
+
+    ui->scrollArea->setEnabled(true);
+    ui->applyButton->setEnabled(false);
 }
 
 void MaterialEditor::on_srcSceneBlendBox_currentIndexChanged(int index)
@@ -545,14 +601,9 @@ void MaterialEditor::on_newTechnique_clicked()
                                          "", &ok);
     if (ok)
     {
-#if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-        Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data());
-#else
         Ogre::MaterialPtr m = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()));
-#endif
         Ogre::Technique *t = m.get()->createTechnique();
         t->setName(text.toStdString().data());
-
         setMaterial(mMaterialName);
     }
 }
@@ -608,13 +659,16 @@ void MaterialEditor::on_selectTexture_clicked()
         QFileInfo file;
         file.setFile(filePath);
 
-        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
-        Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+        try {
+            Ogre::TextureManager::getSingleton().getByName(file.fileName().toStdString().data(),file.path().toStdString().data());
+        } catch (...) {
+            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
+            Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
 
-        Ogre::Image i;
-        i.load(file.fileName().toStdString().data(),file.path().toStdString().data());
-        Ogre::TextureManager::getSingleton().loadImage(file.fileName().toStdString().data(),file.path().toStdString().data(),i);
-
+            Ogre::Image i;
+            i.load(file.fileName().toStdString().data(),file.path().toStdString().data());
+            Ogre::TextureManager::getSingleton().loadImage(file.fileName().toStdString().data(),file.path().toStdString().data(),i);
+        }
         ui->textureName->setText(file.fileName());
         mSelectedTextureUnit->setTextureName(file.fileName().toStdString().data());
     }
@@ -656,6 +710,20 @@ void MaterialEditor::on_comboPolygonMode_currentIndexChanged(int index)
 {
     if(mSelectedPass)
         mSelectedPass->setPolygonMode(static_cast<Ogre::PolygonMode>(index+1));
+    updateMaterialText();
+}
+
+
+void MaterialEditor::on_scrollAnimUSpeed_valueChanged(double arg1)
+{
+    mSelectedTextureUnit->setScrollAnimation(ui->scrollAnimUSpeed->value(),ui->scrollAnimVSpeed->value());
+    updateMaterialText();
+}
+
+
+void MaterialEditor::on_scrollAnimVSpeed_valueChanged(double arg1)
+{
+    mSelectedTextureUnit->setScrollAnimation(ui->scrollAnimUSpeed->value(),ui->scrollAnimVSpeed->value());
     updateMaterialText();
 }
 

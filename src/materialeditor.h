@@ -72,7 +72,7 @@ private slots:
 
     void on_textMaterial_textChanged();
 
-    void on_saveButton_clicked();
+    void on_applyButton_clicked();
 
     void on_buttonEditDifuseColor_clicked();
 
@@ -122,6 +122,10 @@ private slots:
 
     void on_comboPolygonMode_currentIndexChanged(int index);
 
+    void on_scrollAnimUSpeed_valueChanged(double arg1);
+
+    void on_scrollAnimVSpeed_valueChanged(double arg1);
+
 private:
     Ui::MaterialEditor *ui;
 
@@ -142,6 +146,7 @@ private:
     void setTechFields(const QMap<int, Ogre::Pass *> &_techMap, const QList<QString> &_passList);
     void setPassFields(Ogre::Pass *_pass);
     void updateMaterialText();
+    bool validateScript(Ogre::DataStreamPtr &dataStream);
 
     MaterialHighlighter* mMaterialHighlighter;
 };

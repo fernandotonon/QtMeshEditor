@@ -119,12 +119,12 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Og
 
 SkeletonDebug::~SkeletonDebug()
 {
-    Ogre::Entity::ChildObjectListIterator teste = mEntity->getAttachedObjectIterator();
-    while(teste.hasMoreElements())
+    auto attachedObjects = mEntity->getAttachedObjects();
+    for(auto object : attachedObjects)
     {
-        Ogre::Entity* e = (Ogre::Entity*)teste.getNext();
-        if(e->getMesh().getPointer()->getName().compare("SkeletonDebug/AxesMesh") ||
-                e->getMesh().getPointer()->getName().compare("SkeletonDebug/BoneMesh"))
+        Ogre::Entity* e = (Ogre::Entity*)object;
+        if(e->getMesh().get()->getName().compare("SkeletonDebug/AxesMesh") ||
+                e->getMesh().get()->getName().compare("SkeletonDebug/BoneMesh"))
         {
             Manager::getSingleton()->getSceneMgr()->destroyEntity(e);
         }
@@ -190,18 +190,10 @@ void SkeletonDebug::createAxesMaterial()
 {
     Ogre::String matName = "SkeletonDebug/AxesMat";
 
-#if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-        mAxisMatPtr = Ogre::MaterialManager::getSingleton().getByName(matName);
-#else
-        mAxisMatPtr = Ogre::MaterialManager::getSingleton().getByName(matName).staticCast<Ogre::Material>();
-#endif
-    if (mAxisMatPtr.isNull())
+    mAxisMatPtr = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(matName));
+    if (!mAxisMatPtr)
     {
-#if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-        mAxisMatPtr = Ogre::MaterialManager::getSingleton().create(matName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
-#else
-        mAxisMatPtr = Ogre::MaterialManager::getSingleton().create(matName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME).staticCast<Ogre::Material>();
-#endif
+        mAxisMatPtr = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().create(matName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
 
         // First pass for axes that are partially within the model (shows transparency)
         Ogre::Pass* p = mAxisMatPtr->getTechnique(0)->getPass(0);
@@ -227,19 +219,11 @@ void SkeletonDebug::createBoneMaterial()
 {
     Ogre::String matName = "SkeletonDebug/BoneMat";
 
-#if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-    mBoneMatPtr = Ogre::MaterialManager::getSingleton().getByName(matName);
-#else
-    mBoneMatPtr = Ogre::MaterialManager::getSingleton().getByName(matName).staticCast<Ogre::Material>();
-#endif
+    mBoneMatPtr = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(matName));
 
-    if (mBoneMatPtr.isNull())
+    if (!mBoneMatPtr)
     {
-    #if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-        mBoneMatPtr = Ogre::MaterialManager::getSingleton().create(matName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
-    #else
-        mBoneMatPtr = Ogre::MaterialManager::getSingleton().create(matName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME).staticCast<Ogre::Material>();
-    #endif
+        mBoneMatPtr = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().create(matName, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
 
         Ogre::Pass* p = mBoneMatPtr->getTechnique(0)->getPass(0);
         p->setLightingEnabled(false);
@@ -255,12 +239,9 @@ void SkeletonDebug::createBoneMaterial()
 void SkeletonDebug::createBoneMesh()
 {
     Ogre::String meshName = "SkeletonDebug/BoneMesh";
-#if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-    mBoneMeshPtr = Ogre::MeshManager::getSingleton().getByName(meshName);
-#else
-    mBoneMeshPtr = Ogre::MeshManager::getSingleton().getByName(meshName).staticCast<Ogre::Mesh>();
-#endif
-    if(mBoneMeshPtr.isNull())
+
+    mBoneMeshPtr = Ogre::static_pointer_cast<Ogre::Mesh>(Ogre::MeshManager::getSingleton().getByName(meshName));
+    if(!mBoneMeshPtr)
     {
         Ogre::ManualObject mo("tmp");
         mo.begin(mBoneMatPtr->getName());
@@ -354,12 +335,9 @@ void SkeletonDebug::createBoneMesh()
 void SkeletonDebug::createAxesMesh()
 {
     Ogre::String meshName = "SkeletonDebug/AxesMesh";
-#if (OGRE_VERSION < ((1 << 16) | (9 << 8) | 0))
-        mAxesMeshPtr = Ogre::MeshManager::getSingleton().getByName(meshName);
-#else
-        mAxesMeshPtr = Ogre::MeshManager::getSingleton().getByName(meshName).staticCast<Ogre::Mesh>();
-#endif
-    if (mAxesMeshPtr.isNull())
+
+    mAxesMeshPtr = Ogre::static_pointer_cast<Ogre::Mesh>(Ogre::MeshManager::getSingleton().getByName(meshName));
+    if (!mAxesMeshPtr)
     {
         Ogre::ManualObject mo("tmp");
         mo.begin(mAxisMatPtr->getName());

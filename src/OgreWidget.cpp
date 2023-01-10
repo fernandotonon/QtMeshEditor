@@ -158,6 +158,7 @@ void OgreWidget::initOgreWindow(void)
   mOgreWindow->setActive(true);
   makeCurrent();
 #endif
+
   mCamera =  new SpaceCamera(this);
 
   mViewport = mOgreWindow->addViewport( mCamera->getCamera() );

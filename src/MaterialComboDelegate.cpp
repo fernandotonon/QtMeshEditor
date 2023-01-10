@@ -52,7 +52,7 @@ QWidget *MaterialComboDelegate::createEditor(QWidget *parent,
     Ogre::ResourceManager::ResourceMapIterator materialIterator = Ogre::MaterialManager::getSingleton().getResourceIterator();
     while (materialIterator.hasMoreElements())
     {
-        materialList.append(materialIterator.peekNextValue().staticCast<Ogre::Material>()->getName().data());
+        materialList.append(Ogre::static_pointer_cast<Ogre::Material>(materialIterator.peekNextValue())->getName().data());
         materialIterator.moveNext();
     }
 

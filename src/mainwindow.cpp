@@ -24,8 +24,9 @@
 /// THE SOFTWARE.
 ////////////////////////////////////////////////////////////////////////////////*/
 
-#include <QDebug>
 #include <QMessageBox>
+#include <QSettings>
+#include <QApplication>
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "OgreWidget.h"
@@ -45,7 +46,8 @@
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow)
     ,isPlaying(false), m_pRoot(0), m_pTimer(0)
-    ,m_pTransformWidget(0),m_pPrimitivesWidget(0), m_pMaterialWidget(0)
+    ,m_pTransformWidget(0),m_pPrimitivesWidget(0), m_pMaterialWidget(0),
+    customPaletteColorDialog(new QColorDialog(this))
 {
     ui->setupUi(this);
 
@@ -66,6 +68,21 @@ MainWindow::MainWindow(QWidget *parent) :
     manager->CreateEmptyScene();
 
     initToolBar();
+
+    QSettings settings;
+    mCurrentPalette = settings.value("palette","dark").toString();
+    if(mCurrentPalette == "light"){
+            ui->actionLight->setChecked(true);
+    } else if(mCurrentPalette == "custom"){
+        on_Custom_Palette_Color_Selected(settings.value("customPalette").value<QColor>());
+        ui->actionCustom->blockSignals(true);
+        ui->actionCustom->setChecked(true);
+        ui->actionCustom->blockSignals(false);
+    } else {
+        ui->actionDark->setChecked(true);
+    }
+    customPaletteColorDialog->setOption(QColorDialog::DontUseNativeDialog);
+    QObject::connect(customPaletteColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Custom_Palette_Color_Selected(const QColor &)));
 
     ///// TODO Improve the main loop !!!!
     m_pTimer = new QTimer(this);
@@ -213,6 +230,37 @@ void MainWindow::initToolBar()
 
     // show grid
     connect(ui->actionShow_Grid, SIGNAL(toggled(bool)),Manager::getSingleton()->getViewportGrid(),SLOT(setVisible(bool)));
+}
+
+const QPalette &MainWindow::darkPalette()
+{
+    QPalette *darkPalette = new QPalette();
+
+    darkPalette->setColor(QPalette::Window,          QColor( 37,  37,  37));
+    darkPalette->setColor(QPalette::WindowText,      QColor(212, 212, 212));
+    darkPalette->setColor(QPalette::Base,            QColor( 60,  60,  60));
+    darkPalette->setColor(QPalette::AlternateBase,   QColor( 45,  45,  45));
+    darkPalette->setColor(QPalette::PlaceholderText, QColor(127, 127, 127));
+    darkPalette->setColor(QPalette::Text,            QColor(212, 212, 212));
+    darkPalette->setColor(QPalette::Link,            QColor(100, 100, 100));
+    darkPalette->setColor(QPalette::Button,          QColor( 45,  45,  45));
+    darkPalette->setColor(QPalette::ButtonText,      QColor(212, 212, 212));
+    darkPalette->setColor(QPalette::BrightText,      QColor(240, 240, 240));
+    darkPalette->setColor(QPalette::Highlight,       QColor( 38,  79, 120));
+    darkPalette->setColor(QPalette::HighlightedText, QColor(240, 240, 240));
+
+    darkPalette->setColor(QPalette::Light,           QColor( 60,  60,  60));
+    darkPalette->setColor(QPalette::Midlight,        QColor( 52,  52,  52));
+    darkPalette->setColor(QPalette::Dark,            QColor( 30,  30,  30) );
+    darkPalette->setColor(QPalette::Mid,             QColor( 37,  37,  37));
+    darkPalette->setColor(QPalette::Shadow,          QColor( 0,    0,   0));
+
+    darkPalette->setColor(QPalette::Disabled, QPalette::Text, QColor(127, 127, 127));
+    darkPalette->setColor(QPalette::Disabled, QPalette::Window, QColor(100, 100, 100));
+    darkPalette->setColor(QPalette::Disabled, QPalette::Base, QColor(100, 100, 100));
+    darkPalette->setColor(QPalette::Disabled, QPalette::Button, QColor(100, 100, 100));
+
+    return (*darkPalette);
 }
 
 // TODO we have to make a choice : use the standard Ogre loop (no timer, mRoot->startRendering();)
@@ -574,5 +622,66 @@ void MainWindow::on_actionChange_Ambient_Light_triggered()
     QColor c = QColorDialog::getColor(QColor::fromRgbF(ambientLightColour.r, ambientLightColour.g, ambientLightColour.b), this, tr("Choose background color"), QColorDialog::DontUseNativeDialog);
     if(c.isValid())
         Manager::getSingleton()->getSceneMgr()->setAmbientLight( Ogre::ColourValue(c.redF(),c.greenF(),c.blueF()) );
+}
+
+void MainWindow::on_actionLight_toggled(bool arg1)
+{
+    if(arg1){
+        QApplication::setPalette(QColor("ghostwhite"));
+        QSettings settings;
+        settings.setValue("palette","light");
+        ui->actionDark->setChecked(false);
+        ui->actionCustom->blockSignals(true);
+        ui->actionCustom->setChecked(false);
+        ui->actionCustom->blockSignals(false);
+    } else { //Doesn't allow unchecking
+        ui->actionLight->setChecked(!ui->actionDark->isChecked() &&
+                                   !ui->actionCustom->isChecked());
+    }
+}
+
+
+void MainWindow::on_actionDark_toggled(bool arg1)
+{
+    if(arg1){
+        QApplication::setPalette(darkPalette());
+
+        QSettings settings;
+        settings.setValue("palette","dark");
+        ui->actionLight->setChecked(false);
+        ui->actionCustom->blockSignals(true);
+        ui->actionCustom->setChecked(false);
+        ui->actionCustom->blockSignals(false);
+    } else { //Doesn't allow unchecking
+        ui->actionDark->setChecked(!ui->actionLight->isChecked() &&
+                                   !ui->actionCustom->isChecked());
+    }
+}
+
+
+void MainWindow::on_actionCustom_toggled(bool arg1)
+{
+    customPaletteColorDialog->show();
+    ui->actionCustom->blockSignals(true);
+    if(arg1){
+        ui->actionCustom->setChecked(false);
+    } else { //Doesn't allow unchecking
+        ui->actionCustom->setChecked(!ui->actionLight->isChecked() &&
+                                   !ui->actionDark->isChecked());
+    }
+    ui->actionCustom->blockSignals(false);
+}
+
+void MainWindow::on_Custom_Palette_Color_Selected(const QColor &color)
+{
+    QApplication::setPalette(color);
+    QSettings settings;
+    settings.setValue("palette","custom");
+    settings.setValue("customPalette",color);
+    ui->actionCustom->blockSignals(true);
+    ui->actionCustom->setChecked(true);
+    ui->actionLight->setChecked(false);
+    ui->actionDark->setChecked(false);
+    ui->actionCustom->blockSignals(false);
 }
 

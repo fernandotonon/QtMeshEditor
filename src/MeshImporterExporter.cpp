@@ -83,7 +83,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                 sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
 
                 Ogre::Mesh* importedMesh = Ogre::MeshManager::getSingleton().createManual(sn->getName(), "General").get();
-                Ogre::Skeleton* importedSk = Ogre::SkeletonManager::getSingleton().create(QString(QString(sn->getName().data())+".skeleton.xml").toStdString().data(), "General").staticCast<Ogre::Skeleton>().get();
+                Ogre::Skeleton* importedSk = Ogre::static_pointer_cast<Ogre::Skeleton>(Ogre::SkeletonManager::getSingleton().create(QString(QString(sn->getName().data())+".skeleton.xml").toStdString().data(), "General")).get();
 
                 try
                 {
