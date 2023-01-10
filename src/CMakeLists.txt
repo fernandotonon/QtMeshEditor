@@ -183,7 +183,6 @@ ui
             )
         ENDIF()
         SET(OGRELIBLIST ${OGRELIBLIST}
-            libzlib
             OgreMain
             Codec_Assimp
             Codec_STBI
@@ -203,6 +202,8 @@ ui
         FOREACH(ogrelib ${OGRELIBLIST})
             IF(WIN32)
                 INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            ELSEIF(APPLE)
+                INSTALL(FILES $ENV{OGRE_HOME}/lib/macosx/${${ogrelib}.framework}/Version/13.5/${ogrelib} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
             ELSEIF(UNIX)
                 IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
                     INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
