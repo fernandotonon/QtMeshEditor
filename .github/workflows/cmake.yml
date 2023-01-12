@@ -90,27 +90,30 @@ jobs:
 #         arch: 'gcc_64'
 #         tools: 'tools_cmake'
 
-#     - name: Cache Assimp
-#       id: cache-assimp
-#       uses: actions/cache@v3
-#       env:
-#         cache-name: cache-assimp-linux
-#       with:
-#         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
-#         path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/assimp') }}
-#         restore-keys: |
-#           ${{ runner.os }}-build-${{ env.cache-name }}-
 
     - name: Check out Assimp repo
-      if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
-          
+
+    - name: Cache Assimp
+      id: cache-assimp
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-linux
+      with:
+        # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
+        path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+         
     - name: Build Assimp repo
-      run: cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
+      run: |
+            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            ls /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build 
       
 #     - name: Build and install Assimp
 #       run: cmake --build assimp --config ${{env.BUILD_TYPE}}
