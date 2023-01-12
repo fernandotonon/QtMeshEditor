@@ -109,10 +109,10 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
-          path: ./assimp
+          path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
           
     - name: Build Assimp repo
-      run: cmake -B ./assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      run: cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
       
 #     - name: Build and install Assimp
 #       run: cmake --build assimp --config ${{env.BUILD_TYPE}}
