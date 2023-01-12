@@ -105,15 +105,15 @@ jobs:
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
         path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
-       # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        # key: ${{ runner.os }}-build-${{ env.cache-name }}
+        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
+        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
          
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       name: Build Assimp repo
-      run: echo 'found'
+      run: echo 'not found'
 #          |
 #             cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 #             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
