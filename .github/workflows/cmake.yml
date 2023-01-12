@@ -110,9 +110,6 @@ jobs:
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
           
     - name: Build Assimp repo
-      run: cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-      
-    - name: Build Assimp repo 2
       run: cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
       
 #     - name: Build and install Assimp
