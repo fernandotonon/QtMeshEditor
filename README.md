@@ -17,3 +17,5 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 * Renaming Animation
 
 ### [Build-from-source](https://github.com/fernandotonon/QtMeshEditor/wiki/How-to-build)
+
+Feel free to contact me, create issues or to contribute ;)
