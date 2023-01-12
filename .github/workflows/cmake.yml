@@ -105,18 +105,19 @@ jobs:
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
         path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build
-       # key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        # key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
          
-    - if: steps.cache-assimp-linux.cache-hit != 'true'
+    - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       name: Build Assimp repo
-      run: |
-            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
-            make DESTDIR=./ install -j8
+      run: echo 'found'
+#          |
+#             cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+#             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
+#             make DESTDIR=./ install -j8
       
 #     - name: Build and install Assimp
 #       run: cmake --build assimp --config ${{env.BUILD_TYPE}}
