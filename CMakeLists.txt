@@ -72,12 +72,6 @@ endif()
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_PATH}")
 
 ##############################################################
-#  Find OgreProcedural
-##############################################################
-find_package(OgreProcedural REQUIRED)
-include_directories(${OgreProcedural_INCLUDE_DIRS})
-
-##############################################################
 #  Find Ogre
 ##############################################################
 # We provide a FindOgre.cmake as the one provided by Ogre has a bug on linux (version number in the default install path)

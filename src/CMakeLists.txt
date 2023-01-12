@@ -69,27 +69,120 @@ MaterialHighlighter.h
 
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
 
+
 #file(GLOB UI_FILES ./ui_files/*.ui)
 # if we don't include this CMake will not include ui headers properly:
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH_DIR})
 
+
 ##############################################################
 #  Processing ogre-procedural
 ##############################################################
-#ADD_SUBDIRECTORY(ogre-procedural)
-#include_directories("${OgreProcedural_SOURCE_DIR}/library/include" "${OgreProcedural_BINARY_DIR}/include")
+set(OgreProcedural_CONFIG_FREETYPE "PROCEDURAL_NO_FREETYPE")
+set(OGRE_PROCEDURAL_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/ogre-procedural/library/")
+set(OgreProcedural_TEMPLATES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/ogre-procedural/CMake/Templates")
+include_directories(${OGRE_PROCEDURAL_LIB_DIR}include)
+
+configure_file(${OgreProcedural_TEMPLATES_DIR}/ProceduralPlatform.h.in ${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPlatform.h)
+
+set(SRC_FILES
+${SRC_FILES}
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralBoxGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralCapsuleGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralConeGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralCylinderGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralIcoSphereGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPlaneGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralRoundedBoxGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralSphereGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTorusGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTorusKnotGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTubeGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralUtils.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralShape.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralShapeGenerators.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPath.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPathGenerators.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTrack.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralExtruder.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralLathe.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTriangulator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPrecompiledHeaders.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralMultiShape.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralMultiShapeGenerators.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralGeometryHelpers.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralBoolean.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralSpringGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralSVG.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralDebugRendering.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTextureGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTextureModifiers.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralNoise.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralMeshModifiers.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTextureBuffer.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTriangleBuffer.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPrismGenerator.cpp
+)
+
+set(HEADER_FILES
+${HEADER_FILES}
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPlatform.h
+${OGRE_PROCEDURAL_LIB_DIR}include/Procedural.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralMeshGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralBoxGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralCapsuleGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralConeGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralCylinderGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralIcoSphereGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPlaneGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralSphereGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralRoundedBoxGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTorusGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTorusKnotGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTubeGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralUtils.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralExtruder.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralLathe.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralShape.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralShapeGenerators.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralShapeGeneratorsBase.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPath.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPathGenerators.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPathGeneratorsBase.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTrack.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralSplines.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTriangulator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTriangleBuffer.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralStableHeaders.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralMultiShape.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralMultiShapeGenerators.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralGeometryHelpers.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralBoolean.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralSpringGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralSVG.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralDebugRendering.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTextureGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTextureModifiers.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralNoise.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralMeshModifiers.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTextureBuffer.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPrismGenerator.h
+)
+
 
 ##############################################################
 # Determine Ogre version for creating the symlinks in linux
 ##############################################################
 IF(UNIX OR APPLE)
-  file(READ ${OGRE_INCLUDE_DIR}OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
+  file(READ ${OGRE_INCLUDE_DIR}/OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MAJOR OGRE_VERSION_MAJOR)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MINOR OGRE_VERSION_MINOR)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_PATCH OGRE_VERSION_PATCH)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_NAME OGRE_VERSION_NAME)
   set(OGRE_VERSION "${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR}.${OGRE_VERSION_PATCH}")
+  pkg_message(OGRE "Found Ogre3D ${OGRE_VERSION_NAME} (${OGRE_VERSION})")
 ENDIF()
+
 ##############################################################
 #  Adding Resources
 ##############################################################
@@ -132,7 +225,6 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
 ${ASSIMP_LIBRARY_REL}
 ${OGRE_LIBRARIES}
-${OgreProcedural_LIBRARY}
 Qt::Gui
 Qt::Core
 Qt::Widgets
@@ -147,73 +239,73 @@ ui
 ##############################################################
 #  Install libraries
 ##############################################################
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
+        SET(OGRELIBLIST cg
+            Plugin_CgProgramManager_d
+        )
+    ENDIF()
+    SET(OGRELIBLIST ${OGRELIBLIST}
+        OgreMain_d
+        Codec_Assimp_d
+        Codec_STBI_d
+        RenderSystem_GL_d
+        Plugin_OctreeSceneManager_d
+        Plugin_BSPSceneManager_d
+        Plugin_ParticleFX_d
+        Plugin_PCZSceneManager_d
+        Plugin_OctreeZone_d
+        OgrePaging_d
+        OgreProperty_d
+        OgreTerrain_d
+        OgreRTShaderSystem_d
+        OgreVolume_d
+        OgreOverlay_d)
 
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
-            SET(OGRELIBLIST cg
-                Plugin_CgProgramManager_d
-            )
+    FOREACH(ogrelib ${OGRELIBLIST})
+        IF(WIN32)
+            INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         ENDIF()
-        SET(OGRELIBLIST ${OGRELIBLIST}
-            OgreMain_d
-            Codec_Assimp_d
-            Codec_STBI_d
-            RenderSystem_GL_d
-            Plugin_OctreeSceneManager_d
-            Plugin_BSPSceneManager_d
-            Plugin_ParticleFX_d
-            Plugin_PCZSceneManager_d
-            Plugin_OctreeZone_d
-            OgrePaging_d
-            OgreProperty_d
-            OgreTerrain_d
-            OgreRTShaderSystem_d
-            OgreVolume_d
-            OgreOverlay_d)
+    ENDFOREACH(ogrelib)
+else()
+    IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
+        SET(OGRELIBLIST cg
+            Plugin_CgProgramManager
+        )
+    ENDIF()
+    SET(OGRELIBLIST ${OGRELIBLIST}
+        OgreMain
+        Codec_Assimp
+        Codec_STBI
+        RenderSystem_GL
+        Plugin_OctreeSceneManager
+        Plugin_BSPSceneManager
+        Plugin_ParticleFX
+        Plugin_PCZSceneManager
+        Plugin_OctreeZone
+        OgrePaging
+        OgreProperty
+        OgreTerrain
+        OgreRTShaderSystem
+        OgreVolume
+        OgreOverlay)
 
-        FOREACH(ogrelib ${OGRELIBLIST})
-            IF(WIN32)
-                INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+    FOREACH(ogrelib ${OGRELIBLIST})
+        IF(WIN32)
+            INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        ELSEIF(APPLE)
+            INSTALL(FILES $ENV{OGRE_HOME}/lib/macosx/${${ogrelib}.framework}/Version/13.5/${ogrelib} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        ELSEIF(UNIX)
+            IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
+                INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
             ENDIF()
-        ENDFOREACH(ogrelib)
-    else()
-        IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
-            SET(OGRELIBLIST cg
-                Plugin_CgProgramManager
-            )
+            IF(EXISTS ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so)
+                INSTALL(FILES ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            ENDIF()
         ENDIF()
-        SET(OGRELIBLIST ${OGRELIBLIST}
-            OgreMain
-            Codec_Assimp
-            Codec_STBI
-            RenderSystem_GL
-            Plugin_OctreeSceneManager
-            Plugin_BSPSceneManager
-            Plugin_ParticleFX
-            Plugin_PCZSceneManager
-            Plugin_OctreeZone
-            OgrePaging
-            OgreProperty
-            OgreTerrain
-            OgreRTShaderSystem
-            OgreVolume
-            OgreOverlay)
+    ENDFOREACH(ogrelib)
+endif()
 
-        FOREACH(ogrelib ${OGRELIBLIST})
-            IF(WIN32)
-                INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-            ELSEIF(APPLE)
-                INSTALL(FILES $ENV{OGRE_HOME}/lib/macosx/${${ogrelib}.framework}/Version/13.5/${ogrelib} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-            ELSEIF(UNIX)
-                IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
-                    INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-                ENDIF()
-                IF(EXISTS ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so)
-                    INSTALL(FILES ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-                ENDIF()
-            ENDIF()
-        ENDFOREACH(ogrelib)
-    endif()
 IF(WIN32)
     GET_FILENAME_COMPONENT(ASSIMP_DLL_DIR ${ASSIMP_INCLUDE_DIR} PATH)
     find_file(ASSIMP_DLL_FILE NAMES libassim.dll assimp.dll Assimp32.dll PATHS "${ASSIMP_DLL_DIR}/../bin" "${ASSIMP_DLL_DIR}/../bin/x86")
