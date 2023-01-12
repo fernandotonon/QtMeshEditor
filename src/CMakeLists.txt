@@ -1,7 +1,84 @@
 ##############################################################
+#  adding the files
+##############################################################
+
+set(SRC_FILES 
+about.cpp
+main.cpp
+Manager.cpp
+material.cpp
+materialeditor.cpp
+mainwindow.cpp
+MeshTransform.cpp
+OgreWidget.cpp
+QtInputManager.cpp
+SpaceCamera.cpp
+SkeletonDebug.cpp
+SkeletonTransform.cpp
+MeshImporterExporter.cpp
+EditorViewport.cpp
+RotationGizmo.cpp
+TranslationGizmo.cpp
+TransformOperator.cpp
+TransformWidget.cpp
+PrimitivesWidget.cpp
+PrimitiveObject.cpp
+ViewportGrid.cpp
+AnimationWidget.cpp
+SelectionSet.cpp
+SelectionBoxObject.cpp
+ObjectItemModel.cpp
+MaterialWidget.cpp
+MaterialComboDelegate.cpp
+MaterialHighlighter.cpp
+)
+
+set(HEADER_FILES
+GlobalDefinitions.h
+Euler.h
+about.h
+mainwindow.h
+Manager.h
+material.h
+materialeditor.h
+MeshTransform.h
+OgreWidget.h
+QtInputManager.h
+QtKeyListener.h
+QtMouseListener.h
+SpaceCamera.h
+SkeletonDebug.h
+SkeletonTransform.h
+MeshImporterExporter.h
+EditorViewport.h
+RotationGizmo.h
+TranslationGizmo.h
+TransformOperator.h
+TransformWidget.h
+PrimitivesWidget.h
+PrimitiveObject.h
+ViewportGrid.h
+AnimationWidget.h
+SelectionSet.h
+SelectionBoxObject.h
+ObjectItemModel.h
+MaterialWidget.h
+MaterialComboDelegate.h
+MaterialHighlighter.h
+)
+
+ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
+
+
+#file(GLOB UI_FILES ./ui_files/*.ui)
+# if we don't include this CMake will not include ui headers properly:
+include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH_DIR})
+
+
+##############################################################
 #  Processing ogre-procedural
 ##############################################################
-add_definitions(-DPROCEDURAL_NO_FREETYPE)
+set(OgreProcedural_CONFIG_FREETYPE "PROCEDURAL_NO_FREETYPE")
 set(OGRE_PROCEDURAL_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/ogre-procedural/library/")
 set(OgreProcedural_TEMPLATES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/ogre-procedural/CMake/Templates")
 include_directories(${OGRE_PROCEDURAL_LIB_DIR}include)
@@ -92,93 +169,20 @@ ${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTextureBuffer.h
 ${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPrismGenerator.h
 )
 
-##############################################################
-#  adding the files
-##############################################################
-
-set(SRC_FILES 
-about.cpp
-main.cpp
-Manager.cpp
-material.cpp
-materialeditor.cpp
-mainwindow.cpp
-MeshTransform.cpp
-OgreWidget.cpp
-QtInputManager.cpp
-SpaceCamera.cpp
-SkeletonDebug.cpp
-SkeletonTransform.cpp
-MeshImporterExporter.cpp
-EditorViewport.cpp
-RotationGizmo.cpp
-TranslationGizmo.cpp
-TransformOperator.cpp
-TransformWidget.cpp
-PrimitivesWidget.cpp
-PrimitiveObject.cpp
-ViewportGrid.cpp
-AnimationWidget.cpp
-SelectionSet.cpp
-SelectionBoxObject.cpp
-ObjectItemModel.cpp
-MaterialWidget.cpp
-MaterialComboDelegate.cpp
-MaterialHighlighter.cpp
-)
-
-set(HEADER_FILES
-GlobalDefinitions.h
-Euler.h
-about.h
-mainwindow.h
-Manager.h
-material.h
-materialeditor.h
-MeshTransform.h
-OgreWidget.h
-QtInputManager.h
-QtKeyListener.h
-QtMouseListener.h
-SpaceCamera.h
-SkeletonDebug.h
-SkeletonTransform.h
-MeshImporterExporter.h
-EditorViewport.h
-RotationGizmo.h
-TranslationGizmo.h
-TransformOperator.h
-TransformWidget.h
-PrimitivesWidget.h
-PrimitiveObject.h
-ViewportGrid.h
-AnimationWidget.h
-SelectionSet.h
-SelectionBoxObject.h
-ObjectItemModel.h
-MaterialWidget.h
-MaterialComboDelegate.h
-MaterialHighlighter.h
-)
-
-ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
-
-
-#file(GLOB UI_FILES ./ui_files/*.ui)
-# if we don't include this CMake will not include ui headers properly:
-include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH_DIR})
 
 ##############################################################
 # Determine Ogre version for creating the symlinks in linux
 ##############################################################
 IF(UNIX OR APPLE)
-  file(READ ${OGRE_INCLUDE_DIR}OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
+  file(READ ${OGRE_INCLUDE_DIR}/OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MAJOR OGRE_VERSION_MAJOR)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MINOR OGRE_VERSION_MINOR)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_PATCH OGRE_VERSION_PATCH)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_NAME OGRE_VERSION_NAME)
   set(OGRE_VERSION "${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR}.${OGRE_VERSION_PATCH}")
+  pkg_message(OGRE "Found Ogre3D ${OGRE_VERSION_NAME} (${OGRE_VERSION})")
 ENDIF()
+
 ##############################################################
 #  Adding Resources
 ##############################################################
@@ -221,7 +225,6 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
 ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
 ${ASSIMP_LIBRARY_REL}
 ${OGRE_LIBRARIES}
-${OgreProcedural_LIBRARY}
 Qt::Gui
 Qt::Core
 Qt::Widgets
@@ -236,73 +239,73 @@ ui
 ##############################################################
 #  Install libraries
 ##############################################################
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
+        SET(OGRELIBLIST cg
+            Plugin_CgProgramManager_d
+        )
+    ENDIF()
+    SET(OGRELIBLIST ${OGRELIBLIST}
+        OgreMain_d
+        Codec_Assimp_d
+        Codec_STBI_d
+        RenderSystem_GL_d
+        Plugin_OctreeSceneManager_d
+        Plugin_BSPSceneManager_d
+        Plugin_ParticleFX_d
+        Plugin_PCZSceneManager_d
+        Plugin_OctreeZone_d
+        OgrePaging_d
+        OgreProperty_d
+        OgreTerrain_d
+        OgreRTShaderSystem_d
+        OgreVolume_d
+        OgreOverlay_d)
 
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
-            SET(OGRELIBLIST cg
-                Plugin_CgProgramManager_d
-            )
+    FOREACH(ogrelib ${OGRELIBLIST})
+        IF(WIN32)
+            INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         ENDIF()
-        SET(OGRELIBLIST ${OGRELIBLIST}
-            OgreMain_d
-            Codec_Assimp_d
-            Codec_STBI_d
-            RenderSystem_GL_d
-            Plugin_OctreeSceneManager_d
-            Plugin_BSPSceneManager_d
-            Plugin_ParticleFX_d
-            Plugin_PCZSceneManager_d
-            Plugin_OctreeZone_d
-            OgrePaging_d
-            OgreProperty_d
-            OgreTerrain_d
-            OgreRTShaderSystem_d
-            OgreVolume_d
-            OgreOverlay_d)
+    ENDFOREACH(ogrelib)
+else()
+    IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
+        SET(OGRELIBLIST cg
+            Plugin_CgProgramManager
+        )
+    ENDIF()
+    SET(OGRELIBLIST ${OGRELIBLIST}
+        OgreMain
+        Codec_Assimp
+        Codec_STBI
+        RenderSystem_GL
+        Plugin_OctreeSceneManager
+        Plugin_BSPSceneManager
+        Plugin_ParticleFX
+        Plugin_PCZSceneManager
+        Plugin_OctreeZone
+        OgrePaging
+        OgreProperty
+        OgreTerrain
+        OgreRTShaderSystem
+        OgreVolume
+        OgreOverlay)
 
-        FOREACH(ogrelib ${OGRELIBLIST})
-            IF(WIN32)
-                INSTALL(FILES ${OGRE_PLUGIN_DIR_DBG}/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+    FOREACH(ogrelib ${OGRELIBLIST})
+        IF(WIN32)
+            INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        ELSEIF(APPLE)
+            INSTALL(FILES $ENV{OGRE_HOME}/lib/macosx/${${ogrelib}.framework}/Version/13.5/${ogrelib} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        ELSEIF(UNIX)
+            IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
+                INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
             ENDIF()
-        ENDFOREACH(ogrelib)
-    else()
-        IF(OGRE_Plugin_CgProgramManager_INCLUDE_DIR)
-            SET(OGRELIBLIST cg
-                Plugin_CgProgramManager
-            )
+            IF(EXISTS ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so)
+                INSTALL(FILES ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            ENDIF()
         ENDIF()
-        SET(OGRELIBLIST ${OGRELIBLIST}
-            OgreMain
-            Codec_Assimp
-            Codec_STBI
-            RenderSystem_GL
-            Plugin_OctreeSceneManager
-            Plugin_BSPSceneManager
-            Plugin_ParticleFX
-            Plugin_PCZSceneManager
-            Plugin_OctreeZone
-            OgrePaging
-            OgreProperty
-            OgreTerrain
-            OgreRTShaderSystem
-            OgreVolume
-            OgreOverlay)
+    ENDFOREACH(ogrelib)
+endif()
 
-        FOREACH(ogrelib ${OGRELIBLIST})
-            IF(WIN32)
-                INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-            ELSEIF(APPLE)
-                INSTALL(FILES $ENV{OGRE_HOME}/lib/macosx/${${ogrelib}.framework}/Version/13.5/${ogrelib} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-            ELSEIF(UNIX)
-                IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
-                    INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-                ENDIF()
-                IF(EXISTS ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so)
-                    INSTALL(FILES ${OGRE_PLUGIN_DIR_REL}/${ogrelib}.so.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-                ENDIF()
-            ENDIF()
-        ENDFOREACH(ogrelib)
-    endif()
 IF(WIN32)
     GET_FILENAME_COMPONENT(ASSIMP_DLL_DIR ${ASSIMP_INCLUDE_DIR} PATH)
     find_file(ASSIMP_DLL_FILE NAMES libassim.dll assimp.dll Assimp32.dll PATHS "${ASSIMP_DLL_DIR}/../bin" "${ASSIMP_DLL_DIR}/../bin/x86")
