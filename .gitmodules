@@ -1,0 +1,3 @@
+[submodule "src/dependencies/ogre-procedural"]
+	path = src/dependencies/ogre-procedural
+	url = https://github.com/OGRECave/ogre-procedural.git

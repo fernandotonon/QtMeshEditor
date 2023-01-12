@@ -1,4 +1,98 @@
 ##############################################################
+#  Processing ogre-procedural
+##############################################################
+add_definitions(-DPROCEDURAL_NO_FREETYPE)
+set(OGRE_PROCEDURAL_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/ogre-procedural/library/")
+set(OgreProcedural_TEMPLATES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/dependencies/ogre-procedural/CMake/Templates")
+include_directories(${OGRE_PROCEDURAL_LIB_DIR}include)
+
+configure_file(${OgreProcedural_TEMPLATES_DIR}/ProceduralPlatform.h.in ${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPlatform.h)
+
+set(SRC_FILES
+${SRC_FILES}
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralBoxGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralCapsuleGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralConeGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralCylinderGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralIcoSphereGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPlaneGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralRoundedBoxGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralSphereGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTorusGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTorusKnotGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTubeGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralUtils.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralShape.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralShapeGenerators.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPath.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPathGenerators.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTrack.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralExtruder.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralLathe.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTriangulator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPrecompiledHeaders.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralMultiShape.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralMultiShapeGenerators.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralGeometryHelpers.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralBoolean.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralSpringGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralSVG.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralDebugRendering.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTextureGenerator.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTextureModifiers.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralNoise.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralMeshModifiers.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTextureBuffer.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralTriangleBuffer.cpp
+${OGRE_PROCEDURAL_LIB_DIR}src/ProceduralPrismGenerator.cpp
+)
+
+set(HEADER_FILES
+${HEADER_FILES}
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPlatform.h
+${OGRE_PROCEDURAL_LIB_DIR}include/Procedural.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralMeshGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralBoxGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralCapsuleGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralConeGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralCylinderGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralIcoSphereGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPlaneGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralSphereGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralRoundedBoxGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTorusGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTorusKnotGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTubeGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralUtils.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralExtruder.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralLathe.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralShape.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralShapeGenerators.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralShapeGeneratorsBase.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPath.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPathGenerators.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPathGeneratorsBase.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTrack.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralSplines.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTriangulator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTriangleBuffer.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralStableHeaders.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralMultiShape.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralMultiShapeGenerators.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralGeometryHelpers.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralBoolean.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralSpringGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralSVG.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralDebugRendering.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTextureGenerator.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTextureModifiers.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralNoise.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralMeshModifiers.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTextureBuffer.h
+${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPrismGenerator.h
+)
+
+##############################################################
 #  adding the files
 ##############################################################
 
@@ -69,15 +163,10 @@ MaterialHighlighter.h
 
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
 
+
 #file(GLOB UI_FILES ./ui_files/*.ui)
 # if we don't include this CMake will not include ui headers properly:
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH_DIR})
-
-##############################################################
-#  Processing ogre-procedural
-##############################################################
-#ADD_SUBDIRECTORY(ogre-procedural)
-#include_directories("${OgreProcedural_SOURCE_DIR}/library/include" "${OgreProcedural_BINARY_DIR}/include")
 
 ##############################################################
 # Determine Ogre version for creating the symlinks in linux

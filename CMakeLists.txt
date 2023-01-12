@@ -74,8 +74,8 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_
 ##############################################################
 #  Find OgreProcedural
 ##############################################################
-find_package(OgreProcedural REQUIRED)
-include_directories(${OgreProcedural_INCLUDE_DIRS})
+#find_package(OgreProcedural REQUIRED)
+#include_directories(${OgreProcedural_INCLUDE_DIRS})
 
 ##############################################################
 #  Find Ogre
