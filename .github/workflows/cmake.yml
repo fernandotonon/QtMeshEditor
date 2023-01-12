@@ -147,18 +147,15 @@ jobs:
             cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
             make DESTDIR=./ install -j8
-      
-#     - name: Download Artifacts
-#       uses: actions/download-artifact@v3
-      
-#     - name: Configure CMake
-#       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-#       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-#       run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
-#     - name: Build
-#       # Build your program with the given configuration
-#       run: cmake --build ${{github.workspace}} --config ${{env.BUILD_TYPE}}
+    - name: Configure CMake
+      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+      run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+
+    - name: Build
+      # Build your program with the given configuration
+      run: make install -j8
 
 #     - name: Download Artifacts
 #       uses: actions/download-artifact@v3
