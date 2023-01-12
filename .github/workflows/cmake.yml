@@ -144,7 +144,7 @@ jobs:
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
       run: |
-            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
             make DESTDIR=./ install -j8
       
