@@ -110,11 +110,11 @@ jobs:
           ${{ runner.os }}-build-${{ env.cache-name }}-
          
     - name: Build Assimp repo
-      if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
+      if: steps.cache-assimp-linux.cache-hit != 'true'
       run: |
             cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
-            make install
+            make install -j8
             ls ./bin 
       
 #     - name: Build and install Assimp
