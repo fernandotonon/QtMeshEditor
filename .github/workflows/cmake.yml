@@ -128,24 +128,18 @@ jobs:
       env: 
         OGRE_HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake/
         PROGRAMFILES: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/
-      run: |
-            echo "variables"
-            echo $OGRE_HOME 
-            echo $PROGRAMFILES $OGRE_SDK 
-            echo "ls $OGRE_HOME"
-            ls $OGRE_HOME
-            echo "ls $PROGRAMFILES"
-            ls $PROGRAMFILES
-            echo "ls $OGRE_SDK"
-            ls $OGRE_SDK
-            echo "ls /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/OGRE/"
-            ls /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/OGRE/
-            cmake -B ${{github.workspace}} -DOGRE_INCLUDE_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/OGRE/ -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      run: cmake -B ${{github.workspace}} -DOGRE_INCLUDE_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/OGRE/ -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Build
       # Build your program with the given configuration
       run: make install -j8
 
+
+#     - uses: actions/upload-artifact@v3
+#       with:
+#         name: linux-binaries
+#         path: ${{github.workspace}}/bin
+        
 #     - name: Download Artifacts
 #       uses: actions/download-artifact@v3
 #       with:
