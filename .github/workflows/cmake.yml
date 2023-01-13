@@ -52,7 +52,16 @@ jobs:
 #         key: ${{ runner.os }}-build-${{ env.cache-name }}-
 #         restore-keys: |
 #           ${{ runner.os }}-build-${{ env.cache-name }}-
-    
+
+    - name: Test
+      run: |
+            echo "sem sudo"
+            ls /
+            echo "com sudo"
+            /usr/bin/sudo ls /
+            echo "com sudo 2"
+            sudo ls /
+
     - name: Install Qt
       if: steps.cache-qt-linux.outputs.cache-hit != 'true'
       uses: jurplel/install-qt-action@v3
