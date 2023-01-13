@@ -40,9 +40,6 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
-    - name: Sudo su
-      run: sudo su
-
 #     - name: Cache Qt
 #       id: cache-qt-linux
 #       uses: actions/cache@v3
@@ -95,6 +92,9 @@ jobs:
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             make DESTDIR=./ install -j8
 
+    - name: chmod /usr/local
+      run: sudo chmod -R 777 /usr/local
+      
     - name: Cache Ogre
       id: cache-ogre-linux
       uses: actions/cache@v3
