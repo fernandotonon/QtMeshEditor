@@ -78,16 +78,16 @@ jobs:
 #         restore-keys: |
 #           ${{ runner.os }}-build-${{ env.cache-name }}-
     
-    - name: Install Qt
-      if: steps.cache-qt-linux.outputs.cache-hit != 'true'
-      uses: jurplel/install-qt-action@v3
-      with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
-        host: 'linux'
-        target: 'desktop'
-        arch: 'gcc_64'
-        tools: 'tools_cmake'
+#     - name: Install Qt
+#       if: steps.cache-qt-linux.outputs.cache-hit != 'true'
+#       uses: jurplel/install-qt-action@v3
+#       with:
+#         aqtversion: '==2.1.*'
+#         version: '6.5.0'
+#         host: 'linux'
+#         target: 'desktop'
+#         arch: 'gcc_64'
+#         tools: 'tools_cmake'
 
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -157,6 +157,12 @@ jobs:
             echo "variables"
             echo $OGRE_HOME 
             echo $PROGRAMFILES $OGRE_SDK 
+            echo "ls $OGRE_HOME"
+            ls $OGRE_HOME
+            echo "ls $PROGRAMFILES"
+            ls $PROGRAMFILES
+            echo "ls $OGRE_SDK"
+            ls $OGRE_SDK
             cmake -B ${{github.workspace}} -DOGRE_INCLUDE_DIR=./usr/local/include/OGRE/ -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Build
