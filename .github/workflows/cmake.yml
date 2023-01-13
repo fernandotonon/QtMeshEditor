@@ -52,16 +52,16 @@ jobs:
 #         restore-keys: |
 #           ${{ runner.os }}-build-${{ env.cache-name }}-
 
-#     - name: Install Qt
-#       if: steps.cache-qt-linux.outputs.cache-hit != 'true'
-#       uses: jurplel/install-qt-action@v3
-#       with:
-#         aqtversion: '==2.1.*'
-#         version: '6.5.0'
-#         host: 'linux'
-#         target: 'desktop'
-#         arch: 'gcc_64'
-#         tools: 'tools_cmake'
+    - name: Install Qt
+      if: steps.cache-qt-linux.outputs.cache-hit != 'true'
+      uses: jurplel/install-qt-action@v3
+      with:
+        aqtversion: '==2.1.*'
+        version: '6.5.0'
+        host: 'linux'
+        target: 'desktop'
+        arch: 'gcc_64'
+        tools: 'tools_cmake'
 
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -127,19 +127,19 @@ jobs:
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
             sudo make install -j8
 
-#     - name: Configure CMake
-#       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-#       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-#       #env: 
-#         #OGRE_HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake/
-#         #PROGRAMFILES: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib
-#         #HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib
-#         #OGRE_DEPENDENCIES_DIR: "/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/ogre /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/ogre"
-#       run: sudo cmake -B ${{github.workspace}} -DOGRE_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake -DOGRE_INCLUDE_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/OGRE -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+    - name: Configure CMake
+      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+      #env: 
+        #OGRE_HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake/
+        #PROGRAMFILES: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib
+        #HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib
+        #OGRE_DEPENDENCIES_DIR: "/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/ogre /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/ogre"
+      run: sudo cmake -B ${{github.workspace}} -DOGRE_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake -DOGRE_INCLUDE_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/OGRE -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
-#     - name: Build
-#       # Build your program with the given configuration
-#       run: sudo make install -j8
+    - name: Build
+      # Build your program with the given configuration
+      run: sudo make install -j8
 
 
 #     - uses: actions/upload-artifact@v3
