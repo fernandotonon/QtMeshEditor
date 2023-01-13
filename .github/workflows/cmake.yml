@@ -9,7 +9,6 @@ on:
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
-  #OGRE_SDK: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake/
 
 jobs:
 #  build-windows:
@@ -52,15 +51,6 @@ jobs:
 #         key: ${{ runner.os }}-build-${{ env.cache-name }}-
 #         restore-keys: |
 #           ${{ runner.os }}-build-${{ env.cache-name }}-
-
-    - name: Test
-      run: |
-            echo "sem sudo"
-            ls /
-            echo "com sudo"
-            /usr/bin/sudo ls /
-            echo "com sudo 2"
-            sudo ls /
 
     - name: Install Qt
       if: steps.cache-qt-linux.outputs.cache-hit != 'true'
@@ -108,8 +98,8 @@ jobs:
       env:
         cache-name: cache-ogre-linux
       with:
-        # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/ogre/usr` on Linux/macOS
-        path: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr
+        # Assimp cache files are stored in `/usr/local` on Linux/macOS
+        path: /usr/local
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/ogre') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
@@ -129,7 +119,7 @@ jobs:
       run: |
             cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
-            make DESTDIR=./ install -j8
+            sudo make install -j8
 
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
