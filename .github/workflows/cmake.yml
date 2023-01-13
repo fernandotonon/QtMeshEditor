@@ -40,6 +40,9 @@ jobs:
     steps:
     - uses: actions/checkout@v3
 
+    - name: Sudo su
+      run: sudo su
+
 #     - name: Cache Qt
 #       id: cache-qt-linux
 #       uses: actions/cache@v3
