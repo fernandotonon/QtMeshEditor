@@ -62,6 +62,9 @@ jobs:
         target: 'desktop'
         arch: 'gcc_64'
 
+    - name: chmod /usr/local
+      run: sudo chmod -R 777 /usr/local
+
     - name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
@@ -69,7 +72,9 @@ jobs:
         cache-name: cache-assimp-linux
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
-        path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build
+        path: |
+               /usr/local/include/assimp
+               /usr/local/lib/libassimp.so
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
@@ -89,21 +94,7 @@ jobs:
       run: |
             cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
-            make DESTDIR=./ install -j8
-
-    - name: ls
-      run: |
-            echo 0
-            ls /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
-            echo 1
-            ls /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/lib/
-            echo 2
-            ls /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/include
-            echo 3
-            ls /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/include/assimp
-
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
+            sudo make install -j8
 
     - name: Cache Ogre
       id: cache-ogre-linux
