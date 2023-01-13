@@ -53,7 +53,6 @@ jobs:
 #           ${{ runner.os }}-build-${{ env.cache-name }}-
 
     - name: Install Qt
-      if: steps.cache-qt-linux.outputs.cache-hit != 'true'
       uses: jurplel/install-qt-action@v3
       with:
         aqtversion: '==2.1.*'
@@ -61,7 +60,6 @@ jobs:
         host: 'linux'
         target: 'desktop'
         arch: 'gcc_64'
-        tools: 'tools_cmake'
 
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -94,7 +92,10 @@ jobs:
 
     - name: chmod /usr/local
       run: sudo chmod -R 777 /usr/local
-      
+
+    - name: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake
+      run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake
+
     - name: Cache Ogre
       id: cache-ogre-linux
       uses: actions/cache@v3
