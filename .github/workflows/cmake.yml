@@ -52,14 +52,14 @@ jobs:
 #         restore-keys: |
 #           ${{ runner.os }}-build-${{ env.cache-name }}-
 
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v3
-      with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
-        host: 'linux'
-        target: 'desktop'
-        arch: 'gcc_64'
+#     - name: Install Qt
+#       uses: jurplel/install-qt-action@v3
+#       with:
+#         aqtversion: '==2.1.*'
+#         version: '6.5.0'
+#         host: 'linux'
+#         target: 'desktop'
+#         arch: 'gcc_64'
 
     - name: chmod /usr/local
       run: sudo chmod -R 777 /usr/local
@@ -72,8 +72,10 @@ jobs:
       with:
         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
         path: |
+               /usr/local/lib/cmake/
                /usr/local/include/assimp
-               /usr/local/lib/libassimp.so
+               /usr/local/lib/pkgconfig/assimp.pc
+               /usr/local/lib/libassimp*
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
@@ -98,48 +100,48 @@ jobs:
     - name: chmod /usr/local
       run: sudo chmod -R 777 /usr/local
       
-    - name: Cache Ogre
-      id: cache-ogre-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-linux
-      with:
-        path: |
-               /usr/local/lib/lib*
-               /usr/local/share/OGRE/
-               /usr/local/share/OGRE/
-               /usr/local/include/OGRE/
-               /usr/local/lib/OGRE/
-               /usr/local/lib/pkgconfig/
-        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/ogre') }}
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
+#     - name: Cache Ogre
+#       id: cache-ogre-linux
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-ogre-linux
+#       with:
+#         path: |
+#                /usr/local/lib/lib*
+#                /usr/local/share/OGRE/
+#                /usr/local/share/OGRE/
+#                /usr/local/include/OGRE/
+#                /usr/local/lib/OGRE/
+#                /usr/local/lib/pkgconfig/
+#         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/ogre') }}
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+#         restore-keys: |
+#           ${{ runner.os }}-build-${{ env.cache-name }}-
 
-    - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
-      name: Check out ogre repo
-      uses: actions/checkout@master
-      with:
-          repository: OGRECave/ogre
-          path: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre
+#     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
+#       name: Check out ogre repo
+#       uses: actions/checkout@master
+#       with:
+#           repository: OGRECave/ogre
+#           path: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre
 
          
-    - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
-      name: Build Ogre3D repo
-      run: |
-            sudo cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
-            sudo make install -j8
+#     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
+#       name: Build Ogre3D repo
+#       run: |
+#             sudo cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+#             cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
+#             sudo make install -j8
 
-    - name: Configure CMake
-      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+#     - name: Configure CMake
+#       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+#       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+#       run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
 
-    - name: Build
-      # Build your program with the given configuration
-      run: sudo make install -j8
+#     - name: Build
+#       # Build your program with the given configuration
+#       run: sudo make install -j8
 
 
 #     - uses: actions/upload-artifact@v3
