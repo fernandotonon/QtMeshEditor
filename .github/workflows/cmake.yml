@@ -128,6 +128,7 @@ jobs:
       env: 
         OGRE_HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake/
         PROGRAMFILES: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib
+        HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib
       run: cmake -B ${{github.workspace}} -DOGRE_INCLUDE_DIR=/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/OGRE/ -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Build
