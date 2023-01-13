@@ -9,7 +9,7 @@ on:
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
-  OGRE_HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake/
+  OGRE_DIR: ./usr/local/lib/OGRE/cmake/
 
 jobs:
 #  build-windows:
@@ -152,7 +152,7 @@ jobs:
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
       env: 
         OGRE_HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake/
-      run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      run: cmake -B ${{github.workspace}} -DOGRE_INCLUDE_DIR=./usr/local/include/OGRE/ -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 
     - name: Build
       # Build your program with the given configuration
