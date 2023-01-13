@@ -98,7 +98,6 @@ jobs:
       env:
         cache-name: cache-ogre-linux
       with:
-        # Assimp cache files are stored in `/usr/local` on Linux/macOS
         path: |
                /usr/local/lib/lib*
                /usr/local/share/OGRE/
@@ -108,7 +107,7 @@ jobs:
                /usr/local/lib/pkgconfig/
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/ogre') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
 
