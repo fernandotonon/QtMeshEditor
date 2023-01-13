@@ -90,6 +90,17 @@ jobs:
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             make DESTDIR=./ install -j8
 
+    - name: ls
+      run: |
+            echo 0
+            ls /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
+            echo 1
+            ls /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/lib/
+            echo 2
+            ls /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/include
+            echo 3
+            ls /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/usr/local/include/assimp
+
     - name: chmod /usr/local
       run: sudo chmod -R 777 /usr/local
 
