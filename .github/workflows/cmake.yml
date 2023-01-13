@@ -93,9 +93,6 @@ jobs:
     - name: chmod /usr/local
       run: sudo chmod -R 777 /usr/local
 
-    - name: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake
-      run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake
-
     - name: Cache Ogre
       id: cache-ogre-linux
       uses: actions/cache@v3
@@ -133,12 +130,7 @@ jobs:
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      #env: 
-        #OGRE_HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/OGRE/cmake/
-        #PROGRAMFILES: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib
-        #HOME: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib
-        #OGRE_DEPENDENCIES_DIR: "/home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/lib/ogre /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/usr/local/include/ogre"
-      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6
 
     - name: Build
       # Build your program with the given configuration
