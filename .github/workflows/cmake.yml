@@ -80,11 +80,11 @@ jobs:
     #- if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
     - name: Build Ogre3D repo
       run: |
-            echo "dir assimp D:/a/QtMeshEditor/QtMeshEditor/assimp"
-            dir D:/a/QtMeshEditor/QtMeshEditor/assimp
-            echo "dir assimp D:/a/QtMeshEditor/QtMeshEditor/assimp/lib/cmake/assimp-5.2/"
-            dir D:/a/QtMeshEditor/QtMeshEditor/assimp/lib/cmake/assimp-5.2/
-            cmake -B D:/a/QtMeshEditor/QtMeshEditor/ogre-build -S D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=D:/a/QtMeshEditor/QtMeshEditor/assimp/lib/cmake/assimp-5.2/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            echo "dir assimp D:/a/QtMeshEditor/QtMeshEditor/assimp/lib"
+            dir D:/a/QtMeshEditor/QtMeshEditor/assimp/lib
+            echo "dir assimp D:/a/QtMeshEditor/QtMeshEditor/assimp/lib/cmake/"
+            dir D:/a/QtMeshEditor/QtMeshEditor/assimp/lib/cmake/
+            cmake -B D:/a/QtMeshEditor/QtMeshEditor/ogre-build -S D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DASSIMP_DIR=D:/a/QtMeshEditor/QtMeshEditor/assimp/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd D:/a/QtMeshEditor/QtMeshEditor/ogre-build/
             cmake --build
             
