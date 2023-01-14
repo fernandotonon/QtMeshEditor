@@ -293,7 +293,6 @@ jobs:
       env:
         cache-name: cache-assimp-macos
       with:
-        # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
         path: |
                /usr/local/lib/cmake/
                /usr/local/include/assimp
@@ -310,13 +309,13 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
-          path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
+          path: /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp
          
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
-            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
+            cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cd /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             sudo make install -j8
 
  build-macos:
