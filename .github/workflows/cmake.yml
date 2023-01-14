@@ -40,7 +40,7 @@ jobs:
             
  build-n-cache-ogre-windows:
     needs: build-n-cache-assimp-windows
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
     - name: Cache Assimp
       id: cache-assimp-windows
@@ -463,7 +463,7 @@ jobs:
           ${{ runner.os }}-build-${{ env.cache-name }}-
 
     - name: Configure CMake
-      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_PREFIX_PATH=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/ -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/OGRE
+      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_PREFIX_PATH=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/;/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/cmake/ -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/OGRE
 
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/
     
