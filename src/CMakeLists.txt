@@ -180,7 +180,7 @@ IF(UNIX OR APPLE)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_PATCH OGRE_VERSION_PATCH)
   get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_NAME OGRE_VERSION_NAME)
   set(OGRE_VERSION "${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR}.${OGRE_VERSION_PATCH}")
-  pkg_message(OGRE "Found Ogre3D ${OGRE_VERSION_NAME} (${OGRE_VERSION})")
+  message("Found Ogre3D ${OGRE_VERSION_NAME} (${OGRE_VERSION})")
 ENDIF()
 
 ##############################################################

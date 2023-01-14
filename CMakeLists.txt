@@ -68,7 +68,7 @@ if(UNIX)
         find_package(Qt5X11Extras REQUIRED)
     endif()
 endif()
-
+message("Found Qt (${QT_VERSION_MAJOR})")
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_PATH}")
 
 ##############################################################
@@ -131,7 +131,7 @@ ELSEIF(UNIX)
         SET (QTLIBLIST
         Qt${QT_VERSION_MAJOR}Gui
         Qt${QT_VERSION_MAJOR}Core
-        Qt${QT_VERSION_MAJOR}OpenGL
+        Qt${QT_VERSION_MAJOR}Widgets
         Qt${QT_VERSION_MAJOR}XcbQpa)
         FOREACH(qtlib ${QTLIBLIST})
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
