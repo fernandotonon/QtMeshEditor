@@ -443,7 +443,9 @@ jobs:
     - name: Configure CMake
       env: 
          OGRE_SDK: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
-      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+         OGRE_HOME: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/
+         OGRE_DIR: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/
+      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/OGRE
 
     - name: Build
       # Build your program with the given configuration
