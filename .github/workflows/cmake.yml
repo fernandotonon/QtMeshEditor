@@ -36,7 +36,7 @@ jobs:
       run: |
             cd D:/a/QtMeshEditor/QtMeshEditor/assimp/
             cmake -S ./ -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cmake --build ./
+            cmake --build ./ --config ${{env.BUILD_TYPE}}
             
  build-n-cache-ogre-windows:
     needs: build-n-cache-assimp-windows
@@ -52,37 +52,31 @@ jobs:
         path: D:/a/QtMeshEditor/QtMeshEditor/assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
       
-#     - name: Cache Ogre
-#       id: cache-ogre-windows
-#       uses: actions/cache@v3
-#       env:
-#         cache-name: cache-ogre-windows
-#       with:
-#         path: |
-#                /usr/local/lib/lib*
-#                /usr/local/share/OGRE/
-#                /usr/local/share/OGRE/
-#                /usr/local/include/OGRE/
-#                /usr/local/lib/OGRE/
-#                /usr/local/lib/pkgconfig/
-#         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/ogre') }}
-#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+    - name: Cache Ogre
+      id: cache-ogre-windows
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-windows
+      with:
+        path: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/
+        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/ogre') }}
+        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
 
             
-#     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-    - name: Check out ogre repo
+    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+      name: Check out ogre repo
       uses: actions/checkout@master
       with:
           repository: OGRECave/ogre
           path: D:/a/QtMeshEditor/QtMeshEditor/ogre
          
-    #- if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-    - name: Build Ogre3D repo
+    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+      name: Build Ogre3D repo
       run: |
             cmake -B D:/a/QtMeshEditor/QtMeshEditor/ogre-build -S D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DASSIMP_DIR=D:/a/QtMeshEditor/QtMeshEditor/assimp/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd D:/a/QtMeshEditor/QtMeshEditor/ogre-build/
-            cmake --build ./
+            cmake --build ./ --config ${{env.BUILD_TYPE}}
             
  build-windows:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
@@ -115,194 +109,182 @@ jobs:
         path: D:/a/QtMeshEditor/QtMeshEditor/assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
- build-n-cache-assimp-linux:
-    runs-on: ubuntu-latest
-    steps:
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
+#  build-n-cache-assimp-linux:
+#     runs-on: ubuntu-latest
+#     steps:
+#     - name: chmod /usr/local
+#       run: sudo chmod -R 777 /usr/local
 
-    - name: Cache Assimp
-      id: cache-assimp-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-linux
-      with:
-        # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux
-        path: |
-               /usr/local/lib/cmake/
-               /usr/local/include/assimp
-               /usr/local/lib/pkgconfig/assimp.pc
-               /usr/local/lib/libassimp*
-        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
-      name: Check out Assimp repo
-      uses: actions/checkout@master
-      with:
-          repository: assimp/assimp
-          path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
-         
-    - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
-      name: Build Assimp repo
-      run: |
-            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
-            sudo make install -j8
-
- build-n-cache-ogre-linux:
-    needs: build-n-cache-assimp-linux
-    runs-on: ubuntu-latest
-    steps:
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
-      
-    - name: Cache Assimp
-      id: cache-assimp-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-linux
-      with:
-        # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
-        path: |
-               /usr/local/lib/cmake/
-               /usr/local/include/assimp
-               /usr/local/lib/pkgconfig/assimp.pc
-               /usr/local/lib/libassimp*
-        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-      
-    - name: Cache Ogre
-      id: cache-ogre-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-linux
-      with:
-        path: |
-               /usr/local/lib/lib*
-               /usr/local/share/OGRE/
-               /usr/local/share/OGRE/
-               /usr/local/include/OGRE/
-               /usr/local/lib/OGRE/
-               /usr/local/lib/pkgconfig/
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
-      name: install openGL
-      run: |
-            sudo apt update
-            sudo apt-get install freeglut3-dev libxrandr-dev
-            
-    - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
-      name: Check out ogre repo
-      uses: actions/checkout@master
-      with:
-          repository: OGRECave/ogre
-          path: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre
-         
-    - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
-      name: Build Ogre3D repo
-      run: |
-            sudo cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
-            sudo make install -j8
-      
- build-linux:
-    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
-    # You can convert this to a matrix build if you need cross-platform coverage.
-    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-    needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-      with:
-         submodules: true
-
-#     - name: Cache Qt
-#       id: cache-qt-linux
+#     - name: Cache Assimp
+#       id: cache-assimp-linux
 #       uses: actions/cache@v3
 #       env:
-#         cache-name: cache-qt-linux
+#         cache-name: cache-assimp-linux
 #       with:
-#         # qt cache files are stored in `/home/runner/work/QtMeshEditor/Qt` on Linux/macOS
-#         path: /home/runner/work/QtMeshEditor/Qt
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}-
+#         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux
+#         path: |
+#                /usr/local/lib/cmake/
+#                /usr/local/include/assimp
+#                /usr/local/lib/pkgconfig/assimp.pc
+#                /usr/local/lib/libassimp*
+#         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v3
-      with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
-        host: 'linux'
-        target: 'desktop'
-        arch: 'gcc_64'
+#     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
+#       name: Check out Assimp repo
+#       uses: actions/checkout@master
+#       with:
+#           repository: assimp/assimp
+#           path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
+         
+#     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
+#       name: Build Assimp repo
+#       run: |
+#             cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+#             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
+#             sudo make install -j8
 
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
-
-    - name: Cache Assimp
-      id: cache-assimp-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-linux
-      with:
-        # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
-        path: |
-               /usr/local/lib/cmake/
-               /usr/local/include/assimp
-               /usr/local/lib/pkgconfig/assimp.pc
-               /usr/local/lib/libassimp*
-        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
+#  build-n-cache-ogre-linux:
+#     needs: build-n-cache-assimp-linux
+#     runs-on: ubuntu-latest
+#     steps:
+#     - name: chmod /usr/local
+#       run: sudo chmod -R 777 /usr/local
       
-    - name: Cache Ogre
-      id: cache-ogre-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-linux
-      with:
-        path: |
-               /usr/local/lib/lib*
-               /usr/local/share/OGRE/
-               /usr/local/share/OGRE/
-               /usr/local/include/OGRE/
-               /usr/local/lib/OGRE/
-               /usr/local/lib/pkgconfig/
-        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/ogre') }}
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache Assimp
+#       id: cache-assimp-linux
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-assimp-linux
+#       with:
+#         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
+#         path: |
+#                /usr/local/lib/cmake/
+#                /usr/local/include/assimp
+#                /usr/local/lib/pkgconfig/assimp.pc
+#                /usr/local/lib/libassimp*
+#         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+      
+#     - name: Cache Ogre
+#       id: cache-ogre-linux
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-ogre-linux
+#       with:
+#         path: |
+#                /usr/local/lib/lib*
+#                /usr/local/share/OGRE/
+#                /usr/local/share/OGRE/
+#                /usr/local/include/OGRE/
+#                /usr/local/lib/OGRE/
+#                /usr/local/lib/pkgconfig/
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Cache .o files
-      id: cache-build-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-build-linux
-      with:
-        path: src/CMakeFiles/QtMeshEditor.dir/
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/src') }}
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
+#       name: install openGL
+#       run: |
+#             sudo apt update
+#             sudo apt-get install freeglut3-dev libxrandr-dev
+            
+#     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
+#       name: Check out ogre repo
+#       uses: actions/checkout@master
+#       with:
+#           repository: OGRECave/ogre
+#           path: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre
+         
+#     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
+#       name: Build Ogre3D repo
+#       run: |
+#             sudo cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+#             cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
+#             sudo make install -j8
+      
+#  build-linux:
+#     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
+#     # You can convert this to a matrix build if you need cross-platform coverage.
+#     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+#     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
+#     runs-on: ubuntu-latest
+#     steps:
+#     - uses: actions/checkout@v3
+#       with:
+#          submodules: true
+         
+#     - name: Install Qt
+#       uses: jurplel/install-qt-action@v3
+#       with:
+#         aqtversion: '==2.1.*'
+#         version: '6.5.0'
+#         host: 'linux'
+#         target: 'desktop'
+#         arch: 'gcc_64'
 
-    - name: Configure CMake
-      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+#     - name: chmod /usr/local
+#       run: sudo chmod -R 777 /usr/local
 
-    - name: Build
-      # Build your program with the given configuration
-      run: |
-            sudo make install -j8
-            sudo chmod +X bin/QtMeshEditor
-            sudo chmod -R 777 bin/
+#     - name: Cache Assimp
+#       id: cache-assimp-linux
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-assimp-linux
+#       with:
+#         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
+#         path: |
+#                /usr/local/lib/cmake/
+#                /usr/local/include/assimp
+#                /usr/local/lib/pkgconfig/assimp.pc
+#                /usr/local/lib/libassimp*
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+#         restore-keys: |
+#           ${{ runner.os }}-build-${{ env.cache-name }}-
+      
+#     - name: Cache Ogre
+#       id: cache-ogre-linux
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-ogre-linux
+#       with:
+#         path: |
+#                /usr/local/lib/lib*
+#                /usr/local/share/OGRE/
+#                /usr/local/share/OGRE/
+#                /usr/local/include/OGRE/
+#                /usr/local/lib/OGRE/
+#                /usr/local/lib/pkgconfig/
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - uses: actions/upload-artifact@v3
-      with:
-        name: linux-binaries
-        path: ${{github.workspace}}/bin
+#     - name: Cache .o files
+#       id: cache-build-linux
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-build-linux
+#       with:
+#         path: src/CMakeFiles/QtMeshEditor.dir/
+# #         key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/src') }}
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+
+#     - name: Configure CMake
+#       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+#       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+#       run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+
+#     - name: Build
+#       # Build your program with the given configuration
+#       run: |
+#             sudo make install -j8
+#             sudo chmod +X bin/QtMeshEditor
+#             sudo chmod -R 777 bin/
+
+#     - uses: actions/upload-artifact@v3
+#       with:
+#         name: linux-binaries
+#         path: ${{github.workspace}}/bin
 
 #     - name: Test
 #       working-directory: ${{github.workspace}}
@@ -379,6 +361,7 @@ jobs:
                /usr/local/include/OGRE/
                /usr/local/lib/OGRE/
                /usr/local/lib/pkgconfig/
+               /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
             
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
@@ -467,8 +450,6 @@ jobs:
       # Build your program with the given configuration
       run: |
             sudo make install -j8
-            sudo chmod +X bin/QtMeshEditor
-            sudo chmod -R 777 bin/
 
     - uses: actions/upload-artifact@v3
       with:
