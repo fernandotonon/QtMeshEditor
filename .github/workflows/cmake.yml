@@ -42,16 +42,15 @@ jobs:
     #- if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
     - name: Build Assimp repo
       run: |
-            cmake -B D:/a/QtMeshEditor/QtMeshEditor/assimp-build -S D:/a/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cmake -B D:/a/QtMeshEditor/QtMeshEditor/assimp-build -S D:/a/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_INSTALL_PREFIX=D:/a/QtMeshEditor/QtMeshEditor/assimp-build/
             cd D:/a/QtMeshEditor/QtMeshEditor/assimp-build/
-            echo "dir"
-            dir
             mingw32-make install -j8
 
  build-windows:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
     # You can convert this to a matrix build if you need cross-platform coverage.
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    needs: build-n-cache-assimp-windows
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v3
@@ -285,8 +284,8 @@ jobs:
  build-n-cache-assimp-macos:
     runs-on: macos-latest
     steps:
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
+#     - name: chmod /usr/local
+#       run: sudo chmod -R 777 /usr/local
 
     - name: Cache Assimp
       id: cache-assimp-macos
@@ -324,8 +323,8 @@ jobs:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
     # You can convert this to a matrix build if you need cross-platform coverage.
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    needs: build-n-cache-assimp-macos
     runs-on: macos-latest
-
     steps:
     - uses: actions/checkout@v3
       with:
