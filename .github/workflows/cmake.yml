@@ -44,7 +44,7 @@ jobs:
       run: |
             cmake -B D:/a/QtMeshEditor/QtMeshEditor/assimp-build -S D:/a/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd D:/a/QtMeshEditor/QtMeshEditor/assimp-build/
-            sudo mingw32-make install -j8
+            mingw32-make install -j8
 
  build-windows:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
@@ -150,8 +150,10 @@ jobs:
 
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
       name: install openGL
-      run: sudo apt-get install freeglut3-dev
-    
+      run: |
+            sudo apt update
+            sudo apt-get install freeglut3-dev
+            
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
       name: Check out ogre repo
       uses: actions/checkout@master
