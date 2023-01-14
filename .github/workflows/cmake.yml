@@ -53,13 +53,13 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
+          
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       name: Check out Assimp repo
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
-
          
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       name: Build Assimp repo
@@ -67,8 +67,6 @@ jobs:
             cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             sudo make install -j8
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
 
  build-n-cache-ogre-linux:
     runs-on: ubuntu-latest
@@ -94,13 +92,13 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
+          
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
       name: Check out ogre repo
       uses: actions/checkout@master
       with:
           repository: OGRECave/ogre
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre
-
          
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
