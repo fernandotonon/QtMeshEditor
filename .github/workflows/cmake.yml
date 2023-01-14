@@ -31,8 +31,6 @@ jobs:
 #         key: ${{ runner.os }}-build-${{ env.cache-name }}
 #         restore-keys: |
 #           ${{ runner.os }}-build-${{ env.cache-name }}-
-
-    - run: dir
     
     #- if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
     - name: Check out Assimp repo
@@ -44,7 +42,7 @@ jobs:
     #- if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
     - name: Build Assimp repo
       run: |
-            cmake -B D:/a/QtMeshEditor/QtMeshEditor/assimp -S D:/a/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_INSTALL_PREFIX=D:/a/QtMeshEditor/QtMeshEditor/assimp-build/
+            cmake -B D:/a/QtMeshEditor/QtMeshEditor/assimp -S D:/a/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd D:/a/QtMeshEditor/QtMeshEditor/assimp/
             mingw32-make install -j8
 
@@ -356,11 +354,11 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
 
-    - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
-      name: install openGL
-      run: |
-            sudo apt update
-            sudo apt-get install freeglut3-dev libxrandr-dev
+#     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
+#       name: install openGL
+#       run: |
+#             sudo apt update
+#             sudo apt-get install freeglut3-dev libxrandr-dev
             
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Check out ogre repo
