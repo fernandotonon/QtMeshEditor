@@ -73,6 +73,9 @@ jobs:
  build-n-cache-ogre-linux:
     runs-on: ubuntu-latest
     steps:
+    - name: chmod /usr/local
+      run: sudo chmod -R 777 /usr/local
+      
     - name: Cache Ogre
       id: cache-ogre-linux
       uses: actions/cache@v3
