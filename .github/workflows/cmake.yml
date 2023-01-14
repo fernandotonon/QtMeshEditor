@@ -44,6 +44,8 @@ jobs:
       run: |
             cmake -B D:/a/QtMeshEditor/QtMeshEditor/assimp-build -S D:/a/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd D:/a/QtMeshEditor/QtMeshEditor/assimp-build/
+            echo "dir"
+            dir
             mingw32-make install -j8
 
  build-windows:
@@ -152,7 +154,7 @@ jobs:
       name: install openGL
       run: |
             sudo apt update
-            sudo apt-get install freeglut3-dev
+            sudo apt-get install freeglut3-dev libxrandr-dev
             
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
       name: Check out ogre repo
@@ -280,14 +282,54 @@ jobs:
 #       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
 #       run: ctest -C ${{env.BUILD_TYPE}}
 
-#  build-macos:
-#     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
-#     # You can convert this to a matrix build if you need cross-platform coverage.
-#     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-#     runs-on: macos-latest
+ build-n-cache-assimp-macos:
+    runs-on: macos-latest
+    steps:
+    - name: chmod /usr/local
+      run: sudo chmod -R 777 /usr/local
 
-#     steps:
-#     - uses: actions/checkout@v3
+    - name: Cache Assimp
+      id: cache-assimp-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-macos
+      with:
+        # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
+        path: |
+               /usr/local/lib/cmake/
+               /usr/local/include/assimp
+               /usr/local/lib/pkgconfig/assimp.pc
+               /usr/local/lib/libassimp*
+        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
+        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+          
+    - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
+      name: Check out Assimp repo
+      uses: actions/checkout@master
+      with:
+          repository: assimp/assimp
+          path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
+         
+    - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
+      name: Build Assimp repo
+      run: |
+            cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /home/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cd /home/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
+            sudo make install -j8
+
+ build-macos:
+    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
+    # You can convert this to a matrix build if you need cross-platform coverage.
+    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    runs-on: macos-latest
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+         submodules: true
     
 #     - name: Install Qt
 #       uses: jurplel/install-qt-action@v3
