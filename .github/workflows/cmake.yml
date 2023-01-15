@@ -124,7 +124,7 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         
     - name: Configure CMake
-      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+      run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
 
     - name: Build
       # Build your program with the given configuration
@@ -387,7 +387,7 @@ jobs:
                /usr/local/include/OGRE/
                /usr/local/lib/OGRE/
                /usr/local/lib/pkgconfig/
-               /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
+               /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
             
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
