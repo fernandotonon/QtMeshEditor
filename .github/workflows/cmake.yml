@@ -132,8 +132,8 @@ jobs:
     - name: Configure CMake
       env:
          OGRE_HOME: D:/a/QtMeshEditor/QtMeshEditor/ogre-build
-         PKG_CONFIG_PATH: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/pkgconfig
-      run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/ -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
+         PKG_CONFIG_PATH: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/lib/pkgconfig
+      run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre-build -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre-build/cmake
 
     - name: Build
       # Build your program with the given configuration
