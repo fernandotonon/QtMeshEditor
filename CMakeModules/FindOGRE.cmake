@@ -81,6 +81,7 @@ if (WIN32)
   set(OGRE_PREFIX_GUESSES
     ${ENV_PROGRAMFILES}/OGRE
     C:/OgreSDK
+    D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk
   )
 elseif (UNIX OR APPLE)
   set(OGRE_PREFIX_GUESSES
@@ -92,6 +93,7 @@ elseif (UNIX OR APPLE)
     /usr/local/lib${LIB_SUFFIX}/OGRE
     $ENV{HOME}/ogre
     $ENV{HOME}/OGRE
+    /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk
   )
 endif ()
 set(OGRE_PREFIX_PATH
