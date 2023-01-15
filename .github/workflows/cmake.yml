@@ -63,6 +63,10 @@ jobs:
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
+    - name: Set up MinGW
+      uses: egor-tensin/setup-mingw@v2
+      with:
+          platform: x64
             
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Check out ogre repo
@@ -438,18 +442,15 @@ jobs:
       with:
         path: src/CMakeFiles/QtMeshEditor.dir/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
-
-    - name: Configure CMake
-      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_PREFIX_PATH=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/;/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/cmake/ -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/OGRE
 
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/
+
+    - name: Configure CMake
+      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_PREFIX_PATH=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/;/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/cmake/ -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/OGRE -DOGRE_CONFIG_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/
     
     - name: Build
       # Build your program with the given configuration
-      run: |
-            sudo make install -j8
+      run: sudo make install -j8
 
     - uses: actions/upload-artifact@v3
       with:
