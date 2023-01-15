@@ -59,11 +59,11 @@ jobs:
         cache-name: cache-ogre-windows
       with:
         path: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/
-        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/ogre') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Set up MinGW
+    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+      name: Set up MinGW
       uses: egor-tensin/setup-mingw@v2
       with:
           platform: x64
@@ -113,6 +113,28 @@ jobs:
         path: D:/a/QtMeshEditor/QtMeshEditor/assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
+    - name: Cache Ogre
+      id: cache-ogre-windows
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-windows
+      with:
+        path: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/
+        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        
+    - name: Configure CMake
+      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+
+    - name: Build
+      # Build your program with the given configuration
+      run: cmake --build ./
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: windows-binaries
+        path: ${{github.workspace}}/bin
+        
 #  build-n-cache-assimp-linux:
 #     runs-on: ubuntu-latest
 #     steps:
@@ -443,6 +465,7 @@ jobs:
         path: src/CMakeFiles/QtMeshEditor.dir/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
+    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/
 
     - name: Configure CMake
