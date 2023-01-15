@@ -124,15 +124,15 @@ jobs:
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/
-    - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/cmake
-    - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/bin
     - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/lib
+    - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/lib/Release
+    - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/lib/Release/pkgconfig
+    - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/cmake
     
     - name: Configure CMake
       env:
          OGRE_HOME: D:/a/QtMeshEditor/QtMeshEditor/ogre-build
-         PKG_CONFIG_PATH: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/lib/pkgconfig
+         PKG_CONFIG_PATH: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/lib/Release/pkgconfig
       run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre-build -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre-build/cmake
 
     - name: Build
