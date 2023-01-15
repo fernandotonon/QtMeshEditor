@@ -61,12 +61,6 @@ jobs:
         path: D:/a/QtMeshEditor/QtMeshEditor/ogre
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-      name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
-      with:
-          platform: x64
             
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Check out ogre repo
@@ -74,7 +68,13 @@ jobs:
       with:
           repository: OGRECave/ogre
           path: D:/a/QtMeshEditor/QtMeshEditor/ogre
-         
+
+    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+      name: Set up MinGW
+      uses: egor-tensin/setup-mingw@v2
+      with:
+          platform: x64        
+          
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
       run: |
