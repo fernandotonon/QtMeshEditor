@@ -77,6 +77,9 @@ jobs:
          
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
+      env:
+         OGRE_DIR: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake
+         OGRE_SDK: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
       run: |
             cmake -B D:/a/QtMeshEditor/QtMeshEditor/ogre-build -S D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DASSIMP_DIR=D:/a/QtMeshEditor/QtMeshEditor/assimp/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd D:/a/QtMeshEditor/QtMeshEditor/ogre-build/
@@ -100,7 +103,8 @@ jobs:
         version: '6.5.0'
         host: 'windows'
         target: 'desktop'
-        arch: 'win64_mingw'
+        #arch: 'win64_mingw'
+        arch: 'win64_msvc2019_64'
         tools: 'tools_cmake'
 
     - name: Cache Assimp
@@ -469,7 +473,7 @@ jobs:
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/
 
     - name: Configure CMake
-      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_PREFIX_PATH=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/;/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/cmake/ -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/OGRE -DOGRE_CONFIG_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/
+      run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_PREFIX_PATH=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/;/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/cmake/ -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/OGRE -DOGRE_CONFIG_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/ -DOGRE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/
     
     - name: Build
       # Build your program with the given configuration
