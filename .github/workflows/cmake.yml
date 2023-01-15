@@ -123,12 +123,16 @@ jobs:
         path: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-        
+
+    - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk
+    - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/
+    - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/pkgconfig
+    
     - name: Configure CMake
       env:
          OGRE_HOME: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
          PKG_CONFIG_PATH: D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/pkgconfig
-      run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+      run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/ -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
 
     - name: Build
       # Build your program with the given configuration
@@ -471,11 +475,13 @@ jobs:
 
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/
+    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/
+    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/pkgconfig
 
     - name: Configure CMake
       env:
-         OGRE_HOME: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
-         PKG_CONFIG_PATH: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/pkgconfig
+        # OGRE_HOME: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
+         OGRE_HOME: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/pkgconfig
       run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_PREFIX_PATH=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/;/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/cmake/ -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/OGRE -DOGRE_CONFIG_INCLUDE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/include/ -DOGRE_DIR=/Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/CMake/
     
     - name: Build
