@@ -429,7 +429,7 @@ jobs:
     - run: ls /usr/local/lib/
     - run: ls /usr/local/include
     - run: ls /Users
-    - run: ls ${{github.workspace}}/ogre/
+    - run: ls ${{github.workspace}}
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/Media/
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/CMake/
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/lib/
