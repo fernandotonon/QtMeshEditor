@@ -391,71 +391,71 @@ jobs:
 #             cd /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
 #             sudo make install -j8
 
- build-n-cache-ogre-macos:
-#     needs: build-n-cache-assimp-macos
-    runs-on: macos-latest
-    steps:    
-    - name: Cache Assimp
-      id: cache-assimp-macos
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-macos
-      with:
-        path: |
-               /usr/local/lib/cmake/
-               /usr/local/include/assimp
-               /usr/local/lib/pkgconfig/assimp.pc
-               /usr/local/lib/libassimp*
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
+#  build-n-cache-ogre-macos:
+# #     needs: build-n-cache-assimp-macos
+#     runs-on: macos-latest
+#     steps:    
+#     - name: Cache Assimp
+#       id: cache-assimp-macos
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-assimp-macos
+#       with:
+#         path: |
+#                /usr/local/lib/cmake/
+#                /usr/local/include/assimp
+#                /usr/local/lib/pkgconfig/assimp.pc
+#                /usr/local/lib/libassimp*
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+#         restore-keys: |
+#           ${{ runner.os }}-build-${{ env.cache-name }}-
       
-    - name: Cache Ogre
-      id: cache-ogre-macos
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-macos
-      with:
-        path: |
-               /usr/local/lib/lib*
-               /usr/local/share/OGRE/
-               /usr/local/share/OGRE/
-               /usr/local/include/OGRE/
-               /usr/local/lib/OGRE/
-               /usr/local/lib/pkgconfig/
-               ${{github.workspace}}/ogre/
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache Ogre
+#       id: cache-ogre-macos
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-ogre-macos
+#       with:
+#         path: |
+#                /usr/local/lib/lib*
+#                /usr/local/share/OGRE/
+#                /usr/local/share/OGRE/
+#                /usr/local/include/OGRE/
+#                /usr/local/lib/OGRE/
+#                /usr/local/lib/pkgconfig/
+#                ${{github.workspace}}/ogre/
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
             
-    - run: ls /usr/local/lib/
-    - run: ls /usr/local/include
-    - run: ls /Users
-#     - run: ls ${{github.workspace}}
-#     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/Media/
-#     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/CMake/
-#     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/lib/
-#     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/lib/pkgconfig
-#     - run: echo ${{github.workspace}}
+#     - run: ls /usr/local/lib/
+#     - run: ls /usr/local/include
+#     - run: ls /Users
+# #     - run: ls ${{github.workspace}}
+# #     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/Media/
+# #     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/CMake/
+# #     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/lib/
+# #     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/lib/pkgconfig
+# #     - run: echo ${{github.workspace}}
     
-    - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
-      name: Check out ogre repo
-      uses: actions/checkout@master
-      with:
-          repository: OGRECave/ogre
-          path: ${{github.workspace}}/ogre
+#     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
+#       name: Check out ogre repo
+#       uses: actions/checkout@master
+#       with:
+#           repository: OGRECave/ogre
+#           path: ${{github.workspace}}/ogre
          
-    - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
-      name: Build Ogre3D repo
-      run: |
-            cd ${{github.workspace}}/ogre/
-            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            sudo make install -j8
+#     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
+#       name: Build Ogre3D repo
+#       run: |
+#             cd ${{github.workspace}}/ogre/
+#             sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+#             sudo make install -j8
 
  build-macos:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
     # You can convert this to a matrix build if you need cross-platform coverage.
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
   #  needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
-    needs: [build-n-cache-ogre-macos]
+#     needs: [build-n-cache-ogre-macos]
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v3
@@ -498,10 +498,8 @@ jobs:
                /usr/local/include/OGRE/
                /usr/local/lib/OGRE/
                /usr/local/lib/pkgconfig/
-               ${{github.workspace}}/ogre
+               ${{github.workspace}}/ogre/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
 
     - name: Cache .o files
       id: cache-build-macos
