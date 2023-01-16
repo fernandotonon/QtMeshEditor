@@ -111,38 +111,54 @@ ADD_SUBDIRECTORY(cfg)
 ##############################################################
 #  Install Qt dependencies
 ##############################################################
-IF(WIN32)
-        SET (QTLIBLIST
-        Qt${QT_VERSION_MAJOR}GUI
-        Qt${QT_VERSION_MAJOR}Core
-        Qt${QT_VERSION_MAJOR}Widgets)
-        FOREACH(qtlib ${QTLIBLIST})
-                INSTALL(FILES ${QT_DIR}/../../../bin/${qtlib}.dll DESTINATION ${CMAKE_INSTALL_PREFIX})
-        ENDFOREACH(qtlib)
+#IF(WIN32)
+#        SET (QTLIBLIST
+#        Qt${QT_VERSION_MAJOR}GUI
+#        Qt${QT_VERSION_MAJOR}Core
+#        Qt${QT_VERSION_MAJOR}Widgets)
+#        FOREACH(qtlib ${QTLIBLIST})
+#                INSTALL(FILES ${QT_DIR}/../../../bin/${qtlib}.dll DESTINATION ${CMAKE_INSTALL_PREFIX})
+#        ENDFOREACH(qtlib)
 
-        SET (QTPLATFORMSLIST
-                qminimal
-                qoffscreen
-                qwindows)
-        FOREACH(platform ${QTPLATFORMSLIST})
-                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
-        ENDFOREACH(platform)
-ELSEIF(UNIX)
-        SET (QTLIBLIST
-        Qt${QT_VERSION_MAJOR}Gui
-        Qt${QT_VERSION_MAJOR}Core
-        Qt${QT_VERSION_MAJOR}Widgets
-        Qt${QT_VERSION_MAJOR}XcbQpa)
-        FOREACH(qtlib ${QTLIBLIST})
-                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
-        ENDFOREACH(qtlib)
+#        SET (QTPLATFORMSLIST
+#                qminimal
+#                qoffscreen
+#                qwindows)
+#        FOREACH(platform ${QTPLATFORMSLIST})
+#                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
+#        ENDFOREACH(platform)
+#ELSEIF(UNIX)
+#        SET (QTLIBLIST
+#        Qt${QT_VERSION_MAJOR}Gui
+#        Qt${QT_VERSION_MAJOR}Core
+#        Qt${QT_VERSION_MAJOR}Widgets
+#        Qt${QT_VERSION_MAJOR}XcbQpa)
+#        FOREACH(qtlib ${QTLIBLIST})
+#                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
+#        ENDFOREACH(qtlib)
 
-        SET (QTPLATFORMSLIST
-                qminimal
-                qxcb
-                qeglfs
-                qwayland-generic)
-        FOREACH(platform ${QTPLATFORMSLIST})
-                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/lib${platform}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
-        ENDFOREACH(platform)
-ENDIF()
+#        SET (QTPLATFORMSLIST
+#                qminimal
+#                qxcb
+#                qeglfs
+#                qwayland-generic)
+#        FOREACH(platform ${QTPLATFORMSLIST})
+#                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/lib${platform}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
+#        ENDFOREACH(platform)
+#ENDIF()
+
+# Install the executable into "${CMAKE_INSTALL_PREFIX}/bin".
+install(TARGETS QtMeshEditor
+    BUNDLE  DESTINATION .
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+)
+
+# Generate the deployment script for the target QtMeshEditor.
+qt_generate_deploy_app_script(
+    TARGET QtMeshEditor
+    FILENAME_VARIABLE deploy_script
+    NO_UNSUPPORTED_PLATFORM_ERROR
+)
+
+# Call the deployment script on "cmake --install".
+install(SCRIPT ${deploy_script})
