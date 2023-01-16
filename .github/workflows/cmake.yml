@@ -129,13 +129,21 @@ jobs:
     - run: dir D:/a/QtMeshEditor/QtMeshEditor/ogre/cmake
     
     - name: Configure CMake
+      continue-on-error: true
       env:
          OGRE_HOME: D:/a/QtMeshEditor/QtMeshEditor/ogre
       run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre/cmake
 
     - name: Build
       # Build your program with the given configuration
+      continue-on-error: true
       run: cmake --build ./
+
+
+    - uses: actions/upload-artifact@v3
+      with:
+        name: CMakeFiles
+        path: D:/a/QtMeshEditor/QtMeshEditor/CMakeFiles/
 
     - uses: actions/upload-artifact@v3
       with:
