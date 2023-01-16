@@ -132,7 +132,10 @@ jobs:
       continue-on-error: true
       env:
          OGRE_HOME: D:/a/QtMeshEditor/QtMeshEditor/ogre
-      run: cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre/cmake
+      run: |
+            choco install ninja -y
+            call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+            cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=c -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre/cmake
 
     - name: Build
       # Build your program with the given configuration
@@ -244,89 +247,89 @@ jobs:
 #             cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
 #             sudo make install -j8
       
- build-linux:
-    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
-    # You can convert this to a matrix build if you need cross-platform coverage.
-    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-    #needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-      with:
-         submodules: true
+#  build-linux:
+#     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
+#     # You can convert this to a matrix build if you need cross-platform coverage.
+#     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+#     #needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
+#     runs-on: ubuntu-latest
+#     steps:
+#     - uses: actions/checkout@v3
+#       with:
+#          submodules: true
          
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v3
-      with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
-        host: 'linux'
-        target: 'desktop'
-        arch: 'gcc_64'
+#     - name: Install Qt
+#       uses: jurplel/install-qt-action@v3
+#       with:
+#         aqtversion: '==2.1.*'
+#         version: '6.5.0'
+#         host: 'linux'
+#         target: 'desktop'
+#         arch: 'gcc_64'
 
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
+#     - name: chmod /usr/local
+#       run: sudo chmod -R 777 /usr/local
 
-    - name: Cache Assimp
-      id: cache-assimp-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-linux
-      with:
-        # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
-        path: |
-               /usr/local/lib/cmake/
-               /usr/local/include/assimp
-               /usr/local/lib/pkgconfig/assimp.pc
-               /usr/local/lib/libassimp*
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-        restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
+#     - name: Cache Assimp
+#       id: cache-assimp-linux
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-assimp-linux
+#       with:
+#         # Assimp cache files are stored in `/home/runner/work/QtMeshEditor/assimp` on Linux/macOS
+#         path: |
+#                /usr/local/lib/cmake/
+#                /usr/local/include/assimp
+#                /usr/local/lib/pkgconfig/assimp.pc
+#                /usr/local/lib/libassimp*
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+#         restore-keys: |
+#           ${{ runner.os }}-build-${{ env.cache-name }}-
       
-    - name: Cache Ogre
-      id: cache-ogre-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-linux
-      with:
-        path: |
-               /usr/local/lib/lib*
-               /usr/local/share/OGRE/
-               /usr/local/share/OGRE/
-               /usr/local/include/OGRE/
-               /usr/local/lib/OGRE/
-               /usr/local/lib/pkgconfig/
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache Ogre
+#       id: cache-ogre-linux
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-ogre-linux
+#       with:
+#         path: |
+#                /usr/local/lib/lib*
+#                /usr/local/share/OGRE/
+#                /usr/local/share/OGRE/
+#                /usr/local/include/OGRE/
+#                /usr/local/lib/OGRE/
+#                /usr/local/lib/pkgconfig/
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Cache .o files
-      id: cache-build-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-build-linux
-      with:
-        path: src/CMakeFiles/QtMeshEditor.dir/
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/src') }}
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache .o files
+#       id: cache-build-linux
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-build-linux
+#       with:
+#         path: src/CMakeFiles/QtMeshEditor.dir/
+# #         key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/src') }}
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Configure CMake
-      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      #run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
-      run: sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+#     - name: Configure CMake
+#       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
+#       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
+#       #run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+#       run: sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
 
-    - name: Build
-      # Build your program with the given configuration
-      run: |
-            sudo make install -j8
-            sudo chmod +X bin/QtMeshEditor
-            sudo chmod -R 777 bin/
+#     - name: Build
+#       # Build your program with the given configuration
+#       run: |
+#             sudo make install -j8
+#             sudo chmod +X bin/QtMeshEditor
+#             sudo chmod -R 777 bin/
 
-    - uses: actions/upload-artifact@v3
-      with:
-        name: linux-binaries
-        path: ${{github.workspace}}/bin
+#     - uses: actions/upload-artifact@v3
+#       with:
+#         name: linux-binaries
+#         path: ${{github.workspace}}/bin
 
 #     - name: Test
 #       working-directory: ${{github.workspace}}
