@@ -38,49 +38,49 @@ jobs:
 #             cmake -S ./ -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 #             cmake --build ./ --config ${{env.BUILD_TYPE}}
             
- build-n-cache-ogre-windows:
-    #needs: build-n-cache-assimp-windows
-    runs-on: windows-latest
-    steps:
-    - name: Cache Assimp
-      id: cache-assimp-windows
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-windows
-      with:
-        # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: D:/a/QtMeshEditor/QtMeshEditor/assimp
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#  build-n-cache-ogre-windows:
+#     #needs: build-n-cache-assimp-windows
+#     runs-on: windows-latest
+#     steps:
+#     - name: Cache Assimp
+#       id: cache-assimp-windows
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-assimp-windows
+#       with:
+#         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
+#         path: D:/a/QtMeshEditor/QtMeshEditor/assimp
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
       
-    - name: Cache Ogre
-      id: cache-ogre-windows
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-windows
-      with:
-        path: D:/a/QtMeshEditor/QtMeshEditor/ogre
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache Ogre
+#       id: cache-ogre-windows
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-ogre-windows
+#       with:
+#         path: D:/a/QtMeshEditor/QtMeshEditor/ogre
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
             
-    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-      name: Check out ogre repo
-      uses: actions/checkout@master
-      with:
-          repository: OGRECave/ogre
-          path: D:/a/QtMeshEditor/QtMeshEditor/ogre
+#     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+#       name: Check out ogre repo
+#       uses: actions/checkout@master
+#       with:
+#           repository: OGRECave/ogre
+#           path: D:/a/QtMeshEditor/QtMeshEditor/ogre
 
-    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-      name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
-      with:
-          platform: x64        
+#     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+#       name: Set up MinGW
+#       uses: egor-tensin/setup-mingw@v2
+#       with:
+#           platform: x64        
           
-    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-      name: Build Ogre3D repo
-      run: |
-            cd D:/a/QtMeshEditor/QtMeshEditor/ogre
-            cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DASSIMP_DIR=D:/a/QtMeshEditor/QtMeshEditor/assimp/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cmake --build . --config ${{env.BUILD_TYPE}}
+#     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+#       name: Build Ogre3D repo
+#       run: |
+#             cd D:/a/QtMeshEditor/QtMeshEditor/ogre
+#             cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DASSIMP_DIR=D:/a/QtMeshEditor/QtMeshEditor/assimp/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+#             cmake --build . --config ${{env.BUILD_TYPE}}
             
  build-windows:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
@@ -135,7 +135,7 @@ jobs:
       run: |
             choco install ninja -y
             call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-            cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=c -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre/cmake
+            cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre/cmake
       shell: cmd
 
     - name: Build
@@ -503,10 +503,10 @@ jobs:
 
     - uses: actions/upload-artifact@v3
       with:
-        name: CMakeFiles
-        path: ${{github.workspace}}/CMakeFiles/
+        name: CMakeFiles-macos
+        path: /Users/runner/work/QtMeshEditor/QtMeshEditor/CMakeFiles/
         
-    - uses: actions/upload-artifact@v3
-      with:
-        name: macos-binaries
-        path: ${{github.workspace}}/bin
+#     - uses: actions/upload-artifact@v3
+#       with:
+#         name: macos-binaries
+#         path: ${{github.workspace}}/bin
