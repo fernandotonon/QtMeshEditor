@@ -136,6 +136,7 @@ jobs:
             choco install ninja -y
             call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
             cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=c -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_HOME=D:/a/QtMeshEditor/QtMeshEditor/ogre -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre/cmake
+      shell: cmd
 
     - name: Build
       # Build your program with the given configuration
