@@ -150,7 +150,7 @@ ADD_SUBDIRECTORY(cfg)
 # Install the executable into "${CMAKE_INSTALL_PREFIX}/bin".
 install(TARGETS QtMeshEditor
     BUNDLE  DESTINATION .
-    RUNTIME DESTINATION ${CMAKE_INSTALL_PREFIX}
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
 
 # Generate the deployment script for the target QtMeshEditor.
