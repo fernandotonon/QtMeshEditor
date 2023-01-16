@@ -162,3 +162,13 @@ qt_generate_deploy_app_script(
 
 # Call the deployment script on "cmake --install".
 install(SCRIPT ${deploy_script})
+
+set(CPACK_PACKAGE_NAME QtMeshEditor)
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
+set(CPACK_PACKAGE_VENDOR "Fernando")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
+set(CPACK_VERBATIM_VARIABLES ON)
+set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/QtMeshEditor")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Fernando Tonon <tonon.fernando@hotmail.com>")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS libc6 libstdc++6 libgcc-s1)
+include(CPack)
