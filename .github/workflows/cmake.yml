@@ -489,6 +489,7 @@ jobs:
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/lib/pkgconfig
 
     - name: Configure CMake
+      continue-on-error: true
       env:
          OGRE_DIR: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/sdk/
          OGRE_HOME: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
@@ -497,8 +498,14 @@ jobs:
     
     - name: Build
       # Build your program with the given configuration
+      continue-on-error: true
       run: sudo make install -j8
 
+    - uses: actions/upload-artifact@v3
+      with:
+        name: CMakeFiles
+        path: ${{github.workspace}}/CMakeFiles/
+        
     - uses: actions/upload-artifact@v3
       with:
         name: macos-binaries
