@@ -509,6 +509,8 @@ jobs:
         path: src/CMakeFiles/QtMeshEditor.dir/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
+    - run: ${{github.workspace}}/ogre/sdk/CMake
+
     - name: Configure CMake
       continue-on-error: true
       env:
@@ -519,7 +521,7 @@ jobs:
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6GuiTools \
-            -DOGRE_DIR=${{github.workspace}}/ogre/sdk/CMake/ 
+            -DOGRE_DIR=${{github.workspace}}/ogre/sdk/CMake
     
     - name: Build
       # Build your program with the given configuration
