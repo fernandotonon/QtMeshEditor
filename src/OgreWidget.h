@@ -27,7 +27,7 @@
 #ifndef __OGREWIDGET_H__
 #define __OGREWIDGET_H__
 
-#include <OGRE/Ogre.h>
+#include <Ogre.h>
 #include <QtWidgets>
 #include <OgreFrameListener.h>
 
