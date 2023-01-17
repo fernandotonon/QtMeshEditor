@@ -146,12 +146,13 @@ jobs:
             cmake --build . --config ${{env.BUILD_TYPE}}
     
     - run: dir D:/a/QtMeshEditor/QtMeshEditor/assimp
+    - run: dir D:/a/QtMeshEditor/QtMeshEditor/assimp/lib
     
     - name: Configure CMake
       continue-on-error: true
       env:
          OGRE_DIR: D:/a/QtMeshEditor/QtMeshEditor/ogre/CMake
-         ASSIMP_DIR: D:/a/QtMeshEditor/QtMeshEditor/assimp
+         ASSIMP_DIR: D:/a/QtMeshEditor/QtMeshEditor/assimp/lib/cmake
       run: |
             choco install ninja -y
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre/CMake
@@ -509,19 +510,20 @@ jobs:
         path: src/CMakeFiles/QtMeshEditor.dir/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - run: ls ${{github.workspace}}/ogre/sdk/CMake
+    - run: ls ${{github.workspace}}/ogre/SDK/CMake
 
     - name: Configure CMake
       continue-on-error: true
       env:
-         OGRE_DIR: ${{github.workspace}}/ogre/sdk/CMake
+         OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake
       run: |
             sudo cmake -S . 
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6GuiTools \
-            -DOGRE_DIR=${{github.workspace}}/ogre/sdk/CMake
+            -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake
+            -DCMAKE_PREFIX_PATH=${{github.workspace}}/ogre/SDK/CMake
     
     - name: Build
       # Build your program with the given configuration
