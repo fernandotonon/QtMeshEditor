@@ -546,8 +546,8 @@ jobs:
 
     - uses: actions/upload-artifact@v3
       with:
-        name: CMakeFiles-macos
-        path: /Users/runner/work/QtMeshEditor/QtMeshEditor/CMakeFiles/
+        name: build-macos
+        path: /Users/runner/work/QtMeshEditor/QtMeshEditor/
         
 #     - uses: actions/upload-artifact@v3
 #       with:
