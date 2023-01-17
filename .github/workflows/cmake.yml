@@ -11,14 +11,14 @@ env:
   BUILD_TYPE: Release
 
 jobs:
- send-slack-notification:
-   runs-on: ubuntu-latest
-   steps:
-      - name: send slack message
-        uses: docker://technosophos/slack-notify
-        env:
-            SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-            SLACK_MESSAGE: "Building QtMeshEditor in GitHub Actions - works! :D"
+#  send-slack-notification:
+#    runs-on: ubuntu-latest
+#    steps:
+#       - name: send slack message
+#         uses: docker://technosophos/slack-notify
+#         env:
+#             SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+#             SLACK_MESSAGE: "Building QtMeshEditor in GitHub Actions - works! :D"
 #  build-n-cache-assimp-windows:
 #    runs-on: windows-latest
 #    steps:
@@ -154,13 +154,14 @@ jobs:
             cmake --build . --config ${{env.BUILD_TYPE}}
     
     - run: dir D:/a/QtMeshEditor/QtMeshEditor/assimp
+    - run: dir D:/a/QtMeshEditor/QtMeshEditor/assimp/generated
     - run: dir D:/a/QtMeshEditor/QtMeshEditor/assimp/lib/Release
     
     - name: Configure CMake
       continue-on-error: true
       env:
          OGRE_DIR: D:/a/QtMeshEditor/QtMeshEditor/ogre/CMake
-         ASSIMP_DIR: D:/a/QtMeshEditor/QtMeshEditor/assimp/lib/Release/cmake
+         ASSIMP_DIR: D:/a/QtMeshEditor/QtMeshEditor/assimp/generated
       run: |
             choco install ninja -y
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre/CMake
