@@ -511,13 +511,11 @@ jobs:
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/sdk/CMake
       run: |
-            sudo cmake -S . -DQT_QMAKE_EXECUTABLE=qmake \
-            -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            sudo cmake -S . 
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_PREFIX_PATH=${{github.workspace}}/ogre/sdk/CMake/ \
-            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
-            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools \
+            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
+            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
+            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6GuiTools \
             -DOGRE_DIR=${{github.workspace}}/ogre/sdk/CMake/ 
     
     - name: Build
