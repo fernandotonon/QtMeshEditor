@@ -91,7 +91,7 @@ find_package(OGRE REQUIRED)
 
 message("OGRE_INCLUDE_DIRS: ")
 message(${OGRE_INCLUDE_DIRS})
-include_directories(${OGRE_INCLUDE_DIRS} "${OGRE_INCLUDE_DIR}/Plugins/Assimp")
+include_directories(${OGRE_INCLUDE_DIRS} "${OGRE_INCLUDE_DIRS}/Plugins/Assimp")
 
 ##############################################################
 #  Find ASSIMP
