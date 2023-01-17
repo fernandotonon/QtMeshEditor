@@ -145,10 +145,13 @@ jobs:
             cmake -S . -GNinja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DASSIMP_DIR=D:/a/QtMeshEditor/QtMeshEditor/assimp/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cmake --build . --config ${{env.BUILD_TYPE}}
     
+    - run: dir D:/a/QtMeshEditor/QtMeshEditor/assimp
+    
     - name: Configure CMake
       continue-on-error: true
       env:
          OGRE_DIR: D:/a/QtMeshEditor/QtMeshEditor/ogre/CMake
+         ASSIMP_DIR: D:/a/QtMeshEditor/QtMeshEditor/assimp
       run: |
             choco install ninja -y
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=D:/a/QtMeshEditor/QtMeshEditor/ogre/CMake
