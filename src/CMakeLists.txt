@@ -74,7 +74,6 @@ ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
 # if we don't include this CMake will not include ui headers properly:
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH_DIR})
 
-
 ##############################################################
 #  Processing ogre-procedural
 ##############################################################

@@ -70,6 +70,16 @@ if(UNIX)
 endif()
 message("Found Qt (${QT_VERSION_MAJOR})")
 
+SET (QTLIBLIST
+    Qt${QT_VERSION_MAJOR}Gui
+    Qt${QT_VERSION_MAJOR}Core
+    Qt${QT_VERSION_MAJOR}Widgets
+)
+FOREACH(qtlib ${QTLIBLIST})
+        include_directories(${${qtlib}_INCLUDE_DIRS})
+ENDFOREACH(qtlib)
+
+
 #set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_PATH}")
 
 ##############################################################
@@ -79,6 +89,8 @@ message("Found Qt (${QT_VERSION_MAJOR})")
 
 find_package(OGRE REQUIRED)
 
+message("OGRE_INCLUDE_DIRS: ")
+message(${OGRE_INCLUDE_DIRS})
 include_directories(${OGRE_INCLUDE_DIRS} "${OGRE_INCLUDE_DIR}/Plugins/Assimp")
 
 ##############################################################
