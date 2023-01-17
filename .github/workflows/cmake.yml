@@ -523,13 +523,14 @@ jobs:
     - name: Configure CMake
       continue-on-error: true
       env:
-         OGRE_DIR: ${{github.workspace}}/ogre/sdk/
+         OGRE_DIR: ${{github.workspace}}/ogre/sdk/CMake
          OGRE_HOME: ${{github.workspace}}/ogre/
          OGRE_SDK: ${{github.workspace}}/ogre/sdk/
-      run: sudo cmake -S . -DQT_QMAKE_EXECUTABLE=qmake \
+      run: |
+            sudo cmake -S . -DQT_QMAKE_EXECUTABLE=qmake \
             -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_PREFIX_PATH=${{github.workspace}}/ogre/sdk/CMake/;${{github.workspace}}/ogre-build/sdk/lib/cmake/ \
+            -DCMAKE_PREFIX_PATH=${{github.workspace}}/ogre/sdk/CMake/ \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
             -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools \
