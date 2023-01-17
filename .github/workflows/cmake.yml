@@ -19,32 +19,39 @@ jobs:
 #         env:
 #             SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
 #             SLACK_MESSAGE: "Building QtMeshEditor in GitHub Actions - works! :D"
-#  build-n-cache-assimp-windows:
-#    runs-on: windows-latest
-#    steps:
-#     - name: Cache Assimp
-#       id: cache-assimp-windows
-#       uses: actions/cache@v3
-#       env:
-#         cache-name: cache-assimp-windows
-#       with:
-#         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-#         path: D:/a/QtMeshEditor/QtMeshEditor/assimp
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+
+ build-n-cache-assimp-windows:
+   runs-on: windows-latest
+   steps:
+    - name: Set up MinGW
+      uses: egor-tensin/setup-mingw@v2
+      with:
+          platform: x64  
+          
+    - name: Cache Assimp
+      id: cache-assimp-windows
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-windows
+      with:
+        # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
+        path: ${{github.workspace}}/assimp
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
     
-#     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
-#       name: Check out Assimp repo
-#       uses: actions/checkout@master
-#       with:
-#           repository: assimp/assimp
-#           path: D:/a/QtMeshEditor/QtMeshEditor/assimp
+    - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
+      name: Check out Assimp repo
+      uses: actions/checkout@master
+      with:
+          repository: assimp/assimp
+          path: ${{github.workspace}}/assimp
          
-#     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
-#       name: Build Assimp repo
-#       run: |
-#             cd D:/a/QtMeshEditor/QtMeshEditor/assimp/
-#             cmake -S ./ -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-#             cmake --build ./ --config ${{env.BUILD_TYPE}}
+    - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
+      name: Build Assimp repo
+      run: |
+            cd ${{github.workspace}}/assimp
+            cmake -S . -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            mingw32-make install -j8
+      # cmake --build ./ --config ${{env.BUILD_TYPE}}
             
 #  build-n-cache-ogre-windows:
 #     #needs: build-n-cache-assimp-windows
@@ -57,7 +64,7 @@ jobs:
 #         cache-name: cache-assimp-windows
 #       with:
 #         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-#         path: D:/a/QtMeshEditor/QtMeshEditor/assimp
+#         path: ${{github.workspace}}/assimp
 #         key: ${{ runner.os }}-build-${{ env.cache-name }}
       
 #     - name: Cache Ogre
@@ -126,7 +133,7 @@ jobs:
         cache-name: cache-assimp-windows
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: D:/a/QtMeshEditor/QtMeshEditor/assimp
+        path: ${{github.workspace}}/assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Cache Ogre
