@@ -530,6 +530,7 @@ jobs:
             -DOGRE_MEDIA_DIR=${{github.workspace}}/ogre/sdk/Media/
             -DOGRE_PLUGIN_DIR_REL=${{github.workspace}}/ogre/sdk/lib/macosx/Release
             -DOGRE_PLUGIN_DIR_DBG=${{github.workspace}}/ogre/sdk/lib/macosx/Release
+            -DOGRE_LIBRARY_REL=${{github.workspace}}/ogre/sdk/lib/macosx/Release/Ogre.framework
     
     - name: Build
       # Build your program with the given configuration
