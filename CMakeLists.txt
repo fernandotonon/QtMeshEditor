@@ -69,7 +69,8 @@ if(UNIX)
     endif()
 endif()
 message("Found Qt (${QT_VERSION_MAJOR})")
-set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_PATH}")
+
+#set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_PATH}")
 
 ##############################################################
 #  Find Ogre
@@ -147,28 +148,32 @@ ADD_SUBDIRECTORY(cfg)
 #        ENDFOREACH(platform)
 #ENDIF()
 
-# Install the executable into "${CMAKE_INSTALL_PREFIX}/bin".
-install(TARGETS QtMeshEditor
-    BUNDLE  DESTINATION .
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-)
+if(NOT APPLE)
+    # Install the executable into "${CMAKE_INSTALL_PREFIX}/bin".
+    install(TARGETS QtMeshEditor
+        BUNDLE  DESTINATION .
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
 
-# Generate the deployment script for the target QtMeshEditor.
-qt_generate_deploy_app_script(
-    TARGET QtMeshEditor
-    FILENAME_VARIABLE deploy_script
-    NO_UNSUPPORTED_PLATFORM_ERROR
-)
+    # Generate the deployment script for the target QtMeshEditor.
+    qt_generate_deploy_app_script(
+        TARGET QtMeshEditor
+        FILENAME_VARIABLE deploy_script
+        NO_UNSUPPORTED_PLATFORM_ERROR
+    )
 
-# Call the deployment script on "cmake --install".
-install(SCRIPT ${deploy_script})
+    # Call the deployment script on "cmake --install".
+    install(SCRIPT ${deploy_script})
+endif()
 
-set(CPACK_PACKAGE_NAME QtMeshEditor)
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
-set(CPACK_PACKAGE_VENDOR "Fernando")
-set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
-set(CPACK_VERBATIM_VARIABLES ON)
-set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/QtMeshEditor")
-set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Fernando Tonon <tonon.fernando@hotmail.com>")
-set(CPACK_DEBIAN_PACKAGE_DEPENDS libc6 libstdc++6 libgcc-s1)
-include(CPack)
+if(UNIX)
+    set(CPACK_PACKAGE_NAME QtMeshEditor)
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
+    set(CPACK_PACKAGE_VENDOR "Fernando")
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
+    set(CPACK_VERBATIM_VARIABLES ON)
+    set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/QtMeshEditor")
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Fernando Tonon <tonon.fernando@hotmail.com>")
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS libc6 libstdc++6 libgcc-s1)
+    include(CPack)
+endif()
