@@ -518,6 +518,8 @@ jobs:
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/CMake/
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/lib/
     - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/lib/pkgconfig
+    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/include
+    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk/include/OGRE
     - run: echo ${{github.workspace}}
 
     - name: Configure CMake
@@ -534,7 +536,7 @@ jobs:
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
             -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools \
-            -DOGRE_INCLUDE_DIR=${{github.workspace}}/ogre/sdk/include/OGRE \
+            -DOGRE_INCLUDE_DIR=${{github.workspace}}/ogre/sdk/include/ \
             -DOGRE_CONFIG_INCLUDE_DIR=${{github.workspace}}/ogre/sdk/include/ \
             -DOGRE_DIR=${{github.workspace}}/ogre/sdk/CMake/ \
             -DOGRE_MEDIA_DIR=${{github.workspace}}/ogre/sdk/Media/
@@ -546,8 +548,8 @@ jobs:
 
     - uses: actions/upload-artifact@v3
       with:
-        name: build-macos
-        path: /Users/runner/work/QtMeshEditor/QtMeshEditor/
+        name: sdk-build-macos
+        path: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/sdk
         
 #     - uses: actions/upload-artifact@v3
 #       with:
