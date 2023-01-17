@@ -509,7 +509,7 @@ jobs:
         path: src/CMakeFiles/QtMeshEditor.dir/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - run: ${{github.workspace}}/ogre/sdk/CMake
+    - run: ls ${{github.workspace}}/ogre/sdk/CMake
 
     - name: Configure CMake
       continue-on-error: true
