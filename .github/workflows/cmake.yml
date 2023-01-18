@@ -517,6 +517,9 @@ jobs:
         path: ${{github.workspace}}/ogre/SDK
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
+    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/SDK/lib/
+    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/SDK/lib/OGRE/
+
     - name: Cache .o files
       id: cache-build-macos
       uses: actions/cache@v3
