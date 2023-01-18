@@ -215,6 +215,10 @@ endif()
 ##############################################################
 #  Linking the executable
 ##############################################################
+if(APPLE)
+    SET(OGRE_Codec_Assimp_LIBRARY_REL ${OGRE_PLUGIN_DIR}/Codec_Assimp.dylib)
+endif()
+
 if(UNIX)
     IF(NOT Qt6_FOUND)
         target_link_libraries(${CMAKE_PROJECT_NAME} Qt5::X11Extras)
@@ -293,7 +297,11 @@ else()
         IF(WIN32)
             INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         ELSEIF(APPLE)
-            INSTALL(FILES $ENV{OGRE_HOME}/lib/macosx/${${ogrelib}.framework}/Version/13.5/${ogrelib} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        if(EXISTS ${OGRE_PLUGIN_DIR}/${ogrelib}.13.5.dylib)
+            INSTALL(FILES ${OGRE_PLUGIN_DIR}/${ogrelib}.13.5.dylib DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        else()
+            INSTALL(FILES ${OGRE_PLUGIN_DIR}/../lib${ogrelib}.13.5.dylib DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+        endif()
         ELSEIF(UNIX)
             IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
                 INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
