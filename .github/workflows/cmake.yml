@@ -535,7 +535,7 @@ jobs:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
 #          CMAKE_PREFIX_PATH: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
-            sudo cmake -S . \
+            sudo cmake -S . -G Ninja \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
