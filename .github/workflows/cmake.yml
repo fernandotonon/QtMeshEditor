@@ -51,7 +51,7 @@ jobs:
          CMAKE_GENERATOR: "MinGW Makefiles"
       run: |
             cd ${{github.workspace}}/assimp
-            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -Wno-fatal-errors -Wno-errors
+            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
             mingw32-make install -j8
       # cmake --build ./ --config ${{env.BUILD_TYPE}}
             
@@ -533,15 +533,13 @@ jobs:
       continue-on-error: true
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
-#          CMAKE_PREFIX_PATH: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
-            sudo cmake -S . -G Ninja \
+            sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6GuiTools \
             -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/ 
-#            -DCMAKE_PREFIX_PATH=${{github.workspace}}/ogre/SDK/CMake/
     
     - name: Build
       # Build your program with the given configuration
