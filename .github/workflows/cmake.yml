@@ -35,7 +35,7 @@ jobs:
         cache-name: cache-assimp-windows
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: ${{github.workspace}}/assimp
+        path: C:/Program Files (x86)/Assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
     
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
@@ -135,7 +135,7 @@ jobs:
         cache-name: cache-assimp-windows
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: ${{github.workspace}}/assimp
+        path: C:/Program Files (x86)/Assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Cache Ogre
@@ -161,7 +161,7 @@ jobs:
             cd D:/a/QtMeshEditor/QtMeshEditor/ogre
             cmake -S . -GNinja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
             -DOGRE_BUILD_PLUGIN_ASSIMP=ON \
-            -DASSIMP_DIR=D:/a/QtMeshEditor/QtMeshEditor/assimp/ \
+            -DASSIMP_DIR=C:/Program Files (x86)/Assimp/lib/cmake/assimp-5.2/ \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF \
             -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
