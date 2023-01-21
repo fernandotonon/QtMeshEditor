@@ -364,8 +364,8 @@ jobs:
 #       # Build your program with the given configuration
 #       run: |
 #             sudo make install -j8
-#             sudo chmod +X bin/QtMeshEditor
-#             sudo chmod -R 777 bin/
+#             sudo chmod +X ./bin/QtMeshEditor
+#             sudo chmod -R 777 ./bin/
 
 #     - uses: actions/upload-artifact@v3
 #       with:
@@ -542,23 +542,18 @@ jobs:
     - name: Build
       # Build your program with the given configuration
       continue-on-error: true
-      run: sudo make install -j8
+      run: |
+            sudo make install -j8
+            chmod 755 ./bin/QtMeshEditor
 
 #     - uses: actions/upload-artifact@v3
 #       with:
 #         name: CMakeFiles-build-macos
 #         path: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/CMakeFiles
         
-    - run: ls ${{github.workspace}}/bin
-    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/bin/     
+    - run: ls ${{github.workspace}}/bin 
     
     - uses: actions/upload-artifact@v3
       with:
         name: macos-binaries
         path: ${{github.workspace}}/bin
-        
-    - uses: actions/upload-artifact@v3
-      with:
-        name: macos-binaries2
-        path: /Users/runner/work/QtMeshEditor/QtMeshEditor/bin/       
-        
