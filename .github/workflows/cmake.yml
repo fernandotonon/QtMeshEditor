@@ -554,7 +554,16 @@ jobs:
 #         name: CMakeFiles-build-macos
 #         path: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/CMakeFiles
         
+    - run: ls ${{github.workspace}}/bin
+    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/bin/     
+    
     - uses: actions/upload-artifact@v3
       with:
         name: macos-binaries
         path: ${{github.workspace}}/bin
+        
+    - uses: actions/upload-artifact@v3
+      with:
+        name: macos-binaries2
+        path: /Users/runner/work/QtMeshEditor/QtMeshEditor/bin/       
+        
