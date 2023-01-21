@@ -176,8 +176,7 @@ jobs:
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
-            choco install ninja -y
-            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -GNinja \
+            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
             -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
