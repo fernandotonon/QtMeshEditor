@@ -555,6 +555,7 @@ jobs:
 #         path: /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/CMakeFiles
         
     - run: ls ${{github.workspace}}/bin 
+    - run: otool -L ${{github.workspace}}/bin/QtMeshEditor
     
     - uses: actions/upload-artifact@v3
       with:
