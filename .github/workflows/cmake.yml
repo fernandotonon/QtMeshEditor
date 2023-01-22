@@ -20,40 +20,39 @@ jobs:
 #             SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
 #             SLACK_MESSAGE: "Building QtMeshEditor in GitHub Actions - works! :D"
 
- build-n-cache-assimp-windows:
-   runs-on: windows-latest
-   steps:
-    - name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
-      with:
-          platform: x64  
+#  build-n-cache-assimp-windows:
+#    runs-on: windows-latest
+#    steps:
+#     - name: Set up MinGW
+#       uses: egor-tensin/setup-mingw@v2
+#       with:
+#           platform: x64  
           
-    - name: Cache Assimp
-      id: cache-assimp-windows
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-windows
-      with:
-        # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: C:/Program Files (x86)/Assimp
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache Assimp
+#       id: cache-assimp-windows
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-assimp-windows
+#       with:
+#         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
+#         path: C:/Program Files (x86)/Assimp
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
     
-    - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
-      name: Check out Assimp repo
-      uses: actions/checkout@master
-      with:
-          repository: assimp/assimp
-          path: ${{github.workspace}}/assimp
+#     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
+#       name: Check out Assimp repo
+#       uses: actions/checkout@master
+#       with:
+#           repository: assimp/assimp
+#           path: ${{github.workspace}}/assimp
          
-    - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
-      name: Build Assimp repo
-      env:
-         CMAKE_GENERATOR: "MinGW Makefiles"
-      run: |
-            cd ${{github.workspace}}/assimp
-            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
-            mingw32-make install -j8
-      # cmake --build ./ --config ${{env.BUILD_TYPE}}
+#     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
+#       name: Build Assimp repo
+#       env:
+#          CMAKE_GENERATOR: "MinGW Makefiles"
+#       run: |
+#             cd ${{github.workspace}}/assimp
+#             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
+#             mingw32-make install -j8
             
 #  build-n-cache-ogre-windows:
 #     #needs: build-n-cache-assimp-windows
@@ -170,6 +169,10 @@ jobs:
             -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cmake --build . --config ${{env.BUILD_TYPE}}
+    
+    - run: dir ${{github.workspace}}/ogre/
+    - run: dir ${{github.workspace}}/ogre/SDK/
+    - run: dir ${{github.workspace}}/ogre/SDK/CMake/ 
     
     - name: Configure CMake
       continue-on-error: true
