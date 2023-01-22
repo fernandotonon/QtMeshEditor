@@ -92,7 +92,7 @@ jobs:
           platform: x64        
           
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-      name: Build Ogre3D repo
+      name: Build Ogre3D
       shell: cmd
       env:
          CMAKE_GENERATOR: "MinGW Makefiles"
@@ -539,4 +539,6 @@ jobs:
     - uses: actions/upload-artifact@v3
       with:
         name: macos-binaries
-        path: ${{github.workspace}}/bin
+        path: |
+               ${{github.workspace}}/bin
+               ${{github.workspace}}/bin/*.dylib
