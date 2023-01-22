@@ -54,57 +54,66 @@ jobs:
 #             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
 #             mingw32-make install -j8
             
-#  build-n-cache-ogre-windows:
-#     #needs: build-n-cache-assimp-windows
-#     runs-on: windows-latest
-#     steps:
-#     - name: Cache Assimp
-#       id: cache-assimp-windows
-#       uses: actions/cache@v3
-#       env:
-#         cache-name: cache-assimp-windows
-#       with:
-#         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-#         path: ${{github.workspace}}/assimp
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+ build-n-cache-ogre-windows:
+    #needs: build-n-cache-assimp-windows
+    runs-on: windows-latest
+    steps:
+    - name: Cache Assimp
+      id: cache-assimp-windows
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-windows
+      with:
+        # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
+        path: ${{github.workspace}}/assimp
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
       
-#     - name: Cache Ogre
-#       id: cache-ogre-windows
-#       uses: actions/cache@v3
-#       env:
-#         cache-name: cache-ogre-windows
-#       with:
-#         path: ${{github.workspace}}/ogre
-#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+    - name: Cache Ogre
+      id: cache-ogre-windows
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-windows
+      with:
+        path: ${{github.workspace}}/ogre/SDK
+        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
             
-#     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-#       name: Check out ogre repo
-#       uses: actions/checkout@master
-#       with:
-#           repository: OGRECave/ogre
-#           path: ${{github.workspace}}/ogre
+    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+      name: Check out ogre repo
+      uses: actions/checkout@master
+      with:
+          repository: OGRECave/ogre
+          path: ${{github.workspace}}/ogre
 
-#     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-#       name: Set up MinGW
-#       uses: egor-tensin/setup-mingw@v2
-#       with:
-#           platform: x64        
+    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+      name: Set up MinGW
+      uses: egor-tensin/setup-mingw@v2
+      with:
+          platform: x64        
           
-#     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-#       name: Build Ogre3D repo
-#       shell: cmd
-#       run: |
-#             cd ${{github.workspace}}/ogre
-#             cmake -S . -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DASSIMP_DIR=${{github.workspace}}/assimp -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-#             cmake --build . --config ${{env.BUILD_TYPE}}
+    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+      name: Build Ogre3D repo
+      shell: cmd
+      run: |
+            cd ${{github.workspace}}/ogre
+            cmake -S . -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
+            -DOGRE_BUILD_PLUGIN_ASSIMP=ON \
+            -DASSIMP_DIR=C:/Program Files (x86)/Assimp/lib/cmake/assimp-5.2/ \
+            -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON \
+            -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF \
+            -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
+            -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF \
+            -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF \
+            -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF \
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            mingw32-make install -j8
             
  build-windows:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
     # You can convert this to a matrix build if you need cross-platform coverage.
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
    # needs: [build-n-cache-assimp-windows, build-n-cache-ogre-windows]
-#     needs: build-n-cache-assimp-windows
+    needs: build-n-cache-ogre-windows
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v3
@@ -143,32 +152,9 @@ jobs:
       env:
         cache-name: cache-ogre-windows
       with:
-        path: ${{github.workspace}}/ogre
+        path: ${{github.workspace}}/ogre/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-      name: Check out ogre repo
-      uses: actions/checkout@master
-      with:
-          repository: OGRECave/ogre
-          path: ${{github.workspace}}/ogre
-
-    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-      name: Build Ogre3D repo
-      run: |
-            cd D:/a/QtMeshEditor/QtMeshEditor/ogre
-            cmake -S . -GNinja -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ \
-            -DOGRE_BUILD_PLUGIN_ASSIMP=ON \
-            -DASSIMP_DIR=C:/Program Files (x86)/Assimp/lib/cmake/assimp-5.2/ \
-            -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON \
-            -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF \
-            -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
-            -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF \
-            -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF \
-            -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cmake --build . --config ${{env.BUILD_TYPE}}
     
     - run: dir ${{github.workspace}}/ogre/
     - run: dir ${{github.workspace}}/ogre/SDK/
