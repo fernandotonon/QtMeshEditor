@@ -94,6 +94,7 @@ jobs:
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Build Ogre3D
       shell: cmd
+      continue-on-error: true
       env:
          CMAKE_GENERATOR: "MinGW Makefiles"
       run: |
@@ -102,7 +103,12 @@ jobs:
             type D:/a/QtMeshEditor/QtMeshEditor/ogre/Files/CMakeFiles/CMakeError.log
             cmake --build . --target install
 #            mingw32-make install -j8
-            
+    
+    - uses: actions/upload-artifact@v3
+      with:
+        name: CMakeError
+        path: D:/a/QtMeshEditor/QtMeshEditor/ogre/Files/CMakeFiles/CMakeError.log
+        
  build-windows:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
     # You can convert this to a matrix build if you need cross-platform coverage.
