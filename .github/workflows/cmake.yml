@@ -74,7 +74,9 @@ jobs:
       env:
         cache-name: cache-ogre-windows
       with:
-        path: ${{github.workspace}}/ogre/SDK
+        path: |
+               ${{github.workspace}}/ogre/SDK
+               ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
             
@@ -100,7 +102,8 @@ jobs:
           ASSIMP_DIR: "C:/Program Files (x86)/Assimp/lib/cmake/assimp-5.2/"
       run: |
             cd ${{github.workspace}}/ogre
-            cmake -B . -S . -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cmake -B ${{github.workspace}}/ogre-build -S . -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cd ${{github.workspace}}/ogre-build
             mingw32-make install -j8
 #            cmake --build . --target install
     
