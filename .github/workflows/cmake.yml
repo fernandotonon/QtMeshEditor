@@ -550,3 +550,4 @@ jobs:
         path: |
                ${{github.workspace}}/bin
                ${{github.workspace}}/bin/*.dylib
+               ${{github.workspace}}/*.dmg
