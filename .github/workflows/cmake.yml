@@ -517,7 +517,6 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Configure CMake
-      continue-on-error: true
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
@@ -530,12 +529,13 @@ jobs:
     
     - name: Build
       # Build your program with the given configuration
-      continue-on-error: true
       run: |
             sudo make install -j8
             chmod 755 ./bin/QtMeshEditor
-            cpack -G DragNDrop
 
+    - name: Pack
+      run: sudo cpack -G DragNDrop
+            
 #     - uses: actions/upload-artifact@v3
 #       with:
 #         name: CMakeFiles-build-macos
