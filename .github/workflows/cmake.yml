@@ -74,9 +74,7 @@ jobs:
       env:
         cache-name: cache-ogre-windows
       with:
-        path: |
-               ${{github.workspace}}/ogre/SDK
-               ${{github.workspace}}/ogre-build/SDK
+        path: ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
             
@@ -156,20 +154,20 @@ jobs:
       env:
         cache-name: cache-ogre-windows
       with:
-        path: ${{github.workspace}}/ogre/SDK
+        path: ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
     
-    - run: dir ${{github.workspace}}/ogre/
-    - run: dir ${{github.workspace}}/ogre/SDK/
-    - run: dir ${{github.workspace}}/ogre/SDK/CMake/ 
+    - run: dir ${{github.workspace}}/ogre-build/
+    - run: dir ${{github.workspace}}/ogre-build/SDK/
+    - run: dir ${{github.workspace}}/ogre-build/SDK/CMake/ 
     
     - name: Configure CMake
       continue-on-error: true
       env:
-         OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
+         OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
       run: |
-            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/
+            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/
       shell: cmd
 
     - name: Build
