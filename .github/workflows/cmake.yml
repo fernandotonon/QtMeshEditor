@@ -103,71 +103,71 @@ jobs:
 #             cd ${{github.workspace}}/ogre-build
 #             mingw32-make install -j8
         
- build-windows:
-    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
-    # You can convert this to a matrix build if you need cross-platform coverage.
-    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-   # needs: [build-n-cache-assimp-windows, build-n-cache-ogre-windows]
-#     needs: build-n-cache-ogre-windows
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v3
-      with:
-         submodules: true
+#  build-windows:
+#     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
+#     # You can convert this to a matrix build if you need cross-platform coverage.
+#     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+#    # needs: [build-n-cache-assimp-windows, build-n-cache-ogre-windows]
+# #     needs: build-n-cache-ogre-windows
+#     runs-on: windows-latest
+#     steps:
+#     - uses: actions/checkout@v3
+#       with:
+#          submodules: true
 
-    - name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
-      with:
-          platform: x64   
+#     - name: Set up MinGW
+#       uses: egor-tensin/setup-mingw@v2
+#       with:
+#           platform: x64   
 
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v3
-      with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_mingw'
-        #arch: 'win64_msvc2019_64'
-        tools: 'tools_cmake'
+#     - name: Install Qt
+#       uses: jurplel/install-qt-action@v3
+#       with:
+#         aqtversion: '==2.1.*'
+#         version: '6.5.0'
+#         host: 'windows'
+#         target: 'desktop'
+#         arch: 'win64_mingw'
+#         #arch: 'win64_msvc2019_64'
+#         tools: 'tools_cmake'
 
-    - name: Cache Assimp
-      id: cache-assimp-windows
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-windows
-      with:
-        # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: C:/Program Files (x86)/Assimp
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache Assimp
+#       id: cache-assimp-windows
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-assimp-windows
+#       with:
+#         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
+#         path: C:/Program Files (x86)/Assimp
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Cache Ogre
-      id: cache-ogre-windows
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-windows
-      with:
-        path: ${{github.workspace}}/ogre-build/SDK
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache Ogre
+#       id: cache-ogre-windows
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-ogre-windows
+#       with:
+#         path: ${{github.workspace}}/ogre-build/SDK
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
     
-    - name: Configure CMake
-      env:
-         OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
-         CMAKE_GENERATOR: "MinGW Makefiles"
-      run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/
-      shell: cmd
+#     - name: Configure CMake
+#       env:
+#          OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
+#          CMAKE_GENERATOR: "MinGW Makefiles"
+#       run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/
+#       shell: cmd
 
-    - name: Build
-      # Build your program with the given configuration
-      run: |
-            dir
-            mingw32-make install -j8
+#     - name: Build
+#       # Build your program with the given configuration
+#       run: |
+#             dir
+#             mingw32-make install -j8
 
-    - uses: actions/upload-artifact@v3
-      with:
-        name: windows-binaries
-        path: ${{github.workspace}}/bin
+#     - uses: actions/upload-artifact@v3
+#       with:
+#         name: windows-binaries
+#         path: ${{github.workspace}}/bin
         
 #  build-n-cache-assimp-linux:
 #     runs-on: ubuntu-latest
@@ -522,8 +522,8 @@ jobs:
     - run: sudo cp ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor ${{github.workspace}}/bin/QtMeshEditor
     - run: sudo chmod 755 ${{github.workspace}}/bin/QtMeshEditor
     - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor
-    - run: ls
-    - run: ls bin
+    - run: ls /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/
+    - run: ls /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/bin/
     
     - name: Pack
       run: sudo cpack -G DragNDrop
