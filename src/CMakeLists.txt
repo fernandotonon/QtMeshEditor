@@ -205,7 +205,7 @@ if(WIN32)
         ${RESOURCE_SRCS}
         )
 elseif(APPLE)
-        qt_add_executable(${CMAKE_PROJECT_NAME}
+        add_executable(${CMAKE_PROJECT_NAME}
 	${HEADER_FILES}
 	${SRC_FILES}
 	${RESOURCE_SRCS}
