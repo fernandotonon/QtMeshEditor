@@ -74,7 +74,7 @@ jobs:
       env:
         cache-name: cache-ogre-windows
       with:
-        path: ${{github.workspace}}/ogre/SDK
+        path: ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
             
@@ -94,19 +94,21 @@ jobs:
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Build Ogre3D
       shell: cmd
-      continue-on-error: true
+#       continue-on-error: true
       env:
           CMAKE_GENERATOR: "MinGW Makefiles"
+          ASSIMP_DIR: "C:/Program Files (x86)/Assimp/lib/cmake/assimp-5.2/"
       run: |
             cd ${{github.workspace}}/ogre
-            cmake -S . -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DASSIMP_DIR=C:/Program Files (x86)/Assimp/lib/cmake/assimp-5.2/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cmake --build . --target install
-#            mingw32-make install -j8
+            cmake -B ${{github.workspace}}/ogre-build -S . -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cd ${{github.workspace}}/ogre-build
+            mingw32-make install -j8
+#            cmake --build . --target install
     
-    - uses: actions/upload-artifact@v3
-      with:
-        name: CMakeError
-        path: D:/a/QtMeshEditor/QtMeshEditor/ogre/Files/CMakeFiles/CMakeError.log
+#     - uses: actions/upload-artifact@v3
+#       with:
+#         name: CMakeError
+#         path: D:/a/QtMeshEditor/QtMeshEditor/ogre/Files/CMakeFiles/CMakeError.log
         
  build-windows:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
@@ -152,20 +154,20 @@ jobs:
       env:
         cache-name: cache-ogre-windows
       with:
-        path: ${{github.workspace}}/ogre/SDK
+        path: ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
     
-    - run: dir ${{github.workspace}}/ogre/
-    - run: dir ${{github.workspace}}/ogre/SDK/
-    - run: dir ${{github.workspace}}/ogre/SDK/CMake/ 
+    - run: dir ${{github.workspace}}/ogre-build/
+    - run: dir ${{github.workspace}}/ogre-build/SDK/
+    - run: dir ${{github.workspace}}/ogre-build/SDK/CMake/ 
     
     - name: Configure CMake
       continue-on-error: true
       env:
-         OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
+         OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
       run: |
-            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/
+            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/
       shell: cmd
 
     - name: Build
@@ -517,7 +519,6 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Configure CMake
-      continue-on-error: true
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
@@ -530,11 +531,13 @@ jobs:
     
     - name: Build
       # Build your program with the given configuration
-      continue-on-error: true
       run: |
             sudo make install -j8
             chmod 755 ./bin/QtMeshEditor
 
+    - name: Pack
+      run: sudo cpack -G DragNDrop
+            
 #     - uses: actions/upload-artifact@v3
 #       with:
 #         name: CMakeFiles-build-macos
@@ -549,3 +552,4 @@ jobs:
         path: |
                ${{github.workspace}}/bin
                ${{github.workspace}}/bin/*.dylib
+               ${{github.workspace}}/*.dmg
