@@ -515,7 +515,7 @@ jobs:
       # Build your program with the given configuration
       run: |
             sudo make install -j8
-            chmod 755 ./bin/QtMeshEditor
+#            chmod 755 ../bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
     - name: Pack
       run: sudo cpack -G DragNDrop
@@ -532,6 +532,7 @@ jobs:
       with:
         name: macos-binaries
         path: |
+               ../bin
                ${{github.workspace}}/bin
                ${{github.workspace}}/bin/*.dylib
                ${{github.workspace}}/*.dmg
