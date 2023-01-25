@@ -11,8 +11,9 @@
 #  Versions
 ##############################################################
 CMAKE_POLICY(SET CMP0005 NEW)
+cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor)
+project(QtMeshEditor VERSION 1.5.1 LANGUAGES CXX)
 
 set(QTMESHEDITOR_VERSION_STRING "\"1.5.1\"")
 
@@ -55,19 +56,6 @@ set(CMAKE_AUTOMOC ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
 
 ##############################################################
-#  googletest
-##############################################################
-
-include(FetchContent)
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
-)
-# For Windows: Prevent overriding the parent project's compiler/linker settings
-set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-FetchContent_MakeAvailable(googletest)
-
-##############################################################
 #  Searching Qt dependencies
 ##############################################################
 #Find Qt Packages
@@ -95,6 +83,19 @@ ENDFOREACH(qtlib)
 
 
 #set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_PATH}")
+
+##############################################################
+#  googletest
+##############################################################
+
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
+)
+# For Windows: Prevent overriding the parent project's compiler/linker settings
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
 
 ##############################################################
 #  Find Ogre
@@ -133,10 +134,6 @@ ADD_SUBDIRECTORY(cfg)
 #  Install Qt dependencies
 ##############################################################
 IF(WIN32)
-        SET (QTLIBLIST
-        Qt${QT_VERSION_MAJOR}GUI
-        Qt${QT_VERSION_MAJOR}Core
-        Qt${QT_VERSION_MAJOR}Widgets)
         FOREACH(qtlib ${QTLIBLIST})
                 INSTALL(FILES ${QT_DIR}/../../../bin/${qtlib}.dll DESTINATION ${CMAKE_INSTALL_PREFIX})
         ENDFOREACH(qtlib)
@@ -149,10 +146,7 @@ IF(WIN32)
                 INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
         ENDFOREACH(platform)
 ELSEIF(UNIX AND NOT APPLE)
-        SET (QTLIBLIST
-        Qt${QT_VERSION_MAJOR}Gui
-        Qt${QT_VERSION_MAJOR}Core
-        Qt${QT_VERSION_MAJOR}Widgets
+        SET (QTLIBLIST ${QTLIBLIST}
         Qt${QT_VERSION_MAJOR}XcbQpa)
         FOREACH(qtlib ${QTLIBLIST})
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
@@ -168,17 +162,18 @@ ELSEIF(UNIX AND NOT APPLE)
         ENDFOREACH(platform)
 ENDIF()
 
-if(NOT APPLE)
-    # Generate the deployment script for the target QtMeshEditor.
-    qt_generate_deploy_app_script(
-        TARGET QtMeshEditor
-        FILENAME_VARIABLE deploy_script
-        NO_UNSUPPORTED_PLATFORM_ERROR
-    )
+# This is a test for deploying using qt script, still needs more investigation.
+#if(NOT APPLE)
+#    # Generate the deployment script for the target QtMeshEditor.
+#    qt_generate_deploy_app_script(
+#        TARGET QtMeshEditor
+#        FILENAME_VARIABLE deploy_script
+#        NO_UNSUPPORTED_PLATFORM_ERROR
+#    )
 
-    # Call the deployment script on "cmake --install".
-    install(SCRIPT ${deploy_script})
-endif()
+#    # Call the deployment script on "cmake --install".
+#    install(SCRIPT ${deploy_script})
+#endif()
 
 ##############################################################
 #  CPACK
@@ -201,10 +196,11 @@ IF(APPLE)
     set(APPS "\${CMAKE_INSTALL_PREFIX}/${CMAKE_PROJECT_NAME}.app")
 
     # Directories to look for dependencies
-    set(DIRS ${CMAKE_BINARY_DIR})
+    set(DIRS ${CMAKE_INSTALL_PREFIX})
 
-    install(CODE "include(BundleUtilities)
-        fixup_bundle(\"${APPS}\" \"\" \"${DIRS}\")")
+    # this is causing issues in macos, when trying to find assimp in @rpath/libassimp.5.dylib
+#    install(CODE "include(BundleUtilities)
+#        fixup_bundle(\"${APPS}\" \"\" \"${DIRS}\" IGNORE_ITEM \"@rpath/libassimp.5.dylib\")")
 
     set(CPACK_GENERATOR "DRAGNDROP")
 ELSEIF(UNIX)
