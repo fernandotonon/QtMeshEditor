@@ -300,6 +300,7 @@ else()
     IF(APPLE) # this is just for test, it is not using OgreBites yet. TODO: remove
         SET(OGRELIBLIST ${OGRELIBLIST}
             OgreBites
+            OgreBullet
         )
     ENDIF()
     FOREACH(ogrelib ${OGRELIBLIST})
