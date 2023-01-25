@@ -301,6 +301,7 @@ else()
         SET(OGRELIBLIST ${OGRELIBLIST}
             OgreBites
             OgreBullet
+            OgreMeshLodGenerator
         )
     ENDIF()
     FOREACH(ogrelib ${OGRELIBLIST})
