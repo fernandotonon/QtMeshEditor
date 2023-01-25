@@ -81,13 +81,6 @@ FOREACH(qtlib ${QTLIBLIST})
         include_directories(${${qtlib}_INCLUDE_DIRS})
 ENDFOREACH(qtlib)
 
-
-if(APPLE)
-    set_target_properties(QtMeshEditor PROPERTIES
-        MACOSX_BUNDLE TRUE
-    )
-endif()
-
 #set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules/;${CMAKE_MODULE_PATH}")
 
 ##############################################################

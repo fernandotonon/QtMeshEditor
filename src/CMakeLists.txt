@@ -205,11 +205,12 @@ if(WIN32)
         ${RESOURCE_SRCS}
         )
 elseif(APPLE)
-        add_executable(${CMAKE_PROJECT_NAME} MACOSX_BUNDLE
+        qt_add_executable(${CMAKE_PROJECT_NAME}
 	${HEADER_FILES}
 	${SRC_FILES}
 	${RESOURCE_SRCS}
-	)
+        )
+        set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES MACOSX_BUNDLE TRUE)
 else()
         add_executable(${CMAKE_PROJECT_NAME}
         ${HEADER_FILES}
