@@ -517,8 +517,11 @@ jobs:
       # Build your program with the given configuration
       run: |
             sudo make install -j8
-#            chmod 755 ../bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+#            chmod 755 /bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
+    - run: cp ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor ${{github.workspace}}/bin/QtMeshEditor
+    - run: chmod 755 ${{github.workspace}}/bin/QtMeshEditor
+    - run: install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor
     - run: ls
     - run: ls bin
     
