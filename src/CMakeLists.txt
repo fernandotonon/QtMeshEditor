@@ -297,7 +297,11 @@ else()
         OgreRTShaderSystem
         OgreVolume
         OgreOverlay)
-
+    IF(APPLE) # this is just for test, it is not using OgreBites yet. TODO: remove
+        SET(OGRELIBLIST ${OGRELIBLIST}
+            OgreBites
+        )
+    ENDIF()
     FOREACH(ogrelib ${OGRELIBLIST})
         IF(WIN32)
             INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
