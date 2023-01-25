@@ -3,7 +3,6 @@
 # On Windows, define the following environnemental variables before running:
 #
 # - OGRE_HOME (C:\OgreSDK)
-# - ASSIMP_HOME (C:\Program Files\Assimp)
 # - CMAKE_PREFIX_PATH (to Qt <version>\<compiler>\lib\cmake folder)
 # - OgreProcedural_HOME (Ogre Procedural SDK Folder)
 #
@@ -20,16 +19,18 @@ set(QTMESHEDITOR_VERSION_STRING "\"1.5.1\"")
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
 message(STATUS "Building QtMeshEditor version ${QTMESHEDITOR_VERSION_STRING}")
 
+set(CMAKE_CXX_STANDARD 17)
+
 ##############################################################
 #  Configuring CMake
 ##############################################################
 if(WIN32)
     cmake_policy(SET CMP0020 NEW)   # to avoid cmake warning
 endif()
-cmake_minimum_required(VERSION 3.20.0)
+cmake_minimum_required(VERSION 3.25.0)
 
 enable_language(CXX)
-
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 # Building directories
 if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "debug")
     MESSAGE("DEBUG COMPILATION")
@@ -52,6 +53,19 @@ endif()
 # Instruct CMake to run moc automatically when needed.
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_INCLUDE_CURRENT_DIR ON)
+
+##############################################################
+#  googletest
+##############################################################
+
+include(FetchContent)
+FetchContent_Declare(
+  googletest
+  URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
+)
+# For Windows: Prevent overriding the parent project's compiler/linker settings
+set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(googletest)
 
 ##############################################################
 #  Searching Qt dependencies
@@ -94,12 +108,6 @@ message(${OGRE_INCLUDE_DIRS})
 include_directories(${OGRE_INCLUDE_DIRS} "${OGRE_INCLUDE_DIRS}/Plugins/Assimp")
 
 ##############################################################
-#  Find ASSIMP
-##############################################################
-find_package(ASSIMP REQUIRED)
-include_directories(${ASSIMP_INCLUDE_DIRS})
-
-##############################################################
 #  Find ZLIB
 ##############################################################
 OPTION(FIX_NEED_ZLIB "Switch on if your configuration requires zlib" OFF)
@@ -124,49 +132,49 @@ ADD_SUBDIRECTORY(cfg)
 ##############################################################
 #  Install Qt dependencies
 ##############################################################
-#IF(WIN32)
-#        SET (QTLIBLIST
-#        Qt${QT_VERSION_MAJOR}GUI
-#        Qt${QT_VERSION_MAJOR}Core
-#        Qt${QT_VERSION_MAJOR}Widgets)
-#        FOREACH(qtlib ${QTLIBLIST})
-#                INSTALL(FILES ${QT_DIR}/../../../bin/${qtlib}.dll DESTINATION ${CMAKE_INSTALL_PREFIX})
-#        ENDFOREACH(qtlib)
+IF(WIN32)
+        SET (QTLIBLIST
+        Qt${QT_VERSION_MAJOR}GUI
+        Qt${QT_VERSION_MAJOR}Core
+        Qt${QT_VERSION_MAJOR}Widgets)
+        FOREACH(qtlib ${QTLIBLIST})
+                INSTALL(FILES ${QT_DIR}/../../../bin/${qtlib}.dll DESTINATION ${CMAKE_INSTALL_PREFIX})
+        ENDFOREACH(qtlib)
 
-#        SET (QTPLATFORMSLIST
-#                qminimal
-#                qoffscreen
-#                qwindows)
-#        FOREACH(platform ${QTPLATFORMSLIST})
-#                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
-#        ENDFOREACH(platform)
-#ELSEIF(UNIX)
-#        SET (QTLIBLIST
-#        Qt${QT_VERSION_MAJOR}Gui
-#        Qt${QT_VERSION_MAJOR}Core
-#        Qt${QT_VERSION_MAJOR}Widgets
-#        Qt${QT_VERSION_MAJOR}XcbQpa)
-#        FOREACH(qtlib ${QTLIBLIST})
-#                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
-#        ENDFOREACH(qtlib)
+        SET (QTPLATFORMSLIST
+                qminimal
+                qoffscreen
+                qwindows)
+        FOREACH(platform ${QTPLATFORMSLIST})
+                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
+        ENDFOREACH(platform)
+ELSEIF(UNIX)
+        SET (QTLIBLIST
+        Qt${QT_VERSION_MAJOR}Gui
+        Qt${QT_VERSION_MAJOR}Core
+        Qt${QT_VERSION_MAJOR}Widgets
+        Qt${QT_VERSION_MAJOR}XcbQpa)
+        FOREACH(qtlib ${QTLIBLIST})
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
+        ENDFOREACH(qtlib)
 
-#        SET (QTPLATFORMSLIST
-#                qminimal
-#                qxcb
-#                qeglfs
-#                qwayland-generic)
-#        FOREACH(platform ${QTPLATFORMSLIST})
-#                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/lib${platform}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
-#        ENDFOREACH(platform)
-#ENDIF()
+        SET (QTPLATFORMSLIST
+                qminimal
+                qxcb
+                qeglfs
+                qwayland-generic)
+        FOREACH(platform ${QTPLATFORMSLIST})
+                INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/lib${platform}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
+        ENDFOREACH(platform)
+ENDIF()
 
-if(NOT APPLE)
-    # Install the executable into "${CMAKE_INSTALL_PREFIX}/bin".
-    install(TARGETS QtMeshEditor
-        BUNDLE  DESTINATION .
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+# Destination paths below are relative to ${CMAKE_INSTALL_PREFIX}
+install(TARGETS ${APP_NAME}
+    BUNDLE DESTINATION . COMPONENT Runtime
+    RUNTIME DESTINATION bin COMPONENT Runtime
     )
 
+if(NOT APPLE)
     # Generate the deployment script for the target QtMeshEditor.
     qt_generate_deploy_app_script(
         TARGET QtMeshEditor
@@ -178,14 +186,27 @@ if(NOT APPLE)
     install(SCRIPT ${deploy_script})
 endif()
 
-if(UNIX)
-    set(CPACK_PACKAGE_NAME QtMeshEditor)
-    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
-    set(CPACK_PACKAGE_VENDOR "Fernando")
+
+set(CPACK_PACKAGE_NAME QtMeshEditor)
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
+set(CPACK_PACKAGE_VENDOR "Fernando")
+set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Fernando Tonon <tonon.fernando@hotmail.com>")
+include(CPack)
+
+IF(APPLE)
+    # Note Mac specific extension .app
+    set(APPS "\${CMAKE_INSTALL_PREFIX}/${CMAKE_PROJECT_NAME}.app")
+
+    # Directories to look for dependencies
+    set(DIRS ${CMAKE_BINARY_DIR})
+
+    install(CODE "include(BundleUtilities)
+        fixup_bundle(\"${APPS}\" \"\" \"${DIRS}\")")
+
+    set(CPACK_GENERATOR "DRAGNDROP")
+ELSEIF(UNIX)
     set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
     set(CPACK_VERBATIM_VARIABLES ON)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/QtMeshEditor")
-    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Fernando Tonon <tonon.fernando@hotmail.com>")
     set(CPACK_DEBIAN_PACKAGE_DEPENDS libc6 libstdc++6 libgcc-s1)
-    include(CPack)
-endif()
+ENDIF()

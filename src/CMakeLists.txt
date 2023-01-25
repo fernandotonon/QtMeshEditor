@@ -204,12 +204,18 @@ if(WIN32)
 	${SRC_FILES}
         ${RESOURCE_SRCS}
         )
-else()
-        add_executable(${CMAKE_PROJECT_NAME}
+elseif(APPLE)
+        add_executable(${CMAKE_PROJECT_NAME} MACOSX_BUNDLE
 	${HEADER_FILES}
 	${SRC_FILES}
 	${RESOURCE_SRCS}
 	)
+else()
+        add_executable(${CMAKE_PROJECT_NAME}
+        ${HEADER_FILES}
+        ${SRC_FILES}
+        ${RESOURCE_SRCS}
+        )
 endif()
 
 ##############################################################
@@ -226,7 +232,6 @@ if(UNIX)
 endif()
 target_link_libraries(${CMAKE_PROJECT_NAME}
 ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
-${ASSIMP_LIBRARY_REL}
 ${OGRE_LIBRARIES}
 Qt::Gui
 Qt::Core
@@ -297,11 +302,11 @@ else()
         IF(WIN32)
             INSTALL(FILES $ENV{OGRE_HOME}/bin/${ogrelib}.dll DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
         ELSEIF(APPLE)
-        if(EXISTS ${OGRE_PLUGIN_DIR}/${ogrelib}.dylib)
-            INSTALL(FILES ${OGRE_PLUGIN_DIR}/${ogrelib}.dylib DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-        else()
-            INSTALL(FILES ${OGRE_PLUGIN_DIR}/../lib${ogrelib}.dylib DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-        endif()
+            if(EXISTS ${OGRE_PLUGIN_DIR}/${ogrelib}.dylib)
+                INSTALL(FILES ${OGRE_PLUGIN_DIR}/${ogrelib}.dylib DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            else()
+                INSTALL(FILES ${OGRE_PLUGIN_DIR}/../lib${ogrelib}.dylib DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
+            endif()
         ELSEIF(UNIX)
             IF(EXISTS ${OGRE_${ogrelib}_LIBRARY_REL})
                 INSTALL(FILES ${OGRE_${ogrelib}_LIBRARY_REL}.${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
@@ -312,12 +317,3 @@ else()
         ENDIF()
     ENDFOREACH(ogrelib)
 endif()
-
-IF(WIN32)
-    GET_FILENAME_COMPONENT(ASSIMP_DLL_DIR ${ASSIMP_DIR} PATH)
-    find_file(ASSIMP_DLL_FILE NAMES libassim.dll assimp.dll Assimp32.dll PATHS "${ASSIMP_DLL_DIR}/../bin" "${ASSIMP_DLL_DIR}/../bin/x86")
-
-    INSTALL(FILES ${ASSIMP_DLL_FILE} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-
-    INSTALL(FILES ${OgreProcedural_BINARY_REL} DESTINATION ${CMAKE_RUNTIME_OUTPUT_DIRECTORY})
-endif(WIN32)
