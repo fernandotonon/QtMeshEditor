@@ -148,7 +148,7 @@ IF(WIN32)
         FOREACH(platform ${QTPLATFORMSLIST})
                 INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
         ENDFOREACH(platform)
-ELSEIF(UNIX)
+ELSEIF(UNIX AND NOT APPLE)
         SET (QTLIBLIST
         Qt${QT_VERSION_MAJOR}Gui
         Qt${QT_VERSION_MAJOR}Core
@@ -168,12 +168,6 @@ ELSEIF(UNIX)
         ENDFOREACH(platform)
 ENDIF()
 
-# Destination paths below are relative to ${CMAKE_INSTALL_PREFIX}
-install(TARGETS ${APP_NAME}
-    BUNDLE DESTINATION . COMPONENT Runtime
-    RUNTIME DESTINATION bin COMPONENT Runtime
-    )
-
 if(NOT APPLE)
     # Generate the deployment script for the target QtMeshEditor.
     qt_generate_deploy_app_script(
@@ -186,6 +180,15 @@ if(NOT APPLE)
     install(SCRIPT ${deploy_script})
 endif()
 
+##############################################################
+#  CPACK
+##############################################################
+
+# Destination paths below are relative to ${CMAKE_INSTALL_PREFIX}
+install(TARGETS ${APP_NAME}
+    BUNDLE DESTINATION . COMPONENT Runtime
+    RUNTIME DESTINATION bin COMPONENT Runtime
+    )
 
 set(CPACK_PACKAGE_NAME QtMeshEditor)
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
