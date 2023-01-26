@@ -303,6 +303,7 @@ else()
             OgreBites
             OgreBullet
             OgreMeshLodGenerator
+            RenderSystem_GL3Plus
         )
     ENDIF()
     FOREACH(ogrelib ${OGRELIBLIST})
