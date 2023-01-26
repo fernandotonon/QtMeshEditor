@@ -521,10 +521,14 @@ jobs:
 
     - run: sudo cp ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor ${{github.workspace}}/bin/QtMeshEditor
     - run: sudo chmod 755 ${{github.workspace}}/bin/QtMeshEditor
+    - run: cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtWidgets.framework
+    - run: cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtCore.framework
+    - run: cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtGui.framework
     - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor
     - run: ls /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/
     - run: ls /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/bin/
     - run: ls /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/
+    - run: ls /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/plugins/
 #    - run: macdeployqt ${{github.workspace}}/bin/QtMeshEditor.app -dmg
     
 #     - name: Pack
