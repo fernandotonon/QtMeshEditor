@@ -524,7 +524,8 @@ jobs:
     - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor
     - run: ls /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/
     - run: ls /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/bin/
-    - run: macdeployqt ${{github.workspace}}/bin/QtMeshEditor.app -dmg
+    - run: ls /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/
+#    - run: macdeployqt ${{github.workspace}}/bin/QtMeshEditor.app -dmg
     
 #     - name: Pack
 #       run: sudo cpack -G DragNDrop
