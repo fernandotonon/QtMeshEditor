@@ -542,7 +542,7 @@ jobs:
 
     - name: Pack
       run: | 
-            sudo brew install create-dmg
+            brew install create-dmg
             sudo create-dmg QtMeshEditor-MacOS.dmg ${{github.workspace}}/bin/QtMeshEditor.app
 #            sudo cpack -G DragNDrop
     
