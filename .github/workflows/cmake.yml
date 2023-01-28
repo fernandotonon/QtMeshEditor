@@ -541,7 +541,10 @@ jobs:
     - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
     - name: Pack
-      run: sudo cpack -G DragNDrop
+      run: | 
+            sudo brew install create-dmg
+            sudo create-dmg QtMeshEditor-MacOS.dmg ${{github.workspace}}/bin/QtMeshEditor.app
+#            sudo cpack -G DragNDrop
     
     - uses: actions/upload-artifact@v3
       with:
