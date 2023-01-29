@@ -338,6 +338,6 @@ endif()
 if(APPLE)
     configure_file (
         "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
-        "${CMAKE_INSTALL_PREFIX}/${CMAKE_PROJECT_NAME}.app/Contents/Info.plist"
+        "${CMAKE_INSTALL_PREFIX}/Info.plist"
         @ONLY)
 endif()
