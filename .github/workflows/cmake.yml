@@ -543,7 +543,16 @@ jobs:
     - name: Pack
       run: | 
             brew install create-dmg
-            sudo create-dmg QtMeshEditor-MacOS.dmg ${{github.workspace}}/bin/QtMeshEditor.app
+            sudo create-dmg \
+            --volname "Application Installer" \
+            --volicon "${{github.workspace}}/resources/icon.icns" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "QtMeshEditor.app" 200 190 \
+            --app-drop-link 600 185 \
+            QtMeshEditor-MacOS.dmg \
+            ${{github.workspace}}/bin/QtMeshEditor.app
 #            sudo cpack -G DragNDrop
     
     - uses: actions/upload-artifact@v3
