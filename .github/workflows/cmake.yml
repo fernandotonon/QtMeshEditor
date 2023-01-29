@@ -560,5 +560,5 @@ jobs:
       with:
         name: macos-binaries
         path: |
-               ${{github.workspace}}/bin/QtMeshEditor.app
                ${{github.workspace}}/*.dmg
+#               ${{github.workspace}}/bin/QtMeshEditor.app
