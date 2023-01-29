@@ -490,18 +490,6 @@ jobs:
         path: ${{github.workspace}}/ogre/SDK
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/SDK/lib/
-    - run: ls /Users/runner/work/QtMeshEditor/QtMeshEditor/ogre/SDK/lib/OGRE/
-
-    - name: Cache .o files
-      id: cache-build-macos
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-build-macos
-      with:
-        path: src/CMakeFiles/QtMeshEditor.dir/
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-
     - name: Configure CMake
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
@@ -529,6 +517,7 @@ jobs:
     - run: sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
     - run: sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
     - run: sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
+    - run: sudo mkdir ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
     - run: sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
     - run: sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
     - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
