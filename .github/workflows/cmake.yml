@@ -537,7 +537,7 @@ jobs:
             ${{github.workspace}}/bin/QtMeshEditor.app
 #            sudo cpack -G DragNDrop
     
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v3.1.2
       with:
-        name: QtMeshEditor-MacOS.dmg
+        name: QtMeshEditor-MacOS
         path: ${{github.workspace}}/QtMeshEditor-MacOS.dmg
