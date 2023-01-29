@@ -537,7 +537,8 @@ jobs:
     - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
     - run: sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
     - run: sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
-    - run: sudo cp -R ${{github.workspace}}/resources/cube.png ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
+    - run: sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
+    - run: sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
     - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
     - name: Pack
