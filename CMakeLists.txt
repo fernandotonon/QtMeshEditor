@@ -14,11 +14,11 @@ CMAKE_POLICY(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
 project(QtMeshEditor VERSION 1.5.1 LANGUAGES CXX)
+message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"1.5.1\"")
 
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
-message(STATUS "Building QtMeshEditor version ${QTMESHEDITOR_VERSION_STRING}")
 
 set(CMAKE_CXX_STANDARD 17)
 
@@ -206,8 +206,7 @@ IF(APPLE)
     # this is causing issues in macos, when trying to find assimp in @rpath/libassimp.5.dylib
 #    install(CODE "include(BundleUtilities)
 #        fixup_bundle(\"${APPS}\" \"\" \"${DIRS}\" IGNORE_ITEM \"@rpath/libassimp.5.dylib\")")
-
-    set(CPACK_GENERATOR "DRAGNDROP")
+    set(CPACK_GENERATOR "DragNDrop")
 ELSEIF(UNIX)
     set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
     set(CPACK_VERBATIM_VARIABLES ON)

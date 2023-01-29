@@ -331,3 +331,13 @@ else()
         ENDIF()
     ENDFOREACH(ogrelib)
 endif()
+
+##############################################################
+#  Configure Info.plist for Mac OS X
+##############################################################
+if(APPLE)
+    configure_file (
+        "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
+        "${CMAKE_INSTALL_PREFIX}/${CMAKE_PROJECT_NAME}.app/Contents/Info.plist"
+        @ONLY)
+endif()
