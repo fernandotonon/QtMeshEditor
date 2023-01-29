@@ -517,27 +517,19 @@ jobs:
       # Build your program with the given configuration
       run: |
             sudo make install -j8
-#            chmod 755 /bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
-#     - run: sudo cp ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor ${{github.workspace}}/bin/QtMeshEditor
-#     - run: sudo chmod 755 ${{github.workspace}}/bin/QtMeshEditor
-#     - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtWidgets.framework
-#     - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtCore.framework
-#     - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtGui.framework
-#     - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtDBus.framework ${{github.workspace}}/bin/QtDBus.framework
-#     - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/plugins/platforms ${{github.workspace}}/bin/platforms
-#     - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor
-# this freezes the deploy    - run: macdeployqt ${{github.workspace}}/bin/QtMeshEditor.app -dmg
-
-    - run: sudo chmod 755 ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
-    - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
-    - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
-    - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
-    - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
-    - run: sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
+#    - run: sudo chmod 755 ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+    - name: copy Qt libs to app folder
+      run: |
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
     - run: sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
     - run: sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
     - run: sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
+    - run: sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
     - run: sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
     - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
@@ -545,7 +537,7 @@ jobs:
       run: | 
             brew install create-dmg
             sudo create-dmg \
-            --volname "Application Installer" \
+            --volname "QtMeshEditor Installer" \
             --volicon "${{github.workspace}}/resources/icon.icns" \
             --window-pos 200 120 \
             --window-size 800 400 \
