@@ -539,7 +539,5 @@ jobs:
     
     - uses: actions/upload-artifact@v3
       with:
-        name: macos-binaries
-        path: |
-               ${{github.workspace}}/*.dmg
-#               ${{github.workspace}}/bin/QtMeshEditor.app
+        name: QtMeshEditor-MacOS.dmg
+        path: ${{github.workspace}}/QtMeshEditor-MacOS.dmg
