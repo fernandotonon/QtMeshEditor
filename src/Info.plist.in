@@ -30,7 +30,7 @@
 	<string>MIT License, since 2012</string>
 
 	<key>CFBundleIconFile</key>
-	<string>cube.png</string>
+	<string>icon.icns</string>
 
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
