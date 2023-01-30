@@ -224,6 +224,10 @@ endif()
 ##############################################################
 if(APPLE)
     SET(OGRE_Codec_Assimp_LIBRARY_REL ${OGRE_PLUGIN_DIR}/Codec_Assimp.dylib)
+elseif(UNIX)
+    SET(OGRE_Codec_Assimp_LIBRARY_REL ${OGRE_PLUGIN_DIR}/Codec_Assimp.so)
+elseif(WIN32)
+    SET(OGRE_Codec_Assimp_LIBRARY_REL ${OGRE_PLUGIN_DIR}/Codec_Assimp.a)
 endif()
 
 if(UNIX)
