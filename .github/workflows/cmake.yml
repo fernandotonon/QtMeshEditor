@@ -150,6 +150,8 @@ jobs:
         path: ${{github.workspace}}/ogre-build/SDK
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
+        
+    - run: dir ${{github.workspace}}/ogre-build/SDK/bin/
     
     - name: Configure CMake
       env:
@@ -163,7 +165,7 @@ jobs:
       run: |
             dir
             mingw32-make install -j8
-    - run: dir ${{github.workspace}}/ogre-build/SDK/bin/
+    
     - uses: actions/upload-artifact@v3
       with:
         name: windows-binaries
@@ -348,7 +350,7 @@ jobs:
         files: ${{github.workspace}}/bin
         outPath: QtMeshEditor-Linux.tar.gz
 
-    - run: cpack -G DEB -C ${{github.workspace}}/bin -P QtMeshEditor-Linux.deb
+    - run: sudo cpack -G DEB -C ${{github.workspace}}/bin -P QtMeshEditor-Linux.deb
 
     - uses: actions/upload-artifact@v3
       with:
