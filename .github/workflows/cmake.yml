@@ -308,7 +308,6 @@ jobs:
                /usr/local/include/assimp
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
@@ -326,7 +325,6 @@ jobs:
                /usr/local/include/OGRE/
                /usr/local/lib/OGRE/
                /usr/local/lib/pkgconfig/
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Configure CMake
@@ -338,9 +336,8 @@ jobs:
     - name: Build
       # Build your program with the given configuration
       run: |
-            sudo make install -j8
-            sudo chmod +X ./bin/QtMeshEditor
-            sudo chmod -R 777 ./bin/
+            sudo make install
+#            sudo chmod +X ./bin/QtMeshEditor
 
     - name: Compress action step
       uses: a7ul/tar-action@v1.1.0
@@ -348,8 +345,7 @@ jobs:
       with:
         command: c
         cwd: ${{github.workspace}}/bin
-        files: |
-          ${{github.workspace}}/bin
+        files: ${{github.workspace}}/bin
         outPath: QtMeshEditor-Linux.tar.gz
           
     - uses: actions/upload-artifact@v3
