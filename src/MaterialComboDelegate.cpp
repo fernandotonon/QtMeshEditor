@@ -27,6 +27,7 @@
 #include <QComboBox>
 
 #include <QDebug>
+#include <OgreEntity.h>
 #include <OgreSubEntity.h>
 #include <OgreResourceManager.h>
 #include <OgreMaterialManager.h>

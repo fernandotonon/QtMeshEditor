@@ -39,7 +39,7 @@
    <property name="geometry">
     <rect>
      <x>10</x>
-     <y>155</y>
+     <y>163</y>
      <width>331</width>
      <height>41</height>
     </rect>
@@ -56,8 +56,8 @@
 p, li { white-space: pre-wrap; }
 hr { height: 1px; border-width: 0; }
 &lt;/style&gt;&lt;/head&gt;&lt;body style=&quot; font-family:'Ubuntu'; font-size:10pt; font-weight:700; font-style:normal;&quot;&gt;
-&lt;p align=&quot;center&quot; style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-family:'.AppleSystemUIFont'; font-size:12pt; font-weight:400;&quot;&gt;Developed by: &lt;/span&gt;&lt;a href=&quot;https://github.com/fernandotonon&quot;&gt;Fernando&lt;/a&gt;&lt;/p&gt;
-&lt;p align=&quot;center&quot; style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-family:'.AppleSystemUIFont'; font-size:12pt; font-weight:400;&quot;&gt;With contributions from: &lt;/span&gt;&lt;a href=&quot;https://github.com/akira215&quot;&gt;Akira&lt;/a&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
+&lt;p align=&quot;center&quot; style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-weight:400;&quot;&gt;Developed by: &lt;/span&gt;&lt;a href=&quot;https://github.com/fernandotonon&quot;&gt;Fernando&lt;/a&gt;&lt;/p&gt;
+&lt;p align=&quot;center&quot; style=&quot; margin-top:0px; margin-bottom:0px; margin-left:0px; margin-right:0px; -qt-block-indent:0; text-indent:0px;&quot;&gt;&lt;span style=&quot; font-weight:400;&quot;&gt;With contributions from: &lt;/span&gt;&lt;a href=&quot;https://github.com/akira215&quot;&gt;Akira&lt;/a&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;</string>
    </property>
    <property name="openExternalLinks">
     <bool>true</bool>
@@ -67,7 +67,7 @@ hr { height: 1px; border-width: 0; }
    <property name="geometry">
     <rect>
      <x>110</x>
-     <y>4</y>
+     <y>0</y>
      <width>111</width>
      <height>20</height>
     </rect>
@@ -83,9 +83,9 @@ hr { height: 1px; border-width: 0; }
    <property name="geometry">
     <rect>
      <x>0</x>
-     <y>30</y>
+     <y>23</y>
      <width>351</width>
-     <height>121</height>
+     <height>141</height>
     </rect>
    </property>
    <property name="verticalScrollBarPolicy">
