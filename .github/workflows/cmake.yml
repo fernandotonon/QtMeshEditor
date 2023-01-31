@@ -21,7 +21,7 @@ jobs:
 #             SLACK_MESSAGE: "Building QtMeshEditor in GitHub Actions - works! :D"
 
 ####################################################################
-# Windows Deploy
+# Windows Deploy - ok
 ####################################################################
 
 #  build-n-cache-assimp-windows:
@@ -107,82 +107,82 @@ jobs:
 #             cd ${{github.workspace}}/ogre-build
 #             mingw32-make install -j8
         
- build-windows:
-    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
-    # You can convert this to a matrix build if you need cross-platform coverage.
-    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-   # needs: [build-n-cache-assimp-windows, build-n-cache-ogre-windows]
-#     needs: build-n-cache-ogre-windows
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v3
-      with:
-         submodules: true
+#  build-windows:
+#     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
+#     # You can convert this to a matrix build if you need cross-platform coverage.
+#     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+#    # needs: [build-n-cache-assimp-windows, build-n-cache-ogre-windows]
+# #     needs: build-n-cache-ogre-windows
+#     runs-on: windows-latest
+#     steps:
+#     - uses: actions/checkout@v3
+#       with:
+#          submodules: true
 
-    - name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
-      with:
-          platform: x64   
+#     - name: Set up MinGW
+#       uses: egor-tensin/setup-mingw@v2
+#       with:
+#           platform: x64   
 
-    - name: Install Qt
-      uses: jurplel/install-qt-action@v3
-      with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_mingw'
-        #arch: 'win64_msvc2019_64'
-        tools: 'tools_cmake'
+#     - name: Install Qt
+#       uses: jurplel/install-qt-action@v3
+#       with:
+#         aqtversion: '==2.1.*'
+#         version: '6.5.0'
+#         host: 'windows'
+#         target: 'desktop'
+#         arch: 'win64_mingw'
+#         #arch: 'win64_msvc2019_64'
+#         tools: 'tools_cmake'
 
-    - name: Cache Assimp
-      id: cache-assimp-windows
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-windows
-      with:
-        # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: C:/Program Files (x86)/Assimp
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache Assimp
+#       id: cache-assimp-windows
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-assimp-windows
+#       with:
+#         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
+#         path: C:/Program Files (x86)/Assimp
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Cache Ogre
-      id: cache-ogre-windows
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-windows
-      with:
-        path: ${{github.workspace}}/ogre-build/SDK
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+#     - name: Cache Ogre
+#       id: cache-ogre-windows
+#       uses: actions/cache@v3
+#       env:
+#         cache-name: cache-ogre-windows
+#       with:
+#         path: ${{github.workspace}}/ogre-build/SDK
+#         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+#         key: ${{ runner.os }}-build-${{ env.cache-name }}
         
-    - run: dir ${{github.workspace}}/ogre-build/SDK/bin/
-    - run: dir C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin
+#     - run: dir ${{github.workspace}}/ogre-build/SDK/bin/
+#     - run: dir C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin
     
-    - name: Configure CMake
-      env:
-         OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
-         CMAKE_GENERATOR: "MinGW Makefiles"
-      run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/
-      shell: cmd
+#     - name: Configure CMake
+#       env:
+#          OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
+#          CMAKE_GENERATOR: "MinGW Makefiles"
+#       run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/
+#       shell: cmd
 
-    - name: Build
-      # Build your program with the given configuration
-      run: |
-            dir
-            mingw32-make install -j8
+#     - name: Build
+#       # Build your program with the given configuration
+#       run: |
+#             dir
+#             mingw32-make install -j8
 
-    - name: Copy gcc dll to the binary folder
-      run: |
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
+#     - name: Copy gcc dll to the binary folder
+#       run: |
+#             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
+#             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
+#             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
+#             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
+#             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
-    - uses: actions/upload-artifact@v3
-      with:
-        name: windows-binaries
-        path: ${{github.workspace}}/bin
+#     - uses: actions/upload-artifact@v3
+#       with:
+#         name: windows-binaries
+#         path: ${{github.workspace}}/bin
 
 ####################################################################
 # Linux Deploy
@@ -367,6 +367,8 @@ jobs:
         files: ${{github.workspace}}/bin
         outPath: QtMeshEditor-Linux.tar.gz
 
+    - run: ls ${{github.workspace}}/bin
+    
     - run: sudo cpack -G DEB -C ${{github.workspace}}/bin -P QtMeshEditor-Linux.deb
 
     - uses: actions/upload-artifact@v3
@@ -375,6 +377,7 @@ jobs:
         path: |
                ${{github.workspace}}/QtMeshEditor-Linux.tar.gz
                ${{github.workspace}}/QtMeshEditor-Linux.deb
+               ${{github.workspace}}/bin
         #path: ${{github.workspace}}/bin
 
 #     - name: Test
@@ -384,7 +387,7 @@ jobs:
 #       run: ctest -C ${{env.BUILD_TYPE}}
 
 ####################################################################
-# MacOS Deploy
+# MacOS Deploy - ok
 ####################################################################
 
 #  build-n-cache-assimp-macos:
