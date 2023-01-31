@@ -104,7 +104,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                 }
                 catch(...)
                 {
-                    Ogre::LogManager::getSingleton().logMessage("Tentando com assimp...");
+                    Ogre::LogManager::getSingleton().logMessage("Trying with assimp...");
                     goto assimp;
                 }
                 Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, mesh);

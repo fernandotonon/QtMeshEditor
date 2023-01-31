@@ -13,10 +13,10 @@
 CMAKE_POLICY(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 1.5.1 LANGUAGES CXX)
+project(QtMeshEditor VERSION 1.5.2 LANGUAGES CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
-set(QTMESHEDITOR_VERSION_STRING "\"1.5.1\"")
+set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
 
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
 
