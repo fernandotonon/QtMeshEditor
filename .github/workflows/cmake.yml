@@ -152,7 +152,7 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         
     - run: dir ${{github.workspace}}/ogre-build/SDK/bin/
-    - run: dir C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw32/bin
+    - run: dir C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin
     
     - name: Configure CMake
       env:
