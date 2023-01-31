@@ -20,6 +20,10 @@ jobs:
 #             SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
 #             SLACK_MESSAGE: "Building QtMeshEditor in GitHub Actions - works! :D"
 
+####################################################################
+# Windows Deploy
+####################################################################
+
 #  build-n-cache-assimp-windows:
 #    runs-on: windows-latest
 #    steps:
@@ -166,12 +170,23 @@ jobs:
       run: |
             dir
             mingw32-make install -j8
-    
+
+    - name: Copy gcc dll to the binary folder
+      run: |
+            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
+            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
+            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
+            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin
+
     - uses: actions/upload-artifact@v3
       with:
         name: windows-binaries
         path: ${{github.workspace}}/bin
-        
+
+####################################################################
+# Linux Deploy
+####################################################################
+
 #  build-n-cache-assimp-linux:
 #     runs-on: ubuntu-latest
 #     steps:
@@ -366,6 +381,10 @@ jobs:
 #       # Execute tests defined by the CMake configuration.
 #       # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
 #       run: ctest -C ${{env.BUILD_TYPE}}
+
+####################################################################
+# MacOS Deploy
+####################################################################
 
 #  build-n-cache-assimp-macos:
 #     runs-on: macos-latest
