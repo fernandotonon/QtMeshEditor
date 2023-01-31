@@ -190,11 +190,9 @@ install(TARGETS ${APP_NAME}
     RUNTIME DESTINATION bin COMPONENT Runtime
     )
 
-set(CPACK_PACKAGE_NAME QtMeshEditor)
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
+set(CPACK_PACKAGE_NAME "QtMeshEditor")
 set(CPACK_PACKAGE_VENDOR "Fernando")
-set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Fernando Tonon <tonon.fernando@hotmail.com>")
-include(CPack)
+set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
 
 IF(APPLE)
     # Note Mac specific extension .app
@@ -208,8 +206,15 @@ IF(APPLE)
 #        fixup_bundle(\"${APPS}\" \"\" \"${DIRS}\" IGNORE_ITEM \"@rpath/libassimp.5.dylib\")")
     set(CPACK_GENERATOR "DragNDrop")
 ELSEIF(UNIX)
+    set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Fernando Tonon <tonon.fernando@hotmail.com>")
     set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
     set(CPACK_VERBATIM_VARIABLES ON)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/QtMeshEditor")
     set(CPACK_DEBIAN_PACKAGE_DEPENDS libc6 libstdc++6 libgcc-s1)
+elseif(WIN32)
+    # Define NSIS installation types
+    set(CPACK_ALL_INSTALL_TYPES Full Developer)
 ENDIF()
+
+# Must be after the last CPACK macros
+include(CPack)
