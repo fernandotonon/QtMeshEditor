@@ -176,7 +176,8 @@ jobs:
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin
+            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
+            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
     - uses: actions/upload-artifact@v3
       with:
