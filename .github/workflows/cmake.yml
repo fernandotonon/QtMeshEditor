@@ -372,8 +372,8 @@ jobs:
     - run: ls ${{github.workspace}}/bin
         
     - name: Pack
-      env: |
-            LD_LIBRARY_PATH:/opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
+      env: 
+         LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
       run: |
             sudo apt install libxcb-cursor0
             sudo cpack -G DEB -C ${{github.workspace}}/bin -P QtMeshEditor-Linux.deb
