@@ -170,12 +170,10 @@ ELSEIF(UNIX)
         INSTALL(FILES ${QT_DIR}/../../libicui18n.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
         INSTALL(FILES ${QT_DIR}/../../libicuuc.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
         INSTALL(FILES ${QT_DIR}/../../libicudata.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
-        INSTALL(FILES ${QT_DIR}/../../libxcb-cursor.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
 
         INSTALL(FILES ${QT_DIR}/../../libicui18n.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
         INSTALL(FILES ${QT_DIR}/../../libicuuc.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
         INSTALL(FILES ${QT_DIR}/../../libicudata.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
-        INSTALL(FILES ${QT_DIR}/../../libxcb-cursor.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
 
         SET (QTPLATFORMSLIST
                 qminimal
