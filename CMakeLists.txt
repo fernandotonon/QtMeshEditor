@@ -213,6 +213,7 @@ elseif(UNIX)
     set(CPACK_VERBATIM_VARIABLES ON)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/QtMeshEditor")
 #    set(CPACK_DEBIAN_PACKAGE_DEPENDS libc6 libstdc++6 libgcc-s1)
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 elseif(WIN32)
     # Define NSIS installation types
     set(CPACK_ALL_INSTALL_TYPES Full Developer)
