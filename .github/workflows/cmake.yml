@@ -370,7 +370,9 @@ jobs:
         outPath: QtMeshEditor-Linux.tar.gz
 
     - run: ls ${{github.workspace}}/bin
-        
+    
+    - run: sudo chmod -R 777 /usr/local/lib       
+    
     - name: Pack
       env: 
          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
