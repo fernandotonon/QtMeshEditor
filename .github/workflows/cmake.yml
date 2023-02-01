@@ -302,9 +302,7 @@ jobs:
     - uses: actions/checkout@v3
       with:
          submodules: true
-         
-    - run: export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
-    
+           
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
@@ -318,9 +316,7 @@ jobs:
 
     - run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/bin/
     - run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/
-    
-    - run: sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /usr/local/lib/
-    
+        
     - name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
@@ -374,12 +370,11 @@ jobs:
         outPath: QtMeshEditor-Linux.tar.gz
 
     - run: ls ${{github.workspace}}/bin
-    
-    - run: sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ ${{github.workspace}}/bin
-    - run: sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ ${{github.workspace}}/lib
-    - run: sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ ${{github.workspace}}
-    
-    - run: sudo cpack -G DEB -C ${{github.workspace}}/bin -P QtMeshEditor-Linux.deb
+        
+    - name: Pack
+      run: |
+            export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
+            sudo cpack -G DEB -C ${{github.workspace}}/bin -P QtMeshEditor-Linux.deb
 
     - uses: actions/upload-artifact@v3
       with:
