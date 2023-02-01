@@ -376,8 +376,7 @@ jobs:
         name: linux-binaries
         path: |
                ${{github.workspace}}/QtMeshEditor-Linux.tar.gz
-               ${{github.workspace}}/QtMeshEditor-Linux.deb
-               ${{github.workspace}}/bin
+               ${{github.workspace}}/*.deb
         #path: ${{github.workspace}}/bin
 
 #     - name: Test
