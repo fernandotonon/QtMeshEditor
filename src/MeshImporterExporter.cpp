@@ -118,7 +118,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                     Ogre::AssimpLoader::Options opts;
                     opts.customAnimationName = "";
                     opts.animationSpeedModifier = 1.0;
-                    opts.postProcessSteps = 0;
+                    opts.postProcessSteps = 10;
                     opts.maxEdgeAngle = 30;
                     opts.params = (Ogre::AssimpLoader::LP_CUT_ANIMATION_WHERE_NO_FURTHER_CHANGE|Ogre::AssimpLoader::LP_QUIET_MODE);
 

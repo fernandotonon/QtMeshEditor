@@ -155,7 +155,8 @@ ELSEIF(UNIX)
         Qt${QT_VERSION_MAJOR}XcbQpa
         Qt${QT_VERSION_MAJOR}EglFSDeviceIntegration
         Qt${QT_VERSION_MAJOR}DBus
-        Qt${QT_VERSION_MAJOR}WaylandClient)
+        Qt${QT_VERSION_MAJOR}WaylandClient
+        Qt${QT_VERSION_MAJOR}OpenGL)
         FOREACH(qtlib ${QTLIBLIST})
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION} DESTINATION ${CMAKE_INSTALL_PREFIX})
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
@@ -169,6 +170,12 @@ ELSEIF(UNIX)
         INSTALL(FILES ${QT_DIR}/../../libicui18n.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
         INSTALL(FILES ${QT_DIR}/../../libicuuc.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
         INSTALL(FILES ${QT_DIR}/../../libicudata.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
+        INSTALL(FILES ${QT_DIR}/../../libxcb-cursor.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
+
+        INSTALL(FILES ${QT_DIR}/../../libicui18n.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
+        INSTALL(FILES ${QT_DIR}/../../libicuuc.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
+        INSTALL(FILES ${QT_DIR}/../../libicudata.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
+        INSTALL(FILES ${QT_DIR}/../../libxcb-cursor.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
 
         SET (QTPLATFORMSLIST
                 qminimal
