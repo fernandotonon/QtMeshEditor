@@ -373,6 +373,10 @@ jobs:
 
     - run: ls ${{github.workspace}}/bin
     
+    - run: sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ ${{github.workspace}}/bin
+    - run: sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ ${{github.workspace}}/lib
+    - run: sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ ${{github.workspace}}
+    
     - run: sudo cpack -G DEB -C ${{github.workspace}}/bin -P QtMeshEditor-Linux.deb
 
     - uses: actions/upload-artifact@v3
