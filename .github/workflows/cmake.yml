@@ -317,7 +317,7 @@ jobs:
     - run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/bin/
     - run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/
     
-    - run: sudo cp /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /usr/local/lib/
+    - run: sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /usr/local/lib/
     
     - name: Cache Assimp
       id: cache-assimp-linux
