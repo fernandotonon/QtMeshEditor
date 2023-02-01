@@ -303,6 +303,8 @@ jobs:
       with:
          submodules: true
          
+    - run: export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
+    
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
