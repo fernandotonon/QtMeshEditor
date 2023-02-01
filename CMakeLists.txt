@@ -154,8 +154,13 @@ ELSEIF(UNIX)
         SET (QTLIBLIST ${QTLIBLIST}
         Qt${QT_VERSION_MAJOR}XcbQpa)
         FOREACH(qtlib ${QTLIBLIST})
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION} DESTINATION ${CMAKE_INSTALL_PREFIX})
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so DESTINATION ${CMAKE_INSTALL_PREFIX})
+                #cpack uses the /lib in the RPATH. TODO: fix it to install to a single location
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/lib)
         ENDFOREACH(qtlib)
 
         SET (QTPLATFORMSLIST
@@ -194,6 +199,8 @@ install(TARGETS ${APP_NAME}
 set(CPACK_PACKAGE_NAME "QtMeshEditor")
 set(CPACK_PACKAGE_VENDOR "Fernando")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
+set(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+set(CPACK_RESOURCE_FILE_README "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 
 if(APPLE)
     # Note Mac specific extension .app
