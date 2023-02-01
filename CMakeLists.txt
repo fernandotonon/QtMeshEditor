@@ -10,7 +10,7 @@
 ##############################################################
 #  Versions
 ##############################################################
-CMAKE_POLICY(SET CMP0005 NEW)
+cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
 project(QtMeshEditor VERSION 1.5.2 LANGUAGES CXX)
@@ -155,6 +155,7 @@ ELSEIF(UNIX)
         Qt${QT_VERSION_MAJOR}XcbQpa)
         FOREACH(qtlib ${QTLIBLIST})
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so DESTINATION ${CMAKE_INSTALL_PREFIX})
         ENDFOREACH(qtlib)
 
         SET (QTPLATFORMSLIST
@@ -194,7 +195,7 @@ set(CPACK_PACKAGE_NAME "QtMeshEditor")
 set(CPACK_PACKAGE_VENDOR "Fernando")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "A graphical editor for Ogre3D mesh, material and skeleton")
 
-IF(APPLE)
+if(APPLE)
     # Note Mac specific extension .app
     set(APPS "\${CMAKE_INSTALL_PREFIX}/${CMAKE_PROJECT_NAME}.app")
 
@@ -205,16 +206,17 @@ IF(APPLE)
 #    install(CODE "include(BundleUtilities)
 #        fixup_bundle(\"${APPS}\" \"\" \"${DIRS}\" IGNORE_ITEM \"@rpath/libassimp.5.dylib\")")
     set(CPACK_GENERATOR "DragNDrop")
-ELSEIF(UNIX)
+elseif(UNIX)
+    # For now, only linux is using CPACK
     set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Fernando Tonon <tonon.fernando@hotmail.com>")
     set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
     set(CPACK_VERBATIM_VARIABLES ON)
     set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/QtMeshEditor")
-    set(CPACK_DEBIAN_PACKAGE_DEPENDS libc6 libstdc++6 libgcc-s1)
+#    set(CPACK_DEBIAN_PACKAGE_DEPENDS libc6 libstdc++6 libgcc-s1)
 elseif(WIN32)
     # Define NSIS installation types
     set(CPACK_ALL_INSTALL_TYPES Full Developer)
-ENDIF()
+endif()
 
 # Must be after the last CPACK macros
 include(CPack)
