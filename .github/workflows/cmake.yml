@@ -312,9 +312,11 @@ jobs:
         target: 'desktop'
         arch: 'gcc_64'
 
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
+    - run: sudo chmod -R 777 /usr/local
 
+    - run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/bin/
+    - run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/
+    
     - name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
