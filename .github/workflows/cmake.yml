@@ -378,8 +378,9 @@ jobs:
          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
       run: |
             sudo apt install libxcb-cursor0
-            sudo cp ${{github.workspace}}/bin/Plugin_OctreeZone.so.14.0 /usr/local/lib/Plugin_OctreeZone.so.14.0
+            sudo cp -R ${{github.workspace}}/bin/Plugin_PCZSceneManager.* /usr/local/lib/
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /usr/local/lib/
+            sudo ls /usr/local/lib/
             sudo cpack -G DEB -C ${{github.workspace}}/bin -P QtMeshEditor-Linux.deb
 
     - uses: actions/upload-artifact@v3
