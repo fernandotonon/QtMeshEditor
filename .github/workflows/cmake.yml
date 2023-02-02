@@ -382,6 +382,9 @@ jobs:
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* /usr/local/lib/
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* /usr/local/lib/ 
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* /usr/local/lib/ 
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
             sudo ls /usr/local/lib/
             sudo cpack -G DEB -C ./bin -P QtMeshEditor.deb
 
