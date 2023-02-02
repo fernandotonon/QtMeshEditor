@@ -298,6 +298,8 @@ jobs:
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
 #     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     runs-on: ubuntu-latest
+    env: 
+          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
     steps:
     - uses: actions/checkout@v3
       with:
