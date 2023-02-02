@@ -21,7 +21,7 @@ jobs:
 #             SLACK_MESSAGE: "Building QtMeshEditor in GitHub Actions - works! :D"
 
 ####################################################################
-# Windows Deploy - ok
+# Windows Deploy
 ####################################################################
 
 #  build-n-cache-assimp-windows:
@@ -298,8 +298,6 @@ jobs:
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
 #     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     runs-on: ubuntu-latest
-    env: 
-         LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
     steps:
     - uses: actions/checkout@v3
       with:
@@ -315,9 +313,6 @@ jobs:
         arch: 'gcc_64'
 
     - run: sudo chmod -R 777 /usr/local
-
-    - run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/bin/
-    - run: ls /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/
         
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -376,8 +371,8 @@ jobs:
     - run: sudo chmod -R 777 /usr/local/lib       
     
     - name: Pack
-      env: 
-         LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
+#       env: 
+#          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
       run: |
             sudo apt install libxcb-cursor0
             sudo cp -R ${{github.workspace}}/bin/Plugin_PCZSceneManager.* /usr/local/lib/
@@ -403,7 +398,7 @@ jobs:
 #       run: ctest -C ${{env.BUILD_TYPE}}
 
 ####################################################################
-# MacOS Deploy - ok
+# MacOS Deploy 
 ####################################################################
 
 #  build-n-cache-assimp-macos:
