@@ -490,104 +490,105 @@ jobs:
 #             sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2/ -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
 #             sudo make install -j8
 
-#  build-macos:
-#     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
-#     # You can convert this to a matrix build if you need cross-platform coverage.
-#     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
-#   #  needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
-# #     needs: [build-n-cache-ogre-macos]
-#     runs-on: macos-latest
-#     steps:
-#     - uses: actions/checkout@v3
-#       with:
-#          submodules: true
+ build-macos:
+    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
+    # You can convert this to a matrix build if you need cross-platform coverage.
+    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+  #  needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
+#     needs: [build-n-cache-ogre-macos]
+    runs-on: macos-latest
+    steps:
+    - uses: actions/checkout@v3
+      with:
+         submodules: true
          
-#     - run: |
-#             ls ${{github.workspace}}/src/dependencies/ogre-procedural
-#             cd ${{github.workspace}}/src/dependencies/ogre-procedural
-#             git checkout 978e34ffc4079b804bcde3a021686f5dec36e839
-#             git branch
-#             git status
+    - run: |
+            ls ${{github.workspace}}/src/dependencies/ogre-procedural
+            cd ${{github.workspace}}/src/dependencies/ogre-procedural
+            git checkout 978e34ffc4079b804bcde3a021686f5dec36e839
+            git branch
+            git status
     
-#     - name: Install Qt
-#       uses: jurplel/install-qt-action@v3
-#       with:
-#         aqtversion: '==2.1.*'
-#         version: '6.5.0'
-#         host: 'mac'
-#         target: 'desktop'
-#         arch: 'clang_64'
-#         tools: 'tools_cmake'
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        aqtversion: '==2.1.*'
+        version: '6.5.0'
+        host: 'mac'
+        target: 'desktop'
+        arch: 'clang_64'
+        tools: 'tools_cmake'
 
-#     - name: Cache Assimp
-#       id: cache-assimp-macos
-#       uses: actions/cache@v3
-#       env:
-#         cache-name: cache-assimp-macos
-#       with:
-#         path: |
-#                /usr/local/lib/cmake/
-#                /usr/local/include/assimp
-#                /usr/local/lib/pkgconfig/assimp.pc
-#                /usr/local/lib/libassimp*
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+    - name: Cache Assimp
+      id: cache-assimp-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-macos
+      with:
+        path: |
+               /usr/local/lib/cmake/
+               /usr/local/include/assimp
+               /usr/local/lib/pkgconfig/assimp.pc
+               /usr/local/lib/libassimp*
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
       
-#     - name: Cache Ogre
-#       id: cache-ogre-macos
-#       uses: actions/cache@v3
-#       env:
-#         cache-name: cache-ogre-macos
-#       with:
-#         path: ${{github.workspace}}/ogre/SDK
-#         key: ${{ runner.os }}-build-${{ env.cache-name }}
+    - name: Cache Ogre
+      id: cache-ogre-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-macos
+      with:
+        path: ${{github.workspace}}/ogre/SDK
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-#     - name: Configure CMake
-#       env:
-#          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
-#       run: |
-#             sudo cmake -S . \
-#             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-#             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
-#             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
-#             -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6GuiTools \
-#             -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/ 
+    - name: Configure CMake
+      env:
+         OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
+      run: |
+            sudo cmake -S . \
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
+            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
+            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6GuiTools \
+            -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/ 
     
-#     - name: Build
-#       # Build your program with the given configuration
-#       run: |
-#             sudo make install -j8
+    - name: Build
+      # Build your program with the given configuration
+      run: |
+            sudo make install -j8
 
-#     - name: copy Qt libs to app folder
-#       run: |
-#             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
-#             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
-#             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
-#             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
-#             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
-#     - run: sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
-#     - run: sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
-#     - run: sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
-#     - run: sudo mkdir ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
-#     - run: sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
-#     - run: sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
-#     - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+    - name: copy Qt libs to app folder
+      run: |
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
+            sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
+    - run: sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
+    - run: sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
+    - run: sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
+    - run: sudo mkdir ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
+    - run: sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
+    - run: sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
+    - run: sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
-#     - name: Pack
-#       run: | 
-#             brew install create-dmg
-#             sudo create-dmg \
-#             --volname "QtMeshEditor Installer" \
-#             --volicon "${{github.workspace}}/resources/icon.icns" \
-#             --window-pos 200 120 \
-#             --window-size 800 400 \
-#             --icon-size 100 \
-#             --icon "QtMeshEditor.app" 200 190 \
-#             --app-drop-link 600 185 \
-#             QtMeshEditor-MacOS.dmg \
-#             ${{github.workspace}}/bin/QtMeshEditor.app
-# # using create-dmg instead            sudo cpack -G DragNDrop
+    - name: Pack
+      run: | 
+            brew install create-dmg
+            sudo create-dmg \
+            --volname "QtMeshEditor Installer" \
+            --volicon "${{github.workspace}}/resources/icon.icns" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "QtMeshEditor.app" 200 190 \
+            --app-drop-link 600 185 \
+            QtMeshEditor-MacOS.dmg \
+            ${{github.workspace}}/bin/QtMeshEditor.app
+# using create-dmg instead            sudo cpack -G DragNDrop
     
-#     - uses: actions/upload-artifact@v3.1.2
-#       with:
-#         name: QtMeshEditor-MacOS
-#         path: ${{github.workspace}}/QtMeshEditor-MacOS.dmg
+    - uses: actions/upload-artifact@v3.1.2
+      with:
+        name: QtMeshEditor-MacOS
+        path: ${{github.workspace}}/QtMeshEditor-MacOS.dmg
