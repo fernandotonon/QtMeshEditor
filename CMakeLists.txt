@@ -223,7 +223,7 @@ elseif(UNIX)
     set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
     set(CPACK_VERBATIM_VARIABLES ON)
 #    set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/QtMeshEditor")
-#    set(CPACK_DEBIAN_PACKAGE_DEPENDS libc6 libstdc++6 libgcc-s1)
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS libicui18n.so.56 libicuuc.so.56 libicudata.so.56)
     set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
 elseif(WIN32)
     # Define NSIS installation types
