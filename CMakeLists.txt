@@ -161,6 +161,10 @@ ELSEIF(UNIX)
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION} DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
+                
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION} DESTINATION /usr/local/lib)
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION /usr/local/lib)
+                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so DESTINATION /usr/local/lib)
         ENDFOREACH(qtlib)
 
         SET (QTPLATFORMSLIST
