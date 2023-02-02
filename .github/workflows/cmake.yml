@@ -385,11 +385,14 @@ jobs:
             sudo ls /usr/local/lib/
             sudo cpack -G DEB -C ./bin -P QtMeshEditor.deb
 
+    - run: tar -zcvf QtMeshEditor-bin-Linux.tar.gz ./bin
+
     - uses: actions/upload-artifact@v3
       with:
         name: linux-binaries
         path: |
                ${{github.workspace}}/QtMeshEditor-Linux.tar.gz
+               ${{github.workspace}}/QtMeshEditor-bin-Linux.tar.gz
                ${{github.workspace}}/*.deb
         #path: ${{github.workspace}}/bin
 
