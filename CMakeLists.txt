@@ -161,28 +161,7 @@ ELSEIF(UNIX)
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION} DESTINATION ${CMAKE_INSTALL_PREFIX})
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX})
                 INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so DESTINATION ${CMAKE_INSTALL_PREFIX})
-                
-                #cpack uses the /lib in the RPATH. TODO: fix it to install to a single location
-                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION} DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
-                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
-                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
-                
-                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION} DESTINATION /usr/local/lib)
-                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so.${QT_VERSION_MAJOR} DESTINATION /usr/local/lib)
-                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.so DESTINATION /usr/local/lib)
         ENDFOREACH(qtlib)
-
-#        INSTALL(FILES ${QT_DIR}/../../libicui18n.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
-#        INSTALL(FILES ${QT_DIR}/../../libicuuc.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
-#        INSTALL(FILES ${QT_DIR}/../../libicudata.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX})
-
-#        INSTALL(FILES ${QT_DIR}/../../libicui18n.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
-#        INSTALL(FILES ${QT_DIR}/../../libicuuc.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
-#        INSTALL(FILES ${QT_DIR}/../../libicudata.so.56 DESTINATION ${CMAKE_INSTALL_PREFIX}/../lib)
-        
-#        INSTALL(FILES ${QT_DIR}/../../libicui18n.so.56 DESTINATION /usr/local/lib)
-#        INSTALL(FILES ${QT_DIR}/../../libicuuc.so.56 DESTINATION /usr/local/lib)
-#        INSTALL(FILES ${QT_DIR}/../../libicudata.so.56 DESTINATION /usr/local/lib)
 
         SET (QTPLATFORMSLIST
                 qminimal
