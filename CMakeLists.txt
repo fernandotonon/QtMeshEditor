@@ -10,6 +10,7 @@
 ##############################################################
 #  Versions
 ##############################################################
+cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
@@ -28,7 +29,6 @@ set(CMAKE_CXX_STANDARD 17)
 if(WIN32)
     cmake_policy(SET CMP0020 NEW)   # to avoid cmake warning
 endif()
-cmake_minimum_required(VERSION 3.25.0)
 
 enable_language(CXX)
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
