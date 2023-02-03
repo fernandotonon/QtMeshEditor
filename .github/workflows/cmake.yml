@@ -382,7 +382,7 @@ jobs:
             mkdir -p ./pack-deb/usr/local/lib/
             mkdir ./pack-deb/DEBIAN/
             touch ./pack-deb/DEBIAN/control
-            echo -e 'Package: QtMeshEditor \nVersion: 1.5.2 \nArchitecture: arm64 \nMaintainer: Fernando Tonon de Rossi <tonon.fernando@hotmail.com> \nDescription: It is a graphical editor for Ogre\'s mesh and material \n I\'ve made this editor to make it easier to change the meshes instead of using the meshmagick and meshupgrader, it is not finished yet, but the main operations are implemented, I hope it helps someone... \:\)\n' >> ./pack-deb/DEBIAN/control
+            echo -e "Package: QtMeshEditor \nVersion: 1.5.2 \nArchitecture: arm64 \nMaintainer: Fernando Tonon de Rossi <tonon.fernando@hotmail.com> \nDescription: It is a graphical editor for Ogre's mesh and material \n I've made this editor to make it easier to change the meshes instead of using the meshmagick and meshupgrader, it is not finished yet, but the main operations are implemented, I hope it helps someone... :)" >> ./pack-deb/DEBIAN/control
             cat ./pack-deb/DEBIAN/control
             cp ./bin/QtMeshEditor ./pack-deb/usr/local/bin/
             cp -R ./bin/cfg/ ./pack-deb/usr/local/bin/cfg/
