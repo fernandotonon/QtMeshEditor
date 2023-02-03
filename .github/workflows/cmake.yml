@@ -375,13 +375,14 @@ jobs:
             mkdir -p ./pack-deb/usr/local/lib/
             mkdir ./pack-deb/DEBIAN/
             touch ./pack-deb/DEBIAN/control
-            echo -e "Package: QtMeshEditor \nVersion: 1.5.2 \nArchitecture: amd64 \nMaintainer: Fernando Tonon de Rossi <tonon.fernando@hotmail.com> \nDescription: It is a graphical editor for Ogre3D mesh and material \n I have made this editor to make it easier to change the meshes instead of using the meshmagick and meshupgrader, it is not finished yet, but the main operations are implemented, I hope it helps someone... :)" >> ./pack-deb/DEBIAN/control
-            cp ./bin/QtMeshEditor ./pack-deb/usr/local/bin/QtMeshEditor/
-            cp -R ./bin/cfg/ ./pack-deb/usr/local/bin/QtMeshEditor/cfg/
-            cp -R ./bin/media/ ./pack-deb/usr/local/bin/QtMeshEditor/media/
-            cp -R ./bin/platforms/ ./pack-deb/usr/local/bin/QtMeshEditor/platforms/
+            echo -e "Package: QtMeshEditor \nVersion: 1.5.2 \nSection: editors \nPriority: extra \nArchitecture: amd64 \nDepends: libxcb-cursor0 \nMaintainer: Fernando Tonon de Rossi <tonon.fernando@hotmail.com> \nDescription: It is a graphical editor for Ogre3D mesh and material \n I have made this editor to make it easier to change the meshes instead of using the meshmagick and meshupgrader, it is not finished yet, but the main operations are implemented, I hope it helps someone... :)" >> ./pack-deb/DEBIAN/control
+            cp ./bin/QtMeshEditor ./pack-deb/usr/local/bin/QtMeshEditor/qtmesheditor
+            cp -R ./bin/cfg/ ./pack-deb/usr/local/bin/QtMeshEditor/
+            cp -R ./bin/media/ ./pack-deb/usr/local/bin/QtMeshEditor/
+            cp -R ./bin/platforms/ ./pack-deb/usr/local/bin/QtMeshEditor/
             cp -R ./bin/*.so* ./pack-deb/usr/local/lib/
-            dpkg-deb --build --root-owner-group pack-deb
+            dpkg-deb --build --root-owner-group pack-deb 
+            mv pack-deb.deb qtmesheditor.deb
     
 #     - name: Pack
 #       env: 
