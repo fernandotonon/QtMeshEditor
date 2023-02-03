@@ -376,7 +376,7 @@ jobs:
             mkdir ./pack-deb/DEBIAN/
             touch ./pack-deb/DEBIAN/control
             echo -e "Package: qtmesheditor \nVersion: 1.5.2 \nSection: editors \nPriority: extra \nInstalled-Size: 757000 \nArchitecture: amd64 \nOrigin: ubuntu \nBugs: https://github.com/fernandotonon/QtMeshEditor/issues \nHomepage: https://github.com/fernandotonon/QtMeshEditor \nDepends: libxcb-cursor0 \nMaintainer: Fernando Tonon de Rossi <tonon.fernando@hotmail.com> \nDescription: It is a graphical editor for Ogre3D mesh and material \n I have made this editor to make it easier to change the meshes instead of using the meshmagick and meshupgrader, it is not finished yet, but the main operations are implemented, I hope it helps someone... :)" >> ./pack-deb/DEBIAN/control
-            cp ./bin/QtMeshEditor ./pack-deb/usr/local/bin/QtMeshEditor/qtmesheditor
+            cp ./bin/QtMeshEditor ./pack-deb/usr/local/bin/qtmesheditor/qtmesheditor
             cp -R ./bin/cfg/ ./pack-deb/usr/local/bin/qtmesheditor/
             cp -R ./bin/media/ ./pack-deb/usr/local/bin/qtmesheditor/
             cp -R ./bin/platforms/ ./pack-deb/usr/local/bin/qtmesheditor/
