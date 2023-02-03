@@ -368,18 +368,18 @@ jobs:
     - name: Manual Pack
       run: |
             echo "Creating folders 'n files"
-            mkdir -p ./pack-deb/usr/local/bin/QtMeshEditor/
-            mkdir ./pack-deb/usr/local/bin/QtMeshEditor/cfg/
-            mkdir ./pack-deb/usr/local/bin/QtMeshEditor/media/
-            mkdir ./pack-deb/usr/local/bin/QtMeshEditor/platforms/
+            mkdir -p ./pack-deb/usr/local/bin/qtmesheditor/
+            mkdir ./pack-deb/usr/local/bin/qtmesheditor/cfg/
+            mkdir ./pack-deb/usr/local/bin/qtmesheditor/media/
+            mkdir ./pack-deb/usr/local/bin/qtmesheditor/platforms/
             mkdir -p ./pack-deb/usr/local/lib/
             mkdir ./pack-deb/DEBIAN/
             touch ./pack-deb/DEBIAN/control
-            echo -e "Package: QtMeshEditor \nVersion: 1.5.2 \nSection: editors \nPriority: extra \nArchitecture: amd64 \nDepends: libxcb-cursor0 \nMaintainer: Fernando Tonon de Rossi <tonon.fernando@hotmail.com> \nDescription: It is a graphical editor for Ogre3D mesh and material \n I have made this editor to make it easier to change the meshes instead of using the meshmagick and meshupgrader, it is not finished yet, but the main operations are implemented, I hope it helps someone... :)" >> ./pack-deb/DEBIAN/control
+            echo -e "Package: qtmesheditor \nVersion: 1.5.2 \nSection: editors \nPriority: extra \nInstalled-Size: 757000 \nArchitecture: amd64 \nOrigin: ubuntu \nBugs: https://github.com/fernandotonon/QtMeshEditor/issues \nHomepage: https://github.com/fernandotonon/QtMeshEditor \nDepends: libxcb-cursor0 \nMaintainer: Fernando Tonon de Rossi <tonon.fernando@hotmail.com> \nDescription: It is a graphical editor for Ogre3D mesh and material \n I have made this editor to make it easier to change the meshes instead of using the meshmagick and meshupgrader, it is not finished yet, but the main operations are implemented, I hope it helps someone... :)" >> ./pack-deb/DEBIAN/control
             cp ./bin/QtMeshEditor ./pack-deb/usr/local/bin/QtMeshEditor/qtmesheditor
-            cp -R ./bin/cfg/ ./pack-deb/usr/local/bin/QtMeshEditor/
-            cp -R ./bin/media/ ./pack-deb/usr/local/bin/QtMeshEditor/
-            cp -R ./bin/platforms/ ./pack-deb/usr/local/bin/QtMeshEditor/
+            cp -R ./bin/cfg/ ./pack-deb/usr/local/bin/qtmesheditor/
+            cp -R ./bin/media/ ./pack-deb/usr/local/bin/qtmesheditor/
+            cp -R ./bin/platforms/ ./pack-deb/usr/local/bin/qtmesheditor/
             cp -R ./bin/*.so* ./pack-deb/usr/local/lib/
             dpkg-deb --build --root-owner-group pack-deb 
             mv pack-deb.deb qtmesheditor.deb
