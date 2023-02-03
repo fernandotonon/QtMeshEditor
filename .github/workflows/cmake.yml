@@ -374,7 +374,7 @@ jobs:
     
     - name: Manual Pack
       run: |
-            echo 'Creating folders \'n files'
+            echo "Creating folders 'n files"
             mkdir -p ./pack-deb/usr/local/bin/
             mkdir ./pack-deb/usr/local/bin/cfg/
             mkdir ./pack-deb/usr/local/bin/media/
