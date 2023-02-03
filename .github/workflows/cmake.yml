@@ -359,18 +359,7 @@ jobs:
             sudo make install -j8
 #            sudo chmod +X ./bin/QtMeshEditor
 
-    - name: Compress action step
-      uses: a7ul/tar-action@v1.1.0
-      id: compress
-      with:
-        command: c
-        cwd: ./
-        files: ./bin
-        outPath: QtMeshEditor-Linux.tar.gz
-
-    - run: ls ${{github.workspace}}/bin
-    
-    - run: sudo chmod -R 777 /usr/local/lib       
+#    - run: sudo chmod -R 777 /usr/local/lib       
     
     - name: Manual Pack
       run: |
@@ -391,21 +380,21 @@ jobs:
             cp -R ./bin/*.so* ./pack-deb/usr/local/lib/
             dpkg-deb --build --root-owner-group pack-deb
     
-    - name: Pack
-      env: 
-          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
-      run: |
-            sudo apt install libxcb-cursor0
-            sudo cp -R ${{github.workspace}}/bin/Plugin_PCZSceneManager.* /usr/local/lib/
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /usr/local/lib/
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* /usr/local/lib/
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* /usr/local/lib/ 
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* /usr/local/lib/ 
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
-            sudo ls /usr/local/lib/
-            sudo cpack -G DEB -C ./bin -P QtMeshEditor.deb
+#     - name: Pack
+#       env: 
+#           LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
+#       run: |
+#             sudo apt install libxcb-cursor0
+#             sudo cp -R ${{github.workspace}}/bin/Plugin_PCZSceneManager.* /usr/local/lib/
+#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /usr/local/lib/
+#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* /usr/local/lib/
+#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* /usr/local/lib/ 
+#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* /usr/local/lib/ 
+#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
+#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
+#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
+#             sudo ls /usr/local/lib/
+#             sudo cpack -G DEB -C ./bin -P QtMeshEditor.deb
 
     - run: tar -zcvf QtMeshEditor-bin-Linux.tar.gz ./bin
 
