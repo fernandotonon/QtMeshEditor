@@ -372,7 +372,7 @@ jobs:
             mkdir ./pack-deb/usr/local/bin/qtmesheditor/cfg/
             mkdir ./pack-deb/usr/local/bin/qtmesheditor/media/
             mkdir ./pack-deb/usr/local/bin/qtmesheditor/platforms/
-            mkdir ./pack-deb/lib/x86_64-linux-gnu/
+            mkdir -p ./pack-deb/lib/x86_64-linux-gnu/
             mkdir -p ./pack-deb/usr/local/lib/
             mkdir ./pack-deb/DEBIAN/
             touch ./pack-deb/DEBIAN/control
