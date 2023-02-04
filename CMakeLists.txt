@@ -196,6 +196,16 @@ ENDIF()
 #endif()
 
 ##############################################################
+#  DEB package
+##############################################################
+if(LINUX)
+configure_file (
+  	"${CMAKE_CURRENT_SOURCE_DIR}/DEBIAN-control.in"
+    "${CMAKE_INSTALL_PREFIX}/DEBIAN-control"
+        @ONLY)
+endif()
+
+##############################################################
 #  CPACK
 ##############################################################
 
@@ -223,6 +233,7 @@ if(APPLE)
 #        fixup_bundle(\"${APPS}\" \"\" \"${DIRS}\" IGNORE_ITEM \"@rpath/libassimp.5.dylib\")")
     set(CPACK_GENERATOR "DragNDrop")
 elseif(UNIX)
+    set(CPACK_GENERATOR "DEB")
     # For now, only linux is using CPACK
     set(CPACK_DEBIAN_PACKAGE_MAINTAINER "Fernando Tonon <tonon.fernando@hotmail.com>")
     set(CPACK_PACKAGE_INSTALL_DIRECTORY ${CPACK_PACKAGE_NAME})
