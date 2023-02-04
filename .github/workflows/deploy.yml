@@ -507,7 +507,12 @@ jobs:
     - uses: actions/checkout@v3
       with:
          submodules: true
-    
+         
+    - run: |
+            ls ${{github.workspace}}/src/dependencies/ogre-procedural
+            cd ${{github.workspace}}/src/dependencies/ogre-procedural
+            git pull
+            
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
