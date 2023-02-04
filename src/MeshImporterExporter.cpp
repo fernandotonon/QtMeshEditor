@@ -118,11 +118,17 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                     Ogre::AssimpLoader::Options opts;
                     opts.customAnimationName = "";
                     opts.animationSpeedModifier = 1.0;
-                    opts.postProcessSteps = 10;
+                    opts.postProcessSteps = 0x1|0x2|0x4|0x8|0x200|0x400|0x4000|0x1000000|0x8000000; // Assimp postprocess.h TODO: import it in the future for using a reliable enum
                     opts.maxEdgeAngle = 30;
                     opts.params = (Ogre::AssimpLoader::LP_CUT_ANIMATION_WHERE_NO_FURTHER_CHANGE|Ogre::AssimpLoader::LP_QUIET_MODE);
 
-                    Ogre::MeshPtr mesh =  Ogre::MeshManager::getSingleton().createManual(file.baseName().toStdString(), "General");
+                    // Get a unique name
+                    auto meshName = file.baseName();
+                    int i = 0;
+                    while(Ogre::MeshManager::getSingleton().getByName(meshName.toStdString())){
+                        meshName = file.baseName() + " (" + std::to_string(++i).data() + ")";
+                    }
+                    Ogre::MeshPtr mesh =  Ogre::MeshManager::getSingleton().createManual(meshName.toStdString(), "General");
                     Ogre::SkeletonPtr skeleton;
                     Ogre::String filePath = file.filePath().toStdString();
 
@@ -134,7 +140,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                             mesh->_notifySkeleton(skeleton);
                             mesh->setSkeletonName(skeleton.get()->getName());
                         }
-                        sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
+                        sn = Manager::getSingleton()->addSceneNode(QString(meshName));
                         mesh = mesh->clone("Mesh_"+sn->getName());
                         Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, mesh);
 

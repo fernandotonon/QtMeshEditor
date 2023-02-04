@@ -168,20 +168,6 @@ ${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralTextureBuffer.h
 ${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPrismGenerator.h
 )
 
-
-##############################################################
-# Determine Ogre version for creating the symlinks in linux
-##############################################################
-#IF(UNIX OR APPLE)
-#  file(READ ${OGRE_INCLUDE_DIR}/OgreBuildSettings.h OGRE_TEMP_VERSION_CONTENT)
-#  get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MAJOR OGRE_VERSION_MAJOR)
-#  get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_MINOR OGRE_VERSION_MINOR)
-#  get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_PATCH OGRE_VERSION_PATCH)
-#  get_preprocessor_entry(OGRE_TEMP_VERSION_CONTENT OGRE_VERSION_NAME OGRE_VERSION_NAME)
-#  set(OGRE_VERSION "${OGRE_VERSION_MAJOR}.${OGRE_VERSION_MINOR}.${OGRE_VERSION_PATCH}")
-#  message("Found Ogre3D ${OGRE_VERSION_NAME} (${OGRE_VERSION})")
-#ENDIF()
-
 ##############################################################
 #  Adding Resources
 ##############################################################
