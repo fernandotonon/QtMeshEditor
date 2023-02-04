@@ -511,6 +511,7 @@ jobs:
     - run: |
             ls ${{github.workspace}}/src/dependencies/ogre-procedural
             cd ${{github.workspace}}/src/dependencies/ogre-procedural
+            git checkout master
             git pull
             
     - name: Install Qt
