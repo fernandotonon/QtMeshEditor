@@ -19,9 +19,9 @@ message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
 if(WIN32 OR APPLE)
-set(OGRE_PLUGIN_DIR "../")
+set(PLUGIN_DIR "../")
 elseif(UNIX)
-set(OGRE_PLUGIN_DIR "/lib/x86_64-linux-gnu/")
+set(PLUGIN_DIR "/lib/x86_64-linux-gnu/")
 endif()
 
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
