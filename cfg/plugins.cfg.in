@@ -1,8 +1,8 @@
 # Defines plugins to load
 
 # Define plugin folder
-# PluginFolder=@OGRE_PLUGIN_DIR@
-PluginFolder=../
+PluginFolder=@OGRE_PLUGIN_DIR@
+# PluginFolder=../
 
 # Define plugins
 Plugin=RenderSystem_GL
