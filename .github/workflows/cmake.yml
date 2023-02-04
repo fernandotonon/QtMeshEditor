@@ -380,6 +380,7 @@ jobs:
             cp ./bin/QtMeshEditor ./pack-deb/usr/share/qtmesheditor/qtmesheditor
             touch ./pack-deb/usr/local/bin/qtmesheditor
             echo "/usr/share/qtmesheditor/qtmesheditor" >> ./pack-deb/usr/local/bin/qtmesheditor
+            sudo chmod 755 ./pack-deb/usr/local/bin/qtmesheditor
             cp -R ./bin/cfg/ ./pack-deb/usr/share/qtmesheditor/
             sudo chmod -R 755 ./pack-deb/usr/share/qtmesheditor/cfg
             cp -R ./bin/media/ ./pack-deb/usr/share/qtmesheditor/
