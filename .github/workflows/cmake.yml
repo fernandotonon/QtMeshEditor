@@ -372,6 +372,7 @@ jobs:
             mkdir ./pack-deb/usr/local/bin/qtmesheditor/cfg/
             mkdir ./pack-deb/usr/local/bin/qtmesheditor/media/
             mkdir ./pack-deb/usr/local/bin/qtmesheditor/platforms/
+            mkdir ./pack-deb/lib/x86_64-linux-gnu/
             mkdir -p ./pack-deb/usr/local/lib/
             mkdir ./pack-deb/DEBIAN/
             touch ./pack-deb/DEBIAN/control
@@ -380,9 +381,9 @@ jobs:
             cp -R ./bin/cfg/ ./pack-deb/usr/local/bin/qtmesheditor/
             cp -R ./bin/media/ ./pack-deb/usr/local/bin/qtmesheditor/
             cp -R ./bin/platforms/ ./pack-deb/usr/local/bin/qtmesheditor/
-            cp -R ./bin/*.so* ./pack-deb/usr/local/lib/
+            cp -R ./bin/*.so* ./pack-deb/lib/x86_64-linux-gnu/
             dpkg-deb --build --root-owner-group pack-deb 
-            mv pack-deb.deb qtmesheditor.deb
+            mv pack-deb.deb qtmesheditor_amd64.deb
     
 #     - name: Pack
 #       env: 
