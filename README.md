@@ -46,6 +46,9 @@ or
 
 Run it calling `qtmesheditor`
 
+#### Windows
+Unpack the binaries and run the `QtMeshEditor.exe` file
+
 ### [Build-from-source](https://github.com/fernandotonon/QtMeshEditor/wiki/How-to-build)
 
 Feel free to contact me, create issues or to contribute ;)
