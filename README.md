@@ -16,6 +16,14 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 * Animation Preview - It shows a list of animations and allows the animation preview.
 * Renaming Animation
 
+### Install from released binaries
+
+#### macOS
+
+* Download and open the .dmg file;
+* Drag and drop the QtMeshEditor to the Applications folder:
+![install_macOS](https://user-images.githubusercontent.com/996529/216797862-2592a40b-5f3d-4907-bcad-dc1feae4ff2f.gif)
+
 ### [Build-from-source](https://github.com/fernandotonon/QtMeshEditor/wiki/How-to-build)
 
 Feel free to contact me, create issues or to contribute ;)
