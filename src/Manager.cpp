@@ -303,20 +303,13 @@ bool Manager::isForbidenNodeName(const QString &_name)
             ||_name.startsWith("Unnamed_")); //TODO find what is this <- Done, it's the cameras's nodes
 }
 
-bool Manager::hasAnimationName(const QString &_name)
+bool Manager::hasAnimationName(Ogre::Entity *entity, const QString &_name)
 {
-    foreach(Ogre::Entity* entity, getEntities())
-    {
-        Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
-        if(set)
-        {
-            Ogre::AnimationStateIterator iter=set->getAnimationStateIterator();
-            while(iter.hasMoreElements())
-            {
-                Ogre::String str = iter.getNext()->getAnimationName();
-                if(_name==str.c_str())
-                    return true;
-            }
+    if(!entity->hasSkeleton()) return false;
+    auto animationStateSet = entity->getAllAnimationStates();
+    for (auto animState : animationStateSet->getAnimationStates()) {
+        if (_name.toStdString() == animState.second->getAnimationName()) {
+            return true;
         }
     }
     return false;
