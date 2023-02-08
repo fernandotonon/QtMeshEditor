@@ -4,11 +4,11 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 
 [![Deploy](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml/badge.svg)](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml)
 
-### Preview
+### :movie_camera: Preview
 
 ![QtMeshEditor1 5 0](https://user-images.githubusercontent.com/996529/210196572-7b49da4c-c5db-406d-9ab4-7fa20bacb6ae.gif)
 
-### Features
+### :sparkles: Features
 * Translation, Scale, and Rotation of meshes (Easier than OgreMeshMagick)
 * Material Editor - It shows in real time the new material on the model
 * Change the material of the mesh - It allows the change of the mesh material
@@ -18,7 +18,7 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 * Animation Preview - It shows a list of animations and allows the animation preview.
 * Renaming Animation
 
-### Install from released binaries
+### :computer: Install from release binaries
 #### macOS
 
 For now, it is only distributed using the dmg file. When it gets notable enough for homebrew (>30 forks, >30 watchers, or >75 stars), I want to distribute it there.
