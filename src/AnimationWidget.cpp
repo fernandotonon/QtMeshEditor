@@ -222,18 +222,18 @@ void AnimationWidget::on_animTable_cellDoubleClicked(int row, int column)
             return;
         }
 
-        if(Manager::getSingleton()->hasAnimationName(newName))
-        {
-            QMessageBox::warning(this,tr("Error when renaming the animation"),tr("This name already exists."),QMessageBox::Ok);
-            return;
-        }
-
         Ogre::Entity* entity = 0;
         entity = (Ogre::Entity*)ui->animTable->model()->data(ui->animTable->model()->index(row,0), ENTITY_DATA).value<void *>();
 
         disableAllSkeletonDebug();
         if(entity)
         {
+            if(Manager::getSingleton()->hasAnimationName(entity, newName))
+            {
+                QMessageBox::warning(this,tr("Error when renaming the animation"),tr("This name already exists."),QMessageBox::Ok);
+                return;
+            }
+
             if(SkeletonTransform::renameAnimation(entity,oldName,newName))
             {
                 updateAnimationTable();

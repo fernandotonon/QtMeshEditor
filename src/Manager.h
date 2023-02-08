@@ -67,7 +67,7 @@ public:
 
     bool                isForbidenNodeName(const QString &_name);
 
-    bool                hasAnimationName(const QString &_name);
+    bool                hasAnimationName(Ogre::Entity *entity, const QString &_name);
 
     bool                isValidFileExtention(QString &_uri);
     QString             getValidFileExtention();
