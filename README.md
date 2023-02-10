@@ -25,6 +25,7 @@ For now, it is only distributed using the dmg file. When it gets notable enough 
 
 * Download and open the .dmg file;
 * Drag and drop the QtMeshEditor to the Applications folder:
+
 ![install_macOS](https://user-images.githubusercontent.com/996529/216797862-2592a40b-5f3d-4907-bcad-dc1feae4ff2f.gif)
 
 #### :penguin: Linux (ubuntu)
@@ -38,7 +39,7 @@ Then there are a few options for installing it:
 `sudo dpkg -i qtmesheditor_amd64.deb`
 
 * Using the Software Install:
-![image](https://user-images.githubusercontent.com/996529/216799515-51494c16-c420-4535-a898-5b915a340c88.png)
+<img width="600" src="https://user-images.githubusercontent.com/996529/216799515-51494c16-c420-4535-a898-5b915a340c88.png">
 
 Remove with 
 
