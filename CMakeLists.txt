@@ -4,9 +4,7 @@
 #
 # - OGRE_HOME (C:\OgreSDK)
 # - CMAKE_PREFIX_PATH (to Qt <version>\<compiler>\lib\cmake folder)
-# - OgreProcedural_HOME (Ogre Procedural SDK Folder)
 #
-# TODO: Add ogre-procedural as dependency
 ##############################################################
 #  Versions
 ##############################################################
@@ -14,7 +12,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 1.5.2 LANGUAGES CXX)
+project(QtMeshEditor VERSION 1.6.0 LANGUAGES CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -65,9 +63,9 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 ##############################################################
 #Find Qt Packages
 find_package(QT NAMES Qt6 Qt5)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick)
 if (NOT Qt6_FOUND)
-    find_package(Qt5 5.15 REQUIRED COMPONENTS Core Widgets Gui)
+    find_package(Qt5 5.15 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick)
 endif()
 
 if(UNIX)
@@ -81,6 +79,8 @@ SET (QTLIBLIST
     Qt${QT_VERSION_MAJOR}Gui
     Qt${QT_VERSION_MAJOR}Core
     Qt${QT_VERSION_MAJOR}Widgets
+    Qt${QT_VERSION_MAJOR}QuickWidgets
+    Qt${QT_VERSION_MAJOR}Quick
 )
 FOREACH(qtlib ${QTLIBLIST})
         include_directories(${${qtlib}_INCLUDE_DIRS})
@@ -106,8 +106,6 @@ endif()
 ##############################################################
 #  Find Ogre
 ##############################################################
-# We provide a FindOgre.cmake as the one provided by Ogre has a bug on linux (version number in the default install path)
-
 find_package(OGRE REQUIRED)
 
 message("OGRE_INCLUDE_DIRS: ")
@@ -124,6 +122,17 @@ if(FIX_NEED_ZLIB)
         set(OGRE_LIBRARIES ${OGRE_LIBRARIES} ${ZLIB_LIBRARIES})
 endif()
 
+##############################################################
+#  Find Assimp
+##############################################################
+find_package(assimp REQUIRED)
+if (assimp_FOUND)
+    message("Assimp Found")
+    set(ASSIMP_LIBRARY "assimp")
+    add_library(${ASSIMP_LIBRARY} SHARED IMPORTED)
+    set_target_properties(${ASSIMP_LIBRARY} PROPERTIES IMPORTED_LOCATION "${ASSIMP_LIBRARY_DIRS}/libassimp.so")
+    include_directories(${ASSIMP_INCLUDE_DIRS})
+endif(assimp_FOUND)
 ##############################################################
 #  Adding ReadMe file
 ##############################################################

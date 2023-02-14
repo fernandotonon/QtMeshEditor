@@ -68,7 +68,7 @@ Manager* Manager:: m_pSingleton = 0;
 
 QString Manager::mValidFileExtention = ".mesh .dae .blend .3ds .ase .obj .ifc .xgl .zgl .ply .dxf .lwo "\
         ".lws .lxo .stl .x .ac .ms3d .cob .scn .bvh .csm .xml .irrmesh .irr .mdl .md2 .md3 "\
-        ".pk3 .mdc .md5 .smd .vta .m3 .3d .b3d .q3d .q3s .nff .nff .off .raw .ter .mdl .hmp .ndo .fbx .glb .gltf";
+        ".pk3 .mdc .md5 .txt .smd .vta .m3 .3d .b3d .q3d .q3s .nff .nff .off .raw .ter .mdl .hmp .ndo .fbx .glb .gltf";
 
 ////////////////////////////////////////
 /// Static Member to build & destroy

@@ -42,6 +42,7 @@
 #include "MaterialWidget.h"
 #include "AnimationWidget.h"
 #include "SelectionSet.h"
+#include "animationcontrolwidget.h"
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow)
@@ -84,9 +85,11 @@ MainWindow::MainWindow(QWidget *parent) :
     customPaletteColorDialog->setOption(QColorDialog::DontUseNativeDialog);
     QObject::connect(customPaletteColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Custom_Palette_Color_Selected(const QColor &)));
 
-    ///// TODO Improve the main loop !!!!
+    ///// Workaround, when using mRoot->startRendering() there's a flickering effect on the grid
     m_pTimer = new QTimer(this);
-    connect(m_pTimer, SIGNAL(timeout()), this, SLOT(ogreUpdate()));
+    connect(m_pTimer, &QTimer::timeout, this, [this](){
+        m_pRoot->renderOneFrame();
+    });
     m_pTimer->start(0);
 }
 /////////////////////////// TODO Clean up the code of MainWindow
@@ -223,6 +226,23 @@ void MainWindow::initToolBar()
     ui->tabWidget->addTab(pAnimationWidget, tr("Animation"));
     //connect(m_pTransformWidget, SIGNAL(selectionChanged(QString)), pAnimationWidget, SLOT(updateAnimationTable()));
     connect(pAnimationWidget,SIGNAL(changeAnimationState(bool)),this,SLOT(setPlaying(bool)));
+    connect(ui->tabWidget,&QTabWidget::currentChanged,this,[=](int index){
+        if(index==3){
+            // Add Animation Control Widget to the bottom of the main window
+            AnimationControlWidget *pAnimationControlWidget = new AnimationControlWidget(this);
+            addDockWidget(Qt::BottomDockWidgetArea, pAnimationControlWidget);
+        } else {
+            // Remove Animation Control Widget from the bottom of the main window
+            QList<QDockWidget*> dockWidgets = findChildren<QDockWidget*>();
+            for (int i = 0; i < dockWidgets.size(); ++i) {
+                if (dockWidgets.at(i)->objectName() == "AnimationControlWidget") {
+                    removeDockWidget(dockWidgets.at(i));
+                    dockWidgets.at(i)->deleteLater();
+                }
+            }
+        }
+    });
+    
 
     // Viewport
     connect(ui->actionAdd_Viewport, SIGNAL(triggered()), this, SLOT(createEditorViewport()));
@@ -263,13 +283,6 @@ const QPalette &MainWindow::darkPalette()
     return (*darkPalette);
 }
 
-// TODO we have to make a choice : use the standard Ogre loop (no timer, mRoot->startRendering();)
-// or keep a manual loop with a timer or another thread => then we have to avoid ogre frame listener
-void MainWindow::ogreUpdate(void)
-{
-    m_pRoot->renderOneFrame();
-}
-
 void MainWindow::setPlaying(bool playing)
 {   isPlaying = playing;    }
 
@@ -281,13 +294,12 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     // Set animation
     if(isPlaying && SelectionSet::getSingleton()->hasEntities())
     {
-        foreach(Ogre::Entity* ent, SelectionSet::getSingleton()->getEntitiesSelectionList())
+        for(Ogre::Entity* ent : SelectionSet::getSingleton()->getEntitiesSelectionList())
         {
-            Ogre::AnimationStateSet *animStates = ent->getAllAnimationStates();
-            Ogre::AnimationStateIterator it = animStates->getAnimationStateIterator();
-            while(it.hasMoreElements())
+            Ogre::AnimationStateSet *set = ent->getAllAnimationStates();
+            for(const auto &animationStates : set->getAnimationStates())
             {
-                it.getNext()->addTime(evt.timeSinceLastFrame);
+                animationStates.second->addTime(evt.timeSinceLastFrame);
             }
         }
     }

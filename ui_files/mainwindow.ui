@@ -46,7 +46,7 @@
      <x>0</x>
      <y>0</y>
      <width>1010</width>
-     <height>22</height>
+     <height>24</height>
     </rect>
    </property>
    <property name="mouseTracking">
@@ -158,7 +158,7 @@
    </property>
    <property name="maximumSize">
     <size>
-     <width>300</width>
+     <width>350</width>
      <height>524287</height>
     </size>
    </property>

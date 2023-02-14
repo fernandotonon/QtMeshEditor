@@ -4,6 +4,8 @@
 
 set(SRC_FILES 
 about.cpp
+animationcontrolwidget.cpp
+animationcontrolslider.cpp
 main.cpp
 Manager.cpp
 material.cpp
@@ -34,6 +36,8 @@ MaterialHighlighter.cpp
 )
 
 set(HEADER_FILES
+animationcontrolwidget.h
+animationcontrolslider.h
 GlobalDefinitions.h
 Euler.h
 about.h
@@ -68,6 +72,7 @@ MaterialHighlighter.h
 )
 
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
+ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/Assimp")
 
 
 #file(GLOB UI_FILES ./ui_files/*.ui)
@@ -224,6 +229,7 @@ endif()
 target_link_libraries(${CMAKE_PROJECT_NAME}
 ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
 ${OGRE_LIBRARIES}
+${ASSIMP_LIBRARIES}
 Qt::Gui
 Qt::Core
 Qt::Widgets
