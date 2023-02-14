@@ -76,7 +76,6 @@ private slots:
     void setTransformState(TransformOperator::TransformState newState);
     void createEditorViewport(void);
     void onWidgetClosing(EditorViewport* const& widget);
-    void ogreUpdate(void);
 
     void on_actionSingle_toggled(bool arg1);
 

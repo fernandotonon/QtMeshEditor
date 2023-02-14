@@ -75,35 +75,32 @@ void AnimationWidget::updateAnimationTable()
 
     bool hasAnimationEnable = false;
 
-    foreach(Ogre::Entity* entity, SelectionSet::getSingleton()->getEntitiesSelectionList())
+    for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
     {
         //Animation
         Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
         if(set)
         {
-            Ogre::AnimationStateIterator iter=set->getAnimationStateIterator();
-            while(iter.hasMoreElements())
+            for (const auto &animationState:set->getAnimationStates())
             {
                 QTableWidgetItem *entityItem = new QTableWidgetItem;
                 entityItem->setText(entity->getName().data());
                 entityItem->setData(ENTITY_DATA,QVariant::fromValue((void *) entity));
                 entityItem->setFlags(entityItem->flags() & ~Qt::ItemIsEditable);
 
-                Ogre::AnimationState * animationState = iter.getNext();
-
-                QString animationName = animationState->getAnimationName().c_str();
+                QString animationName = animationState.second->getAnimationName().c_str();
 
                 QTableWidgetItem *animationItem = new QTableWidgetItem;
                 animationItem->setText(animationName);
                 animationItem->setFlags(animationItem->flags() & ~Qt::ItemIsEditable);
 
                 QTableWidgetItem* enabledCB = new QTableWidgetItem(0);
-                enabledCB->setCheckState(animationState->getEnabled()?Qt::Checked:Qt::Unchecked);
+                enabledCB->setCheckState(animationState.second->getEnabled()?Qt::Checked:Qt::Unchecked);
                 enabledCB->setFlags(enabledCB->flags() & ~Qt::ItemIsEditable);
-                hasAnimationEnable = hasAnimationEnable || animationState->getEnabled();
+                hasAnimationEnable = hasAnimationEnable || animationState.second->getEnabled();
 
                 QTableWidgetItem* loopCB = new QTableWidgetItem(0);
-                loopCB->setCheckState(animationState->getLoop()?Qt::Checked:Qt::Unchecked);
+                loopCB->setCheckState(animationState.second->getLoop()?Qt::Checked:Qt::Unchecked);
                 loopCB->setFlags(loopCB->flags() & ~Qt::ItemIsEditable);
 
                 ui->animTable->insertRow(0);
@@ -130,7 +127,7 @@ void AnimationWidget::updateSkeletonTable()
     if(!SelectionSet::getSingleton()->hasEntities())
         return;
 
-    foreach(Ogre::Entity* entity, SelectionSet::getSingleton()->getEntitiesSelectionList())
+    for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
     {
         QString str = entity->getName().data();
         QTableWidgetItem *entityItem = new QTableWidgetItem;
@@ -155,16 +152,11 @@ void AnimationWidget::on_PlayPauseButton_toggled(bool checked)
 
 void AnimationWidget::setAnimationState(bool playing)
 {
-    if(playing)
-    {
-        ui->PlayPauseButton->setIcon(QIcon(":/icones/pause.png"));
-        emit changeAnimationState(true);
-    }
-    else
-    {
-        ui->PlayPauseButton->setIcon(QIcon(":/icones/play.png"));
-        emit changeAnimationState(false);
-    }
+    auto icon = QIcon(playing?":/icones/pause.png":":/icones/play.png");
+
+    ui->PlayPauseButton->setIcon(icon);
+
+    emit changeAnimationState(playing);
 }
 
 void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
@@ -251,12 +243,9 @@ void AnimationWidget::disableEntityAnimations(Ogre::Entity* entity)
     Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
     if(set)
     {
-        Ogre::AnimationStateIterator iter=set->getAnimationStateIterator();
-        while(iter.hasMoreElements())
+        for (const auto &animationState : set->getAnimationStates())
         {
-            Ogre::String str = iter.getNext()->getAnimationName();
-            Ogre::AnimationState* animationState = entity->getAnimationState(str);
-            animationState->setEnabled(false);
+            animationState.second->setEnabled(false);
         }
     }
     updateAnimationTable();
@@ -267,17 +256,14 @@ void AnimationWidget::disableAllSelectedAnimations()
     if(!SelectionSet::getSingleton()->hasEntities())
         return;
 
-    foreach(Ogre::Entity* entity, SelectionSet::getSingleton()->getEntitiesSelectionList())
+    for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
     {
         Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
         if(set)
         {
-            Ogre::AnimationStateIterator iter=set->getAnimationStateIterator();
-            while(iter.hasMoreElements())
+            for (const auto &animationState : set->getAnimationStates())
             {
-                Ogre::String str = iter.getNext()->getAnimationName();
-                Ogre::AnimationState* animationState = entity->getAnimationState(str);
-                animationState->setEnabled(false);
+                animationState.second->setEnabled(false);
             }
         }
     }
@@ -286,7 +272,7 @@ void AnimationWidget::disableAllSelectedAnimations()
 
 void AnimationWidget::disableAllSkeletonDebug()
 {
-    foreach(SkeletonDebug *sd, mShowSkeleton.values())
+    for(SkeletonDebug *sd : mShowSkeleton.values())
     {
         sd->showAxes(false);
         sd->showBones(false);

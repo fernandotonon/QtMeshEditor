@@ -74,7 +74,7 @@ PrimitivesWidget::~PrimitivesWidget()
 
 void PrimitivesWidget::setUiEmpty()
 {
-    edit_type->setText(QString());
+    edit_type->setText("");
 
     gb_Geometry->hide();
     gb_Mesh->hide();
