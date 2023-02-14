@@ -2,11 +2,13 @@
 # <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor
 A graphical editor for Ogre3D mesh and material made with Qt Framework
 
-### Preview
+[![Deploy](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml/badge.svg)](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml)
+
+### :movie_camera: Preview
 
 ![QtMeshEditor1 5 0](https://user-images.githubusercontent.com/996529/210196572-7b49da4c-c5db-406d-9ab4-7fa20bacb6ae.gif)
 
-### Features
+### :sparkles: Features
 * Translation, Scale, and Rotation of meshes (Easier than OgreMeshMagick)
 * Material Editor - It shows in real time the new material on the model
 * Change the material of the mesh - It allows the change of the mesh material
@@ -16,14 +18,17 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 * Animation Preview - It shows a list of animations and allows the animation preview.
 * Renaming Animation
 
-### Install from released binaries
-#### macOS
+### :computer: Install from release binaries
+#### :apple: macOS
+
+For now, it is only distributed using the dmg file. When it gets notable enough for homebrew (>30 forks, >30 watchers, or >75 stars), I want to distribute it there.
 
 * Download and open the .dmg file;
 * Drag and drop the QtMeshEditor to the Applications folder:
+
 ![install_macOS](https://user-images.githubusercontent.com/996529/216797862-2592a40b-5f3d-4907-bcad-dc1feae4ff2f.gif)
 
-#### Linux (ubuntu)
+#### :penguin: Linux (ubuntu)
 
 Download the .deb file;
 Then there are a few options for installing it:
@@ -34,7 +39,7 @@ Then there are a few options for installing it:
 `sudo dpkg -i qtmesheditor_amd64.deb`
 
 * Using the Software Install:
-![image](https://user-images.githubusercontent.com/996529/216799515-51494c16-c420-4535-a898-5b915a340c88.png)
+<img width="600" src="https://user-images.githubusercontent.com/996529/216799515-51494c16-c420-4535-a898-5b915a340c88.png">
 
 Remove with 
 
@@ -46,7 +51,7 @@ or
 
 Run it calling `qtmesheditor`
 
-#### Windows
+#### :window: Windows
 Unpack the binaries and run the `QtMeshEditor.exe` file
 
 ### [Build-from-source](https://github.com/fernandotonon/QtMeshEditor/wiki/How-to-build)
