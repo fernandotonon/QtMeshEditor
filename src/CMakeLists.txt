@@ -233,8 +233,6 @@ ${ASSIMP_LIBRARIES}
 Qt::Gui
 Qt::Core
 Qt::Widgets
-Qt::QuickWidgets
-Qt::Quick
 )
 
 ##############################################################
