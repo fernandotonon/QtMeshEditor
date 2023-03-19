@@ -127,6 +127,19 @@
       </widget>
      </item>
      <item>
+      <widget class="QPushButton" name="mergeButton">
+       <property name="text">
+        <string>Merge Skeleton</string>
+       </property>
+       <property name="iconSize">
+        <size>
+         <width>20</width>
+         <height>20</height>
+        </size>
+       </property>
+      </widget>
+     </item>
+     <item>
       <spacer name="horizontalSpacer_5">
        <property name="orientation">
         <enum>Qt::Horizontal</enum>

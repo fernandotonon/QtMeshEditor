@@ -314,7 +314,7 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
         mUriList.clear();
     }
 
-    foreach(EditorViewport* editorViewport, mDockWidgetList )
+    for(EditorViewport* editorViewport: mDockWidgetList )
         editorViewport->getOgreWidget()->update();
 
     //Update the status bar

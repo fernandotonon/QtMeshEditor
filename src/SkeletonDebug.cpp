@@ -26,6 +26,8 @@
 
 #include "SkeletonDebug.h"
 
+#include <QTimer>
+
 #include "Manager.h"
 // TODO Remove defenitively this cam (for overlay purpose, but this has to be driven app level)
 SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Ogre::Camera *cam,*/ float boneSize, float scaleAxes)
@@ -46,6 +48,8 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Og
     mShowAxes = true;
     mShowBones = true;
     mShowNames = true;
+
+    std::map<std::string, Ogre::Entity*> mapEntities;
 
     int numBones = mEntity->getSkeleton()->getNumBones();
 
@@ -98,6 +102,8 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Og
             }
         }
 
+        mapEntities[pBone->getName().data()] = ent;
+
         ent = mSceneMan->createEntity("SkeletonDebug/AxesMesh");
         tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
         // Make sure we don't wind up with tiny/giant axes and that one axis doesnt get squashed
@@ -115,6 +121,32 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Og
     showAxes(false);
     showBones(false);
     showNames(false);
+
+    mTimer = new QTimer();
+    connect(mTimer, &QTimer::timeout, this, [=](){
+        // Set Selected Bone to Red from user data info
+        for(auto ent: mBoneEntities){
+            ent->setMaterial(mBoneMatPtr);
+            ent->setVisible(mShowBones);
+        }
+        for(auto bone : mEntity->getSkeleton()->getBones())
+        {
+            if(bone->getUserObjectBindings().getUserAny("selected").has_value())
+            {
+                if(Ogre::any_cast<bool>(bone->getUserObjectBindings().getUserAny("selected")))
+                {
+                    if(mapEntities.find(bone->getName()) != mapEntities.end())
+                    {
+                        Ogre::Entity* ent = mapEntities.find(bone->getName())->second;
+                        ent->setMaterial(mBoneMatSelectedPtr);
+                        ent->setVisible(mShowBones);
+                    }
+                }
+            }
+        }
+
+    });
+    mTimer->start(0);
 }
 
 SkeletonDebug::~SkeletonDebug()
@@ -234,6 +266,28 @@ void SkeletonDebug::createBoneMaterial()
         p->setDepthWriteEnabled(false);
         p->setDepthCheckEnabled(false);
     }
+
+    // Create a red bone material for selected bones
+    Ogre::String matName2 = "SkeletonDebug/BoneMatSelected";
+
+    mBoneMatSelectedPtr = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(matName2));
+
+    if (!mBoneMatSelectedPtr)
+    {
+        SkeletonDebug::mBoneMatSelectedPtr = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().create(matName2, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+
+        Ogre::Pass* p = mBoneMatSelectedPtr->getTechnique(0)->getPass(0);
+        p->setLightingEnabled(true);
+        p->setDepthWriteEnabled(false);
+        p->setDepthCheckEnabled(false);
+        p->setVertexColourTracking(Ogre::TVC_AMBIENT);
+        p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        p->setCullingMode(Ogre::CULL_ANTICLOCKWISE);
+        p->setDiffuse(1,0,0,1);
+        p->setAmbient(1,0,0);
+        p->setEmissive(1,0,0);
+    }
+
 }
 
 void SkeletonDebug::createBoneMesh()

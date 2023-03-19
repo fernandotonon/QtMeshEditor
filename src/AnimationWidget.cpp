@@ -27,6 +27,7 @@
 #include <QDebug>
 
 #include <QInputDialog>
+#include <QFileDialog>
 #include <QMessageBox>
 
 #include <OgreAnimationState.h>
@@ -311,4 +312,126 @@ void AnimationWidget::on_animTable_clicked(const QModelIndex &index)
 
 }
 
+
+/**
+ * @brief AnimationWidget::on_mergeButton_clicked
+ * Merge a skeleton file into the current skeleton
+ * 
+ */
+void AnimationWidget::on_mergeButton_clicked()
+{
+    QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Select a skeleton file to import"),
+                                                     "",
+                                                     QString("Skeleton ( *.skeleton )"),
+                                                     nullptr, QFileDialog::DontUseNativeDialog);
+
+    if(fileNames.size() == 0)
+        return;
+
+    // Disable all animations
+    disableAllSelectedAnimations();
+    setAnimationState(false);
+    
+    for(const QString& fileName : fileNames)
+    {
+        std::ifstream file(fileName.toStdString().data(), std::ios::in | std::ios::binary);
+        if(!file.is_open())
+        {
+            Ogre::LogManager::getSingleton().logMessage("Error when merging the skeleton - The file couldn't be opened");
+            QMessageBox::warning(nullptr,tr("Error when merging the skeleton"),tr("The file %1 couldn't be opened").arg(fileName),QMessageBox::Ok);
+            continue;
+        }
+
+        Ogre::DataStreamPtr stream(new Ogre::FileStreamDataStream(fileName.toStdString().data(), &file, false));
+        Ogre::SkeletonPtr importedSkel;
+        auto name = fileName.toStdString();
+        unsigned int count = 0;
+        while(true){
+            try{
+                importedSkel = Ogre::SkeletonManager::getSingleton().create(name.data(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                break;
+            } catch(Ogre::Exception& e){
+                name = fileName.toStdString() + "_" + std::to_string(++count);
+            }
+        }
+
+        Ogre::SkeletonSerializer serializer;
+        serializer.importSkeleton(stream, importedSkel.get());
+
+        for(Ogre::Entity* ent : SelectionSet::getSingleton()->getEntitiesSelectionList())
+        {
+            if(!ent->hasSkeleton())
+                continue;
+            
+            // return to bind pose
+            ent->getSkeleton()->reset();
+
+            Ogre::Skeleton* skel = ent->getSkeleton();
+            
+            unsigned short numAnimations = importedSkel->getNumAnimations();
+            for(unsigned short i=0; i<numAnimations; i++)
+            {
+                Ogre::Animation* anim = importedSkel->getAnimation(i);
+                if(!anim)
+                    continue;
+                
+                if(skel->hasAnimation("merged_"+anim->getName()))
+                {
+                    Ogre::LogManager::getSingleton().logMessage("Error when merging the skeleton - The skeleton already has an animation named "+anim->getName());
+                    QMessageBox::warning(this,tr("Error when merging the skeleton"),tr("The skeleton already has an animation named %1").arg(anim->getName().c_str()),QMessageBox::Ok);
+                    continue;
+                }
+                Ogre::Animation* newAnim = skel->createAnimation("merged_"+anim->getName(), anim->getLength());
+
+                unsigned short numTracks = anim->getNumNodeTracks();
+                for(unsigned short j=0; j<numTracks+1000; j++)
+                {
+                    if(!anim->hasNodeTrack(j)) continue;
+
+                    Ogre::NodeAnimationTrack* track = anim->getNodeTrack(j);
+                    if(!track)
+                        continue;
+
+                    Ogre::NodeAnimationTrack* newTrack = newAnim->createNodeTrack(track->getHandle());
+                    newTrack->setAssociatedNode(track->getAssociatedNode());
+
+                    unsigned short numKeyFrames = track->getNumKeyFrames();
+                    for(unsigned short k=0; k<numKeyFrames; k++)
+                    {
+                        Ogre::TransformKeyFrame* keyFrame = track->getNodeKeyFrame(k);
+                        if(!keyFrame)
+                            continue;
+
+                        Ogre::TransformKeyFrame* newKeyFrame = newTrack->createNodeKeyFrame(keyFrame->getTime());
+                        newKeyFrame->setTranslate(keyFrame->getTranslate());
+                        newKeyFrame->setRotation(keyFrame->getRotation());
+                        newKeyFrame->setScale(keyFrame->getScale());
+
+                        // print the keyframe
+                        Ogre::LogManager::getSingleton().logMessage("Animation: " + newAnim->getName());
+                        Ogre::LogManager::getSingleton().logMessage("Keyframe: " + Ogre::StringConverter::toString(keyFrame->getTime()));
+                        Ogre::LogManager::getSingleton().logMessage("Translate: " + Ogre::StringConverter::toString(keyFrame->getTranslate()));
+                        Ogre::LogManager::getSingleton().logMessage("Rotation: " + Ogre::StringConverter::toString(keyFrame->getRotation()));
+                        Ogre::LogManager::getSingleton().logMessage("Scale: " + Ogre::StringConverter::toString(keyFrame->getScale()));
+                    }
+                }
+            }
+
+            skel->setBindingPose();
+            skel->setBlendMode(Ogre::ANIMBLEND_CUMULATIVE);
+
+            ent->refreshAvailableAnimationState();
+        }
+
+        Ogre::SkeletonManager::getSingleton().remove(importedSkel->getHandle());
+
+        file.close();
+
+        //Update the animation table
+        updateAnimationTable();
+
+        //Update the skeleton table
+        updateSkeletonTable();
+    }
+}
 
