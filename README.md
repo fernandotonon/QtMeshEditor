@@ -2,21 +2,34 @@
 # <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor
 A graphical editor for Ogre3D mesh and material made with Qt Framework
 
+[![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star it if you like it! ;-) 
+
 [![Deploy](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml/badge.svg)](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml)
 
 ### :movie_camera: Preview
 
 ![QtMeshEditor1 5 0](https://user-images.githubusercontent.com/996529/210196572-7b49da4c-c5db-406d-9ab4-7fa20bacb6ae.gif)
 
+#### Skeleton Animation Controls
+
+![QtMeshEditor1 6 0](https://user-images.githubusercontent.com/996529/218779819-0a61156d-c014-4ad1-aa8b-cee900c9da56.gif)
+
 ### :sparkles: Features
-* Translation, Scale, and Rotation of meshes (Easier than OgreMeshMagick)
-* Material Editor - It shows in real time the new material on the model
-* Change the material of the mesh - It allows the change of the mesh material
-* Export mesh in older versions - It allows the export of the mesh in older Ogre versions (Easier than OgreMeshUpgrader)
-* Primitives creation, using ogre-procedural - It has an easy tool to create Box, Sphere, and Plane
-* Other 3D Format Importer - Can be used to convert any 3D format provided by ASSIMP to Ogre Mesh, Material and Skeleton
-* Animation Preview - It shows a list of animations and allows the animation preview.
-* Renaming Animation
+* Mesh
+  - Translation, Scale, and Rotation (Easier than OgreMeshMagick)
+  - Change the material of the mesh - It allows the change of the mesh material
+  - Primitives creation, using ogre-procedural - It has an easy tool to create Box, Sphere, and Plane
+* Material
+  - Shows in real time the material changes on the model
+  - Material can be edited using GUI or code editor
+* Skeleton
+  - View the bones
+  - Animation Preview - It shows a list of animations and allows the animation preview.
+  - Renaming Animation
+  - View keyframes positions and values
+* Import/Export
+  - Export mesh in older versions - It allows the export of the mesh in older Ogre versions (Easier than OgreMeshUpgrader)
+  - Other 3D Format Importer - Can be used to convert any 3D format provided by ASSIMP to Ogre Mesh, Material and Skeleton
 
 ### :computer: Install from release binaries
 #### :apple: macOS
