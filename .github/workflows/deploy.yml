@@ -1,8 +1,8 @@
 name: Deploy
 
 on: 
-#    push:
-#      branches: [ "master" ]
+   push:
+      branches: [ "master" ]
    pull_request:
       branches: [ "master" ]
    release:
@@ -436,6 +436,7 @@ jobs:
         path: |
                /usr/local/lib/cmake/
                /usr/local/include/assimp
+               /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
@@ -471,6 +472,7 @@ jobs:
         path: |
                /usr/local/lib/cmake/
                /usr/local/include/assimp
+               /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
         key: ${{ runner.os }}-build-${{ env.cache-name }}
