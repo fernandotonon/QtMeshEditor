@@ -222,6 +222,7 @@ jobs:
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'   
       name: Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
       run: |
+            ls /home/runner/work/QtMeshEditor/assimp/
             cp -R /home/runner/work/QtMeshEditor/assimp/contrib /usr/local/include/contrib
             
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
