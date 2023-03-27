@@ -265,7 +265,7 @@ jobs:
         path: |
                /usr/local/lib/lib*
                /usr/local/share/OGRE/
-               /usr/local/share/OGRE/
+               /usr/local/share/OGRE*
                /usr/local/include/OGRE/
                /usr/local/lib/OGRE/
                /usr/local/lib/pkgconfig/
@@ -350,7 +350,7 @@ jobs:
         path: |
                /usr/local/lib/lib*
                /usr/local/share/OGRE/
-               /usr/local/share/OGRE/
+               /usr/local/share/OGRE*
                /usr/local/include/OGRE/
                /usr/local/lib/OGRE/
                /usr/local/lib/pkgconfig/
