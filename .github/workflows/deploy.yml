@@ -59,6 +59,7 @@ jobs:
             cd ${{github.workspace}}/assimp
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
             mingw32-make install -j8
+            xcopy /I ${{github.workspace}}/assimp/contrib "C:/Program Files (x86)/Assimp/include/contrib"
             
  build-n-cache-ogre-windows:
     needs: build-n-cache-assimp-windows
@@ -466,7 +467,7 @@ jobs:
 
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'   
       name: Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
-      run: cp -R /home/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib /usr/local/include/contrib
+      run: cp -R /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib /usr/local/include/contrib
       
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
