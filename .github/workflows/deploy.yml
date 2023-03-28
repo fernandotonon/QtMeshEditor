@@ -60,6 +60,7 @@ jobs:
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
             mingw32-make install -j8
             xcopy /I ${{github.workspace}}/assimp/contrib "C:/Program Files (x86)/Assimp/include/contrib"
+      shell: cmd
             
  build-n-cache-ogre-windows:
     needs: build-n-cache-assimp-windows
@@ -563,6 +564,7 @@ jobs:
         path: |
                /usr/local/lib/cmake/
                /usr/local/include/assimp
+               /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
         key: ${{ runner.os }}-build-${{ env.cache-name }}
@@ -582,6 +584,8 @@ jobs:
       run: |
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6GuiTools \
