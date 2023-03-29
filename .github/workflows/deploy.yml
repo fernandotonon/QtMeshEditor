@@ -59,7 +59,7 @@ jobs:
             cd ${{github.workspace}}/assimp
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
             mingw32-make install -j8
-            xcopy /I D:/a/QtMeshEditor/QtMeshEditor/assimp/contrib "C:/Program Files (x86)/Assimp/include/contrib"
+            xcopy /I D:/a/QtMeshEditor/QtMeshEditor/assimp/contrib C:/Program\ Files\ \(x86\)/Assimp/include/contrib
       shell: cmd
             
  build-n-cache-ogre-windows:
