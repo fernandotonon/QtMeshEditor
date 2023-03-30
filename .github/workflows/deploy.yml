@@ -154,7 +154,10 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - run: dir %ProgramFiles(x86)%\Assimp\
+      shell: cmd
+    
     - run: dir %ProgramFiles(x86)%\Assimp\include
+      shell: cmd
     
     - name: Cache Ogre
       id: cache-ogre-windows
