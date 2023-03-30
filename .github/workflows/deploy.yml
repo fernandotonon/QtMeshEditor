@@ -153,10 +153,12 @@ jobs:
         path: C:/Program Files (x86)/Assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - run: dir C:/Program Files (x86)/Assimp
-      shell: cmd
-    
-    - run: dir C:/Program Files (x86)/Assimp/include
+    - name: teste
+      run: |
+            cd C:/Program Files (x86)/Assimp
+            dir
+            cd include
+            dir
       shell: cmd
     
     - name: Cache Ogre
