@@ -138,7 +138,9 @@ jobs:
 
     - name: teste
       run: |
-            cd C:/PROGRA~2
+            cd C:\
+            dir
+            cd C:\PROGRA~2
             dir
             cd Assimp
             dir
