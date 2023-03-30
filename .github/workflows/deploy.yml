@@ -29,11 +29,6 @@ jobs:
  build-n-cache-assimp-windows:
    runs-on: windows-latest
    steps:
-    - name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
-      with:
-          platform: x64  
-          
     - name: Cache Assimp
       id: cache-assimp-windows
       uses: actions/cache@v3
@@ -41,8 +36,14 @@ jobs:
         cache-name: cache-assimp-windows
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: C:/Program Files (x86)/Assimp
+        path: C:/PROGRA~2/Assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
+        
+    - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
+      name: Set up MinGW
+      uses: egor-tensin/setup-mingw@v2
+      with:
+          platform: x64            
     
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
       name: Check out Assimp repo
@@ -54,7 +55,6 @@ jobs:
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
       name: Windows - Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
       run: |
-            echo "%ProgramFiles(x86)%\Assimp\include\contrib"
             xcopy  /i  "D:\a\QtMeshEditor\QtMeshEditor\assimp\contrib"  "%ProgramFiles(x86)%\Assimp\include\contrib"
       shell: cmd
       
@@ -77,8 +77,7 @@ jobs:
       env:
         cache-name: cache-assimp-windows
       with:
-        # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: ${{github.workspace}}/assimp
+        path: C:/PROGRA~2/Assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
       
     - name: Cache Ogre
@@ -127,6 +126,40 @@ jobs:
       with:
          submodules: true
 
+    - name: Cache Assimp
+      id: cache-assimp-windows
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-windows
+      with:
+        # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
+        path: C:/PROGRA~2/Assimp
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+
+    - name: teste
+      run: |
+            cd C:/PROGRA~2
+            dir
+            cd Assimp
+            dir
+            cd include
+            dir
+            cd ../lib
+            dir
+            cd cmake
+            dir
+      shell: cmd
+    
+    - name: Cache Ogre
+      id: cache-ogre-windows
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-windows
+      with:
+        path: ${{github.workspace}}/ogre-build/SDK
+        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+
     - name: Set up MinGW
       uses: egor-tensin/setup-mingw@v2
       with:
@@ -142,43 +175,12 @@ jobs:
         arch: 'win64_mingw'
         #arch: 'win64_msvc2019_64'
         tools: 'tools_cmake'
-
-    - name: Cache Assimp
-      id: cache-assimp-windows
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-windows
-      with:
-        # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: C:/Program Files (x86)/Assimp
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - name: teste
-      run: |
-            cd C:/Program Files (x86)/Assimp
-            dir
-            cd include
-            dir
-      shell: cmd
-    
-    - name: Cache Ogre
-      id: cache-ogre-windows
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-windows
-      with:
-        path: ${{github.workspace}}/ogre-build/SDK
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-        
-    - run: dir ${{github.workspace}}/ogre-build/SDK/bin/
-    - run: dir C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin
-    
+     
     - name: Configure CMake
       env:
          OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
          CMAKE_GENERATOR: "MinGW Makefiles"
-      run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/
+      run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-5.2
       shell: cmd
 
     - name: Build
