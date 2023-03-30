@@ -153,6 +153,9 @@ jobs:
         path: C:/Program Files (x86)/Assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
+    - run: dir %ProgramFiles(x86)%\Assimp\
+    - run: dir %ProgramFiles(x86)%\Assimp\include
+    
     - name: Cache Ogre
       id: cache-ogre-windows
       uses: actions/cache@v3
