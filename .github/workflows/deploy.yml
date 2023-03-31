@@ -71,7 +71,7 @@ jobs:
             mingw32-make install -j8
             cd c:/
             dir
-            cd %ProgramFiles(x86)%\Assimp
+            cd C:/PROGRA~2/Assimp
             dir
             
  build-n-cache-ogre-windows:
