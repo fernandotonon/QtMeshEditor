@@ -38,8 +38,7 @@ jobs:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
         path: |
                C:/PROGRA~2/Assimp
-               %ProgramFiles(x86)%/Assimp
-               ${{github.workspace}}/assimp
+               ${{github.workspace}}/assimp-build
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
@@ -58,7 +57,7 @@ jobs:
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
       name: Windows - Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
       run: |
-            xcopy  /i  "D:\a\QtMeshEditor\QtMeshEditor\assimp\contrib"  "%ProgramFiles(x86)%\Assimp\include\contrib"
+            xcopy  /I  "D:/a/QtMeshEditor/QtMeshEditor/assimp/contrib"  "C:/PROGRA~2/Assimp/include/contrib"
       shell: cmd
       
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
@@ -69,10 +68,7 @@ jobs:
             cd ${{github.workspace}}/assimp
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
             mingw32-make install -j8
-            cd c:/
-            dir
-            cd C:/PROGRA~2/Assimp
-            dir
+            xcopy /I C:/PROGRA~2/Assimp ${{github.workspace}}/assimp-build
             
  build-n-cache-ogre-windows:
     needs: build-n-cache-assimp-windows
@@ -84,7 +80,7 @@ jobs:
       env:
         cache-name: cache-assimp-windows
       with:
-        path: C:/PROGRA~2/Assimp
+        path: ${{github.workspace}}/assimp-build
         key: ${{ runner.os }}-build-${{ env.cache-name }}
       
     - name: Cache Ogre
@@ -140,24 +136,13 @@ jobs:
         cache-name: cache-assimp-windows
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: C:/PROGRA~2/Assimp
+        path: ${{github.workspace}}/assimp-build
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: teste
       run: |
-            cd C:\
+            cd ${{github.workspace}}/assimp-build
             dir
-            cd C:\PROGRA~2
-            dir
-            cd Assimp
-            dir
-            cd include
-            dir
-            cd ../lib
-            dir
-            cd cmake
-            dir
-      shell: cmd
     
     - name: Cache Ogre
       id: cache-ogre-windows
@@ -189,7 +174,7 @@ jobs:
       env:
          OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
          CMAKE_GENERATOR: "MinGW Makefiles"
-      run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-5.2
+      run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=${{github.workspace}}/assimp-build/lib/cmake/assimp-5.2
       shell: cmd
 
     - name: Build
