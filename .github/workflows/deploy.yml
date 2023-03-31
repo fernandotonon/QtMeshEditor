@@ -36,7 +36,10 @@ jobs:
         cache-name: cache-assimp-windows
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: C:/PROGRA~2/Assimp
+        path: |
+               C:/PROGRA~2/Assimp
+               %ProgramFiles(x86)%/Assimp
+               ${{github.workspace}}/assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
@@ -66,6 +69,10 @@ jobs:
             cd ${{github.workspace}}/assimp
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
             mingw32-make install -j8
+            cd c:/
+            dir
+            cd %ProgramFiles(x86)%\Assimp
+            dir
             
  build-n-cache-ogre-windows:
     needs: build-n-cache-assimp-windows
