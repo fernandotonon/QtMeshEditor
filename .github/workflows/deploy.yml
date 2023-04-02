@@ -81,7 +81,9 @@ jobs:
       env:
         cache-name: cache-assimp-windows
       with:
-        path: ${{github.workspace}}/assimp-build
+        path: |
+               C:/PROGRA~2/Assimp
+               ${{github.workspace}}/assimp-build
         key: ${{ runner.os }}-build-${{ env.cache-name }}
       
     - name: Cache Ogre
@@ -137,13 +139,10 @@ jobs:
         cache-name: cache-assimp-windows
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
-        path: ${{github.workspace}}/assimp-build
+        path: |
+               C:/PROGRA~2/Assimp
+               ${{github.workspace}}/assimp-build
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - name: teste
-      run: |
-            cd ${{github.workspace}}/assimp-build
-            dir
     
     - name: Cache Ogre
       id: cache-ogre-windows
@@ -175,7 +174,8 @@ jobs:
       env:
          OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
          CMAKE_GENERATOR: "MinGW Makefiles"
-      run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=${{github.workspace}}/assimp-build/lib/cmake/assimp-5.2
+         ASSIMP_DIR: C:/PROGRA~2/Assimp
+      run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-5.2
       shell: cmd
 
     - name: Build
