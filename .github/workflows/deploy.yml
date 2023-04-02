@@ -69,6 +69,12 @@ jobs:
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
             mingw32-make install -j8
             xcopy  /I  "C:/PROGRA~2/Assimp"  "${{github.workspace}}/assimp-build"
+            cd C:/PROGRA~2/Assimp
+            dir
+            cd C:/PROGRA~2/Assimp/include/contrib
+            dir
+            cd "${{github.workspace}}/assimp-build"
+            dir
       shell: cmd
             
  build-n-cache-ogre-windows:
@@ -181,6 +187,12 @@ jobs:
     - name: Build
       # Build your program with the given configuration
       run: |
+            dir
+            cd C:/PROGRA~2/Assimp
+            dir
+            cd C:/PROGRA~2/Assimp/include/contrib
+            dir
+            cd "${{github.workspace}}/assimp-build"
             dir
             mingw32-make install -j8
 
