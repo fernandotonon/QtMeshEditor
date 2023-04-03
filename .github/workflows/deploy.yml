@@ -189,11 +189,13 @@ jobs:
       # Build your program with the given configuration
       run: |
             dir
+            mingw32-make install -j8
             cd C:/PROGRA~2/Assimp
+            dir
+            cd C:/PROGRA~2/Assimp/include/
             dir
             cd C:/PROGRA~2/Assimp/include/contrib
             dir
-            mingw32-make install -j8
 
     - name: Copy gcc dll to the binary folder
       run: |
