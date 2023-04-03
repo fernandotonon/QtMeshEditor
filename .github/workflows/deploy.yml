@@ -56,7 +56,7 @@ jobs:
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
       name: Windows - Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
       run: |
-            xcopy  /I  "D:/a/QtMeshEditor/QtMeshEditor/assimp/contrib"  "C:/PROGRA~2/Assimp/include/contrib"
+            xcopy  /I /S /E  "D:/a/QtMeshEditor/QtMeshEditor/assimp/contrib"  "C:/PROGRA~2/Assimp/include/contrib"
             cd D:/a/QtMeshEditor/QtMeshEditor/assimp/contrib
             dir
             cd C:/PROGRA~2/Assimp/include/contrib
