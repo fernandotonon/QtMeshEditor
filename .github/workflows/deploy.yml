@@ -232,6 +232,7 @@ jobs:
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
@@ -274,6 +275,7 @@ jobs:
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
@@ -359,6 +361,7 @@ jobs:
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
@@ -475,6 +478,7 @@ jobs:
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
@@ -515,6 +519,7 @@ jobs:
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
@@ -589,6 +594,7 @@ jobs:
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
         key: ${{ runner.os }}-build-${{ env.cache-name }}
       
     - name: Cache Ogre
