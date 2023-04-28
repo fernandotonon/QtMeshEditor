@@ -365,7 +365,11 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
-      
+
+    - run: |
+            cd /usr/local/include/assimp
+            ls
+    
     - name: Cache Ogre
       id: cache-ogre-linux
       uses: actions/cache@v3
