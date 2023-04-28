@@ -547,12 +547,6 @@ jobs:
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
       run: |
-            echo "ls /usr/local/include/assimp"
-            ls /usr/local/include/assimp
-            echo "ls /usr/local/include/"
-            ls /usr/local/include/
-            echo "ls /usr/local/include/contrib"
-            ls /usr/local/include/contrib
             cd ${{github.workspace}}/ogre/
             sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2/ \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
