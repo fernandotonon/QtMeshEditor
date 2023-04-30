@@ -220,6 +220,12 @@ void MeshImporterExporter::exporter(Ogre::SceneNode *_sn)
 
                 e->getMesh().get()->setSkeletonName((file.baseName()+".skeleton.xml").toStdString().data());
 
+                if(fileName.right(8)==".mesh.xml")
+                {
+                    fileName = fileName.left(fileName.length()-8);
+                }
+                fileName+=".mesh.xml";
+                
                 xmlMS.exportMesh(e->getMesh().get(),fileName.toStdString().data());
 
                 e->getMesh().get()->setSkeletonName(skName);
@@ -252,7 +258,13 @@ void MeshImporterExporter::exporter(Ogre::SceneNode *_sn)
                     e->getMesh().get()->setSkeletonName(QString(file.baseName()+".skeleton").toStdString().data());
                 }
 
+                if(fileName.right(5)==".mesh")
+                {
+                    fileName = fileName.left(fileName.length()-5);
+                }
+                fileName+=".mesh";
                 m.exportMesh(e->getMesh().get(),fileName.toStdString().data(),(Ogre::MeshVersion)version);
+                
                 for(unsigned int c = 0; c<e->getNumSubEntities();c++)
                 {
                     ms.queueForExport(e->getSubEntity(c)->getMaterial());
