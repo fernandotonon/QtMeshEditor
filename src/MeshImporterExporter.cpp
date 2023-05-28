@@ -205,15 +205,6 @@ void MeshImporterExporter::exporter(Ogre::SceneNode *_sn)
         Ogre::Entity *e = Manager::getSingleton()->getSceneMgr()->getEntity(_sn->getName());
         if(e)
         {
-            //TODO: Extract this to a function
-            // workaround for enabling the loading of the skeleton. It needs to load the skeleton for the animation to work
-            try{
-                Ogre::ResourceGroupManager::getSingleton().destroyResourceGroup(file.path().toStdString().data());
-            }catch(...){}
-
-            Ogre::ResourceGroupManager::getSingleton().createResourceGroup(file.path().toStdString().data());
-            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data(),false, true);
-            Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
             if(filter=="Ogre XML (*.mesh.xml)")
             {
                 Ogre::XMLMeshSerializer xmlMS;
@@ -261,10 +252,9 @@ void MeshImporterExporter::exporter(Ogre::SceneNode *_sn)
 
                 if(e->hasSkeleton())
                 {
+                    // TODO: change the name of the skeleton to match the new mesh name.
                     Ogre::SkeletonSerializer ss;
-                    ss.exportSkeleton(e->getSkeleton(),QString(file.path()+"/"+file.baseName()+".skeleton").toStdString().data());
-
-                    e->getMesh().get()->setSkeletonName(QString(file.baseName()+".skeleton").toStdString().data());
+                    ss.exportSkeleton(e->getSkeleton(),QString(file.path()+"/"+e->getMesh().get()->getSkeletonName().c_str()).toStdString().data());
                 }
 
                 if(fileName.right(5)==".mesh")
