@@ -111,7 +111,7 @@ jobs:
           repository: OGRECave/ogre
           path: ${{github.workspace}}/ogre
           # picking a branch before updating the freetype
-          ref: aea7d17c01be9d0135f3bc534ab89450c622659a
+          ref: d5b52c2832e7fdc077dac24d763276b7fddcc321
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Set up MinGW
