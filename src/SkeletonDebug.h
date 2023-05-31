@@ -30,10 +30,14 @@
 #include <Ogre.h>
 #include <OgreTagPoint.h>
 #include <vector>
+#include <QObject>
 //#include "ObjectTextDisplay.h"
 
-class SkeletonDebug
+class QTimer;
+
+class SkeletonDebug: public QObject
 {
+    Q_OBJECT
 public:
     SkeletonDebug(Ogre::Entity *entity, Ogre::SceneManager *man,/* Ogre::Camera *cam,*/ float boneSize = 0.1f, float scaleAxes =0.1f);
     ~SkeletonDebug();
@@ -47,7 +51,7 @@ public:
     bool axesShown(){return mShowAxes;}
     bool namesShown(){return mShowNames;}
     bool bonesShown(){return mShowBones;}
-
+    
     void update();
 
 private:
@@ -60,6 +64,7 @@ private:
     Ogre::Entity *mEntity;
     Ogre::MaterialPtr mAxisMatPtr;
     Ogre::MaterialPtr mBoneMatPtr;
+    Ogre::MaterialPtr mBoneMatSelectedPtr;
     Ogre::MeshPtr mBoneMeshPtr;
     Ogre::MeshPtr mAxesMeshPtr;
     Ogre::SceneManager *mSceneMan;
@@ -75,6 +80,8 @@ private:
     void createBoneMaterial();
     void createAxesMesh();
     void createBoneMesh();
+
+    QTimer *mTimer;
 };
 
 #endif // SKELETONDEBUG_H_INCLUDED

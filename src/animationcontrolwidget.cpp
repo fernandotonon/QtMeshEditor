@@ -1,6 +1,7 @@
 #include "animationcontrolwidget.h"
 #include "ui_animationcontrolwidget.h"
 #include "SelectionSet.h"
+#include "Manager.h"
 #include <QTreeWidgetItem>
 #include <QTimer>
 
@@ -55,10 +56,18 @@ AnimationControlWidget::AnimationControlWidget(QWidget *parent) :
         }
     });
     connect(ui->boneList, &QListWidget::itemSelectionChanged, this, [=](){
+        //clear selected from all bones
+        for(int i = 0; i < m_selectedSkeleton->getNumBones(); i++)
+        {
+            m_selectedSkeleton->getBone(i)->getUserObjectBindings().setUserAny("selected",Ogre::Any(false));
+        }
         if(ui->boneList->selectedItems().size() > 0)
         {
             auto selected = ui->boneList->selectedItems().at(0);
             m_selectedTrack = selected->data(Qt::UserRole).value<Ogre::NodeAnimationTrack*>();
+
+            //set selected to bone user data
+            m_selectedSkeleton->getBone(m_selectedTrack->getAssociatedNode()->getName())->getUserObjectBindings().setUserAny("selected",Ogre::Any(true));
         }
     });
     connect(ui->horizontalSlider,SIGNAL(valueChanged(int)),this,SLOT(setAnimationFrame(int)));
@@ -138,5 +147,5 @@ void AnimationControlWidget::setAnimationFrame(int time)
             }
         }
     }
-    
+
 }

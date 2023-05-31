@@ -146,7 +146,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                                Ogre::LogManager::getSingleton().logMessage("Bone: "+ std::to_string(i) + " - " + std::to_string(skeleton->getNumBones())+ " Nome: " + bone->getName() + " Orientation: " + Ogre::StringConverter::toString(orientation) + " Position: " + Ogre::StringConverter::toString(bone->getPosition()));
 
                             }
-                            auto anim = skeleton->getAnimation(0);
+                            /*auto anim = skeleton->getAnimation(0);
                             for(unsigned int i = 0; i<anim->getNumNodeTracks(); ++i){
                                 auto track = anim->getNodeTrack(i);
                                 auto node = track->getAssociatedNode();
@@ -156,7 +156,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                                     Ogre::LogManager::getSingleton().logMessage(" keyframe: " + Ogre::StringConverter::toString(keyframe->getRotation()));
 
                                 }
-                            }
+                            }*/
                         }
                         sn = Manager::getSingleton()->addSceneNode(QString(meshName));
                         mesh = mesh->clone("Mesh_"+sn->getName());
@@ -220,6 +220,12 @@ void MeshImporterExporter::exporter(Ogre::SceneNode *_sn)
 
                 e->getMesh().get()->setSkeletonName((file.baseName()+".skeleton.xml").toStdString().data());
 
+                if(fileName.right(8)==".mesh.xml")
+                {
+                    fileName = fileName.left(fileName.length()-8);
+                }
+                fileName+=".mesh.xml";
+                
                 xmlMS.exportMesh(e->getMesh().get(),fileName.toStdString().data());
 
                 e->getMesh().get()->setSkeletonName(skName);
@@ -246,13 +252,18 @@ void MeshImporterExporter::exporter(Ogre::SceneNode *_sn)
 
                 if(e->hasSkeleton())
                 {
+                    // TODO: change the name of the skeleton to match the new mesh name.
                     Ogre::SkeletonSerializer ss;
-                    ss.exportSkeleton(e->getSkeleton(),QString(file.path()+"/"+file.baseName()+".skeleton").toStdString().data());
-
-                    e->getMesh().get()->setSkeletonName(QString(file.baseName()+".skeleton").toStdString().data());
+                    ss.exportSkeleton(e->getSkeleton(),QString(file.path()+"/"+e->getMesh().get()->getSkeletonName().c_str()).toStdString().data());
                 }
 
+                if(fileName.right(5)==".mesh")
+                {
+                    fileName = fileName.left(fileName.length()-5);
+                }
+                fileName+=".mesh";
                 m.exportMesh(e->getMesh().get(),fileName.toStdString().data(),(Ogre::MeshVersion)version);
+                
                 for(unsigned int c = 0; c<e->getNumSubEntities();c++)
                 {
                     ms.queueForExport(e->getSubEntity(c)->getMaterial());
