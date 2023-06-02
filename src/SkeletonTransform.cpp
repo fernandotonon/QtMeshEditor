@@ -168,64 +168,61 @@ bool SkeletonTransform::renameAnimation(Ogre::Entity *_ent, const QString &_oldN
         Ogre::AnimationStateSet *set = _ent->getAllAnimationStates();
         if(set)
         {
-            Ogre::AnimationStateIterator iter=set->getAnimationStateIterator();
-            while(iter.hasMoreElements())
-            {
-              iter.getNext()->setEnabled(false);
-            }
+            for(const auto &animState: set->getAnimationStates())
+                animState.second->setEnabled(false);
         }
 
         //Update the screen
         Manager::getSingleton()->getRoot()->renderOneFrame();
         QCoreApplication::processEvents();
 
-        Ogre::XMLSkeletonSerializer ss;
-        Ogre::Skeleton* sk = _ent->getSkeleton();
-        ss.exportSkeleton(sk,"_temp.xml");
-
-        QFile* xmlFile = new QFile("_temp.xml");
-
-        if(!xmlFile->open(QFile::ReadOnly|QFile::Text))
+        // Clone the current animation
+        auto currentAnim = _ent->getSkeleton()->getAnimation(_oldName.toStdString());
+        auto newAnim = _ent->getSkeleton()->createAnimation(_newName.toStdString(),currentAnim->getLength());
+        unsigned short numTracks = currentAnim->getNumNodeTracks();
+        for(unsigned short j=0; j<numTracks+1000; j++)
         {
-            return false;
+            if(!currentAnim->hasNodeTrack(j)) continue;
+
+            Ogre::NodeAnimationTrack* track = currentAnim->getNodeTrack(j);
+            if(!track)
+                continue;
+
+            Ogre::NodeAnimationTrack* newTrack = newAnim->createNodeTrack(track->getHandle());
+            newTrack->setAssociatedNode(track->getAssociatedNode());
+
+            unsigned short numKeyFrames = track->getNumKeyFrames();
+            for(unsigned short k=0; k<numKeyFrames; k++)
+            {
+                Ogre::TransformKeyFrame* keyFrame = track->getNodeKeyFrame(k);
+                if(!keyFrame)
+                    continue;
+
+                Ogre::TransformKeyFrame* newKeyFrame = newTrack->createNodeKeyFrame(keyFrame->getTime());
+                newKeyFrame->setTranslate(keyFrame->getTranslate());
+                newKeyFrame->setRotation(keyFrame->getRotation());
+                newKeyFrame->setScale(keyFrame->getScale());
+
+                // print the keyframe
+               /* Ogre::LogManager::getSingleton().logMessage("Animation: " + newAnim->getName());
+                Ogre::LogManager::getSingleton().logMessage("Keyframe: " + Ogre::StringConverter::toString(keyFrame->getTime()));
+                Ogre::LogManager::getSingleton().logMessage("Translate: " + Ogre::StringConverter::toString(keyFrame->getTranslate()));
+                Ogre::LogManager::getSingleton().logMessage("Rotation: " + Ogre::StringConverter::toString(keyFrame->getRotation()));
+                Ogre::LogManager::getSingleton().logMessage("Scale: " + Ogre::StringConverter::toString(keyFrame->getScale()));*/
+            }
         }
 
-        QByteArray xmlArray = xmlFile->readAll();
+        //Remove the old animation
+        _ent->getSkeleton()->removeAnimation(_oldName.toStdString());
 
-        xmlArray.replace(QString("<animation name=\""+_oldName+"\"").toStdString().data(),QString("<animation name=\""+_newName+"\"").toStdString().data());
-
-        xmlFile->close();
-
-        xmlFile = new QFile("_temp.xml");
-
-        if(!xmlFile->open(QFile::WriteOnly|QFile::Truncate))
-        {
-            return false;
-        }
-
-        xmlFile->write(xmlArray);
-        xmlFile->close();
-
-        sk->unload();
-
-        _ent->getAllAnimationStates()->removeAllAnimationStates();
-        _ent->getMesh().get()->removeAllAnimations();
-
-        for(int c = _ent->getSkeleton()->getNumAnimations()-1; c >=0; --c)
-        {
-            _ent->getSkeleton()->removeAnimation(_ent->getSkeleton()->getAnimation(c)->getName().data());
-        }
-
-        ss.importSkeleton("_temp.xml",sk);
-
+        // Update the animations
         _ent->refreshAvailableAnimationState();
         _ent->_updateAnimation();
         _ent->getMesh().get()->_dirtyState();
 
-        //Delete the temp file
-        xmlFile = new QFile("_temp.xml");
-
-        xmlFile->remove();
+        //Update the screen
+        Manager::getSingleton()->getRoot()->renderOneFrame();
+        QCoreApplication::processEvents();
 
         return true;
     }
