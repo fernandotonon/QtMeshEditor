@@ -236,6 +236,44 @@ Qt::Widgets
 )
 
 ##############################################################
+#  build the tests
+##############################################################
+
+if(BUILD_TESTS)
+
+    set(TEST_SOURCES "")
+    foreach(src IN LISTS SRC_FILES)
+        if(NOT src MATCHES "main.cpp")
+            list(APPEND TEST_SOURCES ${src})
+        endif() 
+    endforeach()
+
+    # Add all files ending with _test.cpp to the set
+    file(GLOB TestFiles "*_test.cpp")
+    foreach(TestFile ${TestFiles})
+        list(APPEND TEST_SOURCES ${TestFile})
+    endforeach()    
+
+    # Create the test executable
+    add_executable(UnitTests
+    ${HEADER_FILES}
+    ${TEST_SOURCES}
+    ${RESOURCE_SRCS}
+    )
+
+    # Link against Google Test libraries
+    target_link_libraries(UnitTests 
+    gtest 
+    gtest_main 
+    gmock
+    ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
+    ${OGRE_LIBRARIES}
+    ${ASSIMP_LIBRARIES}
+    Qt::Widgets Qt::Core Qt::Gui)
+endif()
+
+
+##############################################################
 #  make sure that UI files will be processed first
 ##############################################################
 ADD_DEPENDENCIES(${CMAKE_PROJECT_NAME}
