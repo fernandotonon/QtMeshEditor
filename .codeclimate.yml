@@ -1,0 +1,16 @@
+version: "2"
+plugins:
+  cppcheck:
+    enabled: true
+    config:
+      standard: "cpp17"
+  cpplint:
+    enabled: true
+    config:
+      extensions: "cpp,hpp"
+  clang-tidy:
+    enabled: true
+    config:
+      checks: "-*,modernize-*"
+  iwyu:
+    enabled: true
