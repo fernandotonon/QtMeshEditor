@@ -14,5 +14,5 @@ plugins:
       checks: "-*,modernize-*"
   iwyu:
     enabled: true
-exclude_paths:
-  - src/OgreXML
+exclude_patterns:
+  - src/OgreXML/*
