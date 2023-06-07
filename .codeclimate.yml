@@ -1,0 +1,10 @@
+version: "2"
+plugins:
+  cppcheck:
+    enabled: true
+    config:
+      standard: "cpp11"
+  cpplint:
+    enabled: true
+    config:
+      extensions: "cpp,hpp"
