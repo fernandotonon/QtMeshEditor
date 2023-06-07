@@ -1,5 +1,9 @@
 version: "2"
 plugins:
+  duplication:
+    enabled: true
+  fixme:
+    enabled: true
   cppcheck:
     enabled: true
     config:
