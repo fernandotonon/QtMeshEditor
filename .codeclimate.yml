@@ -1,8 +1,54 @@
 version: "2"
+checks:
+  argument-count:
+    config:
+      threshold: 4
+  complex-logic:
+    config:
+      threshold: 4
+  file-lines:
+    config:
+      threshold: 250
+  method-complexity:
+    config:
+      threshold: 5
+  method-count:
+    config:
+      threshold: 20
+  method-lines:
+    config:
+      threshold: 25
+  nested-control-flow:
+    config:
+      threshold: 4
+  return-statements:
+    config:
+      threshold: 4
+  similar-code:
+    config:
+      threshold: # language-specific defaults. an override will affect all languages.
+  identical-code:
+    config:
+      threshold: # language-specific defaults. an override will affect all languages.
 plugins:
+  standard:
+    channels:
+     stable: codeclimate/codeclimate-standard
+     beta: codeclimate/codeclimate-standard
+    description: Standard static analysis tool.
+  structure:
+    channels:
+      stable: codeclimate/codeclimate-structure
+    description: Performs structural checks on code.
+  duplication:
+    enabled: true
+  fixme:
+    enabled: true
   cppcheck:
     enabled: true
     config:
+      check: all
       standard: "cpp17"
+      library: googletest
 exclude_patterns:
   - src/OgreXML/*
