@@ -407,7 +407,8 @@ jobs:
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools \
+            -DBUILD_TESTS=ON 
 
     - name: Build
       # Build your program with the given configuration
