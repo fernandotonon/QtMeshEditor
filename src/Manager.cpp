@@ -266,7 +266,7 @@ QList<Ogre::SceneNode *> &Manager::getSceneNodes()
     {
         Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(node);
         QString name = pSN->getName().data();
-        if(!(isForbidenNodeName(name)))
+        if(!(isForbiddenNodeName(name)))
             mSceneNodesList.append(pSN);
     }
 
@@ -282,7 +282,7 @@ QList<Ogre::Entity *> &Manager::getEntities()
     {
         Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(node);
         QString name = pSN->getName().data();
-        if(!(isForbidenNodeName(name)))
+        if(!(isForbiddenNodeName(name)))
         {
             Ogre::SceneNode *parentNode = pSN;
             for(int entIndex = 0;  entIndex < parentNode->numAttachedObjects();entIndex++)
@@ -294,7 +294,7 @@ QList<Ogre::Entity *> &Manager::getEntities()
     return mEntitiesList;
 }
 
-bool Manager::isForbidenNodeName(const QString &_name)
+bool Manager::isForbiddenNodeName(const QString &_name)
 {
     return (_name=="TPCameraChildSceneNode" //TODO add a define for TPCameraChildSceneNode
             ||_name=="GridLine_node" //TODO add a define for GridLine_node
@@ -307,12 +307,12 @@ bool Manager::hasAnimationName(Ogre::Entity *entity, const QString &_name)
 {
     if(!entity->hasSkeleton()) return false;
     auto animationStateSet = entity->getAllAnimationStates();
-    for (auto animState : animationStateSet->getAnimationStates()) {
-        if (_name.toStdString() == animState.second->getAnimationName()) {
-            return true;
-        }
-    }
-    return false;
+
+    return std::any_of(animationStateSet->getAnimationStates().begin(), animationStateSet->getAnimationStates().end(),
+                       [&_name](const std::pair<std::string, Ogre::AnimationState*>& animState)
+    {
+        return _name.toStdString() == animState.second->getAnimationName();
+    });
 }
 
 

@@ -116,6 +116,7 @@ if(BUILD_TESTS)
 
     # Add the test
     add_test(NAME UnitTests COMMAND UnitTests)
+    include(GoogleTest)
 endif()
 ##############################################################
 #  Find Ogre

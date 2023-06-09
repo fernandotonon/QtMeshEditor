@@ -8,6 +8,8 @@
 #include <QSettings>
 #include "mainwindow.h"
 
+using ::testing::Mock;
+
 // Mock class for MainWindow
 class MockMainWindow : public MainWindow
 {
@@ -43,10 +45,7 @@ TEST(MainTest, QApplicationAndMainWindowMock)
 
     // Assertions on the result if needed
     EXPECT_EQ(result, 0);
-}
-
-int main(int argc, char* argv[])
-{
-    ::testing::InitGoogleMock(&argc, argv);
-    return RUN_ALL_TESTS();
+    
+    // Clear the mock object
+    Mock::VerifyAndClear(&mockQApplication);
 }

@@ -266,10 +266,14 @@ if(BUILD_TESTS)
     gtest 
     gtest_main 
     gmock
+    gmock_main
     ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui)
+
+    
+    gtest_discover_tests(UnitTests)
 endif()
 
 

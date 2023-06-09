@@ -52,3 +52,6 @@ plugins:
       library: googletest
 exclude_patterns:
   - src/OgreXML/*
+  - "*_autogen*"
+  - src/dependencies/*
+  - src/CMakeFiles/*
