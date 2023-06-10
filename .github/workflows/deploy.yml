@@ -541,7 +541,7 @@ jobs:
       env:
          QT_QPA_PLATFORM: offscreen
       run: |
-            ./bin/UnitTests
+            sudo ./bin/UnitTests
 #            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
    
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
