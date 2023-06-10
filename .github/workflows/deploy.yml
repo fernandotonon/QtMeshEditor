@@ -326,11 +326,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
             sudo make install -j8
-
-    - run: |
-            ls /usr/local/include/OGRE/
-            ls /usr/local/include/OGRE/Plugins/
-            ls /usr/local/include/OGRE/Plugins/Assimp/
       
  build-linux:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
@@ -546,7 +541,6 @@ jobs:
       env:
          QT_QPA_PLATFORM: offscreen
       run: |
-            sudo apt-get -y install '^libxcb.*-dev' libx11-xcb-dev libglu1-mesa-dev libxrender-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev
             sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
    
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
