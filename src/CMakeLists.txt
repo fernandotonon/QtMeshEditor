@@ -271,9 +271,10 @@ if(BUILD_TESTS)
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui)
-
     
     gtest_discover_tests(UnitTests)
+    
+    set_property(TEST UnitTests PROPERTY ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 
