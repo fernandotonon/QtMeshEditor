@@ -537,24 +537,24 @@ jobs:
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
-            sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu/
             sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu
             sudo cp -R /usr/local/lib/OGRE/* ./bin
+            sudo chmod 755 -R .
 
     - name: Test
       working-directory: ${{github.workspace}}
       env:
          QT_QPA_PLATFORM: offscreen
-      run: ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
+      run: sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
    
-    - run: gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
+    - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
     
-    - run: lcov --capture --directory . --output-file coverage.info
+    - run: sudo lcov --capture --directory . --output-file coverage.info
     
     - run: |
             cd ${{github.workspace}}
             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
-            chmod +X test-reporter-latest-linux-amd64
+            sudo chmod +X test-reporter-latest-linux-amd64
             ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json coverage.info
             ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r 9894e7003db0163ace6398acab70e6ffd126feabb41eb9724d2464d958569545
             
