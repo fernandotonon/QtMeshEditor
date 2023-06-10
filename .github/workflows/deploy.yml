@@ -537,6 +537,7 @@ jobs:
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
+            sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu/
             sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu
             sudo cp -R /usr/local/lib/OGRE/* ./bin
 
