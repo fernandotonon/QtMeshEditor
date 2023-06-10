@@ -546,7 +546,6 @@ jobs:
       env:
          QT_QPA_PLATFORM: offscreen
       run: |
-            sudo export QT_QPA_PLATFORM=offscreen 
             sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
    
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
