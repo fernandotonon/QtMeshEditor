@@ -546,6 +546,7 @@ jobs:
       env:
          QT_QPA_PLATFORM: offscreen
       run: |
+            sudo apt-get -y install '^libxcb.*-dev' libx11-xcb-dev libglu1-mesa-dev libxrender-dev libxi-dev libxkbcommon-dev libxkbcommon-x11-dev
             sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
    
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
