@@ -512,6 +512,16 @@ jobs:
                /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
+
+    - name: Install CodeQL
+      run: |
+            wget https://github.com/github/codeql-cli-binaries/releases/latest/download/codeql-linux64.zip
+            unzip codeql-linux64.zip
+            cd codeql-linux64
+            ./codeql --version
+            sudo mv codeql /usr/local/bin
+            codeql database create ${{github.workspace}}/CodeQL-database --language=cpp
+
     - name: Configure CMake
       run: |
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
@@ -537,19 +547,11 @@ jobs:
             sudo cp -R /usr/local/lib/OGRE/* ./bin
 #            sudo chmod 755 -R .
 
-    - name: Install CodeQL
-      run: |
-            wget https://github.com/github/codeql-cli-binaries/releases/latest/download/codeql-linux64.zip
-            unzip codeql-linux64.zip
-            cd codeql-linux64
-            ./codeql --version
-            sudo mv codeql /usr/local/bin
-
-    # - name: Perform CodeQL Analysis
-    #   uses: github/codeql-action/analyze@v2
-    #   with:
-    #     category: "/language:cpp"
-      
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+      with:
+        category: "/language:cpp"
+    
     - name: Test
       env:
          QT_QPA_PLATFORM: minimal

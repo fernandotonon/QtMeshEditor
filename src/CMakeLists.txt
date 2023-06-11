@@ -242,7 +242,8 @@ ENDIF()
 ##############################################################
 
 if(BUILD_TESTS)
-
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+    
     set(TEST_SOURCES "")
     foreach(src IN LISTS SRC_FILES)
         if(NOT src MATCHES "main.cpp")
