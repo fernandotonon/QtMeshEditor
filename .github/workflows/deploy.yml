@@ -72,12 +72,6 @@ jobs:
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
             mingw32-make install -j8
             xcopy  /I  "C:/PROGRA~2/Assimp"  "${{github.workspace}}/assimp-build"
-            cd C:/PROGRA~2/Assimp
-            dir
-            cd C:/PROGRA~2/Assimp/include/contrib
-            dir
-            cd "${{github.workspace}}/assimp-build"
-            dir
       shell: cmd
             
  build-n-cache-ogre-windows:
@@ -210,7 +204,7 @@ jobs:
             cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/
             dir
             echo "Qt lib"
-            cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/lib
+            cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/bin
             dir
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
@@ -550,7 +544,7 @@ jobs:
       run: |
             export QT_QPA_PLATFORM="offscreen"
             export QT_DEBUG_PLUGINS=1
-            ls
+            ls bin/platforms
             echo "ls bin"
             ls bin
             sudo ./bin/UnitTests
