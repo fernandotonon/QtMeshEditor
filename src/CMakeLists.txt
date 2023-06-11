@@ -274,6 +274,8 @@ if(BUILD_TESTS)
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui)
     
+    ADD_DEPENDENCIES(UnitTests ui)
+
     gtest_discover_tests(UnitTests)
 endif()
 
@@ -281,9 +283,9 @@ endif()
 ##############################################################
 #  make sure that UI files will be processed first
 ##############################################################
-ADD_DEPENDENCIES(${CMAKE_PROJECT_NAME}
-ui
-)
+IF(BUILD_QT_MESH_EDITOR)
+    ADD_DEPENDENCIES(${CMAKE_PROJECT_NAME} ui)
+ENDIF()
 ##############################################################
 #  Install libraries
 ##############################################################
