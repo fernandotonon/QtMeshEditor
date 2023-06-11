@@ -207,10 +207,10 @@ jobs:
             cd C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/
             dir
             echo "Qt"
-            cd D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/
+            cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/
             dir
             echo "Qt lib"
-            cd D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib
+            cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/lib
             dir
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
@@ -550,6 +550,9 @@ jobs:
       run: |
             export QT_QPA_PLATFORM="offscreen"
             export QT_DEBUG_PLUGINS=1
+            ls
+            echo "ls bin"
+            ls bin
             sudo ./bin/UnitTests
             sudo ldd ./bin/UnitTests
 #            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
