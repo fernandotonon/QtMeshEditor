@@ -206,8 +206,8 @@ jobs:
             echo "mingw bin"
             cd C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/
             dir
-            echo "Qt bin"
-            cd D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/bin
+            echo "Qt"
+            cd D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/
             dir
             echo "Qt lib"
             cd D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib
@@ -549,7 +549,9 @@ jobs:
          QT_DEBUG_PLUGINS: 1
       run: |
             export QT_QPA_PLATFORM="offscreen"
+            export QT_DEBUG_PLUGINS=1
             sudo ./bin/UnitTests
+            sudo ldd ./bin/UnitTests
 #            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
    
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
