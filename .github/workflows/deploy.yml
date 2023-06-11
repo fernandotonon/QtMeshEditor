@@ -182,10 +182,7 @@ jobs:
       shell: cmd
 
     - name: Build
-      # Build your program with the given configuration
-      run: |
-            dir
-            mingw32-make install -j8
+      run: mingw32-make install -j8
 
 
     - name: Copy assimp dll to the binary folder
@@ -205,6 +202,8 @@ jobs:
             dir
             echo "Qt lib"
             cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/bin
+            dir
+            cd C:/PROGRA~2/Assimp/bin/
             dir
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
