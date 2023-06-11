@@ -547,8 +547,9 @@ jobs:
             ls bin/platforms
             echo "ls bin"
             ls bin
-            sudo ./bin/UnitTests
             sudo ldd ./bin/UnitTests
+            sudo apt -y install libxcb libxcb-xinerama0 
+            sudo ./bin/UnitTests
 #            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
    
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
