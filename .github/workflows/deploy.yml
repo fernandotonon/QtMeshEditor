@@ -543,7 +543,7 @@ jobs:
       run: |
             export QT_QPA_PLATFORM="offscreen"
             export QT_DEBUG_PLUGINS=1
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /usr/local/lib
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /lib/x86_64-linux-gnu/
             sudo apt -y install libxcb-xinerama0 libxcb-cursor0
             ls bin/platforms
             echo "ls bin"
