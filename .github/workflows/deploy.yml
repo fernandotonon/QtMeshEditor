@@ -546,9 +546,13 @@ jobs:
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /lib/x86_64-linux-gnu/
             sudo apt -y install libxcb-xinerama0 libxcb-cursor0
             ls bin/platforms
-            echo "ls bin"
+            echo "\nls bin"
             ls bin
+            echo "\nls /lib/x86_64-linux-gnu/"
+            ls /lib/x86_64-linux-gnu/
+            echo "\nldd ./bin/platforms/libqxcb.so"
             sudo ldd ./bin/platforms/libqxcb.so
+            echo "\nldd ./bin/UnitTests"
             sudo ldd ./bin/UnitTests
             sudo ./bin/UnitTests
 #            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
