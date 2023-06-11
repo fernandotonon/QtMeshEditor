@@ -537,6 +537,11 @@ jobs:
             sudo cp -R /usr/local/lib/OGRE/* ./bin
 #            sudo chmod 755 -R .
 
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v2
+      with:
+        category: "/language:cpp"
+      
     - name: Test
       env:
          QT_QPA_PLATFORM: offscreen
