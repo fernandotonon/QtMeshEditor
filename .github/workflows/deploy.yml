@@ -543,12 +543,13 @@ jobs:
       run: |
             export QT_QPA_PLATFORM="offscreen"
             export QT_DEBUG_PLUGINS=1
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /usr/local/lib
+            sudo apt -y install libxcb-xinerama0 
             ls bin/platforms
             echo "ls bin"
             ls bin
             sudo ldd ./bin/platforms/libqxcb.so
             sudo ldd ./bin/UnitTests
-            sudo apt -y install libxcb-xinerama0 
             sudo ./bin/UnitTests
 #            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
    
