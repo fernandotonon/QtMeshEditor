@@ -185,7 +185,8 @@ qt_add_resources(RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../resources/resourc
         set(RESOURCE_SRCS ${RESOURCE_SRCS} ${RES} ${PNG} ${ICO})
 #endif(WIN32)
 
-
+OPTION(BUILD_QT_MESH_EDITOR "Build the application Qt Mesh Editor" ON)
+IF(BUILD_QT_MESH_EDITOR)
 ##############################################################
 #  Building the executable
 ##############################################################
@@ -234,6 +235,7 @@ Qt::Gui
 Qt::Core
 Qt::Widgets
 )
+ENDIF()
 
 ##############################################################
 #  build the tests
