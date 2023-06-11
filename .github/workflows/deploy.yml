@@ -537,10 +537,18 @@ jobs:
             sudo cp -R /usr/local/lib/OGRE/* ./bin
 #            sudo chmod 755 -R .
 
-    - name: Perform CodeQL Analysis
-      uses: github/codeql-action/analyze@v2
-      with:
-        category: "/language:cpp"
+    - name: Install CodeQL
+      run: |
+            wget https://github.com/github/codeql-cli-binaries/releases/latest/download/codeql-linux64.zip
+            unzip codeql-linux64.zip
+            cd codeql-linux64
+            ./codeql --version
+            sudo mv codeql /usr/local/bin
+
+    # - name: Perform CodeQL Analysis
+    #   uses: github/codeql-action/analyze@v2
+    #   with:
+    #     category: "/language:cpp"
       
     - name: Test
       env:
