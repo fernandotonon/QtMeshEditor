@@ -205,8 +205,9 @@ jobs:
             dir
             cd C:/PROGRA~2/Assimp/bin/
             dir
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
+            copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
+            copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
+#            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
     - uses: actions/upload-artifact@v3
       if: github.event_name == 'release' && github.event.action == 'published'
@@ -514,7 +515,6 @@ jobs:
                /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-
     # - name: Install CodeQL
     #   run: |
     #         wget https://github.com/github/codeql-cli-binaries/releases/latest/download/codeql-linux64.zip
@@ -562,6 +562,7 @@ jobs:
             export QT_DEBUG_PLUGINS=1
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /lib/x86_64-linux-gnu/
             sudo apt -y install libxcb-xinerama0 libxcb-cursor0 libx11-dev
+            echo $QT_QPA_PLATFORM
             sudo ./bin/UnitTests
 #            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
    
