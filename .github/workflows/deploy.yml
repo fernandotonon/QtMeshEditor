@@ -517,10 +517,9 @@ jobs:
       run: |
             wget https://github.com/github/codeql-cli-binaries/releases/latest/download/codeql-linux64.zip
             unzip codeql-linux64.zip
-            cd codeql
-            ./codeql --version
-            sudo mv codeql /usr/local/bin
-            codeql database create ${{github.workspace}}/CodeQL-database --language=cpp
+            ./codeql/codeql --version
+            mkdir ${{github.workspace}}/CodeQL-database
+            ./codeql/codeql database create ${{github.workspace}}/CodeQL-database --language=cpp
 
     - name: Configure CMake
       run: |
