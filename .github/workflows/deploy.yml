@@ -222,9 +222,6 @@ jobs:
  build-n-cache-assimp-linux:
     runs-on: ubuntu-latest
     steps:
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
-
     - name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
@@ -242,6 +239,10 @@ jobs:
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
+
+    - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
+      name: change folder permissions
+      run: sudo chmod -R 777 /usr/local
 
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       name: Check out Assimp repo
@@ -264,11 +265,24 @@ jobs:
  build-n-cache-ogre-linux:
     needs: build-n-cache-assimp-linux
     runs-on: ubuntu-latest
-    steps:
-    - name: chmod /usr/local
-      run: sudo chmod -R 777 /usr/local
-      
-    - name: Cache Assimp
+    steps:        
+    - name: Cache Ogre
+      id: cache-ogre-linux
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-linux
+      with:
+        path: |
+               /usr/local/lib/lib*
+               /usr/local/share/OGRE/
+               /usr/local/share/OGRE*
+               /usr/local/include/OGRE/
+               /usr/local/lib/OGRE/
+               /usr/local/lib/pkgconfig/
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+
+    - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
+      name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
@@ -285,21 +299,10 @@ jobs:
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-      
-    - name: Cache Ogre
-      id: cache-ogre-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-linux
-      with:
-        path: |
-               /usr/local/lib/lib*
-               /usr/local/share/OGRE/
-               /usr/local/share/OGRE*
-               /usr/local/include/OGRE/
-               /usr/local/lib/OGRE/
-               /usr/local/lib/pkgconfig/
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+
+    - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
+      name: change folder permissions
+      run: sudo chmod -R 777 /usr/local
 
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
       name: install openGL
@@ -353,7 +356,7 @@ jobs:
         target: 'desktop'
         arch: 'gcc_64'
 
-    - run: sudo chmod -R 777 /usr/local
+#    - run: sudo chmod -R 777 /usr/local
         
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -388,9 +391,6 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Configure CMake
-      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      #run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
       run: |
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
@@ -543,10 +543,9 @@ jobs:
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
-            sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu
-            sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu
-            sudo cp -R /usr/local/lib/OGRE/* ./bin
-#            sudo chmod 755 -R .
+#            sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu
+#            sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu
+#            sudo cp -R /usr/local/lib/OGRE/* ./bin
 
 #    - name: Perform CodeQL Analysis
 #      uses: github/codeql-action/analyze@v2
@@ -582,7 +581,6 @@ jobs:
             cd ${{github.workspace}}
             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
             sudo chmod +x test-reporter-latest-linux-amd64
-            sudo ./test-reporter-latest-linux-amd64 after-build --prefix ./
             sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json filtered_coverage.info
             sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
 
