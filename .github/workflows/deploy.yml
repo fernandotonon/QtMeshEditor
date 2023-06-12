@@ -594,15 +594,12 @@ jobs:
 
       - name: Analyze code
         run: |
-            codeclimate analyze --dev ./src --output=analysis-report.json
-            codeclimate prepare
-
-      - name: Upload coverage to Code Climate
-        run: |
-            cat analysis-report.json
-            curl -L https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64 > ./cc-test-reporter
-            chmod +x ./cc-test-reporter
-            ./cc-test-reporter upload-coverage --debug -i "analysis-report.json" -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
+            codeclimate analyze --dev ./src -f html > codeclimate.html
+      
+      - uses: actions/upload-artifact@v3.1.2
+        with:
+          name: codeclimate.html
+          path: codeclimate.html
 
 ####################################################################
 # MacOS Deploy 
