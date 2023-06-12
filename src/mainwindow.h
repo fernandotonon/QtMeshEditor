@@ -58,7 +58,8 @@ class MainWindow : public QMainWindow, public Ogre::FrameListener
 
 public:
     explicit MainWindow(QWidget *parent = 0);
-    ~MainWindow();
+    MainWindow(const std::string& _test); // for testing purposes
+    virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
     
 private slots:

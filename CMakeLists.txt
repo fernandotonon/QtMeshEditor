@@ -25,6 +25,7 @@ endif()
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 ##############################################################
 #  Configuring CMake
@@ -97,11 +98,25 @@ if(BUILD_TESTS)
     include(FetchContent)
     FetchContent_Declare(
       googletest
-      URL https://github.com/google/googletest/archive/03597a01ee50ed33e9dfd640b249b4be3799d395.zip
+      URL https://github.com/google/googletest/archive/b796f7d44681514f58a683a3a71ff17c94edb0c1.zip
     )
     # For Windows: Prevent overriding the parent project's compiler/linker settings
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
+
+    # Include Google Test headers
+    include_directories(
+        ${gtest_SOURCE_DIR}/include 
+        ${gtest_SOURCE_DIR} 
+        ${CMAKE_CURRENT_SOURCE_DIR}/ui_files
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+    )
+
+    enable_testing()
+
+    # Add the test
+    add_test(NAME UnitTests COMMAND UnitTests)
+    include(GoogleTest)
 endif()
 ##############################################################
 #  Find Ogre

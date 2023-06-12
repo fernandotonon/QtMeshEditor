@@ -72,12 +72,6 @@ jobs:
             cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
             mingw32-make install -j8
             xcopy  /I  "C:/PROGRA~2/Assimp"  "${{github.workspace}}/assimp-build"
-            cd C:/PROGRA~2/Assimp
-            dir
-            cd C:/PROGRA~2/Assimp/include/contrib
-            dir
-            cd "${{github.workspace}}/assimp-build"
-            dir
       shell: cmd
             
  build-n-cache-ogre-windows:
@@ -188,10 +182,7 @@ jobs:
       shell: cmd
 
     - name: Build
-      # Build your program with the given configuration
-      run: |
-            dir
-            mingw32-make install -j8
+      run: mingw32-make install -j8
 
 
     - name: Copy assimp dll to the binary folder
@@ -203,10 +194,23 @@ jobs:
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
+            echo "mingw bin"
+            cd C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/
+            dir
+            echo "Qt"
+            cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/
+            dir
+            echo "Qt lib"
+            cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/bin
+            dir
+            cd C:/PROGRA~2/Assimp/bin/
+            dir
+            copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
+            copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
+#            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
     - uses: actions/upload-artifact@v3
+      if: github.event_name == 'release' && github.event.action == 'published'
       with:
         name: windows-binaries
         path: ${{github.workspace}}/bin
@@ -218,9 +222,9 @@ jobs:
  build-n-cache-assimp-linux:
     runs-on: ubuntu-latest
     steps:
-    - name: chmod /usr/local
+    - name: change folder permissions
       run: sudo chmod -R 777 /usr/local
-
+      
     - name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
@@ -260,11 +264,27 @@ jobs:
  build-n-cache-ogre-linux:
     needs: build-n-cache-assimp-linux
     runs-on: ubuntu-latest
-    steps:
-    - name: chmod /usr/local
+    steps:        
+    - name: change folder permissions
       run: sudo chmod -R 777 /usr/local
       
-    - name: Cache Assimp
+    - name: Cache Ogre
+      id: cache-ogre-linux
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-linux
+      with:
+        path: |
+               /usr/local/lib/lib*
+               /usr/local/share/OGRE/
+               /usr/local/share/OGRE*
+               /usr/local/include/OGRE/
+               /usr/local/lib/OGRE/
+               /usr/local/lib/pkgconfig/
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+
+    - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
+      name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
       env:
@@ -280,21 +300,6 @@ jobs:
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-      
-    - name: Cache Ogre
-      id: cache-ogre-linux
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-linux
-      with:
-        path: |
-               /usr/local/lib/lib*
-               /usr/local/share/OGRE/
-               /usr/local/share/OGRE*
-               /usr/local/include/OGRE/
-               /usr/local/lib/OGRE/
-               /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
@@ -326,11 +331,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build/
             sudo make install -j8
-
-    - run: |
-            ls /usr/local/include/OGRE/
-            ls /usr/local/include/OGRE/Plugins/
-            ls /usr/local/include/OGRE/Plugins/Assimp/
       
  build-linux:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
@@ -341,7 +341,7 @@ jobs:
     env: 
           LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v3.5.3
       with:
          submodules: true
            
@@ -372,10 +372,6 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
-
-    - run: |
-            cd /usr/local/include/assimp
-            ls
     
     - name: Cache Ogre
       id: cache-ogre-linux
@@ -392,15 +388,7 @@ jobs:
                /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - run: |
-        ls /usr/local/include/OGRE/
-        ls /usr/local/include/OGRE/Plugins/
-        ls /usr/local/include/OGRE/Plugins/Assimp/
-
     - name: Configure CMake
-      # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
-      # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
-      #run: sudo cmake -B ${{github.workspace}} -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
       run: |
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
@@ -410,9 +398,7 @@ jobs:
             -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
 
     - name: Build
-      # Build your program with the given configuration
-      run: |
-            sudo make install -j8
+      run: sudo make install -j8
 
     - name: Add missing libraries
       run: |
@@ -462,18 +448,162 @@ jobs:
 #     - run: tar -zcvf QtMeshEditor-bin-Linux.tar.gz ./bin
 
     - uses: actions/upload-artifact@v3
+      if: github.event_name == 'release' && github.event.action == 'published'
       with:
         name: linux-binaries
         path: ${{github.workspace}}/*.deb
-#        path: |
-#               ${{github.workspace}}/*.deb
-#               ${{github.workspace}}/QtMeshEditor-bin-Linux.tar.gz
 
+####################################################################
+# Unit Tests - on Linux 
+####################################################################
+      
+ unit-tests-linux:
+    # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
+    # You can convert this to a matrix build if you need cross-platform coverage.
+    # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
+    needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
+    runs-on: ubuntu-latest
+    env: 
+          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
+    steps:
+    - uses: actions/checkout@v3.5.3
+      with:
+         submodules: true
+           
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        aqtversion: '==2.1.*'
+        version: '6.5.0'
+        host: 'linux'
+        target: 'desktop'
+        arch: 'gcc_64'
+
+    - run: sudo chmod -R 777 /usr/local
+        
+    - name: Cache Assimp
+      id: cache-assimp-linux
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-linux
+      with:
+        path: |
+               /usr/local/lib/cmake/
+               /usr/local/include/assimp
+               /usr/local/include/contrib
+               /usr/local/lib/pkgconfig/assimp.pc
+               /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+ 
+    - name: Cache Ogre
+      id: cache-ogre-linux
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-linux
+      with:
+        path: |
+               /usr/local/lib/lib*
+               /usr/local/share/OGRE/
+               /usr/local/share/OGRE*
+               /usr/local/include/OGRE/
+               /usr/local/lib/OGRE/
+               /usr/local/lib/pkgconfig/
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+
+    # - name: Install CodeQL
+    #   run: |
+    #         wget https://github.com/github/codeql-cli-binaries/releases/latest/download/codeql-linux64.zip
+    #         unzip codeql-linux64.zip
+    #         ./codeql/codeql --version
+    #         mkdir ${{github.workspace}}/CodeQL-database
+    #         ./codeql/codeql database create ${{github.workspace}}/CodeQL-database --language=cpp
+
+    - name: Configure CMake
+      run: |
+            sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
+            -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
+            -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
+            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools \
+            -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage \
+            -DBUILD_QT_MESH_EDITOR=OFF
+
+    - name: Build
+      # Build your program with the given configuration
+      run: sudo make install -j8
+
+    - name: Add missing libraries
+      run: |
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
+            sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu
+            sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu
+            sudo cp -R /usr/local/lib/OGRE/* ./bin
+
+#    - name: Perform CodeQL Analysis
+#      uses: github/codeql-action/analyze@v2
+#      with:
+#        category: "/language:cpp"
+    
     - name: Test
-      working-directory: ${{github.workspace}}
-      # Execute tests defined by the CMake configuration.
-      # See https://cmake.org/cmake/help/latest/manual/ctest.1.html for more detail
-      run: ctest -C ${{env.BUILD_TYPE}}
+      env:
+         QT_QPA_PLATFORM: minimal
+         QT_DEBUG_PLUGINS: 1
+      run: |
+            export QT_QPA_PLATFORM="minimal"
+            export QT_DEBUG_PLUGINS=1
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /lib/x86_64-linux-gnu/
+            sudo apt -y install libxcb-xinerama0 libxcb-cursor0 libx11-dev
+            sudo apt-get install xvfb
+            Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+            export DISPLAY=:99
+            echo $QT_QPA_PLATFORM
+            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
+#            sudo ./bin/UnitTests
+            
+    - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
+    
+    - name: Run lcov
+      run: |
+            sudo apt install lcov
+            lcov --capture --directory . --output-file coverage.info
+            lcov --remove coverage.info '/usr/*' '/home/runner/work/QtMeshEditor/Qt/*' -o filtered_coverage.info
+    
+    - run: |
+            cd ${{github.workspace}}
+            curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
+            sudo chmod +x test-reporter-latest-linux-amd64
+            sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json filtered_coverage.info
+            sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
+
+####################################################################
+# Code Climate Analysis 
+####################################################################
+           
+ codeclimate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3.5.3
+
+      - name: Install codeclimate
+        run: |
+            curl -L https://github.com/codeclimate/codeclimate/archive/master.tar.gz | tar xvz
+            cd codeclimate-* && sudo make install
+
+      - name: Analyze code
+        run: |
+            codeclimate analyze --dev ./src -f html > codeclimate.html
+      
+      - uses: actions/upload-artifact@v3.1.2
+        with:
+          name: codeclimate.html
+          path: codeclimate.html
 
 ####################################################################
 # MacOS Deploy 
@@ -666,6 +796,7 @@ jobs:
 # using create-dmg instead            sudo cpack -G DragNDrop
     
     - uses: actions/upload-artifact@v3.1.2
+      if: github.event_name == 'release' && github.event.action == 'published'
       with:
         name: QtMeshEditor-MacOS
         path: ${{github.workspace}}/QtMeshEditor-MacOS.dmg

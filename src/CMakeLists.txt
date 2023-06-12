@@ -185,7 +185,8 @@ qt_add_resources(RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../resources/resourc
         set(RESOURCE_SRCS ${RESOURCE_SRCS} ${RES} ${PNG} ${ICO})
 #endif(WIN32)
 
-
+OPTION(BUILD_QT_MESH_EDITOR "Build the application Qt Mesh Editor" ON)
+IF(BUILD_QT_MESH_EDITOR)
 ##############################################################
 #  Building the executable
 ##############################################################
@@ -234,13 +235,58 @@ Qt::Gui
 Qt::Core
 Qt::Widgets
 )
+ENDIF()
+
+##############################################################
+#  build the tests
+##############################################################
+
+if(BUILD_TESTS)
+    set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+    
+    set(TEST_SOURCES "")
+    foreach(src IN LISTS SRC_FILES)
+        if(NOT src MATCHES "main.cpp")
+            list(APPEND TEST_SOURCES ${src})
+        endif() 
+    endforeach()
+
+    # Add all files ending with _test.cpp to the set
+    file(GLOB TestFiles "*_test.cpp")
+    foreach(TestFile ${TestFiles})
+        list(APPEND TEST_SOURCES ${TestFile})
+    endforeach()    
+
+    # Create the test executable
+    add_executable(UnitTests
+    ${HEADER_FILES}
+    ${TEST_SOURCES}
+    ${RESOURCE_SRCS}
+    )
+
+    # Link against Google Test libraries
+    target_link_libraries(UnitTests 
+    gtest 
+    gtest_main 
+    gmock
+    gmock_main
+    ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
+    ${OGRE_LIBRARIES}
+    ${ASSIMP_LIBRARIES}
+    Qt::Widgets Qt::Core Qt::Gui)
+    
+    ADD_DEPENDENCIES(UnitTests ui)
+
+    gtest_discover_tests(UnitTests)
+endif()
+
 
 ##############################################################
 #  make sure that UI files will be processed first
 ##############################################################
-ADD_DEPENDENCIES(${CMAKE_PROJECT_NAME}
-ui
-)
+IF(BUILD_QT_MESH_EDITOR)
+    ADD_DEPENDENCIES(${CMAKE_PROJECT_NAME} ui)
+ENDIF()
 ##############################################################
 #  Install libraries
 ##############################################################

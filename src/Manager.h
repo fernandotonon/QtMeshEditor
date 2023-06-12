@@ -65,7 +65,7 @@ public:
 
     QList<Ogre::Entity *>&   getEntities();
 
-    bool                isForbidenNodeName(const QString &_name);
+    bool                isForbiddenNodeName(const QString &_name);
 
     bool                hasAnimationName(Ogre::Entity *entity, const QString &_name);
 
