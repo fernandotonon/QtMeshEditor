@@ -594,7 +594,7 @@ jobs:
 
       - name: Analyze code
         run: |
-            codeclimate analyze --dev ./src --format=json > analysis-report.json
+            codeclimate analyze --dev ./src --format json > analysis-report.json
             codeclimate prepare
 
       - name: Upload coverage to Code Climate
