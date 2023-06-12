@@ -572,8 +572,7 @@ jobs:
       run: |
             sudo apt install lcov
             lcov --capture --directory . --output-file coverage.info
-            cat coverage.info
-            lcov --remove coverage.info '/usr/*' -o filtered_coverage.info
+            lcov --remove coverage.info '/usr/*' '/home/runner/work/QtMeshEditor/Qt/*' -o filtered_coverage.info
     
     - run: |
             cd ${{github.workspace}}
