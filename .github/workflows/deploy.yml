@@ -566,22 +566,24 @@ jobs:
             Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
             export DISPLAY=:99
             echo $QT_QPA_PLATFORM
-            sudo ./bin/UnitTests
-#            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
-   
+            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
+#            sudo ./bin/UnitTests
+            
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
     
     - name: Run lcov
       run: |
             sudo apt install lcov
-            sudo lcov --capture --directory . --output-file coverage.info
+            lcov --capture --directory . --output-file coverage.info
+            cat coverage.info
+            lcov --remove coverage.info '/usr/*' -o filtered_coverage.info
     
     - run: |
             cd ${{github.workspace}}
             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
             sudo chmod +x test-reporter-latest-linux-amd64
-            ls -l test-reporter-latest-linux-amd64
-            sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json coverage.info
+            sudo ./test-reporter-latest-linux-amd64 after-build --prefix ./
+            sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json filtered_coverage.info
             sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
 
 ####################################################################
