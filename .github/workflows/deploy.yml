@@ -595,7 +595,8 @@ jobs:
       - name: Analyze code
         run: |
             codeclimate analyze --dev ./src
-            codeclimate upload-coverage --token $CODECLIMATE_TOKEN
+            codeclimate prepare
+            codeclimate upload-coverage --input-type "codeclimate-batch" --debug --token $CODECLIMATE_TOKEN
 
 ####################################################################
 # MacOS Deploy 
