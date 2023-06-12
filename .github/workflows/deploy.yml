@@ -571,7 +571,10 @@ jobs:
    
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
     
-    - run: sudo lcov --capture --directory . --output-file coverage.info
+    - name: Run lcov
+      run: |
+            sudo apt install lcov
+            sudo lcov --capture --directory . --output-file coverage.info
     
     - run: |
             cd ${{github.workspace}}
