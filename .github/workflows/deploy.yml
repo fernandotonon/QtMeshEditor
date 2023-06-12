@@ -594,7 +594,7 @@ jobs:
 
       - name: Analyze code
         run: |
-            codeclimate analyze --dev ./src
+            codeclimate analyze --dev ./src --format=json > analysis-report.json
             codeclimate prepare
 
       - name: Upload coverage to Code Climate
@@ -602,7 +602,7 @@ jobs:
             curl -L https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64 > ./cc-test-reporter
             chmod +x ./cc-test-reporter
             echo $CODECLIMATE_COVERAGE_ID
-            ./cc-test-reporter upload-coverage --debug -r 9894e7003db0163ace6398acab70e6ffd126feabb41eb9724d2464d958569545
+            ./cc-test-reporter upload-coverage --debug -i analysis-report.json -r 9894e7003db0163ace6398acab70e6ffd126feabb41eb9724d2464d958569545
 
 ####################################################################
 # MacOS Deploy 
