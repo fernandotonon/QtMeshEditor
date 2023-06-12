@@ -356,7 +356,7 @@ jobs:
         target: 'desktop'
         arch: 'gcc_64'
 
-#    - run: sudo chmod -R 777 /usr/local
+    - run: sudo chmod -R 777 /usr/local
         
     - name: Cache Assimp
       id: cache-assimp-linux
