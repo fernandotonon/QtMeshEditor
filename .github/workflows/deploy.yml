@@ -222,6 +222,9 @@ jobs:
  build-n-cache-assimp-linux:
     runs-on: ubuntu-latest
     steps:
+    - name: change folder permissions
+      run: sudo chmod -R 777 /usr/local
+      
     - name: Cache Assimp
       id: cache-assimp-linux
       uses: actions/cache@v3
@@ -239,10 +242,6 @@ jobs:
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
-      name: change folder permissions
-      run: sudo chmod -R 777 /usr/local
 
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       name: Check out Assimp repo
@@ -266,6 +265,9 @@ jobs:
     needs: build-n-cache-assimp-linux
     runs-on: ubuntu-latest
     steps:        
+    - name: change folder permissions
+      run: sudo chmod -R 777 /usr/local
+      
     - name: Cache Ogre
       id: cache-ogre-linux
       uses: actions/cache@v3
@@ -299,10 +301,6 @@ jobs:
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
-      name: change folder permissions
-      run: sudo chmod -R 777 /usr/local
 
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
       name: install openGL
