@@ -513,13 +513,13 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
 
-    - name: Install CodeQL
-      run: |
-            wget https://github.com/github/codeql-cli-binaries/releases/latest/download/codeql-linux64.zip
-            unzip codeql-linux64.zip
-            ./codeql/codeql --version
-            mkdir ${{github.workspace}}/CodeQL-database
-            ./codeql/codeql database create ${{github.workspace}}/CodeQL-database --language=cpp
+    # - name: Install CodeQL
+    #   run: |
+    #         wget https://github.com/github/codeql-cli-binaries/releases/latest/download/codeql-linux64.zip
+    #         unzip codeql-linux64.zip
+    #         ./codeql/codeql --version
+    #         mkdir ${{github.workspace}}/CodeQL-database
+    #         ./codeql/codeql database create ${{github.workspace}}/CodeQL-database --language=cpp
 
     - name: Configure CMake
       run: |
@@ -573,7 +573,26 @@ jobs:
             sudo chmod +X test-reporter-latest-linux-amd64
             ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json coverage.info
             ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r 9894e7003db0163ace6398acab70e6ffd126feabb41eb9724d2464d958569545
-            
+
+####################################################################
+# Code Climate Analysis 
+####################################################################
+           
+ codeclimate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Analyze code
+        run: |
+          docker pull codeclimate/codeclimate
+          docker run \
+            --volume "$PWD:/code" \
+            --env CODECLIMATE_CODE="$PWD" \
+            --rm \
+            codeclimate/codeclimate analyze --dev
 
 ####################################################################
 # MacOS Deploy 
