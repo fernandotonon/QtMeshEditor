@@ -587,10 +587,12 @@ jobs:
 
       - name: Analyze code
         run: |
+          docker version
+          sudo service docker start
+          docker info
           docker pull codeclimate/codeclimate
           docker run \
-            --volume "$PWD:/code" \
-            --env CODECLIMATE_CODE="$PWD" \
+            --env CODECLIMATE_CODE="$PWD/src" \
             --rm \
             codeclimate/codeclimate analyze --dev
 
