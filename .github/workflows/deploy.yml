@@ -596,7 +596,12 @@ jobs:
         run: |
             codeclimate analyze --dev ./src
             codeclimate prepare
-            codeclimate upload-coverage --input-type "codeclimate-batch" --debug --token $CODECLIMATE_TOKEN
+
+      - name: Upload coverage to Code Climate
+        run: |
+            curl -L https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64 > ./cc-test-reporter
+            chmod +x ./cc-test-reporter
+            ./cc-test-reporter upload-coverage --input-type "codeclimate-batch" --debug
 
 ####################################################################
 # MacOS Deploy 
