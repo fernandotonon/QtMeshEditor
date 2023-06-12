@@ -580,8 +580,8 @@ jobs:
             cd ${{github.workspace}}
             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
             sudo chmod +X test-reporter-latest-linux-amd64
-            ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json coverage.info
-            ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
+            sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json coverage.info
+            sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
 
 ####################################################################
 # Code Climate Analysis 
