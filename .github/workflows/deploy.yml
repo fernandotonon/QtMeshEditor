@@ -574,7 +574,7 @@ jobs:
             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
             sudo chmod +X test-reporter-latest-linux-amd64
             ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json coverage.info
-            ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r 9894e7003db0163ace6398acab70e6ffd126feabb41eb9724d2464d958569545
+            ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r $CODECLIMATE_COVERAGE_ID
 
 ####################################################################
 # Code Climate Analysis 
@@ -601,7 +601,7 @@ jobs:
         run: |
             curl -L https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64 > ./cc-test-reporter
             chmod +x ./cc-test-reporter
-            ./cc-test-reporter upload-coverage --input-type "codeclimate-batch" --debug
+            ./cc-test-reporter upload-coverage --debug -r $CODECLIMATE_COVERAGE_ID
 
 ####################################################################
 # MacOS Deploy 
