@@ -209,6 +209,7 @@ jobs:
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
     - uses: actions/upload-artifact@v3
+      if: github.event_name == 'release' && github.event.action == 'published'
       with:
         name: windows-binaries
         path: ${{github.workspace}}/bin
@@ -448,6 +449,7 @@ jobs:
 #     - run: tar -zcvf QtMeshEditor-bin-Linux.tar.gz ./bin
 
     - uses: actions/upload-artifact@v3
+      if: github.event_name == 'release' && github.event.action == 'published'
       with:
         name: linux-binaries
         path: ${{github.workspace}}/*.deb
@@ -585,10 +587,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v2
 
-      - name: Analyze code
+      - name: Install codeclimate
         run: |
             curl -L https://github.com/codeclimate/codeclimate/archive/master.tar.gz | tar xvz
             cd codeclimate-* && sudo make install
+
+      - name: Analyze code
+        run: |
+            rubocop --auto-gen-config
             codeclimate engines:install
             codeclimate analyze --dev ./src
             codeclimate upload-coverage --token $CODECLIMATE_TOKEN
@@ -784,6 +790,7 @@ jobs:
 # using create-dmg instead            sudo cpack -G DragNDrop
     
     - uses: actions/upload-artifact@v3.1.2
+      if: github.event_name == 'release' && github.event.action == 'published'
       with:
         name: QtMeshEditor-MacOS
         path: ${{github.workspace}}/QtMeshEditor-MacOS.dmg
