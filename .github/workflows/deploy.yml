@@ -341,7 +341,7 @@ jobs:
     env: 
           LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v3.5.3
       with:
          submodules: true
            
@@ -466,7 +466,7 @@ jobs:
     env: 
           LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v3.5.3
       with:
          submodules: true
            
@@ -588,10 +588,9 @@ jobs:
            
  codeclimate:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3.5.3
 
       - name: Install codeclimate
         run: |
