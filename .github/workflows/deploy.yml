@@ -587,14 +587,11 @@ jobs:
 
       - name: Analyze code
         run: |
-          systemctl status docker
-          sudo systemctl start docker
-          docker pull codeclimate/codeclimate
-          docker run \
-            --volume "$PWD:/code" \
-            --env CODECLIMATE_CODE="$PWD/src" \
-            --rm \
-            codeclimate/codeclimate analyze --dev
+            curl -L https://github.com/codeclimate/codeclimate/archive/master.tar.gz | tar xvz
+            cd codeclimate-* && sudo make install
+            codeclimate engines:install
+            codeclimate analyze --dev ./src
+            codeclimate upload-coverage --token $CODECLIMATE_TOKEN
 
 ####################################################################
 # MacOS Deploy 
