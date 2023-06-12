@@ -594,8 +594,6 @@ jobs:
 
       - name: Analyze code
         run: |
-            rubocop --auto-gen-config
-            codeclimate engines:install
             codeclimate analyze --dev ./src
             codeclimate upload-coverage --token $CODECLIMATE_TOKEN
 
