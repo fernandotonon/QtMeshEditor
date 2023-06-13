@@ -585,43 +585,24 @@ jobs:
 # Code Climate Analysis 
 ####################################################################
            
- codeclimate:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v3.5.3
+# codeclimate:
+#    runs-on: ubuntu-latest
+#    steps:
+#      - name: Checkout code
+#        uses: actions/checkout@v3.5.3
 
-      - name: Install codeclimate
-        run: |
-            curl -L https://github.com/codeclimate/codeclimate/archive/master.tar.gz | tar xvz
-            cd codeclimate-* && sudo make install
+#      - name: Install codeclimate
+#        run: |
+#            curl -L https://github.com/codeclimate/codeclimate/archive/master.tar.gz | tar xvz
+#            cd codeclimate-* && sudo make install
 
-      - name: Analyze code
-        run: |
-              codeclimate analyze 
-              codeclimate analyze ./src -f html > codeclimate.html
-#        run: codeclimate analyze ./src -f json > codeclimate.json
+#      - name: Analyze code
+#        run: codeclimate analyze ./src -f html > codeclimate.html
 
-#       - name: Send report to code climate
-#         run: |
-#             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
-#             sudo chmod +x test-reporter-latest-linux-amd64
-#             sudo ./test-reporter-latest-linux-amd64 upload-coverage --input codeclimate.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
-
-      - uses: actions/upload-artifact@v3.1.2
-        with:
-          name: codeclimate.html
-          path: codeclimate.html
-          
-      - run: |
-              docker pull codeclimate/codeclimate
-              docker run \
-              --interactive --rm \
-              --env CODECLIMATE_CODE="$PWD" \
-              --volume "$PWD":/code \
-              --volume /var/run/docker.sock:/var/run/docker.sock \
-              --volume /tmp/cc:/tmp/cc \
-              codeclimate/codeclimate analyze
+#      - uses: actions/upload-artifact@v3.1.2
+#        with:
+#          name: codeclimate.html
+#          path: codeclimate.html
 
 ####################################################################
 # MacOS Deploy 
