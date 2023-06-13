@@ -598,7 +598,7 @@ jobs:
 
       - name: Analyze code
         run: |
-            codeclimate analyze --dev ./src -f html > codeclimate.html
+            codeclimate analyze --dev ./src -f json > codeclimate.json
             codeclimate-test-reporter upload-coverage --input=./codeclimate.json
 
       - name: Send report to code climate
