@@ -614,7 +614,7 @@ jobs:
       - run: |
               docker pull codeclimate/codeclimate
               docker run \
-              --interactive --tty --rm \
+              --interactive --rm \
               --env CODECLIMATE_CODE="$PWD" \
               --volume "$PWD":/code \
               --volume /var/run/docker.sock:/var/run/docker.sock \

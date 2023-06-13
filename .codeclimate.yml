@@ -50,6 +50,10 @@ plugins:
       check: all
       standard: "cpp17"
       library: googletest
+  cpplint:
+    enabled: true
+    config:
+      filter: "-,+whitespace,-whitespace/ending_newline"
 exclude_patterns:
   - src/OgreXML/*
   - "*_autogen*"
