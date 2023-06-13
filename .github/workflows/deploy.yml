@@ -597,8 +597,10 @@ jobs:
             cd codeclimate-* && sudo make install
 
       - name: Analyze code
-        run: codeclimate analyze --dev ./src -f html > codeclimate.html
-#        run: codeclimate analyze --dev ./src -f json > codeclimate.json
+        run: |
+              codeclimate analyze 
+              codeclimate analyze ./src -f html > codeclimate.html
+#        run: codeclimate analyze ./src -f json > codeclimate.json
 
 #       - name: Send report to code climate
 #         run: |
