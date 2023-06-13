@@ -42,14 +42,9 @@ checks:
       threshold: 10
 plugins:
   standard:
-    channels:
-     stable: codeclimate/codeclimate-standard
-     beta: codeclimate/codeclimate-standard
-    description: Standard static analysis tool.
+    enabled: true
   structure:
-    channels:
-      stable: codeclimate/codeclimate-structure
-    description: Performs structural checks on code.
+    enabled: true
   duplication:
     enabled: true
   fixme:
