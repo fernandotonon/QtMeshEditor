@@ -621,7 +621,7 @@ jobs:
               --volume "$PWD":/code \
               --volume /var/run/docker.sock:/var/run/docker.sock \
               --volume /tmp/cc:/tmp/cc \
-              codeclimate/codeclimate help
+              codeclimate/codeclimate analyze
 
 ####################################################################
 # MacOS Deploy 
