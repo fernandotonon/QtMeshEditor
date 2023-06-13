@@ -597,18 +597,29 @@ jobs:
             cd codeclimate-* && sudo make install
 
       - name: Analyze code
-        run: codeclimate analyze --dev ./src -f json > codeclimate.json
+        run: codeclimate analyze --dev ./src -f html > codeclimate.html
+#        run: codeclimate analyze --dev ./src -f json > codeclimate.json
 
-      - name: Send report to code climate
-        run: |
-            curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
-            sudo chmod +x test-reporter-latest-linux-amd64
-            sudo ./test-reporter-latest-linux-amd64 upload-coverage --input codeclimate.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
+#       - name: Send report to code climate
+#         run: |
+#             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
+#             sudo chmod +x test-reporter-latest-linux-amd64
+#             sudo ./test-reporter-latest-linux-amd64 upload-coverage --input codeclimate.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
 
-#       - uses: actions/upload-artifact@v3.1.2
-#         with:
-#           name: codeclimate.html
-#           path: codeclimate.html
+      - uses: actions/upload-artifact@v3.1.2
+        with:
+          name: codeclimate.html
+          path: codeclimate.html
+          
+      - run: |
+              docker pull codeclimate/codeclimate
+              docker run \
+              --interactive --tty --rm \
+              --env CODECLIMATE_CODE="$PWD" \
+              --volume "$PWD":/code \
+              --volume /var/run/docker.sock:/var/run/docker.sock \
+              --volume /tmp/cc:/tmp/cc \
+              codeclimate/codeclimate help
 
 ####################################################################
 # MacOS Deploy 
