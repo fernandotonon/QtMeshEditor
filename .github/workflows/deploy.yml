@@ -212,11 +212,11 @@ jobs:
     - if: github.event_name == 'release' && github.event.action == 'published'
       uses: actions/upload-artifact@v3
       with:
-        name: QtMeshEditor-${{github.ref}}-bin-Windows
+        name: QtMeshEditor-${{github.ref_name}}-bin-Windows
         path: ${{github.workspace}}/bin
     
     - if: github.event_name == 'release' && github.event.action == 'published'
-      run: Compress-Archive ${{github.workspace}}/bin QtMeshEditor-${{github.ref}}-bin-Windows.zip
+      run: Compress-Archive ${{github.workspace}}/bin QtMeshEditor-${{github.ref_name}}-bin-Windows.zip
       shell: powershell
       
     - if: github.event_name == 'release' && github.event.action == 'published'
@@ -224,9 +224,9 @@ jobs:
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-          file: QtMeshEditor-${{github.ref}}-bin-Windows.zip
+          file: QtMeshEditor-${{github.ref_name}}-bin-Windows.zip
           update_latest_release: true
-          overwrite: true
+          overwrite: false
           verbose: true
 ####################################################################
 # Linux Deploy
@@ -473,7 +473,7 @@ jobs:
       with:
           file: ${{github.workspace}}/*.deb
           update_latest_release: true
-          overwrite: true
+          overwrite: false
           verbose: true
 ####################################################################
 # Unit Tests - on Linux 
@@ -815,7 +815,7 @@ jobs:
             --icon-size 100 \
             --icon "QtMeshEditor.app" 200 190 \
             --app-drop-link 600 185 \
-            QtMeshEditor-${{github.ref}}-MacOS.dmg \
+            QtMeshEditor-${{github.ref_name}}-MacOS.dmg \
             ${{github.workspace}}/bin/QtMeshEditor.app
 # using create-dmg instead            sudo cpack -G DragNDrop
     
@@ -823,14 +823,14 @@ jobs:
       uses: actions/upload-artifact@v3.1.2
       with:
         name: QtMeshEditor-MacOS
-        path: ${{github.workspace}}/QtMeshEditor-${{github.ref}}-MacOS.dmg
+        path: ${{github.workspace}}/QtMeshEditor-${{github.ref_name}}-MacOS.dmg
         
     - if: github.event_name == 'release' && github.event.action == 'published'
       uses: xresloader/upload-to-github-release@main
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-          file: QtMeshEditor-${{github.ref}}-MacOS.dmg
+          file: QtMeshEditor-${{github.ref_name}}-MacOS.dmg
           update_latest_release: true
-          overwrite: true
+          overwrite: false
           verbose: true
