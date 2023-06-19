@@ -39,12 +39,6 @@
 #include "EditorViewport.h"
 #include "QtInputManager.h"
 
-#ifdef __gnu_linux__
-    #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-        #include <QX11Info>
-    #endif
-#endif
-
 OgreWidget::OgreWidget( QWidget *parent ):
     QWidget( parent ), mOgreRoot(0), mOgreWindow(NULL),
     mCamera(0)
@@ -121,22 +115,18 @@ void OgreWidget::initOgreWindow(void)
 #ifdef WIN32
   // Windows code
   winHandle = Ogre::StringConverter::toString((unsigned long)(this->parentWidget()->winId()));
-#elif MACOS
-  // Mac code, tested on Mac OSX 10.6 using Qt 4.7.4 and Ogre 1.7.3
-  winHandle  = Ogre::StringConverter::toString(winId());
 #else
-    #if QT_VERSION < QT_VERSION_CHECK(6, 0, 0)
-        winHandle = Ogre::StringConverter::toString((unsigned long)(QX11Info::display())) + ":";
-        winHandle += Ogre::StringConverter::toString((unsigned int)(QX11Info::appScreen()))+ ":";
-    #endif
-
-    winHandle += Ogre::StringConverter::toString(winId());
+        winHandle  = Ogre::StringConverter::toString(winId());
 #endif
 
   Ogre::NameValuePairList params;
 
-#ifndef MACOS
   params["externalWindowHandle"] = winHandle;
+#ifdef Q_OS_MACOS
+  // code for Mac
+  params["macAPI"] = "cocoa";
+  params["macAPICocoaUseNSView"] = "true";
+#endif
 
   QString name = "Viewport " + QString::number(getIndex());
 
@@ -147,17 +137,6 @@ void OgreWidget::initOgreWindow(void)
                            &params );
 
   mOgreWindow->setActive(true);
-
-#else
-  // code for Mac
-  params["externalWindowHandle"] = winHandle;
-  params["macAPI"] = "cocoa";
-  params["macAPICocoaUseNSView"] = "true";
-  mOgreWindow = mOgreRoot->createRenderWindow("QOgreWidget_RenderWindow",
-      width(), height(), false, &params);
-  mOgreWindow->setActive(true);
-  makeCurrent();
-#endif
 
   mCamera =  new SpaceCamera(this);
 

@@ -25,7 +25,7 @@ public:
     MOCK_METHOD(void, show, ());
 };
 
-TEST(UnitTests, Forbidden_Name)
+TEST(ManagerTest, Forbidden_Name)
 {
     // Create mock objects
     int argc = 0;
