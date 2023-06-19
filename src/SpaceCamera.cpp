@@ -32,7 +32,6 @@
 #include "OgreWidget.h"
 #include <QDebug>
 
-#define CAMERA_VEL 0.5
 const QPoint    SpaceCamera::invalidPoint(-1,-1);
 //SpaceCamera*    SpaceCamera::mSpaceCamera = NULL;
 
@@ -41,7 +40,7 @@ SpaceCamera::SpaceCamera(OgreWidget* parent)
     ,mCameraNode(NULL)
     ,mTarget(NULL)
     ,mCamera(NULL)
-    ,mCameraSpeed(0.1f)
+    ,mCameraSpeed(0.5f)
     ,mOldPos(invalidPoint)
     ,mRotation(0.0f,0.0f)
     ,mTranslation(0.0f,0.0f)
@@ -90,18 +89,18 @@ void SpaceCamera::setKeyMapping()
     // Key Mapping initialisation
     // TODO push this static or at app level
 
-    mKeyRotationMapping[Qt::Key_Up]     = Ogre::Vector2 ( 0.0,  CAMERA_VEL  );
-    mKeyRotationMapping[Qt::Key_Down] 	= Ogre::Vector2 ( 0.0, -CAMERA_VEL  );
-    mKeyRotationMapping[Qt::Key_Right] 	= Ogre::Vector2 ( CAMERA_VEL , 0.0  );
-    mKeyRotationMapping[Qt::Key_Left]   = Ogre::Vector2 (-CAMERA_VEL , 0.0  );
+    mKeyRotationMapping[Qt::Key_Up]     = Ogre::Vector2 ( 0.0,  getCameraSpeed()  );
+    mKeyRotationMapping[Qt::Key_Down] 	= Ogre::Vector2 ( 0.0, -getCameraSpeed()  );
+    mKeyRotationMapping[Qt::Key_Right] 	= Ogre::Vector2 ( getCameraSpeed() , 0.0  );
+    mKeyRotationMapping[Qt::Key_Left]   = Ogre::Vector2 (-getCameraSpeed() , 0.0  );
 
-    mKeyTranslationMapping[Qt::Key_W]   = Ogre::Vector2 ( 0.0,  CAMERA_VEL  );
-    mKeyTranslationMapping[Qt::Key_S] 	= Ogre::Vector2 ( 0.0, -CAMERA_VEL  );
-    mKeyTranslationMapping[Qt::Key_A] 	= Ogre::Vector2 ( CAMERA_VEL , 0.0  );
-    mKeyTranslationMapping[Qt::Key_D]   = Ogre::Vector2 (-CAMERA_VEL , 0.0  );
+    mKeyTranslationMapping[Qt::Key_W]   = Ogre::Vector2 ( 0.0,  getCameraSpeed()  );
+    mKeyTranslationMapping[Qt::Key_S] 	= Ogre::Vector2 ( 0.0, -getCameraSpeed()  );
+    mKeyTranslationMapping[Qt::Key_A] 	= Ogre::Vector2 ( getCameraSpeed() , 0.0  );
+    mKeyTranslationMapping[Qt::Key_D]   = Ogre::Vector2 (-getCameraSpeed() , 0.0  );
 
-    mKeyRollingMapping[Qt::Key_Q]       =  CAMERA_VEL;
-    mKeyRollingMapping[Qt::Key_E]       = -CAMERA_VEL;
+    mKeyRollingMapping[Qt::Key_Q]       =  getCameraSpeed();
+    mKeyRollingMapping[Qt::Key_E]       = -getCameraSpeed();
 }
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -198,8 +197,10 @@ void SpaceCamera::mouseMoveEvent(QMouseEvent *event)
 
 void SpaceCamera::wheelEvent(QWheelEvent *event)
 {
-    int delta = event->angleDelta().y() * 10 / 60 * mCameraSpeed;
+    int delta = event->angleDelta().y() * 10 / 60 * getCameraSpeed();
     zoom(delta);
+
+    pan(Ogre::Vector2 ( event->angleDelta().x() * 10 / 60 * getCameraSpeed() , 0.0  ));
 
     event->accept();
 }
