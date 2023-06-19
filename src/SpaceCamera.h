@@ -43,7 +43,7 @@ class SpaceCamera : Ogre::FrameListener
 {
     public:
         SpaceCamera(OgreWidget* parent);
-        ~SpaceCamera();
+        virtual ~SpaceCamera();
 
         // Accessors
         Ogre::Camera*           getCamera();
@@ -68,24 +68,26 @@ class SpaceCamera : Ogre::FrameListener
         virtual void mouseMoveEvent(QMouseEvent *event);
         virtual void wheelEvent(QWheelEvent *event);
 
+    protected:
+        SpaceCamera(){} // for testing purposes
+
     private:
         Ogre::SceneNode*        mCameraNode; // Node da camera
         Ogre::SceneNode*        mTarget;
         Ogre::Camera*           mCamera; // Ogre camera
-        Ogre::Real              mCameraSpeed;
-        Ogre::SceneManager*     mSceneMgr; //SceneManager
+        Ogre::Real              mCameraSpeed = 0.0f;
+        Ogre::SceneManager*     mSceneMgr=nullptr; //SceneManager
 
         static const QPoint     invalidPoint;
         QPoint                  mOldPos;
-        Ogre::Vector2           mRotation;
-        Ogre::Vector2           mTranslation;
-        Ogre::Real              mRoll;
+        Ogre::Vector2           mRotation = Ogre::Vector2::ZERO;
+        Ogre::Vector2           mTranslation = Ogre::Vector2::ZERO;
+        Ogre::Real              mRoll = 0.0f;
 
         QMap<int, Ogre::Vector2> mKeyRotationMapping;
         QMap<int, Ogre::Vector2> mKeyTranslationMapping;
         QMap<int, Ogre::Real>    mKeyRollingMapping;
 
-    private:
         void setKeyMapping();
         void zoom(const int delta);
         void pan(const Ogre::Real& deltaX, const Ogre::Real& deltaY);

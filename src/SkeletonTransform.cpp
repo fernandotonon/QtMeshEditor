@@ -50,10 +50,9 @@ void SkeletonTransform::scaleSkeleton(const Ogre::Entity *_ent, const Ogre::Vect
         Ogre::AnimationStateSet *set=_ent->getAllAnimationStates();
         if(set)
         {
-            Ogre::AnimationStateIterator iter=set->getAnimationStateIterator();
-            while(iter.hasMoreElements())
+            for (const auto &animState: set->getAnimationStates())
             {
-              iter.getNext()->setEnabled(false);
+                animState.second->setEnabled(false);
             }
         }
 
@@ -91,10 +90,9 @@ void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::
         Ogre::AnimationStateSet *set=_ent->getAllAnimationStates();
         if(set)
         {
-            Ogre::AnimationStateIterator iter=set->getAnimationStateIterator();
-            while(iter.hasMoreElements())
+            for (const auto &animState: set->getAnimationStates())
             {
-              iter.getNext()->setEnabled(false);
+                animState.second->setEnabled(false);
             }
         }
 
@@ -128,10 +126,9 @@ void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vec
         Ogre::AnimationStateSet *set=_ent->getAllAnimationStates();
         if(set)
         {
-            Ogre::AnimationStateIterator iter=set->getAnimationStateIterator();
-            while(iter.hasMoreElements())
+            for (const auto &animState: set->getAnimationStates())
             {
-              iter.getNext()->setEnabled(false);
+                animState.second->setEnabled(false);
             }
         }
 

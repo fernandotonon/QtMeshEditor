@@ -42,9 +42,6 @@ SpaceCamera::SpaceCamera(OgreWidget* parent)
     ,mCamera(NULL)
     ,mCameraSpeed(0.5f)
     ,mOldPos(invalidPoint)
-    ,mRotation(0.0f,0.0f)
-    ,mTranslation(0.0f,0.0f)
-    ,mRoll(0.0f)
 {
     QString name = "Camera " + QString::number(parent->getIndex());
     mCamera = mSceneMgr->createCamera(name.toLocal8Bit().constData());
@@ -72,9 +69,9 @@ SpaceCamera::SpaceCamera(OgreWidget* parent)
 
 SpaceCamera::~SpaceCamera()
 {
-    Manager::getSingleton()->getRoot()->removeFrameListener(this);
     if(mSceneMgr)
     {
+        Manager::getSingleton()->getRoot()->removeFrameListener(this);
         mSceneMgr->destroySceneNode(mCameraNode);
         mSceneMgr->destroySceneNode(mTarget);
         mSceneMgr->destroyCamera(mCamera);
