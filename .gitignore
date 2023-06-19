@@ -9,10 +9,11 @@
 Dependencies/*
 release/*
 bin/*
+lib/*
 debug/*
 src/ogre-assimp/CMakeFiles/
 src\moc_*
-CMakeCache.txt
+CMakeCache.txt*
 CMakeFiles/
 moc_*
 ui_files/
@@ -20,3 +21,7 @@ ui_*
 *.log
 *.cmake
 *.user
+*.qtc_clangd*
+_CPack_Packages/*
+_deps/*
+*_autogen/*

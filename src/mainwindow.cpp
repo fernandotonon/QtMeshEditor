@@ -92,6 +92,15 @@ MainWindow::MainWindow(QWidget *parent) :
     });
     m_pTimer->start(0);
 }
+
+MainWindow::MainWindow(const std::string& _test){
+    Manager* manager = Manager::getSingleton(this); // init the Ogre Root/RenderSystem/SceneManager
+
+    createEditorViewport(/*TODO add the type of view (perspective, left,....*/);
+
+    manager->loadResources(); // Resources should be loaded after createRenderWindow...
+} // for testing purposes
+
 /////////////////////////// TODO Clean up the code of MainWindow
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)
 MainWindow::~MainWindow()

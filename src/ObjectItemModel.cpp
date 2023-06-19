@@ -88,7 +88,7 @@ void ObjectItemModel::appendAllChildFromParent(Ogre::SceneNode* const& parentNod
         Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(child);
         QString name = pSN->getName().data();
 
-        if(name.length() && !(Manager::getSingleton()->isForbidenNodeName(name)))
+        if(name.length() && !(Manager::getSingleton()->isForbiddenNodeName(name)))
         {
             Ogre::SceneNode* currentNode = pSN;
             QStandardItem* newItem = new QStandardItem(QIcon(":/icones/cube.png"),currentNode->getName().data()+tr(" (Node)"));
