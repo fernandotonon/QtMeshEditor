@@ -2,7 +2,7 @@
 # <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor
 A graphical editor for Ogre3D mesh and material made with Qt Framework
 
-[![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star if you like it! We need to get to >75 to be able to distribute it from homebrew ;-) 
+[![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star if you like it! 
 
 [![Deploy](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml/badge.svg)](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml)
 [![Test Coverage](https://api.codeclimate.com/v1/badges/946bc0c606302904a589/test_coverage)](https://codeclimate.com/github/fernandotonon/QtMeshEditor/test_coverage)
@@ -35,7 +35,7 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 ### :computer: Install from release binaries
 #### :apple: macOS
 
-For now, it is only distributed using the dmg file. When it gets notable enough for homebrew (>30 forks, >30 watchers, or >75 stars), I want to distribute it there.
+For now, it is only distributed using the dmg file. 
 
 * Download and open the .dmg file;
 * Drag and drop the QtMeshEditor to the Applications folder:
