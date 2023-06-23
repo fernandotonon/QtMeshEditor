@@ -39,6 +39,14 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 
 `brew install qtmesheditor`
 
+Remove with
+
+`brew remove qtmesheditor`
+
+Upgrade with
+
+`brew upgrade qtmesheditor`
+
 <img width="502" alt="image" src="https://github.com/fernandotonon/QtMeshEditor/assets/996529/84f56be3-4522-45a7-9039-5a143de7313c">
 
 
