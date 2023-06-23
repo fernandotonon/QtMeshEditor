@@ -34,9 +34,15 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 
 ### :computer: Install from release binaries
 #### :apple: macOS
+##### Homebrew
+`brew tap fernandotonon/qtmesheditor`
 
-For now, it is only distributed using the dmg file. 
+`brew install qtmesheditor`
 
+<img width="502" alt="image" src="https://github.com/fernandotonon/QtMeshEditor/assets/996529/84f56be3-4522-45a7-9039-5a143de7313c">
+
+
+##### DMG file
 * Download and open the .dmg file;
 * Drag and drop the QtMeshEditor to the Applications folder:
 
