@@ -30,17 +30,14 @@
 #include <QDebug>
 
 #include "Manager.h"
-#include "Assimp/OgreAssimpLoader.h"
+//#include "Assimp/OgreAssimpLoader.h"
 #include "OgreXML/OgreXMLMeshSerializer.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
+#include "AssimpToOgreImporter.h"
 
 #ifndef WIN32
     #include <unistd.h>
 #endif
-
-MeshImporterExporter::MeshImporterExporter()
-{
-}
 
 void MeshImporterExporter::configureCamera(Ogre::Entity *en)
 {
@@ -115,7 +112,30 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
             else
             {
                 assimp:
-                AssimpLoader::Options opts;
+
+                AssimpToOgreImporter importer;
+                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString().data());
+
+               /* AssimpOgreImporter importer(Manager::getSingleton()->getSceneMgr());
+                Ogre::MeshPtr mesh = importer.importMesh(file.filePath().toStdString().data());*/
+                if (mesh)
+                {
+                    auto meshName = file.baseName();
+
+                    sn = Manager::getSingleton()->addSceneNode(QString(meshName));
+
+                    Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, mesh);
+
+                    //Ogre::Entity* en = Manager::getSingleton()->getSceneMgr()->createEntity(sn, mesh);
+                    //Manager::getSingleton()->getSceneMgr()->getRootSceneNode()->createChildSceneNode()->attachObject(en);
+
+
+                    sn->setPosition(0,0,0);
+
+                    configureCamera(en);
+                }
+
+               /* AssimpLoader::Options opts;
                 opts.customAnimationName = "";
                 opts.animationSpeedModifier = 1.0f;
                 opts.postProcessSteps = 0x1|0x2|0x4|0x8|0x200|0x400|0x4000|0x1000000|0x8000000; // Assimp postprocess.h TODO: import it in the future for using a reliable enum
@@ -146,7 +166,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                                Ogre::LogManager::getSingleton().logMessage("Bone: "+ std::to_string(i) + " - " + std::to_string(skeleton->getNumBones())+ " Nome: " + bone->getName() + " Orientation: " + Ogre::StringConverter::toString(orientation) + " Position: " + Ogre::StringConverter::toString(bone->getPosition()));
 
                             }
-                            /*auto anim = skeleton->getAnimation(0);
+                            /**auto anim = skeleton->getAnimation(0);
                             for(unsigned int i = 0; i<anim->getNumNodeTracks(); ++i){
                                 auto track = anim->getNodeTrack(i);
                                 auto node = track->getAssociatedNode();
@@ -156,7 +176,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                                     Ogre::LogManager::getSingleton().logMessage(" keyframe: " + Ogre::StringConverter::toString(keyframe->getRotation()));
 
                                 }
-                            }*/
+                            }** /
                         }
                         sn = Manager::getSingleton()->addSceneNode(QString(meshName));
                         mesh = mesh->clone("Mesh_"+sn->getName());
@@ -172,7 +192,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                     }
                 } catch (...){
                     QMessageBox::warning(NULL,"Error when importing 3d file","Not supported by assimp.",QMessageBox::Ok);
-                }
+                }*/
             }
         }
     }

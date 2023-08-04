@@ -69,6 +69,7 @@ ObjectItemModel.h
 MaterialWidget.h
 MaterialComboDelegate.h
 MaterialHighlighter.h
+AssimpToOgreImporter.h
 )
 
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
@@ -200,7 +201,7 @@ elseif(APPLE)
         add_executable(${CMAKE_PROJECT_NAME}
 	${HEADER_FILES}
 	${SRC_FILES}
-	${RESOURCE_SRCS}
+        ${RESOURCE_SRCS}
         )
         set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES MACOSX_BUNDLE TRUE)
 else()
