@@ -30,21 +30,21 @@ public:
         importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
         const aiScene* scene = importer.ReadFile(path,
-                                                 aiProcess_CalcTangentSpace | // 0x1
-                                                     aiProcess_JoinIdenticalVertices | // 0x2
-                                                     aiProcess_Triangulate | // 0x8
-                                                     aiProcess_RemoveComponent | // 0x10
-                                                     aiProcess_GenSmoothNormals | // 0x40
-                                                     aiProcess_ValidateDataStructure | // 0x400
-                                                     aiProcess_OptimizeGraph | // 0x1000
-                                                     aiProcess_LimitBoneWeights | // 0x2000
-                                                     aiProcess_FindInvalidData | // 0x8000
-                                                     aiProcess_SortByPType | // 0x10000
-                                                     aiProcess_ImproveCacheLocality | // 0x800
-                                                     aiProcess_FixInfacingNormals | // 0x2000
-                                                     aiProcess_PopulateArmatureData | // 0x4000 necessary to load bone node information
-                                                     aiProcess_FlipUVs | // 0x800000
-                                                     aiProcess_OptimizeMeshes |  // 0x200000
+                                                 aiProcess_CalcTangentSpace |
+                                                     aiProcess_JoinIdenticalVertices |
+                                                     aiProcess_Triangulate |
+                                                     aiProcess_RemoveComponent |
+                                                     aiProcess_GenSmoothNormals |
+                                                     aiProcess_ValidateDataStructure |
+                                                     aiProcess_OptimizeGraph |
+                                                     aiProcess_LimitBoneWeights |
+                                                     aiProcess_FindInvalidData |
+                                                     aiProcess_SortByPType |
+                                                     aiProcess_ImproveCacheLocality |
+                                                     aiProcess_FixInfacingNormals |
+                                                     aiProcess_PopulateArmatureData | // necessary to load bone node information
+                                                     aiProcess_ConvertToLeftHanded |
+                                                     aiProcess_OptimizeMeshes |
                                                      aiProcess_GlobalScale
                                                  );
 
@@ -70,17 +70,7 @@ public:
         Ogre::MeshPtr ogreMesh = createMesh();
 
         // Process animations
-        // processAnimations(scene);
-        // Test animation
-        /*Ogre::Animation* animation = skeleton->createAnimation("TestAnimation", 10.0f);
-        Ogre::Bone* boneToAnimate = skeleton->getBone("mixamorig:RightFoot");
-        Ogre::NodeAnimationTrack* track = animation->createNodeTrack(boneToAnimate->getHandle(), boneToAnimate);
-        Ogre::TransformKeyFrame* keyFrame1 = track->createNodeKeyFrame(0.0f);
-        keyFrame1->setRotation(Ogre::Quaternion::IDENTITY);
-        Ogre::TransformKeyFrame* keyFrame2 = track->createNodeKeyFrame(5.0f);
-        keyFrame2->setRotation(Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_X));
-        Ogre::TransformKeyFrame* keyFrame3 = track->createNodeKeyFrame(10.0f);
-        keyFrame3->setRotation(Ogre::Quaternion::IDENTITY);*/
+        processAnimations(scene);
 
         return ogreMesh;
     }
@@ -244,9 +234,6 @@ private:
     void processBoneNode(BoneNode* boneNode, const aiScene* scene, SubMeshData& subMeshData) {
         aiBone* bone = boneNode->bone;
 
-        // Retrieve the bone (it should already exist)
-        Ogre::Bone* ogreBone = skeleton->getBone(bone->mName.C_Str());
-
         // Convert the aiBone's offset matrix to an Ogre::Matrix4
         Ogre::Matrix4 offsetMatrix(
             bone->mOffsetMatrix.a1, bone->mOffsetMatrix.a2, bone->mOffsetMatrix.a3, bone->mOffsetMatrix.a4,
@@ -274,6 +261,9 @@ private:
         Ogre::Vector3 position, scale;
         Ogre::Quaternion orientation;
         affine.decomposition(position, scale, orientation);
+
+        // Retrieve the bone (it should already exist)
+        Ogre::Bone* ogreBone = skeleton->getBone(bone->mName.C_Str());
 
         // Set the bone's position, orientation, and scale
         ogreBone->setPosition(position);
@@ -333,7 +323,7 @@ private:
 
     void processAnimation(aiAnimation* animation, const aiScene* scene) {
         // Create the animation
-        Ogre::Animation* ogreAnimation = skeleton->createAnimation(animation->mName.C_Str(), animation->mDuration);
+        Ogre::Animation* ogreAnimation = skeleton->createAnimation(animation->mName.C_Str(), animation->mDuration/10.0f);
 
         // Process the animation channels
         for(unsigned int i = 0; i < animation->mNumChannels; i++) {
@@ -354,8 +344,16 @@ private:
         // Process the position keys
         for(unsigned int i = 0; i < nodeAnim->mNumPositionKeys; i++) {
             aiVectorKey positionKey = nodeAnim->mPositionKeys[i];
+            Ogre::Vector3 position(positionKey.mValue.x, positionKey.mValue.y, positionKey.mValue.z);
+
+            // Get the bone's T-pose position
+            auto boneTPosePosition = bone->getPosition();
+
+            // Convert the position from local space to model space
+            position = position - boneTPosePosition;
+
             keyframes[positionKey.mTime] = std::make_tuple(
-                Ogre::Vector3(positionKey.mValue.x, positionKey.mValue.y, positionKey.mValue.z),
+                position,
                 Ogre::Quaternion::IDENTITY,
                 Ogre::Vector3::UNIT_SCALE
                 );
@@ -364,7 +362,9 @@ private:
         // Process the rotation keys
         for(unsigned int i = 0; i < nodeAnim->mNumRotationKeys; i++) {
             aiQuatKey rotationKey = nodeAnim->mRotationKeys[i];
+            Ogre::Quaternion boneTPoseRotation = bone->getOrientation();
             Ogre::Quaternion rot(rotationKey.mValue.w, rotationKey.mValue.x, rotationKey.mValue.y, rotationKey.mValue.z);
+            rot = boneTPoseRotation.Inverse() * rot; // Convert from local space to model space
             rot.normalise(); // Normalize the quaternion
             if (keyframes.find(rotationKey.mTime) == keyframes.end()) {
                 keyframes[rotationKey.mTime] = std::make_tuple(
@@ -376,6 +376,7 @@ private:
                 std::get<1>(keyframes[rotationKey.mTime]) = rot;
             }
         }
+
 
         // Process the scaling keys
         for(unsigned int i = 0; i < nodeAnim->mNumScalingKeys; i++) {
@@ -394,7 +395,7 @@ private:
 
         // Now create the keyframes in the track
         for(auto& [time, transform] : keyframes) {
-            Ogre::TransformKeyFrame* keyFrame = track->createNodeKeyFrame(time);
+            Ogre::TransformKeyFrame* keyFrame = track->createNodeKeyFrame(time/10.0f);
             keyFrame->setTranslate(std::get<0>(transform));
             keyFrame->setRotation(std::get<1>(transform));
             keyFrame->setScale(std::get<2>(transform));
