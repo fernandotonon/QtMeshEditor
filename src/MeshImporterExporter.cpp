@@ -33,7 +33,7 @@
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 
 #include "Manager.h"
-#include "AssimpToOgreImporter.h"
+#include "Assimp/Importer.h"
 
 #ifndef WIN32
     #include <unistd.h>
