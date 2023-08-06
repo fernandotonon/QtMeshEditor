@@ -28,3 +28,4 @@ _deps/*
 .vscode/*
 src/QtMeshEditor_autogen/*
 src/__/*
+src/qrc_resource.cpp

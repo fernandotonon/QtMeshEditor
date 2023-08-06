@@ -51,9 +51,9 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     modelName = scene->mName.C_Str();
     if(modelName.empty()) modelName="importedModel";
 
-    if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
+    if(!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));
-        return Ogre::MeshPtr();
+        return {};
     }
 
     // Process materials
@@ -79,21 +79,22 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
 
 void AssimpToOgreImporter::processNode(aiNode* node, const aiScene* scene) {
     // Process each mesh located at the current node
-    for(unsigned int i = 0; i < node->mNumMeshes; i++) {
+    for(auto i = 0u; i < node->mNumMeshes; i++) {
         aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
         subMeshesData.push_back(processMesh(mesh, scene));
     }
 
     // After we've processed all of the meshes (if any) we then recursively process each of the children nodes
-    for(unsigned int i = 0; i < node->mNumChildren; i++) {
+    for(auto i = 0u; i < node->mNumChildren; i++) {
         processNode(node->mChildren[i], scene);
     }
 }
 
 SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene) {
     SubMeshData subMeshData;
+
     // Initialize blend indices and blend weights
-    for(unsigned int i = 0; i < mesh->mNumVertices; i++) {
+    for(auto i = 0u; i < mesh->mNumVertices; i++) {
         subMeshData.blendIndices.push_back(Ogre::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
         subMeshData.blendWeights.push_back(Ogre::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
 
@@ -113,9 +114,9 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
 
     // Load blend weights and blend indices
     if(mesh->HasBones()) {
-        for(unsigned int i = 0; i < mesh->mNumBones; i++) {
+        for(auto i = 0u; i < mesh->mNumBones; i++) {
             aiBone* bone = mesh->mBones[i];
-            for(unsigned int j = 0; j < bone->mNumWeights; j++) {
+            for(auto j = 0u; j < bone->mNumWeights; j++) {
                 aiVertexWeight weight = bone->mWeights[j];
                 int freeIndex = -1;
                 for(int k = 0; k < 4; k++) {
@@ -145,7 +146,7 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
     }
 
     // Normalize the blend weights so they sum to 1
-    for(unsigned int i = 0; i < mesh->mNumVertices; i++) {
+    for(auto i = 0u; i < mesh->mNumVertices; i++) {
         float sum = 0.0f;
         for(int j = 0; j < 4; j++) {
             sum += subMeshData.blendWeights[i][j];
@@ -158,9 +159,9 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
     }
 
     // Process indices
-    for(unsigned int i = 0; i < mesh->mNumFaces; i++) {
+    for(auto i = 0u; i < mesh->mNumFaces; i++) {
         aiFace face = mesh->mFaces[i];
-        for(unsigned int j = 0; j < face.mNumIndices; j++) {
+        for(auto j = 0u; j < face.mNumIndices; j++) {
             subMeshData.indices.push_back(face.mIndices[j]);
         }
     }
@@ -170,7 +171,7 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
 
     // Process tangents and bitangents
     if(mesh->HasTangentsAndBitangents()) {
-        for(unsigned int i = 0; i < mesh->mNumVertices; i++) {
+        for(auto i = 0u; i < mesh->mNumVertices; i++) {
             subMeshData.tangents.push_back(Ogre::Vector3(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z));
             subMeshData.bitangents.push_back(Ogre::Vector3(mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z));
         }
@@ -178,7 +179,7 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
 
     // Process vertex colors
     if(mesh->HasVertexColors(0)) {
-        for(unsigned int i = 0; i < mesh->mNumVertices; i++) {
+        for(auto i = 0u; i < mesh->mNumVertices; i++) {
             subMeshData.colors.push_back(Ogre::ColourValue(mesh->mColors[0][i].r, mesh->mColors[0][i].g, mesh->mColors[0][i].b, mesh->mColors[0][i].a));
         }
     }
@@ -187,7 +188,7 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
     std::map<aiNode*, BoneNode*> nodeToBoneNode;
 
     // First pass: create all bones
-    for(unsigned int i = 0; i < mesh->mNumBones; i++) {
+    for(auto i = 0u; i < mesh->mNumBones; i++) {
         aiBone* bone = mesh->mBones[i];
         BoneNode* boneNode = new BoneNode;
         boneNode->bone = bone;
@@ -272,7 +273,7 @@ void AssimpToOgreImporter::processBoneNode(BoneNode* boneNode, const aiScene* sc
     ogreBone->setScale(scale);
 
     // Set the bone weights
-    for(unsigned int i = 0; i < bone->mNumWeights; i++) {
+    for(auto i = 0u; i < bone->mNumWeights; i++) {
         aiVertexWeight weight = bone->mWeights[i];
 
         Ogre::VertexBoneAssignment vba;
@@ -314,7 +315,7 @@ void AssimpToOgreImporter::processBoneNode(BoneNode* boneNode, const aiScene* sc
 }
 
 void AssimpToOgreImporter::processAnimations(const aiScene* scene) {
-    for(unsigned int i = 0; i < scene->mNumAnimations; i++) {
+    for(auto i = 0u; i < scene->mNumAnimations; i++) {
         aiAnimation* animation = scene->mAnimations[i];
         processAnimation(animation, scene);
     }
@@ -325,7 +326,7 @@ void AssimpToOgreImporter::processAnimation(aiAnimation* animation, const aiScen
     Ogre::Animation* ogreAnimation = skeleton->createAnimation(animation->mName.C_Str(), animation->mDuration/10.0f);
 
     // Process the animation channels
-    for(unsigned int i = 0; i < animation->mNumChannels; i++) {
+    for(auto i = 0u; i < animation->mNumChannels; i++) {
         aiNodeAnim* nodeAnim = animation->mChannels[i];
         processAnimationChannel(nodeAnim, ogreAnimation, scene, i);
     }
@@ -341,7 +342,7 @@ void AssimpToOgreImporter::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::A
     std::map<double, std::tuple<Ogre::Vector3, Ogre::Quaternion, Ogre::Vector3>> keyframes;
 
     // Process the position keys
-    for(unsigned int i = 0; i < nodeAnim->mNumPositionKeys; i++) {
+    for(auto i = 0u; i < nodeAnim->mNumPositionKeys; i++) {
         aiVectorKey positionKey = nodeAnim->mPositionKeys[i];
         Ogre::Vector3 position(positionKey.mValue.x, positionKey.mValue.y, positionKey.mValue.z);
 
@@ -359,7 +360,7 @@ void AssimpToOgreImporter::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::A
     }
 
     // Process the rotation keys
-    for(unsigned int i = 0; i < nodeAnim->mNumRotationKeys; i++) {
+    for(auto i = 0u; i < nodeAnim->mNumRotationKeys; i++) {
         aiQuatKey rotationKey = nodeAnim->mRotationKeys[i];
         Ogre::Quaternion boneTPoseRotation = bone->getOrientation();
         Ogre::Quaternion rot(rotationKey.mValue.w, rotationKey.mValue.x, rotationKey.mValue.y, rotationKey.mValue.z);
@@ -378,7 +379,7 @@ void AssimpToOgreImporter::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::A
 
 
     // Process the scaling keys
-    for(unsigned int i = 0; i < nodeAnim->mNumScalingKeys; i++) {
+    for(auto i = 0u; i < nodeAnim->mNumScalingKeys; i++) {
         aiVectorKey scalingKey = nodeAnim->mScalingKeys[i];
         Ogre::Vector3 scale(scalingKey.mValue.x, scalingKey.mValue.y, scalingKey.mValue.z);
         if (keyframes.find(scalingKey.mTime) == keyframes.end()) {
@@ -403,7 +404,7 @@ void AssimpToOgreImporter::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::A
 
 
 void AssimpToOgreImporter::processMaterials(const aiScene* scene) {
-    for(unsigned int i = 0; i < scene->mNumMaterials; i++) {
+    for(auto i = 0u; i < scene->mNumMaterials; i++) {
         aiMaterial* material = scene->mMaterials[i];
         Ogre::MaterialPtr ogreMaterial = processMaterial(material);
         materials.push_back(ogreMaterial);
@@ -413,9 +414,13 @@ void AssimpToOgreImporter::processMaterials(const aiScene* scene) {
 Ogre::MaterialPtr AssimpToOgreImporter::processMaterial(aiMaterial* material) {
     aiColor3D color(0.f, 0.f, 0.f);
     float shininess = 0.0f;
+    std::string materialName = material->GetName().C_Str();
+    if(materialName.empty()) materialName="importedMaterial" + std::to_string(materials.size());
+    if(auto existingMaterial = Ogre::MaterialManager::getSingleton().getByName(materialName))
+        return existingMaterial;
 
     material->Get(AI_MATKEY_COLOR_DIFFUSE, color);
-    Ogre::MaterialPtr ogreMaterial = Ogre::MaterialManager::getSingleton().create("MyMaterial" + std::to_string(materials.size()), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    Ogre::MaterialPtr ogreMaterial = Ogre::MaterialManager::getSingleton().create(materialName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     ogreMaterial->getTechnique(0)->getPass(0)->setDiffuse(color.r, color.g, color.b, 1.0f);
 
     if(AI_SUCCESS == material->Get(AI_MATKEY_COLOR_AMBIENT, color)) {
