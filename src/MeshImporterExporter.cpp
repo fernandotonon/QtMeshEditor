@@ -29,10 +29,10 @@
 #include <QFileDialog>
 #include <QDebug>
 
-#include "Manager.h"
-//#include "Assimp/OgreAssimpLoader.h"
 #include "OgreXML/OgreXMLMeshSerializer.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
+
+#include "Manager.h"
 #include "AssimpToOgreImporter.h"
 
 #ifndef WIN32
@@ -112,87 +112,19 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
             else
             {
                 assimp:
-
                 AssimpToOgreImporter importer;
-                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString().data());
-
-               /* AssimpOgreImporter importer(Manager::getSingleton()->getSceneMgr());
-                Ogre::MeshPtr mesh = importer.importMesh(file.filePath().toStdString().data());*/
+                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString());
                 if (mesh)
                 {
                     auto meshName = file.baseName();
-
                     sn = Manager::getSingleton()->addSceneNode(QString(meshName));
 
                     Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, mesh);
-
-                    //Ogre::Entity* en = Manager::getSingleton()->getSceneMgr()->createEntity(sn, mesh);
-                    //Manager::getSingleton()->getSceneMgr()->getRootSceneNode()->createChildSceneNode()->attachObject(en);
-
 
                     sn->setPosition(0,0,0);
 
                     configureCamera(en);
                 }
-
-               /* AssimpLoader::Options opts;
-                opts.customAnimationName = "";
-                opts.animationSpeedModifier = 1.0f;
-                opts.postProcessSteps = 0x1|0x2|0x4|0x8|0x200|0x400|0x4000|0x1000000|0x8000000; // Assimp postprocess.h TODO: import it in the future for using a reliable enum
-                opts.maxEdgeAngle = 30;
-                opts.params = AssimpLoader::LP_CUT_ANIMATION_WHERE_NO_FURTHER_CHANGE;//|Ogre::AssimpLoader::LP_QUIET_MODE;
-
-                // Get a unique name
-                auto meshName = file.baseName();
-                int i = 0;
-                while(Ogre::MeshManager::getSingleton().getByName(meshName.toStdString())){
-                    meshName = file.baseName() + " (" + std::to_string(++i).data() + ")";
-                }
-                Ogre::MeshPtr mesh =  Ogre::MeshManager::getSingleton().createManual(meshName.toStdString(), "General");
-                Ogre::SkeletonPtr skeleton;
-                Ogre::String filePath = file.filePath().toStdString();
-
-                AssimpLoader loader;
-                try{
-                    if(loader.load(filePath, mesh.get(), skeleton,opts))
-                    {
-                        if(skeleton.get())
-                        {
-                            mesh->_notifySkeleton(skeleton);
-                            mesh->setSkeletonName(skeleton.get()->getName());
-                            for (unsigned short i = 0; i < skeleton->getNumBones(); ++i) {
-                               Ogre::Bone* bone = skeleton->getBone(i);
-                               Ogre::Quaternion orientation = bone->getOrientation();
-                               Ogre::LogManager::getSingleton().logMessage("Bone: "+ std::to_string(i) + " - " + std::to_string(skeleton->getNumBones())+ " Nome: " + bone->getName() + " Orientation: " + Ogre::StringConverter::toString(orientation) + " Position: " + Ogre::StringConverter::toString(bone->getPosition()));
-
-                            }
-                            /**auto anim = skeleton->getAnimation(0);
-                            for(unsigned int i = 0; i<anim->getNumNodeTracks(); ++i){
-                                auto track = anim->getNodeTrack(i);
-                                auto node = track->getAssociatedNode();
-                                Ogre::LogManager::getSingleton().logMessage("node animation: "+node->getName()+" has "+std::to_string(track->getNumKeyFrames()));
-                                for(unsigned int j = 0; j< track->getNumKeyFrames(); ++j){
-                                    auto keyframe = track->getNodeKeyFrame(j);
-                                    Ogre::LogManager::getSingleton().logMessage(" keyframe: " + Ogre::StringConverter::toString(keyframe->getRotation()));
-
-                                }
-                            }** /
-                        }
-                        sn = Manager::getSingleton()->addSceneNode(QString(meshName));
-                        mesh = mesh->clone("Mesh_"+sn->getName());
-                        Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, mesh);
-
-                        sn->setPosition(0,0,0);
-
-                        configureCamera(en);
-                    }
-                    else
-                    {
-                        QMessageBox::warning(NULL,"Error when importing 3d file","Not supported by assimp.",QMessageBox::Ok);
-                    }
-                } catch (...){
-                    QMessageBox::warning(NULL,"Error when importing 3d file","Not supported by assimp.",QMessageBox::Ok);
-                }*/
             }
         }
     }

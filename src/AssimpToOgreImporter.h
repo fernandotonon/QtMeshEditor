@@ -48,6 +48,8 @@ public:
                                                      aiProcess_GlobalScale
                                                  );
 
+        modelName = scene->mName.C_Str();
+        if(modelName.empty()) modelName="importedModel";
 
         if(!scene || scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE || !scene->mRootNode) {
             Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));
@@ -58,7 +60,7 @@ public:
         processMaterials(scene);
 
         // Create a new skeleton
-        skeleton = Ogre::SkeletonManager::getSingleton().create("MySkeleton.skeleton", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
+        skeleton = Ogre::SkeletonManager::getSingleton().create(modelName+".skeleton", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
 
         // Create the root bone
         skeleton->createBone("RootNode");
@@ -443,69 +445,6 @@ private:
             Ogre::TexturePtr texture = Ogre::TextureManager::getSingleton().load(textureFilename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
             ogreMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(texture->getName());
         }
-       /* if(AI_SUCCESS == material->GetTexture(aiTextureType_SPECULAR, 0, &path)) {
-            std::string texturePath = path.C_Str();
-            std::string textureFilename = texturePath.substr(texturePath.find_last_of("/\\") + 1);
-            Ogre::TexturePtr texture = Ogre::TextureManager::getSingleton().load(textureFilename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-            Ogre::TextureUnitState* textureUnit =ogreMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(texture->getName());
-            textureUnit->setColourOperationEx(Ogre::LBX_BLEND_MANUAL, Ogre::LBS_TEXTURE, Ogre::LBS_CURRENT, Ogre::ColourValue::White, Ogre::ColourValue::Black, 0.0);
-        }
-        if(AI_SUCCESS == material->GetTexture(aiTextureType_NORMALS, 0, &path)) {
-            std::string texturePath = path.C_Str();
-            std::string textureFilename = texturePath.substr(texturePath.find_last_of("/\\") + 1);
-            Ogre::TexturePtr texture = Ogre::TextureManager::getSingleton().load(textureFilename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-            Ogre::TextureUnitState* textureUnit = ogreMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(texture->getName());
-            textureUnit->setTextureCoordSet(1); // Assuming the normal map uses the second set of UV coordinates
-        }*/
-        /*// Iterate through all texture types
-        for (int type = aiTextureType_NONE; type != aiTextureType_UNKNOWN; ++type) {
-            aiTextureType textureType = static_cast<aiTextureType>(type);
-
-            // Get the texture count for this type
-            unsigned int textureCount = material->GetTextureCount(textureType);
-
-            // Iterate through all textures of this type
-            for (unsigned int i = 0; i < textureCount; i++) {
-                aiString path;
-                if (AI_SUCCESS == material->GetTexture(textureType, i, &path)) {
-                    std::string texturePath = path.C_Str();
-                    std::string textureFilename = texturePath.substr(texturePath.find_last_of("/\\") + 1);
-                    Ogre::TexturePtr texture = Ogre::TextureManager::getSingleton().load(textureFilename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-
-                    // Create a texture unit state for this texture
-                    Ogre::TextureUnitState* textureUnit = ogreMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(texture->getName());
-
-                    // Set additional properties based on the texture type (optional)
-                    switch (textureType) {
-                        case aiTextureType_DIFFUSE:
-                            // Apply specific settings for diffuse textures here
-                            // For example, set a specific texture addressing mode
-                            textureUnit->setTextureAddressingMode(Ogre::TextureUnitState::TAM_WRAP);
-                            //textureUnit->setColourOperationEx(Ogre::LBX_MODULATE);
-                            break;
-                        case aiTextureType_SPECULAR:
-                            // Apply specific settings for specular textures here
-                            // For example, set a specific blending mode
-                            textureUnit->setColourOperationEx(Ogre::LBX_MODULATE);
-                            break;
-                        case aiTextureType_NORMALS:
-                            // Aply specific settings for normal maps here
-                            // For example, set the texture coordinate set to use
-                            textureUnit->setTextureCoordSet(1);
-                            break;
-                        case aiTextureType_HEIGHT:
-                            // Apply specific settings for height maps here
-                            // For example, set a specific texture filtering
-                            textureUnit->setTextureFiltering(Ogre::TFO_BILINEAR);
-                            break;
-                        // Handle other texture types as needed
-                        default:
-                            // Handle unknown or unhandled texture types here
-                            break;
-                    }
-                }
-            }
-        }*/
 
         return ogreMaterial;
     }
@@ -513,7 +452,7 @@ private:
 
     Ogre::MeshPtr createMesh() {
         // Create the mesh
-        Ogre::MeshPtr ogreMesh = Ogre::MeshManager::getSingleton().createManual("MyMesh", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        Ogre::MeshPtr ogreMesh = Ogre::MeshManager::getSingleton().createManual(modelName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
         // Initialize the min and max coordinates to the first vertex
         Ogre::Vector3 minCoords = subMeshesData[0].vertices[0];
@@ -533,7 +472,7 @@ private:
             Ogre::VertexDeclaration* vertexDecl = vertexData->vertexDeclaration;
             size_t currOffset = vertexDecl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION).getSize();
             currOffset += vertexDecl->addElement(0, currOffset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL).getSize();
-            currOffset += vertexDecl->addElement(0, currOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES).getSize();
+            vertexDecl->addElement(0, currOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES).getSize();
 
             // Set the vertex count
             vertexData->vertexCount = subMeshData.vertices.size();
@@ -586,7 +525,7 @@ private:
             Ogre::RGBA* pColor = static_cast<Ogre::RGBA*>(colorBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
             for(const Ogre::ColourValue& color : subMeshData.colors) {
                 Ogre::ColourValue finalColor(color.r, color.g, color.b, color.a);
-                *pColor++ = Ogre::VertexElement::convertColourValue(finalColor, Ogre::VET_COLOUR_ARGB);
+                *pColor++ = finalColor.getAsARGB();
             }
             colorBuf->unlock();
             vertexData->vertexBufferBinding->setBinding(3, colorBuf);
@@ -637,7 +576,6 @@ private:
         // Set the skeleton
         ogreMesh->setSkeletonName(skeleton->getName());
 
-
         // Compile the mesh
         ogreMesh->load();
 
@@ -650,4 +588,5 @@ private:
     Ogre::SkeletonPtr skeleton;
     std::map<std::string, BoneNode*> boneNodes;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
+    std::string modelName;
 };
