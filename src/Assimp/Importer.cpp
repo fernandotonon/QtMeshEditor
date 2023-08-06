@@ -26,6 +26,8 @@
 
 #include "Importer.h"
 
+#include <algorithm>
+
 Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
@@ -48,13 +50,13 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
                                                  aiProcess_GlobalScale
                                              );
 
-    modelName = scene->mName.C_Str();
-    if(modelName.empty()) modelName="importedModel";
-
     if(!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));
         return {};
     }
+    
+    modelName = scene->mName.C_Str();
+    if(modelName.empty()) modelName="importedModel";
 
     // Process materials
     processMaterials(scene);
@@ -300,14 +302,10 @@ void AssimpToOgreImporter::processBoneNode(BoneNode* boneNode, const aiScene* sc
         Ogre::Bone* parentBone = skeleton->getBone(bone->mNode->mParent->mName.C_Str());
         if(parentBone) {
             // Check if ogreBone is already a child of parentBone
-            bool isChild = false;
-            for(const auto& childNode: parentBone->getChildren()){
-                if (childNode->getName() == ogreBone->getName()) {
-                    isChild = true;
-                    break;
-                }
-            }
-            if(!isChild) {
+            if (!std::any_of(parentBone->getChildren().begin(), parentBone->getChildren().end(),
+                             [&ogreBone](const auto& childNode) {
+                                 return childNode->getName() == ogreBone->getName();
+                             })) {
                 parentBone->addChild(ogreBone);
             }
         }
@@ -460,7 +458,6 @@ Ogre::MeshPtr AssimpToOgreImporter::createMesh() {
     Ogre::Vector3 minCoords = subMeshesData[0].vertices[0];
     Ogre::Vector3 maxCoords = subMeshesData[0].vertices[0];
 
-    size_t submeshCount = 0;
     for(const SubMeshData& subMeshData : subMeshesData) {
         // Create a submesh
         Ogre::SubMesh* subMesh = ogreMesh->createSubMesh();
@@ -567,8 +564,6 @@ Ogre::MeshPtr AssimpToOgreImporter::createMesh() {
 
         // Assign the material
         subMesh->setMaterialName(materials[subMeshData.materialIndex]->getName());
-
-        ++submeshCount;
     }
 
     // Set the bounding box and bounding sphere radius
