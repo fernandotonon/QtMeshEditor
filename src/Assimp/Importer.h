@@ -60,7 +60,7 @@ private:
     void processNode(aiNode* node, const aiScene* scene);
 
     // Bones
-    void createBone(aiBone* bone, const aiScene* scene);
+    void createBone(const std::string& boneName);
     void processBoneNode(BoneNode* boneNode, const aiScene* scene, SubMeshData& subMeshData);
 
     // Animations

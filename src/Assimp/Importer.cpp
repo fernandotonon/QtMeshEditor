@@ -54,7 +54,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));
         return {};
     }
-    
+
     modelName = scene->mName.C_Str();
     if(modelName.empty()) modelName="importedModel";
 
@@ -65,7 +65,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     skeleton = Ogre::SkeletonManager::getSingleton().create(modelName+".skeleton", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
 
     // Create the root bone
-    skeleton->createBone("RootNode");
+    createBone(scene->mRootNode->mName.C_Str());
 
     // Process the root node recursively
     processNode(scene->mRootNode, scene);
@@ -196,7 +196,7 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
         boneNode->bone = bone;
         boneNodes[bone->mName.C_Str()] = boneNode;
         nodeToBoneNode[bone->mNode] = boneNode;  // Populate the nodeToBoneNode map
-        createBone(bone, scene);
+        createBone(bone->mName.C_Str());
     }
 
     // Second pass: set bone properties and relationships
@@ -227,11 +227,11 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
     return subMeshData;
 }
 
-void AssimpToOgreImporter::createBone(aiBone* bone, const aiScene* scene) {
+void AssimpToOgreImporter::createBone(const std::string& boneName) {
     // Check if the bone already exists
-    if(!skeleton->hasBone(bone->mName.C_Str())) {
+    if(!skeleton->hasBone(boneName)) {
         // If the bone does not exist, create it
-        skeleton->createBone(bone->mName.C_Str());
+        skeleton->createBone(boneName);
     }
 }
 
