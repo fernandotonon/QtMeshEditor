@@ -104,7 +104,6 @@ jobs:
       with:
           repository: OGRECave/ogre
           path: ${{github.workspace}}/ogre
-          submodules: recursive
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Set up MinGW
@@ -122,7 +121,7 @@ jobs:
             cd ${{github.workspace}}/ogre
             cmake -B ${{github.workspace}}/ogre-build -S . -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=OFF -DOGRE_BUILD_PLUGIN_PCZ=ON -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd ${{github.workspace}}/ogre-build
-            mingw32-make install -j8
+            mingw32-make install -j8 -v
         
  build-windows:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
