@@ -100,10 +100,12 @@ jobs:
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Install Doxygen
+      shell: cmd
       run: |
-        Invoke-WebRequest -Uri "https://www.doxygen.nl/files/doxygen-1.9.7-setup.exe" -OutFile "doxygen-installer.exe"
-        Start-Process -Wait -FilePath .\doxygen-installer.exe -ArgumentList "/VERYSILENT"
-        echo "C:\Program Files\doxygen\bin" >> $GITHUB_PATH
+        curl -L -o doxygen-installer.exe "https://www.doxygen.nl/files/doxygen-1.9.7-setup.exe"
+        doxygen-installer.exe /VERYSILENT
+        echo C:\Program Files\doxygen\bin >> %GITHUB_PATH%
+        echo ::add-path::C:\Program Files\doxygen\bin
             
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Check out ogre repo
