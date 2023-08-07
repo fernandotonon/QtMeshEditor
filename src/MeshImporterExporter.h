@@ -37,7 +37,6 @@ class MeshImporterExporter
 private:
     static void configureCamera(Ogre::Entity *en);
 public:
-    MeshImporterExporter();
     static void importer(const QStringList &_uriList);
     static void exporter(Ogre::SceneNode *_sn);
 };

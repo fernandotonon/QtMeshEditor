@@ -74,7 +74,6 @@ MaterialHighlighter.h
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/Assimp")
 
-
 #file(GLOB UI_FILES ./ui_files/*.ui)
 # if we don't include this CMake will not include ui headers properly:
 include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${BUILD_INCLUDE_DIR} ${BUILD_UIH_DIR})
@@ -200,7 +199,7 @@ elseif(APPLE)
         add_executable(${CMAKE_PROJECT_NAME}
 	${HEADER_FILES}
 	${SRC_FILES}
-	${RESOURCE_SRCS}
+        ${RESOURCE_SRCS}
         )
         set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES MACOSX_BUNDLE TRUE)
 else()

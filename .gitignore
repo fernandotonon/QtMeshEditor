@@ -25,3 +25,7 @@ ui_*
 _CPack_Packages/*
 _deps/*
 *_autogen/*
+.vscode/*
+src/QtMeshEditor_autogen/*
+src/__/*
+src/qrc_resource.cpp
