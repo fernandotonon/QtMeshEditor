@@ -77,7 +77,7 @@ private:
 
     // Mesh
     Ogre::MeshPtr createMesh();
-    SubMeshData *processMesh(aiMesh* mesh, const aiScene* scene);
+    SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
 
     Assimp::Importer importer;
     std::vector<SubMeshData*> subMeshesData;
