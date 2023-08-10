@@ -87,11 +87,14 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     // Process animations
     processAnimations(scene);
 
-    // delete the BoneNode objects to avoid memory leaks.
+    // clean up to avoid memory leaks.
     for(auto& pair : boneNodes) {
         delete pair.second;
     }
     boneNodes.clear();
+    materials.clear();
+    unattachedBoneNodes.clear();
+    subMeshesData.clear();
 
     return ogreMesh;
 }
@@ -232,6 +235,7 @@ SubMeshData* AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scen
 
     return subMeshData;
 }
+
 void AssimpToOgreImporter::createOgreBones(const aiScene *scene) {
     for(auto i = 0u; i < scene->mNumMeshes; i++) {
         aiMesh* mesh = scene->mMeshes[i];
@@ -240,6 +244,8 @@ void AssimpToOgreImporter::createOgreBones(const aiScene *scene) {
             if(boneNodes.find(std::string(mesh->mName.C_Str())+bone->mName.C_Str()) == boneNodes.end()){
                 BoneNode* boneNode = new BoneNode;
                 boneNode->bone = bone;
+                //TODO: find a better way to store and process this, I hacked into using mesh name + bone name, because each submesh has its own relation with the bone,
+                // so they have their own bone node for storing for e.g. the skinning information. Keep in mind that it needs to process the bones considering the bone hierarchy.
                 boneNodes[std::string(mesh->mName.C_Str())+bone->mName.C_Str()] = boneNode;
                 aiBonesMap[bone->mName.C_Str()] = bone;
                 nodeToBoneNode[bone->mNode] = boneNode;  // Populate the nodeToBoneNode map
@@ -407,7 +413,6 @@ void AssimpToOgreImporter::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::A
             std::get<1>(keyframes[rotationKey.mTime]) = rot;
         }
     }
-
 
     // Process the scaling keys
     for(auto i = 0u; i < nodeAnim->mNumScalingKeys; i++) {
