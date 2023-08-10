@@ -56,7 +56,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     }
 
     modelName = scene->mName.C_Str();
-    if(modelName.empty()) modelName="importedModel";
+    if(modelName.empty()) modelName = path.substr(path.find_last_of("/\\") + 1);
 
     // Process materials
     processMaterials(scene);
@@ -64,11 +64,22 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     // Create a new skeleton
     skeleton = Ogre::SkeletonManager::getSingleton().create(modelName+".skeleton", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
 
-    // Create the root bone
-    createBone(scene->mRootNode->mName.C_Str());
+    createOgreBones(scene);
 
-    // Process the root node recursively
+    // Process the root node recursively (meshes)
     processNode(scene->mRootNode, scene);
+
+    // Process the root bones first
+    for(auto i = 0u; i < scene->mNumMeshes; i++) {
+        aiMesh* mesh = scene->mMeshes[i];
+        for(auto j = 0u; j < mesh->mNumBones; j++) {
+            aiBone* bone = mesh->mBones[j];
+            if(boneNodes.find(std::string(mesh->mName.C_Str())+bone->mNode->mParent->mName.C_Str()) == boneNodes.end()) {
+                createBone(bone->mNode->mParent->mName.C_Str());
+                processBoneHierarchy(bone, scene);
+            }
+        }
+    }
 
     // Create the mesh
     Ogre::MeshPtr ogreMesh = createMesh();
@@ -76,7 +87,32 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     // Process animations
     processAnimations(scene);
 
+    // delete the BoneNode objects to avoid memory leaks.
+    for(auto& pair : boneNodes) {
+        delete pair.second;
+    }
+    boneNodes.clear();
+
     return ogreMesh;
+}
+
+void AssimpToOgreImporter::processBoneHierarchy(aiBone* bone, const aiScene* scene) {
+    // Process the bone node
+    if(boneNameToSubMeshes.find(bone->mName.C_Str()) != boneNameToSubMeshes.end() && !boneNameToSubMeshes[bone->mName.C_Str()].empty()) {
+        for(auto subMeshData : boneNameToSubMeshes[bone->mName.C_Str()]) {
+            BoneNode* boneNode = boneNodes[subMeshData->mName+bone->mName.C_Str()];
+            processBoneNode(boneNode, scene, *subMeshData);
+        }
+        boneNameToSubMeshes.erase(bone->mName.C_Str());
+    }
+
+    // Recursively process children bones
+    for(auto i = 0u; i < bone->mNode->mNumChildren; i++) {
+        aiNode* childNode = bone->mNode->mChildren[i];
+        if(aiBonesMap.find(childNode->mName.C_Str()) != aiBonesMap.end()) {
+            processBoneHierarchy(aiBonesMap[childNode->mName.C_Str()], scene);
+        }
+    }
 }
 
 void AssimpToOgreImporter::processNode(aiNode* node, const aiScene* scene) {
@@ -92,56 +128,55 @@ void AssimpToOgreImporter::processNode(aiNode* node, const aiScene* scene) {
     }
 }
 
-SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene) {
-    SubMeshData subMeshData;
+SubMeshData* AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene) {
+    SubMeshData* subMeshData = new SubMeshData();
+    subMeshData->mName = mesh->mName.C_Str();
 
     // Initialize blend indices and blend weights
     for(auto i = 0u; i < mesh->mNumVertices; i++) {
-        subMeshData.blendIndices.push_back(Ogre::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
-        subMeshData.blendWeights.push_back(Ogre::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
+        subMeshData->blendIndices.push_back(Ogre::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
+        subMeshData->blendWeights.push_back(Ogre::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
 
         // Process vertices
-        subMeshData.vertices.push_back(Ogre::Vector3(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z));
+        subMeshData->vertices.push_back(Ogre::Vector3(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z));
 
         // Process normals
         if(mesh->HasNormals()) {
-            subMeshData.normals.push_back(Ogre::Vector3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z));
+            subMeshData->normals.push_back(Ogre::Vector3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z));
         }
 
         // Process texture coordinates
         if(mesh->HasTextureCoords(0)) {
-            subMeshData.texCoords.push_back(Ogre::Vector2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y));
+            subMeshData->texCoords.push_back(Ogre::Vector2(mesh->mTextureCoords[0][i].x, mesh->mTextureCoords[0][i].y));
         }
     }
 
     // Load blend weights and blend indices
-    if(mesh->HasBones()) {
-        for(auto i = 0u; i < mesh->mNumBones; i++) {
-            aiBone* bone = mesh->mBones[i];
-            for(auto j = 0u; j < bone->mNumWeights; j++) {
-                aiVertexWeight weight = bone->mWeights[j];
-                int freeIndex = -1;
-                for(int k = 0; k < 4; k++) {
-                    if(subMeshData.blendWeights[weight.mVertexId][k] == 0.0f) {
-                        freeIndex = k;
-                        break;
+    for(auto i = 0u; i < mesh->mNumBones; i++) {
+        aiBone* bone = mesh->mBones[i];
+        for(auto j = 0u; j < bone->mNumWeights; j++) {
+            aiVertexWeight weight = bone->mWeights[j];
+            int freeIndex = -1;
+            for(int k = 0; k < 4; k++) {
+                if(subMeshData->blendWeights[weight.mVertexId][k] == 0.0f) {
+                    freeIndex = k;
+                    break;
+                }
+            }
+            if(freeIndex != -1) {
+                subMeshData->blendIndices[weight.mVertexId][freeIndex] = i;
+                subMeshData->blendWeights[weight.mVertexId][freeIndex] = weight.mWeight;
+            } else {
+                // Find the smallest weight, replace it if the current weight is larger
+                int smallest = 0;
+                for(int k = 1; k < 4; k++) {
+                    if(subMeshData->blendWeights[weight.mVertexId][k] < subMeshData->blendWeights[weight.mVertexId][smallest]) {
+                        smallest = k;
                     }
                 }
-                if(freeIndex != -1) {
-                    subMeshData.blendIndices[weight.mVertexId][freeIndex] = i;
-                    subMeshData.blendWeights[weight.mVertexId][freeIndex] = weight.mWeight;
-                } else {
-                    // Find the smallest weight, replace it if the current weight is larger
-                    int smallest = 0;
-                    for(int k = 1; k < 4; k++) {
-                        if(subMeshData.blendWeights[weight.mVertexId][k] < subMeshData.blendWeights[weight.mVertexId][smallest]) {
-                            smallest = k;
-                        }
-                    }
-                    if(subMeshData.blendWeights[weight.mVertexId][smallest] < weight.mWeight) {
-                        subMeshData.blendIndices[weight.mVertexId][smallest] = i;
-                        subMeshData.blendWeights[weight.mVertexId][smallest] = weight.mWeight;
-                    }
+                if(subMeshData->blendWeights[weight.mVertexId][smallest] < weight.mWeight) {
+                    subMeshData->blendIndices[weight.mVertexId][smallest] = i;
+                    subMeshData->blendWeights[weight.mVertexId][smallest] = weight.mWeight;
                 }
             }
         }
@@ -151,11 +186,11 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
     for(auto i = 0u; i < mesh->mNumVertices; i++) {
         float sum = 0.0f;
         for(int j = 0; j < 4; j++) {
-            sum += subMeshData.blendWeights[i][j];
+            sum += subMeshData->blendWeights[i][j];
         }
         if(sum > 0.0f) {
             for(int j = 0; j < 4; j++) {
-                subMeshData.blendWeights[i][j] /= sum;
+                subMeshData->blendWeights[i][j] /= sum;
             }
         }
     }
@@ -164,67 +199,65 @@ SubMeshData AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene
     for(auto i = 0u; i < mesh->mNumFaces; i++) {
         aiFace face = mesh->mFaces[i];
         for(auto j = 0u; j < face.mNumIndices; j++) {
-            subMeshData.indices.push_back(face.mIndices[j]);
+            subMeshData->indices.push_back(face.mIndices[j]);
         }
     }
 
     // Process Material Index
-    subMeshData.materialIndex = mesh->mMaterialIndex;
+    subMeshData->materialIndex = mesh->mMaterialIndex;
 
     // Process tangents and bitangents
     if(mesh->HasTangentsAndBitangents()) {
         for(auto i = 0u; i < mesh->mNumVertices; i++) {
-            subMeshData.tangents.push_back(Ogre::Vector3(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z));
-            subMeshData.bitangents.push_back(Ogre::Vector3(mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z));
+            subMeshData->tangents.push_back(Ogre::Vector3(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z));
+            subMeshData->bitangents.push_back(Ogre::Vector3(mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z));
         }
     }
 
     // Process vertex colors
     if(mesh->HasVertexColors(0)) {
         for(auto i = 0u; i < mesh->mNumVertices; i++) {
-            subMeshData.colors.push_back(Ogre::ColourValue(mesh->mColors[0][i].r, mesh->mColors[0][i].g, mesh->mColors[0][i].b, mesh->mColors[0][i].a));
-        }
-    }
-
-    // Create a map of aiNode* to BoneNode*
-    std::map<aiNode*, BoneNode*> nodeToBoneNode;
-
-    // First pass: create all bones
-    for(auto i = 0u; i < mesh->mNumBones; i++) {
-        aiBone* bone = mesh->mBones[i];
-        BoneNode* boneNode = new BoneNode;
-        boneNode->bone = bone;
-        boneNodes[bone->mName.C_Str()] = boneNode;
-        nodeToBoneNode[bone->mNode] = boneNode;  // Populate the nodeToBoneNode map
-        createBone(bone->mName.C_Str());
-    }
-
-    // Second pass: set bone properties and relationships
-    for(auto& pair : boneNodes) {
-        BoneNode* boneNode = pair.second;
-        aiBone* bone = boneNode->bone;
-
-        if(bone->mNode->mParent) {
-            BoneNode* parentBoneNode = nodeToBoneNode[bone->mNode->mParent];  // Look up the parent bone node in the nodeToBoneNode map
-            if(parentBoneNode) {
-                parentBoneNode->children.push_back(boneNode);
-            }
+            subMeshData->colors.push_back(Ogre::ColourValue(mesh->mColors[0][i].r, mesh->mColors[0][i].g, mesh->mColors[0][i].b, mesh->mColors[0][i].a));
         }
     }
 
     // process the BoneNode objects in a depth-first manner
-    for(auto& pair : boneNodes) {
-        BoneNode* boneNode = pair.second;
-        processBoneNode(boneNode, scene, subMeshData);
+    for(auto i = 0u; i < mesh->mNumBones; i++) {
+        aiBone* bone = mesh->mBones[i];
+        if(boneNameToSubMeshes.find(bone->mName.C_Str()) == boneNameToSubMeshes.end()){
+            boneNameToSubMeshes[bone->mName.C_Str()] = std::vector<SubMeshData*>();
+        }
+        boneNameToSubMeshes[bone->mName.C_Str()].push_back(subMeshData);
     }
-
-    // delete the BoneNode objects to avoid memory leaks.
-    for(auto& pair : boneNodes) {
-        delete pair.second;
-    }
-    boneNodes.clear();
 
     return subMeshData;
+}
+void AssimpToOgreImporter::createOgreBones(const aiScene *scene) {
+    for(auto i = 0u; i < scene->mNumMeshes; i++) {
+        aiMesh* mesh = scene->mMeshes[i];
+        for(auto j = 0u; j < mesh->mNumBones; j++) {
+            aiBone* bone = mesh->mBones[j];
+            if(boneNodes.find(std::string(mesh->mName.C_Str())+bone->mName.C_Str()) == boneNodes.end()){
+                BoneNode* boneNode = new BoneNode;
+                boneNode->bone = bone;
+                boneNodes[std::string(mesh->mName.C_Str())+bone->mName.C_Str()] = boneNode;
+                aiBonesMap[bone->mName.C_Str()] = bone;
+                nodeToBoneNode[bone->mNode] = boneNode;  // Populate the nodeToBoneNode map
+                createBone(bone->mName.C_Str());
+            }
+        }
+    }
+
+    for(auto i = 0u; i < scene->mNumAnimations; i++) {
+        aiAnimation* anim = scene->mAnimations[i];
+        for(auto j = 0u; j < anim->mNumChannels; j++) {
+            aiNodeAnim* nodeAnim = anim->mChannels[j];
+            if(boneNodes.find(nodeAnim->mNodeName.C_Str()) == boneNodes.end()){
+                unattachedBoneNodes.push_back(nodeAnim->mNodeName.C_Str());
+                createBone(nodeAnim->mNodeName.C_Str());
+            }
+        }
+    }
 }
 
 void AssimpToOgreImporter::createBone(const std::string& boneName) {
@@ -455,10 +488,10 @@ Ogre::MeshPtr AssimpToOgreImporter::createMesh() {
     Ogre::MeshPtr ogreMesh = Ogre::MeshManager::getSingleton().createManual(modelName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     // Initialize the min and max coordinates to the first vertex
-    Ogre::Vector3 minCoords = subMeshesData[0].vertices[0];
-    Ogre::Vector3 maxCoords = subMeshesData[0].vertices[0];
+    Ogre::Vector3 minCoords = subMeshesData[0]->vertices[0];
+    Ogre::Vector3 maxCoords = subMeshesData[0]->vertices[0];
 
-    for(const SubMeshData& subMeshData : subMeshesData) {
+    for(const auto& subMeshData : subMeshesData) {
         // Create a submesh
         Ogre::SubMesh* subMesh = ogreMesh->createSubMesh();
 
@@ -474,24 +507,24 @@ Ogre::MeshPtr AssimpToOgreImporter::createMesh() {
         vertexDecl->addElement(0, currOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES).getSize();
 
         // Set the vertex count
-        vertexData->vertexCount = subMeshData.vertices.size();
+        vertexData->vertexCount = subMeshData->vertices.size();
 
         // Create the vertex buffer and set the vertex data
         Ogre::HardwareVertexBufferSharedPtr vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(vertexDecl->getVertexSize(0), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
         float* pVertex = static_cast<float*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
 
         // Set the vertex positions, blend weights, normals, texture coordinates, and blend indices
-        for(size_t i = 0; i < subMeshData.vertices.size(); i++) {
-            *pVertex++ = subMeshData.vertices[i].x;
-            *pVertex++ = subMeshData.vertices[i].y;
-            *pVertex++ = subMeshData.vertices[i].z;
+        for(size_t i = 0; i < subMeshData->vertices.size(); i++) {
+            *pVertex++ = subMeshData->vertices[i].x;
+            *pVertex++ = subMeshData->vertices[i].y;
+            *pVertex++ = subMeshData->vertices[i].z;
 
-            *pVertex++ = subMeshData.normals[i].x;
-            *pVertex++ = subMeshData.normals[i].y;
-            *pVertex++ = subMeshData.normals[i].z;
+            *pVertex++ = subMeshData->normals[i].x;
+            *pVertex++ = subMeshData->normals[i].y;
+            *pVertex++ = subMeshData->normals[i].z;
 
-            *pVertex++ = subMeshData.texCoords[i].x;
-            *pVertex++ = subMeshData.texCoords[i].y;
+            *pVertex++ = subMeshData->texCoords[i].x;
+            *pVertex++ = subMeshData->texCoords[i].y;
         }
 
         vbuf->unlock();
@@ -500,7 +533,7 @@ Ogre::MeshPtr AssimpToOgreImporter::createMesh() {
         // Create the tangent buffer and set the tangent data
         Ogre::HardwareVertexBufferSharedPtr tangentBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
         float* pTangent = static_cast<float*>(tangentBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for(const Ogre::Vector3& tangent : subMeshData.tangents) {
+        for(const Ogre::Vector3& tangent : subMeshData->tangents) {
             *pTangent++ = tangent.x;
             *pTangent++ = tangent.y;
             *pTangent++ = tangent.z;
@@ -511,7 +544,7 @@ Ogre::MeshPtr AssimpToOgreImporter::createMesh() {
         // Create the bitangent buffer and set the bitangent data
         Ogre::HardwareVertexBufferSharedPtr bitangentBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
         float* pBitangent = static_cast<float*>(bitangentBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for(const Ogre::Vector3& bitangent : subMeshData.bitangents) {
+        for(const Ogre::Vector3& bitangent : subMeshData->bitangents) {
             *pBitangent++ = bitangent.x;
             *pBitangent++ = bitangent.y;
             *pBitangent++ = bitangent.z;
@@ -522,7 +555,7 @@ Ogre::MeshPtr AssimpToOgreImporter::createMesh() {
         // Create the color buffer and set the color data
         Ogre::HardwareVertexBufferSharedPtr colorBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(Ogre::VertexElement::getTypeSize(Ogre::VET_COLOUR), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
         Ogre::RGBA* pColor = static_cast<Ogre::RGBA*>(colorBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for(const Ogre::ColourValue& color : subMeshData.colors) {
+        for(const Ogre::ColourValue& color : subMeshData->colors) {
             Ogre::ColourValue finalColor(color.r, color.g, color.b, color.a);
             *pColor++ = finalColor.getAsARGB();
         }
@@ -533,22 +566,22 @@ Ogre::MeshPtr AssimpToOgreImporter::createMesh() {
         Ogre::IndexData* indexData = subMesh->indexData;
 
         // Set the index count
-        indexData->indexCount = subMeshData.indices.size();
+        indexData->indexCount = subMeshData->indices.size();
 
         // Create the index buffer and set the index data
         Ogre::HardwareIndexBufferSharedPtr ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(Ogre::HardwareIndexBuffer::IT_16BIT, indexData->indexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
         unsigned short* pIndices = static_cast<unsigned short*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
 
         // Set the indices
-        for(size_t i = 0; i < subMeshData.indices.size(); i++) {
-            *pIndices++ = subMeshData.indices[i];
+        for(size_t i = 0; i < subMeshData->indices.size(); i++) {
+            *pIndices++ = subMeshData->indices[i];
         }
 
         ibuf->unlock();
         indexData->indexBuffer = ibuf;
 
         // Update the min and max coordinates
-        for(const Ogre::Vector3& vertex : subMeshData.vertices) {
+        for(const Ogre::Vector3& vertex : subMeshData->vertices) {
             minCoords.x = std::min(minCoords.x, vertex.x);
             minCoords.y = std::min(minCoords.y, vertex.y);
             minCoords.z = std::min(minCoords.z, vertex.z);
@@ -558,12 +591,12 @@ Ogre::MeshPtr AssimpToOgreImporter::createMesh() {
         }
 
         // Set the bone assignments
-        for(const Ogre::VertexBoneAssignment& vba : subMeshData.boneAssignments) {
+        for(const Ogre::VertexBoneAssignment& vba : subMeshData->boneAssignments) {
             subMesh->addBoneAssignment(vba);
         }
 
         // Assign the material
-        subMesh->setMaterialName(materials[subMeshData.materialIndex]->getName());
+        subMesh->setMaterialName(materials[subMeshData->materialIndex]->getName());
     }
 
     // Set the bounding box and bounding sphere radius

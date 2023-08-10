@@ -43,6 +43,7 @@ struct SubMeshData {
     std::vector<Ogre::Vector4> blendWeights;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     unsigned int materialIndex;
+    std::string mName;
 };
 
 struct BoneNode {
@@ -60,7 +61,9 @@ private:
     void processNode(aiNode* node, const aiScene* scene);
 
     // Bones
+    void createOgreBones(const aiScene *scene);
     void createBone(const std::string& boneName);
+    void processBoneHierarchy(aiBone* bone, const aiScene* scene);
     void processBoneNode(BoneNode* boneNode, const aiScene* scene, SubMeshData& subMeshData);
 
     // Animations
@@ -74,14 +77,17 @@ private:
 
     // Mesh
     Ogre::MeshPtr createMesh();
-    SubMeshData processMesh(aiMesh* mesh, const aiScene* scene);
-
+    SubMeshData *processMesh(aiMesh* mesh, const aiScene* scene);
 
     Assimp::Importer importer;
-    std::vector<SubMeshData> subMeshesData;
+    std::vector<SubMeshData*> subMeshesData;
     std::vector<Ogre::MaterialPtr> materials;
     Ogre::SkeletonPtr skeleton;
+    std::vector<std::string>  unattachedBoneNodes;
     std::map<std::string, BoneNode*> boneNodes;
+    std::map<std::string, aiBone*> aiBonesMap;
+    std::map<std::string, std::vector<SubMeshData*>> boneNameToSubMeshes;
+    std::map<aiNode*, BoneNode*> nodeToBoneNode;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     std::string modelName;
 };
