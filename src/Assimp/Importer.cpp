@@ -104,7 +104,7 @@ void AssimpToOgreImporter::processBoneHierarchy(aiBone* bone, const aiScene* sce
     if(boneNameToSubMeshes.find(bone->mName.C_Str()) != boneNameToSubMeshes.end() && !boneNameToSubMeshes[bone->mName.C_Str()].empty()) {
         for(auto subMeshData : boneNameToSubMeshes[bone->mName.C_Str()]) {
             BoneNode* boneNode = boneNodes[subMeshData->mName+bone->mName.C_Str()];
-            processBoneNode(boneNode, scene, *subMeshData);
+            processBoneNode(boneNode->bone, *subMeshData);
         }
         boneNameToSubMeshes.erase(bone->mName.C_Str());
     }
@@ -273,9 +273,7 @@ void AssimpToOgreImporter::createBone(const std::string& boneName) {
     }
 }
 
-void AssimpToOgreImporter::processBoneNode(BoneNode* boneNode, const aiScene* scene, SubMeshData& subMeshData) {
-    aiBone* bone = boneNode->bone;
-
+void AssimpToOgreImporter::processBoneNode(aiBone* bone, SubMeshData& subMeshData) {
     // Convert the aiBone's offset matrix to an Ogre::Matrix4
     Ogre::Matrix4 offsetMatrix(
         bone->mOffsetMatrix.a1, bone->mOffsetMatrix.a2, bone->mOffsetMatrix.a3, bone->mOffsetMatrix.a4,

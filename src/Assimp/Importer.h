@@ -64,7 +64,7 @@ private:
     void createOgreBones(const aiScene *scene);
     void createBone(const std::string& boneName);
     void processBoneHierarchy(aiBone* bone, const aiScene* scene);
-    void processBoneNode(BoneNode* boneNode, const aiScene* scene, SubMeshData& subMeshData);
+    void processBoneNode(aiBone *bone, SubMeshData& subMeshData);
 
     // Animations
     void processAnimations(const aiScene* scene);
