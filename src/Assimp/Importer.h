@@ -31,6 +31,8 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
+#include "MaterialProcessor.h"
+
 struct SubMeshData {
     std::vector<Ogre::Vector3> vertices;
     std::vector<Ogre::Vector3> normals;
@@ -72,20 +74,17 @@ private:
     void processAnimation(aiAnimation* animation, const aiScene* scene);
     void processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex);
 
-    // Materials
-    void processMaterials(const aiScene* scene);
-    Ogre::MaterialPtr processMaterial(aiMaterial* material);
-
     // Mesh
     Ogre::MeshPtr createMesh();
     SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
 
     Assimp::Importer importer;
     std::vector<SubMeshData*> subMeshesData;
-    std::vector<Ogre::MaterialPtr> materials;
     Ogre::SkeletonPtr skeleton;
     std::map<std::string, aiBone*> aiBonesMap;
     std::map<std::string, std::vector<SubMeshData*>> boneNameToSubMeshes;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     std::string modelName;
+
+    MaterialProcessor materialProcessor;
 };
