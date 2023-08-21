@@ -47,6 +47,7 @@ struct SubMeshData {
     unsigned int materialIndex;
     std::string mName;
     std::map<std::string, aiBone*> mapAiBone;
+
 };
 
 struct BoneNode {
@@ -68,6 +69,7 @@ private:
     void createBone(const std::string& boneName);
     void processBoneHierarchy(aiBone* bone, const aiScene* scene);
     void processBoneNode(aiBone *bone, SubMeshData& subMeshData);
+
 
     // Animations
     void processAnimations(const aiScene* scene);
