@@ -87,7 +87,6 @@ private:
     std::map<std::string, BoneNode*> boneNodes;
     std::map<std::string, aiBone*> aiBonesMap;
     std::map<std::string, std::vector<SubMeshData*>> boneNameToSubMeshes;
-    std::map<aiNode*, BoneNode*> nodeToBoneNode;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     std::string modelName;
 };

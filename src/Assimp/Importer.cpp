@@ -248,7 +248,6 @@ void AssimpToOgreImporter::createOgreBones(const aiScene *scene) {
                 // so they have their own bone node for storing for e.g. the skinning information. Keep in mind that it needs to process the bones considering the bone hierarchy.
                 boneNodes[std::string(mesh->mName.C_Str())+bone->mName.C_Str()] = boneNode;
                 aiBonesMap[bone->mName.C_Str()] = bone;
-                nodeToBoneNode[bone->mNode] = boneNode;  // Populate the nodeToBoneNode map
                 createBone(bone->mName.C_Str());
             }
         }
