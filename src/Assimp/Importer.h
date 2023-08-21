@@ -84,7 +84,6 @@ private:
     std::vector<SubMeshData*> subMeshesData;
     std::vector<Ogre::MaterialPtr> materials;
     Ogre::SkeletonPtr skeleton;
-    std::map<std::string, BoneNode*> boneNodes;
     std::map<std::string, aiBone*> aiBonesMap;
     std::map<std::string, std::vector<SubMeshData*>> boneNameToSubMeshes;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;

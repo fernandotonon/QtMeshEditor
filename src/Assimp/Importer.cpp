@@ -74,7 +74,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
         aiMesh* mesh = scene->mMeshes[i];
         for(auto j = 0u; j < mesh->mNumBones; j++) {
             aiBone* bone = mesh->mBones[j];
-            if(boneNodes.find(std::string(mesh->mName.C_Str())+bone->mNode->mParent->mName.C_Str()) == boneNodes.end()) {
+            if(!skeleton->hasBone(bone->mNode->mParent->mName.C_Str())) {
                 createBone(bone->mNode->mParent->mName.C_Str());
                 processBoneHierarchy(bone, scene);
             }
@@ -88,10 +88,6 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     processAnimations(scene);
 
     // clean up to avoid memory leaks.
-    for(auto& pair : boneNodes) {
-        delete pair.second;
-    }
-    boneNodes.clear();
     materials.clear();
     subMeshesData.clear();
 
@@ -245,12 +241,8 @@ void AssimpToOgreImporter::createOgreBones(const aiScene *scene) {
         aiMesh* mesh = scene->mMeshes[i];
         for(auto j = 0u; j < mesh->mNumBones; j++) {
             aiBone* bone = mesh->mBones[j];
-            if(boneNodes.find(std::string(mesh->mName.C_Str())+bone->mName.C_Str()) == boneNodes.end()){
-                BoneNode* boneNode = new BoneNode;
-                boneNode->bone = bone;
-                //TODO: find a better way to store and process this, I hacked into using mesh name + bone name, because each submesh has its own relation with the bone,
-                // so they have their own bone node for storing for e.g. the skinning information. Keep in mind that it needs to process the bones considering the bone hierarchy.
-                boneNodes[std::string(mesh->mName.C_Str())+bone->mName.C_Str()] = boneNode;
+            // Check if the bone already exists
+            if(!skeleton->hasBone(bone->mName.C_Str())) {
                 aiBonesMap[bone->mName.C_Str()] = bone;
                 createBone(bone->mName.C_Str());
             }
@@ -261,9 +253,7 @@ void AssimpToOgreImporter::createOgreBones(const aiScene *scene) {
         aiAnimation* anim = scene->mAnimations[i];
         for(auto j = 0u; j < anim->mNumChannels; j++) {
             aiNodeAnim* nodeAnim = anim->mChannels[j];
-            if(boneNodes.find(nodeAnim->mNodeName.C_Str()) == boneNodes.end()){
-                createBone(nodeAnim->mNodeName.C_Str());
-            }
+            createBone(nodeAnim->mNodeName.C_Str());
         }
     }
 }
