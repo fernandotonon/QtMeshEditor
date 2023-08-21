@@ -14,4 +14,3 @@ private:
     Ogre::MaterialPtr processMaterial(aiMaterial* material);
     std::vector<Ogre::MaterialPtr> materials;
 };
-
