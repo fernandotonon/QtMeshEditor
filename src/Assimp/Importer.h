@@ -44,6 +44,7 @@ struct SubMeshData {
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     unsigned int materialIndex;
     std::string mName;
+    std::map<std::string, aiBone*> mapAiBone;
 };
 
 struct BoneNode {
@@ -83,7 +84,6 @@ private:
     std::vector<SubMeshData*> subMeshesData;
     std::vector<Ogre::MaterialPtr> materials;
     Ogre::SkeletonPtr skeleton;
-    std::vector<std::string>  unattachedBoneNodes;
     std::map<std::string, BoneNode*> boneNodes;
     std::map<std::string, aiBone*> aiBonesMap;
     std::map<std::string, std::vector<SubMeshData*>> boneNameToSubMeshes;

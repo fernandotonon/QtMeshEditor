@@ -93,7 +93,6 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     }
     boneNodes.clear();
     materials.clear();
-    unattachedBoneNodes.clear();
     subMeshesData.clear();
 
     return ogreMesh;
@@ -103,8 +102,7 @@ void AssimpToOgreImporter::processBoneHierarchy(aiBone* bone, const aiScene* sce
     // Process the bone node
     if(boneNameToSubMeshes.find(bone->mName.C_Str()) != boneNameToSubMeshes.end() && !boneNameToSubMeshes[bone->mName.C_Str()].empty()) {
         for(auto subMeshData : boneNameToSubMeshes[bone->mName.C_Str()]) {
-            BoneNode* boneNode = boneNodes[subMeshData->mName+bone->mName.C_Str()];
-            processBoneNode(boneNode->bone, *subMeshData);
+            processBoneNode(subMeshData->mapAiBone[bone->mName.C_Str()], *subMeshData);
         }
         boneNameToSubMeshes.erase(bone->mName.C_Str());
     }
@@ -224,7 +222,13 @@ SubMeshData* AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scen
         }
     }
 
-    // process the BoneNode objects in a depth-first manner
+    // Add aiBones to the submesh
+    for(auto i = 0u; i < mesh->mNumBones; i++) {
+        aiBone* bone = mesh->mBones[i];
+        subMeshData->mapAiBone[bone->mName.C_Str()] = bone;
+    }
+
+    // add the submesh to the boneNameToSubMeshes map
     for(auto i = 0u; i < mesh->mNumBones; i++) {
         aiBone* bone = mesh->mBones[i];
         if(boneNameToSubMeshes.find(bone->mName.C_Str()) == boneNameToSubMeshes.end()){
@@ -258,7 +262,6 @@ void AssimpToOgreImporter::createOgreBones(const aiScene *scene) {
         for(auto j = 0u; j < anim->mNumChannels; j++) {
             aiNodeAnim* nodeAnim = anim->mChannels[j];
             if(boneNodes.find(nodeAnim->mNodeName.C_Str()) == boneNodes.end()){
-                unattachedBoneNodes.push_back(nodeAnim->mNodeName.C_Str());
                 createBone(nodeAnim->mNodeName.C_Str());
             }
         }
