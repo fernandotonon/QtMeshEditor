@@ -95,12 +95,15 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
 }
 
 void AssimpToOgreImporter::processBoneHierarchy(aiBone* bone, const aiScene* scene) {
+    auto boneNameStr = bone->mName.C_Str();
+    auto boneIter = boneNameToSubMeshes.find(boneNameStr);
+
     // Process the bone node
-    if(boneNameToSubMeshes.find(bone->mName.C_Str()) != boneNameToSubMeshes.end() && !boneNameToSubMeshes[bone->mName.C_Str()].empty()) {
-        for(auto subMeshData : boneNameToSubMeshes[bone->mName.C_Str()]) {
-            processBoneNode(subMeshData->mapAiBone[bone->mName.C_Str()], *subMeshData);
+    if(boneIter != boneNameToSubMeshes.end() && !boneIter->second.empty()) {
+        for(auto subMeshData : boneIter->second) {
+            processBoneNode(subMeshData->mapAiBone[boneNameStr], *subMeshData);
         }
-        boneNameToSubMeshes.erase(bone->mName.C_Str());
+        boneNameToSubMeshes.erase(boneIter);
     }
 
     // Recursively process children bones
