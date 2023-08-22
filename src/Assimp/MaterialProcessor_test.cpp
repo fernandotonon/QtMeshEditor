@@ -7,7 +7,7 @@ TEST(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
     aiScene scene;
 
     scene.mNumMaterials = 2;
-    scene.mMaterials = new aiMaterial[2];
+    scene.mMaterials = new aiMaterial*[2];
     scene.mMaterials[0] = new aiMaterial;
     scene.mMaterials[1] = new aiMaterial;
 
