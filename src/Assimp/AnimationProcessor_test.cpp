@@ -33,8 +33,9 @@ TEST(AnimationProcessorTest, ProcessAllAnimations) {
     mockAnimation2.mDuration = 5.0f;
 
     scene.mNumAnimations = 2;
-    aiAnimation* animations[2] = { &mockAnimation1, &mockAnimation2 };
-    scene.mAnimations = animations;
+    scene.mAnimations = new aiAnimation*[2];
+    scene.mAnimations[0] = &mockAnimation1;
+    scene.mAnimations[1] = &mockAnimation2;
 
     processor.processAnimations(&scene);
 
