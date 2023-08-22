@@ -9,38 +9,7 @@ public:
     aiAnimation** mAnimations;
 };
 
-class MockAiAnimation {
-public:
-    MOCK_METHOD0(mName, aiString&());
-    MOCK_METHOD0(mDuration, double());
-    unsigned int mNumChannels;
-    aiNodeAnim** mChannels;
-};
-
-class MockAiNodeAnim {
-public:
-    MOCK_METHOD0(mNodeName, aiString&());
-    unsigned int mNumPositionKeys;
-    aiVectorKey* mPositionKeys;
-    unsigned int mNumRotationKeys;
-    aiQuatKey* mRotationKeys;
-    unsigned int mNumScalingKeys;
-    aiVectorKey* mScalingKeys;
-};
-
 // Mock classes for Ogre types
-class MockOgreAnimation {
-public:
-    MOCK_METHOD2(createNodeTrack, Ogre::NodeAnimationTrack*(int, Ogre::Bone*));
-    MOCK_METHOD1(createNodeTrack, void(double));
-};
-
-class MockOgreBone {
-public:
-    MOCK_METHOD0(getPosition, Ogre::Vector3&());
-    MOCK_METHOD0(getOrientation, Ogre::Quaternion&());
-    MOCK_METHOD0(getHandle, int());
-};
 class MockOgreSkeleton : public Ogre::Skeleton {
 public:
     MockOgreSkeleton(Ogre::ResourceManager* creator, const Ogre::String& name, Ogre::ResourceHandle handle,
@@ -51,24 +20,11 @@ public:
     MOCK_METHOD1(getBone, Ogre::Bone*(const Ogre::String& name));
 };
 
-// Test fixture
-class AnimationProcessorTest : public ::testing::Test {
-protected:
-    std::shared_ptr<MockOgreSkeleton> mockSkeleton;
-    AnimationProcessor processor;
-
-    void SetUp() override {
-        mockSkeleton = std::make_shared<MockOgreSkeleton>(nullptr, "MockSkeleton", 0, "Group");
-        processor = AnimationProcessor(mockSkeleton);
-    }
-
-    void TearDown() override {
-        // Cleanup code if needed
-    }
-};
-
 // Test if processAnimations processes all animations
-TEST_F(AnimationProcessorTest, ProcessAllAnimations) {
+TEST(AnimationProcessorTest, ProcessAllAnimations) {
+    std::shared_ptr<MockOgreSkeleton> mockSkeleton= std::make_shared<MockOgreSkeleton>(nullptr, "MockSkeleton", 0, "Group");
+    AnimationProcessor processor(mockSkeleton);
+
     MockAiScene scene;
     aiAnimation mockAnimation1, mockAnimation2;
 
