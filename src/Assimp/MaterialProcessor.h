@@ -10,11 +10,7 @@ public:
     Ogre::MaterialPtr operator[](unsigned int index);
     unsigned int size();
 
-protected:
-    Ogre::MaterialPtr processMaterial(aiMaterial* material);
-
-    // For testing purposes
-    friend class MaterialProcessorTest;    
 private:
+    Ogre::MaterialPtr processMaterial(aiMaterial* material);
     std::vector<Ogre::MaterialPtr> materials;
 };

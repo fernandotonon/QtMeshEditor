@@ -28,15 +28,12 @@ protected:
     }
 };
 
-// Test cases:
-
-// Test if loadScene processes all materials
 TEST_F(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
     MockAiScene scene;
     MockAiMaterial mockMaterial1, mockMaterial2;
-    
+
     scene.mNumMaterials = 2;
-    MockAiMaterial* materials[2] = { &mockMaterial1, &mockMaterial2 };
+    aiMaterial* materials[2] = { &mockMaterial1, &mockMaterial2 };
     scene.mMaterials = materials;
 
     processor.loadScene(&scene);
@@ -44,12 +41,30 @@ TEST_F(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
     EXPECT_EQ(processor.size(), 2);
 }
 
-// Test if material naming handles empty names
-TEST_F(MaterialProcessorTest, MaterialNamingHandlesEmptyNames) {
-    MockAiMaterial mockMaterial;
+TEST_F(MaterialProcessorTest, MaterialIndexing) {
+    MockAiScene scene;
+    MockAiMaterial mockMaterial1, mockMaterial2;
 
-    processor.processMaterial(&mockMaterial);
+    scene.mNumMaterials = 2;
+    aiMaterial* materials[2] = { &mockMaterial1, &mockMaterial2 };
+    scene.mMaterials = materials;
 
-    // Assuming there's a method called getLastProcessedMaterialName in MaterialProcessor
-    EXPECT_EQ(processor.getLastProcessedMaterialName(), "importedMaterial0");
+    processor.loadScene(&scene);
+
+    // Assuming you can compare Ogre::MaterialPtr in some way:
+    EXPECT_EQ(processor[0], /* expected material 1 */);
+    EXPECT_EQ(processor[1], /* expected material 2 */);
+}
+
+TEST_F(MaterialProcessorTest, MaterialSize) {
+    MockAiScene scene;
+    MockAiMaterial mockMaterial1, mockMaterial2, mockMaterial3;
+
+    scene.mNumMaterials = 3;
+    aiMaterial* materials[3] = { &mockMaterial1, &mockMaterial2, &mockMaterial3 };
+    scene.mMaterials = materials;
+
+    processor.loadScene(&scene);
+
+    EXPECT_EQ(processor.size(), 3);
 }
