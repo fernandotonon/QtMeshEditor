@@ -27,6 +27,10 @@ TEST(AnimationProcessorTest, ProcessAllAnimations) {
 
     MockAiScene scene;
     aiAnimation mockAnimation1, mockAnimation2;
+    mockAnimation1.mName = aiString("Animation1");
+    mockAnimation2.mName = aiString("Animation2");
+    mockAnimation1.mDuration = 10.0f;
+    mockAnimation2.mDuration = 5.0f;
 
     scene.mNumAnimations = 2;
     aiAnimation* animations[2] = { &mockAnimation1, &mockAnimation2 };
@@ -34,5 +38,6 @@ TEST(AnimationProcessorTest, ProcessAllAnimations) {
 
     processor.processAnimations(&scene);
 
-    EXPECT_CALL(*mockSkeleton, createAnimation(testing::_, testing::_)).Times(2);
+    EXPECT_CALL(*mockSkeleton, createAnimation("Animation1", 1.0f));
+    EXPECT_CALL(*mockSkeleton, createAnimation("Animation2", 0.5f));
 }

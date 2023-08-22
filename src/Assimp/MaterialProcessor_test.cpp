@@ -8,8 +8,8 @@ TEST(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
     aiMaterial mockMaterial1, mockMaterial2;
 
     scene.mNumMaterials = 2;
-    aiMaterial* materials[2] = { &mockMaterial1, &mockMaterial2 };
-    scene.mMaterials = materials;
+    scene.mMaterials.push_back(&mockMaterial1);
+    scene.mMaterials.push_back(&mockMaterial2);
 
     processor.loadScene(&scene);
 
