@@ -2,15 +2,11 @@
 #include <gmock/gmock.h>
 #include "MaterialProcessor.h"
 
-// Mock classes for Assimp's aiMaterial and aiScene
-class MockAiMaterial : public aiMaterial {
-
-};
-
+// Mock classes for Assimp's aiScene
 class MockAiScene : public aiScene {
 public:
     unsigned int mNumMaterials;
-    MockAiMaterial** mMaterials;
+    aiMaterial** mMaterials;
 };
 
 // Test suite for MaterialProcessor
@@ -30,7 +26,7 @@ protected:
 
 TEST_F(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
     MockAiScene scene;
-    MockAiMaterial mockMaterial1, mockMaterial2;
+    aiMaterial mockMaterial1, mockMaterial2;
 
     scene.mNumMaterials = 2;
     aiMaterial* materials[2] = { &mockMaterial1, &mockMaterial2 };
@@ -43,7 +39,7 @@ TEST_F(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
 
 TEST_F(MaterialProcessorTest, MaterialIndexing) {
     MockAiScene scene;
-    MockAiMaterial mockMaterial1, mockMaterial2;
+    aiMaterial mockMaterial1, mockMaterial2;
 
     scene.mNumMaterials = 2;
     aiMaterial* materials[2] = { &mockMaterial1, &mockMaterial2 };
@@ -58,7 +54,7 @@ TEST_F(MaterialProcessorTest, MaterialIndexing) {
 
 TEST_F(MaterialProcessorTest, MaterialSize) {
     MockAiScene scene;
-    MockAiMaterial mockMaterial1, mockMaterial2, mockMaterial3;
+    aiMaterial mockMaterial1, mockMaterial2, mockMaterial3;
 
     scene.mNumMaterials = 3;
     aiMaterial* materials[3] = { &mockMaterial1, &mockMaterial2, &mockMaterial3 };
