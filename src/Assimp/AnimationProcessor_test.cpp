@@ -8,7 +8,7 @@ public:
                      const Ogre::String& group, bool isManual = false, Ogre::ManualResourceLoader* loader = 0)
         : Ogre::Skeleton(creator, name, handle, group, isManual, loader) {}
 
-    MOCK_METHOD1(createAnimation, Ogre::Animation*(const Ogre::String& name, Ogre::Real length));
+    MOCK_METHOD2(createAnimation, Ogre::Animation*(const Ogre::String& name, Ogre::Real length));
     MOCK_METHOD1(getBone, Ogre::Bone*(const Ogre::String& name));
 };
 
