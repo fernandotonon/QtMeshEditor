@@ -5,11 +5,11 @@
 TEST(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
     MaterialProcessor processor;
     aiScene scene;
-    aiMaterial mockMaterial1, mockMaterial2;
 
     scene.mNumMaterials = 2;
-    scene.mMaterials.push_back(&mockMaterial1);
-    scene.mMaterials.push_back(&mockMaterial2);
+    scene.mMaterials = new aiMaterial[2];
+    scene.mMaterials[0] = new aiMaterial;
+    scene.mMaterials[1] = new aiMaterial;
 
     processor.loadScene(&scene);
 
