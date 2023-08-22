@@ -3,7 +3,7 @@
 #include "AnimationProcessor.h"
 
 // Mock classes for Assimp types
-class MockAiScene {
+class MockAiScene : public aiScene {
 public:
     unsigned int mNumAnimations;
     aiAnimation** mAnimations;
