@@ -2,6 +2,45 @@
 #include <gmock/gmock.h>
 #include "AnimationProcessor.h"
 
+// Mock classes for Assimp types
+class MockAiScene {
+public:
+    unsigned int mNumAnimations;
+    aiAnimation** mAnimations;
+};
+
+class MockAiAnimation {
+public:
+    MOCK_METHOD0(mName, aiString&());
+    MOCK_METHOD0(mDuration, double());
+    unsigned int mNumChannels;
+    aiNodeAnim** mChannels;
+};
+
+class MockAiNodeAnim {
+public:
+    MOCK_METHOD0(mNodeName, aiString&());
+    unsigned int mNumPositionKeys;
+    aiVectorKey* mPositionKeys;
+    unsigned int mNumRotationKeys;
+    aiQuatKey* mRotationKeys;
+    unsigned int mNumScalingKeys;
+    aiVectorKey* mScalingKeys;
+};
+
+// Mock classes for Ogre types
+class MockOgreAnimation {
+public:
+    MOCK_METHOD2(createNodeTrack, Ogre::NodeAnimationTrack*(int, Ogre::Bone*));
+    MOCK_METHOD1(createNodeTrack, void(double));
+};
+
+class MockOgreBone {
+public:
+    MOCK_METHOD0(getPosition, Ogre::Vector3&());
+    MOCK_METHOD0(getOrientation, Ogre::Quaternion&());
+    MOCK_METHOD0(getHandle, int());
+};
 class MockOgreSkeleton : public Ogre::Skeleton {
 public:
     MockOgreSkeleton(Ogre::ResourceManager* creator, const Ogre::String& name, Ogre::ResourceHandle handle,

@@ -5,13 +5,13 @@
 // Mock classes for Assimp's aiMaterial and aiScene
 class MockAiMaterial : public aiMaterial {
 public:
-    MOCK_METHOD4(Get, unsigned int(const char*, unsigned int, unsigned int, aiColor3D&));
-    MOCK_METHOD4(Get, unsigned int(const char*, unsigned int, unsigned int, float&));
-    MOCK_METHOD4(Get, unsigned int(const char*, unsigned int, unsigned int, aiString&));
+    MOCK_METHOD4(GetColor, unsigned int(const char*, unsigned int, unsigned int, aiColor3D&));
+    MOCK_METHOD4(GetFloat, unsigned int(const char*, unsigned int, unsigned int, float&));
+    MOCK_METHOD4(GetString, unsigned int(const char*, unsigned int, unsigned int, aiString&));
     // Add more mock methods as needed for your tests
 };
 
-class MockAiScene {
+class MockAiScene : public aiScene {
 public:
     unsigned int mNumMaterials;
     MockAiMaterial** mMaterials;
