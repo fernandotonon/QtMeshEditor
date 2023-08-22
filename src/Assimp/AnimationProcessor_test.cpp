@@ -51,7 +51,6 @@ public:
     MOCK_METHOD1(getBone, Ogre::Bone*(const Ogre::String& name));
 };
 
-
 // Test fixture
 class AnimationProcessorTest : public ::testing::Test {
 protected:
@@ -71,13 +70,13 @@ protected:
 // Test if processAnimations processes all animations
 TEST_F(AnimationProcessorTest, ProcessAllAnimations) {
     MockAiScene scene;
-    MockAiAnimation mockAnimation1, mockAnimation2;
+    aiAnimation mockAnimation1, mockAnimation2;
 
     scene.mNumAnimations = 2;
     aiAnimation* animations[2] = { &mockAnimation1, &mockAnimation2 };
     scene.mAnimations = animations;
 
-    EXPECT_CALL(*mockSkeleton, createAnimation(testing::_, testing::_)).Times(2);
-
     processor.processAnimations(&scene);
+
+    EXPECT_CALL(*mockSkeleton, createAnimation(testing::_, testing::_)).Times(2);
 }

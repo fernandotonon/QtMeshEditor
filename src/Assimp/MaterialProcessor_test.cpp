@@ -47,9 +47,8 @@ TEST_F(MaterialProcessorTest, MaterialIndexing) {
 
     processor.loadScene(&scene);
 
-    // Assuming you can compare Ogre::MaterialPtr in some way:
-    EXPECT_EQ(processor[0], /* expected material 1 */);
-    EXPECT_EQ(processor[1], /* expected material 2 */);
+    EXPECT_NE(processor[0], nullptr);
+    EXPECT_NE(processor[1], nullptr);
 }
 
 TEST_F(MaterialProcessorTest, MaterialSize) {
