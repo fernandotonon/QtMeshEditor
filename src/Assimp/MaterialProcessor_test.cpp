@@ -4,11 +4,7 @@
 
 // Mock classes for Assimp's aiMaterial and aiScene
 class MockAiMaterial : public aiMaterial {
-public:
-    MOCK_METHOD4(GetColor, unsigned int(const char*, unsigned int, unsigned int, aiColor3D&));
-    MOCK_METHOD4(GetFloat, unsigned int(const char*, unsigned int, unsigned int, float&));
-    MOCK_METHOD4(GetString, unsigned int(const char*, unsigned int, unsigned int, aiString&));
-    // Add more mock methods as needed for your tests
+
 };
 
 class MockAiScene : public aiScene {
@@ -51,10 +47,6 @@ TEST_F(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
 // Test if material naming handles empty names
 TEST_F(MaterialProcessorTest, MaterialNamingHandlesEmptyNames) {
     MockAiMaterial mockMaterial;
-
-    // Assuming aiMaterial::GetName() returns an aiString, and aiString has a C_Str() method
-    aiString emptyName = "";
-    ON_CALL(mockMaterial, GetName()).WillByDefault(::testing::ReturnRef(emptyName));
 
     processor.processMaterial(&mockMaterial);
 
