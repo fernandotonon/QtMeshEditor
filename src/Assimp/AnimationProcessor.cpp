@@ -1,5 +1,7 @@
 #include "AnimationProcessor.h"
 
+AnimationProcessor::AnimationProcessor(Ogre::SkeletonPtr skeleton): skeleton(skeleton) {}
+
 void AnimationProcessor::processAnimations(const aiScene* scene) {
     for(auto i = 0u; i < scene->mNumAnimations; i++) {
         aiAnimation* animation = scene->mAnimations[i];
@@ -10,7 +12,6 @@ void AnimationProcessor::processAnimations(const aiScene* scene) {
 void AnimationProcessor::processAnimation(aiAnimation* animation, const aiScene* scene) {
     // Create the animation
     Ogre::Animation* ogreAnimation = skeleton->createAnimation(animation->mName.C_Str(), animation->mDuration/10.0f);
-
     // Process the animation channels
     for(auto i = 0u; i < animation->mNumChannels; i++) {
         aiNodeAnim* nodeAnim = animation->mChannels[i];

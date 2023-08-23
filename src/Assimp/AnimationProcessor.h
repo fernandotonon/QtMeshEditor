@@ -6,11 +6,9 @@
 class AnimationProcessor
 {
 public:
-    AnimationProcessor(Ogre::SkeletonPtr skeleton): skeleton(skeleton) {}
+    AnimationProcessor(Ogre::SkeletonPtr skeleton);
     void processAnimations(const aiScene* scene);
 
-    //for testing purposes
-    Ogre::SkeletonPtr getSkeleton() { return skeleton; }
 private:
     void processAnimation(aiAnimation* animation, const aiScene* scene);
     void processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex);

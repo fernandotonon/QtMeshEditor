@@ -3,6 +3,7 @@
 #include "MaterialProcessor.h"
 
 TEST(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
+    auto ogreRoot = std::make_unique<Ogre::Root>();
     MaterialProcessor processor;
     aiScene scene;
 
@@ -10,8 +11,10 @@ TEST(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
     scene.mMaterials = new aiMaterial*[2];
     scene.mMaterials[0] = new aiMaterial;
     scene.mMaterials[1] = new aiMaterial;
-    scene.mMaterials[0]->AddProperty(aiString("testMaterial1"), AI_MATKEY_NAME);
-    scene.mMaterials[1]->AddProperty(aiString("testMaterial2"), AI_MATKEY_NAME);
+    aiString matName1( std::string( "testMaterial1"));
+    aiString matName2( std::string( "testMaterial2"));
+    scene.mMaterials[0]->AddProperty(&matName1, AI_MATKEY_NAME);
+    scene.mMaterials[1]->AddProperty(&matName2, AI_MATKEY_NAME);
 
     processor.loadScene(&scene);
 
@@ -19,6 +22,7 @@ TEST(MaterialProcessorTest, LoadSceneProcessesAllMaterials) {
 }
 
 TEST(MaterialProcessorTest, MaterialIndexing) {
+    auto ogreRoot = std::make_unique<Ogre::Root>();
     MaterialProcessor processor;
     aiScene scene;
 
@@ -26,8 +30,10 @@ TEST(MaterialProcessorTest, MaterialIndexing) {
     scene.mMaterials = new aiMaterial*[2];
     scene.mMaterials[0] = new aiMaterial;
     scene.mMaterials[1] = new aiMaterial;
-    scene.mMaterials[0]->AddProperty(aiString("testMaterial1"), AI_MATKEY_NAME);
-    scene.mMaterials[1]->AddProperty(aiString("testMaterial2"), AI_MATKEY_NAME);
+    aiString matName1( std::string( "testMaterial1"));
+    aiString matName2( std::string( "testMaterial2"));
+    scene.mMaterials[0]->AddProperty(&matName1, AI_MATKEY_NAME);
+    scene.mMaterials[1]->AddProperty(&matName2, AI_MATKEY_NAME);
 
     processor.loadScene(&scene);
 
@@ -36,6 +42,7 @@ TEST(MaterialProcessorTest, MaterialIndexing) {
 }
 
 TEST(MaterialProcessorTest, MaterialSize) {
+    auto ogreRoot = std::make_unique<Ogre::Root>();
     MaterialProcessor processor;
     aiScene scene;
 
@@ -44,9 +51,12 @@ TEST(MaterialProcessorTest, MaterialSize) {
     scene.mMaterials[0] = new aiMaterial;
     scene.mMaterials[1] = new aiMaterial;
     scene.mMaterials[2] = new aiMaterial;
-    scene.mMaterials[0]->AddProperty(aiString("testMaterial1"), AI_MATKEY_NAME);
-    scene.mMaterials[1]->AddProperty(aiString("testMaterial2"), AI_MATKEY_NAME);
-    scene.mMaterials[2]->AddProperty(aiString("testMaterial3"), AI_MATKEY_NAME);
+    aiString matName1( std::string( "testMaterial1"));
+    aiString matName2( std::string( "testMaterial2"));
+    aiString matName3( std::string( "testMaterial3"));
+    scene.mMaterials[0]->AddProperty(&matName1, AI_MATKEY_NAME);
+    scene.mMaterials[1]->AddProperty(&matName2, AI_MATKEY_NAME);
+    scene.mMaterials[2]->AddProperty(&matName3, AI_MATKEY_NAME);
 
     processor.loadScene(&scene);
 

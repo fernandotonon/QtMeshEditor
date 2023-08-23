@@ -20,16 +20,17 @@ unsigned int MaterialProcessor::size()
 
 Ogre::MaterialPtr MaterialProcessor::processMaterial(aiMaterial *material)
 {
-    aiColor3D color(0.f, 0.f, 0.f);
-    float shininess = 0.0f;
     std::string materialName = material->GetName().C_Str();
     if(materialName.empty()) materialName="importedMaterial" + std::to_string(materials.size());
     if(auto existingMaterial = Ogre::MaterialManager::getSingleton().getByName(materialName))
         return existingMaterial;
 
-    material->Get(AI_MATKEY_COLOR_DIFFUSE, color);
     Ogre::MaterialPtr ogreMaterial = Ogre::MaterialManager::getSingleton().create(materialName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    ogreMaterial->getTechnique(0)->getPass(0)->setDiffuse(color.r, color.g, color.b, 1.0f);
+
+    aiColor3D color(0.f, 0.f, 0.f);
+    if(AI_SUCCESS == material->Get(AI_MATKEY_COLOR_DIFFUSE, color)) {
+        ogreMaterial->getTechnique(0)->getPass(0)->setDiffuse(color.r, color.g, color.b, 1.0f);
+    }
 
     if(AI_SUCCESS == material->Get(AI_MATKEY_COLOR_AMBIENT, color)) {
         ogreMaterial->getTechnique(0)->getPass(0)->setAmbient(color.r, color.g, color.b);
@@ -43,6 +44,7 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(aiMaterial *material)
         ogreMaterial->getTechnique(0)->getPass(0)->setSelfIllumination(color.r, color.g, color.b);
     }
 
+    float shininess = 0.0f;
     if(AI_SUCCESS == material->Get(AI_MATKEY_SHININESS, shininess)) {
         ogreMaterial->getTechnique(0)->getPass(0)->setShininess(shininess);
     }
