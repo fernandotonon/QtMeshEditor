@@ -28,24 +28,8 @@
 
 #include <Ogre.h>
 #include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
 
 #include "MaterialProcessor.h"
-
-struct SubMeshData {
-    std::vector<Ogre::Vector3> vertices;
-    std::vector<Ogre::Vector3> normals;
-    std::vector<Ogre::Vector2> texCoords;
-    std::vector<Ogre::Vector3> tangents;
-    std::vector<Ogre::Vector3> bitangents;
-    std::vector<Ogre::ColourValue> colors;
-    std::vector<unsigned long> indices;
-    std::vector<Ogre::Vector4> blendIndices;
-    std::vector<Ogre::Vector4> blendWeights;
-    std::vector<Ogre::VertexBoneAssignment> boneAssignments;
-    unsigned int materialIndex;
-};
 
 class AssimpToOgreImporter {
 public:
@@ -54,15 +38,8 @@ public:
     Ogre::MeshPtr loadModel(const std::string& path);
 
 private:
-    // Mesh
-    Ogre::MeshPtr createMesh();
-    void processNode(aiNode* node, const aiScene* scene);
-    SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
-
     Assimp::Importer importer;
-    std::vector<SubMeshData*> subMeshesData;
     Ogre::SkeletonPtr skeleton;
-    std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     std::string modelName;
 
     MaterialProcessor materialProcessor;

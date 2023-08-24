@@ -8,6 +8,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/Importer.cpp
 ${CMAKE_CURRENT_SOURCE_DIR}/MaterialProcessor.cpp
 ${CMAKE_CURRENT_SOURCE_DIR}/AnimationProcessor.cpp
 ${CMAKE_CURRENT_SOURCE_DIR}/BoneProcessor.cpp
+${CMAKE_CURRENT_SOURCE_DIR}/MeshProcessor.cpp
 PARENT_SCOPE
 )
 
@@ -17,6 +18,7 @@ ${CMAKE_CURRENT_SOURCE_DIR}/Importer.h
 ${CMAKE_CURRENT_SOURCE_DIR}/MaterialProcessor.h
 ${CMAKE_CURRENT_SOURCE_DIR}/AnimationProcessor.h
 ${CMAKE_CURRENT_SOURCE_DIR}/BoneProcessor.h
+${CMAKE_CURRENT_SOURCE_DIR}/MeshProcessor.h
 PARENT_SCOPE
 )
 
