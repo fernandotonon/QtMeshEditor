@@ -7,6 +7,7 @@ ${SRC_FILES}
 ${CMAKE_CURRENT_SOURCE_DIR}/Importer.cpp
 ${CMAKE_CURRENT_SOURCE_DIR}/MaterialProcessor.cpp
 ${CMAKE_CURRENT_SOURCE_DIR}/AnimationProcessor.cpp
+${CMAKE_CURRENT_SOURCE_DIR}/BoneProcessor.cpp
 PARENT_SCOPE
 )
 
@@ -15,6 +16,7 @@ ${HEADER_FILES}
 ${CMAKE_CURRENT_SOURCE_DIR}/Importer.h
 ${CMAKE_CURRENT_SOURCE_DIR}/MaterialProcessor.h
 ${CMAKE_CURRENT_SOURCE_DIR}/AnimationProcessor.h
+${CMAKE_CURRENT_SOURCE_DIR}/BoneProcessor.h
 PARENT_SCOPE
 )
 

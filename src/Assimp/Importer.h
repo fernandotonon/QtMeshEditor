@@ -54,12 +54,6 @@ public:
     Ogre::MeshPtr loadModel(const std::string& path);
 
 private:
-    // Bones
-    void createOgreBones(const aiScene *scene);
-    void createBone(const std::string& boneName);
-    void processBoneHierarchy(aiBone* bone);
-    void processBoneNode(aiBone *bone);
-
     // Mesh
     Ogre::MeshPtr createMesh();
     void processNode(aiNode* node, const aiScene* scene);
@@ -68,7 +62,6 @@ private:
     Assimp::Importer importer;
     std::vector<SubMeshData*> subMeshesData;
     Ogre::SkeletonPtr skeleton;
-    std::map<std::string, aiBone*> aiBonesMap;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     std::string modelName;
 
