@@ -67,9 +67,6 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
 
     createOgreBones(scene);
 
-    // Process the root node recursively (meshes)
-    processNode(scene->mRootNode, scene);
-
     // Process the root bones first
     for(auto i = 0u; i < scene->mNumMeshes; i++) {
         aiMesh* mesh = scene->mMeshes[i];
@@ -77,10 +74,13 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
             aiBone* bone = mesh->mBones[j];
             if(!skeleton->hasBone(bone->mNode->mParent->mName.C_Str())) {
                 createBone(bone->mNode->mParent->mName.C_Str());
-                processBoneHierarchy(bone, scene);
+                processBoneHierarchy(bone);
             }
         }
     }
+
+    // Process the root node recursively (meshes)
+    processNode(scene->mRootNode, scene);
 
     // Create the mesh
     Ogre::MeshPtr ogreMesh = createMesh();
@@ -95,23 +95,15 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     return ogreMesh;
 }
 
-void AssimpToOgreImporter::processBoneHierarchy(aiBone* bone, const aiScene* scene) {
-    auto boneNameStr = bone->mName.C_Str();
-    auto boneIter = boneNameToSubMeshes.find(boneNameStr);
-
+void AssimpToOgreImporter::processBoneHierarchy(aiBone* bone) {
     // Process the bone node
-    if(boneIter != boneNameToSubMeshes.end() && !boneIter->second.empty()) {
-        for(auto subMeshData : boneIter->second) {
-            processBoneNode(subMeshData->mapAiBone[boneNameStr], *subMeshData);
-        }
-        boneNameToSubMeshes.erase(boneIter);
-    }
+    processBoneNode(bone);
 
     // Recursively process children bones
     for(auto i = 0u; i < bone->mNode->mNumChildren; i++) {
         aiNode* childNode = bone->mNode->mChildren[i];
         if(aiBonesMap.find(childNode->mName.C_Str()) != aiBonesMap.end()) {
-            processBoneHierarchy(aiBonesMap[childNode->mName.C_Str()], scene);
+            processBoneHierarchy(aiBonesMap[childNode->mName.C_Str()]);
         }
     }
 }
@@ -131,7 +123,6 @@ void AssimpToOgreImporter::processNode(aiNode* node, const aiScene* scene) {
 
 SubMeshData* AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scene) {
     SubMeshData* subMeshData = new SubMeshData();
-    subMeshData->mName = mesh->mName.C_Str();
 
     // Initialize blend indices and blend weights
     for(auto i = 0u; i < mesh->mNumVertices; i++) {
@@ -222,19 +213,33 @@ SubMeshData* AssimpToOgreImporter::processMesh(aiMesh* mesh, const aiScene* scen
         }
     }
 
-    // Add aiBones to the submesh
-    for(auto i = 0u; i < mesh->mNumBones; i++) {
-        aiBone* bone = mesh->mBones[i];
-        subMeshData->mapAiBone[bone->mName.C_Str()] = bone;
-    }
-
     // add the submesh to the boneNameToSubMeshes map
     for(auto i = 0u; i < mesh->mNumBones; i++) {
         aiBone* bone = mesh->mBones[i];
-        if(boneNameToSubMeshes.find(bone->mName.C_Str()) == boneNameToSubMeshes.end()){
-            boneNameToSubMeshes[bone->mName.C_Str()] = std::vector<SubMeshData*>();
+        // Retrieve the bone (it should already exist)
+        Ogre::Bone* ogreBone = skeleton->getBone(bone->mName.C_Str());
+        // Set the bone weights
+        for(auto i = 0u; i < bone->mNumWeights; i++) {
+            aiVertexWeight weight = bone->mWeights[i];
+
+            Ogre::VertexBoneAssignment vba;
+            vba.vertexIndex = weight.mVertexId;
+            vba.boneIndex = ogreBone->getHandle();
+            vba.weight = weight.mWeight;
+
+            subMeshData->boneAssignments.push_back(vba);
+
+            // Update the blend indices and blend weights
+            Ogre::Vector4& blendIndices = subMeshData->blendIndices[weight.mVertexId];
+            Ogre::Vector4& blendWeights = subMeshData->blendWeights[weight.mVertexId];
+            for(int j = 0; j < 4; j++) {
+                if(blendWeights[j] == 0.0f) {
+                    blendIndices[j] = ogreBone->getHandle();
+                    blendWeights[j] = weight.mWeight;
+                    break;
+                }
+            }
         }
-        boneNameToSubMeshes[bone->mName.C_Str()].push_back(subMeshData);
     }
 
     return subMeshData;
@@ -270,7 +275,7 @@ void AssimpToOgreImporter::createBone(const std::string& boneName) {
     }
 }
 
-void AssimpToOgreImporter::processBoneNode(aiBone* bone, SubMeshData& subMeshData) {
+void AssimpToOgreImporter::processBoneNode(aiBone* bone) {
     // Convert the aiBone's offset matrix to an Ogre::Matrix4
     Ogre::Matrix4 offsetMatrix(
         bone->mOffsetMatrix.a1, bone->mOffsetMatrix.a2, bone->mOffsetMatrix.a3, bone->mOffsetMatrix.a4,
@@ -306,29 +311,6 @@ void AssimpToOgreImporter::processBoneNode(aiBone* bone, SubMeshData& subMeshDat
     ogreBone->setPosition(position);
     ogreBone->setOrientation(orientation);
     ogreBone->setScale(scale);
-
-    // Set the bone weights
-    for(auto i = 0u; i < bone->mNumWeights; i++) {
-        aiVertexWeight weight = bone->mWeights[i];
-
-        Ogre::VertexBoneAssignment vba;
-        vba.vertexIndex = weight.mVertexId;
-        vba.boneIndex = ogreBone->getHandle();
-        vba.weight = weight.mWeight;
-
-        subMeshData.boneAssignments.push_back(vba);
-
-        // Update the blend indices and blend weights
-        Ogre::Vector4& blendIndices = subMeshData.blendIndices[weight.mVertexId];
-        Ogre::Vector4& blendWeights = subMeshData.blendWeights[weight.mVertexId];
-        for(int j = 0; j < 4; j++) {
-            if(blendWeights[j] == 0.0f) {
-                blendIndices[j] = ogreBone->getHandle();
-                blendWeights[j] = weight.mWeight;
-                break;
-            }
-        }
-    }
 
     // Add the bone to the parent bone, if it exists
     if(bone->mNode->mParent && bone->mNode->mParent->mName.length) {

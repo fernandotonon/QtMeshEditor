@@ -45,13 +45,6 @@ struct SubMeshData {
     std::vector<Ogre::Vector4> blendWeights;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     unsigned int materialIndex;
-    std::string mName;
-    std::map<std::string, aiBone*> mapAiBone;
-};
-
-struct BoneNode {
-    aiBone* bone;
-    std::vector<BoneNode*> children;
 };
 
 class AssimpToOgreImporter {
@@ -61,23 +54,21 @@ public:
     Ogre::MeshPtr loadModel(const std::string& path);
 
 private:
-    void processNode(aiNode* node, const aiScene* scene);
-
     // Bones
     void createOgreBones(const aiScene *scene);
     void createBone(const std::string& boneName);
-    void processBoneHierarchy(aiBone* bone, const aiScene* scene);
-    void processBoneNode(aiBone *bone, SubMeshData& subMeshData);
+    void processBoneHierarchy(aiBone* bone);
+    void processBoneNode(aiBone *bone);
 
     // Mesh
     Ogre::MeshPtr createMesh();
+    void processNode(aiNode* node, const aiScene* scene);
     SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
 
     Assimp::Importer importer;
     std::vector<SubMeshData*> subMeshesData;
     Ogre::SkeletonPtr skeleton;
     std::map<std::string, aiBone*> aiBonesMap;
-    std::map<std::string, std::vector<SubMeshData*>> boneNameToSubMeshes;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     std::string modelName;
 

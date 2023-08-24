@@ -11,6 +11,6 @@ public:
     unsigned int size();
 
 private:
-    Ogre::MaterialPtr processMaterial(aiMaterial* material);
+    Ogre::MaterialPtr processMaterial(aiMaterial* material, const aiScene* scene);
     std::vector<Ogre::MaterialPtr> materials;
 };
