@@ -57,38 +57,42 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(aiMaterial *material, const
         Ogre::TexturePtr texturePtr = Ogre::TextureManager::getSingleton().getByName(textureFilename);
 
         if(!texturePtr){
-            if(auto texture = scene->GetEmbeddedTexture(path.C_Str())) {
-                //returned pointer is not null, read texture from memory
-                if(texture->mHeight == 0) {
-                    // The texture data is compressed (e.g., JPEG, PNG, etc.)
-                    Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(texture->pcData, texture->mWidth));
-                    Ogre::Image img;
-                    img.load(stream, texture->achFormatHint);
-
-                    texturePtr = Ogre::TextureManager::getSingleton().loadImage(
-                            textureFilename,
-                            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
-                            img
-                            );
-                } else {
-                    // The texture data is raw
-                    Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(texture->pcData, texture->mWidth * texture->mHeight * 3)); // Assuming RGB 8-bit
-                    texturePtr = Ogre::TextureManager::getSingleton().loadRawData(
-                        textureFilename,
-                        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
-                        stream,
-                        texture->mWidth,
-                        texture->mHeight,
-                        Ogre::PF_R8G8B8  // Assuming RGB 8-bit format
-                        );
-                }
-            } else {
-                //regular file, check if it exists and read it
-                Ogre::TexturePtr texturePtr = Ogre::TextureManager::getSingleton().load(textureFilename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-            }
+            texturePtr = loadTexture(textureFilename, path, scene);
         }
         ogreMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(texturePtr->getName());
     }
 
     return ogreMaterial;
+}
+
+Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, const aiString &path, const aiScene* scene)
+{
+    if(auto texture = scene->GetEmbeddedTexture(path.C_Str())) {
+        //returned pointer is not null, read texture from memory
+        if(texture->mHeight == 0) {
+            // The texture data is compressed (e.g., JPEG, PNG, etc.)
+            Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(texture->pcData, texture->mWidth));
+            Ogre::Image img;
+            img.load(stream, texture->achFormatHint);
+
+            return Ogre::TextureManager::getSingleton().loadImage(
+                    filename,
+                    Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                    img
+                    );
+        } else {
+            // The texture data is raw
+            Ogre::DataStreamPtr stream(new Ogre::MemoryDataStream(texture->pcData, texture->mWidth * texture->mHeight * 3)); // Assuming RGB 8-bit
+            return Ogre::TextureManager::getSingleton().loadRawData(
+                filename,
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                stream,
+                texture->mWidth,
+                texture->mHeight,
+                Ogre::PF_R8G8B8  // Assuming RGB 8-bit format
+                );
+        }
+    } 
+    //regular file, check if it exists and read it
+    return Ogre::TextureManager::getSingleton().load(filename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 }

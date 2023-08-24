@@ -12,5 +12,7 @@ public:
 
 private:
     Ogre::MaterialPtr processMaterial(aiMaterial* material, const aiScene* scene);
+    Ogre::TexturePtr loadTexture(const Ogre::String& filename, const aiString& path, const aiScene* scene);
+
     std::vector<Ogre::MaterialPtr> materials;
 };
