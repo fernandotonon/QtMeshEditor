@@ -1,9 +1,6 @@
 #include "MeshProcessor.h"
 
-MeshProcessor::MeshProcessor(Ogre::SkeletonPtr skeleton)
-{
-    this->skeleton = skeleton;
-}
+MeshProcessor::MeshProcessor(Ogre::SkeletonPtr skeleton):skeleton(skeleton) {}
 
 void MeshProcessor::processNode(aiNode* node, const aiScene* scene) {
     // Process each mesh located at the current node
