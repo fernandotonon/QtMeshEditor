@@ -71,6 +71,8 @@ MaterialComboDelegate.h
 MaterialHighlighter.h
 )
 
+set(TEST_SOURCES "")
+
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/Assimp")
 
@@ -243,7 +245,6 @@ ENDIF()
 if(BUILD_TESTS)
     set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
     
-    set(TEST_SOURCES "")
     foreach(src IN LISTS SRC_FILES)
         if(NOT src MATCHES "main.cpp")
             list(APPEND TEST_SOURCES ${src})

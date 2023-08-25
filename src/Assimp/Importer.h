@@ -28,28 +28,8 @@
 
 #include <Ogre.h>
 #include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
 
-struct SubMeshData {
-    std::vector<Ogre::Vector3> vertices;
-    std::vector<Ogre::Vector3> normals;
-    std::vector<Ogre::Vector2> texCoords;
-    std::vector<Ogre::Vector3> tangents;
-    std::vector<Ogre::Vector3> bitangents;
-    std::vector<Ogre::ColourValue> colors;
-    std::vector<unsigned long> indices;
-    std::vector<Ogre::Vector4> blendIndices;
-    std::vector<Ogre::Vector4> blendWeights;
-    std::vector<Ogre::VertexBoneAssignment> boneAssignments;
-    unsigned int materialIndex;
-    std::string mName;
-};
-
-struct BoneNode {
-    aiBone* bone;
-    std::vector<BoneNode*> children;
-};
+#include "MaterialProcessor.h"
 
 class AssimpToOgreImporter {
 public:
@@ -58,36 +38,9 @@ public:
     Ogre::MeshPtr loadModel(const std::string& path);
 
 private:
-    void processNode(aiNode* node, const aiScene* scene);
-
-    // Bones
-    void createOgreBones(const aiScene *scene);
-    void createBone(const std::string& boneName);
-    void processBoneHierarchy(aiBone* bone, const aiScene* scene);
-    void processBoneNode(BoneNode* boneNode, const aiScene* scene, SubMeshData& subMeshData);
-
-    // Animations
-    void processAnimations(const aiScene* scene);
-    void processAnimation(aiAnimation* animation, const aiScene* scene);
-    void processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex);
-
-    // Materials
-    void processMaterials(const aiScene* scene);
-    Ogre::MaterialPtr processMaterial(aiMaterial* material);
-
-    // Mesh
-    Ogre::MeshPtr createMesh();
-    SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
-
     Assimp::Importer importer;
-    std::vector<SubMeshData*> subMeshesData;
-    std::vector<Ogre::MaterialPtr> materials;
     Ogre::SkeletonPtr skeleton;
-    std::vector<std::string>  unattachedBoneNodes;
-    std::map<std::string, BoneNode*> boneNodes;
-    std::map<std::string, aiBone*> aiBonesMap;
-    std::map<std::string, std::vector<SubMeshData*>> boneNameToSubMeshes;
-    std::map<aiNode*, BoneNode*> nodeToBoneNode;
-    std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     std::string modelName;
+
+    MaterialProcessor materialProcessor;
 };
