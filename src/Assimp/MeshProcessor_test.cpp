@@ -3,7 +3,7 @@
 
 class MockMeshProcessor: public MeshProcessor {
 public:
-    MockMeshProcessor(Ogre::SkeletonPtr skeleton): MeshProcessor(skeleton){}
+    explicit MockMeshProcessor(Ogre::SkeletonPtr skeleton): MeshProcessor(skeleton){}
     SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene){return MeshProcessor::processMesh(mesh, scene);}
 };
 
