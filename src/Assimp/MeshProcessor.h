@@ -23,9 +23,12 @@ public:
     MeshProcessor(Ogre::SkeletonPtr skeleton);
     void processNode(aiNode* node, const aiScene* scene);
     Ogre::MeshPtr createMesh(const Ogre::String& name, const Ogre::String& group, MaterialProcessor &materialProcessor);
+
+protected:
+    // Protected for testing purposes
+    SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
     
 private:
-    SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
     std::vector<SubMeshData*> subMeshesData;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     Ogre::SkeletonPtr skeleton;

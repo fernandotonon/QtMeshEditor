@@ -55,6 +55,7 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
                     break;
                 }
             }
+
             if(freeIndex != -1) {
                 index = freeIndex;
             } else {
@@ -69,10 +70,10 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
                     index = smallest;
                 }
             }
+
             if(index != -1) {
                 subMeshData->blendIndices[weight.mVertexId][index] = i;
                 subMeshData->blendWeights[weight.mVertexId][index] = weight.mWeight;
-                subMeshData->blendWeights[weight.mVertexId][index] = ogreBone->getHandle();
             }
 
             Ogre::VertexBoneAssignment vba;
