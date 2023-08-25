@@ -26,5 +26,6 @@ set(TEST_SOURCES
 ${TEST_SOURCES}
 ${CMAKE_CURRENT_SOURCE_DIR}/MaterialProcessor_test.cpp
 ${CMAKE_CURRENT_SOURCE_DIR}/AnimationProcessor_test.cpp
+${CMAKE_CURRENT_SOURCE_DIR}/BoneProcessor_test.cpp
 PARENT_SCOPE
 )

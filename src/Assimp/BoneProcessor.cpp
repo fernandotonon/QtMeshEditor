@@ -41,13 +41,12 @@ void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scen
         aiMesh* mesh = scene->mMeshes[i];
         for(auto j = 0u; j < mesh->mNumBones; j++) {
             aiBone* bone = mesh->mBones[j];
-            if(!skeleton->hasBone(bone->mNode->mParent->mName.C_Str())) {
+            if(bone->mNode && bone->mNode->mParent && !skeleton->hasBone(bone->mNode->mParent->mName.C_Str())) {
                 createBone(bone->mNode->mParent->mName.C_Str());
                 processBoneHierarchy(bone);
             }
         }
     }
-
 }
 
 void BoneProcessor::createBone(const std::string& boneName) {
