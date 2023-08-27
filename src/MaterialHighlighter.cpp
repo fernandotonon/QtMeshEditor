@@ -42,7 +42,7 @@ MaterialHighlighter::~MaterialHighlighter()
 
 void MaterialHighlighter::highlightBlock(const QString &text)
 {
-    mParent->blockSignals(true);
+    if(mParent) mParent->blockSignals(true);
 
     QColor palette = QApplication::palette().color(QPalette::Text);
     bool dark = qGray(palette.red(),palette.green(),palette.blue())>100;
@@ -73,7 +73,7 @@ void MaterialHighlighter::highlightBlock(const QString &text)
     pattern = "\\b\\d+|(\\d+\\.)|(\\d+\\.\\d+)\\b";
     applyHighlight(format,pattern, text);
 
-    mParent->blockSignals(false);
+    if(mParent) mParent->blockSignals(false);
 }
 
 void MaterialHighlighter::applyHighlight(const QTextCharFormat &format, const QString &pattern, const QString &text)
