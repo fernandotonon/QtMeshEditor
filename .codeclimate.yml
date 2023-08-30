@@ -59,7 +59,15 @@ exclude_patterns:
   - src/OgreXML/*
   - "*_autogen*"
   - src/dependencies/*
+  - CMakeFiles/*
   - src/CMakeFiles/*
   - "_deps/*"
   - "moc_*"
   - "media/*"
+  - "lib/*"
+  - "bin/*"
+  - "cfg/*"
+  - "*.md"
+  - "*.in"
+  - "*.yml"
+  - "*.cmake"
