@@ -103,7 +103,7 @@ TEST_F(BoneProcessorTest, BoneHierarchy) {
 
     mockScene.mRootNode = parentNode;
     mockScene.mRootNode->mTransformation = aiMatrix4x4();
-
+    
     processor.processBones(mockSkeleton, &mockScene);
 
     EXPECT_EQ(mockSkeleton->getBone("ChildBone")->getParent(), mockSkeleton->getBone("RootBone"));
@@ -116,6 +116,7 @@ TEST_F(BoneProcessorTest, BoneTransformation) {
     aiBone* mockBone = new aiBone();
     mockBone->mName = aiString("TestBone");
     aiNode* mockNode = new aiNode();
+
     mockNode->mName = aiString("TestBone");
     mockBone->mNode = mockNode;
     mockNode->mParent = rootNode;
