@@ -20,9 +20,6 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
 
     // Initialize blend indices and blend weights
     for(auto i = 0u; i < mesh->mNumVertices; i++) {
-        subMeshData->blendIndices.push_back(Ogre::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
-        subMeshData->blendWeights.push_back(Ogre::Vector4(0.0f, 0.0f, 0.0f, 0.0f));
-
         // Process vertices
         subMeshData->vertices.push_back(Ogre::Vector3(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z));
 
@@ -44,34 +41,6 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
         Ogre::Bone* ogreBone = skeleton->getBone(bone->mName.C_Str());
         for(auto j = 0u; j < bone->mNumWeights; j++) {
             aiVertexWeight weight = bone->mWeights[j];
-            int index = -1;
-            int freeIndex = -1;
-            for(int k = 0; k < 4; k++) {
-                if(subMeshData->blendWeights[weight.mVertexId][k] == 0.0f) {
-                    freeIndex = k;
-                    break;
-                }
-            }
-
-            if(freeIndex != -1) {
-                index = freeIndex;
-            } else {
-                // Find the smallest weight, replace it if the current weight is larger
-                int smallest = 0;
-                for(int k = 1; k < 4; k++) {
-                    if(subMeshData->blendWeights[weight.mVertexId][k] < subMeshData->blendWeights[weight.mVertexId][smallest]) {
-                        smallest = k;
-                    }
-                }
-                if(subMeshData->blendWeights[weight.mVertexId][smallest] < weight.mWeight) {
-                    index = smallest;
-                }
-            }
-
-            if(index != -1) {
-                subMeshData->blendIndices[weight.mVertexId][index] = i;
-                subMeshData->blendWeights[weight.mVertexId][index] = weight.mWeight;
-            }
 
             Ogre::VertexBoneAssignment vba;
             vba.vertexIndex = weight.mVertexId;
@@ -79,19 +48,6 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
             vba.weight = weight.mWeight;
 
             subMeshData->boneAssignments.push_back(vba);
-        }
-    }
-
-    // Normalize the blend weights so they sum to 1
-    for(auto i = 0u; i < mesh->mNumVertices; i++) {
-        float sum = 0.0f;
-        for(int j = 0; j < 4; j++) {
-            sum += subMeshData->blendWeights[i][j];
-        }
-        if(sum > 0.0f) {
-            for(int j = 0; j < 4; j++) {
-                subMeshData->blendWeights[i][j] /= sum;
-            }
         }
     }
 

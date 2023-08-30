@@ -45,7 +45,6 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
                                                  aiProcess_ValidateDataStructure |
                                                  aiProcess_OptimizeGraph |
                                                  aiProcess_LimitBoneWeights |
-                                                 aiProcess_FindInvalidData |
                                                  aiProcess_SortByPType |
                                                  aiProcess_ImproveCacheLocality |
                                                  aiProcess_FixInfacingNormals |

@@ -12,8 +12,6 @@ struct SubMeshData {
     std::vector<Ogre::Vector3> bitangents;
     std::vector<Ogre::ColourValue> colors;
     std::vector<unsigned long> indices;
-    std::vector<Ogre::Vector4> blendIndices;
-    std::vector<Ogre::Vector4> blendWeights;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     unsigned int materialIndex;
 };

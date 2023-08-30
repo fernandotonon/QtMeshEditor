@@ -19,8 +19,9 @@ void AnimationProcessor::processAnimation(aiAnimation* animation, const aiScene*
     }
 }
 
-
 void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex) {
+    if(!skeleton->hasBone(nodeAnim->mNodeName.C_Str())) return;
+
     // Create the animation track
     Ogre::Bone* bone = skeleton->getBone(nodeAnim->mNodeName.C_Str());
     Ogre::NodeAnimationTrack* track = animation->createNodeTrack(bone->getHandle(), bone);

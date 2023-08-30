@@ -97,11 +97,5 @@ TEST_F(MeshProcessorTest, MeshDataProcessingTest) {
     EXPECT_EQ(resultData->vertices[0], Ogre::Vector3(0, 0, 0));
     EXPECT_EQ(resultData->vertices[1], Ogre::Vector3(1, 1, 1));
     EXPECT_EQ(resultData->vertices[2], Ogre::Vector3(2, 2, 2));
-
-    // Verify blend indices and blend weights for each vertex
-    for (unsigned int i = 0; i < mockMesh->mNumVertices; i++) {
-        EXPECT_EQ(resultData->blendIndices[i][0], 0);  // Assuming the bone only one bone
-        EXPECT_FLOAT_EQ(resultData->blendWeights[i][0], 1.0f);  // the values get normalized (0.5+1+1.5)/3=1
-    }
 }
 // TODO: test the other functions
