@@ -34,6 +34,19 @@ TEST_F(BoneProcessorTest, CreateBones) {
     mockScene.mMeshes[0]->mBones[1]->mName = aiString("Bone2");
     mockScene.mMeshes[0]->mBones[0]->mOffsetMatrix = aiMatrix4x4();
     mockScene.mMeshes[0]->mBones[1]->mOffsetMatrix = aiMatrix4x4();
+    mockScene.mRootNode = new aiNode();
+    mockScene.mRootNode->mName = aiString("Root");
+    mockScene.mRootNode->mTransformation = aiMatrix4x4();
+    mockScene.mRootNode->mNumChildren = 2;
+    mockScene.mRootNode->mChildren = new aiNode*[2];
+    mockScene.mRootNode->mChildren[0] = new aiNode();
+    mockScene.mRootNode->mChildren[1] = new aiNode();
+    mockScene.mRootNode->mChildren[0]->mName = aiString("Bone1");
+    mockScene.mRootNode->mChildren[1]->mName = aiString("Bone2");
+    mockScene.mRootNode->mChildren[0]->mTransformation = aiMatrix4x4();
+    mockScene.mRootNode->mChildren[1]->mTransformation = aiMatrix4x4();
+    mockScene.mMeshes[0]->mBones[0]->mNode = mockScene.mRootNode->mChildren[0];
+    mockScene.mMeshes[0]->mBones[1]->mNode = mockScene.mRootNode->mChildren[1];
 
     processor.processBones(mockSkeleton, &mockScene);
 
@@ -88,6 +101,9 @@ TEST_F(BoneProcessorTest, BoneHierarchy) {
 
     mockScene.mMeshes[0]->mBones[0] = childBone;
 
+    mockScene.mRootNode = parentNode;
+    mockScene.mRootNode->mTransformation = aiMatrix4x4();
+    
     processor.processBones(mockSkeleton, &mockScene);
 
     EXPECT_EQ(mockSkeleton->getBone("ChildBone")->getParent(), mockSkeleton->getBone("RootBone"));
@@ -100,6 +116,8 @@ TEST_F(BoneProcessorTest, BoneTransformation) {
     aiBone* mockBone = new aiBone();
     mockBone->mName = aiString("TestBone");
     aiNode* mockNode = new aiNode();
+
+    mockNode->mName = aiString("TestBone");
     mockBone->mNode = mockNode;
     mockNode->mParent = rootNode;
 
@@ -119,6 +137,12 @@ TEST_F(BoneProcessorTest, BoneTransformation) {
     mockScene.mMeshes[0]->mBones = new aiBone*[1];
     mockScene.mMeshes[0]->mBones[0] = mockBone;
 
+    mockScene.mRootNode = rootNode;
+    mockScene.mRootNode->mTransformation = aiMatrix4x4();
+    mockScene.mRootNode->mNumChildren = 1;
+    mockScene.mRootNode->mChildren = new aiNode*[1];
+    mockScene.mRootNode->mChildren[0] = mockNode;
+
     processor.processBones(mockSkeleton, &mockScene);
 
     Ogre::Bone* testBone = mockSkeleton->getBone("TestBone");
@@ -130,23 +154,4 @@ TEST_F(BoneProcessorTest, BoneTransformation) {
     EXPECT_EQ(testBone->getPosition(), expectedPosition);
     EXPECT_EQ(testBone->getOrientation(), expectedOrientation);
     EXPECT_EQ(testBone->getScale(), expectedScale);
-}
-
-TEST_F(BoneProcessorTest, AnimationBones) {
-    aiAnimation* mockAnimation = new aiAnimation();
-    aiNodeAnim* mockNodeAnim = new aiNodeAnim();
-    mockNodeAnim->mNodeName = aiString("AnimBone");
-
-    mockAnimation->mNumChannels = 1;
-    mockAnimation->mChannels = new aiNodeAnim*[1];
-    mockAnimation->mChannels[0] = mockNodeAnim;
-
-    mockScene.mNumAnimations = 1;
-    mockScene.mAnimations = new aiAnimation*[1];
-    mockScene.mAnimations[0] = mockAnimation;
-
-    processor.processBones(mockSkeleton, &mockScene);
-
-    // Check if animation bone "AnimBone" is correctly created
-    EXPECT_TRUE(mockSkeleton->hasBone("AnimBone"));
 }

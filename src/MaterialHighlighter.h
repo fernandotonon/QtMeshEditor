@@ -36,11 +36,14 @@ class MaterialHighlighter : public QSyntaxHighlighter
 public:
     explicit MaterialHighlighter(QObject *parent = 0);
     ~MaterialHighlighter();
-
+    
     void highlightBlock(const QString &text);
+
+protected:
+    virtual void applyHighlight(const QTextCharFormat &format, const QString &pattern, const QString &text);
+
 private:
     QObject *mParent;
-    void applyHighlight(const QTextCharFormat &format, const QString &pattern, const QString &text);
 };
 
 #endif // MATERIALHIGHLIGHTER_H

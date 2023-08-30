@@ -9,8 +9,10 @@ class BoneProcessor {
 
     private:
         void createBone(const std::string& boneName);
-        void processBoneHierarchy(aiBone* bone);
+        void processBoneHierarchy(aiNode* node);
         void processBoneNode(aiBone *bone);
+        Ogre::Matrix4 convertToOgreMatrix4(const aiMatrix4x4& aiMat);
+        void applyTransformation(const std::string& boneName, const Ogre::Matrix4 &transform);
 
         Ogre::SkeletonPtr skeleton;    
         std::map<std::string, aiBone*> aiBonesMap;

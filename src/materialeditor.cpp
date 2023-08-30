@@ -73,7 +73,7 @@ MaterialEditor::~MaterialEditor()
 void MaterialEditor::setMaterialText(const QString &_mat)
 {
     Ogre::LogManager::getSingleton().logMessage("void MaterialEditor::setMaterialText(const QString &_mat)");
-    //mMaterialHighlighter->highlightBlock(_mat);
+
     ui->textMaterial->setText(_mat);
 
     ui->scrollArea->setEnabled(true);
