@@ -10,19 +10,17 @@ using ::testing::Mock;
 class MockMaterialHighlighter : public MaterialHighlighter
 {
 public:
-    MockMaterialHighlighter(QTextEdit *editor=0){}
+    explicit MockMaterialHighlighter(QTextEdit *editor=0){}
 
     MOCK_METHOD(void, applyHighlight, (const QTextCharFormat &format, const QString &pattern, const QString &text), (override));
 
     bool containsExpectedFormat(const std::vector<QTextCharFormat>& capturedFormats,
                                 const QTextCharFormat& expectedFormat) {
-        for (const auto &format : capturedFormats) {
-            if (format.fontWeight() == expectedFormat.fontWeight() &&
-                format.foreground().color() == expectedFormat.foreground().color()) {
-                return true;
-            }
-        }
-        return false;
+        return std::any_of(capturedFormats.begin(), capturedFormats.end(),
+                           [&expectedFormat](const QTextCharFormat& format) {
+                               return format.fontWeight() == expectedFormat.fontWeight() &&
+                                      format.foreground().color() == expectedFormat.foreground().color();
+                           });
     }
 };
 
