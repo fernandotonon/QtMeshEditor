@@ -71,3 +71,4 @@ exclude_patterns:
   - "*.in"
   - "*.yml"
   - "*.cmake"
+  - "makefile"
