@@ -60,3 +60,6 @@ exclude_patterns:
   - "*_autogen*"
   - src/dependencies/*
   - src/CMakeFiles/*
+  - "_deps/*"
+  - "moc_*"
+  - "media/*"
