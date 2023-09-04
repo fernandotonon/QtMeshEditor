@@ -4,6 +4,7 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 
 [![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star if you like it! 
 
+[![Github All Releases](https://img.shields.io/github/downloads/fernandotonon/QtMeshEditor/total.svg)]()
 [![Deploy](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml/badge.svg)](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml)
 [![Test Coverage](https://api.codeclimate.com/v1/badges/946bc0c606302904a589/test_coverage)](https://codeclimate.com/github/fernandotonon/QtMeshEditor/test_coverage)
 
