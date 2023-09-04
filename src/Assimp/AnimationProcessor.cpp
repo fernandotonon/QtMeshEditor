@@ -10,16 +10,18 @@ void AnimationProcessor::processAnimations(const aiScene* scene) {
 }
 
 void AnimationProcessor::processAnimation(aiAnimation* animation, const aiScene* scene) {
+    // get the animation speed
+    auto mTicksPerSecond = (Ogre::Real)((0 == animation->mTicksPerSecond) ? 24.0f : animation->mTicksPerSecond);
     // Create the animation
-    Ogre::Animation* ogreAnimation = skeleton->createAnimation(animation->mName.C_Str(), animation->mDuration/10.0f);
+    Ogre::Animation* ogreAnimation = skeleton->createAnimation(animation->mName.C_Str(), animation->mDuration/mTicksPerSecond);
     // Process the animation channels
     for(auto i = 0u; i < animation->mNumChannels; i++) {
         aiNodeAnim* nodeAnim = animation->mChannels[i];
-        processAnimationChannel(nodeAnim, ogreAnimation, scene, i);
+        processAnimationChannel(nodeAnim, ogreAnimation, scene, i, mTicksPerSecond);
     }
 }
 
-void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex) {
+void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex, Ogre::Real mTicksPerSecond) {
     if(!skeleton->hasBone(nodeAnim->mNodeName.C_Str())) return;
 
     // Create the animation track
@@ -29,14 +31,12 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
     // Create a map to store keyframes by time
     std::map<double, std::tuple<Ogre::Vector3, Ogre::Quaternion, Ogre::Vector3>> keyframes;
 
+    // Get the bone's T-pose position
+    auto boneTPosePosition = bone->getPosition();
     // Process the position keys
     for(auto i = 0u; i < nodeAnim->mNumPositionKeys; i++) {
         aiVectorKey positionKey = nodeAnim->mPositionKeys[i];
         Ogre::Vector3 position(positionKey.mValue.x, positionKey.mValue.y, positionKey.mValue.z);
-
-        // Get the bone's T-pose position
-        auto boneTPosePosition = bone->getPosition();
-
         // Convert the position from local space to model space
         position = position - boneTPosePosition;
 
@@ -48,11 +48,11 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
     }
 
     // Process the rotation keys
+    Ogre::Quaternion boneTPoseInverseRotation = bone->getOrientation().Inverse();
     for(auto i = 0u; i < nodeAnim->mNumRotationKeys; i++) {
         aiQuatKey rotationKey = nodeAnim->mRotationKeys[i];
-        Ogre::Quaternion boneTPoseRotation = bone->getOrientation();
         Ogre::Quaternion rot(rotationKey.mValue.w, rotationKey.mValue.x, rotationKey.mValue.y, rotationKey.mValue.z);
-        rot = boneTPoseRotation.Inverse() * rot; // Convert from local space to model space
+        rot = boneTPoseInverseRotation * rot; // Convert from local space to model space
         rot.normalise(); // Normalize the quaternion
         if (keyframes.find(rotationKey.mTime) == keyframes.end()) {
             keyframes[rotationKey.mTime] = std::make_tuple(
@@ -82,7 +82,7 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
 
     // Now create the keyframes in the track
     for(auto& [time, transform] : keyframes) {
-        Ogre::TransformKeyFrame* keyFrame = track->createNodeKeyFrame(time/10.0f);
+        Ogre::TransformKeyFrame* keyFrame = track->createNodeKeyFrame(time/mTicksPerSecond);
         keyFrame->setTranslate(std::get<0>(transform));
         keyFrame->setRotation(std::get<1>(transform));
         keyFrame->setScale(std::get<2>(transform));
