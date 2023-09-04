@@ -11,7 +11,7 @@ public:
 
 private:
     void processAnimation(aiAnimation* animation, const aiScene* scene);
-    void processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex);
+    void processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Animation* animation, const aiScene* scene, unsigned int channelIndex, Ogre::Real mTicksPerSecond);
     Ogre::SkeletonPtr skeleton;
 };
 

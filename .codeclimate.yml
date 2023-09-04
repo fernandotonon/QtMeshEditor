@@ -56,7 +56,19 @@ plugins:
       standard: "cpp17"
       library: googletest
 exclude_patterns:
-  - src/OgreXML/*
+  - "src/OgreXML/"
   - "*_autogen*"
-  - src/dependencies/*
-  - src/CMakeFiles/*
+  - "src/dependencies/"
+  - "CMakeFiles/"
+  - "src/CMakeFiles/"
+  - "_deps/"
+  - "moc_*"
+  - "media/"
+  - "lib/"
+  - "bin/"
+  - "cfg/"
+  - "*.md"
+  - "*.in"
+  - "*.yml"
+  - "*.cmake"
+  - "makefile"
