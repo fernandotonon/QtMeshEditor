@@ -29,15 +29,27 @@
 
 #include <QTableWidget>
 
+namespace Ogre {
+    class Entity;
+    class SubEntity;
+}
+
+
 class MaterialWidget : public QTableWidget
 {
     Q_OBJECT
 
 public:
     explicit MaterialWidget(QWidget *parent = 0);
-    ~MaterialWidget();
+    virtual ~MaterialWidget();
+
+private:
+    void populateTableWithEntities(const QList<Ogre::Entity*>& entities);
+    void populateTableWithSubEntities(const QList<Ogre::SubEntity*>& subEntities);
 
 private slots:
+    void onNodeSelected();
+    void onEntitySelected();
     void onSubEntitySelected();
     void onMaterialChanged(int row, int column);
 
