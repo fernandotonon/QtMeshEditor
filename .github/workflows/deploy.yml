@@ -197,6 +197,8 @@ jobs:
     - name: Copy gcc dll to the binary folder
       run: |
             echo "mingw bin"
+            cd C:/ProgramData/mingw64/mingw64/bin
+            dir
             cd C:/ProgramData/chocolatey/lib/mingw/tools/
             dir
             cd C:/ProgramData/chocolatey/lib/mingw/tools/install/
