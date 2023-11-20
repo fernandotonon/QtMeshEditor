@@ -197,6 +197,12 @@ jobs:
     - name: Copy gcc dll to the binary folder
       run: |
             echo "mingw bin"
+            cd C:/ProgramData/chocolatey/lib/mingw/tools/
+            dir
+            cd C:/ProgramData/chocolatey/lib/mingw/tools/install/
+            dir
+            cd C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/
+            dir
             cd C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/
             dir 
             copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
