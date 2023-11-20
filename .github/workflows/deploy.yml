@@ -114,7 +114,7 @@ jobs:
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
+      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
       with:
           platform: x64        
           
@@ -163,7 +163,7 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
+      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
       with:
           platform: x64   
 
