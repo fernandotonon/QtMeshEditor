@@ -42,7 +42,7 @@ jobs:
         
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
       name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
+      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
       with:
           platform: x64            
     
@@ -114,7 +114,7 @@ jobs:
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
+      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
       with:
           platform: x64        
           
@@ -163,19 +163,18 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Set up MinGW
-      uses: egor-tensin/setup-mingw@v2
+      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
       with:
           platform: x64   
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
+        aqtversion: '==3.1.*'
+        version: '6.6.0'
         host: 'windows'
         target: 'desktop'
         arch: 'win64_mingw'
-        #arch: 'win64_msvc2019_64'
         tools: 'tools_cmake'
      
     - name: Configure CMake
@@ -196,23 +195,22 @@ jobs:
 
     - name: Copy gcc dll to the binary folder
       run: |
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
             echo "mingw bin"
-            cd C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/
+            cd C:/ProgramData/mingw64/mingw64/bin
             dir
+            copy C:/ProgramData/mingw64/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
+            copy C:/ProgramData/mingw64/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
+            copy C:/ProgramData/mingw64/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
             echo "Qt"
-            cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/
+            cd D:/a/QtMeshEditor/Qt/6.6.0/mingw_64/
             dir
             echo "Qt lib"
-            cd D:/a/QtMeshEditor/Qt/6.5.0/mingw_64/bin
-            dir
-            cd C:/PROGRA~2/Assimp/bin/
+            cd D:/a/QtMeshEditor/Qt/6.6.0/mingw_64/bin
             dir
             copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
             copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
-#            copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
+# copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
+# copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
     - if: github.event_name == 'release' && github.event.action == 'published'
       uses: actions/upload-artifact@v3
