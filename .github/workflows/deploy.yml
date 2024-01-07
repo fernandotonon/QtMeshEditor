@@ -206,8 +206,7 @@ jobs:
 # copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
 # copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
-    - if: github.event_name == 'release' && github.event.action == 'published'
-      uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v3
       with:
         name: QtMeshEditor-${{github.ref_name}}-bin-Windows
         path: ${{github.workspace}}/bin
