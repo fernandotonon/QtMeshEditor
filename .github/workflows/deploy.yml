@@ -171,7 +171,7 @@ jobs:
       uses: jurplel/install-qt-action@v3
       with:
         aqtversion: '==2.1.*'
-        version: '6.5.0'
+        version: '6.7.0'
         host: 'windows'
         target: 'desktop'
         arch: 'win64_mingw'
@@ -358,7 +358,7 @@ jobs:
       uses: jurplel/install-qt-action@v3
       with:
         aqtversion: '==2.1.*'
-        version: '6.5.0'
+        version: '6.7.0'
         host: 'linux'
         target: 'desktop'
         arch: 'gcc_64'
@@ -733,7 +733,7 @@ jobs:
       uses: jurplel/install-qt-action@v3
       with:
         aqtversion: '==2.1.*'
-        version: '6.5.0'
+        version: '6.7.0'
         host: 'mac'
         target: 'desktop'
         arch: 'clang_64'
