@@ -603,7 +603,7 @@ jobs:
     - uses: sonarsource/sonarqube-scan-action@master
       with:
           args: >
-            -Dsonar.projectKey=${{ github.repository }}
+            -Dsonar.projectKey=QtMeshEditor
             -Dsonar.coverageReportPaths=filtered_coverage.info
       env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
