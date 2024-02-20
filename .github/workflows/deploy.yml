@@ -587,15 +587,11 @@ jobs:
             
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
 
-    - run: sudo apt-get install gcovr
-      
-    - run: sudo gcovr --root ${GITHUB_WORKSPACE} --filter="${GITHUB_WORKSPACE}/src/" --xml-pretty --output=coverage.xml
-
     - uses: sonarsource/sonarqube-scan-action@master
       with:
           args: >
             -Dsonar.projectKey=QtMeshEditor
-            -Dsonar.coverageReportPaths=coverage.xml
+            -Dsonar.cfamily.gcov.reportsPath=.
       env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
