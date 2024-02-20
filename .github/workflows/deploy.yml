@@ -586,22 +586,26 @@ jobs:
 #            sudo ./bin/UnitTests
             
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
-    
-    - name: Run lcov
-      run: |
-            sudo apt install lcov
-            lcov --capture --directory . --output-file coverage.info
-            lcov --remove coverage.info '/usr/*' '/home/runner/work/QtMeshEditor/Qt/*' -o filtered_coverage.info
+
+    - run: sudo apt-get install gcovr
+      
+    - run: sudo gcovr --root ${GITHUB_WORKSPACE} --filter="${GITHUB_WORKSPACE}/src/" --xml-pretty --output=coverage.xml
 
     - uses: sonarsource/sonarqube-scan-action@master
       with:
           args: >
             -Dsonar.projectKey=QtMeshEditor
-            -Dsonar.coverageReportPaths=filtered_coverage.info
+            -Dsonar.coverageReportPaths=coverage.xml
       env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-    
+          
+    - name: Run lcov
+      run: |
+            sudo apt install lcov
+            lcov --capture --directory . --output-file coverage.info
+            lcov --remove coverage.info '/usr/*' '/home/runner/work/QtMeshEditor/Qt/*' -o filtered_coverage.info
+   
     - run: |
             cd ${{github.workspace}}
             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
