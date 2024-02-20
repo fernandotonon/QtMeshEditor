@@ -592,14 +592,7 @@ jobs:
             sudo apt install lcov
             lcov --capture --directory . --output-file coverage.info
             lcov --remove coverage.info '/usr/*' '/home/runner/work/QtMeshEditor/Qt/*' -o filtered_coverage.info
-    
-    - run: |
-            cd ${{github.workspace}}
-            curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
-            sudo chmod +x test-reporter-latest-linux-amd64
-            sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json filtered_coverage.info
-            sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
-            
+
     - uses: sonarsource/sonarqube-scan-action@master
       with:
           args: >
@@ -608,7 +601,14 @@ jobs:
       env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
+    
+    - run: |
+            cd ${{github.workspace}}
+            curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
+            sudo chmod +x test-reporter-latest-linux-amd64
+            sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json filtered_coverage.info
+            sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
+            
 ####################################################################
 # Code Climate Analysis 
 ####################################################################
