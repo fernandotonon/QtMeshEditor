@@ -586,15 +586,6 @@ jobs:
 #            sudo ./bin/UnitTests
             
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
-
-    - uses: sonarsource/sonarqube-scan-action@master
-      with:
-          args: >
-            -Dsonar.projectKey=QtMeshEditor
-            -Dsonar.cfamily.gcov.reportsPath=.
-      env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
           
     - name: Run lcov
       run: |
