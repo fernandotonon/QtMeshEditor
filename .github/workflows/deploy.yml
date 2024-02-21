@@ -140,7 +140,12 @@ jobs:
     - uses: actions/checkout@v3
       with:
          submodules: true
-
+         
+    - name: Dump GitHub context
+      env:
+          GITHUB_CONTEXT: ${{ toJson(github) }}
+      run: echo "$GITHUB_CONTEXT"
+        
     - name: Cache Assimp
       id: cache-assimp-windows
       uses: actions/cache@v3
@@ -187,7 +192,6 @@ jobs:
 
     - name: Build
       run: mingw32-make install -j8
-
 
     - name: Copy assimp dll to the binary folder
       run: |
