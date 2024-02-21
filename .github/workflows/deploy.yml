@@ -170,8 +170,8 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        aqtversion: '==3.1.*'
-        version: '6.6.0'
+        aqtversion: '==2.1.*'
+        version: '6.5.0'
         host: 'windows'
         target: 'desktop'
         arch: 'win64_mingw'
@@ -200,12 +200,6 @@ jobs:
             copy C:/ProgramData/mingw64/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
             copy C:/ProgramData/mingw64/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
             copy C:/ProgramData/mingw64/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
-            echo "Qt"
-            cd D:/a/QtMeshEditor/Qt/6.6.0/mingw_64/
-            dir
-            echo "Qt lib"
-            cd D:/a/QtMeshEditor/Qt/6.6.0/mingw_64/bin
-            dir
             copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
             copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 # copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
@@ -490,12 +484,14 @@ jobs:
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     runs-on: ubuntu-latest
+    permissions: read-all
     env: 
           LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
     steps:
     - uses: actions/checkout@v3.5.3
       with:
          submodules: true
+         fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
            
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
@@ -594,20 +590,20 @@ jobs:
 #            sudo ./bin/UnitTests
             
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
-    
+          
     - name: Run lcov
       run: |
             sudo apt install lcov
             lcov --capture --directory . --output-file coverage.info
             lcov --remove coverage.info '/usr/*' '/home/runner/work/QtMeshEditor/Qt/*' -o filtered_coverage.info
-    
+   
     - run: |
             cd ${{github.workspace}}
             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
             sudo chmod +x test-reporter-latest-linux-amd64
             sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json filtered_coverage.info
             sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
-
+            
 ####################################################################
 # Code Climate Analysis 
 ####################################################################
