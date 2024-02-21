@@ -40,6 +40,8 @@ class About : public QDialog
 public:
     explicit About(QWidget *parent = 0);
     ~About();
+
+    QString getVersionText() const;
     
 private:
     Ui::About *ui;

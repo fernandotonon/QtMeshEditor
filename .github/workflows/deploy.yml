@@ -205,16 +205,20 @@ jobs:
 # copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
 # copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
-    - uses: actions/upload-artifact@v3
+    - name: Upload Artifact
+      if: github.event_name == 'release' && github.event.action == 'published'
+      uses: actions/upload-artifact@v3
       with:
         name: QtMeshEditor-${{github.ref_name}}-bin-Windows
         path: ${{github.workspace}}/bin
     
-    - if: github.event_name == 'release' && github.event.action == 'published'
+    - name: Compress File
+      if: github.event_name == 'release' && github.event.action == 'published'
       run: Compress-Archive ${{github.workspace}}/bin QtMeshEditor-${{github.ref_name}}-bin-Windows.zip
       shell: powershell
       
-    - if: github.event_name == 'release' && github.event.action == 'published'
+    - name: Uploadfile to release
+      if: github.event_name == 'release' && github.event.action == 'published'
       uses: xresloader/upload-to-github-release@main
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

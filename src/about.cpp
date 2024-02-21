@@ -39,3 +39,7 @@ About::~About()
 {
     delete ui;
 }
+
+QString About::getVersionText() const {
+    return ui->versionText->text();
+}
