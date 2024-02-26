@@ -590,6 +590,16 @@ jobs:
 #            sudo ./bin/UnitTests
             
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
+
+    - name: Install sonar-scanner
+      uses: SonarSource/sonarcloud-github-c-cpp@v2
+        
+    - name: Run sonar-scanner
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      run: |
+          sonar-scanner 
           
     - name: Run lcov
       run: |
