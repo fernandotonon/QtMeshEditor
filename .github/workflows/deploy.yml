@@ -556,15 +556,15 @@ jobs:
             -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage \
             -DBUILD_QT_MESH_EDITOR=OFF
 
-    # - name: Build
-    #   # Build your program with the given configuration
-    #   run: sudo make install -j8
+    - name: Build
+      # Build your program with the given configuration
+      run: sudo make install -j8
 
-    - name: Install sonar-scanner and build-wrapper
-      uses: SonarSource/sonarcloud-github-c-cpp@v2
-    - name: Run build-wrapper
-      run: |
-         build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} sudo make install -j8
+    # - name: Install sonar-scanner and build-wrapper
+    #   uses: SonarSource/sonarcloud-github-c-cpp@v2
+    # - name: Run build-wrapper
+    #   run: |
+    #      build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} sudo make install -j8
 
     - name: Add missing libraries
       run: |
@@ -598,12 +598,12 @@ jobs:
             
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
 
-    - name: Run sonar-scanner
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      run: |
-         sonar-scanner --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" 
+    # - name: Run sonar-scanner
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    #   run: |
+    #      sonar-scanner --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" 
           
     - name: Run lcov
       run: |
