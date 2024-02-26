@@ -595,7 +595,7 @@ jobs:
       uses: SonarSource/sonarcloud-github-c-cpp@v2
     - name: Run build-wrapper
       run: |
-         build-wrapper-linux-x86-64 --out-dir ./ sudo make -j8
+         build-wrapper-linux-x86-64 --out-dir ./ sudo make install -j8
     - name: Run sonar-scanner
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
