@@ -595,13 +595,13 @@ jobs:
       uses: SonarSource/sonarcloud-github-c-cpp@v2
     - name: Run build-wrapper
       run: |
-         build-wrapper-linux-x86-64 --out-dir ./ sudo make install -j8
+         build-wrapper-linux-x86-64 --out-dir ./ sudo make clean all -j8
     - name: Run sonar-scanner
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       run: |
-         sonar-scanner --define sonar.cfamily.build-wrapper-output="./"
+         sonar-scanner --define sonar.cfamily.build-wrapper-output="./" -X
           
     - name: Run lcov
       run: |
