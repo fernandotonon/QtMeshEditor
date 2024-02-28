@@ -170,8 +170,8 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        aqtversion: '==3.1.*'
-        version: '6.6.0'
+        aqtversion: '==2.1.*'
+        version: '6.5.0'
         host: 'windows'
         target: 'desktop'
         arch: 'win64_mingw'
@@ -188,7 +188,6 @@ jobs:
     - name: Build
       run: mingw32-make install -j8
 
-
     - name: Copy assimp dll to the binary folder
       run: |
             copy C:/PROGRA~2/Assimp/bin/libassimp-5.dll ${{github.workspace}}/bin
@@ -201,28 +200,25 @@ jobs:
             copy C:/ProgramData/mingw64/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
             copy C:/ProgramData/mingw64/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
             copy C:/ProgramData/mingw64/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
-            echo "Qt"
-            cd D:/a/QtMeshEditor/Qt/6.6.0/mingw_64/
-            dir
-            echo "Qt lib"
-            cd D:/a/QtMeshEditor/Qt/6.6.0/mingw_64/bin
-            dir
             copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
             copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 # copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
 # copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
-    - if: github.event_name == 'release' && github.event.action == 'published'
+    - name: Upload Artifact
+      if: github.event_name == 'release' && github.event.action == 'published'
       uses: actions/upload-artifact@v3
       with:
         name: QtMeshEditor-${{github.ref_name}}-bin-Windows
         path: ${{github.workspace}}/bin
     
-    - if: github.event_name == 'release' && github.event.action == 'published'
+    - name: Compress File
+      if: github.event_name == 'release' && github.event.action == 'published'
       run: Compress-Archive ${{github.workspace}}/bin QtMeshEditor-${{github.ref_name}}-bin-Windows.zip
       shell: powershell
       
-    - if: github.event_name == 'release' && github.event.action == 'published'
+    - name: Uploadfile to release
+      if: github.event_name == 'release' && github.event.action == 'published'
       uses: xresloader/upload-to-github-release@main
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -488,12 +484,15 @@ jobs:
     # See: https://docs.github.com/en/free-pro-team@latest/actions/learn-github-actions/managing-complex-workflows#using-a-build-matrix
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     runs-on: ubuntu-latest
+    permissions: read-all
     env: 
           LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
+          BUILD_WRAPPER_OUT_DIR: /home/runner/work/QtMeshEditor/QtMeshEditor/ 
     steps:
     - uses: actions/checkout@v3.5.3
       with:
          submodules: true
+         fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
            
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
@@ -561,6 +560,12 @@ jobs:
       # Build your program with the given configuration
       run: sudo make install -j8
 
+    # - name: Install sonar-scanner and build-wrapper
+    #   uses: SonarSource/sonarcloud-github-c-cpp@v2
+    # - name: Run build-wrapper
+    #   run: |
+    #      build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} sudo make install -j8
+
     - name: Add missing libraries
       run: |
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
@@ -592,20 +597,27 @@ jobs:
 #            sudo ./bin/UnitTests
             
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
-    
+
+    # - name: Run sonar-scanner
+    #   env:
+    #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    #     SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    #   run: |
+    #      sonar-scanner --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" 
+          
     - name: Run lcov
       run: |
             sudo apt install lcov
             lcov --capture --directory . --output-file coverage.info
             lcov --remove coverage.info '/usr/*' '/home/runner/work/QtMeshEditor/Qt/*' -o filtered_coverage.info
-    
+   
     - run: |
             cd ${{github.workspace}}
             curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
             sudo chmod +x test-reporter-latest-linux-amd64
             sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json filtered_coverage.info
             sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
-
+            
 ####################################################################
 # Code Climate Analysis 
 ####################################################################
