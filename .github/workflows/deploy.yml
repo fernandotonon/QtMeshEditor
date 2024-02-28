@@ -613,10 +613,10 @@ jobs:
         gcovr --sonarqube > coverage.xml
 
     - name: Run sonar-scanner
-        env:
+      env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} 
-        run: |
+      run: |
           sonar-scanner \
             --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" \
             --define sonar.coverageReportPaths=coverage.xml
