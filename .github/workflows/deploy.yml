@@ -565,7 +565,7 @@ jobs:
       uses: SonarSource/sonarcloud-github-c-cpp@v2
     - name: Run build-wrapper
       run: |
-          build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} sudo make install -j8
+          build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} sudo cmake --build . --target install
 
     - name: Add missing libraries
       run: |
