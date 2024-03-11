@@ -27,6 +27,7 @@
 #ifndef MATERIAL_H
 #define MATERIAL_H
 
+#include "QtWidgets/qlistwidget.h"
 #include <QMainWindow>
 
 namespace Ui {
@@ -39,7 +40,7 @@ class Material : public QMainWindow
     
 public:
     explicit Material(QWidget *parent = 0);
-    ~Material();
+    virtual ~Material();
     void SetMaterialList(const QStringList &_list);
     
 private slots:
@@ -52,6 +53,8 @@ private slots:
     void on_buttonNew_clicked();
 
     void on_pushButton_clicked();
+
+    void on_listMaterial_itemDoubleClicked(QListWidgetItem *item);
 
 private:
     Ui::Material *ui;

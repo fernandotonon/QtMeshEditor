@@ -1,29 +1,3 @@
-/*/////////////////////////////////////////////////////////////////////////////////
-/// A QtMeshEditor file
-///
-/// Copyright (c) HogPog Team (www.hogpog.com.br)
-///
-/// The MIT License
-///
-/// Permission is hereby granted, free of charge, to any person obtaining a copy
-/// of this software and associated documentation files (the "Software"), to deal
-/// in the Software without restriction, including without limitation the rights
-/// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-/// copies of the Software, and to permit persons to whom the Software is
-/// furnished to do so, subject to the following conditions:
-///
-/// The above copyright notice and this permission notice shall be included in
-/// all copies or substantial portions of the Software.
-///
-/// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-/// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-/// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-/// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-/// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-/// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-/// THE SOFTWARE.
-////////////////////////////////////////////////////////////////////////////////*/
-
 #ifndef MATERIALEDITOR_H
 #define MATERIALEDITOR_H
 
@@ -47,14 +21,22 @@ class MaterialHighlighter;
 
 class MaterialEditor : public QDialog
 {
-    Q_OBJECT
-    
-public:
-    explicit MaterialEditor(QWidget *parent = 0);
-    ~MaterialEditor();
-    void setMaterialText(const QString &_mat);
-    void setMaterial(const QString& _material);
-    
+        Q_OBJECT
+        
+    public:
+        explicit MaterialEditor(QWidget *parent = 0);
+        virtual ~MaterialEditor();
+        void setMaterialText(const QString &_mat);
+        void setMaterial(const QString& _material);
+        const std::string getMaterialText() const;
+
+    protected:
+        void setup(std::shared_ptr<Ui::MaterialEditor> _ui,
+                   std::shared_ptr<QColorDialog> _ambientColorDialog,
+                   std::shared_ptr<QColorDialog> _difuseColorDialog,
+                   std::shared_ptr<QColorDialog> _specularColorDialog,
+                   std::shared_ptr<QColorDialog> _emissiveColorDialog );
+                        
 private slots:
     void on_buttonEditAmbientColor_clicked();
 
@@ -127,14 +109,14 @@ private slots:
     void on_scrollAnimVSpeed_valueChanged(double arg1);
 
 private:
-    Ui::MaterialEditor *ui;
+    std::shared_ptr<Ui::MaterialEditor> ui;
 
     QString mMaterialName;
 
-    QColorDialog *ambientColorDialog;
-    QColorDialog *difuseColorDialog;
-    QColorDialog *specularColorDialog;
-    QColorDialog *emissiveColorDialog;
+    std::shared_ptr<QColorDialog> ambientColorDialog;
+    std::shared_ptr<QColorDialog> difuseColorDialog;
+    std::shared_ptr<QColorDialog> specularColorDialog;
+    std::shared_ptr<QColorDialog> emissiveColorDialog;
 
     QMap <int, QMap <int, Ogre::Pass*> > mTechMap;
     QMap <int, QList <QString> > mTechMapName;
@@ -148,7 +130,7 @@ private:
     void updateMaterialText();
     bool validateScript(Ogre::DataStreamPtr &dataStream);
 
-    MaterialHighlighter* mMaterialHighlighter;
+    std::shared_ptr<MaterialHighlighter> mMaterialHighlighter;
 };
 
 #endif // MATERIALEDITOR_H
