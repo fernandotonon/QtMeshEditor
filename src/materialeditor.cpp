@@ -13,32 +13,16 @@
 #include <OgreScriptTranslator.h>
 
 MaterialEditor::MaterialEditor(QWidget *parent) :
-    QDialog(parent),
-    mSelectedPass(NULL),
-    mSelectedTechnique(NULL),
-    mSelectedTextureUnit(NULL)
+    QDialog(parent)
+    ,ui(new Ui::MaterialEditor)
+    ,ambientColorDialog(new QColorDialog(this))
+    ,difuseColorDialog(new QColorDialog(this))
+    ,specularColorDialog(new QColorDialog(this))
+    ,emissiveColorDialog(new QColorDialog(this))
+    ,mSelectedPass(NULL)
+    ,mSelectedTechnique(NULL)
+    ,mSelectedTextureUnit(NULL)
 {
-    auto ui = std::make_shared<Ui::MaterialEditor>();
-    auto ambientColorDialog = std::make_shared<QColorDialog>(this);
-    auto difuseColorDialog = std::make_shared<QColorDialog>(this);
-    auto specularColorDialog = std::make_shared<QColorDialog>(this);
-    auto emissiveColorDialog = std::make_shared<QColorDialog>(this);
-    setup(ui, ambientColorDialog, difuseColorDialog, specularColorDialog, emissiveColorDialog);
-}
-
-void MaterialEditor::setup( std::shared_ptr<Ui::MaterialEditor> _ui,
-                           std::shared_ptr<QColorDialog> _ambientColorDialog,
-                           std::shared_ptr<QColorDialog> _difuseColorDialog,
-                           std::shared_ptr<QColorDialog> _specularColorDialog,
-                           std::shared_ptr<QColorDialog> _emissiveColorDialog)
-
-{
-    ui = _ui;
-    ambientColorDialog = _ambientColorDialog;
-    difuseColorDialog = _difuseColorDialog;
-    specularColorDialog = _specularColorDialog;
-    emissiveColorDialog = _emissiveColorDialog;
-
     ui->setupUi(this);
 
     ambientColorDialog->setOption(QColorDialog::DontUseNativeDialog);
@@ -46,17 +30,20 @@ void MaterialEditor::setup( std::shared_ptr<Ui::MaterialEditor> _ui,
     specularColorDialog->setOption(QColorDialog::DontUseNativeDialog);
     emissiveColorDialog->setOption(QColorDialog::DontUseNativeDialog);
 
-    QObject::connect(ambientColorDialog.get(),SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Ambient_Color_Selected(QColor)));
-    QObject::connect(difuseColorDialog.get(),SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Difuse_Color_Selected(QColor)));
-    QObject::connect(specularColorDialog.get(),SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Specular_Color_Selected(QColor)));
-    QObject::connect(emissiveColorDialog.get(),SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Emissive_Color_Selected(QColor)));
+    QObject::connect(ambientColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Ambient_Color_Selected(QColor)));
+    QObject::connect(difuseColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Difuse_Color_Selected(QColor)));
+    QObject::connect(specularColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Specular_Color_Selected(QColor)));
+    QObject::connect(emissiveColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Emissive_Color_Selected(QColor)));
 
-    mMaterialHighlighter = std::make_shared<MaterialHighlighter>(ui->textMaterial);
+    mMaterialHighlighter = new MaterialHighlighter(ui->textMaterial);
 }
 
 MaterialEditor::~MaterialEditor()
 {
+    delete mMaterialHighlighter;
+    delete ui;
 }
+
 
 void MaterialEditor::setMaterialText(const QString &_mat)
 {

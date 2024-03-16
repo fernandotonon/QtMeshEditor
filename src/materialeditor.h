@@ -109,14 +109,14 @@ private slots:
     void on_scrollAnimVSpeed_valueChanged(double arg1);
 
 private:
-    std::shared_ptr<Ui::MaterialEditor> ui;
+    Ui::MaterialEditor *ui;
 
     QString mMaterialName;
 
-    std::shared_ptr<QColorDialog> ambientColorDialog;
-    std::shared_ptr<QColorDialog> difuseColorDialog;
-    std::shared_ptr<QColorDialog> specularColorDialog;
-    std::shared_ptr<QColorDialog> emissiveColorDialog;
+    QColorDialog *ambientColorDialog;
+    QColorDialog *difuseColorDialog;
+    QColorDialog *specularColorDialog;
+    QColorDialog *emissiveColorDialog;
 
     QMap <int, QMap <int, Ogre::Pass*> > mTechMap;
     QMap <int, QList <QString> > mTechMapName;
@@ -130,7 +130,7 @@ private:
     void updateMaterialText();
     bool validateScript(Ogre::DataStreamPtr &dataStream);
 
-    std::shared_ptr<MaterialHighlighter> mMaterialHighlighter;
+    MaterialHighlighter* mMaterialHighlighter;
 };
 
 #endif // MATERIALEDITOR_H
