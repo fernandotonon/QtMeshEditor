@@ -125,7 +125,7 @@ void Material::on_pushButton_clicked()
 
 void Material::on_listMaterial_itemDoubleClicked(QListWidgetItem *item)
 {
-    MaterialEditor *ME = new MaterialEditor(this);
+    auto ME = new MaterialEditor(this);
     ME->setMaterial(item->text());
     ME->show();
 }
