@@ -5,12 +5,6 @@
 #include <QApplication>
 
 class MaterialEditorTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-    }
-
-    void TearDown() override {
-    }
 };
 
 TEST_F(MaterialEditorTest, SetMaterialTextTest) {
@@ -20,9 +14,7 @@ TEST_F(MaterialEditorTest, SetMaterialTextTest) {
 
     std::unique_ptr<MaterialEditor> editor;
     editor = std::make_unique<MaterialEditor>();
+    editor->setMaterialText("Test Material");
 
-   /* QString testMaterial = "Test Material";
-    editor->setMaterialText(testMaterial);
-
-    ASSERT_EQ(editor->getMaterialText(), testMaterial.toStdString());*/
+    ASSERT_EQ(editor->getMaterialText(), "Test Material");
 }
