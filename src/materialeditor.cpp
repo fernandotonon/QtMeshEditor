@@ -55,7 +55,7 @@ void MaterialEditor::setMaterialText(const QString &_mat)
     ui->applyButton->setEnabled(false);
 }
 
-const std::string MaterialEditor::getMaterialText() const
+std::string MaterialEditor::getMaterialText() const
 {
     return ui->textMaterial->toPlainText().toStdString();
 }

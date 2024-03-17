@@ -28,7 +28,7 @@ class MaterialEditor : public QDialog
         virtual ~MaterialEditor();
         void setMaterialText(const QString &_mat);
         void setMaterial(const QString& _material);
-        const std::string getMaterialText() const;
+        std::string getMaterialText() const;
 
     protected:
         void setup(std::shared_ptr<Ui::MaterialEditor> _ui,
