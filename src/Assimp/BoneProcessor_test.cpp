@@ -69,7 +69,7 @@ TEST_F(BoneProcessorTest, BoneHierarchy) {
     mockScene.mMeshes[0]->mNumBones = 1;
     mockScene.mMeshes[0]->mBones = new aiBone*[1];
 
-    aiBone* parentBone = new aiBone();
+    auto parentBone = std::make_unique<aiBone>();
     aiBone* childBone = new aiBone();
     parentBone->mOffsetMatrix = aiMatrix4x4(
         1, 0, 0, 0,
@@ -103,7 +103,7 @@ TEST_F(BoneProcessorTest, BoneHierarchy) {
 
     mockScene.mRootNode = parentNode;
     mockScene.mRootNode->mTransformation = aiMatrix4x4();
-    
+
     processor.processBones(mockSkeleton, &mockScene);
 
     EXPECT_EQ(mockSkeleton->getBone("ChildBone")->getParent(), mockSkeleton->getBone("RootBone"));
