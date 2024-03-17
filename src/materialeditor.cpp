@@ -47,8 +47,6 @@ MaterialEditor::~MaterialEditor()
 
 void MaterialEditor::setMaterialText(const QString &_mat)
 {
-    Ogre::LogManager::getSingleton().logMessage("void MaterialEditor::setMaterialText(const QString &_mat)");
-
     ui->textMaterial->setText(_mat);
 
     ui->scrollArea->setEnabled(true);
@@ -62,7 +60,6 @@ std::string MaterialEditor::getMaterialText() const
 
 void MaterialEditor::setMaterial(const QString &_material)
 {
-    Ogre::LogManager::getSingleton().logMessage("void MaterialEditor::setMaterial(const QString &_material)");
     if(_material.size()==0)
     {
         setMaterialText("material material_name\n{\n}");
