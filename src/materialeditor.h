@@ -31,13 +31,6 @@ class MaterialEditor : public QDialog
         std::string getMaterialText() const;
         std::string getMaterialName() const;
         bool isScrollAreaEnabled() const;
-
-    protected:
-        void setup(std::shared_ptr<Ui::MaterialEditor> _ui,
-                   std::shared_ptr<QColorDialog> _ambientColorDialog,
-                   std::shared_ptr<QColorDialog> _difuseColorDialog,
-                   std::shared_ptr<QColorDialog> _specularColorDialog,
-                   std::shared_ptr<QColorDialog> _emissiveColorDialog );
                         
 private slots:
     void on_buttonEditAmbientColor_clicked();
