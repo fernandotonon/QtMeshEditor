@@ -27,5 +27,9 @@ _deps/*
 *_autogen/*
 .vscode/*
 src/QtMeshEditor_autogen/*
+src/UnitTests_autogen/*
 src/__/*
 src/qrc_resource.cpp
+**/.cache/*
+compile_commands.json
+install_manifest.txt
