@@ -29,6 +29,8 @@ class MaterialEditor : public QDialog
         void setMaterialText(const QString &_mat);
         void setMaterial(const QString& _material);
         std::string getMaterialText() const;
+        std::string getMaterialName() const;
+        bool isScrollAreaEnabled() const;
 
     protected:
         void setup(std::shared_ptr<Ui::MaterialEditor> _ui,

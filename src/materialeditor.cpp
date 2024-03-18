@@ -115,6 +115,16 @@ void MaterialEditor::setMaterial(const QString &_material)
     }
 }
 
+std::string MaterialEditor::getMaterialName() const
+{
+    return mMaterialName.toStdString();
+}
+
+bool MaterialEditor::isScrollAreaEnabled() const
+{
+    return ui->scrollArea->isEnabled();
+}
+
 void MaterialEditor::on_buttonEditAmbientColor_clicked()
 {
     ambientColorDialog->show();
