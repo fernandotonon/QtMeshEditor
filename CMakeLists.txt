@@ -63,17 +63,9 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 #  Searching Qt dependencies
 ##############################################################
 #Find Qt Packages
-find_package(QT NAMES Qt6 Qt5)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick)
-if (NOT Qt6_FOUND)
-    find_package(Qt5 5.15 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick)
-endif()
+find_package(QT NAMES Qt6)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick Test)
 
-if(UNIX)
-    if (NOT Qt6_FOUND)
-        find_package(Qt5X11Extras REQUIRED)
-    endif()
-endif()
 message("Found Qt (${QT_VERSION_MAJOR})")
 
 SET (QTLIBLIST

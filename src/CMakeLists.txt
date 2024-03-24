@@ -273,7 +273,7 @@ if(BUILD_TESTS)
     ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
-    Qt::Widgets Qt::Core Qt::Gui)
+    Qt::Widgets Qt::Core Qt::Gui Qt::Test)
     
     ADD_DEPENDENCIES(UnitTests ui)
 
