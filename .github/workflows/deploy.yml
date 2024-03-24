@@ -589,8 +589,8 @@ jobs:
             Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
             export DISPLAY=:99
             echo $QT_QPA_PLATFORM
-            sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
-#            sudo ./bin/UnitTests
+            sudo ./bin/UnitTests
+          #  sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
 
     - name: Set up Python 3.8 for gcovr
       uses: actions/setup-python@v4
