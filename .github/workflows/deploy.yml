@@ -580,10 +580,10 @@ jobs:
     
     - name: Test
       env:
-         QT_QPA_PLATFORM: offscreen
+         QT_QPA_PLATFORM: minimal
          QT_DEBUG_PLUGINS: 1
       run: |
-            export QT_QPA_PLATFORM="offscreen"
+            export QT_QPA_PLATFORM="minimal"
             export QT_DEBUG_PLUGINS=1
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /lib/x86_64-linux-gnu/
             sudo apt -y install libxcb-xinerama0 libxcb-cursor0 libx11-dev xvfb
