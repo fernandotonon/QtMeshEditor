@@ -584,10 +584,10 @@ jobs:
             export QT_QPA_PLATFORM="minimal"
             export QT_DEBUG_PLUGINS=1
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /lib/x86_64-linux-gnu/
-            sudo apt -y install libxcb-xinerama0 libxcb-cursor0 libx11-dev
-            sudo apt-get install xvfb
+            sudo apt -y install libxcb-xinerama0 libxcb-cursor0 libx11-dev xvfb
             Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
             export DISPLAY=:99
+            echo "DISPLAY=:99" >> $GITHUB_ENV
             echo $QT_QPA_PLATFORM
             sudo ./bin/UnitTests
           #  sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
