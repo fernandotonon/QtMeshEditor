@@ -25,7 +25,6 @@ protected:
     }
 
     QApplication* app;
-
 };
 
 TEST_F(PrimitivesWidgetTest, CreateCube)
