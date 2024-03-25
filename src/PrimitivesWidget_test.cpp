@@ -40,6 +40,114 @@ TEST_F(PrimitivesWidgetTest, CreateCube)
     ASSERT_EQ(primitiveType, "Cube");
 }
 
+TEST_F(PrimitivesWidgetTest, CreateSphere)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createSphere("Sphere");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "Sphere");
+}
+
+TEST_F(PrimitivesWidgetTest, CreatePlane)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createPlane("Plane");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "Plane");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateCylinder)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createCylinder("Cylinder");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "Cylinder");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateCone)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createCone("Cone");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "Cone");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateTorus)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createTorus("Torus");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "Torus");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateTube)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createTube("Tube");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "Tube");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateCapsule)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createCapsule("Capsule");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "Capsule");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateIcoSphere)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createIcoSphere("IcoSphere");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "IcoSphere");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateRoundedBox)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createRoundedBox("Rounded Box");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "Rounded Box");
+}
+
 TEST_F(PrimitivesWidgetTest, UpdateUiFromParams)
 {
     PrimitivesWidget widget;

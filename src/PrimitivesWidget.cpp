@@ -175,9 +175,9 @@ void PrimitivesWidget::setUiSphere()
 
 }
 
-void PrimitivesWidget::setUiPlan()
+void PrimitivesWidget::setUiPlane()
 {
-    edit_type->setText(tr("Plan"));
+    edit_type->setText(tr("Plane"));
 
     gb_Geometry->show();
     gb_Mesh->show();
@@ -638,7 +638,7 @@ void PrimitivesWidget::onSelectionChanged()
                         updateUiFromParams();setUiSphere();
                     break;
             case PrimitiveObject::AP_PLANE:
-                        updateUiFromParams();setUiPlan();
+                        updateUiFromParams();setUiPlane();
                     break;
             case PrimitiveObject::AP_CYLINDER:
                         updateUiFromParams();setUiCylinder();

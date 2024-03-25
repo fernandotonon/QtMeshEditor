@@ -34,7 +34,7 @@ protected:
     void setUiMesh();
     void setUiCube();
     void setUiSphere();
-    void setUiPlan();
+    void setUiPlane();
     void setUiCylinder();
     void setUiCone();
     void setUiTorus();
