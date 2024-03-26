@@ -31,13 +31,11 @@ class MaterialEditor : public QDialog
         std::string getMaterialText() const;
         std::string getMaterialName() const;
         bool isScrollAreaEnabled() const;
-                        
+        void setTechFields(const QMap<int, Ogre::Pass *> &_techMap, const QList<QString> &_passList);
+        Ui::MaterialEditor* getUI() const;
+
 private slots:
     void on_buttonEditAmbientColor_clicked();
-
-    void on_techComboBox_currentIndexChanged(const QString &arg1);
-
-    void on_passComboBox_currentIndexChanged(const QString &arg1);
 
     void on_Ambient_Color_Selected(const QColor &arg1);
 
@@ -120,7 +118,6 @@ private:
     Ogre::TextureUnitState* mSelectedTextureUnit;
     Ogre::Technique* mSelectedTechnique;
     QMap <QString, Ogre::TextureUnitState*> mTexUnitMap;
-    void setTechFields(const QMap<int, Ogre::Pass *> &_techMap, const QList<QString> &_passList);
     void setPassFields(Ogre::Pass *_pass);
     void updateMaterialText();
     bool validateScript(Ogre::DataStreamPtr &dataStream);
