@@ -160,6 +160,11 @@ void MaterialEditor::setTechFields(const QMap<int, Ogre::Pass *> &_techMap, cons
         ui->passComboBox->setCurrentIndex(1);
 }
 
+Ui::MaterialEditor *MaterialEditor::getUI() const
+{
+    return ui;
+}
+
 void MaterialEditor::setPassFields(Ogre::Pass* _pass)
 {
     mSelectedPass = _pass;
@@ -301,11 +306,6 @@ void MaterialEditor::on_techComboBox_currentIndexChanged(int index)
     }
 }
 
-void MaterialEditor::on_techComboBox_currentIndexChanged(const QString &arg1)
-{
-
-}
-
 
 void MaterialEditor::on_passComboBox_currentIndexChanged(int index)
 {
@@ -316,8 +316,6 @@ void MaterialEditor::on_passComboBox_currentIndexChanged(int index)
     else
     {
         mSelectedPass = NULL;
-
-     //   ui->scrollArea->setEnabled(false);
 
         ui->checkBoxLightning->setChecked(false);
         ui->srcSceneBlendBox->setCurrentIndex(0);
@@ -334,11 +332,6 @@ void MaterialEditor::on_passComboBox_currentIndexChanged(int index)
         ui->shineSpecular->clear();
         ui->textureName->setText("*Select a texture*");
     }
-}
-
-void MaterialEditor::on_passComboBox_currentIndexChanged(const QString &arg1)
-{
-
 }
 
 void MaterialEditor::on_ComboTextureUnit_currentIndexChanged(int index)
