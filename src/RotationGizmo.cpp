@@ -1,29 +1,3 @@
-/*/////////////////////////////////////////////////////////////////////////////////
-/// A QtMeshEditor file
-///
-/// Copyright (c) HogPog Team (www.hogpog.com.br)
-///
-/// The MIT License
-///
-/// Permission is hereby granted, free of charge, to any person obtaining a copy
-/// of this software and associated documentation files (the "Software"), to deal
-/// in the Software without restriction, including without limitation the rights
-/// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-/// copies of the Software, and to permit persons to whom the Software is
-/// furnished to do so, subject to the following conditions:
-///
-/// The above copyright notice and this permission notice shall be included in
-/// all copies or substantial portions of the Software.
-///
-/// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-/// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-/// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-/// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-/// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-/// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-/// THE SOFTWARE.
-////////////////////////////////////////////////////////////////////////////////*/
-
 #include <QtDebug>
 
 #include "GlobalDefinitions.h"
@@ -42,10 +16,8 @@ const float RotationGizmo::mSolidThickness = 40.0f;
 // Constructor & destructor
 
 RotationGizmo::RotationGizmo(Ogre::SceneNode* linkNode, const Ogre::String &name, Ogre::Real scale)
-    : m_pXCircle(0), m_pYCircle(0), m_pZCircle(0),mFade(0.4f), mHighlighted(false)
+    : m_pXCircle(0), m_pYCircle(0), m_pZCircle(0),mFade(0.4f), mHighlighted(false), mScale(scale)
 {
-    mScale        = scale;
-
     Ogre::SceneManager* pSceneMgr = linkNode->getCreator();
     //Creating the manual objects
     m_pXCircle = pSceneMgr->createManualObject(name + "X");
@@ -67,7 +39,6 @@ RotationGizmo::RotationGizmo(Ogre::SceneNode* linkNode, const Ogre::String &name
     linkNode->attachObject(m_pXCircle);
     linkNode->attachObject(m_pYCircle);
     linkNode->attachObject(m_pZCircle);
-
 }
 
 RotationGizmo::~RotationGizmo()
@@ -85,8 +56,11 @@ void RotationGizmo::createXCircle(const Ogre::ColourValue& colour)
     m_pXCircle->clear();
     m_pXCircle->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_LINE_STRIP);
     m_pXCircle->colour(colour);
-    for(float theta = 0; theta <= 2 * Ogre::Math::PI; theta += Ogre::Math::PI / mAccuracy)
+    for(int deg = 0; deg <= 360; deg += 1)
+    {
+        float theta = Ogre::Degree(deg).valueRadians();
         m_pXCircle->position(0, cos(theta)*mScale, sin(theta)*mScale);
+    }
     m_pXCircle->end();
 }
 
@@ -95,8 +69,11 @@ void RotationGizmo::createYCircle(const Ogre::ColourValue& colour)
     m_pYCircle->clear();
     m_pYCircle->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_LINE_STRIP);
     m_pYCircle->colour(colour);
-    for(float theta = 0; theta <= 2 * Ogre::Math::PI; theta += Ogre::Math::PI / mAccuracy)
+    for(int deg = 0; deg <= 360; deg += 1)
+    {
+        float theta = Ogre::Degree(deg).valueRadians();
         m_pYCircle->position(cos(theta)*mScale, 0, sin(theta)*mScale);
+    }
     m_pYCircle->end();
 }
 
@@ -105,8 +82,11 @@ void RotationGizmo::createZCircle(const Ogre::ColourValue& colour)
     m_pZCircle->clear();
     m_pZCircle->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_LINE_STRIP);
     m_pZCircle->colour(colour);
-    for(float theta = 0; theta <= 2 * Ogre::Math::PI; theta += Ogre::Math::PI / mAccuracy)
+    for(int deg = 0; deg <= 360; deg += 1)
+    {
+        float theta = Ogre::Degree(deg).valueRadians();
         m_pZCircle->position(cos(theta)*mScale, sin(theta)*mScale,0);
+    }
     m_pZCircle->end();
 }
 
@@ -118,8 +98,9 @@ void RotationGizmo::createSolidXCircle(const Ogre::ColourValue& colour)
     m_pXCircle->clear();
     m_pXCircle->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_TRIANGLE_LIST );
     m_pXCircle->colour(colour);
-    for(float theta = 0; theta <= 2 * Ogre::Math::PI; theta += Ogre::Math::PI / mAccuracy)
+    for(int deg = 0; deg <= 360; deg += 1)
     {
+        float theta = Ogre::Degree(deg).valueRadians();
         m_pXCircle->position(0, mScale * cos(theta), mScale * sin(theta));
         m_pXCircle->position(0, mScale * cos(theta - Ogre::Math::PI / mAccuracy), mScale * sin(theta - Ogre::Math::PI / mAccuracy));
         m_pXCircle->position(0, (mScale - thickness) * cos(theta - Ogre::Math::PI / mAccuracy), (mScale - thickness) * sin(theta - Ogre::Math::PI / mAccuracy));
@@ -140,8 +121,9 @@ void RotationGizmo::createSolidYCircle(const Ogre::ColourValue& colour)
     m_pYCircle->clear();
     m_pYCircle->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_TRIANGLE_LIST );
     m_pYCircle->colour(colour);
-    for(float theta = 0; theta <= 2 * Ogre::Math::PI; theta += Ogre::Math::PI / mAccuracy)
+    for(int deg = 0; deg <= 360; deg += 1)
     {
+        float theta = Ogre::Degree(deg).valueRadians();
         m_pYCircle->position(mScale * cos(theta), 0, mScale * sin(theta));
         m_pYCircle->position(mScale * cos(theta - Ogre::Math::PI / mAccuracy), 0, mScale * sin(theta - Ogre::Math::PI / mAccuracy));
         m_pYCircle->position((mScale - thickness) * cos(theta - Ogre::Math::PI / mAccuracy), 0,(mScale - thickness) * sin(theta - Ogre::Math::PI / mAccuracy));
@@ -162,8 +144,9 @@ void RotationGizmo::createSolidZCircle(const Ogre::ColourValue& colour)
     m_pZCircle->clear();
     m_pZCircle->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_TRIANGLE_LIST );
     m_pZCircle->colour(colour);
-    for(float theta = 0; theta <= 2 * Ogre::Math::PI; theta += Ogre::Math::PI / mAccuracy)
+    for(int deg = 0; deg <= 360; deg += 1)
     {
+        float theta = Ogre::Degree(deg).valueRadians();
         m_pZCircle->position(mScale * cos(theta), mScale * sin(theta), 0);
         m_pZCircle->position(mScale * cos(theta - Ogre::Math::PI / mAccuracy), mScale * sin(theta - Ogre::Math::PI / mAccuracy), 0);
         m_pZCircle->position((mScale - thickness) * cos(theta - Ogre::Math::PI / mAccuracy), (mScale - thickness) * sin(theta - Ogre::Math::PI / mAccuracy), 0);
@@ -199,6 +182,21 @@ const Ogre::ColourValue& RotationGizmo::getZaxisColour (void) const
 
 const Ogre::Real& RotationGizmo::getScale(void) const
 {   return (mScale);  }
+
+const Ogre::ManualObject &RotationGizmo::getXCircle() const
+{
+    return *m_pXCircle;
+}
+
+const Ogre::ManualObject &RotationGizmo::getYCircle() const
+{
+    return *m_pYCircle;
+}
+
+const Ogre::ManualObject &RotationGizmo::getZCircle() const
+{
+    return *m_pZCircle;
+}
 
 //////////////////////////////////////////
 // Mutators
