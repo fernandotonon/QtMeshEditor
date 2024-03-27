@@ -1,30 +1,3 @@
-/*/////////////////////////////////////////////////////////////////////////////////
-/// A QtMeshEditor file
-///
-/// Copyright (c) HogPog Team (www.hogpog.com.br)
-///
-/// The MIT License
-///
-/// Permission is hereby granted, free of charge, to any person obtaining a copy
-/// of this software and associated documentation files (the "Software"), to deal
-/// in the Software without restriction, including without limitation the rights
-/// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-/// copies of the Software, and to permit persons to whom the Software is
-/// furnished to do so, subject to the following conditions:
-///
-/// The above copyright notice and this permission notice shall be included in
-/// all copies or substantial portions of the Software.
-///
-/// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-/// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-/// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-/// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-/// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-/// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-/// THE SOFTWARE.
-////////////////////////////////////////////////////////////////////////////////*/
-
-
 #include <QString>
 
 #include <OgreAny.h>
@@ -43,6 +16,7 @@
 #include "ProceduralIcoSphereGenerator.h"
 #include "ProceduralCapsuleGenerator.h"
 #include "ProceduralRoundedBoxGenerator.h"
+#include "ProceduralSpringGenerator.h"
 
 
 // TODO add spring primitive
@@ -141,7 +115,14 @@ void PrimitiveObject::setDefaultParams()
             mNumSegX = 1;   mNumSegY = 1;       mNumSegZ = 1;
             mUTile = 1.0f;  mVTile = 1.0f;      mSwitchUV = false;
             break;
+        case AP_SPRING:
+            mSizeX = 0.0f;  mSizeY = 0.0f;      mSizeZ = 0.0f;
+            mRadius = 0.0f; mRadius2 = 0.0f;    mHeight = 0.0f;
+            mNumSegX = 10;   mNumSegY = 10;       mNumSegZ = 0;
+            mUTile = 1.0f;  mVTile = 1.0f;      mSwitchUV = false;
+            break;
         case AP_NONE:
+        default:
         break;
     }
 }
@@ -230,6 +211,11 @@ Ogre::SceneNode* PrimitiveObject::createIcoSphere(const QString& name)
 Ogre::SceneNode* PrimitiveObject::createRoundedBox(const QString& name)
 {
     PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_ROUNDEDBOX);
+    return newPrimitive->createPrimitive();
+}
+Ogre::SceneNode* PrimitiveObject::createSpring(const QString& name)
+{
+    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_SPRING);
     return newPrimitive->createPrimitive();
 }
 
@@ -612,6 +598,11 @@ Ogre::MeshPtr PrimitiveObject::createMesh()
                     .setNumSegX(mNumSegX).setNumSegY(mNumSegY).setNumSegZ(mNumSegZ)
                     .setUTile(mUTile).setVTile(mVTile).setSwitchUV(mSwitchUV)
                     .realizeMesh(name.data());
+            break;
+        case AP_SPRING:
+            mp = Procedural::SpringGenerator().setNumSegCircle(mNumSegX).setNumSegPath(mNumSegY)
+                     .setUTile(mUTile).setVTile(mVTile).setSwitchUV(mSwitchUV)
+                     .realizeMesh(name.data());
             break;
         default:
             mp.reset();

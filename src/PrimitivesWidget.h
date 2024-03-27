@@ -28,6 +28,7 @@ public slots:
     void createCapsule();
     void createIcoSphere();
     void createRoundedBox();
+    void createSpring();
 
 protected:
     void setUiEmpty();
@@ -42,6 +43,7 @@ protected:
     void setUiCapsule();
     void setUiIcoSphere();
     void setUiRoundedBox();
+    void setUiSpring();
     void createPrimitive(PrimitiveObject::PrimitiveType newPrimitive, const QString& name);
     PrimitiveObject::PrimitiveType getSelectedPrimitive();
     void blockEditSignals(bool block);
