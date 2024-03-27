@@ -16,5 +16,6 @@
         <file>capsule.png</file>
         <file>roundedbox.png</file>
         <file>addVertice.png</file>
+        <file>spring.png</file>
     </qresource>
 </RCC>

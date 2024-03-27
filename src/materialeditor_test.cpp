@@ -5,13 +5,14 @@
 #include <QApplication>
 
 class MaterialEditorTest : public ::testing::Test {
-    protected:
-    std::unique_ptr<QApplication> app;
+protected:
     void SetUp() override {
         int argc{0};
         char* argv[] = { nullptr };
         app = std::make_unique<QApplication>(argc, argv);
     }
+private:
+    std::unique_ptr<QApplication> app;
 };
 
 TEST_F(MaterialEditorTest, SetMaterialTextTest) {

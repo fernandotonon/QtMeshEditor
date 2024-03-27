@@ -204,6 +204,7 @@ void MainWindow::initToolBar()
     QAction* pAddCapsule    = new QAction(QIcon(":/icones/capsule.png"),tr("Capsule"), addPrimitiveButton);
     QAction* pAddIcoSphere  = new QAction(QIcon(":/icones/sphere.png"),tr("IcoSphere"), addPrimitiveButton);
     QAction* pAddRoundedBox = new QAction(QIcon(":/icones/roundedbox.png"),tr("Rounded Box"), addPrimitiveButton);
+    QAction* pAddSpring     = new QAction(QIcon(":/icones/spring.png"),tr("Spring"), addPrimitiveButton);
 
     addPrimitiveMenu->addAction(pAddCube);
     addPrimitiveMenu->addAction(pAddSphere);
@@ -215,6 +216,7 @@ void MainWindow::initToolBar()
     addPrimitiveMenu->addAction(pAddCapsule);
     addPrimitiveMenu->addAction(pAddIcoSphere);
     addPrimitiveMenu->addAction(pAddRoundedBox);
+    addPrimitiveMenu->addAction(pAddSpring);
 
     addPrimitiveButton->setMenu(addPrimitiveMenu);
     ui->objectsToolbar->addWidget(addPrimitiveButton);
@@ -229,6 +231,7 @@ void MainWindow::initToolBar()
     connect(pAddCapsule,    SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createCapsule()));
     connect(pAddIcoSphere,  SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createIcoSphere()));
     connect(pAddRoundedBox, SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createRoundedBox()));
+    connect(pAddSpring,     SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createSpring()));
 
     // Animation tab
     AnimationWidget *pAnimationWidget = new AnimationWidget(this->ui->tabWidget);

@@ -24,6 +24,7 @@ protected:
         delete app;
     }
 
+private:
     QApplication* app;
 };
 
@@ -145,6 +146,18 @@ TEST_F(PrimitivesWidgetTest, CreateRoundedBox)
 
     QString primitiveType = primitiveTypeLineEdit->text();
     ASSERT_EQ(primitiveType, "Rounded Box");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateSpring)
+{
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createSpring("Spring");
+
+    QString primitiveType = primitiveTypeLineEdit->text();
+    ASSERT_EQ(primitiveType, "Spring");
 }
 
 TEST_F(PrimitivesWidgetTest, UpdateUiFromParams)

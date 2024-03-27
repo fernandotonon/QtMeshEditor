@@ -11,8 +11,6 @@
 
 #include "mainwindow.h"
 
-// TODO add spring primitive
-
 // TODO play with numTextureCoord (require to change the UI)
 
 // TODO fix the bug in the num of segment for rounded box
@@ -490,6 +488,22 @@ void PrimitivesWidget::setUiRoundedBox()
 
 }
 
+void PrimitivesWidget::setUiSpring()
+{
+    edit_type->setText(tr("Spring"));
+
+    gb_Mesh->show();
+
+    label_numSegX->show();
+    label_numSegY->show();
+
+    edit_numSegX->show();
+    edit_numSegY->show();
+
+    label_numSegX->setText(tr("Circle Segments"));
+    label_numSegY->setText(tr("Path Segments"));
+}
+
 void PrimitivesWidget::updateUiFromParams()
 {
     blockEditSignals(true);
@@ -660,6 +674,9 @@ void PrimitivesWidget::onSelectionChanged()
                     break;
             case PrimitiveObject::AP_ROUNDEDBOX:
                         updateUiFromParams();setUiRoundedBox();
+                    break;
+            case PrimitiveObject::AP_SPRING:
+                        updateUiFromParams();setUiSpring();
                     break;
             default:
                         setUiMesh();
@@ -938,6 +955,20 @@ void PrimitivesWidget::createRoundedBox()
 
     PrimitiveObject::createRoundedBox(name);
     //createPrimitive(PrimitiveObject::AP_ROUNDEDBOX, name);
+}
+void PrimitivesWidget::createSpring()
+{
+    bool ok;
+    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Spring"),
+                                         tr("Spring name:"), QLineEdit::Normal,
+                                         "", &ok);
+    name=(ok&&name.size())?name:tr("Spring");
+
+    if(!ok)
+        return;
+
+    PrimitiveObject::createSpring(name);
+    //createPrimitive(PrimitiveObject::AP_SPRING, name);
 }
 
 
