@@ -11,8 +11,6 @@
 
 #include "mainwindow.h"
 
-// TODO add spring primitive
-
 // TODO play with numTextureCoord (require to change the UI)
 
 // TODO fix the bug in the num of segment for rounded box
