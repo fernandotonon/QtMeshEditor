@@ -21,8 +21,10 @@ public:
     explicit AnimationControlWidget(QWidget *parent = nullptr);
     ~AnimationControlWidget();
 
-private slots:
+public slots:
     void updateAnimationTree();
+
+private slots:
     void setAnimationFrame(int time);
 
 private:

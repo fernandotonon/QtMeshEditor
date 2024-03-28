@@ -77,7 +77,7 @@ TEST_F(RotationGizmoTests, IsHighlighted) {
     EXPECT_FALSE(mRotationGizmo->isHighlighted());
 
     // Highlight the Z Circle
-    mRotationGizmo->highlightCircle(&mRotationGizmo->getXCircle());
+    mRotationGizmo->highlightCircle(&mRotationGizmo->getZCircle());
     EXPECT_TRUE(mRotationGizmo->isHighlighted());
 }
 
@@ -98,4 +98,25 @@ TEST_F(RotationGizmoTests, SetVisible) {
     EXPECT_FALSE(mRotationGizmo->getXCircle().isVisible());
     EXPECT_FALSE(mRotationGizmo->getYCircle().isVisible());
     EXPECT_FALSE(mRotationGizmo->getZCircle().isVisible());
+}
+
+// Test case for setColour() method
+TEST_F(RotationGizmoTests, SetColour) {
+    // Set the X axis colour to red
+    mRotationGizmo->setXaxisColour(Ogre::ColourValue::Red);
+
+    // Assert that the X axis colour is set correctly
+    EXPECT_EQ(mRotationGizmo->getXaxisColour(), Ogre::ColourValue::Red);
+
+    // Set the Y axis colour to green
+    mRotationGizmo->setYaxisColour(Ogre::ColourValue::Green);
+
+    // Assert that the Y axis colour is set correctly
+    EXPECT_EQ(mRotationGizmo->getYaxisColour(), Ogre::ColourValue::Green);
+
+    // Set the Z axis colour to blue
+    mRotationGizmo->setZaxisColour(Ogre::ColourValue::Blue);
+
+    // Assert that the Z axis colour is set correctly
+    EXPECT_EQ(mRotationGizmo->getZaxisColour(), Ogre::ColourValue::Blue);
 }
