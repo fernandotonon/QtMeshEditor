@@ -34,6 +34,10 @@ TEST_F(TranslationGizmoTests, TestIsLeftHandCS) {
     // Assuming there's a method to set this value
     mTranslationGizmo->setLeftHandCS(true);
     EXPECT_TRUE(mTranslationGizmo->isLeftHandCS());
+
+    // Test after setting to false
+    mTranslationGizmo->setLeftHandCS(false);
+    EXPECT_FALSE(mTranslationGizmo->isLeftHandCS());
 }
 
 TEST_F(TranslationGizmoTests, TestIsHighlighted) {
