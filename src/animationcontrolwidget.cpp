@@ -73,12 +73,12 @@ AnimationControlWidget::AnimationControlWidget(QWidget *parent) :
     connect(ui->horizontalSlider,SIGNAL(valueChanged(int)),this,SLOT(setAnimationFrame(int)));
     QTimer *m_pTimer = new QTimer(this);
     connect(m_pTimer, &QTimer::timeout, this, [this](){
-        if(m_selectedEntity)
-        {
-            // Updates the slider
-            Ogre::AnimationState* state = m_selectedEntity->getAnimationState(m_selectedAnimation);
-            ui->horizontalSlider->setValue(state->getTimePosition()*1000);
-        }
+        if(!m_selectedEntity) return;
+
+        if(!m_selectedEntity->hasAnimationState(m_selectedAnimation)) return;
+        // Updates the slider
+        Ogre::AnimationState* state = m_selectedEntity->getAnimationState(m_selectedAnimation);
+        ui->horizontalSlider->setValue(state->getTimePosition()*1000);
     });
     m_pTimer->start(0);
 }
@@ -117,35 +117,34 @@ void AnimationControlWidget::updateAnimationTree()
 
 void AnimationControlWidget::setAnimationFrame(int time)
 {
-    if (m_selectedEntity)
-    {
-        Ogre::AnimationState* state = m_selectedEntity->getAnimationState(m_selectedAnimation);
-        state->setTimePosition(time/1000.0f);
+    if (!m_selectedEntity) return;
+    if(!m_selectedEntity->hasAnimationState(m_selectedAnimation)) return;
 
-        if(m_selectedTrack){
-            Ogre::KeyFrame* keyframe1;
-            Ogre::KeyFrame* keyframe2;
-            m_selectedTrack->getKeyFramesAtTime(time/1000.0f, &keyframe1, &keyframe2);
-            if(keyframe1)
-            {
-                Ogre::TransformKeyFrame* keyframe = static_cast<Ogre::TransformKeyFrame*>(keyframe1);
+    Ogre::AnimationState* state = m_selectedEntity->getAnimationState(m_selectedAnimation);
+    state->setTimePosition(time/1000.0f);
 
-                Ogre::Vector3 translation = keyframe->getTranslate();
-                Ogre::Quaternion rotation = keyframe->getRotation();
-                Ogre::Vector3 scale = keyframe->getScale();
+    if(m_selectedTrack){
+        Ogre::KeyFrame* keyframe1;
+        Ogre::KeyFrame* keyframe2;
+        m_selectedTrack->getKeyFramesAtTime(time/1000.0f, &keyframe1, &keyframe2);
+        if(keyframe1)
+        {
+            Ogre::TransformKeyFrame* keyframe = static_cast<Ogre::TransformKeyFrame*>(keyframe1);
 
-                ui->tableWidget->item(0,1)->setText(QString::number(translation.x));
-                ui->tableWidget->item(0,2)->setText(QString::number(translation.y));
-                ui->tableWidget->item(0,3)->setText(QString::number(translation.z));
-                ui->tableWidget->item(1,1)->setText(QString::number(scale.x));
-                ui->tableWidget->item(1,2)->setText(QString::number(scale.y));
-                ui->tableWidget->item(1,3)->setText(QString::number(scale.z));
-                ui->tableWidget->item(2,0)->setText(QString::number(rotation.w));
-                ui->tableWidget->item(2,1)->setText(QString::number(rotation.x));
-                ui->tableWidget->item(2,2)->setText(QString::number(rotation.y));
-                ui->tableWidget->item(2,3)->setText(QString::number(rotation.z));
-            }
+            Ogre::Vector3 translation = keyframe->getTranslate();
+            Ogre::Quaternion rotation = keyframe->getRotation();
+            Ogre::Vector3 scale = keyframe->getScale();
+
+            ui->tableWidget->item(0,1)->setText(QString::number(translation.x));
+            ui->tableWidget->item(0,2)->setText(QString::number(translation.y));
+            ui->tableWidget->item(0,3)->setText(QString::number(translation.z));
+            ui->tableWidget->item(1,1)->setText(QString::number(scale.x));
+            ui->tableWidget->item(1,2)->setText(QString::number(scale.y));
+            ui->tableWidget->item(1,3)->setText(QString::number(scale.z));
+            ui->tableWidget->item(2,0)->setText(QString::number(rotation.w));
+            ui->tableWidget->item(2,1)->setText(QString::number(rotation.x));
+            ui->tableWidget->item(2,2)->setText(QString::number(rotation.y));
+            ui->tableWidget->item(2,3)->setText(QString::number(rotation.z));
         }
     }
-
 }
