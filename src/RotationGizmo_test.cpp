@@ -26,6 +26,16 @@ protected:
     }
 };
 
+// Test case for unamed gizmo
+TEST_F(RotationGizmoTests, CreateUnamedGizmo) {
+    RotationGizmo unamedGizmo{mLinkNode,""};
+
+    ASSERT_EQ(unamedGizmo.getQueryFlags(), 0);
+    ASSERT_EQ(unamedGizmo.getXCircle().getName(), "X");
+    ASSERT_EQ(unamedGizmo.getYCircle().getName(), "Y");
+    ASSERT_EQ(unamedGizmo.getZCircle().getName(), "Z");
+}
+
 // Test case for createCircles() method
 TEST_F(RotationGizmoTests, CreateCircles) {
     // Call the createCircles() method
