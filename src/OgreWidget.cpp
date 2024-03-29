@@ -129,6 +129,9 @@ void OgreWidget::initOgreWindow(void)
 #endif
 
   QString name = "Viewport " + QString::number(getIndex());
+  while (mOgreRoot->getRenderTarget(name.toStdString())) {
+        name+=".";
+  }
 
   mOgreWindow = mOgreRoot->createRenderWindow( name.toStdString().data(),
                            width(),
