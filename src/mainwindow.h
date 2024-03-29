@@ -34,7 +34,6 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
-    QColorDialog* getCustomPaletteColorDialog(void) const;
     
 private slots:
     void on_actionImport_triggered();
@@ -87,6 +86,7 @@ private:
     bool                        isPlaying;
     QString                     mCurrentPalette;
     QColorDialog*               customPaletteColorDialog;
+    QColorDialog*               ambientLightColorDialog;
 
     void custom_Palette_Color_Selected(const QColor& color);
 protected:

@@ -19,10 +19,11 @@
 #include "animationcontrolwidget.h"
 
 MainWindow::MainWindow(QWidget *parent) :
-    QMainWindow(parent), ui(new Ui::MainWindow)
-    ,isPlaying(false), m_pRoot(nullptr), m_pTimer(nullptr)
-    ,m_pTransformWidget(nullptr),m_pPrimitivesWidget(nullptr), m_pMaterialWidget(nullptr),
-    customPaletteColorDialog(new QColorDialog(this))
+    QMainWindow(parent), ui(new Ui::MainWindow),
+    isPlaying(false), m_pRoot(nullptr), m_pTimer(nullptr),
+    m_pTransformWidget(nullptr),m_pPrimitivesWidget(nullptr), m_pMaterialWidget(nullptr),
+    customPaletteColorDialog(new QColorDialog(this)),
+    ambientLightColorDialog(new QColorDialog(this))
 {
     ui->setupUi(this);
 
@@ -56,9 +57,18 @@ MainWindow::MainWindow(QWidget *parent) :
     } else {
         ui->actionDark->setChecked(true);
     }
+
     customPaletteColorDialog->setOption(QColorDialog::DontUseNativeDialog);
+    customPaletteColorDialog->setObjectName("Custom Color Dialog");
     QObject::connect(customPaletteColorDialog,&QColorDialog::colorSelected,this,[=](const QColor &color){
         custom_Palette_Color_Selected(color);
+    });
+
+    ambientLightColorDialog->setOption(QColorDialog::DontUseNativeDialog);
+    ambientLightColorDialog->setObjectName("Ambient Light Color Dialog");
+    QObject::connect(ambientLightColorDialog,&QColorDialog::colorSelected,this,[=](const QColor &color){
+        if(color.isValid())
+            Manager::getSingleton()->getSceneMgr()->setAmbientLight( Ogre::ColourValue(color.redF(),color.greenF(),color.blueF()) );
     });
 
     ///// Workaround, when using mRoot->startRendering() there's a flickering effect on the grid
@@ -378,11 +388,6 @@ void MainWindow::importMeshs(const QStringList &_uriList)
     MeshImporterExporter::importer(_uriList/*, &lastImported*/);
 }
 
-QColorDialog* MainWindow::getCustomPaletteColorDialog() const
-{
-    return customPaletteColorDialog;
-}
-
 void MainWindow::on_actionExport_Selected_triggered()
 {
     // TODO add a descritpion so that the user could know what he is saving (scenenode name in MeshExporter)
@@ -544,6 +549,9 @@ void MainWindow::on_actionSingle_toggled(bool arg1)
         ui->actionSingle->setChecked(true);
         ui->action1x1_Side_by_Side->setChecked(false);
         ui->action1x1_Upper_and_Lower->setChecked(false);
+    } else { //Doesn't allow unchecking
+        ui->actionSingle->setChecked(   !ui->action1x1_Side_by_Side->isChecked() &&
+                                        !ui->action1x1_Upper_and_Lower->isChecked());
     }
 }
 
@@ -565,6 +573,9 @@ void MainWindow::on_action1x1_Side_by_Side_toggled(bool arg1)
         ui->actionSingle->setChecked(false);
         ui->action1x1_Side_by_Side->setChecked(true);
         ui->action1x1_Upper_and_Lower->setChecked(false);
+    } else { //Doesn't allow unchecking
+        ui->action1x1_Side_by_Side->setChecked( !ui->actionSingle->isChecked() &&
+                                                !ui->action1x1_Upper_and_Lower->isChecked());
     }
 }
 
@@ -587,6 +598,9 @@ void MainWindow::on_action1x1_Upper_and_Lower_toggled(bool arg1)
         ui->actionSingle->setChecked(false);
         ui->action1x1_Side_by_Side->setChecked(false);
         ui->action1x1_Upper_and_Lower->setChecked(true);
+    } else { //Doesn't allow unchecking
+        ui->action1x1_Upper_and_Lower->setChecked(  !ui->actionSingle->isChecked() &&
+                                                    !ui->action1x1_Upper_and_Lower->isChecked());
     }
 }
 
@@ -610,10 +624,9 @@ void MainWindow::on_actionAdd_Resource_location_triggered()
 
 void MainWindow::on_actionChange_Ambient_Light_triggered()
 {
-    Ogre::ColourValue ambientLightColour = Manager::getSingleton()->getSceneMgr()->getAmbientLight();
-    QColor c = QColorDialog::getColor(QColor::fromRgbF(ambientLightColour.r, ambientLightColour.g, ambientLightColour.b), this, tr("Choose background color"), QColorDialog::DontUseNativeDialog);
-    if(c.isValid())
-        Manager::getSingleton()->getSceneMgr()->setAmbientLight( Ogre::ColourValue(c.redF(),c.greenF(),c.blueF()) );
+    Ogre::ColourValue c = Manager::getSingleton()->getSceneMgr()->getAmbientLight();
+    ambientLightColorDialog->setCurrentColor(QColor(c.r*255,c.g*255,c.b*255,c.a*255));
+    ambientLightColorDialog->show();
 }
 
 void MainWindow::on_actionLight_toggled(bool arg1)
