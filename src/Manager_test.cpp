@@ -16,14 +16,6 @@ public:
     MOCK_METHOD(int, exec, ());
 };
 
-// Mock class for MainWindow
-class MockMainWindow : public MainWindow
-{
-public:
-    MockMainWindow(): MainWindow() {};
-    virtual ~MockMainWindow() {};
-    MOCK_METHOD(void, show, ());
-};
 
 TEST(ManagerTest, Forbidden_Name)
 {
