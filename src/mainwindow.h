@@ -1,29 +1,3 @@
-/*/////////////////////////////////////////////////////////////////////////////////
-/// A QtMeshEditor file
-///
-/// Copyright (c) HogPog Team (www.hogpog.com.br)
-///
-/// The MIT License
-///
-/// Permission is hereby granted, free of charge, to any person obtaining a copy
-/// of this software and associated documentation files (the "Software"), to deal
-/// in the Software without restriction, including without limitation the rights
-/// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-/// copies of the Software, and to permit persons to whom the Software is
-/// furnished to do so, subject to the following conditions:
-///
-/// The above copyright notice and this permission notice shall be included in
-/// all copies or substantial portions of the Software.
-///
-/// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-/// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-/// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-/// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-/// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-/// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-/// THE SOFTWARE.
-////////////////////////////////////////////////////////////////////////////////*/
-
 #ifndef MAINWINDOW_H
 #define MAINWINDOW_H
 
@@ -57,10 +31,10 @@ class MainWindow : public QMainWindow, public Ogre::FrameListener
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget *parent = 0);
-    MainWindow(const std::string& _test); // for testing purposes
+    explicit MainWindow(QWidget *parent = nullptr);
     virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
+    QColorDialog* getCustomPaletteColorDialog(void) const;
     
 private slots:
     void on_actionImport_triggered();
@@ -94,8 +68,6 @@ private slots:
 
     void on_actionCustom_toggled(bool arg1);
 
-    void on_Custom_Palette_Color_Selected(const QColor& color);
-
 public slots:
     void setPlaying(bool playing);
 
@@ -115,6 +87,8 @@ private:
     bool                        isPlaying;
     QString                     mCurrentPalette;
     QColorDialog*               customPaletteColorDialog;
+
+    void custom_Palette_Color_Selected(const QColor& color);
 protected:
     bool frameStarted(const Ogre::FrameEvent& evt);
     bool frameRenderingQueued(const Ogre::FrameEvent &evt);

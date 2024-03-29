@@ -16,14 +16,6 @@ public:
     MOCK_METHOD(int, exec, ());
 };
 
-// Mock class for MainWindow
-class MockMainWindow : public MainWindow
-{
-public:
-    MockMainWindow(): MainWindow("test") {};
-    virtual ~MockMainWindow() {};
-    MOCK_METHOD(void, show, ());
-};
 
 TEST(ManagerTest, Forbidden_Name)
 {
@@ -53,14 +45,14 @@ TEST(ManagerTest, CreateEmptyScene)
     int argc = 0;
     char* argv[] = { nullptr };
     MockQApplication mockQApplication(argc, argv);
-    MockMainWindow* mockMainWindow = new MockMainWindow(); // TODO: currently it is not possible to mock it twice, so we need to refactory it to be able to do it to test the other functions
+    MainWindow* mainWindow = new MainWindow(); // TODO: currently it is not possible to mock it twice, so we need to refactory it to be able to do it to test the other functions
 
-    Manager *manager = Manager::getSingleton(mockMainWindow);
+    Manager *manager = Manager::getSingleton(mainWindow);
     manager->CreateEmptyScene();
-    EXPECT_EQ(manager->getSceneNodes().size(), 2); // Root and the light
-    EXPECT_EQ(manager->getEntities().size(), 1);
+    EXPECT_EQ(manager->getSceneNodes().size(), 3); // Root and the light
+    EXPECT_EQ(manager->getEntities().size(), 2);
  
     // Clear the mock object
     Mock::VerifyAndClear(&mockQApplication);
-    Mock::VerifyAndClear(mockMainWindow);
+    delete mainWindow;
 }

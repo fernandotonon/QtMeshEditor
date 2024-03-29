@@ -44,6 +44,9 @@ SpaceCamera::SpaceCamera(OgreWidget* parent)
     ,mOldPos(invalidPoint)
 {
     QString name = "Camera " + QString::number(parent->getIndex());
+    while (mSceneMgr->hasCamera(name.toStdString())) {
+        name+=".";
+    }
     mCamera = mSceneMgr->createCamera(name.toLocal8Bit().constData());
 
     if (mCamera == 0)
@@ -75,9 +78,9 @@ SpaceCamera::~SpaceCamera()
         mSceneMgr->destroySceneNode(mCameraNode);
         mSceneMgr->destroySceneNode(mTarget);
         mSceneMgr->destroyCamera(mCamera);
-        mCameraNode         = 0;
-        mTarget             = 0;
-        mCamera             = 0;
+        mCameraNode = nullptr;
+        mTarget     = nullptr;
+        mCamera     = nullptr;
     }
 }
 

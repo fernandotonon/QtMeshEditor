@@ -20,8 +20,8 @@
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow)
-    ,isPlaying(false), m_pRoot(0), m_pTimer(0)
-    ,m_pTransformWidget(0),m_pPrimitivesWidget(0), m_pMaterialWidget(0),
+    ,isPlaying(false), m_pRoot(nullptr), m_pTimer(nullptr)
+    ,m_pTransformWidget(nullptr),m_pPrimitivesWidget(nullptr), m_pMaterialWidget(nullptr),
     customPaletteColorDialog(new QColorDialog(this))
 {
     ui->setupUi(this);
@@ -49,7 +49,7 @@ MainWindow::MainWindow(QWidget *parent) :
     if(mCurrentPalette == "light"){
             ui->actionLight->setChecked(true);
     } else if(mCurrentPalette == "custom"){
-        on_Custom_Palette_Color_Selected(settings.value("customPalette").value<QColor>());
+        custom_Palette_Color_Selected(settings.value("customPalette").value<QColor>());
         ui->actionCustom->blockSignals(true);
         ui->actionCustom->setChecked(true);
         ui->actionCustom->blockSignals(false);
@@ -57,7 +57,9 @@ MainWindow::MainWindow(QWidget *parent) :
         ui->actionDark->setChecked(true);
     }
     customPaletteColorDialog->setOption(QColorDialog::DontUseNativeDialog);
-    QObject::connect(customPaletteColorDialog,SIGNAL(colorSelected(const QColor &)),this,SLOT(on_Custom_Palette_Color_Selected(const QColor &)));
+    QObject::connect(customPaletteColorDialog,&QColorDialog::colorSelected,this,[=](const QColor &color){
+        custom_Palette_Color_Selected(color);
+    });
 
     ///// Workaround, when using mRoot->startRendering() there's a flickering effect on the grid
     m_pTimer = new QTimer(this);
@@ -66,14 +68,6 @@ MainWindow::MainWindow(QWidget *parent) :
     });
     m_pTimer->start(0);
 }
-
-MainWindow::MainWindow(const std::string& _test){
-    Manager* manager = Manager::getSingleton(this); // init the Ogre Root/RenderSystem/SceneManager
-
-    createEditorViewport(/*TODO add the type of view (perspective, left,....*/);
-
-    manager->loadResources(); // Resources should be loaded after createRenderWindow...
-} // for testing purposes
 
 /////////////////////////// TODO Clean up the code of MainWindow
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)
@@ -98,24 +92,18 @@ MainWindow::~MainWindow()
     if(m_pTransformWidget)
     {
         delete m_pTransformWidget;
-        m_pTransformWidget = 0;
+        m_pTransformWidget = nullptr;
     }
     if(m_pPrimitivesWidget)
     {
         delete m_pPrimitivesWidget;
-        m_pPrimitivesWidget = 0;
+        m_pPrimitivesWidget = nullptr;
     }
     if(m_pMaterialWidget)
     {
         delete m_pMaterialWidget;
-        m_pMaterialWidget = 0;
+        m_pMaterialWidget = nullptr;
     }
-
-    TransformOperator::kill();
-    SelectionSet::kill();
-    Manager::kill();
-
-    exit(0);
 }
 
 void MainWindow::initToolBar()
@@ -388,6 +376,11 @@ void MainWindow::on_actionImport_triggered()
 void MainWindow::importMeshs(const QStringList &_uriList)
 {
     MeshImporterExporter::importer(_uriList/*, &lastImported*/);
+}
+
+QColorDialog* MainWindow::getCustomPaletteColorDialog() const
+{
+    return customPaletteColorDialog;
 }
 
 void MainWindow::on_actionExport_Selected_triggered()
@@ -671,7 +664,7 @@ void MainWindow::on_actionCustom_toggled(bool arg1)
     ui->actionCustom->blockSignals(false);
 }
 
-void MainWindow::on_Custom_Palette_Color_Selected(const QColor &color)
+void MainWindow::custom_Palette_Color_Selected(const QColor &color)
 {
     QApplication::setPalette(color);
     QSettings settings;

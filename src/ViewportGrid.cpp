@@ -38,12 +38,20 @@
 // Constructor & destructor
 
 ViewportGrid::ViewportGrid(const Ogre::ColourValue& colour, const unsigned int scale)
-    : m_pGridLine(0), m_pGridLineNode(0), mGridColor(colour),mScale(scale), mFade(0.3f)
+    : m_pGridLine(nullptr), m_pGridLineNode(nullptr), mGridColor(colour),mScale(scale), mFade(0.3f)
 {
+    if(Manager::getSingleton()->getSceneMgr()->hasManualObject("GridLine"))
+        m_pGridLine = Manager::getSingleton()->getSceneMgr()->getManualObject("GridLine");
+    else
+        m_pGridLine = Manager::getSingleton()->getSceneMgr()->createManualObject("GridLine");
 
-    m_pGridLine=Manager::getSingleton()->getSceneMgr()->createManualObject("GridLine");
-    m_pGridLineNode=Manager::getSingleton()->addSceneNode("GridLine_node");
-    m_pGridLineNode->attachObject(m_pGridLine);
+    if(Manager::getSingleton()->hasSceneNode("GridLine_node")){
+        m_pGridLineNode=Manager::getSingleton()->getSceneNode("GridLine_node");
+    }
+    else {
+        m_pGridLineNode=Manager::getSingleton()->addSceneNode("GridLine_node");
+        m_pGridLineNode->attachObject(m_pGridLine);
+    }
 
     m_pGridLine->setRenderQueueGroup(Ogre::RENDER_QUEUE_BACKGROUND/*ZORDER_OVERLAY*/); // when using this, ensure Depth Check is Off in the material
 
