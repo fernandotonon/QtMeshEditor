@@ -523,6 +523,16 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
 
     // TODO add some procedure to determine where to create the new widget so that it looks like 2x2 matrix view
     // it should determine the position of the existing Docked Widget
+
+    ui->actionSingle->blockSignals(true);
+    ui->action1x1_Side_by_Side->blockSignals(true);
+    ui->action1x1_Upper_and_Lower->blockSignals(true);
+    ui->actionSingle->setChecked(false);
+    ui->action1x1_Side_by_Side->setChecked(false);
+    ui->action1x1_Upper_and_Lower->setChecked(false);
+    ui->actionSingle->blockSignals(false);
+    ui->action1x1_Side_by_Side->blockSignals(false);
+    ui->action1x1_Upper_and_Lower->blockSignals(false);
 }
 
 void MainWindow::onWidgetClosing(EditorViewport* const& widget)
