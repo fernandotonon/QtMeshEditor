@@ -235,7 +235,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: change folder permissions
-      run: sudo chmod -R 777 /usr/local
+      run: |
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
       
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -278,7 +280,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:        
     - name: change folder permissions
-      run: sudo chmod -R 777 /usr/local
+      run: |
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
+            sudo chmod -R 777 /usr/local/share
       
     - name: Cache Ogre
       id: cache-ogre-linux
@@ -366,7 +371,11 @@ jobs:
         target: 'desktop'
         arch: 'gcc_64'
 
-    - run: sudo chmod -R 777 /usr/local
+    - name: change folder permissions
+      run: |
+          sudo chmod -R 777 /usr/local/lib
+          sudo chmod -R 777 /usr/local/include
+          sudo chmod -R 777 /usr/local/share
         
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -582,6 +591,7 @@ jobs:
       env:
          QT_QPA_PLATFORM: minimal
          QT_DEBUG_PLUGINS: 1
+         DISPLAY: :99
       run: |
             export QT_QPA_PLATFORM="minimal"
             export QT_DEBUG_PLUGINS=1

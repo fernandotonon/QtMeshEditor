@@ -194,7 +194,7 @@ void Manager::destroySceneNode(const QString & name)
 }
 void Manager::destroySceneNode(Ogre::SceneNode* node)
 {
-    if(!node)
+    if(!node || isForbiddenNodeName(node->getName().c_str()))
         return;
 
 
