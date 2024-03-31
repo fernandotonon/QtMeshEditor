@@ -512,9 +512,11 @@ jobs:
         target: 'desktop'
         arch: 'gcc_64'
 
-    - run: sudo chmod -R 777 /usr/local/lib
-    - run: sudo chmod -R 777 /usr/local/include
-    - run: sudo chmod -R 777 /usr/local/share
+    - name: change folder permissions
+      run: |
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
+            sudo chmod -R 777 /usr/local/share
         
     - name: Cache Assimp
       id: cache-assimp-linux
