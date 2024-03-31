@@ -194,7 +194,7 @@ void Manager::destroySceneNode(const QString & name)
 }
 void Manager::destroySceneNode(Ogre::SceneNode* node)
 {
-    if(!node)
+    if(!node || isForbiddenNodeName(node->getName().c_str()))
         return;
 
 
@@ -300,7 +300,7 @@ bool Manager::isForbiddenNodeName(const QString &_name)
             ||_name=="GridLine_node" //TODO add a define for GridLine_node
             ||_name==SELECTIONBOX_OBJECT_NAME
             ||_name==TRANSFORM_OBJECT_NAME
-            ||_name.startsWith("Unnamed_")); //TODO find what is this <- Done, it's the cameras's nodes
+            ||_name.startsWith("Unnamed_")); //This is the cameras's nodes
 }
 
 bool Manager::hasAnimationName(Ogre::Entity *entity, const QString &_name)
