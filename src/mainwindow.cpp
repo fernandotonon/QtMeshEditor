@@ -145,9 +145,6 @@ void MainWindow::initToolBar()
     connect(ui->actionTranslate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_TRANSLATE);});
     connect(ui->actionRotate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_ROTATE);});
     connect(ui->actionRemove_Object, SIGNAL(triggered()), TransformOperator::getSingleton(), SLOT(removeSelected()));
-    // TODO improve that : the first connection could not be done in the first call of createEditorViewport
-    // because m_pTransformOperator doesn't exist yet, but m_pTransformOperator need the ressources to be created...
-    //connect(mDockWidgetList.at(0)->getOgreWidget(), SIGNAL(focusOnWidget(OgreWidget*)), TransformOperator::getSingleton(), SLOT(setActiveWidget(OgreWidget*)));
 
     // Material tab
     m_pMaterialWidget = new MaterialWidget(this->ui->tabWidget);
@@ -158,25 +155,25 @@ void MainWindow::initToolBar()
     m_pPrimitivesWidget = new PrimitivesWidget(this->ui->tabWidget);
     ui->tabWidget->addTab(m_pPrimitivesWidget, tr("Edit"));
 
-    QToolButton* addPrimitiveButton=new QToolButton(ui->objectsToolbar);
+    auto addPrimitiveButton = new QToolButton(ui->objectsToolbar);
     addPrimitiveButton->setIcon(QIcon(":/icones/cube.png"));
     addPrimitiveButton->setToolTip(tr("Add Primitive"));
     addPrimitiveButton->setPopupMode(QToolButton::InstantPopup);
 
-    QMenu* addPrimitiveMenu=new QMenu(addPrimitiveButton);
+    auto addPrimitiveMenu = new QMenu(addPrimitiveButton);
 
-    QAction* pAddCube       = new QAction(QIcon(":/icones/cube.png"),tr("Cube"), addPrimitiveButton);
-    QAction* pAddSphere     = new QAction(QIcon(":/icones/sphere.png"),tr("Sphere"), addPrimitiveButton);
-    QAction* pAddPlane      = new QAction(QIcon(":/icones/square.png"),tr("Plane"), addPrimitiveButton);
-    QAction* pAddCylinder   = new QAction(QIcon(":/icones/cylinder.png"),tr("Cylinder"), addPrimitiveButton);
-    QAction* pAddCone       = new QAction(QIcon(":/icones/cone.png"),tr("Cone"), addPrimitiveButton);
-    QAction* pAddTorus      = new QAction(QIcon(":/icones/torus.png"),tr("Torus"), addPrimitiveButton);
+    auto pAddCube       = new QAction(QIcon(":/icones/cube.png"),tr("Cube"), addPrimitiveButton);
+    auto pAddSphere     = new QAction(QIcon(":/icones/sphere.png"),tr("Sphere"), addPrimitiveButton);
+    auto pAddPlane      = new QAction(QIcon(":/icones/square.png"),tr("Plane"), addPrimitiveButton);
+    auto pAddCylinder   = new QAction(QIcon(":/icones/cylinder.png"),tr("Cylinder"), addPrimitiveButton);
+    auto pAddCone       = new QAction(QIcon(":/icones/cone.png"),tr("Cone"), addPrimitiveButton);
+    auto pAddTorus      = new QAction(QIcon(":/icones/torus.png"),tr("Torus"), addPrimitiveButton);
     // TODO add correct icon for tube and polish the existing ones
-    QAction* pAddTube       = new QAction(QIcon(":/icones/torus.png"),tr("Tube"), addPrimitiveButton);
-    QAction* pAddCapsule    = new QAction(QIcon(":/icones/capsule.png"),tr("Capsule"), addPrimitiveButton);
-    QAction* pAddIcoSphere  = new QAction(QIcon(":/icones/sphere.png"),tr("IcoSphere"), addPrimitiveButton);
-    QAction* pAddRoundedBox = new QAction(QIcon(":/icones/roundedbox.png"),tr("Rounded Box"), addPrimitiveButton);
-    QAction* pAddSpring     = new QAction(QIcon(":/icones/spring.png"),tr("Spring"), addPrimitiveButton);
+    auto pAddTube       = new QAction(QIcon(":/icones/torus.png"),tr("Tube"), addPrimitiveButton);
+    auto pAddCapsule    = new QAction(QIcon(":/icones/capsule.png"),tr("Capsule"), addPrimitiveButton);
+    auto pAddIcoSphere  = new QAction(QIcon(":/icones/sphere.png"),tr("IcoSphere"), addPrimitiveButton);
+    auto pAddRoundedBox = new QAction(QIcon(":/icones/roundedbox.png"),tr("Rounded Box"), addPrimitiveButton);
+    auto pAddSpring     = new QAction(QIcon(":/icones/spring.png"),tr("Spring"), addPrimitiveButton);
 
     addPrimitiveMenu->addAction(pAddCube);
     addPrimitiveMenu->addAction(pAddSphere);
@@ -318,7 +315,7 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 {
     QtInputManager::getInstance().keyPressEvent(event);
 
-    switch(event->key ()){
+    switch(event->key()){
     case Qt::Key_R:
         setTransformState(TransformOperator::TS_ROTATE);
        break;

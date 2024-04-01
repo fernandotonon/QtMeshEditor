@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include <QApplication>
+#include <QToolBar>
 #include <QSettings>
+#include <QDockWidget>
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
@@ -203,6 +205,52 @@ TEST_F(MainWindowTest, SelectTranslateRotate) {
     ASSERT_TRUE(actionRotate_Object->isChecked());
 }
 
+TEST_F(MainWindowTest, SelectTranslateRotateShortcut) {
+    auto actionSelect_Object = mainWindow->findChild<QAction*>("actionSelect_Object");
+    auto actionTranslate_Object = mainWindow->findChild<QAction*>("actionTranslate_Object");
+    auto actionRotate_Object = mainWindow->findChild<QAction*>("actionRotate_Object");
+    ASSERT_TRUE(actionSelect_Object != nullptr);
+    ASSERT_TRUE(actionTranslate_Object != nullptr);
+    ASSERT_TRUE(actionRotate_Object != nullptr);
+
+    // ROTATE
+    // mock pressing R key in mainwindow
+    auto event = new QKeyEvent(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier);
+    mainWindow->keyPressEvent(event);
+
+    ASSERT_FALSE(actionSelect_Object->isChecked());
+    ASSERT_FALSE(actionTranslate_Object->isChecked());
+    ASSERT_TRUE(actionRotate_Object->isChecked());
+
+    // There's no unchecking
+    mainWindow->keyPressEvent(event);
+    ASSERT_TRUE(actionRotate_Object->isChecked());
+
+    // SELECT
+    event = new QKeyEvent(QEvent::KeyPress, Qt::Key_Y, Qt::NoModifier);
+    mainWindow->keyPressEvent(event);
+
+    ASSERT_TRUE(actionSelect_Object->isChecked());
+    ASSERT_FALSE(actionTranslate_Object->isChecked());
+    ASSERT_FALSE(actionRotate_Object->isChecked());
+
+    // There's no unchecking
+    mainWindow->keyPressEvent(event);
+    ASSERT_TRUE(actionSelect_Object->isChecked());
+
+    // TRANSLATE
+    event = new QKeyEvent(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier);
+    mainWindow->keyPressEvent(event);
+
+    ASSERT_FALSE(actionSelect_Object->isChecked());
+    ASSERT_TRUE(actionTranslate_Object->isChecked());
+    ASSERT_FALSE(actionRotate_Object->isChecked());
+
+    // There's no unchecking
+    mainWindow->keyPressEvent(event);
+    ASSERT_TRUE(actionTranslate_Object->isChecked());
+}
+
 TEST_F(MainWindowTest, RemoveEmptySelection) {
     auto actionRemove_Object = mainWindow->findChild<QAction*>("actionRemove_Object");
     ASSERT_TRUE(actionRemove_Object != nullptr);
@@ -216,4 +264,115 @@ TEST_F(MainWindowTest, RemoveEmptySelection) {
     auto countAfter = Manager::getSingleton()->getEntities().count();
 
     ASSERT_EQ(countBefore,countAfter);
+}
+
+TEST_F(MainWindowTest, RemoveEmptySelectionShortcut) {
+    SelectionSet::getSingleton()->clear();
+
+    auto countBefore = Manager::getSingleton()->getEntities().count();
+
+    auto event = new QKeyEvent(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    mainWindow->keyPressEvent(event);
+
+    auto countAfter = Manager::getSingleton()->getEntities().count();
+
+    ASSERT_EQ(countBefore,countAfter);
+}
+
+TEST_F(MainWindowTest, RemoveSelectedSceneNode) {
+    auto actionRemove_Object = mainWindow->findChild<QAction*>("actionRemove_Object");
+    ASSERT_TRUE(actionRemove_Object != nullptr);
+
+    auto sceneNodeName = "TestSceneNode";
+    auto sceneNode = Manager::getSingleton()->addSceneNode(sceneNodeName);
+    auto countBefore = Manager::getSingleton()->getSceneNodes().count();
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(sceneNode);
+
+    actionRemove_Object->trigger();
+
+    auto countAfter = Manager::getSingleton()->getSceneNodes().count();
+
+    ASSERT_EQ(countBefore-1,countAfter);
+    
+    for (auto node : Manager::getSingleton()->getSceneNodes()) {
+        ASSERT_NE(node->getName(), sceneNodeName);
+    }
+}
+
+TEST_F(MainWindowTest, RemoveSelectedSceneNodeShortcut) {
+    auto sceneNodeName = "TestSceneNode";
+    auto sceneNode = Manager::getSingleton()->addSceneNode(sceneNodeName);
+    auto countBefore = Manager::getSingleton()->getSceneNodes().count();
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(sceneNode);
+
+    auto event = new QKeyEvent(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    mainWindow->keyPressEvent(event);
+
+    auto countAfter = Manager::getSingleton()->getSceneNodes().count();
+
+    ASSERT_EQ(countBefore-1,countAfter);
+
+    for (auto node : Manager::getSingleton()->getSceneNodes()) {
+        ASSERT_NE(node->getName(), sceneNodeName);
+    }
+}
+
+TEST_F(MainWindowTest, ShowHideObjectsToolbar) {
+    mainWindow->setVisible(true);
+    auto actionObjectsToolbar = mainWindow->findChild<QAction*>("actionObjects_Toolbar");
+    ASSERT_TRUE(actionObjectsToolbar != nullptr);
+
+    auto objectsToolbar = mainWindow->findChild<QToolBar*>("objectsToolbar");
+    ASSERT_TRUE(objectsToolbar != nullptr);
+
+    actionObjectsToolbar->toggle();
+
+    ASSERT_FALSE(actionObjectsToolbar->isChecked());
+    ASSERT_FALSE(objectsToolbar->isVisible());
+
+    actionObjectsToolbar->toggle();
+
+    ASSERT_TRUE(actionObjectsToolbar->isChecked());
+    ASSERT_TRUE(objectsToolbar->isVisible());
+}
+
+TEST_F(MainWindowTest, ShowHideToolsToolbar) {
+    mainWindow->setVisible(true);
+    auto actionToolsToolbar = mainWindow->findChild<QAction*>("actionTools_Toolbar");
+    ASSERT_TRUE(actionToolsToolbar != nullptr);
+
+    auto toolsToolbar = mainWindow->findChild<QToolBar*>("toolToolbar");
+    ASSERT_TRUE(toolsToolbar != nullptr);
+
+    actionToolsToolbar->toggle();
+
+    ASSERT_FALSE(actionToolsToolbar->isChecked());
+    ASSERT_FALSE(toolsToolbar->isVisible());
+
+    actionToolsToolbar->toggle();
+
+    ASSERT_TRUE(actionToolsToolbar->isChecked());
+    ASSERT_TRUE(toolsToolbar->isVisible());
+}
+
+TEST_F(MainWindowTest, ShowHideMeshEditor) {
+    mainWindow->setVisible(true);
+    auto actionMeshEditor = mainWindow->findChild<QAction*>("actionMeshEditor");
+    ASSERT_TRUE(actionMeshEditor != nullptr);
+    ASSERT_TRUE(actionMeshEditor->isChecked());
+
+    auto meshEditor = mainWindow->findChild<QDockWidget*>("meshEditorWidget");
+    ASSERT_TRUE(meshEditor != nullptr);
+
+    actionMeshEditor->toggle();
+    ASSERT_FALSE(actionMeshEditor->isChecked());
+    ASSERT_FALSE(meshEditor->isVisible());
+
+    actionMeshEditor->toggle();
+    ASSERT_TRUE(actionMeshEditor->isChecked());
+    ASSERT_TRUE(meshEditor->isVisible());
 }
