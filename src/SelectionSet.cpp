@@ -337,7 +337,7 @@ const Ogre::Vector3 SelectionSet::getSelectionNodesCenter() const
 
 const Ogre::Vector3 SelectionSet::getSelectionScale(void)   const
 {
-    Ogre::Vector3 vResult = Ogre::Vector3::ZERO;
+    Ogre::Vector3 vResult = Ogre::Vector3::UNIT_SCALE;
 
     if(hasNodes())
     {
@@ -353,10 +353,6 @@ const Ogre::Vector3 SelectionSet::getSelectionScale(void)   const
             vResult += getSingleton()->getEntityScaleFactor(obj);
 
         vResult = vResult/getEntitiesCount();
-    }
-    else
-    {
-        vResult = Ogre::Vector3::UNIT_SCALE;
     }
 
     return (vResult);

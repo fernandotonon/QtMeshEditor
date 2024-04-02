@@ -80,3 +80,34 @@ TEST(SelectionSetTests, ClearList)
     EXPECT_FALSE(selectionSet->contains(sceneNode));
     Manager::getSingleton()->destroySceneNode(sceneNode);
 }
+
+TEST(SelectionSetTests, GetSelectionNodesCenterEmpty)
+{
+    SelectionSet::getSingleton()->clear();
+    auto center = SelectionSet::getSingleton()->getSelectionNodesCenter();
+
+    EXPECT_EQ(center.x, 0.0f);
+    EXPECT_EQ(center.y, 0.0f);
+    EXPECT_EQ(center.z, 0.0f);
+}
+
+TEST(SelectionSetTests, GetSelectionNodesCenter)
+{
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    auto sceneNode = Manager::getSingleton()->addSceneNode("test");
+    auto sceneNode2 = Manager::getSingleton()->addSceneNode("test2");
+
+    selectionSet->selectOne(sceneNode);
+    selectionSet->append(sceneNode2);
+
+    sceneNode2->translate(1.0,2.0,3.0);
+
+    auto center = selectionSet->getSelectionNodesCenter();
+
+    EXPECT_EQ(center.x, 0.5f);
+    EXPECT_EQ(center.y, 1.0f);
+    EXPECT_EQ(center.z, 1.5f);
+
+    Manager::getSingleton()->destroySceneNode(sceneNode);
+    Manager::getSingleton()->destroySceneNode(sceneNode2);
+}
