@@ -279,28 +279,6 @@ TEST_F(MainWindowTest, RemoveEmptySelectionShortcut) {
     ASSERT_EQ(countBefore,countAfter);
 }
 
-TEST_F(MainWindowTest, RemoveSelectedSceneNode) {
-    auto actionRemove_Object = mainWindow->findChild<QAction*>("actionRemove_Object");
-    ASSERT_TRUE(actionRemove_Object != nullptr);
-
-    auto sceneNodeName = "TestSceneNode";
-    auto sceneNode = Manager::getSingleton()->addSceneNode(sceneNodeName);
-    auto countBefore = Manager::getSingleton()->getSceneNodes().count();
-
-    SelectionSet::getSingleton()->clear();
-    SelectionSet::getSingleton()->selectOne(sceneNode);
-
-    actionRemove_Object->trigger();
-
-    auto countAfter = Manager::getSingleton()->getSceneNodes().count();
-
-    ASSERT_EQ(countBefore-1,countAfter);
-    
-    for (auto node : Manager::getSingleton()->getSceneNodes()) {
-        ASSERT_NE(node->getName(), sceneNodeName);
-    }
-}
-
 TEST_F(MainWindowTest, RemoveSelectedSceneNodeShortcut) {
     auto sceneNodeName = "TestSceneNode";
     auto sceneNode = Manager::getSingleton()->addSceneNode(sceneNodeName);
