@@ -321,6 +321,33 @@ TEST_F(MainWindowTest, RemoveSelectedSceneNodeShortcut) {
     }
 }
 
+TEST_F(MainWindowTest, RemoveAndRecreateSceneNode) {
+    auto actionRemove_Object = mainWindow->findChild<QAction*>("actionRemove_Object");
+    ASSERT_TRUE(actionRemove_Object != nullptr);
+
+    auto sceneNodeName = "TestSceneNode";
+    auto sceneNode = Manager::getSingleton()->addSceneNode(sceneNodeName);
+    auto countBefore = Manager::getSingleton()->getSceneNodes().count();
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(sceneNode);
+
+    actionRemove_Object->trigger();
+
+    auto countAfter = Manager::getSingleton()->getSceneNodes().count();
+
+    ASSERT_EQ(countBefore-1,countAfter);
+
+    for (auto node : Manager::getSingleton()->getSceneNodes()) {
+        ASSERT_NE(node->getName(), sceneNodeName);
+    }
+
+    sceneNode = Manager::getSingleton()->addSceneNode(sceneNodeName);
+    SelectionSet::getSingleton()->selectOne(sceneNode);
+    actionRemove_Object->trigger();
+    ASSERT_EQ(countBefore-1,countAfter);
+}
+
 TEST_F(MainWindowTest, ShowHideObjectsToolbar) {
     mainWindow->setVisible(true);
     auto actionObjectsToolbar = mainWindow->findChild<QAction*>("actionObjects_Toolbar");

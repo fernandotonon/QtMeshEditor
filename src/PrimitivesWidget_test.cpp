@@ -5,6 +5,7 @@
 #include <QKeyEvent>
 #include <QInputDialog>
 #include "PrimitivesWidget.h"
+#include "Manager.h"
 
 // Test case for MaterialWidget
 class PrimitivesWidgetTest : public ::testing::Test
@@ -38,6 +39,26 @@ TEST_F(PrimitivesWidgetTest, CreateCube)
 
     QString primitiveType = primitiveTypeLineEdit->text();
     ASSERT_EQ(primitiveType, "Cube");
+}
+
+TEST_F(PrimitivesWidgetTest, RemoveAndRecreateCube) {
+    PrimitivesWidget widget;
+    QLineEdit* primitiveTypeLineEdit = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_TRUE(primitiveTypeLineEdit != nullptr);
+
+    PrimitiveObject::createCube("Cube");
+
+    auto countBefore = Manager::getSingleton()->getSceneNodes().count();
+
+    Manager::getSingleton()->destroySceneNode("Cube");
+
+    auto countAfter = Manager::getSingleton()->getSceneNodes().count();
+
+    ASSERT_EQ(countBefore-1,countAfter);
+
+    PrimitiveObject::createCube("Cube");
+    Manager::getSingleton()->destroySceneNode("Cube");
+    ASSERT_EQ(countBefore-1,countAfter);
 }
 
 TEST_F(PrimitivesWidgetTest, CreateSphere)
