@@ -34,6 +34,7 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
+    void keyPressEvent(QKeyEvent *event);
     
 private slots:
     void on_actionImport_triggered();
@@ -94,7 +95,6 @@ protected:
     bool frameRenderingQueued(const Ogre::FrameEvent &evt);
     bool frameEnded(const Ogre::FrameEvent& evt);
 
-    void keyPressEvent(QKeyEvent *event);
     void keyReleaseEvent(QKeyEvent *event);
     void dropEvent(QDropEvent *event);
     void dragEnterEvent(QDragEnterEvent *event);

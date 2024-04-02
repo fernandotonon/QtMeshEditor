@@ -201,8 +201,7 @@ void Manager::destroySceneNode(Ogre::SceneNode* node)
     if(PrimitiveObject::isPrimitive(node))
     {
         PrimitiveObject* primitive = PrimitiveObject::getPrimitiveFromSceneNode(node);
-        //if (!(node->getUserObjectBindings().getUserAny().isEmpty()))
-            node->getUserObjectBindings().clear();
+        node->getUserObjectBindings().clear();
 
         delete primitive;
     }
@@ -225,6 +224,7 @@ void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
 
    for(auto attachedObject : attachedObjects)
       node->getCreator()->destroyMovableObject(attachedObject);
+
    /* TODO check to free up the meshmanager
    if(ent->getMesh().getPointer()->isManuallyLoaded())
    {
