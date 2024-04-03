@@ -414,3 +414,15 @@ TEST_F(MainWindowTest, FrameRendering) {
     message = statusBar->currentMessage();
     ASSERT_TRUE(message.startsWith("Status "));
 }
+
+TEST_F(MainWindowTest, OpenMaterialWindow) {
+    auto actionMaterial_Editor = mainWindow->findChild<QAction*>("actionMaterial_Editor");
+    ASSERT_TRUE(actionMaterial_Editor != nullptr);
+
+    int childrenBefore = mainWindow->children().size();
+
+    actionMaterial_Editor->trigger();
+
+    int childrenAfter = mainWindow->children().size();
+    ASSERT_EQ(childrenBefore, childrenAfter-1);
+}

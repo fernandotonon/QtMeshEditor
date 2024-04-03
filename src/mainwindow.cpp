@@ -401,7 +401,7 @@ void MainWindow::on_actionExport_Selected_triggered()
 
 void MainWindow::on_actionMaterial_Editor_triggered()
 {
-    Material *m = new Material(this);
+    auto m = new Material(this);
 
     QStringList List;
     Ogre::ResourceManager::ResourceMapIterator materialIterator = Ogre::MaterialManager::getSingleton().getResourceIterator();
