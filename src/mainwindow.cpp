@@ -203,24 +203,27 @@ void MainWindow::initToolBar()
     connect(pAddSpring,     SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createSpring()));
 
     // Animation tab
-    AnimationWidget *pAnimationWidget = new AnimationWidget(this->ui->tabWidget);
+    auto pAnimationWidget = new AnimationWidget(this->ui->tabWidget);
     ui->tabWidget->addTab(pAnimationWidget, tr("Animation"));
+
+    // Add Animation Control Widget to the bottom of the main window
+    auto pAnimationControlWidget = new AnimationControlWidget(this);
+    pAnimationControlWidget->setVisible(false);
+    connect(pAnimationWidget,SIGNAL(changeAnimationName(const std::string&)),pAnimationControlWidget,SLOT(updateAnimationTree()));
+
     //connect(m_pTransformWidget, SIGNAL(selectionChanged(QString)), pAnimationWidget, SLOT(updateAnimationTable()));
     connect(pAnimationWidget,SIGNAL(changeAnimationState(bool)),this,SLOT(setPlaying(bool)));
     connect(ui->tabWidget,&QTabWidget::currentChanged,this,[=](int index){
         if(index==3){
             // Add Animation Control Widget to the bottom of the main window
-            AnimationControlWidget *pAnimationControlWidget = new AnimationControlWidget(this);
-            connect(pAnimationWidget,SIGNAL(changeAnimationName(const std::string&)),pAnimationControlWidget,SLOT(updateAnimationTree()));
+            pAnimationControlWidget->setVisible(true);
             addDockWidget(Qt::BottomDockWidgetArea, pAnimationControlWidget);
         } else {
             // Remove Animation Control Widget from the bottom of the main window
-            QList<QDockWidget*> dockWidgets = findChildren<QDockWidget*>();
-            for (int i = 0; i < dockWidgets.size(); ++i) {
-                if (dockWidgets.at(i)->objectName() == "AnimationControlWidget") {
-                    removeDockWidget(dockWidgets.at(i));
-                    dockWidgets.at(i)->deleteLater();
-                }
+            auto dockWidget = findChild<QDockWidget*>("AnimationControlWidget");
+            if (dockWidget) {
+                pAnimationControlWidget->setVisible(false);
+                removeDockWidget(dockWidget);
             }
         }
     });

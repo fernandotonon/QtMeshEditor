@@ -381,3 +381,22 @@ TEST_F(MainWindowTest, ShowHideMeshEditor) {
     ASSERT_TRUE(actionMeshEditor->isChecked());
     ASSERT_TRUE(meshEditor->isVisible());
 }
+
+TEST_F(MainWindowTest, NavigateTabWidget) {
+    mainWindow->setVisible(true);
+    auto tabWidget = mainWindow->findChild<QTabWidget*>("tabWidget");
+    ASSERT_TRUE(tabWidget != nullptr);
+
+    auto transformTab = tabWidget->widget(0);
+    auto materialTab = tabWidget->widget(1);
+    auto editTab = tabWidget->widget(2);
+    auto animationTab = tabWidget->widget(3);
+    ASSERT_TRUE(transformTab != nullptr);
+    ASSERT_TRUE(materialTab != nullptr);
+    ASSERT_TRUE(editTab != nullptr);
+    ASSERT_TRUE(animationTab != nullptr);
+
+    ASSERT_FALSE(animationTab->isVisible());
+    tabWidget->setCurrentIndex(3);
+    ASSERT_TRUE(animationTab->isVisible());
+}
