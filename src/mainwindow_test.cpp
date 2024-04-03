@@ -426,3 +426,15 @@ TEST_F(MainWindowTest, OpenMaterialWindow) {
     int childrenAfter = mainWindow->children().size();
     ASSERT_EQ(childrenBefore, childrenAfter-1);
 }
+
+TEST_F(MainWindowTest, OpenAbout) {
+    auto actionAbout = mainWindow->findChild<QAction*>("actionAbout");
+    ASSERT_TRUE(actionAbout != nullptr);
+
+    int childrenBefore = mainWindow->children().size();
+
+    actionAbout->trigger();
+
+    int childrenAfter = mainWindow->children().size();
+    ASSERT_EQ(childrenBefore, childrenAfter-1);
+}
