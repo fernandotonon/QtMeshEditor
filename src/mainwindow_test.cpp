@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <QApplication>
 #include <QToolBar>
+#include <QStatusBar>
 #include <QSettings>
 #include <QDockWidget>
 #include "Manager.h"
@@ -399,4 +400,17 @@ TEST_F(MainWindowTest, NavigateTabWidget) {
     ASSERT_FALSE(animationTab->isVisible());
     tabWidget->setCurrentIndex(3);
     ASSERT_TRUE(animationTab->isVisible());
+}
+
+TEST_F(MainWindowTest, FrameRendering) {
+    auto statusBar = mainWindow->findChild<QStatusBar*>("statusBar");
+    ASSERT_TRUE(statusBar != nullptr);
+
+    auto message = statusBar->currentMessage();
+    ASSERT_EQ(message, "");
+
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
+    message = statusBar->currentMessage();
+    ASSERT_TRUE(message.startsWith("Status "));
 }
