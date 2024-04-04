@@ -250,6 +250,15 @@ TEST_F(MainWindowTest, SelectTranslateRotateShortcut) {
     // There's no unchecking
     mainWindow->keyPressEvent(event);
     ASSERT_TRUE(actionTranslate_Object->isChecked());
+
+    // Other key
+    event = new QKeyEvent(QEvent::KeyPress, Qt::Key_P, Qt::NoModifier);
+    mainWindow->keyPressEvent(event);
+
+    // Keeps the previous status
+    ASSERT_FALSE(actionSelect_Object->isChecked());
+    ASSERT_TRUE(actionTranslate_Object->isChecked());
+    ASSERT_FALSE(actionRotate_Object->isChecked());
 }
 
 TEST_F(MainWindowTest, RemoveEmptySelection) {
