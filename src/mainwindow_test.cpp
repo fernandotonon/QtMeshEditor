@@ -4,6 +4,8 @@
 #include <QStatusBar>
 #include <QSettings>
 #include <QDockWidget>
+#include <QMimeData>
+#include <QDropEvent>
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
@@ -447,4 +449,51 @@ TEST_F(MainWindowTest, OpenAbout) {
 
     int childrenAfter = mainWindow->children().size();
     ASSERT_EQ(childrenBefore, childrenAfter-1);
+}
+
+TEST_F(MainWindowTest, DropEvent) {
+    auto entities = Manager::getSingleton()->getEntities();
+    int countBefore = entities.count();
+    // Create a QDropEvent instance for testing
+    QMimeData* mimeData = new QMimeData();
+    QDropEvent* event = new QDropEvent(QPoint(), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+
+    // Set the mime data with a valid URI
+    QString validUri = "file:///./media/models/ninja.mesh\nfile:///./media/models/robot.mesh";
+    mimeData->setData("text/uri-list", validUri.toUtf8());
+
+    // Call the dropEvent method
+    mainWindow->dropEvent(event);
+
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
+    // Verify that the file is loaded
+    entities = Manager::getSingleton()->getEntities();
+    ASSERT_EQ(entities.count(), countBefore+2);
+
+    // Set the mime data with an invalid URI
+    QString invalidUri = "file:///./UnitTests";
+    mimeData->setData("text/uri-list", invalidUri.toUtf8());
+
+    // Call the dropEvent method again
+    mainWindow->dropEvent(event);
+
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
+    // Verify that the file is not loaded
+    entities = Manager::getSingleton()->getEntities();
+    ASSERT_EQ(entities.count(), countBefore+2);
+
+    // Set the mime data with another type of data
+    QString other = "asd";
+    mimeData->setData("text", other.toUtf8());
+
+    // Call the dropEvent method again
+    mainWindow->dropEvent(event);
+
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
+    // Verify that the file is not loaded
+    entities = Manager::getSingleton()->getEntities();
+    ASSERT_EQ(entities.count(), countBefore+2);
 }
