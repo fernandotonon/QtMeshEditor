@@ -1,8 +1,11 @@
 #include <gtest/gtest.h>
 #include <QApplication>
 #include <QToolBar>
+#include <QStatusBar>
 #include <QSettings>
 #include <QDockWidget>
+#include <QMimeData>
+#include <QDropEvent>
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
@@ -249,6 +252,15 @@ TEST_F(MainWindowTest, SelectTranslateRotateShortcut) {
     // There's no unchecking
     mainWindow->keyPressEvent(event);
     ASSERT_TRUE(actionTranslate_Object->isChecked());
+
+    // Other key
+    event = new QKeyEvent(QEvent::KeyPress, Qt::Key_P, Qt::NoModifier);
+    mainWindow->keyPressEvent(event);
+
+    // Keeps the previous status
+    ASSERT_FALSE(actionSelect_Object->isChecked());
+    ASSERT_TRUE(actionTranslate_Object->isChecked());
+    ASSERT_FALSE(actionRotate_Object->isChecked());
 }
 
 TEST_F(MainWindowTest, RemoveEmptySelection) {
@@ -380,4 +392,108 @@ TEST_F(MainWindowTest, ShowHideMeshEditor) {
     actionMeshEditor->toggle();
     ASSERT_TRUE(actionMeshEditor->isChecked());
     ASSERT_TRUE(meshEditor->isVisible());
+}
+/*
+TEST_F(MainWindowTest, NavigateTabWidget) {
+    mainWindow->setVisible(true);
+    auto tabWidget = mainWindow->findChild<QTabWidget*>("tabWidget");
+    ASSERT_TRUE(tabWidget != nullptr);
+
+    auto transformTab = tabWidget->widget(0);
+    auto materialTab = tabWidget->widget(1);
+    auto editTab = tabWidget->widget(2);
+    auto animationTab = tabWidget->widget(3);
+    ASSERT_TRUE(transformTab != nullptr);
+    ASSERT_TRUE(materialTab != nullptr);
+    ASSERT_TRUE(editTab != nullptr);
+    ASSERT_TRUE(animationTab != nullptr);
+
+    ASSERT_FALSE(animationTab->isVisible());
+    tabWidget->setCurrentIndex(3);
+    ASSERT_TRUE(animationTab->isVisible());
+} errors on github actions */
+
+TEST_F(MainWindowTest, FrameRendering) {
+    auto statusBar = mainWindow->findChild<QStatusBar*>("statusBar");
+    ASSERT_TRUE(statusBar != nullptr);
+
+    auto message = statusBar->currentMessage();
+    ASSERT_EQ(message, "");
+
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
+    message = statusBar->currentMessage();
+    ASSERT_TRUE(message.startsWith("Status "));
+}
+
+/*
+TEST_F(MainWindowTest, OpenMaterialWindow) {
+    auto actionMaterial_Editor = mainWindow->findChild<QAction*>("actionMaterial_Editor");
+    ASSERT_TRUE(actionMaterial_Editor != nullptr);
+
+    int childrenBefore = mainWindow->children().size();
+
+    actionMaterial_Editor->trigger();
+
+    int childrenAfter = mainWindow->children().size();
+    ASSERT_EQ(childrenBefore, childrenAfter-1);
+} segfault on GH Actions */
+
+TEST_F(MainWindowTest, OpenAbout) {
+    auto actionAbout = mainWindow->findChild<QAction*>("actionAbout");
+    ASSERT_TRUE(actionAbout != nullptr);
+
+    int childrenBefore = mainWindow->children().size();
+
+    actionAbout->trigger();
+
+    int childrenAfter = mainWindow->children().size();
+    ASSERT_EQ(childrenBefore, childrenAfter-1);
+}
+
+TEST_F(MainWindowTest, DropEvent) {
+    auto entities = Manager::getSingleton()->getEntities();
+    int countBefore = entities.count();
+    // Create a QDropEvent instance for testing
+    QMimeData* mimeData = new QMimeData();
+    QDropEvent* event = new QDropEvent(QPoint(), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+
+    // Set the mime data with a valid URI
+    QString validUri = "file:///./media/models/ninja.mesh\nfile:///./media/models/robot.mesh\nfile:///./media/models/Rumba%20Dancing.fbx";
+    mimeData->setData("text/uri-list", validUri.toUtf8());
+
+    // Call the dropEvent method
+    mainWindow->dropEvent(event);
+
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
+    // Verify that the file is loaded
+    entities = Manager::getSingleton()->getEntities();
+    ASSERT_EQ(entities.count(), countBefore+3);
+
+    // Set the mime data with an invalid URI
+    QString invalidUri = "file:///./UnitTests";
+    mimeData->setData("text/uri-list", invalidUri.toUtf8());
+
+    // Call the dropEvent method again
+    mainWindow->dropEvent(event);
+
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
+    // Verify that the file is not loaded
+    entities = Manager::getSingleton()->getEntities();
+    ASSERT_EQ(entities.count(), countBefore+3);
+
+    // Set the mime data with another type of data
+    QString other = "asd";
+    mimeData->setData("text", other.toUtf8());
+
+    // Call the dropEvent method again
+    mainWindow->dropEvent(event);
+
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
+    // Verify that the file is not loaded
+    entities = Manager::getSingleton()->getEntities();
+    ASSERT_EQ(entities.count(), countBefore+3);
 }
