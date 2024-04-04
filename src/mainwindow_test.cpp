@@ -459,7 +459,7 @@ TEST_F(MainWindowTest, DropEvent) {
     QDropEvent* event = new QDropEvent(QPoint(), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
 
     // Set the mime data with a valid URI
-    QString validUri = "file:///./media/models/ninja.mesh\nfile:///./media/models/robot.mesh";
+    QString validUri = "file:///./media/models/ninja.mesh\nfile:///./media/models/robot.mesh\nfile:///./media/models/Rumba%20Dancing.fbx";
     mimeData->setData("text/uri-list", validUri.toUtf8());
 
     // Call the dropEvent method
@@ -469,7 +469,7 @@ TEST_F(MainWindowTest, DropEvent) {
 
     // Verify that the file is loaded
     entities = Manager::getSingleton()->getEntities();
-    ASSERT_EQ(entities.count(), countBefore+2);
+    ASSERT_EQ(entities.count(), countBefore+3);
 
     // Set the mime data with an invalid URI
     QString invalidUri = "file:///./UnitTests";
@@ -482,7 +482,7 @@ TEST_F(MainWindowTest, DropEvent) {
 
     // Verify that the file is not loaded
     entities = Manager::getSingleton()->getEntities();
-    ASSERT_EQ(entities.count(), countBefore+2);
+    ASSERT_EQ(entities.count(), countBefore+3);
 
     // Set the mime data with another type of data
     QString other = "asd";
@@ -495,5 +495,5 @@ TEST_F(MainWindowTest, DropEvent) {
 
     // Verify that the file is not loaded
     entities = Manager::getSingleton()->getEntities();
-    ASSERT_EQ(entities.count(), countBefore+2);
+    ASSERT_EQ(entities.count(), countBefore+3);
 }
