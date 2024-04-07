@@ -33,16 +33,14 @@ public:
     void setTechFields(const QMap<int, Ogre::Pass *> &_techMap, const QList<QString> &_passList);
     Ui::MaterialEditor* getUI() const;
 
+public slots:
+    void on_Ambient_Color_Selected(const QColor &arg1);
+    void on_Difuse_Color_Selected(const QColor &arg1);
+    void on_Specular_Color_Selected(const QColor &arg1);
+    void on_Emissive_Color_Selected(const QColor &arg1);
+
 private slots:
     void on_buttonEditAmbientColor_clicked();
-
-    void on_Ambient_Color_Selected(const QColor &arg1);
-
-    void on_Difuse_Color_Selected(const QColor &arg1);
-
-    void on_Specular_Color_Selected(const QColor &arg1);
-
-    void on_Emissive_Color_Selected(const QColor &arg1);
 
     void on_textMaterial_textChanged();
 

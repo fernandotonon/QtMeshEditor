@@ -133,3 +133,91 @@ TEST_F(MaterialEditorTest, ApplyMaterial) {
     ASSERT_FALSE(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getLightingEnabled());
     Ogre::MaterialManager::getSingleton().remove(material);
 }
+
+TEST_F(MaterialEditorTest, onAmbientColorSelected) {
+    auto editor = std::make_unique<MaterialEditor>();
+
+    //Create test material
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getLightingEnabled());
+
+    // Set material
+    editor->setMaterial("TestMaterial");
+
+    // Set ambient color
+    auto testColor = QColor(233, 127, 90);
+    editor->on_Ambient_Color_Selected(testColor);
+
+    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getAmbient().r, testColor.redF());
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getAmbient().g, testColor.greenF());
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getAmbient().b, testColor.blueF());
+
+    Ogre::MaterialManager::getSingleton().remove(material);
+}
+
+TEST_F(MaterialEditorTest, onDifuseColorSelected) {
+    auto editor = std::make_unique<MaterialEditor>();
+
+    //Create test material
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getLightingEnabled());
+
+    // Set material
+    editor->setMaterial("TestMaterial");
+
+    // Set difuse color
+    auto testColor = QColor(233, 127, 90);
+    editor->on_Difuse_Color_Selected(testColor);
+
+    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getDiffuse().r, testColor.redF());
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getDiffuse().g, testColor.greenF());
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getDiffuse().b, testColor.blueF());
+
+    Ogre::MaterialManager::getSingleton().remove(material);
+}
+
+TEST_F(MaterialEditorTest, onSpecularColorSelected) {
+    auto editor = std::make_unique<MaterialEditor>();
+
+    //Create test material
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getLightingEnabled());
+
+    // Set material
+    editor->setMaterial("TestMaterial");
+
+    // Set specular color
+    auto testColor = QColor(233, 127, 90);
+    editor->on_Specular_Color_Selected(testColor);
+
+    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSpecular().r, testColor.redF());
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSpecular().g, testColor.greenF());
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSpecular().b, testColor.blueF());
+
+    Ogre::MaterialManager::getSingleton().remove(material);
+}
+
+TEST_F(MaterialEditorTest, onEmissiveColorSelected) {
+    auto editor = std::make_unique<MaterialEditor>();
+
+    //Create test material
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getLightingEnabled());
+
+    // Set material
+    editor->setMaterial("TestMaterial");
+
+    // Set emissive color
+    auto testColor = QColor(233, 127, 90);
+    editor->on_Emissive_Color_Selected(testColor);
+
+    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSelfIllumination().r, testColor.redF());
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSelfIllumination().g, testColor.greenF());
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSelfIllumination().b, testColor.blueF());
+
+    Ogre::MaterialManager::getSingleton().remove(material);
+}
