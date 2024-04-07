@@ -19,9 +19,9 @@ MaterialEditor::MaterialEditor(QWidget *parent) :
     ,difuseColorDialog(new QColorDialog(this))
     ,specularColorDialog(new QColorDialog(this))
     ,emissiveColorDialog(new QColorDialog(this))
-    ,mSelectedPass(NULL)
-    ,mSelectedTechnique(NULL)
-    ,mSelectedTextureUnit(NULL)
+    ,mSelectedPass(nullptr)
+    ,mSelectedTechnique(nullptr)
+    ,mSelectedTextureUnit(nullptr)
 {
     ui->setupUi(this);
 
@@ -80,11 +80,11 @@ void MaterialEditor::setMaterial(const QString &_material)
 
         setMaterialText(ms.getQueuedAsString().data());
 
-        auto techniques = m->getTechniques();
         int tcount=0;//technique
         int pcount=0;//pass
         QMap <int, Ogre::Pass*> passMap;
         QList <QString> passMapName;
+        const auto techniques = m->getTechniques();
         for (Ogre::Technique* tech : techniques)
         {
             pcount=0;
@@ -93,7 +93,7 @@ void MaterialEditor::setMaterial(const QString &_material)
 
             ui->techComboBox->addItem(techname);
 
-            auto passes = tech->getPasses();
+            const auto passes = tech->getPasses();
             for(Ogre::Pass* pass : passes)
             {
                 QString passname = pass->getName().size()?pass->getName().data():QString("pass%1").arg(pcount);
@@ -206,7 +206,7 @@ void MaterialEditor::setPassFields(Ogre::Pass* _pass)
     ui->emissiveColorWidget->setPalette(Pal);
     emissiveColorDialog->setCurrentColor(Color);
 
-    auto itTU = _pass->getTextureUnitStates();
+    const auto itTU = _pass->getTextureUnitStates();
     int tcount=0;
     for (Ogre::TextureUnitState *textureUnit : itTU)
     {
@@ -237,7 +237,6 @@ void MaterialEditor::updateMaterialText()
 
 bool MaterialEditor::validateScript(Ogre::DataStreamPtr& dataStream)
 {
-
     try{
         class MyListener: public Ogre::ScriptCompilerListener
         {
@@ -257,7 +256,7 @@ bool MaterialEditor::validateScript(Ogre::DataStreamPtr& dataStream)
         if(Ogre::MaterialManager::getSingleton().resourceExists(mMaterialName.toStdString().data(),"Test_Script"))
             Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data(),"Test_Script");
 
-        MyListener *l = new MyListener();
+        auto l = new MyListener();
         Ogre::ScriptCompilerManager::getSingleton().setListener(l);
         Ogre::ScriptCompilerManager::getSingleton().parseScript(dataStream,"Test_Script");
         Ogre::MaterialManager::getSingleton().remove(mMaterialName.toStdString().data(),"Test_Script");
@@ -302,7 +301,7 @@ void MaterialEditor::on_techComboBox_currentIndexChanged(int index)
         ui->passComboBox->clear();
         ui->passComboBox->setEnabled(false);
         ui->passNewButton->setEnabled(false);
-        mSelectedTechnique = NULL;
+        mSelectedTechnique = nullptr;
     }
 }
 
@@ -315,7 +314,7 @@ void MaterialEditor::on_passComboBox_currentIndexChanged(int index)
     }
     else
     {
-        mSelectedPass = NULL;
+        mSelectedPass = nullptr;
 
         ui->checkBoxLightning->setChecked(false);
         ui->srcSceneBlendBox->setCurrentIndex(0);
@@ -351,7 +350,7 @@ void MaterialEditor::on_ComboTextureUnit_currentIndexChanged(int index)
         ui->selectTexture->setEnabled(true);
         ui->removeTexture->setEnabled(true);
 
-        auto effects = mSelectedTextureUnit->getEffects();
+        const auto effects = mSelectedTextureUnit->getEffects();
         for(auto effectPair : effects){
             if(effectPair.first==Ogre::TextureUnitState::ET_UVSCROLL ||
                     effectPair.first==Ogre::TextureUnitState::ET_USCROLL)
@@ -363,7 +362,7 @@ void MaterialEditor::on_ComboTextureUnit_currentIndexChanged(int index)
     }
     else
     {
-        mSelectedTextureUnit = NULL;
+        mSelectedTextureUnit = nullptr;
         ui->textureName->setText("*Select a texture*");
         ui->selectTexture->setEnabled(false);
         ui->removeTexture->setEnabled(false);
@@ -442,7 +441,7 @@ void MaterialEditor::on_applyButton_clicked()
     Ogre::MeshManager::getSingleton().reloadAll(true);
 
     //Reaply all materials after reloading
-    for(Ogre::SceneNode * sn : Manager::getSingleton()->getSceneNodes())
+    for(Ogre::SceneNode* sn : Manager::getSingleton()->getSceneNodes())
     {
         Ogre::LogManager::getSingleton().logMessage(sn->getName());
         if(!sn->getName().empty()&&!sn->getAttachedObjects().empty()) {
@@ -491,85 +490,78 @@ void MaterialEditor::on_dstSceneBlendBox_currentIndexChanged(int index)
 
 void MaterialEditor::on_checkBoxUseVertexColorToAmbient_toggled(bool checked)
 {
-    if(mSelectedPass)
-    {
-        mSelectedPass->setVertexColourTracking(
-                    checked
-                    ?mSelectedPass->getVertexColourTracking()|1
-                    :mSelectedPass->getVertexColourTracking()&0xE);//0b1110 not supported by msvsc
-        updateMaterialText();
-    }
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setVertexColourTracking(
+                checked
+                ?mSelectedPass->getVertexColourTracking()|1
+                :mSelectedPass->getVertexColourTracking()&0xE);//0b1110 not supported by msvsc
+    updateMaterialText();
 }
 
 void MaterialEditor::on_checkBoxUseVertexColorToDifuse_toggled(bool checked)
 {
-    if(mSelectedPass)
-    {
-        mSelectedPass->setVertexColourTracking(
-                    checked
-                    ?mSelectedPass->getVertexColourTracking()|2
-                    :mSelectedPass->getVertexColourTracking()&0xD);//0b1101 not supported by msvsc
-        updateMaterialText();
-    }
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setVertexColourTracking(
+                checked
+                ?mSelectedPass->getVertexColourTracking()|2
+                :mSelectedPass->getVertexColourTracking()&0xD);//0b1101 not supported by msvsc
+    updateMaterialText();
 }
 
 void MaterialEditor::on_checkBoxUseVertexColorToSpecular_toggled(bool checked)
 {
-    if(mSelectedPass)
-    {
-        mSelectedPass->setVertexColourTracking(
-                    checked
-                    ?mSelectedPass->getVertexColourTracking()|4
-                    :mSelectedPass->getVertexColourTracking()&0xB);//0b1011 not supported by msvsc
-        updateMaterialText();
-    }
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setVertexColourTracking(
+                checked
+                ?mSelectedPass->getVertexColourTracking()|4
+                :mSelectedPass->getVertexColourTracking()&0xB);//0b1011 not supported by msvsc
+    updateMaterialText();
 }
 
 void MaterialEditor::on_checkBoxUseVertexColorToEmissive_toggled(bool checked)
 {
-    if(mSelectedPass)
-    {
-        mSelectedPass->setVertexColourTracking(
-                    checked
-                    ?mSelectedPass->getVertexColourTracking()|8
-                    :mSelectedPass->getVertexColourTracking()&0x7);//0b0111 not supported by msvsc
-        updateMaterialText();
-    }
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setVertexColourTracking(
+                checked
+                ?mSelectedPass->getVertexColourTracking()|8
+                :mSelectedPass->getVertexColourTracking()&0x7);//0b0111 not supported by msvsc
+    updateMaterialText();
 }
 
-void MaterialEditor::on_alphaDifuse_valueChanged(double arg1)
+void MaterialEditor::on_alphaDifuse_valueChanged(float arg1)
 {
-    if(mSelectedPass)
-    {
-        mSelectedPass->setDiffuse(
-                    mSelectedPass->getDiffuse().r
-                    ,mSelectedPass->getDiffuse().g
-                    ,mSelectedPass->getDiffuse().b
-                    ,arg1);
-        updateMaterialText();
-    }
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setDiffuse(
+                mSelectedPass->getDiffuse().r
+                ,mSelectedPass->getDiffuse().g
+                ,mSelectedPass->getDiffuse().b
+                ,arg1);
+    updateMaterialText();
 }
 
-void MaterialEditor::on_alphaSpecular_valueChanged(double arg1)
+void MaterialEditor::on_alphaSpecular_valueChanged(float arg1)
 {
-    if(mSelectedPass)
-    {
-        mSelectedPass->setSpecular(
-                    mSelectedPass->getSpecular().r
-                    ,mSelectedPass->getSpecular().g
-                    ,mSelectedPass->getSpecular().b
-                    ,arg1);
-        updateMaterialText();
-    }
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setSpecular(
+                mSelectedPass->getSpecular().r
+                ,mSelectedPass->getSpecular().g
+                ,mSelectedPass->getSpecular().b
+                ,arg1);
+    updateMaterialText();
 }
 
-void MaterialEditor::on_shineSpecular_valueChanged(double arg1)
+void MaterialEditor::on_shineSpecular_valueChanged(float arg1)
 {
-    if(mSelectedPass)
-    {
-        mSelectedPass->setShininess(arg1);
-        updateMaterialText();
-    }
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setShininess(arg1);
+    updateMaterialText();
 }
 
 void MaterialEditor::on_newTechnique_clicked()
@@ -578,13 +570,12 @@ void MaterialEditor::on_newTechnique_clicked()
     QString text = QInputDialog::getText(this, tr("New Technique"),
                                          tr("Technique name:"), QLineEdit::Normal,
                                          "", &ok);
-    if (ok)
-    {
-        Ogre::MaterialPtr m = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()));
-        Ogre::Technique *t = m.get()->createTechnique();
-        t->setName(text.toStdString().data());
-        setMaterial(mMaterialName);
-    }
+    if (!ok) return;
+
+    Ogre::MaterialPtr m = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(mMaterialName.toStdString().data()));
+    Ogre::Technique *t = m.get()->createTechnique();
+    t->setName(text.toStdString().data());
+    setMaterial(mMaterialName);
 }
 
 void MaterialEditor::on_passNewButton_clicked()
@@ -669,14 +660,12 @@ void MaterialEditor::on_checkBoxLightning_toggled(bool checked)
     updateMaterialText();
 }
 
-
 void MaterialEditor::on_checkBoxDepthWrite_toggled(bool checked)
 {
     if(mSelectedPass)
         mSelectedPass->setDepthWriteEnabled(checked);
     updateMaterialText();
 }
-
 
 void MaterialEditor::on_checkBoxDepthCheck_toggled(bool checked)
 {
@@ -692,17 +681,14 @@ void MaterialEditor::on_comboPolygonMode_currentIndexChanged(int index)
     updateMaterialText();
 }
 
-
 void MaterialEditor::on_scrollAnimUSpeed_valueChanged(double arg1)
 {
     mSelectedTextureUnit->setScrollAnimation(ui->scrollAnimUSpeed->value(),ui->scrollAnimVSpeed->value());
     updateMaterialText();
 }
 
-
 void MaterialEditor::on_scrollAnimVSpeed_valueChanged(double arg1)
 {
     mSelectedTextureUnit->setScrollAnimation(ui->scrollAnimUSpeed->value(),ui->scrollAnimVSpeed->value());
     updateMaterialText();
 }
-

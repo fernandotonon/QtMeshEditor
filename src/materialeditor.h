@@ -12,7 +12,6 @@
 #include <OgreTechnique.h>
 #include <OgrePass.h>
 
-
 namespace Ui {
 class MaterialEditor;
 }
@@ -21,29 +20,41 @@ class MaterialHighlighter;
 
 class MaterialEditor : public QDialog
 {
-        Q_OBJECT
-        
-    public:
-        explicit MaterialEditor(QWidget *parent = 0);
-        virtual ~MaterialEditor();
-        void setMaterialText(const QString &_mat);
-        void setMaterial(const QString& _material);
-        std::string getMaterialText() const;
-        std::string getMaterialName() const;
-        bool isScrollAreaEnabled() const;
-        void setTechFields(const QMap<int, Ogre::Pass *> &_techMap, const QList<QString> &_passList);
-        Ui::MaterialEditor* getUI() const;
+    Q_OBJECT
+    
+public:
+    explicit MaterialEditor(QWidget *parent = 0);
+    virtual ~MaterialEditor();
+    void setMaterialText(const QString &_mat);
+    void setMaterial(const QString& _material);
+    std::string getMaterialText() const;
+    std::string getMaterialName() const;
+    bool isScrollAreaEnabled() const;
+    void setTechFields(const QMap<int, Ogre::Pass *> &_techMap, const QList<QString> &_passList);
+    Ui::MaterialEditor* getUI() const;
+
+public slots:
+    void on_Ambient_Color_Selected(const QColor &arg1);
+    void on_Difuse_Color_Selected(const QColor &arg1);
+    void on_Specular_Color_Selected(const QColor &arg1);
+    void on_Emissive_Color_Selected(const QColor &arg1);
+
+    void on_checkBoxLightning_toggled(bool checked);
+    void on_checkBoxDepthWrite_toggled(bool checked);
+    void on_checkBoxDepthCheck_toggled(bool checked);
+    void on_checkBoxUseVertexColorToAmbient_toggled(bool checked);
+    void on_checkBoxUseVertexColorToDifuse_toggled(bool checked);
+    void on_checkBoxUseVertexColorToSpecular_toggled(bool checked);
+    void on_checkBoxUseVertexColorToEmissive_toggled(bool checked);
+
+    void on_comboPolygonMode_currentIndexChanged(int index);
+
+    void on_alphaDifuse_valueChanged(float arg1);
+    void on_alphaSpecular_valueChanged(float arg1);
+    void on_shineSpecular_valueChanged(float arg1);
 
 private slots:
     void on_buttonEditAmbientColor_clicked();
-
-    void on_Ambient_Color_Selected(const QColor &arg1);
-
-    void on_Difuse_Color_Selected(const QColor &arg1);
-
-    void on_Specular_Color_Selected(const QColor &arg1);
-
-    void on_Emissive_Color_Selected(const QColor &arg1);
 
     void on_textMaterial_textChanged();
 
@@ -58,20 +69,6 @@ private slots:
     void on_srcSceneBlendBox_currentIndexChanged(int index);
 
     void on_dstSceneBlendBox_currentIndexChanged(int index);
-
-    void on_checkBoxUseVertexColorToAmbient_toggled(bool checked);
-
-    void on_checkBoxUseVertexColorToDifuse_toggled(bool checked);
-
-    void on_checkBoxUseVertexColorToSpecular_toggled(bool checked);
-
-    void on_checkBoxUseVertexColorToEmissive_toggled(bool checked);
-
-    void on_alphaDifuse_valueChanged(double arg1);
-
-    void on_alphaSpecular_valueChanged(double arg1);
-
-    void on_shineSpecular_valueChanged(double arg1);
 
     void on_newTechnique_clicked();
 
@@ -89,16 +86,7 @@ private slots:
 
     void on_removeTexture_clicked();
 
-    void on_checkBoxLightning_toggled(bool checked);
-
-    void on_checkBoxDepthWrite_toggled(bool checked);
-
-    void on_checkBoxDepthCheck_toggled(bool checked);
-
-    void on_comboPolygonMode_currentIndexChanged(int index);
-
     void on_scrollAnimUSpeed_valueChanged(double arg1);
-
     void on_scrollAnimVSpeed_valueChanged(double arg1);
 
 private:
