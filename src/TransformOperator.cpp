@@ -1,29 +1,3 @@
-/*/////////////////////////////////////////////////////////////////////////////////
-/// A QtMeshEditor file
-///
-/// Copyright (c) HogPog Team (www.hogpog.com.br)
-///
-/// The MIT License
-///
-/// Permission is hereby granted, free of charge, to any person obtaining a copy
-/// of this software and associated documentation files (the "Software"), to deal
-/// in the Software without restriction, including without limitation the rights
-/// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-/// copies of the Software, and to permit persons to whom the Software is
-/// furnished to do so, subject to the following conditions:
-///
-/// The above copyright notice and this permission notice shall be included in
-/// all copies or substantial portions of the Software.
-///
-/// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-/// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-/// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-/// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-/// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-/// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-/// THE SOFTWARE.
-////////////////////////////////////////////////////////////////////////////////*/
-
 #include <QtDebug>
 
 #include "GlobalDefinitions.h"
@@ -119,32 +93,33 @@ TransformOperator::~TransformOperator()
     if(m_pRayQuery)
     {
         pSceneMgr->destroyQuery(m_pRayQuery);
-        m_pRayQuery = 0;
+        m_pRayQuery = nullptr;
     }
     if(m_pVolQuery)
     {
         pSceneMgr->destroyQuery(m_pVolQuery);
-        m_pVolQuery =0;
+        m_pVolQuery = nullptr;
     }
 
     if(m_pRotationGizmo)
     {
         delete m_pRotationGizmo;
-        m_pRotationGizmo = 0;
+        m_pRotationGizmo = nullptr;
     }
 
     if(m_pTranslationGizmo)
     {
         delete m_pTranslationGizmo;
-        m_pTranslationGizmo = 0;
+        m_pTranslationGizmo = nullptr;
     }
     if(m_pSelectionBox)
     {
         delete m_pSelectionBox;
-        m_pSelectionBox = 0;
+        m_pSelectionBox = nullptr;
     }
 
-    pSceneMgr->destroySceneNode(m_pTransformNode); //TODO destroy SelectionBoxNode
+    pSceneMgr->destroySceneNode(m_pTransformNode);
+    pSceneMgr->destroySceneNode(m_pSelectionBoxNode);
 }
 
 void TransformOperator::swap(int& x, int& y)
@@ -325,8 +300,8 @@ Ogre::Ray TransformOperator::rayFromScreenPoint(const QPoint& pos)
 {
     if(m_pActiveWidget)
     {
-        int width = m_pActiveWidget->getViewport()->getActualWidth();
-        int height = m_pActiveWidget->getViewport()->getActualHeight();
+        int width = m_pActiveWidget->getViewport()->getActualWidth() / 2.0f;
+        int height = m_pActiveWidget->getViewport()->getActualHeight() / 2.0f;
 
         Ogre::Real x = (Ogre::Real)(pos.x()) / (Ogre::Real)width;
         Ogre::Real y = (Ogre::Real)(pos.y()) / (Ogre::Real)height;
@@ -453,8 +428,8 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
     {
         if(m_pSelectionBox->isVisible() && m_pActiveWidget)
         {
-            int width = m_pActiveWidget->getViewport()->getActualWidth();
-            int height = m_pActiveWidget->getViewport()->getActualHeight();
+            int width = m_pActiveWidget->getViewport()->getActualWidth() / 2.0f;
+            int height = m_pActiveWidget->getViewport()->getActualHeight() / 2.0f;
 
             float xStart  = (float)(mScreenStart.x())/(float)width*2.0f-1.0f;
             float xStop   = (float)(e->pos().x())/(float)width*2.0f-1.0f;
@@ -463,7 +438,6 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
             m_pSelectionBox->drawBox(xStart, yStart, xStop, yStop);
         }
-
     }
     else if(mTransformState == TS_TRANSLATE && (!SelectionSet::getSingleton()->isEmpty()))
     {
