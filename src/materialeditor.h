@@ -39,6 +39,20 @@ public slots:
     void on_Specular_Color_Selected(const QColor &arg1);
     void on_Emissive_Color_Selected(const QColor &arg1);
 
+    void on_checkBoxLightning_toggled(bool checked);
+    void on_checkBoxDepthWrite_toggled(bool checked);
+    void on_checkBoxDepthCheck_toggled(bool checked);
+    void on_checkBoxUseVertexColorToAmbient_toggled(bool checked);
+    void on_checkBoxUseVertexColorToDifuse_toggled(bool checked);
+    void on_checkBoxUseVertexColorToSpecular_toggled(bool checked);
+    void on_checkBoxUseVertexColorToEmissive_toggled(bool checked);
+
+    void on_comboPolygonMode_currentIndexChanged(int index);
+
+    void on_alphaDifuse_valueChanged(float arg1);
+    void on_alphaSpecular_valueChanged(float arg1);
+    void on_shineSpecular_valueChanged(float arg1);
+
 private slots:
     void on_buttonEditAmbientColor_clicked();
 
@@ -56,20 +70,6 @@ private slots:
 
     void on_dstSceneBlendBox_currentIndexChanged(int index);
 
-    void on_checkBoxUseVertexColorToAmbient_toggled(bool checked);
-
-    void on_checkBoxUseVertexColorToDifuse_toggled(bool checked);
-
-    void on_checkBoxUseVertexColorToSpecular_toggled(bool checked);
-
-    void on_checkBoxUseVertexColorToEmissive_toggled(bool checked);
-
-    void on_alphaDifuse_valueChanged(float arg1);
-
-    void on_alphaSpecular_valueChanged(float arg1);
-
-    void on_shineSpecular_valueChanged(float arg1);
-
     void on_newTechnique_clicked();
 
     void on_passNewButton_clicked();
@@ -86,16 +86,7 @@ private slots:
 
     void on_removeTexture_clicked();
 
-    void on_checkBoxLightning_toggled(bool checked);
-
-    void on_checkBoxDepthWrite_toggled(bool checked);
-
-    void on_checkBoxDepthCheck_toggled(bool checked);
-
-    void on_comboPolygonMode_currentIndexChanged(int index);
-
     void on_scrollAnimUSpeed_valueChanged(double arg1);
-
     void on_scrollAnimVSpeed_valueChanged(double arg1);
 
 private:
