@@ -83,11 +83,11 @@ signals:
     void focusOnWidget(OgreWidget* ogreWidget);
 
 private:
-  Ogre::Root*           mOgreRoot;
-  Ogre::RenderWindow*   mOgreWindow;
-  Ogre::Viewport*       mViewport;
-  Ogre::SceneManager*   mSceneMgr;
-  SpaceCamera*          mCamera;
+  Ogre::Root*           mOgreRoot = nullptr;
+  Ogre::RenderWindow*   mOgreWindow = nullptr;
+  Ogre::Viewport*       mViewport = nullptr;
+  Ogre::SceneManager*   mSceneMgr = nullptr;
+  SpaceCamera*          mCamera = nullptr;
 };
 
 #endif //__OGREWIDGET_H__
