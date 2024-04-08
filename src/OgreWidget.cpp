@@ -14,8 +14,7 @@
 #include "QtInputManager.h"
 
 OgreWidget::OgreWidget( QWidget *parent ):
-    QWidget( parent ), mOgreRoot(nullptr), mOgreWindow(nullptr),
-    mCamera(nullptr)
+    QWidget( parent )
 {
     setAttribute( Qt::WA_PaintOnScreen );
     setAttribute( Qt::WA_OpaquePaintEvent );
