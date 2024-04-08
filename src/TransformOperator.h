@@ -43,12 +43,12 @@ public:
     };
 
     const Ogre::ColourValue& getSelectionBoxColour() const;
+    static void swap(int& x, int& y);
 
 private:
     TransformOperator ();
     ~TransformOperator ();
 
-    static void             swap(int& x, int& y);
     Ogre::Ray               rayFromScreenPoint(const QPoint& pos);
     Ogre::MovableObject*    performRaySelection(const QPoint& pos, bool findGizmo = false);
     void                    performBoxSelection(const QPoint& first, const QPoint& second, SelectionMode mode = NEW_SELECT);
@@ -103,6 +103,11 @@ private:
     Ogre::Vector3                           mStartPoint;
     Ogre::Vector3                           mTransformVector;
     TransformState                          mTransformState;
+#ifdef Q_OS_MACOS
+    int mWindowSizeModifier = 2;
+#else
+    int mWindowSizeModifier = 1;
+#endif
 
 };
 

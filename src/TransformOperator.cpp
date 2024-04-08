@@ -300,8 +300,8 @@ Ogre::Ray TransformOperator::rayFromScreenPoint(const QPoint& pos)
 {
     if(m_pActiveWidget)
     {
-        int width = m_pActiveWidget->getViewport()->getActualWidth() / 2;
-        int height = m_pActiveWidget->getViewport()->getActualHeight() / 2;
+        int width = m_pActiveWidget->getViewport()->getActualWidth() / mWindowSizeModifier;
+        int height = m_pActiveWidget->getViewport()->getActualHeight() / mWindowSizeModifier;
 
         Ogre::Real x = (Ogre::Real)(pos.x()) / (Ogre::Real)width;
         Ogre::Real y = (Ogre::Real)(pos.y()) / (Ogre::Real)height;
@@ -428,8 +428,8 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
     {
         if(m_pSelectionBox->isVisible() && m_pActiveWidget)
         {
-            int width = m_pActiveWidget->getViewport()->getActualWidth() / 2;
-            int height = m_pActiveWidget->getViewport()->getActualHeight() / 2;
+            int width = m_pActiveWidget->getViewport()->getActualWidth() / mWindowSizeModifier;
+            int height = m_pActiveWidget->getViewport()->getActualHeight() / mWindowSizeModifier;
 
             float xStart  = (float)(mScreenStart.x())/(float)width*2.0f-1.0f;
             float xStop   = (float)(e->pos().x())/(float)width*2.0f-1.0f;

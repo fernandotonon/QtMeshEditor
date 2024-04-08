@@ -30,3 +30,11 @@ TEST(TransformOperatorTest, SetSelectionBoxColour) {
     instance->setSelectionBoxColour(Ogre::ColourValue(0.5, 0.5, 0.5, 1.0));
     EXPECT_EQ(instance->getSelectionBoxColour(), Ogre::ColourValue(0.5, 0.5, 0.5, 1.0));
 }
+
+TEST(TransformOperatorTest, Swap) {
+    int x = 1;
+    int y = 2;
+    TransformOperator::swap(x, y);
+    EXPECT_EQ(x, 2);
+    EXPECT_EQ(y, 1);
+}
