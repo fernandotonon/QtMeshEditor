@@ -38,3 +38,10 @@ TEST(TransformOperatorTest, Swap) {
     EXPECT_EQ(x, 2);
     EXPECT_EQ(y, 1);
 }
+
+TEST(TransformOperatorTest, RayFromScreenPoint) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::Ray ray = instance->rayFromScreenPoint(QPoint(0, 0));
+    EXPECT_EQ(ray.getOrigin(), Ogre::Vector3::ZERO);
+    EXPECT_EQ(ray.getDirection(), Ogre::Vector3::UNIT_Z);
+}

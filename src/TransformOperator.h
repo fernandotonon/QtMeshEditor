@@ -43,13 +43,15 @@ public:
     };
 
     const Ogre::ColourValue& getSelectionBoxColour() const;
+
+    // Made public for testing
     static void swap(int& x, int& y);
+    Ogre::Ray   rayFromScreenPoint(const QPoint& pos);
 
 private:
     TransformOperator ();
     ~TransformOperator ();
 
-    Ogre::Ray               rayFromScreenPoint(const QPoint& pos);
     Ogre::MovableObject*    performRaySelection(const QPoint& pos, bool findGizmo = false);
     void                    performBoxSelection(const QPoint& first, const QPoint& second, SelectionMode mode = NEW_SELECT);
     void                    updateGizmo();

@@ -22,7 +22,6 @@ TranslationGizmo::TranslationGizmo(Ogre::SceneNode* linkNode, const Ogre::String
     m_pYaxis = pSceneMgr->createManualObject(name + "Y");
     m_pZaxis = pSceneMgr->createManualObject(name + "Z");
 
-
     //Default Color
     Ogre::Real solid=1.0f;
     mXaxisColor = Ogre::ColourValue(solid, 0, 0, solid);
@@ -48,7 +47,6 @@ TranslationGizmo::~TranslationGizmo()
     pSceneMgr->destroyManualObject(m_pXaxis);
     pSceneMgr->destroyManualObject(m_pYaxis);
     pSceneMgr->destroyManualObject(m_pZaxis);
-
 }
 
 void TranslationGizmo::createXaxis(const Ogre::ColourValue& colour)

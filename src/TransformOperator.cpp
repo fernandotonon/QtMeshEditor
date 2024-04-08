@@ -20,7 +20,7 @@
 
 ////////////////////////////////////////
 // Static variable initialisation
-TransformOperator* TransformOperator:: m_pSingleton = 0;
+TransformOperator* TransformOperator:: m_pSingleton = nullptr;
 const QPoint  TransformOperator::invalidPosition(-1,-1);
 
 ////////////////////////////////////////
@@ -28,7 +28,7 @@ const QPoint  TransformOperator::invalidPosition(-1,-1);
 
 TransformOperator* TransformOperator::getSingleton()
 {
-  if (m_pSingleton == 0)
+  if (m_pSingleton == nullptr)
   {
       m_pSingleton =  new TransformOperator();
   }
@@ -38,10 +38,10 @@ TransformOperator* TransformOperator::getSingleton()
 
 void TransformOperator::kill()
 {
-    if (m_pSingleton != 0)
+    if (m_pSingleton != nullptr)
     {
         delete m_pSingleton;
-        m_pSingleton = 0;
+        m_pSingleton = nullptr;
     }
 }
 
@@ -332,7 +332,7 @@ Ogre::MovableObject* TransformOperator::performRaySelection(const QPoint& pos, b
                     return (queryResultIterator->movable);
     }
 
-    return 0;
+    return nullptr;
 }
 
 
