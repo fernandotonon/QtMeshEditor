@@ -36,15 +36,6 @@ TransformOperator* TransformOperator::getSingleton()
   return m_pSingleton;
 }
 
-void TransformOperator::kill()
-{
-    if (m_pSingleton != nullptr)
-    {
-        delete m_pSingleton;
-        m_pSingleton = nullptr;
-    }
-}
-
 ////////////////////////////////////////
 // Constructor & Destructor
 
