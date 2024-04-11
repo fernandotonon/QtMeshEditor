@@ -6,11 +6,8 @@
 class SkeletonDebugTests : public ::testing::Test {
 protected:
     std::unique_ptr<SkeletonDebug> skeletonDebug;
-    Ogre::Entity* entity;
-    Ogre::SceneManager* sceneManager;
 
     void SetUp() override {
-        // Create a QApplication instance for testing
         QStringList validUri{"./media/models/robot.mesh"};
         Manager::getSingleton()->getMainWindow()->importMeshs(validUri);
         Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
@@ -18,9 +15,6 @@ protected:
         skeletonDebug = std::make_unique<SkeletonDebug>(entity,sceneManager);
     }
 
-    void TearDown() override {
-        delete entity;
-    }
 };
 
 TEST_F(SkeletonDebugTests, ShowAxesTest)
