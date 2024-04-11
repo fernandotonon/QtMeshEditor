@@ -19,6 +19,8 @@ TEST_F(AboutTest, VersionTextIsCorrect) {
     QApplication app(argc, argv); 
 
     About aboutDialog;
+    About aboutDialog2(&aboutDialog); // Also test with a parent widget.
     QString expectedVersionText = QString("Version: ") + QTMESHEDITOR_VERSION;
     EXPECT_EQ(aboutDialog.getVersionText(), expectedVersionText);
+    EXPECT_EQ(aboutDialog2.getVersionText(), expectedVersionText);
 }
