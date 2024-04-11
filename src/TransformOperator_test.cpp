@@ -16,14 +16,6 @@ TEST(TransformOperatorTest, SingletonInstance) {
     EXPECT_EQ(instance1, instance2);
 }
 
-// Test if kill deletes the instance
-TEST(TransformOperatorTest, Kill) {
-    TransformOperator* instance = TransformOperator::getSingleton();
-    TransformOperator::kill();
-    TransformOperator* instance2 = TransformOperator::getSingleton();
-    EXPECT_NE(instance, instance2);
-}
-
 // Test if setTransformState sets the state correctly
 TEST(TransformOperatorTest, SetSelectionBoxColour) {
     TransformOperator* instance = TransformOperator::getSingleton();

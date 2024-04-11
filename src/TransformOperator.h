@@ -26,7 +26,6 @@ class TransformOperator : public QObject, public QtMouseListener
 public:
 
     static TransformOperator* getSingleton();
-    static void kill();
 
     enum TransformState
     {
