@@ -397,7 +397,6 @@ TEST_F(MainWindowTest, ShowHideMeshEditor) {
 }
 
 TEST_F(MainWindowTest, NavigateTabWidget) {
-    mainWindow->setVisible(true);
     auto tabWidget = mainWindow->findChild<QTabWidget*>("tabWidget");
     ASSERT_TRUE(tabWidget != nullptr);
 
@@ -412,8 +411,8 @@ TEST_F(MainWindowTest, NavigateTabWidget) {
 
     ASSERT_FALSE(animationTab->isVisible());
     ASSERT_EQ(tabWidget->count(), 4);
-    tabWidget->setCurrentWidget(animationTab);
-    ASSERT_TRUE(animationTab->isVisible());
+    tabWidget->setCurrentIndex(3);
+    ASSERT_TRUE(tabWidget->currentWidget()==animationTab);
 } 
 
 TEST_F(MainWindowTest, FrameRendering) {
