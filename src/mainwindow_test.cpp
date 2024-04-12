@@ -6,6 +6,8 @@
 #include <QDockWidget>
 #include <QMimeData>
 #include <QDropEvent>
+#include <QMouseEvent>
+#include "PrimitiveObject.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
@@ -393,7 +395,7 @@ TEST_F(MainWindowTest, ShowHideMeshEditor) {
     ASSERT_TRUE(actionMeshEditor->isChecked());
     ASSERT_TRUE(meshEditor->isVisible());
 }
-/*
+
 TEST_F(MainWindowTest, NavigateTabWidget) {
     mainWindow->setVisible(true);
     auto tabWidget = mainWindow->findChild<QTabWidget*>("tabWidget");
@@ -411,7 +413,7 @@ TEST_F(MainWindowTest, NavigateTabWidget) {
     ASSERT_FALSE(animationTab->isVisible());
     tabWidget->setCurrentIndex(3);
     ASSERT_TRUE(animationTab->isVisible());
-} errors on github actions */
+} 
 
 TEST_F(MainWindowTest, FrameRendering) {
     auto statusBar = mainWindow->findChild<QStatusBar*>("statusBar");
