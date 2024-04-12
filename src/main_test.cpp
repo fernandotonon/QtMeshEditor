@@ -53,12 +53,12 @@ TEST(MainTest, QApplicationAndMainWindowMock)
 
 //Test creating mainwindow passing a list of URIs to import as startup arguments
 TEST(MainTest, ImportMeshs) {
-    int before = Manager::getSingleton()->getEntities().count();
+    auto before = Manager::getSingleton()->getEntities().count();
     int argc = 2;
     char* argv[] = { "./media/models/ninja.mesh", "./media/models/robot.mesh" };
     QApplication app(argc, argv);
     MainWindow mainWindow;
     Manager::getSingleton()->getRoot()->renderOneFrame();
-    int after = Manager::getSingleton()->getEntities().count();
+    auto after = Manager::getSingleton()->getEntities().count();
     ASSERT_EQ(after, before+3);
 }
