@@ -411,7 +411,8 @@ TEST_F(MainWindowTest, NavigateTabWidget) {
     ASSERT_TRUE(animationTab != nullptr);
 
     ASSERT_FALSE(animationTab->isVisible());
-    tabWidget->setCurrentIndex(3);
+    ASSERT_EQ(tabWidget->count(), 4);
+    tabWidget->setCurrentWidget(animationTab);
     ASSERT_TRUE(animationTab->isVisible());
 } 
 
