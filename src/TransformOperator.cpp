@@ -73,45 +73,7 @@ TransformOperator::TransformOperator()
     QtInputManager::getInstance().AddMouseListener(this);
 }
 
-TransformOperator::~TransformOperator()
-{
-    QtInputManager::getInstance().RemoveMouseListener(this);
-
-    //m_pSelectedNode = 0;
-
-    Ogre::SceneManager* pSceneMgr = Manager::getSingleton()->getSceneMgr();
-
-    if(m_pRayQuery)
-    {
-        pSceneMgr->destroyQuery(m_pRayQuery);
-        m_pRayQuery = nullptr;
-    }
-    if(m_pVolQuery)
-    {
-        pSceneMgr->destroyQuery(m_pVolQuery);
-        m_pVolQuery = nullptr;
-    }
-
-    if(m_pRotationGizmo)
-    {
-        delete m_pRotationGizmo;
-        m_pRotationGizmo = nullptr;
-    }
-
-    if(m_pTranslationGizmo)
-    {
-        delete m_pTranslationGizmo;
-        m_pTranslationGizmo = nullptr;
-    }
-    if(m_pSelectionBox)
-    {
-        delete m_pSelectionBox;
-        m_pSelectionBox = nullptr;
-    }
-
-    pSceneMgr->destroySceneNode(m_pTransformNode);
-    pSceneMgr->destroySceneNode(m_pSelectionBoxNode);
-}
+TransformOperator::~TransformOperator(){}
 
 void TransformOperator::swap(int& x, int& y)
 {
