@@ -100,8 +100,7 @@ void TransformWidget::updateTreeViewFromSelection()
     ui->treeView->selectionModel()->select(newSelection, QItemSelectionModel::ClearAndSelect);
 
     // Update header Text
-    int numSelected = SelectionSet::getSingleton()->getCount();
-    switch (numSelected)
+    switch (int numSelected = SelectionSet::getSingleton()->getCount(); numSelected)
     {
     case 0:
         m_pObjectTreeModel->setHeaderText(tr("No object selected"));
