@@ -1,17 +1,15 @@
 #include <QDebug>
+#include <QItemSelection>
 
 #include "GlobalDefinitions.h"
 
 #include "TransformWidget.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
-#include "Manager.h"
 #include "ObjectItemModel.h"
-#include "ui_TransformWidget.h"
 
 TransformWidget::TransformWidget(QWidget *parent) :
-    QWidget(parent),
-    ui(new Ui::TransformWidget), m_pObjectTreeModel(nullptr)
+    QWidget(parent), m_pObjectTreeModel(nullptr)
 {
     ui->setupUi(this);
 
@@ -50,7 +48,6 @@ TransformWidget::~TransformWidget()
         delete m_pObjectTreeModel;
         m_pObjectTreeModel = nullptr;
     }
-
 }
 
 void TransformWidget::updateTreeViewFromSelection()
@@ -64,18 +61,16 @@ void TransformWidget::updateTreeViewFromSelection()
     Ogre::SubEntity* subEntity = nullptr;
     QItemSelection newSelection;
 
-    foreach(node,SelectionSet::getSingleton()->getNodesSelectionList())
+    foreach(node, SelectionSet::getSingleton()->getNodesSelectionList())
     {
         index = m_pObjectTreeModel->match(start, NODE_DATA,
                       QVariant::fromValue((void *) node),
                       1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
-        if(!index.isEmpty())
-            if(index.at(0).isValid())
-            {
-                newSelection.select(index.at(0),index.at(0));
-                ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
-            }
+        if(index.isEmpty() || !index.at(0).isValid()) continue;
+
+        newSelection.select(index.at(0),index.at(0));
+        ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
     }
 
     foreach(entity,SelectionSet::getSingleton()->getEntitiesSelectionList())
@@ -84,12 +79,10 @@ void TransformWidget::updateTreeViewFromSelection()
                       QVariant::fromValue((void *) entity),
                       1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
-        if(!index.isEmpty())
-            if(index.at(0).isValid())
-            {
-                newSelection.select(index.at(0),index.at(0));
-                ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
-            }
+        if(index.isEmpty() || !index.at(0).isValid()) continue;
+
+        newSelection.select(index.at(0),index.at(0));
+        ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
     }
 
     foreach(subEntity,SelectionSet::getSingleton()->getSubEntitiesSelectionList())
@@ -98,30 +91,33 @@ void TransformWidget::updateTreeViewFromSelection()
                       QVariant::fromValue((void *) subEntity),
                       1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
-        if(!index.isEmpty())
-            if(index.at(0).isValid())
-            {
-                newSelection.select(index.at(0),index.at(0));
-                ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
-            }
+        if(index.isEmpty() || !index.at(0).isValid()) continue;
+
+        newSelection.select(index.at(0),index.at(0));
+        ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
     }
+
     ui->treeView->selectionModel()->select(newSelection, QItemSelectionModel::ClearAndSelect);
 
     // Update header Text
     int numSelected = SelectionSet::getSingleton()->getCount();
-    if(numSelected == 0)
-        m_pObjectTreeModel->setHeaderText(tr("No Selection"));
-    else if(numSelected == 1)
-        m_pObjectTreeModel->setHeaderText(tr("1 Object Selected"));
-    else
-        m_pObjectTreeModel->setHeaderText(QString::number(numSelected)+tr(" Objects Selected"));
+    switch (numSelected)
+    {
+    case 0:
+        m_pObjectTreeModel->setHeaderText(tr("No object selected"));
+        break;
+    case 1:
+        m_pObjectTreeModel->setHeaderText(tr("1 object selected"));
+        break;
+    default:
+        m_pObjectTreeModel->setHeaderText(QString::number(numSelected) + tr(" objects selected"));
+    }
 
     ui->treeView->blockSignals(false);
 }
 
 void TransformWidget::treeWidgetSelectionChanged(const QItemSelection& selected, const QItemSelection& deselected)
 {
-
     QItemSelectionRange range;
     QModelIndex index;
     QStandardItem*      currentItem = nullptr;

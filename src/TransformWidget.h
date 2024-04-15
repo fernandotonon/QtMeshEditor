@@ -3,18 +3,11 @@
 
 #include <QWidget>
 #include <Ogre.h>
-
-namespace Ui {
-class TransformWidget;
-}
+#include "ui_TransformWidget.h"
 
 class QItemSelection;
 class ObjectItemModel;
 
-namespace Ogre {
-class SceneNode;
-//class Vector3;
-}
 class TransformWidget : public QWidget
 {
     Q_OBJECT
@@ -40,7 +33,7 @@ signals:
     void selectionChanged(Ogre::SceneNode* newNode);
 
 private:
-    Ui::TransformWidget* ui;
+    Ui::TransformWidget* ui = new Ui::TransformWidget;
     ObjectItemModel*    m_pObjectTreeModel;
 };
 
