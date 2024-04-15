@@ -7,6 +7,7 @@
 #include <QStyleFactory>
 #include <QSettings>
 #include "mainwindow.h"
+#include "Manager.h"
 
 using ::testing::Mock;
 
@@ -48,4 +49,16 @@ TEST(MainTest, QApplicationAndMainWindowMock)
     
     // Clear the mock object
     Mock::VerifyAndClear(&mockQApplication);
+}
+
+//Test creating mainwindow passing a list of URIs to import as startup arguments
+TEST(MainTest, ImportMeshs) {
+    auto before = Manager::getSingleton()->getEntities().count();
+    int argc = 2;
+    char* argv[] = { "./media/models/ninja.mesh", "./media/models/robot.mesh" };
+    QApplication app(argc, argv);
+    MainWindow mainWindow;
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+    auto after = Manager::getSingleton()->getEntities().count();
+    ASSERT_EQ(after, before+3);
 }

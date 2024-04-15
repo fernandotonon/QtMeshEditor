@@ -1,43 +1,15 @@
-/*/////////////////////////////////////////////////////////////////////////////////
-/// A QtMeshEditor file
-///
-/// Copyright (c) HogPog Team (www.hogpog.com.br)
-///
-/// The MIT License
-///
-/// Permission is hereby granted, free of charge, to any person obtaining a copy
-/// of this software and associated documentation files (the "Software"), to deal
-/// in the Software without restriction, including without limitation the rights
-/// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-/// copies of the Software, and to permit persons to whom the Software is
-/// furnished to do so, subject to the following conditions:
-///
-/// The above copyright notice and this permission notice shall be included in
-/// all copies or substantial portions of the Software.
-///
-/// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-/// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-/// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-/// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-/// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-/// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-/// THE SOFTWARE.
-////////////////////////////////////////////////////////////////////////////////*/
-
 #include <QDebug>
+#include <QItemSelection>
 
 #include "GlobalDefinitions.h"
 
 #include "TransformWidget.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
-#include "Manager.h"
 #include "ObjectItemModel.h"
-#include "ui_TransformWidget.h"
 
 TransformWidget::TransformWidget(QWidget *parent) :
-    QWidget(parent),
-    ui(new Ui::TransformWidget), m_pObjectTreeModel(0)
+    QWidget(parent), m_pObjectTreeModel(nullptr)
 {
     ui->setupUi(this);
 
@@ -74,9 +46,8 @@ TransformWidget::~TransformWidget()
     if(m_pObjectTreeModel)
     {
         delete m_pObjectTreeModel;
-        m_pObjectTreeModel = 0;
+        m_pObjectTreeModel = nullptr;
     }
-
 }
 
 void TransformWidget::updateTreeViewFromSelection()
@@ -85,23 +56,21 @@ void TransformWidget::updateTreeViewFromSelection()
 
     QModelIndex start =  m_pObjectTreeModel->getRootIndex();
     QModelIndexList index;
-    Ogre::SceneNode* node = 0;
-    Ogre::Entity*    entity = 0;
-    Ogre::SubEntity* subEntity = 0;
+    Ogre::SceneNode* node = nullptr;
+    Ogre::Entity*    entity = nullptr;
+    Ogre::SubEntity* subEntity = nullptr;
     QItemSelection newSelection;
 
-    foreach(node,SelectionSet::getSingleton()->getNodesSelectionList())
+    foreach(node, SelectionSet::getSingleton()->getNodesSelectionList())
     {
         index = m_pObjectTreeModel->match(start, NODE_DATA,
                       QVariant::fromValue((void *) node),
                       1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
-        if(!index.isEmpty())
-            if(index.at(0).isValid())
-            {
-                newSelection.select(index.at(0),index.at(0));
-                ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
-            }
+        if(index.isEmpty() || !index.at(0).isValid()) continue;
+
+        newSelection.select(index.at(0),index.at(0));
+        ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
     }
 
     foreach(entity,SelectionSet::getSingleton()->getEntitiesSelectionList())
@@ -110,12 +79,10 @@ void TransformWidget::updateTreeViewFromSelection()
                       QVariant::fromValue((void *) entity),
                       1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
-        if(!index.isEmpty())
-            if(index.at(0).isValid())
-            {
-                newSelection.select(index.at(0),index.at(0));
-                ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
-            }
+        if(index.isEmpty() || !index.at(0).isValid()) continue;
+
+        newSelection.select(index.at(0),index.at(0));
+        ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
     }
 
     foreach(subEntity,SelectionSet::getSingleton()->getSubEntitiesSelectionList())
@@ -124,36 +91,38 @@ void TransformWidget::updateTreeViewFromSelection()
                       QVariant::fromValue((void *) subEntity),
                       1/*stop*/ ,Qt::MatchExactly|Qt::MatchRecursive);
 
-        if(!index.isEmpty())
-            if(index.at(0).isValid())
-            {
-                newSelection.select(index.at(0),index.at(0));
-                ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
-            }
+        if(index.isEmpty() || !index.at(0).isValid()) continue;
+
+        newSelection.select(index.at(0),index.at(0));
+        ui->treeView->expand(m_pObjectTreeModel->parent(index.at(0)));
     }
+
     ui->treeView->selectionModel()->select(newSelection, QItemSelectionModel::ClearAndSelect);
 
     // Update header Text
-    int numSelected = SelectionSet::getSingleton()->getCount();
-    if(numSelected == 0)
-        m_pObjectTreeModel->setHeaderText(tr("No Selection"));
-    else if(numSelected == 1)
-        m_pObjectTreeModel->setHeaderText(tr("1 Object Selected"));
-    else
-        m_pObjectTreeModel->setHeaderText(QString::number(numSelected)+tr(" Objects Selected"));
+    switch (int numSelected = SelectionSet::getSingleton()->getCount(); numSelected)
+    {
+    case 0:
+        m_pObjectTreeModel->setHeaderText(tr("No object selected"));
+        break;
+    case 1:
+        m_pObjectTreeModel->setHeaderText(tr("1 object selected"));
+        break;
+    default:
+        m_pObjectTreeModel->setHeaderText(QString::number(numSelected) + tr(" objects selected"));
+    }
 
     ui->treeView->blockSignals(false);
 }
 
 void TransformWidget::treeWidgetSelectionChanged(const QItemSelection& selected, const QItemSelection& deselected)
 {
-
     QItemSelectionRange range;
     QModelIndex index;
-    QStandardItem*      currentItem = 0;
-    Ogre::SceneNode*    node = 0;
-    Ogre::Entity*       entity = 0;
-    Ogre::SubEntity*    subEntity = 0;
+    QStandardItem*      currentItem = nullptr;
+    Ogre::SceneNode*    node = nullptr;
+    Ogre::Entity*       entity = nullptr;
+    Ogre::SubEntity*    subEntity = nullptr;
 
     foreach(range, deselected)
     {

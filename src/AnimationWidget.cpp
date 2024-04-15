@@ -263,27 +263,25 @@ void AnimationWidget::on_animTable_clicked(const QModelIndex &index)
     if(index.column()<2)
         return;
 
-    Ogre::Entity* entity = nullptr;
-    entity = (Ogre::Entity*)ui->animTable->model()->data(ui->animTable->model()->index(index.row(),0), ENTITY_DATA).value<void *>();
+    const Ogre::Entity* entity = (Ogre::Entity*)ui->animTable->model()->data(ui->animTable->model()->index(index.row(),0), ENTITY_DATA).value<void *>();
+    if(!entity)
+        return;
 
-    if(entity)  //Should always be true
+    Ogre::AnimationState* animationState = entity->getAnimationState(ui->animTable->item(index.row(),1)->text().toStdString().data());
+    if(!animationState)
+        return;
+
+    switch(index.column())
     {
-
-        Ogre::AnimationState* animationState = entity->getAnimationState(ui->animTable->item(index.row(),1)->text().toStdString().data());
-        if(animationState)
-        {
-            switch(index.column())
-            {
-            case 2:
-                animationState->setEnabled(index.data(Qt::CheckStateRole) == Qt::Checked);
-                break;
-            case 3:
-                animationState->setLoop(index.data(Qt::CheckStateRole) == Qt::Checked);
-                break;
-            }
-        }
+    case 2:
+        animationState->setEnabled(index.data(Qt::CheckStateRole) == Qt::Checked);
+        break;
+    case 3:
+        animationState->setLoop(index.data(Qt::CheckStateRole) == Qt::Checked);
+        break;
+    default:
+        break;
     }
-
 }
 
 
