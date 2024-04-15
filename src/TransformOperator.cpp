@@ -39,12 +39,7 @@ TransformOperator* TransformOperator::getSingleton()
 ////////////////////////////////////////
 // Constructor & Destructor
 
-TransformOperator::TransformOperator()
-    :QObject(0), m_pActiveWidget(0),
-    m_pRotationGizmo(0), m_pTransformNode(0),/* m_pSelectedNode(0),*/
-    m_pRayQuery(0), m_pVolQuery(0), mTransformState(TS_NONE), mStartPoint(Ogre::Vector3::ZERO),
-    mTransformVector(Ogre::Vector3::ZERO),m_pSelectionBox(0),mScreenStart(invalidPosition),
-    mTrackingEnable(false)
+TransformOperator::TransformOperator() : QObject(nullptr)
 {
 
     Ogre::SceneManager* pSceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -72,8 +67,6 @@ TransformOperator::TransformOperator()
 
     QtInputManager::getInstance().AddMouseListener(this);
 }
-
-TransformOperator::~TransformOperator(){}
 
 void TransformOperator::swap(int& x, int& y)
 {

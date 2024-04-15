@@ -15,6 +15,7 @@ public:
     explicit PrimitivesWidget(QWidget *parent = 0);
     ~PrimitivesWidget();
     void updateUiFromParams();
+    const QList<PrimitiveObject*>& getSelectedPrimitiveList();
 
 public slots:
     void onSelectionChanged();
