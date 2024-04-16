@@ -49,7 +49,7 @@ public:
 
 private:
     TransformOperator ();
-    ~TransformOperator ();
+    ~TransformOperator () = default;
 
     Ogre::MovableObject*    performRaySelection(const QPoint& pos, bool findGizmo = false);
     void                    performBoxSelection(const QPoint& first, const QPoint& second, SelectionMode mode = NEW_SELECT);
@@ -89,27 +89,26 @@ private:
     static TransformOperator*               m_pSingleton; // the only instance of this!
     static const QPoint                     invalidPosition;
 
-    bool                                    mTrackingEnable;
-    QPoint                                  mScreenStart;
-    SelectionBoxObject*                     m_pSelectionBox;
+    bool                                    mTrackingEnable = false;
+    QPoint                                  mScreenStart = invalidPosition;
+    SelectionBoxObject*                     m_pSelectionBox  = nullptr;
     Ogre::SceneNode*                        m_pSelectionBoxNode; //TODO try to move this in the SelectionBoxObject
     //TransformWidget*                        m_pTransformWidget;
-    OgreWidget*                             m_pActiveWidget;
-    RotationGizmo*                          m_pRotationGizmo;
-    TranslationGizmo*                       m_pTranslationGizmo;
-    Ogre::SceneNode*                        m_pTransformNode;
+    OgreWidget*                             m_pActiveWidget = nullptr;
+    RotationGizmo*                          m_pRotationGizmo = nullptr;
+    TranslationGizmo*                       m_pTranslationGizmo = nullptr;
+    Ogre::SceneNode*                        m_pTransformNode = nullptr;
     //Ogre::SceneNode*                        m_pSelectedNode;
-    Ogre::RaySceneQuery*                    m_pRayQuery;
-    Ogre::PlaneBoundedVolumeListSceneQuery* m_pVolQuery;
-    Ogre::Vector3                           mStartPoint;
-    Ogre::Vector3                           mTransformVector;
-    TransformState                          mTransformState;
+    Ogre::RaySceneQuery*                    m_pRayQuery  = nullptr;
+    Ogre::PlaneBoundedVolumeListSceneQuery* m_pVolQuery  = nullptr;
+    Ogre::Vector3                           mStartPoint = Ogre::Vector3::ZERO;
+    Ogre::Vector3                           mTransformVector = Ogre::Vector3::ZERO;
+    TransformState                          mTransformState = TS_NONE;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;
 #else
     int mWindowSizeModifier = 1;
 #endif
-
 };
 
 

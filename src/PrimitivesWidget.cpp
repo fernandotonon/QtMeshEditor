@@ -545,20 +545,20 @@ void PrimitivesWidget::updateUiFromParams()
     }
     else
     {
-        edit_sizeX->setSpecialValueText(tr("-"));
-        edit_sizeY->setSpecialValueText(tr("-"));
-        edit_sizeZ->setSpecialValueText(tr("-"));
+        edit_sizeX->setSpecialValueText("-");
+        edit_sizeY->setSpecialValueText("-");
+        edit_sizeZ->setSpecialValueText("-");
 
-        edit_radius->setSpecialValueText(tr("-"));
-        edit_radius2->setSpecialValueText(tr("-"));
-        edit_height->setSpecialValueText(tr("-"));
+        edit_radius->setSpecialValueText("-");
+        edit_radius2->setSpecialValueText("-");
+        edit_height->setSpecialValueText("-");
 
-        edit_numSegX->setSpecialValueText(tr("-"));
-        edit_numSegY->setSpecialValueText(tr("-"));
-        edit_numSegZ->setSpecialValueText(tr("-"));
+        edit_numSegX->setSpecialValueText("-");
+        edit_numSegY->setSpecialValueText("-");
+        edit_numSegZ->setSpecialValueText("-");
 
-        edit_UTile->setSpecialValueText(tr("-"));
-        edit_VTile->setSpecialValueText(tr("-"));
+        edit_UTile->setSpecialValueText("-");
+        edit_VTile->setSpecialValueText("-");
 
         edit_sizeX->setValue(edit_sizeX->minimum());
         edit_sizeY->setValue(edit_sizeY->minimum());
@@ -581,6 +581,12 @@ void PrimitivesWidget::updateUiFromParams()
 
     blockEditSignals(false);
 }
+
+const QList<PrimitiveObject *> &PrimitivesWidget::getSelectedPrimitiveList()
+{
+    return mSelectedPrimitive;
+}
+
 void PrimitivesWidget::blockEditSignals(bool block)
 {
     edit_sizeX->blockSignals(block);
@@ -690,8 +696,7 @@ void PrimitivesWidget::onSelectionChanged()
 
 void PrimitivesWidget::onEditSizeX()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setSizeX(edit_sizeX->value());
@@ -700,8 +705,7 @@ void PrimitivesWidget::onEditSizeX()
 
 void PrimitivesWidget::onEditSizeY()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setSizeY(edit_sizeY->value());
@@ -710,8 +714,7 @@ void PrimitivesWidget::onEditSizeY()
 
 void PrimitivesWidget::onEditSizeZ()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setSizeZ(edit_sizeZ->value());
@@ -720,8 +723,7 @@ void PrimitivesWidget::onEditSizeZ()
 
 void PrimitivesWidget::onEditRadius()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setRadius(edit_radius->value());
@@ -730,8 +732,7 @@ void PrimitivesWidget::onEditRadius()
 
 void PrimitivesWidget::onEditRadius2()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setInnerRadius(edit_radius2->value());
@@ -740,8 +741,7 @@ void PrimitivesWidget::onEditRadius2()
 
 void PrimitivesWidget::onEditHeight()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setHeight(edit_height->value());
@@ -750,8 +750,7 @@ void PrimitivesWidget::onEditHeight()
 
 void PrimitivesWidget::onEditNumSegX()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setNumSegX(edit_numSegX->value());
@@ -760,8 +759,7 @@ void PrimitivesWidget::onEditNumSegX()
 
 void PrimitivesWidget::onEditNumSegY()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setNumSegY(edit_numSegY->value());
@@ -770,8 +768,7 @@ void PrimitivesWidget::onEditNumSegY()
 
 void PrimitivesWidget::onEditNumSegZ()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setNumSegZ(edit_numSegZ->value());
@@ -780,8 +777,7 @@ void PrimitivesWidget::onEditNumSegZ()
 
 void PrimitivesWidget::onEditUTile()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setUTile(edit_UTile->value());
@@ -790,8 +786,7 @@ void PrimitivesWidget::onEditUTile()
 
 void PrimitivesWidget::onEditVTile()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setVTile(edit_VTile->value());
@@ -800,8 +795,7 @@ void PrimitivesWidget::onEditVTile()
 
 void PrimitivesWidget::onToggleSwitchUV()
 {
-    if(mSelectedPrimitive.count()==0)
-        return;
+    if(mSelectedPrimitive.empty()) return;
 
     foreach(PrimitiveObject* primitive, mSelectedPrimitive)
         primitive->setUVSwitch(pb_switchUV->isChecked());
