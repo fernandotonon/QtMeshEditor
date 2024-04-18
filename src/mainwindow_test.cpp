@@ -506,7 +506,7 @@ TEST_F(MainWindowTest, DropEvent) {
 
 TEST_F(MainWindowTest, SelectAnimatedEntity)
 {
-    auto widget = new AnimationWidget();
+    auto widget = std::make_unique<AnimationWidget>();
     // import a mesh
     QStringList validUri{"./media/models/ninja.mesh"};
     mainWindow->importMeshs(validUri);
@@ -542,4 +542,50 @@ TEST_F(MainWindowTest, SelectAnimatedEntity)
     ASSERT_EQ(animTable->item(0, 0)->text().toStdString(), "ninja4");
     ASSERT_EQ(animTable->item(0, 1)->text().toStdString(), "Walk");
     ASSERT_EQ(animTable->item(1, 1)->text().toStdString(), "Stealth");
+
+    // Select the Walk animation by clicking on the third column
+    // simulate a click on the table
+    animTable->setColumnWidth(0,2);
+    animTable->setColumnWidth(1,2);
+    animTable->setColumnWidth(2,4);
+    auto item = animTable->item(0, 2);
+    QPoint pos = animTable->pos();
+    pos.setX(pos.x() + 6);
+    auto mouseEvent = new QMouseEvent(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(animTable, mouseEvent);
+    delete mouseEvent;
+    item->setCheckState(Qt::Checked);
+    emit animTable->cellClicked(0,2);
+    emit animTable->clicked(animTable->indexFromItem(item));
+
+    // Verify the entity has the Walk animation enabled
+    auto animationState = entity->getAnimationState("Walk");
+    ASSERT_TRUE(animationState->getEnabled());
+
+    // Show the skeleton debug
+    auto skeletonTable = widget->findChild<QTableWidget*>("skeletonTable");
+    ASSERT_EQ(skeletonTable->rowCount(), 1);
+    ASSERT_EQ(skeletonTable->item(0, 0)->text().toStdString(), "ninja4");
+
+
+    // Verify the entities before
+    ASSERT_FALSE(Manager::getSingleton()->getSceneMgr()->hasEntity("SkeletonDebug/BoneMesh"));
+
+    // Select the skeleton by clicking on the second column
+    // simulate a click on the table
+    skeletonTable->setColumnWidth(0,2);
+    skeletonTable->setColumnWidth(1,4);
+    item = skeletonTable->item(0, 1);
+    pos = skeletonTable->pos();
+    pos.setX(pos.x() + 3);
+    mouseEvent = new QMouseEvent(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(skeletonTable, mouseEvent);
+    delete mouseEvent;
+    emit skeletonTable->cellClicked(0,1);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(item));
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
+    // Verify the entities after
+    //ASSERT_TRUE(Manager::getSingleton()->getSceneMgr()->hasEntity("SkeletonDebug/BoneMesh"));
+
 }

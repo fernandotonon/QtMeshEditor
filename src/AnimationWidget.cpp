@@ -139,7 +139,7 @@ void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
     if(index.column()!=1)
         return;
 
-    Ogre::Entity* entity = (Ogre::Entity*)ui->skeletonTable->model()->data(ui->skeletonTable->model()->index(index.row(),0), ENTITY_DATA).value<void *>();
+    auto entity = (Ogre::Entity*)ui->skeletonTable->model()->data(ui->skeletonTable->model()->index(index.row(),0), ENTITY_DATA).value<void *>();
 
     if(entity && entity->hasSkeleton())
     {
