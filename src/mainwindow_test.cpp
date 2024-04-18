@@ -11,6 +11,7 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
+#include "AnimationWidget.h"
 
 class MainWindowTest : public ::testing::Test {
 protected:
@@ -499,4 +500,46 @@ TEST_F(MainWindowTest, DropEvent) {
     // Verify that the file is not loaded
     entities = Manager::getSingleton()->getEntities();
     ASSERT_EQ(entities.count(), countBefore+3);
+}
+
+
+
+TEST_F(MainWindowTest, SelectAnimatedEntity)
+{
+    auto widget = new AnimationWidget();
+    // import a mesh
+    QStringList validUri{"./media/models/ninja.mesh"};
+    mainWindow->importMeshs(validUri);
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+    auto entity = Manager::getSingleton()->getEntities().last();
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    // Verify the entity name is ninja and has these animations:
+    /*
+    Attack1
+    Attack2
+    Attack3
+    Backflip
+    Block
+    Climb
+    Crouch
+    Death1
+    Death2
+    HighJump
+    Idle1
+    Idle2
+    Idle3
+    Jump
+    JumpNoHeight
+    Kick
+    SideKick
+    Spin
+    Stealth
+    Walk
+    */
+    auto animTable = widget->findChild<QTableWidget*>("animTable");
+    ASSERT_EQ(animTable->rowCount(), 20);
+    ASSERT_EQ(animTable->item(0, 0)->text().toStdString(), "ninja4");
+    ASSERT_EQ(animTable->item(0, 1)->text().toStdString(), "Walk");
+    ASSERT_EQ(animTable->item(1, 1)->text().toStdString(), "Stealth");
 }

@@ -4,20 +4,26 @@
 #include <QPushButton>
 #include "AnimationWidget.h"
 
-TEST(AnimationWidgetTest, AnimationStateChange)
-{
-    // Create the QApplication
+class AnimationWidgetTest : public ::testing::Test {
+protected:
     int argc = 0;
-    char** argv = nullptr;
-    QApplication app(argc, argv);
+    QApplication* app = new QApplication(argc, nullptr);
+    AnimationWidget* widget;
 
-    // Create an instance of AnimationWidget
-    AnimationWidget widget;
+    void SetUp() override {
+        widget = new AnimationWidget();
+    }
 
-    auto playButton = widget.findChild<QPushButton*>("PlayPauseButton");
+    void TearDown() override {
+    }
+};
+
+TEST_F(AnimationWidgetTest, AnimationStateChange)
+{
+    auto playButton = widget->findChild<QPushButton*>("PlayPauseButton");
 
     // Create a signal spy to monitor the changeAnimationState signal
-    QSignalSpy spy(&widget, SIGNAL(changeAnimationState(bool)));
+    QSignalSpy spy(widget, SIGNAL(changeAnimationState(bool)));
 
     // click the play button to change animation state
     playButton->click();
