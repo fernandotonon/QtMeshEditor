@@ -507,7 +507,7 @@ TEST_F(MainWindowTest, DropEvent) {
 
 TEST_F(MainWindowTest, SelectAnimatedEntity)
 {
-    auto widget = std::make_unique<AnimationWidget>();
+    auto widget = std::make_unique<AnimationWidget>(mainWindow);
     auto animControl = std::make_unique<AnimationControlWidget>();
     // import a mesh
     QStringList validUri{"./media/models/ninja.mesh"};
