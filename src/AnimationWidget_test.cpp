@@ -19,7 +19,7 @@ TEST(AnimationWidgetTest, AnimationStateChange)
     QSignalSpy spy(&widget, SIGNAL(changeAnimationState(bool)));
 
     // click the play button to change animation state
-    playButton->click();
+    playButton->setChecked(true);
 
     // Check if the changeAnimationState signal was emitted with the correct argument
     ASSERT_EQ(spy.count(), 1);
@@ -27,10 +27,11 @@ TEST(AnimationWidgetTest, AnimationStateChange)
     ASSERT_EQ(arguments.at(0).toBool(), true);
 
     // click the play button to change animation state
+    playButton->setChecked(false);
     playButton->click();
 
     // Check if the changeAnimationState signal was emitted with the correct argument
-    ASSERT_EQ(spy.count(), 1);
+    ASSERT_EQ(spy.count(), 2);
     arguments = spy.takeFirst();
     ASSERT_EQ(arguments.at(0).toBool(), false);
 }
