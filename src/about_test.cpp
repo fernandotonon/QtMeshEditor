@@ -14,9 +14,8 @@ protected:
 };
 
 TEST_F(AboutTest, VersionTextIsCorrect) {
-    int argc = 1;
-    char *argv[1] = {(char*)"test"};
-    QApplication app(argc, argv); 
+    int argc = 0;
+    QApplication app(argc, nullptr);
 
     About aboutDialog;
     About aboutDialog2(&aboutDialog); // Also test with a parent widget.

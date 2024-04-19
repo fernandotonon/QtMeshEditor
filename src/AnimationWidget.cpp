@@ -39,6 +39,11 @@ AnimationWidget::~AnimationWidget()
     delete ui;
 }
 
+bool AnimationWidget::isSkeletonShown(Ogre::Entity * entity) const
+{
+    return mShowSkeleton.contains(entity) && mShowSkeleton.find(entity).value()->bonesShown();
+}
+
 void AnimationWidget::updateAnimationTable()
 {
     while(ui->animTable->rowCount())
@@ -139,8 +144,7 @@ void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
     if(index.column()!=1)
         return;
 
-    Ogre::Entity* entity = nullptr;
-    entity = (Ogre::Entity*)ui->skeletonTable->model()->data(ui->skeletonTable->model()->index(index.row(),0), ENTITY_DATA).value<void *>();
+    auto entity = (Ogre::Entity*)ui->skeletonTable->model()->data(ui->skeletonTable->model()->index(index.row(),0), ENTITY_DATA).value<void *>();
 
     if(entity && entity->hasSkeleton())
     {
@@ -215,8 +219,7 @@ void AnimationWidget::on_animTable_cellDoubleClicked(int row, int column)
 
 void AnimationWidget::disableEntityAnimations(Ogre::Entity* entity)
 {
-    Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
-    if(set)
+    if(auto set = entity->getAllAnimationStates(); set)
     {
         for (const auto &animationState : set->getAnimationStates())
         {
@@ -231,10 +234,9 @@ void AnimationWidget::disableAllSelectedAnimations()
     if(!SelectionSet::getSingleton()->hasEntities())
         return;
 
-    for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
+    for(const Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
     {
-        Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
-        if(set)
+        if(auto set = entity->getAllAnimationStates(); set)
         {
             for (const auto &animationState : set->getAnimationStates())
             {

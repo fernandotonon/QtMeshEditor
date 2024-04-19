@@ -11,6 +11,8 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
+#include "AnimationWidget.h"
+#include "animationcontrolwidget.h"
 
 class MainWindowTest : public ::testing::Test {
 protected:
@@ -499,4 +501,95 @@ TEST_F(MainWindowTest, DropEvent) {
     // Verify that the file is not loaded
     entities = Manager::getSingleton()->getEntities();
     ASSERT_EQ(entities.count(), countBefore+3);
+}
+
+
+
+TEST_F(MainWindowTest, SelectAnimatedEntity)
+{
+    auto widget = std::make_unique<AnimationWidget>(mainWindow);
+    auto animControl = std::make_unique<AnimationControlWidget>();
+    // import a mesh
+    QStringList validUri{"./media/models/ninja.mesh"};
+    mainWindow->importMeshs(validUri);
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+    auto entity = Manager::getSingleton()->getEntities().last();
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    // Verify the entity name is ninja and has these animations:
+    /*
+    Attack1
+    Attack2
+    Attack3
+    Backflip
+    Block
+    Climb
+    Crouch
+    Death1
+    Death2
+    HighJump
+    Idle1
+    Idle2
+    Idle3
+    Jump
+    JumpNoHeight
+    Kick
+    SideKick
+    Spin
+    Stealth
+    Walk
+    */
+    auto animTable = widget->findChild<QTableWidget*>("animTable");
+    ASSERT_EQ(animTable->rowCount(), 20);
+    ASSERT_EQ(animTable->item(0, 0)->text().toStdString(), "ninja4");
+    ASSERT_EQ(animTable->item(0, 1)->text().toStdString(), "Walk");
+    ASSERT_EQ(animTable->item(1, 1)->text().toStdString(), "Stealth");
+
+    // Enable/Disable the Walk animation by clicking on the third column
+    auto item = animTable->item(0, 2);
+    item->setCheckState(Qt::Checked);
+    emit animTable->clicked(animTable->indexFromItem(item));
+    auto animationState = entity->getAnimationState("Walk");
+    ASSERT_TRUE(animationState->getEnabled());
+
+    item = animTable->item(0, 2);
+    item->setCheckState(Qt::Unchecked);
+    emit animTable->clicked(animTable->indexFromItem(item));
+    animationState = entity->getAnimationState("Walk");
+    ASSERT_FALSE(animationState->getEnabled());
+
+    // Enable/Disable the Walk animation loop by clicking on the forth column
+    item = animTable->item(0, 3);
+    item->setCheckState(Qt::Checked);
+    emit animTable->clicked(animTable->indexFromItem(item));
+    animationState = entity->getAnimationState("Walk");
+    ASSERT_TRUE(animationState->getLoop());
+
+    item = animTable->item(0, 3);
+    item->setCheckState(Qt::Unchecked);
+    emit animTable->clicked(animTable->indexFromItem(item));
+    animationState = entity->getAnimationState("Walk");
+    ASSERT_FALSE(animationState->getLoop());
+
+    // Show the skeleton debug
+    auto skeletonTable = widget->findChild<QTableWidget*>("skeletonTable");
+    ASSERT_EQ(skeletonTable->rowCount(), 1);
+    ASSERT_EQ(skeletonTable->item(0, 0)->text().toStdString(), "ninja4");
+
+    // Verify the entities before
+    ASSERT_FALSE(widget->isSkeletonShown(entity));
+
+    // Enable/Disable the skeleton debug by clicking on the second column
+    item = skeletonTable->item(0, 1);
+    item->setCheckState(Qt::Checked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(item));
+    ASSERT_TRUE(widget->isSkeletonShown(entity));
+
+    item = skeletonTable->item(0, 1);
+    item->setCheckState(Qt::Unchecked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(item));
+    ASSERT_FALSE(widget->isSkeletonShown(entity));
+
+    SelectionSet::getSingleton()->clear();
+    ASSERT_EQ(animTable->rowCount(), 0);
 }

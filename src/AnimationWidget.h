@@ -19,6 +19,7 @@ class AnimationWidget : public QWidget
 public:
     explicit AnimationWidget(QWidget *parent = nullptr);
     ~AnimationWidget();
+    bool isSkeletonShown(Ogre::Entity*entity) const;
 
 private:
     void setAnimationState(bool playing);
