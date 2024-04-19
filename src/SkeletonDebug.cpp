@@ -105,18 +105,18 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Og
         }
         for(auto bone : mEntity->getSkeleton()->getBones())
         {
-            if(bone->getUserObjectBindings().getUserAny("selected").has_value())
-            {
-                if(Ogre::any_cast<bool>(bone->getUserObjectBindings().getUserAny("selected")))
-                {
-                    if(mapEntities.find(bone->getName()) != mapEntities.end())
-                    {
-                        Ogre::Entity* ent = mapEntities.find(bone->getName())->second;
-                        ent->setMaterial(mBoneMatSelectedPtr);
-                        ent->setVisible(mShowBones);
-                    }
-                }
-            }
+            if(!bone->getUserObjectBindings().getUserAny("selected").has_value())
+                continue;
+
+            if(!Ogre::any_cast<bool>(bone->getUserObjectBindings().getUserAny("selected")))
+                continue;
+
+            if(mapEntities.find(bone->getName()) == mapEntities.end())
+                continue;
+
+            Ogre::Entity* ent = mapEntities.find(bone->getName())->second;
+            ent->setMaterial(mBoneMatSelectedPtr);
+            ent->setVisible(mShowBones);
         }
 
     });

@@ -12,6 +12,7 @@
 #include "SelectionSet.h"
 #include "mainwindow.h"
 #include "AnimationWidget.h"
+#include "animationcontrolwidget.h"
 
 class MainWindowTest : public ::testing::Test {
 protected:
@@ -507,6 +508,7 @@ TEST_F(MainWindowTest, DropEvent) {
 TEST_F(MainWindowTest, SelectAnimatedEntity)
 {
     auto widget = std::make_unique<AnimationWidget>();
+    auto animControl = std::make_unique<AnimationControlWidget>();
     // import a mesh
     QStringList validUri{"./media/models/ninja.mesh"};
     mainWindow->importMeshs(validUri);
@@ -543,49 +545,51 @@ TEST_F(MainWindowTest, SelectAnimatedEntity)
     ASSERT_EQ(animTable->item(0, 1)->text().toStdString(), "Walk");
     ASSERT_EQ(animTable->item(1, 1)->text().toStdString(), "Stealth");
 
-    // Select the Walk animation by clicking on the third column
-    // simulate a click on the table
-    animTable->setColumnWidth(0,2);
-    animTable->setColumnWidth(1,2);
-    animTable->setColumnWidth(2,4);
+    // Enable/Disable the Walk animation by clicking on the third column
     auto item = animTable->item(0, 2);
-    QPoint pos = animTable->pos();
-    pos.setX(pos.x() + 6);
-    auto mouseEvent = new QMouseEvent(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(animTable, mouseEvent);
-    delete mouseEvent;
     item->setCheckState(Qt::Checked);
-    emit animTable->cellClicked(0,2);
     emit animTable->clicked(animTable->indexFromItem(item));
-
-    // Verify the entity has the Walk animation enabled
     auto animationState = entity->getAnimationState("Walk");
     ASSERT_TRUE(animationState->getEnabled());
+
+    item = animTable->item(0, 2);
+    item->setCheckState(Qt::Unchecked);
+    emit animTable->clicked(animTable->indexFromItem(item));
+    animationState = entity->getAnimationState("Walk");
+    ASSERT_FALSE(animationState->getEnabled());
+
+    // Enable/Disable the Walk animation loop by clicking on the forth column
+    item = animTable->item(0, 3);
+    item->setCheckState(Qt::Checked);
+    emit animTable->clicked(animTable->indexFromItem(item));
+    animationState = entity->getAnimationState("Walk");
+    ASSERT_TRUE(animationState->getLoop());
+
+    item = animTable->item(0, 3);
+    item->setCheckState(Qt::Unchecked);
+    emit animTable->clicked(animTable->indexFromItem(item));
+    animationState = entity->getAnimationState("Walk");
+    ASSERT_FALSE(animationState->getLoop());
 
     // Show the skeleton debug
     auto skeletonTable = widget->findChild<QTableWidget*>("skeletonTable");
     ASSERT_EQ(skeletonTable->rowCount(), 1);
     ASSERT_EQ(skeletonTable->item(0, 0)->text().toStdString(), "ninja4");
 
-
     // Verify the entities before
-    ASSERT_FALSE(Manager::getSingleton()->getSceneMgr()->hasEntity("SkeletonDebug/BoneMesh"));
+    ASSERT_FALSE(widget->isSkeletonShown(entity));
 
-    // Select the skeleton by clicking on the second column
-    // simulate a click on the table
-    skeletonTable->setColumnWidth(0,2);
-    skeletonTable->setColumnWidth(1,4);
+    // Enable/Disable the skeleton debug by clicking on the second column
     item = skeletonTable->item(0, 1);
-    pos = skeletonTable->pos();
-    pos.setX(pos.x() + 3);
-    mouseEvent = new QMouseEvent(QEvent::MouseButtonPress, pos, Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
-    QApplication::sendEvent(skeletonTable, mouseEvent);
-    delete mouseEvent;
-    emit skeletonTable->cellClicked(0,1);
+    item->setCheckState(Qt::Checked);
     emit skeletonTable->clicked(skeletonTable->indexFromItem(item));
-    Manager::getSingleton()->getRoot()->renderOneFrame();
+    ASSERT_TRUE(widget->isSkeletonShown(entity));
 
-    // Verify the entities after
-    //ASSERT_TRUE(Manager::getSingleton()->getSceneMgr()->hasEntity("SkeletonDebug/BoneMesh"));
+    item = skeletonTable->item(0, 1);
+    item->setCheckState(Qt::Unchecked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(item));
+    ASSERT_FALSE(widget->isSkeletonShown(entity));
 
+    SelectionSet::getSingleton()->clear();
+    ASSERT_EQ(animTable->rowCount(), 0);
 }

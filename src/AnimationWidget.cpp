@@ -39,6 +39,11 @@ AnimationWidget::~AnimationWidget()
     delete ui;
 }
 
+bool AnimationWidget::isSkeletonShown(Ogre::Entity * entity) const
+{
+    return mShowSkeleton.contains(entity) && mShowSkeleton.find(entity).value()->bonesShown();
+}
+
 void AnimationWidget::updateAnimationTable()
 {
     while(ui->animTable->rowCount())
