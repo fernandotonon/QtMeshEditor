@@ -131,7 +131,7 @@ private:
 private:
     PrimitiveType   mType;
     QString         mName;
-    Ogre::SceneNode* mSceneNode;
+    Ogre::SceneNode* mSceneNode = nullptr;
 
     Ogre::Real      mSizeX;
     Ogre::Real      mSizeY;

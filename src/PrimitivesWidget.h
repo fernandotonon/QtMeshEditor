@@ -13,7 +13,7 @@ class PrimitivesWidget : public QWidget,private Ui::PrimitivesWidget
     
 public:
     explicit PrimitivesWidget(QWidget *parent = 0);
-    ~PrimitivesWidget();
+    ~PrimitivesWidget() override = default;
     void updateUiFromParams();
     const QList<PrimitiveObject*>& getSelectedPrimitiveList();
 

@@ -40,10 +40,6 @@ PrimitivesWidget::PrimitivesWidget(QWidget *parent)
     connect(SelectionSet::getSingleton(),SIGNAL(nodeSelectionChanged()),this,SLOT(onSelectionChanged()));
 }
 
-PrimitivesWidget::~PrimitivesWidget()
-{
-}
-
 void PrimitivesWidget::setUiEmpty()
 {
     edit_type->setText("");
@@ -126,6 +122,7 @@ void PrimitivesWidget::setUiCube()
     edit_numSegZ->show();
 
     setUVTileVisible(true);
+    pb_switchUV->setVisible(false);
 
     label_numSegX->setText(tr("Seg X"));
     label_numSegY->setText(tr("Seg Y"));
