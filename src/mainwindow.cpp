@@ -20,8 +20,6 @@
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
-    isPlaying(false), m_pRoot(nullptr), m_pTimer(nullptr),
-    m_pTransformWidget(nullptr),m_pPrimitivesWidget(nullptr), m_pMaterialWidget(nullptr),
     customPaletteColorDialog(new QColorDialog(this)),
     ambientLightColorDialog(new QColorDialog(this))
 {
@@ -239,7 +237,7 @@ void MainWindow::initToolBar()
 
 const QPalette &MainWindow::darkPalette()
 {
-    QPalette *darkPalette = new QPalette();
+    auto darkPalette = new QPalette();
 
     darkPalette->setColor(QPalette::Window,          QColor( 37,  37,  37));
     darkPalette->setColor(QPalette::WindowText,      QColor(212, 212, 212));
@@ -279,12 +277,12 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     // Set animation
     if(isPlaying && SelectionSet::getSingleton()->hasEntities())
     {
-        for(Ogre::Entity* ent : SelectionSet::getSingleton()->getEntitiesSelectionList())
+        for(Ogre::Entity const* ent : SelectionSet::getSingleton()->getEntitiesSelectionList())
         {
-            Ogre::AnimationStateSet *set = ent->getAllAnimationStates();
-            for(const auto &animationStates : set->getAnimationStates())
+            Ogre::AnimationStateSet const *set = ent->getAllAnimationStates();
+            for(const auto& [key, value] : set->getAnimationStates())
             {
-                animationStates.second->addTime(evt.timeSinceLastFrame);
+                value->addTime(evt.timeSinceLastFrame);
             }
         }
     }

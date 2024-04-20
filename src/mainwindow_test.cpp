@@ -7,7 +7,8 @@
 #include <QMimeData>
 #include <QDropEvent>
 #include <QMouseEvent>
-#include "PrimitiveObject.h"
+#include <QPushButton>
+#include <QSignalSpy>
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
@@ -592,4 +593,32 @@ TEST_F(MainWindowTest, SelectAnimatedEntity)
 
     SelectionSet::getSingleton()->clear();
     ASSERT_EQ(animTable->rowCount(), 0);
+}
+
+TEST_F(MainWindowTest, AnimationStateChange)
+{
+    // Create an instance of AnimationWidget
+    AnimationWidget widget;
+
+    auto playButton = widget.findChild<QPushButton*>("PlayPauseButton");
+
+    // Create a signal spy to monitor the changeAnimationState signal
+    QSignalSpy spy(&widget, SIGNAL(changeAnimationState(bool)));
+
+    // click the play button to change animation state
+    playButton->setChecked(true);
+
+    // Check if the changeAnimationState signal was emitted with the correct argument
+    ASSERT_EQ(spy.count(), 1);
+    QList<QVariant> arguments = spy.takeFirst();
+    ASSERT_EQ(arguments.at(0).toBool(), true);
+
+    // click the play button to change animation state
+    playButton->setChecked(false);
+    playButton->click();
+
+    // Check if the changeAnimationState signal was emitted with the correct argument
+    ASSERT_EQ(spy.count(), 2);
+    arguments = spy.takeFirst();
+    ASSERT_EQ(arguments.at(0).toBool(), false);
 }
