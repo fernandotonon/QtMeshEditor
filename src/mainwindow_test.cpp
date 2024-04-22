@@ -616,6 +616,7 @@ TEST_F(MainWindowTest, SelectAnimatedEntity)
     // Click on the first child item to show the bone list
     treeWidget->setCurrentItem(topLevelItem->child(0));
     ASSERT_EQ(boneList->count(), 28);
+    Manager::getSingleton()->getRoot()->renderOneFrame();
 
     SelectionSet::getSingleton()->clear();
     ASSERT_EQ(animTable->rowCount(), 0);
