@@ -2,7 +2,10 @@
 #define ABOUT_H
 
 #include <QDialog>
-#include "ui_about.h"
+
+namespace Ui {
+class About;
+}
 
 class About : public QDialog
 {
@@ -10,11 +13,12 @@ class About : public QDialog
     
 public:
     explicit About(QWidget *parent = nullptr);
+    ~About() override;
 
     QString getVersionText() const;
     
 private:
-    std::unique_ptr<Ui::About> ui = std::make_unique<Ui::About>();
+    Ui::About *ui;
 };
 
 #endif // ABOUT_H
