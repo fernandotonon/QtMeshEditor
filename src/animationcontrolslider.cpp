@@ -1,10 +1,7 @@
 #include "animationcontrolslider.h"
 
 AnimationControlSlider::AnimationControlSlider(QWidget *parent)
-    : QSlider(parent)
-{
-
-}
+    : QSlider(parent) {}
 
 void AnimationControlSlider::addTick(int value, QColor color)
 {
@@ -15,12 +12,11 @@ void AnimationControlSlider::paintEvent(QPaintEvent *event)
 {
     QSlider::paintEvent(event);
 
-    for(auto tick : m_ticks)
+    for(const auto &[first, second] : m_ticks)
     {
-        int x = style()->sliderPositionFromValue(minimum(), maximum(), tick.first, width());
+        int x = QStyle::sliderPositionFromValue(minimum(), maximum(), first, width());
         QPainter painter(this);
-        painter.setPen(QPen(tick.second, 2));
+        painter.setPen(QPen(second, 2));
         painter.drawLine(x, 15, x, height());
     }
-    
 }
