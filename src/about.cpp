@@ -4,7 +4,8 @@ About::About(QWidget *parent) :
     QDialog(parent)
 {
     ui->setupUi(this);
-    ui->versionText->setText(QString("Version: ")+QTMESHEDITOR_VERSION);
+    auto versionText = QString("Version: ")+QTMESHEDITOR_VERSION;
+    ui->versionText->setText(versionText);
 }
 
 QString About::getVersionText() const {
