@@ -1,5 +1,3 @@
-#include <QString>
-
 #include <OgreAny.h>
 #include <OgreUserObjectBindings.h>
 
@@ -41,7 +39,8 @@ PrimitiveObject::~PrimitiveObject()
    //We don't destroy this scene node as it will be destroy by the Manager
 
     Manager::getSingleton()->getSceneMgr()->destroyManualObject(mName.toStdString());
-    Ogre::MeshManager::getSingleton().remove(mName.toStdString());
+    if(Ogre::MeshManager::getSingleton().getByName(mName.toStdString()))
+        Ogre::MeshManager::getSingleton().remove(mName.toStdString());
 }
 
 void PrimitiveObject::setDefaultParams()

@@ -2,8 +2,7 @@
 #define PRIMITIVES_OBJECT_H
 
 #include <OgrePrerequisites.h>
-
-class QString;
+#include <QString>
 
 namespace Procedural{
 class BoxGenerator;
@@ -37,7 +36,7 @@ public:
         AP_SPRING
     };
 
-    PrimitiveObject(const QString& name);
+    explicit PrimitiveObject(const QString& name);
     PrimitiveObject(const QString& name, PrimitiveType type);
     ~PrimitiveObject();
 
