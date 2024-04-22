@@ -66,7 +66,7 @@ TEST_F(MainWindowTest, ChooseLightPalette) {
     auto selectedFalette = settings.value("palette");
     EXPECT_EQ(selectedFalette, "light");
 }
-/*
+
 TEST_F(MainWindowTest, ChooseCustomPalette) {
     auto paletteAction = mainWindow->findChild<QAction*>("actionCustom");
     ASSERT_TRUE(paletteAction != nullptr);
@@ -92,7 +92,7 @@ TEST_F(MainWindowTest, ChooseCustomPalette) {
     // There's no unchecking
     paletteAction->toggle();
     ASSERT_TRUE(paletteAction->isChecked());
-} this is causing GHActions to fail*/
+}
 
 TEST_F(MainWindowTest, ChooseAmbientLight) {
     auto actionButton = mainWindow->findChild<QAction*>("actionChange_Ambient_Light");
@@ -572,6 +572,10 @@ TEST_F(MainWindowTest, SelectAnimatedEntity)
     animationState = entity->getAnimationState("Walk");
     ASSERT_FALSE(animationState->getLoop());
 
+    // rename Walk Animation
+    emit animTable->cellDoubleClicked(0,0); // don't do anything
+    // emit animTable->cellDoubleClicked(0,1); // open name modal (crashing the test)
+
     // Show the skeleton debug
     auto skeletonTable = widget->findChild<QTableWidget*>("skeletonTable");
     ASSERT_EQ(skeletonTable->rowCount(), 1);
@@ -590,6 +594,11 @@ TEST_F(MainWindowTest, SelectAnimatedEntity)
     item->setCheckState(Qt::Unchecked);
     emit skeletonTable->clicked(skeletonTable->indexFromItem(item));
     ASSERT_FALSE(widget->isSkeletonShown(entity));
+
+    item = skeletonTable->item(0, 0);
+    item->setCheckState(Qt::Checked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(item));
+    ASSERT_FALSE(widget->isSkeletonShown(entity)); //dont do anything
 
     SelectionSet::getSingleton()->clear();
     ASSERT_EQ(animTable->rowCount(), 0);

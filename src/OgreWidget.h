@@ -47,7 +47,7 @@ class OgreWidget : public QWidget, public Ogre::FrameListener
   Q_OBJECT
 
  public:
-  explicit OgreWidget( QWidget* parent = 0 );
+  explicit OgreWidget( QWidget* parent = nullptr );
   ~OgreWidget() override;
 
   int getIndex()    const;
