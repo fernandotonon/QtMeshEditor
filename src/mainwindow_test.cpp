@@ -4,10 +4,13 @@
 #include <QStatusBar>
 #include <QSettings>
 #include <QDockWidget>
+#include <QTreeWidget>
+#include <QListWidget>
 #include <QMimeData>
 #include <QDropEvent>
 #include <QMouseEvent>
-#include "PrimitiveObject.h"
+#include <QPushButton>
+#include <QSignalSpy>
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
@@ -571,6 +574,10 @@ TEST_F(MainWindowTest, SelectAnimatedEntity)
     animationState = entity->getAnimationState("Walk");
     ASSERT_FALSE(animationState->getLoop());
 
+    // rename Walk Animation
+    emit animTable->cellDoubleClicked(0,0); // don't do anything
+    // emit animTable->cellDoubleClicked(0,1); // open name modal (crashing the test)
+
     // Show the skeleton debug
     auto skeletonTable = widget->findChild<QTableWidget*>("skeletonTable");
     ASSERT_EQ(skeletonTable->rowCount(), 1);
@@ -590,6 +597,55 @@ TEST_F(MainWindowTest, SelectAnimatedEntity)
     emit skeletonTable->clicked(skeletonTable->indexFromItem(item));
     ASSERT_FALSE(widget->isSkeletonShown(entity));
 
+    item = skeletonTable->item(0, 0);
+    item->setCheckState(Qt::Checked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(item));
+    ASSERT_FALSE(widget->isSkeletonShown(entity)); //dont do anything
+
+    // Check the anim list in animationcontrolwidget
+    auto treeWidget = animControl->findChild<QTreeWidget*>("treeWidget");
+    ASSERT_EQ(treeWidget->topLevelItemCount(), 1);
+    auto topLevelItem = treeWidget->topLevelItem(0);
+    ASSERT_EQ(topLevelItem->text(0).toStdString(), "mesh: ninja4");
+    ASSERT_EQ(topLevelItem->childCount(), 20);
+    ASSERT_EQ(topLevelItem->child(0)->text(0).toStdString(), "anim: Attack1");
+    // Click on the top level item should not show the bone list
+    treeWidget->setCurrentItem(topLevelItem);
+    auto boneList = animControl->findChild<QListWidget*>("boneList");
+    ASSERT_EQ(boneList->count(), 0);
+    // Click on the first child item to show the bone list
+    treeWidget->setCurrentItem(topLevelItem->child(0));
+    ASSERT_EQ(boneList->count(), 28);
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+
     SelectionSet::getSingleton()->clear();
     ASSERT_EQ(animTable->rowCount(), 0);
+}
+
+TEST_F(MainWindowTest, AnimationStateChange)
+{
+    // Create an instance of AnimationWidget
+    AnimationWidget widget;
+
+    auto playButton = widget.findChild<QPushButton*>("PlayPauseButton");
+
+    // Create a signal spy to monitor the changeAnimationState signal
+    QSignalSpy spy(&widget, SIGNAL(changeAnimationState(bool)));
+
+    // click the play button to change animation state
+    playButton->setChecked(true);
+
+    // Check if the changeAnimationState signal was emitted with the correct argument
+    ASSERT_EQ(spy.count(), 1);
+    QList<QVariant> arguments = spy.takeFirst();
+    ASSERT_EQ(arguments.at(0).toBool(), true);
+
+    // click the play button to change animation state
+    playButton->setChecked(false);
+    playButton->click();
+
+    // Check if the changeAnimationState signal was emitted with the correct argument
+    ASSERT_EQ(spy.count(), 2);
+    arguments = spy.takeFirst();
+    ASSERT_EQ(arguments.at(0).toBool(), false);
 }

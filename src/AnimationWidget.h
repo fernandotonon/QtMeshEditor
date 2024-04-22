@@ -18,7 +18,7 @@ class AnimationWidget : public QWidget
 
 public:
     explicit AnimationWidget(QWidget *parent = nullptr);
-    ~AnimationWidget();
+    ~AnimationWidget() override;
     bool isSkeletonShown(Ogre::Entity*entity) const;
 
 private:

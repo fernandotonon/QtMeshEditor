@@ -12,8 +12,8 @@ class About : public QDialog
     Q_OBJECT
     
 public:
-    explicit About(QWidget *parent = 0);
-    ~About();
+    explicit About(QWidget *parent = nullptr);
+    ~About() override;
 
     QString getVersionText() const;
     

@@ -14,7 +14,7 @@ public:
     void addTick(int value, QColor color);
 
 protected:
-    void paintEvent(QPaintEvent *event);
+    void paintEvent(QPaintEvent *event) override;
 
 private:
     std::vector<std::pair<int, QColor>> m_ticks;

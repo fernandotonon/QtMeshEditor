@@ -35,8 +35,8 @@ public:
     virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
 
-    void keyPressEvent(QKeyEvent *event);
-    void dropEvent(QDropEvent *event);
+    void keyPressEvent(QKeyEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
     
 private slots:
     void on_actionImport_triggered();
@@ -76,34 +76,33 @@ public slots:
 private:
     Ui::MainWindow *ui;
 
-    Ogre::Root*                 m_pRoot;
+    Ogre::Root*                 m_pRoot = nullptr;
     QList<EditorViewport*>      mDockWidgetList;
 
-    QTimer*                     m_pTimer;
-    TransformWidget*            m_pTransformWidget;
-    PrimitivesWidget*           m_pPrimitivesWidget;
-    MaterialWidget*             m_pMaterialWidget;
+    QTimer*                     m_pTimer = nullptr;
+    TransformWidget*            m_pTransformWidget = nullptr;
+    PrimitivesWidget*           m_pPrimitivesWidget = nullptr;
+    MaterialWidget*             m_pMaterialWidget = nullptr;
 
     QStringList                 mUriList;
 
-    bool                        isPlaying;
+    bool                        isPlaying = false;
     QString                     mCurrentPalette;
     QColorDialog*               customPaletteColorDialog;
     QColorDialog*               ambientLightColorDialog;
 
     void custom_Palette_Color_Selected(const QColor& color);
 protected:
-    bool frameStarted(const Ogre::FrameEvent& evt);
-    bool frameRenderingQueued(const Ogre::FrameEvent &evt);
-    bool frameEnded(const Ogre::FrameEvent& evt);
+    bool frameStarted(const Ogre::FrameEvent& evt) override;
+    bool frameRenderingQueued(const Ogre::FrameEvent &evt) override;
+    bool frameEnded(const Ogre::FrameEvent& evt) override;
 
-    void keyReleaseEvent(QKeyEvent *event);
-    void dragEnterEvent(QDragEnterEvent *event);
+    void keyReleaseEvent(QKeyEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
 
 private:
     void initToolBar();
     const QPalette& darkPalette();
-
 };
 
 #endif // MAINWINDOW_H

@@ -1,5 +1,3 @@
-#include <QString>
-
 #include <OgreAny.h>
 #include <OgreUserObjectBindings.h>
 
@@ -18,28 +16,20 @@
 #include "ProceduralRoundedBoxGenerator.h"
 #include "ProceduralSpringGenerator.h"
 
-
 // TODO play with numTextureCoord (require to change the UI)
 
 // TODO fix the bug in the num of segment for rounded box
 
-// TODO switchUV doesn't seems to work
-
 ////////////////////////////////////////
 // Constructor & Destructor
 
-PrimitiveObject::PrimitiveObject(const QString& name ) :
-    mType(AP_NONE), mName(name), mSceneNode(0),
-    mSizeX(1.0f),mSizeY(1.0f),mSizeZ(1.0f),
-    mRadius(1.0f),mRadius2(0.5f),mHeight(1.0f),
-    mNumSegX(1),mNumSegY(1),mNumSegZ(1),
-    mUTile(1.0f),mVTile(1.0f),mSwitchUV(false)
-
+PrimitiveObject::PrimitiveObject(const QString& name) :
+    PrimitiveObject(name, AP_NONE)
 {
 }
 
 PrimitiveObject::PrimitiveObject(const QString& name, PrimitiveType type) :
-    mType(type), mName(name), mSceneNode(0)
+    mType(type), mName(name)
 {
     setDefaultParams();
 }
@@ -49,7 +39,8 @@ PrimitiveObject::~PrimitiveObject()
    //We don't destroy this scene node as it will be destroy by the Manager
 
     Manager::getSingleton()->getSceneMgr()->destroyManualObject(mName.toStdString());
-    Ogre::MeshManager::getSingleton().remove(mName.toStdString());
+    if(Ogre::MeshManager::getSingleton().getByName(mName.toStdString()))
+        Ogre::MeshManager::getSingleton().remove(mName.toStdString());
 }
 
 void PrimitiveObject::setDefaultParams()
@@ -119,11 +110,14 @@ void PrimitiveObject::setDefaultParams()
         case AP_SPRING:
             mSizeX = 0.0f;  mSizeY = 0.0f;      mSizeZ = 0.0f;
             mRadius = 0.0f; mRadius2 = 0.0f;    mHeight = 0.0f;
-            mNumSegX = 10;   mNumSegY = 10;       mNumSegZ = 0;
+            mNumSegX = 10;   mNumSegY = 10;     mNumSegZ = 0;
             mUTile = 1.0f;  mVTile = 1.0f;      mSwitchUV = false;
             break;
-        case AP_NONE:
         default:
+            mSizeX = 1.0f;  mSizeY = 1.0f;      mSizeZ = 1.0f;
+            mRadius = 1.0f; mRadius2 = 0.5f;    mHeight = 1.0f;
+            mNumSegX = 1;   mNumSegY = 1;       mNumSegZ = 1;
+            mUTile = 1.0f;  mVTile = 1.0f;      mSwitchUV = false;
         break;
     }
 }
@@ -135,14 +129,9 @@ void PrimitiveObject::setDefaultParams()
 
 bool PrimitiveObject::isPrimitive(const Ogre::SceneNode* node)
 {
-  try
+    try
     {
-        PrimitiveObject* prim =0;
-        prim = Ogre::any_cast<PrimitiveObject*>(node->getUserObjectBindings().getUserAny());
-        if (prim)
-            return true;  //TODO check this &node
-        else
-            return false;
+        return !!Ogre::any_cast<PrimitiveObject*>(node->getUserObjectBindings().getUserAny());
     }
     catch(...)
     {
@@ -163,60 +152,60 @@ PrimitiveObject* PrimitiveObject::getPrimitiveFromSceneNode(const Ogre::SceneNod
 
 Ogre::SceneNode*  PrimitiveObject::createCube(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_CUBE);
+    auto newPrimitive = new PrimitiveObject(name, AP_CUBE);
     return newPrimitive->createPrimitive();
 }
 
 Ogre::SceneNode* PrimitiveObject::createSphere(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_SPHERE);
+    auto newPrimitive = new PrimitiveObject(name, AP_SPHERE);
     return newPrimitive->createPrimitive();
 }
 
 Ogre::SceneNode* PrimitiveObject::createPlane(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_PLANE);
+    auto newPrimitive = new PrimitiveObject(name, AP_PLANE);
     return newPrimitive->createPrimitive();
 }
 
 Ogre::SceneNode* PrimitiveObject::createCylinder(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_CYLINDER);
+    auto newPrimitive = new PrimitiveObject(name, AP_CYLINDER);
     return newPrimitive->createPrimitive();
 }
 Ogre::SceneNode* PrimitiveObject::createCone(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_CONE);
+    auto newPrimitive = new PrimitiveObject(name, AP_CONE);
     return newPrimitive->createPrimitive();
 }
 Ogre::SceneNode* PrimitiveObject::createTorus(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_TORUS);
+    auto newPrimitive = new PrimitiveObject(name, AP_TORUS);
     return newPrimitive->createPrimitive();
 }
 Ogre::SceneNode* PrimitiveObject::createTube(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_TUBE);
+    auto newPrimitive = new PrimitiveObject(name, AP_TUBE);
     return newPrimitive->createPrimitive();
 }
 Ogre::SceneNode* PrimitiveObject::createCapsule(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_CAPSULE);
+    auto newPrimitive = new PrimitiveObject(name, AP_CAPSULE);
     return newPrimitive->createPrimitive();
 }
 Ogre::SceneNode* PrimitiveObject::createIcoSphere(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_ICOSPHERE);
+    auto newPrimitive = new PrimitiveObject(name, AP_ICOSPHERE);
     return newPrimitive->createPrimitive();
 }
 Ogre::SceneNode* PrimitiveObject::createRoundedBox(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_ROUNDEDBOX);
+    auto newPrimitive = new PrimitiveObject(name, AP_ROUNDEDBOX);
     return newPrimitive->createPrimitive();
 }
 Ogre::SceneNode* PrimitiveObject::createSpring(const QString& name)
 {
-    PrimitiveObject* newPrimitive = new PrimitiveObject(name, AP_SPRING);
+    auto newPrimitive = new PrimitiveObject(name, AP_SPRING);
     return newPrimitive->createPrimitive();
 }
 

@@ -84,7 +84,7 @@ void RotationGizmo::createZCircle(const Ogre::ColourValue& colour)
     m_pZCircle->colour(colour);
     for(int deg = 0; deg <= 360; deg += 1)
     {
-        float theta = Ogre::Degree(deg).valueRadians();
+        float theta = Ogre::Degree(static_cast<float>(deg)).valueRadians();
         m_pZCircle->position(cos(theta)*mScale, sin(theta)*mScale,0);
     }
     m_pZCircle->end();
@@ -100,7 +100,7 @@ void RotationGizmo::createSolidXCircle(const Ogre::ColourValue& colour)
     m_pXCircle->colour(colour);
     for(int deg = 0; deg <= 360; deg += 1)
     {
-        float theta = Ogre::Degree(deg).valueRadians();
+        float theta = Ogre::Degree(static_cast<float>(deg)).valueRadians();
         m_pXCircle->position(0, mScale * cos(theta), mScale * sin(theta));
         m_pXCircle->position(0, mScale * cos(theta - Ogre::Math::PI / mAccuracy), mScale * sin(theta - Ogre::Math::PI / mAccuracy));
         m_pXCircle->position(0, (mScale - thickness) * cos(theta - Ogre::Math::PI / mAccuracy), (mScale - thickness) * sin(theta - Ogre::Math::PI / mAccuracy));
@@ -123,7 +123,7 @@ void RotationGizmo::createSolidYCircle(const Ogre::ColourValue& colour)
     m_pYCircle->colour(colour);
     for(int deg = 0; deg <= 360; deg += 1)
     {
-        float theta = Ogre::Degree(deg).valueRadians();
+        float theta = Ogre::Degree(static_cast<float>(deg)).valueRadians();
         m_pYCircle->position(mScale * cos(theta), 0, mScale * sin(theta));
         m_pYCircle->position(mScale * cos(theta - Ogre::Math::PI / mAccuracy), 0, mScale * sin(theta - Ogre::Math::PI / mAccuracy));
         m_pYCircle->position((mScale - thickness) * cos(theta - Ogre::Math::PI / mAccuracy), 0,(mScale - thickness) * sin(theta - Ogre::Math::PI / mAccuracy));
@@ -146,7 +146,7 @@ void RotationGizmo::createSolidZCircle(const Ogre::ColourValue& colour)
     m_pZCircle->colour(colour);
     for(int deg = 0; deg <= 360; deg += 1)
     {
-        float theta = Ogre::Degree(deg).valueRadians();
+        float theta = Ogre::Degree(static_cast<float>(deg)).valueRadians();
         m_pZCircle->position(mScale * cos(theta), mScale * sin(theta), 0);
         m_pZCircle->position(mScale * cos(theta - Ogre::Math::PI / mAccuracy), mScale * sin(theta - Ogre::Math::PI / mAccuracy), 0);
         m_pZCircle->position((mScale - thickness) * cos(theta - Ogre::Math::PI / mAccuracy), (mScale - thickness) * sin(theta - Ogre::Math::PI / mAccuracy), 0);
@@ -163,40 +163,34 @@ void RotationGizmo::createSolidZCircle(const Ogre::ColourValue& colour)
 // Accessors
 
 bool RotationGizmo::isHighlighted(void) const
-{   return (mHighlighted);    }
+{   return mHighlighted;    }
 
 Ogre::uint32 RotationGizmo::getQueryFlags(void)   const
-{ return (m_pXCircle->getQueryFlags());  }
+{ return m_pXCircle->getQueryFlags();  }
 
 const Ogre::Real& RotationGizmo::getFading(void)   const
-{   return (mFade); }
+{   return mFade; }
 
 const Ogre::ColourValue& RotationGizmo::getXaxisColour (void) const
-{   return (mXaxisColor);   }
+{   return mXaxisColor;   }
 
 const Ogre::ColourValue& RotationGizmo::getYaxisColour (void) const
-{   return (mYaxisColor);   }
+{   return mYaxisColor;   }
 
 const Ogre::ColourValue& RotationGizmo::getZaxisColour (void) const
-{   return (mZaxisColor);   }
+{   return mZaxisColor;   }
 
 const Ogre::Real& RotationGizmo::getScale(void) const
-{   return (mScale);  }
+{   return mScale;  }
 
 const Ogre::ManualObject &RotationGizmo::getXCircle() const
-{
-    return *m_pXCircle;
-}
+{   return *m_pXCircle; }
 
 const Ogre::ManualObject &RotationGizmo::getYCircle() const
-{
-    return *m_pYCircle;
-}
+{    return *m_pYCircle; }
 
 const Ogre::ManualObject &RotationGizmo::getZCircle() const
-{
-    return *m_pZCircle;
-}
+{   return *m_pZCircle; }
 
 //////////////////////////////////////////
 // Mutators

@@ -33,11 +33,6 @@ OgreWidget::~OgreWidget()
         mOgreWindow->removeAllViewports();
         mViewport = nullptr;
     }
-    if(mCamera)
-    {
-        delete mCamera;
-        mCamera = nullptr;
-    }
     if(mOgreRoot)
     {
         mOgreRoot->removeFrameListener(this);
@@ -55,7 +50,7 @@ int OgreWidget::getIndex() const
     return (qobject_cast<EditorViewport *>(parent()))->getIndex();
 }
 
-const QColor OgreWidget::getBackgroundColor() const
+QColor OgreWidget::getBackgroundColor() const
 {
     if(mViewport)
     {
@@ -114,18 +109,13 @@ void OgreWidget::initOgreWindow(void)
 
   mOgreWindow->setActive(true);
 
-  mCamera =  new SpaceCamera(this);
+  mCamera = std::make_unique<SpaceCamera>(this);
 
   mViewport = mOgreWindow->addViewport( mCamera->getCamera() );
   mViewport->setBackgroundColour( Ogre::ColourValue( 0,0,0 ) );
   mViewport->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
 
   mOgreRoot->addFrameListener(this);
-}
-
-void OgreWidget::paintEvent(QPaintEvent *e)
-{
-    return QWidget::paintEvent(e);
 }
 
 bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)
@@ -142,7 +132,7 @@ bool OgreWidget::frameEnded(const Ogre::FrameEvent& e)
 {
     if(mOgreWindow)
     {
-        mOgreWindow->windowMovedOrResized(); //TODO: Improve it someday, it is there to avoid creatin window in whrong aspect ratio
+        mOgreWindow->windowMovedOrResized();
         mOgreWindow->update();
     }
 
@@ -150,7 +140,7 @@ bool OgreWidget::frameEnded(const Ogre::FrameEvent& e)
 }
 
 QPaintEngine* OgreWidget:: paintEngine() const
-{    return 0;  }
+{    return nullptr;  }
 
 void OgreWidget::resizeEvent(QResizeEvent *e)
 {
@@ -187,38 +177,7 @@ void OgreWidget::moveEvent(QMoveEvent *e)
 void OgreWidget::keyPressEvent(QKeyEvent *e)
 {
     mCamera->keyPressEvent(e);
-
-    //  KEYBOARD ENTRY FOR DEBUG PURPOSE ONLY
-    if(e->key () == Qt::Key_Escape)
-    {
-        //emit closeApplication();
-    }           ////////////// Debug /////////////////////
-    else if(e->key () == Qt::Key_F1)
-    {
-        qDebug()<<"F1 has been pressed";
-
-    }
-    else if(e->key () == Qt::Key_F2)
-    {
-
-    }
-    else if(e->key () == Qt::Key_F3)
-    {
-
-    }
-    else if(e->key () == Qt::Key_F4)
-    {
-
-    }
-    else if(e->key () == Qt::Key_F5)
-    {
-
-
-    }       ////////////// Debug /////////////////////
-    else
-    {
-        e->ignore();
-    }
+    e->ignore();
 }
 
 void OgreWidget::keyReleaseEvent(QKeyEvent *e)

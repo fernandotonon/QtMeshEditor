@@ -14,7 +14,7 @@ class RotationGizmo
 {
 public:
     RotationGizmo(Ogre::SceneNode* linkNode, const Ogre::String &name = "RotationGizmo", Ogre::Real scale = 1.0);
-    ~RotationGizmo();
+    virtual ~RotationGizmo();
 
 private:
     Ogre::Real              mScale;
