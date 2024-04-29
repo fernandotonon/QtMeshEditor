@@ -554,9 +554,9 @@ Ogre::MeshPtr PrimitiveObject::createMesh()
             break;
         case AP_ROUNDEDBOX:
             mp = Procedural::RoundedBoxGenerator().setSizeX(mSizeX).setSizeY(mSizeY).setSizeZ(mSizeZ).setChamferSize(mRadius)
-                    .setNumSegX(static_cast<unsigned int>(mNumSegX))
-                    .setNumSegY(static_cast<unsigned int>(mNumSegY))
-                    .setNumSegZ(static_cast<unsigned int>(mNumSegZ))
+                    .setNumSegX(static_cast<unsigned short>(mNumSegX))
+                    .setNumSegY(static_cast<unsigned short>(mNumSegY))
+                    .setNumSegZ(static_cast<unsigned short>(mNumSegZ))
                     .setUTile(mUTile).setVTile(mVTile).setSwitchUV(mSwitchUV)
                     .realizeMesh(name.data());
             break;
