@@ -3,8 +3,8 @@
 
 TEST(PrimitivesTest, CreateDefaultPrimitive)
 {
-    PrimitiveObject primitive("Primitive");
-    ASSERT_EQ(primitive.getName(), "Primitive");
+    PrimitiveObject primitive("");
+    ASSERT_EQ(primitive.getName(), "");
     ASSERT_EQ(primitive.getType(), PrimitiveObject::PrimitiveType::AP_NONE);
     ASSERT_EQ(primitive.getSceneNode(), nullptr);
     ASSERT_EQ(primitive.getNumIterations(), 1);

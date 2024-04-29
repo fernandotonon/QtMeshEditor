@@ -41,7 +41,6 @@ public:
     ~PrimitiveObject();
 
     Ogre::SceneNode* createPrimitive();
-    void clone(const PrimitiveObject* primitiveToClone);
 
     static bool isPrimitive(const Ogre::SceneNode* node);
     static bool isPrimitive(const Ogre::Entity* entity);

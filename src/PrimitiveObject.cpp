@@ -1,4 +1,4 @@
-#include <OgreAny.h>
+ #include <OgreAny.h>
 #include <OgreUserObjectBindings.h>
 
 #include "Manager.h"
@@ -324,18 +324,12 @@ void PrimitiveObject::setRadius(const Ogre::Real& radius)
 
 void PrimitiveObject::setOuterRadius(const Ogre::Real& radius)
 {
-    if(radius>0.0)
-        mRadius = radius;
-
-    updatePrimitive();
+    setRadius(radius);
 }
 
 void PrimitiveObject::setChamferRadius(const Ogre::Real& radius)
 {
-    if(radius>0.0)
-        mRadius = radius;
-
-    updatePrimitive();
+    setRadius(radius);
 }
 
 void PrimitiveObject::setInnerRadius(const Ogre::Real& radius)
@@ -348,11 +342,7 @@ void PrimitiveObject::setInnerRadius(const Ogre::Real& radius)
 
 void PrimitiveObject::setSectionRadius(const Ogre::Real& radius)
 {
-
-    if((radius>0.0)&&(radius<mRadius))
-        mRadius2 = radius;
-
-    updatePrimitive();
+    setInnerRadius(radius);
 }
 
 void PrimitiveObject::setHeight(const Ogre::Real& height)
@@ -467,25 +457,6 @@ void PrimitiveObject::setUVSwitch(bool switched)
     updatePrimitive();
 }
 
-void PrimitiveObject::clone(const PrimitiveObject* primitiveToClone)
-{
-    mSizeX  = primitiveToClone->mSizeX;
-    mSizeY  = primitiveToClone->mSizeY;
-    mSizeZ  = primitiveToClone->mSizeZ;
-
-    mRadius = primitiveToClone->mRadius;
-    mRadius2= primitiveToClone->mRadius2;
-    mHeight = primitiveToClone->mHeight;
-
-    mNumSegX= primitiveToClone->mNumSegX;
-    mNumSegY= primitiveToClone->mNumSegY;
-    mNumSegZ= primitiveToClone->mNumSegZ;
-
-    mUTile  = primitiveToClone->mUTile;
-    mVTile  = primitiveToClone->mVTile;
-    mSwitchUV= primitiveToClone->mSwitchUV;
-}
-
 ////////////////////////////////////////
 /// Private Methods
 ///
@@ -496,8 +467,7 @@ void PrimitiveObject::updatePrimitive()
         return;
 
     //delete old entity
-    Ogre::Entity* oldEntity = static_cast<Ogre::Entity*>(mSceneNode->getAttachedObject(0));
-    //TODO check if no issue with sub entity (we are only at primitive stage so I assume that there is no issue)
+    auto oldEntity = static_cast<Ogre::Entity*>(mSceneNode->getAttachedObject(0));
     Ogre::MaterialPtr entMaterial = oldEntity->getSubEntity(0)->getMaterial();
 
     //if(oldEntity->getMesh().get()->isManuallyLoaded())
@@ -508,7 +478,6 @@ void PrimitiveObject::updatePrimitive()
     Manager::getSingleton()->getSceneMgr()->destroyEntity(oldEntity);
 
     //Create a new one with the given params
-    // TODO Check if this line is required
     mSceneNode->getUserObjectBindings().setUserAny(Ogre::Any(this));
 
     Ogre::MeshPtr mp = createMesh();
@@ -585,7 +554,9 @@ Ogre::MeshPtr PrimitiveObject::createMesh()
             break;
         case AP_ROUNDEDBOX:
             mp = Procedural::RoundedBoxGenerator().setSizeX(mSizeX).setSizeY(mSizeY).setSizeZ(mSizeZ).setChamferSize(mRadius)
-                    .setNumSegX(mNumSegX).setNumSegY(mNumSegY).setNumSegZ(mNumSegZ)
+                    .setNumSegX(std::static_cast<unsigned int>(mNumSegX))
+                    .setNumSegY(std::static_cast<unsigned int>(mNumSegY))
+                    .setNumSegZ(std::static_cast<unsigned int>(mNumSegZ))
                     .setUTile(mUTile).setVTile(mVTile).setSwitchUV(mSwitchUV)
                     .realizeMesh(name.data());
             break;
@@ -603,8 +574,6 @@ Ogre::MeshPtr PrimitiveObject::createMesh()
 
 Ogre::SceneNode* PrimitiveObject::createPrimitive()
 {
-    // TODO check if no memory leakage using setUserAny
-    // http://www.ogre3d.org/forums/viewtopic.php?f=2&t=81594&sid=70ac0036f529bfc87dc2c464b03e33fe
     // This will trigger the selection change signal
     mSceneNode = Manager::getSingleton()->addSceneNode(mName.toStdString().data(), Ogre::Any(static_cast<PrimitiveObject*>(this)));
 
@@ -625,9 +594,8 @@ Ogre::SceneNode* PrimitiveObject::createPrimitive()
     else
     {
         Manager::getSingleton()->destroySceneNode(mSceneNode);
-        return 0;
+        return nullptr;
     }
-
 }
 
 
