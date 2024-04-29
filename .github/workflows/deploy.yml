@@ -678,9 +678,9 @@ jobs:
           repository: assimp/assimp
           path: /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp
 
-    - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'   
-      name: Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
-      run: cp -R /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib /usr/local/include/contrib
+    # - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'   
+    #   name: Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
+    #   run: cp -R /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib /usr/local/include/contrib
       
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
