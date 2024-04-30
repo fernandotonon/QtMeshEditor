@@ -251,9 +251,6 @@ const Ogre::Real& PrimitiveObject::getHeight()          const
 int PrimitiveObject::getNumSegX()        const
 {   return mNumSegX;    }
 
-int PrimitiveObject::getNumSegRing()     const
-{   return mNumSegX;    }
-
 int PrimitiveObject::getNumSegBase()     const
 {   return mNumSegX;    }
 
@@ -266,16 +263,7 @@ int PrimitiveObject::getNumIterations()  const
 int PrimitiveObject::getNumSegY()        const
 {   return mNumSegY;    }
 
-int PrimitiveObject::getNumSegLoop()     const
-{   return mNumSegY;    }
-
-int PrimitiveObject::getNumSegSection()  const
-{   return mNumSegY;    }
-
 int PrimitiveObject::getNumSegZ()        const
-{   return mNumSegZ;    }
-
-int PrimitiveObject::getNumSegHeight()   const
 {   return mNumSegZ;    }
 
 const Ogre::Real& PrimitiveObject::getUTile()          const
@@ -327,11 +315,6 @@ void PrimitiveObject::setOuterRadius(const Ogre::Real& radius)
     setRadius(radius);
 }
 
-void PrimitiveObject::setChamferRadius(const Ogre::Real& radius)
-{
-    setRadius(radius);
-}
-
 void PrimitiveObject::setInnerRadius(const Ogre::Real& radius)
 {
    if((radius>0.0)&&(radius<mRadius))
@@ -379,14 +362,6 @@ void PrimitiveObject::setNumSegZ(int numSegZ)
     updatePrimitive();
 }
 
-void PrimitiveObject::setNumSegRing(int numSegRing)
-{
-    if(numSegRing>0)
-        mNumSegX = numSegRing;
-
-    updatePrimitive();
-}
-
 void PrimitiveObject::setNumSegBase(int numSegBase)
 {
     if(numSegBase>0)
@@ -410,14 +385,6 @@ void PrimitiveObject::setNumIterations(int numIterations)
     updatePrimitive();
 }
 
-void PrimitiveObject::setNumSegLoop(int numSegLoop)
-{
-
-    if(numSegLoop>0)
-        mNumSegY = numSegLoop;
-
-    updatePrimitive();
-}
 void PrimitiveObject::setNumSegSection(int numSegSection)
 {
     if(numSegSection>0)
@@ -483,12 +450,10 @@ void PrimitiveObject::updatePrimitive()
     Ogre::MeshPtr mp = createMesh();
     if(mp)
     {
-        Ogre::Entity* ent;
-        ent = Manager::getSingleton()->createEntity(mSceneNode,mp);
+        auto ent = Manager::getSingleton()->createEntity(mSceneNode,mp);
 
         ent->setMaterial(entMaterial);
     }
-
 }
 
 Ogre::MeshPtr PrimitiveObject::createMesh()

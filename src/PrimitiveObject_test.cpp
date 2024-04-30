@@ -10,7 +10,6 @@ TEST(PrimitivesTest, CreateDefaultPrimitive)
     ASSERT_EQ(primitive.getNumIterations(), 1);
     ASSERT_EQ(primitive.getNumSegBase(), 1);
     ASSERT_EQ(primitive.getNumSegCircle(), 1);
-    ASSERT_EQ(primitive.getNumSegRing(), 1);
     ASSERT_EQ(primitive.getNumSegX(), 1);
     ASSERT_EQ(primitive.getNumSegY(), 1);
     ASSERT_EQ(primitive.getNumSegZ(), 1);
