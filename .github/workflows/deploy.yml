@@ -767,16 +767,14 @@ jobs:
         path: ${{github.workspace}}/ogre/SDK
         key: ${{ runner.os }}-build-${{ env.cache-name }}
     
-    - run: ls -ll /usr/local/lib/cmake/
-
     - name: Configure CMake
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
-         ASSIMP_DIR: /usr/local/lib/cmake/assimp-5.2
+         ASSIMP_DIR: /usr/local/lib/cmake/assimp-5.4
       run: |
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.4 \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
