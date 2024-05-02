@@ -729,7 +729,6 @@ jobs:
          submodules: true
          
     - run: |
-            ls ${{github.workspace}}/src/dependencies/ogre-procedural
             cd ${{github.workspace}}/src/dependencies/ogre-procedural
             git checkout master
             git pull
@@ -771,6 +770,7 @@ jobs:
     - name: Configure CMake
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
+         ASSIMP_DIR: /usr/local/lib/cmake/assimp-5.2
       run: |
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
