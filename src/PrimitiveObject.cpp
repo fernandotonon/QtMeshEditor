@@ -129,6 +129,7 @@ void PrimitiveObject::setDefaultParams()
 
 bool PrimitiveObject::isPrimitive(const Ogre::SceneNode* node)
 {
+    if(!node) return false;
     try
     {
         return !!Ogre::any_cast<PrimitiveObject*>(node->getUserObjectBindings().getUserAny());
@@ -138,11 +139,6 @@ bool PrimitiveObject::isPrimitive(const Ogre::SceneNode* node)
        //We've got something else in userAny
         return false;
     }
-}
-
-bool PrimitiveObject::isPrimitive(const Ogre::Entity* entity)
-{
-   return isPrimitive(entity->getParentSceneNode());
 }
 
 PrimitiveObject* PrimitiveObject::getPrimitiveFromSceneNode(const Ogre::SceneNode* node)
@@ -562,7 +558,3 @@ Ogre::SceneNode* PrimitiveObject::createPrimitive()
         return nullptr;
     }
 }
-
-
-
-

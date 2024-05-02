@@ -23,3 +23,8 @@ TEST(PrimitivesTest, CreateDefaultPrimitive)
     ASSERT_EQ(primitive.getSizeY(), 1.0f);
     ASSERT_EQ(primitive.getSizeX(), 1.0f);
 }
+
+TEST(PrimitivesTest, isPrimitiveWithNullptr)
+{
+    ASSERT_FALSE(PrimitiveObject::isPrimitive(nullptr));
+}

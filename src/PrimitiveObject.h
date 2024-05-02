@@ -43,7 +43,6 @@ public:
     Ogre::SceneNode* createPrimitive();
 
     static bool isPrimitive(const Ogre::SceneNode* node);
-    static bool isPrimitive(const Ogre::Entity* entity);
     static PrimitiveObject* getPrimitiveFromSceneNode(const Ogre::SceneNode* node);
 
     static Ogre::SceneNode* createCube(const QString& name);
