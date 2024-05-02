@@ -766,6 +766,8 @@ jobs:
       with:
         path: ${{github.workspace}}/ogre/SDK
         key: ${{ runner.os }}-build-${{ env.cache-name }}
+    
+    - run: ls -ll /usr/local/lib/cmake/
 
     - name: Configure CMake
       env:
