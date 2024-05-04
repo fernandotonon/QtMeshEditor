@@ -22,7 +22,7 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 
 ### :sparkles: Features
 * Mesh
-  - Translation, Scale, and Rotation (Easier than OgreMeshMagick)
+  - Translation, Scale, and Rotation
   - Change the material of the mesh - Allows the change of the mesh material
   - Primitives creation, using ogre-procedural - Easy tool to create Box, Sphere, and Plane
 * Material

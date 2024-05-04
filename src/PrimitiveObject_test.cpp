@@ -3,14 +3,13 @@
 
 TEST(PrimitivesTest, CreateDefaultPrimitive)
 {
-    PrimitiveObject primitive("Primitive");
-    ASSERT_EQ(primitive.getName(), "Primitive");
+    PrimitiveObject primitive("");
+    ASSERT_EQ(primitive.getName(), "");
     ASSERT_EQ(primitive.getType(), PrimitiveObject::PrimitiveType::AP_NONE);
     ASSERT_EQ(primitive.getSceneNode(), nullptr);
     ASSERT_EQ(primitive.getNumIterations(), 1);
     ASSERT_EQ(primitive.getNumSegBase(), 1);
     ASSERT_EQ(primitive.getNumSegCircle(), 1);
-    ASSERT_EQ(primitive.getNumSegRing(), 1);
     ASSERT_EQ(primitive.getNumSegX(), 1);
     ASSERT_EQ(primitive.getNumSegY(), 1);
     ASSERT_EQ(primitive.getNumSegZ(), 1);
@@ -23,4 +22,9 @@ TEST(PrimitivesTest, CreateDefaultPrimitive)
     ASSERT_EQ(primitive.getSizeZ(), 1.0f);
     ASSERT_EQ(primitive.getSizeY(), 1.0f);
     ASSERT_EQ(primitive.getSizeX(), 1.0f);
+}
+
+TEST(PrimitivesTest, isPrimitiveWithNullptr)
+{
+    ASSERT_FALSE(PrimitiveObject::isPrimitive(nullptr));
 }

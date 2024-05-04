@@ -52,16 +52,6 @@ jobs:
       with:
           repository: assimp/assimp
           path: ${{github.workspace}}/assimp
-         
-    - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
-      name: Windows - Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
-      run: |
-            xcopy  /I /S /E  "D:/a/QtMeshEditor/QtMeshEditor/assimp/contrib"  "C:/PROGRA~2/Assimp/include/contrib"
-            cd D:/a/QtMeshEditor/QtMeshEditor/assimp/contrib
-            dir
-            cd C:/PROGRA~2/Assimp/include/contrib
-            dir
-      shell: cmd
       
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
       name: Build Assimp repo
@@ -263,10 +253,6 @@ jobs:
       with:
           repository: assimp/assimp
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
-    
-    - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'   
-      name: Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
-      run: cp -R /home/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib /usr/local/include/contrib
             
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
       name: Build Assimp repo
@@ -652,6 +638,13 @@ jobs:
  build-n-cache-assimp-macos:
     runs-on: macos-latest
     steps:
+    - name: change folder permissions
+      run: |
+            sudo mkdir /usr/local/lib
+            sudo mkdir /usr/local/include
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
+
     - name: Cache Assimp
       id: cache-assimp-macos
       uses: actions/cache@v3
@@ -659,7 +652,7 @@ jobs:
         cache-name: cache-assimp-macos
       with:
         path: |
-               /usr/local/lib/cmake/
+               /usr/local/lib/cmake
                /usr/local/include/assimp
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
@@ -677,10 +670,6 @@ jobs:
       with:
           repository: assimp/assimp
           path: /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp
-
-    - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'   
-      name: Workaround to fix the need of utf8.h file https://github.com/assimp/assimp/issues/5005
-      run: cp -R /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp/contrib /usr/local/include/contrib
       
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
@@ -693,6 +682,13 @@ jobs:
     needs: build-n-cache-assimp-macos
     runs-on: macos-latest
     steps:    
+    - name: change folder permissions
+      run: |
+          sudo mkdir /usr/local/lib
+          sudo mkdir /usr/local/include
+          sudo chmod -R 777 /usr/local/lib
+          sudo chmod -R 777 /usr/local/include
+
     - name: Cache Assimp
       id: cache-assimp-macos
       uses: actions/cache@v3
@@ -700,7 +696,7 @@ jobs:
         cache-name: cache-assimp-macos
       with:
         path: |
-               /usr/local/lib/cmake/
+               /usr/local/lib/cmake
                /usr/local/include/assimp
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
@@ -730,7 +726,7 @@ jobs:
       name: Build Ogre3D repo
       run: |
             cd ${{github.workspace}}/ogre/
-            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2/ \
+            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.4/ \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
@@ -742,12 +738,18 @@ jobs:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
     runs-on: macos-latest
     steps:
+    - name: change folder permissions
+      run: |
+            sudo mkdir /usr/local/lib
+            sudo mkdir /usr/local/include
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
+
     - uses: actions/checkout@v3
       with:
          submodules: true
          
     - run: |
-            ls ${{github.workspace}}/src/dependencies/ogre-procedural
             cd ${{github.workspace}}/src/dependencies/ogre-procedural
             git checkout master
             git pull
@@ -769,7 +771,7 @@ jobs:
         cache-name: cache-assimp-macos
       with:
         path: |
-               /usr/local/lib/cmake/
+               /usr/local/lib/cmake
                /usr/local/include/assimp
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
@@ -785,14 +787,14 @@ jobs:
       with:
         path: ${{github.workspace}}/ogre/SDK
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
+    
     - name: Configure CMake
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.4 \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \

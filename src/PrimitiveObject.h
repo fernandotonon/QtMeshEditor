@@ -41,10 +41,8 @@ public:
     ~PrimitiveObject();
 
     Ogre::SceneNode* createPrimitive();
-    void clone(const PrimitiveObject* primitiveToClone);
 
     static bool isPrimitive(const Ogre::SceneNode* node);
-    static bool isPrimitive(const Ogre::Entity* entity);
     static PrimitiveObject* getPrimitiveFromSceneNode(const Ogre::SceneNode* node);
 
     static Ogre::SceneNode* createCube(const QString& name);
@@ -78,15 +76,9 @@ public:
     int                 getNumSegY()        const;
     int                 getNumSegZ()        const;
 
-    int                 getNumSegRing()     const;
     int                 getNumSegBase()     const;
     int                 getNumSegCircle()   const;
     int                 getNumIterations()  const;
-
-    int                 getNumSegLoop()     const;
-    int                 getNumSegSection()  const;
-
-    int                 getNumSegHeight()   const;
 
     const Ogre::Real&   getUTile()          const;
     const Ogre::Real&   getVTile()          const;
@@ -97,7 +89,6 @@ public:
     void setSizeZ           (const Ogre::Real& sizeZ);
     void setRadius          (const Ogre::Real& radius);
     void setOuterRadius     (const Ogre::Real& radius);
-    void setChamferRadius   (const Ogre::Real& radius);
     void setInnerRadius     (const Ogre::Real& radius);
     void setSectionRadius   (const Ogre::Real& radius);
     void setHeight          (const Ogre::Real& height);
@@ -106,12 +97,10 @@ public:
     void setNumSegY         (int numSegY);
     void setNumSegZ         (int numSegZ);
 
-    void setNumSegRing      (int numSegRing);
     void setNumSegBase      (int numSegBase);
     void setNumSegCircle    (int numSegCircle);
     void setNumIterations   (int numIterations);
 
-    void setNumSegLoop      (int numSegLoop);
     void setNumSegSection   (int numSegSection);
 
     void setNumSegHeight    (int numSegHeight);
