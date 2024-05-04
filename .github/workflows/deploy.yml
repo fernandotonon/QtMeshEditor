@@ -640,7 +640,7 @@ jobs:
     steps:
     - name: change folder permissions
       run: |
-            mkdir /usr/local/lib
+            sudo mkdir /usr/local/lib
             sudo chmod -R 777 /usr/local/lib
             sudo chmod -R 777 /usr/local/include
 
