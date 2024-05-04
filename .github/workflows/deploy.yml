@@ -638,6 +638,11 @@ jobs:
  build-n-cache-assimp-macos:
     runs-on: macos-latest
     steps:
+    - name: change folder permissions
+      run: |
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
+
     - name: Cache Assimp
       id: cache-assimp-macos
       uses: actions/cache@v3
@@ -645,7 +650,7 @@ jobs:
         cache-name: cache-assimp-macos
       with:
         path: |
-               /usr/local/lib/cmake/assimp-5.4
+               /usr/local/lib/cmake
                /usr/local/include/assimp
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
@@ -675,6 +680,11 @@ jobs:
     needs: build-n-cache-assimp-macos
     runs-on: macos-latest
     steps:    
+    - name: change folder permissions
+      run: |
+          sudo chmod -R 777 /usr/local/lib
+          sudo chmod -R 777 /usr/local/include
+
     - name: Cache Assimp
       id: cache-assimp-macos
       uses: actions/cache@v3
@@ -682,7 +692,7 @@ jobs:
         cache-name: cache-assimp-macos
       with:
         path: |
-               /usr/local/lib/cmake/assimp-5.4
+               /usr/local/lib/cmake
                /usr/local/include/assimp
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
@@ -724,6 +734,11 @@ jobs:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
     runs-on: macos-latest
     steps:
+    - name: change folder permissions
+      run: |
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
+
     - uses: actions/checkout@v3
       with:
          submodules: true
@@ -750,7 +765,7 @@ jobs:
         cache-name: cache-assimp-macos
       with:
         path: |
-               /usr/local/lib/cmake/assimp-5.4
+               /usr/local/lib/cmake
                /usr/local/include/assimp
                /usr/local/include/contrib
                /usr/local/lib/pkgconfig/assimp.pc
@@ -770,7 +785,6 @@ jobs:
     - name: Configure CMake
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
-         ASSIMP_DIR: /usr/local/lib/cmake/assimp-5.4
       run: |
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
