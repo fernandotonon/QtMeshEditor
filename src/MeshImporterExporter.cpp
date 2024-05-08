@@ -101,14 +101,12 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
         }
 
         Ogre::SceneNode *sn;
+        Ogre::Entity *en;
 
         if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
         {
             sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
-            Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(),                                                                                        file.path().toStdString().data()));
-            sn->setPosition(0,0,0);
-
-            configureCamera(en);
+            en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(), file.path().toStdString().data()));
         }
         else if(!file.suffix().compare("xml",Qt::CaseInsensitive))
         {
@@ -140,28 +138,22 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                 Ogre::LogManager::getSingleton().logMessage("Trying with assimp...");
                 goto assimp;
             }
-            Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, mesh);
-            sn->setPosition(0,0,0);
-
-            configureCamera(en);
+            en = Manager::getSingleton()->createEntity(sn, mesh);
         }
         else
         {
             assimp:
             AssimpToOgreImporter importer;
             Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString());
-            if (mesh)
-            {
-                auto meshName = file.baseName();
-                sn = Manager::getSingleton()->addSceneNode(QString(meshName));
+            if (!mesh) return;
 
-                Ogre::Entity *en = Manager::getSingleton()->createEntity(sn, mesh);
-
-                sn->setPosition(0,0,0);
-
-                configureCamera(en);
-            }
+            auto meshName = file.baseName();
+            sn = Manager::getSingleton()->addSceneNode(QString(meshName));
+            en = Manager::getSingleton()->createEntity(sn, mesh);
         }
+
+        sn->setPosition(0,0,0);
+        configureCamera(en);
     }
 }
 
@@ -193,11 +185,8 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
 
     if(filter=="Ogre XML (*.mesh.xml)")
     {
-        if(fileName.right(8)==".mesh.xml")
-        {
-            fileName = fileName.left(fileName.length()-8);
-        }
-        fileName+=".mesh.xml";
+        if(fileName.right(8)!=".mesh.xml")
+            fileName+=".mesh.xml";
 
         Ogre::XMLMeshSerializer xmlMS;
         Ogre::String skName;
@@ -221,11 +210,8 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
     }
     else
     {
-        if(fileName.right(5)==".mesh")
-        {
-            fileName = fileName.left(fileName.length()-5);
-        }
-        fileName+=".mesh";
+        if(fileName.right(5)!=".mesh")
+            fileName+=".mesh";
 
         Ogre::MeshSerializer m;
 
