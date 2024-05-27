@@ -26,6 +26,9 @@ THE SOFTWARE.
 -----------------------------------------------------------------------------------
 */
 #include "MeshImporterExporter.h"
+#include <assimp/Importer.hpp>
+#include <assimp/Exporter.hpp>
+#include <assimp/postprocess.h>
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QDebug>
@@ -88,75 +91,81 @@ void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, con
 
 void MeshImporterExporter::importer(const QStringList &_uriList)
 {
-    foreach(const QString &fileName,_uriList)
+    try{
+        foreach(const QString &fileName,_uriList)
+        {
+            if(!fileName.size()) continue;
+
+            QFileInfo file;
+            file.setFile(fileName);
+
+            try{
+                Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data(),false);
+                Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+            } catch(Ogre::Exception &e)
+            {
+                Ogre::LogManager::getSingleton().logMessage(e.getFullDescription());
+            }
+
+            Ogre::SceneNode *sn;
+            Ogre::Entity *en;
+
+            if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
+            {
+                sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
+                en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(), file.path().toStdString().data()));
+            }
+            else if(!file.suffix().compare("xml",Qt::CaseInsensitive))
+            {
+                Ogre::MeshPtr mesh;
+                sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
+
+                Ogre::Mesh* importedMesh = Ogre::MeshManager::getSingleton().createManual(sn->getName(), "General").get();
+                Ogre::Skeleton* importedSk = Ogre::static_pointer_cast<Ogre::Skeleton>(Ogre::SkeletonManager::getSingleton().create(QString(QString(sn->getName().data())+".skeleton.xml").toStdString().data(), "General")).get();
+
+                try
+                {
+                    Ogre::XMLSkeletonSerializer xmlSS;
+                    xmlSS.importSkeleton((file.filePath().left(file.filePath().length()-8)+"skeleton.xml").toStdString().data(),importedSk);
+                    importedSk->setBackgroundLoaded(true);
+                    while(importedSk->isLoading())
+                        #ifdef WIN32
+                            Sleep(1000);
+                        #else
+                            sleep(1);
+                        #endif
+
+                    Ogre::XMLMeshSerializer xmlMS;
+                    xmlMS.importMesh(file.filePath().toStdString().data(),importedMesh);
+                    mesh = importedMesh->clone(sn->getName());
+
+                }
+                catch(...)
+                {
+                    Ogre::LogManager::getSingleton().logMessage("Trying with assimp...");
+                    goto assimp;
+                }
+                en = Manager::getSingleton()->createEntity(sn, mesh);
+            }
+            else
+            {
+                assimp:
+                AssimpToOgreImporter importer;
+                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString());
+                if (!mesh) return;
+
+                auto meshName = file.baseName();
+                sn = Manager::getSingleton()->addSceneNode(QString(meshName));
+                en = Manager::getSingleton()->createEntity(sn, mesh);
+            }
+
+            sn->setPosition(0,0,0);
+            configureCamera(en);
+        }
+    } 
+    catch(Ogre::Exception &e)
     {
-        if(!fileName.size()) continue;
-
-        QFileInfo file;
-        file.setFile(fileName);
-
-        try{
-            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data(),false);
-            Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
-        } catch(Ogre::Exception &e)
-        {
-            Ogre::LogManager::getSingleton().logMessage(e.getFullDescription());
-        }
-
-        Ogre::SceneNode *sn;
-        Ogre::Entity *en;
-
-        if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
-        {
-            sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
-            en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(), file.path().toStdString().data()));
-        }
-        else if(!file.suffix().compare("xml",Qt::CaseInsensitive))
-        {
-            Ogre::MeshPtr mesh;
-            sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
-
-            Ogre::Mesh* importedMesh = Ogre::MeshManager::getSingleton().createManual(sn->getName(), "General").get();
-            Ogre::Skeleton* importedSk = Ogre::static_pointer_cast<Ogre::Skeleton>(Ogre::SkeletonManager::getSingleton().create(QString(QString(sn->getName().data())+".skeleton.xml").toStdString().data(), "General")).get();
-
-            try
-            {
-                Ogre::XMLSkeletonSerializer xmlSS;
-                xmlSS.importSkeleton((file.filePath().left(file.filePath().length()-8)+"skeleton.xml").toStdString().data(),importedSk);
-                importedSk->setBackgroundLoaded(true);
-                while(importedSk->isLoading())
-                    #ifdef WIN32
-                        Sleep(1000);
-                    #else
-                        sleep(1);
-                    #endif
-
-                Ogre::XMLMeshSerializer xmlMS;
-                xmlMS.importMesh(file.filePath().toStdString().data(),importedMesh);
-                mesh = importedMesh->clone(sn->getName());
-
-            }
-            catch(...)
-            {
-                Ogre::LogManager::getSingleton().logMessage("Trying with assimp...");
-                goto assimp;
-            }
-            en = Manager::getSingleton()->createEntity(sn, mesh);
-        }
-        else
-        {
-            assimp:
-            AssimpToOgreImporter importer;
-            Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString());
-            if (!mesh) return;
-
-            auto meshName = file.baseName();
-            sn = Manager::getSingleton()->addSceneNode(QString(meshName));
-            en = Manager::getSingleton()->createEntity(sn, mesh);
-        }
-
-        sn->setPosition(0,0,0);
-        configureCamera(en);
+        Ogre::LogManager::getSingleton().logMessage(e.getFullDescription());
     }
 }
 
@@ -177,7 +186,31 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
                                                         "Ogre Mesh v1.7+(*.mesh);;"\
                                                         "Ogre Mesh v1.4+(*.mesh);;"\
                                                         "Ogre Mesh v1.0+(*.mesh);;"\
-                                                        "Ogre XML (*.mesh.xml)"),&filter,
+                                                        "Ogre XML (*.mesh.xml);;"\
+                                                        "Collada (*.dae);;"\
+                                                        "X (*.x);;"\
+                                                        "STP (*.stp);;"\
+                                                        "OBJ (*.obj);;"\
+                                                        "OBJ without MTL (*.objnomtl);;"\
+                                                        "STL (*.stl);;"\
+                                                        "STL Binary (*.stlb);;"\
+                                                        "PLY (*.ply);;"\
+                                                        "PLY Binary (*.plyb);;"\
+                                                        "3DS (*.3ds);;"\
+                                                        "glTF 2.0 (*.gltf2);;"\
+                                                        "glTF 2.0 Binary (*.glb2);;"\
+                                                        "glTF 1.0 (*.gltf);;"\
+                                                        "glTF 1.0 Binary (*.glb);;"\
+                                                        "Assimp Binary (*.assbin);;"\
+                                                        "Assimp XML (*.assxml);;"\
+                                                        "Assimp JSON (*.assjson);;"\
+                                                        "X3D (*.x3d);;"\
+                                                        "FBX (*.fbx);;"\
+                                                        "FBX ASCII (*.fbxa);;"\
+                                                        "M3D (*.m3d);;"\
+                                                        "M3D ASCII (*.m3da);;"\
+                                                        "3MF (*.3mf);;"\
+                                                        "PBRT (*.pbrt)"),&filter,
                                                     QFileDialog::DontUseNativeDialog);
     if(!fileName.size()) return;
     QFileInfo file;
@@ -211,7 +244,7 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
 
         exportMaterial(e, file);
     }
-    else
+    else if(filter.contains("mesh"))
     {
         if(fileName.right(5)!=".mesh")
             fileName+=".mesh";
@@ -240,5 +273,33 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
         m.exportMesh(e->getMesh().get(),fileName.toStdString().data(),(Ogre::MeshVersion)version);
 
         exportMaterial(e, file);
+    } 
+    // Export using Assimp
+    // Export temp Ogre XML
+    Ogre::XMLMeshSerializer m;
+    Ogre::String skName;
+    if(e->hasSkeleton())
+    {
+        Ogre::XMLSkeletonSerializer xmlSS;
+        skName = e->getMesh().get()->getSkeletonName();
+        e->getMesh().get()->setSkeletonName(file.path().toStdString()+"/temp.skeleton.xml");
+        xmlSS.exportSkeleton(e->getSkeleton(),file.path().toStdString()+"/temp.skeleton.xml");
     }
+    m.exportMesh(e->getMesh().get(),file.path().toStdString()+"/temp.mesh.xml");
+    if(e->hasSkeleton())
+        e->getMesh().get()->setSkeletonName(skName);
+    QFileInfo temp = file;
+    temp.setFile(file.path()+"/temp.material");
+    exportMaterial(e, temp);
+    // Import the temp file
+    Assimp::Importer importer;
+    const aiScene* scene = importer.ReadFile(file.path().toStdString()+"/temp.mesh.xml", aiProcess_Triangulate | aiProcess_JoinIdenticalVertices);
+    if(!scene) return;
+    // Export to the desired format
+    Assimp::Exporter exporter;
+    exporter.Export(scene, file.suffix().toStdString().c_str(), file.filePath().toStdString().c_str());
+    // Remove temporary files
+    QFile::remove(file.path()+"/temp.mesh.xml");
+    QFile::remove(file.path()+"/temp.skeleton.xml");
+    QFile::remove(file.path()+"/temp.material");
 }

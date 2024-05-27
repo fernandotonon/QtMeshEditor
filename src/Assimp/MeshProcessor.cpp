@@ -201,7 +201,8 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
     ogreMesh->_setBoundingSphereRadius((maxCoords - minCoords).length() / 2.0f);
 
     // Set the skeleton
-    ogreMesh->setSkeletonName(skeleton->getName());
+    if(skeleton)
+        ogreMesh->setSkeletonName(skeleton->getName());
 
     // Compile the mesh
     ogreMesh->load();
