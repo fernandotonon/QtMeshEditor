@@ -12,7 +12,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 1.8.8 LANGUAGES CXX)
+project(QtMeshEditor VERSION 1.9.0 LANGUAGES CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -243,10 +243,7 @@ if(APPLE)
 
     # Directories to look for dependencies
     set(DIRS ${CMAKE_INSTALL_PREFIX})
-
-    # this is causing issues in macos, when trying to find assimp in @rpath/libassimp.5.dylib
-#    install(CODE "include(BundleUtilities)
-#        fixup_bundle(\"${APPS}\" \"\" \"${DIRS}\" IGNORE_ITEM \"@rpath/libassimp.5.dylib\")")
+    
     set(CPACK_GENERATOR "DragNDrop")
 elseif(UNIX)
     set(CPACK_GENERATOR "DEB")
