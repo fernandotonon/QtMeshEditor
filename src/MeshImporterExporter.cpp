@@ -52,35 +52,38 @@ void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
     }
 }
 
-void MeshImporterExporter::exportMaterial(const Ogre::Entity *e, const QFileInfo &file)
+void MeshImporterExporter::exportMaterial(const Ogre::Entity* e, const QFileInfo& file)
 {
     Ogre::MaterialSerializer ms;
-    for(unsigned int c = 0; c<e->getNumSubEntities();c++)
+    for (const auto &subEntity : e->getSubEntities())
     {
-        ms.queueForExport(e->getSubEntity(c)->getMaterial());
-        // if material has textures, export them
-        for(unsigned int t = 0; t<e->getSubEntity(c)->getMaterial()->getNumTechniques();t++)
+        ms.queueForExport(subEntity->getMaterial());
+        exportTextures(subEntity->getMaterial(), file);
+    }
+    ms.exportQueued((file.path() + "/" + file.baseName() + ".material").toStdString());
+}
+
+void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, const QFileInfo& file)
+{
+    for (const auto &technique : material->getTechniques())
+    {
+        for (const auto &pass : technique->getPasses())
         {
-            for(unsigned int p = 0; p<e->getSubEntity(c)->getMaterial()->getTechnique(t)->getNumPasses();p++)
+            for (const auto &tus : pass->getTextureUnitStates())
             {
-                for(unsigned int s = 0; s<e->getSubEntity(c)->getMaterial()->getTechnique(t)->getPass(p)->getNumTextureUnitStates();s++)
+                if (tus->getContentType() != Ogre::TextureUnitState::CONTENT_NAMED)
+                    continue;
+
+                Ogre::TexturePtr tex = tus->_getTexturePtr();
+                if (tex->getTextureType() == Ogre::TEX_TYPE_2D)
                 {
-                    Ogre::TextureUnitState *tus = e->getSubEntity(c)->getMaterial()->getTechnique(t)->getPass(p)->getTextureUnitState(s);
-                    if(tus->getContentType()==Ogre::TextureUnitState::CONTENT_NAMED)
-                    {
-                        Ogre::TexturePtr tex = tus->_getTexturePtr();
-                        if(tex->getTextureType()==Ogre::TEX_TYPE_2D)
-                        {
-                            Ogre::Image img;
-                            tex->convertToImage(img, true);
-                            img.save(QString(file.path()+"/"+tex->getName().c_str()).toStdString().data());
-                        }
-                    }
+                    Ogre::Image img;
+                    tex->convertToImage(img, true);
+                    img.save((file.path() + "/" + tex->getName().c_str()).toStdString());
                 }
             }
         }
     }
-    ms.exportQueued(QString(file.path()+"/"+file.baseName()+".material").toStdString().data());
 }
 
 void MeshImporterExporter::importer(const QStringList &_uriList)
@@ -88,7 +91,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
     foreach(const QString &fileName,_uriList)
     {
         if(!fileName.size()) continue;
-    
+
         QFileInfo file;
         file.setFile(fileName);
 
@@ -235,7 +238,7 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
         }
 
         m.exportMesh(e->getMesh().get(),fileName.toStdString().data(),(Ogre::MeshVersion)version);
-        
+
         exportMaterial(e, file);
     }
 }

@@ -40,6 +40,8 @@ class MeshImporterExporter
 private:
     static void configureCamera(const Ogre::Entity *en);
     static void exportMaterial(const Ogre::Entity *e, const QFileInfo &file);
+    static void exportTextures(const Ogre::MaterialPtr &material, const QFileInfo &file);
+
 public:
     static void importer(const QStringList &_uriList);
     static void exporter(const Ogre::SceneNode *_sn);
