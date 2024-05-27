@@ -13,7 +13,7 @@ Ogre::MaterialPtr MaterialProcessor::operator[](unsigned int index)
     return materials[index];
 }
 
-unsigned int MaterialProcessor::size()
+unsigned long MaterialProcessor::size() const
 {
     return materials.size();
 }

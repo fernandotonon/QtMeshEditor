@@ -8,7 +8,7 @@ class MaterialProcessor
 public:
     void loadScene(const aiScene* scene);
     Ogre::MaterialPtr operator[](unsigned int index);
-    unsigned int size();
+    unsigned long size() const;
 
 private:
     Ogre::MaterialPtr processMaterial(aiMaterial* material, const aiScene* scene);
