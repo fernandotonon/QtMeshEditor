@@ -18,7 +18,7 @@ unsigned long MaterialProcessor::size() const
     return materials.size();
 }
 
-Ogre::MaterialPtr MaterialProcessor::processMaterial(aiMaterial *material, const aiScene* scene)
+Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material, const aiScene* scene)
 {
     std::string materialName = material->GetName().C_Str();
     if(materialName.empty()) materialName="importedMaterial" + std::to_string(materials.size());
@@ -65,7 +65,7 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(aiMaterial *material, const
     return ogreMaterial;
 }
 
-Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, const aiString &path, const aiScene* scene)
+Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, const aiString &path, const aiScene* scene) const
 {
     if(auto texture = scene->GetEmbeddedTexture(path.C_Str())) {
         //returned pointer is not null, read texture from memory

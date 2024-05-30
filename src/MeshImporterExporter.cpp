@@ -99,16 +99,14 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
             QFileInfo file;
             file.setFile(fileName);
 
-            try{
-                Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data(),false);
-                Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
-            } catch(Ogre::Exception &e)
+            if(!Ogre::ResourceGroupManager::getSingleton().resourceLocationExists(file.path().toStdString().data(),file.path().toStdString().data()))
             {
-                Ogre::LogManager::getSingleton().logMessage(e.getFullDescription());
+                Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
+                Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
             }
 
             Ogre::SceneNode *sn;
-            Ogre::Entity *en;
+            const Ogre::Entity *en;
 
             if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
             {
@@ -221,7 +219,7 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
 
     if(filter=="Ogre XML (*.mesh.xml)")
     {
-        if(fileName.right(8)!=".mesh.xml")
+        if(fileName.right(9)!=".mesh.xml")
             fileName+=".mesh.xml";
 
         Ogre::XMLMeshSerializer xmlMS;
@@ -273,33 +271,51 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
         m.exportMesh(e->getMesh().get(),fileName.toStdString().data(),(Ogre::MeshVersion)version);
 
         exportMaterial(e, file);
-    } 
-    // Export using Assimp
-    // Export temp Ogre XML
-    Ogre::XMLMeshSerializer m;
-    Ogre::String skName;
-    if(e->hasSkeleton())
-    {
-        Ogre::XMLSkeletonSerializer xmlSS;
-        skName = e->getMesh().get()->getSkeletonName();
-        e->getMesh().get()->setSkeletonName(file.path().toStdString()+"/temp.skeleton.xml");
-        xmlSS.exportSkeleton(e->getSkeleton(),file.path().toStdString()+"/temp.skeleton.xml");
+    } else {
+        // Export using Assimp
+
+        // Export temp Ogre XML
+        Ogre::XMLMeshSerializer m;
+        /*Ogre::String skName;
+        if(e->hasSkeleton())
+        {
+            skName = e->getMesh().get()->getSkeletonName();
+            Ogre::XMLSkeletonSerializer xmlSS;
+            xmlSS.exportSkeleton(e->getSkeleton(),skName);
+        }*/
+        m.exportMesh(e->getMesh().get(),"./temp.mesh.xml");
+        QFileInfo temp = file;
+        temp.setFile("./temp.material");
+        exportMaterial(e, temp);
+
+        // Import the temp file
+        Assimp::Importer importer;
+        const aiScene* scene = importer.ReadFile(
+            "./temp.mesh.xml",
+            aiProcess_CalcTangentSpace |
+            aiProcess_JoinIdenticalVertices |
+            aiProcess_Triangulate |
+            aiProcess_RemoveComponent |
+            aiProcess_GenSmoothNormals |
+            aiProcess_ValidateDataStructure |
+            aiProcess_OptimizeGraph |
+            aiProcess_LimitBoneWeights |
+            aiProcess_SortByPType |
+            aiProcess_ImproveCacheLocality |
+            aiProcess_FixInfacingNormals |
+            aiProcess_PopulateArmatureData | // necessary to load bone node information
+            aiProcess_OptimizeMeshes |
+            aiProcess_GlobalScale
+        );
+        if(!scene) return;
+
+        // Export to the desired format
+        Assimp::Exporter exporter;
+        exporter.Export(scene, file.suffix().toStdString().c_str(), file.filePath().toStdString().c_str());
+
+        // Remove temporary files
+        QFile::remove("./temp.mesh.xml");
+       // QFile::remove("./temp.skeleton.xml");
+        QFile::remove("./temp.material");
     }
-    m.exportMesh(e->getMesh().get(),file.path().toStdString()+"/temp.mesh.xml");
-    if(e->hasSkeleton())
-        e->getMesh().get()->setSkeletonName(skName);
-    QFileInfo temp = file;
-    temp.setFile(file.path()+"/temp.material");
-    exportMaterial(e, temp);
-    // Import the temp file
-    Assimp::Importer importer;
-    const aiScene* scene = importer.ReadFile(file.path().toStdString()+"/temp.mesh.xml", aiProcess_Triangulate | aiProcess_JoinIdenticalVertices);
-    if(!scene) return;
-    // Export to the desired format
-    Assimp::Exporter exporter;
-    exporter.Export(scene, file.suffix().toStdString().c_str(), file.filePath().toStdString().c_str());
-    // Remove temporary files
-    QFile::remove(file.path()+"/temp.mesh.xml");
-    QFile::remove(file.path()+"/temp.skeleton.xml");
-    QFile::remove(file.path()+"/temp.material");
 }

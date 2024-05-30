@@ -11,8 +11,8 @@ public:
     unsigned long size() const;
 
 private:
-    Ogre::MaterialPtr processMaterial(aiMaterial* material, const aiScene* scene);
-    Ogre::TexturePtr loadTexture(const Ogre::String& filename, const aiString& path, const aiScene* scene);
+    Ogre::MaterialPtr processMaterial(const aiMaterial* material, const aiScene* scene);
+    Ogre::TexturePtr loadTexture(const Ogre::String& filename, const aiString& path, const aiScene* scene) const;
 
     std::vector<Ogre::MaterialPtr> materials;
 };
