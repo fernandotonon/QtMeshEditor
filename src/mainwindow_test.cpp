@@ -434,7 +434,7 @@ TEST_F(MainWindowTest, FrameRendering) {
     ASSERT_TRUE(message.startsWith("Status "));
 }
 
-/*
+
 TEST_F(MainWindowTest, OpenMaterialWindow) {
     auto actionMaterial_Editor = mainWindow->findChild<QAction*>("actionMaterial_Editor");
     ASSERT_TRUE(actionMaterial_Editor != nullptr);
@@ -445,7 +445,7 @@ TEST_F(MainWindowTest, OpenMaterialWindow) {
 
     int childrenAfter = mainWindow->children().size();
     ASSERT_EQ(childrenBefore, childrenAfter-1);
-} segfault on GH Actions */
+} 
 
 TEST_F(MainWindowTest, OpenAbout) {
     auto actionAbout = mainWindow->findChild<QAction*>("actionAbout");
