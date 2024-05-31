@@ -850,9 +850,10 @@ jobs:
 
   - name: change folder permissions
     run: |
+          sudo mkdir /usr/local/lib
+          sudo mkdir /usr/local/include
           sudo chmod -R 777 /usr/local/lib
           sudo chmod -R 777 /usr/local/include
-          sudo chmod -R 777 /usr/local/share
 
   - name: Install Qt
     uses: jurplel/install-qt-action@v3
