@@ -33,7 +33,7 @@ TEST(MeshImporterExporterTest, FormatFileURI_UnknownFormat_ReturnsURIWithoutChan
 }
 
 TEST(MeshImporterExporterTest, ExportFileDialogFilter_ReturnsFilterString) {
-    QString expected = "Ogre Mesh (*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre XML (*.mesh.xml);;Collada (*.dae);;X (*.x);;STP (*.stp);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;STL (*.stl);;STL Binary (*.stlb);;PLY (*.ply);;PLY Binary (*.plyb);;3DS (*.3ds);;glTF 2.0 (*.gltf2);;glTF 2.0 Binary (*.glb2);;glTF 1.0 (*.gltf);;glTF 1.0 Binary (*.glb);;Assimp Binary (*.assbin)";
+    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;PLY Binary (*.plyb);;STL (*.stl);;STL Binary (*.stlb);;STP (*.stp);;X (*.x);;glTF 1.0 (*.gltf);;glTF 1.0 Binary (*.glb);;glTF 2.0 (*.gltf2);;glTF 2.0 Binary (*.glb2)";
 
     QString result = MeshImporterExporter::exportFileDialogFilter();
 
