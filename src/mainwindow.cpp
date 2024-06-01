@@ -388,8 +388,6 @@ void MainWindow::importMeshs(const QStringList &_uriList)
 
 void MainWindow::on_actionExport_Selected_triggered()
 {
-    // TODO add a descritpion so that the user could know what he is saving (scenenode name in MeshExporter)
-    // TODO Mesh Exporter don't add the extension of the file when created
     if(SelectionSet::getSingleton()->hasNodes())
     {
         foreach(Ogre::SceneNode* node, SelectionSet::getSingleton()->getNodesSelectionList())
