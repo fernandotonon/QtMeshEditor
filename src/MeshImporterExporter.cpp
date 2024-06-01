@@ -43,6 +43,31 @@ THE SOFTWARE.
     #include <unistd.h>
 #endif
 
+const QMap<QString, QString> MeshImporterExporter::exportFormats = {
+    {"Ogre Mesh (*.mesh)", ".mesh"},
+    {"Ogre Mesh v1.10+(*.mesh)", ".mesh"},
+    {"Ogre Mesh v1.8+(*.mesh)", ".mesh"},
+    {"Ogre Mesh v1.7+(*.mesh)", ".mesh"},
+    {"Ogre Mesh v1.4+(*.mesh)", ".mesh"},
+    {"Ogre Mesh v1.0+(*.mesh)", ".mesh"},
+    {"Ogre XML (*.mesh.xml)", ".mesh.xml"},
+    {"Collada (*.dae)", ".dae"},
+    {"X (*.x)", ".x"},
+    {"STP (*.stp)", ".stp"},
+    {"OBJ (*.obj)", ".obj"},
+    {"OBJ without MTL (*.objnomtl)", ".obj"},
+    {"STL (*.stl)", ".stl"},
+    {"STL Binary (*.stlb)", ".stlb"},
+    {"PLY (*.ply)", ".ply"},
+    {"PLY Binary (*.plyb)", ".plyb"},
+    {"3DS (*.3ds)", ".3ds"},
+    {"glTF 2.0 (*.gltf2)", ".gltf2"},
+    {"glTF 2.0 Binary (*.glb2)", ".glb2"},
+    {"glTF 1.0 (*.gltf)", ".gltf"},
+    {"glTF 1.0 Binary (*.glb)", ".glb"},
+    {"Assimp Binary (*.assbin)", ".assbin"}
+};
+
 void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
 {
     Ogre::Real size = std::max(std::max(en->getBoundingBox().getSize().y,en->getBoundingBox().getSize().x),en->getBoundingBox().getSize().z)    ;
@@ -167,6 +192,24 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
     }
 }
 
+QString MeshImporterExporter::formatFileURI(const QString &_uri, const QString &_format)
+{
+    const auto ext = exportFormats[_format];
+    if(_uri.right(ext.size())==ext) 
+        return _uri;
+    
+    return _uri+ext;
+}
+
+QString MeshImporterExporter::exportFileDialogFilter()
+{
+    QString filter;
+    for(auto format = exportFormats.keyBegin(); format!=exportFormats.keyEnd(); ++format)
+        filter+=*format+";;";
+    filter.chop(2);
+    return filter;
+}
+
 void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
 {
     if(!_sn)
@@ -175,42 +218,15 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
         return;
     }
 
-    QString filter;
+    QString filter = "Ogre Mesh (*.mesh)";
     QString fileName = QFileDialog::getSaveFileName(nullptr, QObject::tr("Export Mesh"),
                                                      _sn->getName().data(),
-                                                     QObject::tr("Ogre Mesh (*.mesh);;"\
-                                                        "Ogre Mesh v1.10+(*.mesh);;"\
-                                                        "Ogre Mesh v1.8+(*.mesh);;"\
-                                                        "Ogre Mesh v1.7+(*.mesh);;"\
-                                                        "Ogre Mesh v1.4+(*.mesh);;"\
-                                                        "Ogre Mesh v1.0+(*.mesh);;"\
-                                                        "Ogre XML (*.mesh.xml);;"\
-                                                        "Collada (*.dae);;"\
-                                                        "X (*.x);;"\
-                                                        "STP (*.stp);;"\
-                                                        "OBJ (*.obj);;"\
-                                                        "OBJ without MTL (*.objnomtl);;"\
-                                                        "STL (*.stl);;"\
-                                                        "STL Binary (*.stlb);;"\
-                                                        "PLY (*.ply);;"\
-                                                        "PLY Binary (*.plyb);;"\
-                                                        "3DS (*.3ds);;"\
-                                                        "glTF 2.0 (*.gltf2);;"\
-                                                        "glTF 2.0 Binary (*.glb2);;"\
-                                                        "glTF 1.0 (*.gltf);;"\
-                                                        "glTF 1.0 Binary (*.glb);;"\
-                                                        "Assimp Binary (*.assbin);;"\
-                                                        "Assimp XML (*.assxml);;"\
-                                                        "Assimp JSON (*.assjson);;"\
-                                                        "X3D (*.x3d);;"\
-                                                        "FBX (*.fbx);;"\
-                                                        "FBX ASCII (*.fbxa);;"\
-                                                        "M3D (*.m3d);;"\
-                                                        "M3D ASCII (*.m3da);;"\
-                                                        "3MF (*.3mf);;"\
-                                                        "PBRT (*.pbrt)"),&filter,
+                                                     exportFileDialogFilter(),&filter,
                                                     QFileDialog::DontUseNativeDialog);
     if(!fileName.size()) return;
+
+    fileName = formatFileURI(fileName, filter);
+
     QFileInfo file;
     file.setFile(fileName);
 
@@ -219,9 +235,6 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
 
     if(filter=="Ogre XML (*.mesh.xml)")
     {
-        if(fileName.right(9)!=".mesh.xml")
-            fileName+=".mesh.xml";
-
         Ogre::XMLMeshSerializer xmlMS;
         Ogre::String skName;
 
@@ -244,9 +257,6 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
     }
     else if(filter.contains("mesh"))
     {
-        if(fileName.right(5)!=".mesh")
-            fileName+=".mesh";
-
         Ogre::MeshSerializer m;
 
         unsigned int version = 0;
