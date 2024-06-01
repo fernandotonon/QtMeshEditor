@@ -11,6 +11,7 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QStyleFactory>
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
