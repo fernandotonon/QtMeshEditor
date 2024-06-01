@@ -11,6 +11,8 @@ on:
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
+  AQT_VERSION: '==2.1.*'
+  QT_VERSION: '6.5.0'
 
 jobs:
 #  send-slack-notification:
@@ -160,8 +162,8 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
         host: 'windows'
         target: 'desktop'
         arch: 'win64_mingw'
@@ -192,8 +194,6 @@ jobs:
             copy C:/ProgramData/mingw64/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
             copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
             copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
-# copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
-# copy C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
 
     - name: Upload Artifact
       if: github.event_name == 'release' && github.event.action == 'published'
@@ -351,8 +351,8 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
         host: 'linux'
         target: 'desktop'
         arch: 'gcc_64'
@@ -436,24 +436,6 @@ jobs:
             dpkg-deb --build --root-owner-group pack-deb 
             mv pack-deb.deb qtmesheditor_amd64.deb
     
-#     - name: CPack
-#       env: 
-#           LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
-#       run: |
-#             sudo apt install libxcb-cursor0
-#             sudo cp -R ${{github.workspace}}/bin/Plugin_PCZSceneManager.* /usr/local/lib/
-#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /usr/local/lib/
-#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* /usr/local/lib/
-#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* /usr/local/lib/ 
-#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* /usr/local/lib/ 
-#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
-#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
-#             sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
-#             sudo ls /usr/local/lib/
-#             sudo cpack -G DEB -C ./bin -P QtMeshEditor.deb
-
-#     - run: tar -zcvf QtMeshEditor-bin-Linux.tar.gz ./bin
-
     - uses: actions/upload-artifact@v3
       if: github.event_name == 'release' && github.event.action == 'published'
       with:
@@ -495,8 +477,8 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
         host: 'linux'
         target: 'desktop'
         arch: 'gcc_64'
@@ -539,14 +521,6 @@ jobs:
                /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    # - name: Install CodeQL
-    #   run: |
-    #         wget https://github.com/github/codeql-cli-binaries/releases/latest/download/codeql-linux64.zip
-    #         unzip codeql-linux64.zip
-    #         ./codeql/codeql --version
-    #         mkdir ${{github.workspace}}/CodeQL-database
-    #         ./codeql/codeql database create ${{github.workspace}}/CodeQL-database --language=cpp
-
     - name: Configure CMake
       run: |
             mkdir build
@@ -558,10 +532,6 @@ jobs:
             -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools \
             -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage \
             -DBUILD_QT_MESH_EDITOR=OFF
-
-    #- name: Build
-      # Build your program with the given configuration
-      # run: sudo make install -j8
 
     - name: Install sonar-scanner and build-wrapper
       uses: SonarSource/sonarcloud-github-c-cpp@v2
@@ -590,6 +560,8 @@ jobs:
             sudo apt -y install libxcb-xinerama0 libxcb-cursor0 libx11-dev xvfb
             Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
             export DISPLAY=:99
+            sleep 5
+            ps -ef | grep Xvfb
             echo "DISPLAY=:99" >> $GITHUB_ENV
             sudo ./bin/UnitTests
           #  sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
@@ -757,8 +729,8 @@ jobs:
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
-        aqtversion: '==2.1.*'
-        version: '6.5.0'
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
         host: 'mac'
         target: 'desktop'
         arch: 'clang_64'
@@ -838,7 +810,6 @@ jobs:
             --app-drop-link 600 185 \
             QtMeshEditor-${{github.ref_name}}-MacOS.dmg \
             ${{github.workspace}}/bin/QtMeshEditor.app
-# using create-dmg instead            sudo cpack -G DragNDrop
     
     - if: github.event_name == 'release' && github.event.action == 'published'
       uses: actions/upload-artifact@v3.1.2

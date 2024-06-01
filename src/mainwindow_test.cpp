@@ -11,6 +11,7 @@
 #include <QMouseEvent>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QStyleFactory>
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "mainwindow.h"
@@ -27,6 +28,12 @@ protected:
         int argc = 0;
         char* argv[] = { nullptr };
         app = new QApplication(argc, argv);
+
+        QCoreApplication::setOrganizationName("QtMeshEditor");
+        QCoreApplication::setOrganizationDomain("none");
+        QCoreApplication::setApplicationName("QtMeshEditor");
+
+        app->setStyle(QStyleFactory::create("Fusion"));
 
         mainWindow = new MainWindow();
     }
@@ -68,7 +75,7 @@ TEST_F(MainWindowTest, ChooseLightPalette) {
     auto selectedFalette = settings.value("palette");
     EXPECT_EQ(selectedFalette, "light");
 }
-/*
+
 TEST_F(MainWindowTest, ChooseCustomPalette) {
     auto paletteAction = mainWindow->findChild<QAction*>("actionCustom");
     ASSERT_TRUE(paletteAction != nullptr);
@@ -94,7 +101,7 @@ TEST_F(MainWindowTest, ChooseCustomPalette) {
     // There's no unchecking
     paletteAction->toggle();
     ASSERT_TRUE(paletteAction->isChecked());
-} this is causing GHActions to fail*/
+} 
 
 TEST_F(MainWindowTest, ChooseAmbientLight) {
     auto actionButton = mainWindow->findChild<QAction*>("actionChange_Ambient_Light");
@@ -434,7 +441,7 @@ TEST_F(MainWindowTest, FrameRendering) {
     ASSERT_TRUE(message.startsWith("Status "));
 }
 
-/*
+
 TEST_F(MainWindowTest, OpenMaterialWindow) {
     auto actionMaterial_Editor = mainWindow->findChild<QAction*>("actionMaterial_Editor");
     ASSERT_TRUE(actionMaterial_Editor != nullptr);
@@ -445,7 +452,7 @@ TEST_F(MainWindowTest, OpenMaterialWindow) {
 
     int childrenAfter = mainWindow->children().size();
     ASSERT_EQ(childrenBefore, childrenAfter-1);
-} segfault on GH Actions */
+} 
 
 TEST_F(MainWindowTest, OpenAbout) {
     auto actionAbout = mainWindow->findChild<QAction*>("actionAbout");
