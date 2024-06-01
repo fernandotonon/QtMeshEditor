@@ -27,7 +27,7 @@ TEST(MeshImporterExporterTest, FormatFileURI_UnknownFormat_ReturnsURIWithoutChan
     QString format = "Unknown Format";
     QString expected = "/path/to/file.obj";
 
-    QString result = MeshImporterExporter.formatFileURI(uri, format);
+    QString result = MeshImporterExporter::formatFileURI(uri, format);
 
     EXPECT_EQ(result, expected);
 }
