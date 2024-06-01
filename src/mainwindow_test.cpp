@@ -32,7 +32,7 @@ protected:
         QCoreApplication::setOrganizationDomain("none");
         QCoreApplication::setApplicationName("QtMeshEditor");
 
-        app.setStyle(QStyleFactory::create("Fusion"));
+        app->setStyle(QStyleFactory::create("Fusion"));
 
         mainWindow = new MainWindow();
     }
