@@ -130,7 +130,8 @@ TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndUri_ReturnMinusOne) {
 
 TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndEntityAndUri_ReturnZero) {
     // Arrange
-    QStringList validUri{"./media/models/Twist Dance.fbx"};
+    // Add an empty url just for test the continue statement
+    QStringList validUri{"", "./media/models/Twist Dance.fbx"};
     MeshImporterExporter::importer(validUri);
     Manager::getSingleton()->getRoot()->renderOneFrame();
     auto sn = Manager::getSingleton()->getSceneNodes().last();
