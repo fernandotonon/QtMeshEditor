@@ -147,6 +147,8 @@ TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndEntityAndUri_ReturnZe
 
     // Clean up
     QFile::remove("./exported.mesh");
+    QFile::remove("./exported.material");
     QFile::remove("./exported.mesh.xml");
+    QFile::remove("./exported.skeleton.xml");
     QFile::remove("./exported.x");
 }
