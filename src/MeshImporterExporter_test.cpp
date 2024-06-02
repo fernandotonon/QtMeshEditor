@@ -22,6 +22,50 @@ TEST(MeshImporterExporterTest, FormatFileURI_URIWithExtension_ReturnsURIWithoutC
     EXPECT_EQ(result, expected);
 }
 
+TEST(MeshImporterExporterTest, FormatFileURI_URIWithoutExtension_ReturnsURIWithFormatExtension) {
+    QString uri = "/path/to/file";
+    QString format = "Ogre XML (*.mesh.xml)";
+    QString expected = "/path/to/file.mesh.xml";
+
+    QString result = MeshImporterExporter::formatFileURI(uri, format);
+
+    EXPECT_EQ(result, expected);
+}
+
+TEST(MeshImporterExporterTest, FormatFileURI_URIWithExtensionAndNoFormat_ReturnsURIWithoutChanges) {
+    QString uri = "/path/to/file.mesh.xml";
+    QString expected = "/path/to/file.mesh.xml";
+
+    QString result = MeshImporterExporter::formatFileURI(uri, nullptr);
+
+    EXPECT_EQ(result, expected);
+}
+
+TEST(MeshImporterExporterTest, FormatFileURI_URIWithoutExtensionAndNoFormat_ReturnsURIWithoutChanges) {
+    QString uri = "/path/to/file";
+    QString expected = "/path/to/file";
+
+    QString result = MeshImporterExporter::formatFileURI(uri, nullptr);
+
+    EXPECT_EQ(result, expected);
+}
+
+TEST(MeshImporterExporterTest, FormatFileURI_NULLURI_ReturnsEmptyString) {
+    QString format = "Ogre XML (*.mesh.xml)";
+
+    QString result = MeshImporterExporter::formatFileURI(nullptr, format);
+
+    EXPECT_EQ(result, "");
+}
+
+TEST(MeshImporterExporterTest, FormatFileURI_EmptyURI_ReturnsEmptyString) {
+    QString format = "Ogre XML (*.mesh.xml)";
+
+    QString result = MeshImporterExporter::formatFileURI("", format);
+
+    EXPECT_EQ(result, "");
+}
+
 TEST(MeshImporterExporterTest, FormatFileURI_UnknownFormat_ReturnsURIWithoutChanges) {
     QString uri = "/path/to/file.obj";
     QString format = "Unknown Format";

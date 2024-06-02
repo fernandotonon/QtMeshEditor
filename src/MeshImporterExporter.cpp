@@ -2,7 +2,7 @@
 -----------------------------------------------------------------------------------
 A QtMeshEditor file
 
-Copyright (c) HogPog Team (www.hogpog.com.br)
+Copyright (c) Fernando Tonon (https://github.com/fernandotonon)
 
 The MIT License
 
@@ -25,6 +25,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 -----------------------------------------------------------------------------------
 */
+
 #include "MeshImporterExporter.h"
 #include <assimp/Importer.hpp>
 #include <assimp/Exporter.hpp>
@@ -194,6 +195,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
 
 QString MeshImporterExporter::formatFileURI(const QString &_uri, const QString &_format)
 {
+    if(_uri.isEmpty()) return "";
     const auto ext = exportFormats[_format];
     if(_uri.right(ext.size())==ext) 
         return _uri;
