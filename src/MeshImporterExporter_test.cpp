@@ -130,7 +130,7 @@ TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndUri_ReturnMinusOne) {
 
 TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndEntityAndUri_ReturnZero) {
     // Arrange
-    QStringList validUri{"./media/models/robot.mesh"};
+    QStringList validUri{"./media/models/Twist Dance.fbx"};
     MeshImporterExporter::importer(validUri);
     Manager::getSingleton()->getRoot()->renderOneFrame();
     auto sn = Manager::getSingleton()->getSceneNodes().last();
@@ -139,6 +139,10 @@ TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndEntityAndUri_ReturnZe
     EXPECT_EQ(MeshImporterExporter::exporter(sn, "./exported.mesh", "Ogre Mesh (*.mesh)"), 0);
     EXPECT_EQ(MeshImporterExporter::exporter(sn, "./exported.mesh.xml", "Ogre XML (*.mesh.xml)"), 0);
     EXPECT_EQ(MeshImporterExporter::exporter(sn, "./exported.x", "X (*.x)"), 0);
+
+    // Test import ogre xml
+    QStringList ogreXMLURL{"./exported.mesh.xml"};
+    MeshImporterExporter::importer(ogreXMLURL);
 
     // Clean up
     QFile::remove("./exported.mesh");
