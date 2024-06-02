@@ -2,7 +2,7 @@
 -----------------------------------------------------------------------------------
 A QtMeshEditor file
 
-Copyright (c) HogPog Team (www.hogpog.com.br)
+Copyright (c) Fernando Tonon (https://github.com/fernandotonon)
 
 The MIT License
 
@@ -25,6 +25,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 -----------------------------------------------------------------------------------
 */
+
 #include "MeshImporterExporter.h"
 #include <assimp/Importer.hpp>
 #include <assimp/Exporter.hpp>
@@ -194,6 +195,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
 
 QString MeshImporterExporter::formatFileURI(const QString &_uri, const QString &_format)
 {
+    if(_uri.isEmpty()) return "";
     const auto ext = exportFormats[_format];
     if(_uri.right(ext.size())==ext) 
         return _uri;
@@ -210,12 +212,12 @@ QString MeshImporterExporter::exportFileDialogFilter()
     return filter;
 }
 
-void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
+int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
 {
     if(!_sn)
     {
         QMessageBox::warning(nullptr,"No object","Which object are you trying to export?",QMessageBox::Ok);
-        return;
+        return -1;
     }
 
     QString filter = "Ogre Mesh (*.mesh)";
@@ -223,17 +225,28 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
                                                      _sn->getName().data(),
                                                      exportFileDialogFilter(),&filter,
                                                     QFileDialog::DontUseNativeDialog);
-    if(!fileName.size()) return;
+    if(fileName.isEmpty()) return -1;
 
-    fileName = formatFileURI(fileName, filter);
+    QString uri = formatFileURI(fileName, filter);
+
+    exporter(_sn, uri, filter);
+    return 0;
+}
+
+int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format)
+{
+    if(!_sn) return -1;
+
+    if(_uri.isEmpty()) return -1;
 
     QFileInfo file;
-    file.setFile(fileName);
+    file.setFile(_uri);
 
+    if(!Manager::getSingleton()->getSceneMgr()->hasEntity(_sn->getName())) return -1;
     const Ogre::Entity *e = Manager::getSingleton()->getSceneMgr()->getEntity(_sn->getName());
-    if(!e) return;
+    if(!e) return -1;
 
-    if(filter=="Ogre XML (*.mesh.xml)")
+    if(_format=="Ogre XML (*.mesh.xml)")
     {
         Ogre::XMLMeshSerializer xmlMS;
         Ogre::String skName;
@@ -241,21 +254,21 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
         if(e->hasSkeleton())
         {
             Ogre::XMLSkeletonSerializer xmlSS;
-            xmlSS.exportSkeleton(e->getSkeleton(),(fileName.left(fileName.length()-8)+"skeleton.xml").toStdString().data());
+            xmlSS.exportSkeleton(e->getSkeleton(),(_uri.left(_uri.length()-8)+"skeleton.xml").toStdString().data());
 
             skName = e->getMesh().get()->getSkeletonName();
 
             e->getMesh().get()->setSkeletonName((file.baseName()+".skeleton.xml").toStdString().data());
         }
 
-        xmlMS.exportMesh(e->getMesh().get(),fileName.toStdString().data());
+        xmlMS.exportMesh(e->getMesh().get(),_uri.toStdString().data());
 
         if(e->hasSkeleton())
             e->getMesh().get()->setSkeletonName(skName);
 
         exportMaterial(e, file);
     }
-    else if(filter.contains("mesh"))
+    else if(_format.contains("mesh"))
     {
         Ogre::MeshSerializer m;
 
@@ -269,16 +282,15 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
             {"Ogre Mesh v1.0+(*.mesh)", 5}
         };
 
-        version = versionMap[filter];
+        version = versionMap[_format];
 
         if(e->hasSkeleton())
         {
-            // TODO: change the name of the skeleton to match the new mesh name.
             Ogre::SkeletonSerializer ss;
             ss.exportSkeleton(e->getSkeleton(),QString(file.path()+"/"+e->getMesh().get()->getSkeletonName().c_str()).toStdString().data());
         }
 
-        m.exportMesh(e->getMesh().get(),fileName.toStdString().data(),(Ogre::MeshVersion)version);
+        m.exportMesh(e->getMesh().get(),_uri.toStdString().data(),(Ogre::MeshVersion)version);
 
         exportMaterial(e, file);
     } else {
@@ -317,7 +329,7 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
             aiProcess_OptimizeMeshes |
             aiProcess_GlobalScale
         );
-        if(!scene) return;
+        if(!scene) return -1;
 
         // Export to the desired format
         Assimp::Exporter exporter;
@@ -328,4 +340,6 @@ void MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
        // QFile::remove("./temp.skeleton.xml");
         QFile::remove("./temp.material");
     }
+
+    return 0;
 }

@@ -2,7 +2,7 @@
 -----------------------------------------------------------------------------------
 A QtMeshEditor file
 
-Copyright (c) HogPog Team (www.hogpog.com.br)
+Copyright (c) Fernando Tonon (https://github.com/fernandotonon)
 
 The MIT License
 

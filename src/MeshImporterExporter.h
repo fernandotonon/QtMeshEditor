@@ -2,7 +2,7 @@
 -----------------------------------------------------------------------------------
 A QtMeshEditor file
 
-Copyright (c) HogPog Team (www.hogpog.com.br)
+Copyright (c) Fernando Tonon (https://github.com/fernandotonon)
 
 The MIT License
 
@@ -45,7 +45,8 @@ private:
 
 public:
     static void importer(const QStringList &_uriList);
-    static void exporter(const Ogre::SceneNode *_sn);
+    static int exporter(const Ogre::SceneNode *_sn);
+    static int exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format);
     static QString formatFileURI(const QString &_uri, const QString &_format);
     static QString exportFileDialogFilter();
 };
