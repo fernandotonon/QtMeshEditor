@@ -31,7 +31,7 @@ protected:
 
         QCoreApplication::setOrganizationName("QtMeshEditor");
         QCoreApplication::setOrganizationDomain("none");
-        QCoreApplication::setApplicationName("QtMeshEditor");
+        QCoreApplication::setApplicationName("QtMeshEditor_test");
 
         app->setStyle(QStyleFactory::create("Fusion"));
 
@@ -512,8 +512,6 @@ TEST_F(MainWindowTest, DropEvent) {
     entities = Manager::getSingleton()->getEntities();
     ASSERT_EQ(entities.count(), countBefore+3);
 }
-
-
 
 TEST_F(MainWindowTest, SelectAnimatedEntity)
 {
