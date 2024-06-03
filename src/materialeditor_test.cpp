@@ -448,15 +448,17 @@ TEST_F(MaterialEditorTest, onAlphaSpecularValueChanged) {
 
     //Create test material
     Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSpecular().a, 1.0f);
+
+    // Don't change the value if the pass is not selected
+    editor->on_alphaSpecular_valueChanged(0.5);
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSpecular().a, 1.0);
 
     // Set material
     editor->setMaterial("TestMaterial");
+    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
 
     // Set alpha specular
     editor->on_alphaSpecular_valueChanged(0.5);
-
-    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
     ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSpecular().a, 0.5);
 
     // Set alpha specular to 0
@@ -473,15 +475,17 @@ TEST_F(MaterialEditorTest, onShineSpecularValueChanged) {
 
     //Create test material
     Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    // Don't change the value if the pass is not selected
+    editor->on_shineSpecular_valueChanged(0.5);
     ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getShininess(), 0.0);
 
     // Set material
     editor->setMaterial("TestMaterial");
+    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
 
     // Set shine specular
     editor->on_shineSpecular_valueChanged(0.5);
-
-    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
     ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getShininess(), 0.5);
 
     // Set shine specular back
@@ -529,4 +533,34 @@ TEST_F(MaterialEditorTest, onScrollAnimSpeedValueChanged) {
     editor->getUI()->scrollAnimVSpeed->setValue(0.0f);
     ASSERT_EQ(editor->getMaterialText().find("1.0 1.0"),-1);
     Ogre::MaterialManager::getSingleton().remove(material);
+}
+
+TEST_F(MaterialEditorTest, onSrcBlendBoxCurrentIndexChanged) {
+    auto editor = std::make_unique<MaterialEditor>();
+
+    //Create test material
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestSrcBlendBoxMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    // Set material
+    editor->setMaterial("TestSrcBlendBoxMaterial");
+    editor->setMaterialText("\nmaterial TestSrcBlendBoxMaterial\n{\n\ttechnique\n\t{\n\t\tpass test_pass \n\t\t{\n\t\tlighting off\n\t\ttexture_unit testTU \n\t\t{\n\t\t}\n\t\t}\n\n\t}\n\n}\n");
+
+    ASSERT_EQ(editor->getUI()->srcSceneBlendBox->currentIndex(), 6);
+
+    // Change the src blend box
+    editor->getUI()->srcSceneBlendBox->setCurrentIndex(1);
+
+    ASSERT_EQ(editor->getUI()->srcSceneBlendBox->currentIndex(), 1);
+    ASSERT_GT(editor->getMaterialText().find("alpha_blend"), 0);
+
+    // Don't change when selecting null
+    editor->getUI()->srcSceneBlendBox->setCurrentIndex(0);
+    ASSERT_GT(editor->getMaterialText().find("alpha_blend"), 0);
+
+    // Change the src blend box back
+    editor->getUI()->srcSceneBlendBox->setCurrentIndex(6);
+
+    ASSERT_EQ(editor->getUI()->srcSceneBlendBox->currentIndex(), 6);
+    ASSERT_EQ(editor->getMaterialText().find("alpha_blend"), -1);
+    ASSERT_GT(editor->getMaterialText().find("one"), 0);
 }
