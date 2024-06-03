@@ -2,7 +2,9 @@
 #include <gmock/gmock.h>
 #include "materialeditor.h"
 #include "ui_materialeditor.h"
+#include "Manager.h"
 #include <QApplication>
+#include <QInputDialog>
 
 class MaterialEditorTest : public ::testing::Test {
 protected:
@@ -495,24 +497,36 @@ TEST_F(MaterialEditorTest, onScrollAnimSpeedValueChanged) {
     auto editor = std::make_unique<MaterialEditor>();
 
     //Create test material
-    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureUScroll(), 0.0f);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureVScroll(), 0.0f);
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestScrollAnimSpeedMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     // Set material
-    editor->setMaterial("TestMaterial");
+    editor->setMaterial("TestScrollAnimSpeedMaterial");
+    editor->setMaterialText("\nmaterial TestScrollAnimSpeedMaterial\n{\n\ttechnique\n\t{\n\t\tpass test_pass \n\t\t{\n\t\tlighting off\n\t\ttexture_unit testTU \n\t\t{\n\t\t}\n\t\t}\n\n\t}\n\n}\n");
+    ASSERT_EQ(editor->getMaterialName(), "TestScrollAnimSpeedMaterial");
+
+    // Apply
+    editor->getUI()->applyButton->setEnabled(true);
+    editor->getUI()->applyButton->click();
+
+    // Select the first pass
+    editor->getUI()->passComboBox->setCurrentIndex(1);
+
+    // Create the texture unity
+    editor->getUI()->ComboTextureUnit->setCurrentIndex(1);
+    ASSERT_EQ(editor->getUI()->ComboTextureUnit->currentText(), "testTU");
+
+    // Assert initial state
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestScrollAnimSpeedMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureUScroll(), 0.0f);
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestScrollAnimSpeedMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureVScroll(), 0.0f);
 
     // Set animation u speed
-    editor->getUI()->scrollAnimUSpeed->setValue(1.0);
-    editor->getUI()->scrollAnimVSpeed->setValue(1.0);
+    editor->getUI()->scrollAnimUSpeed->setValue(1.0f);
+    editor->getUI()->scrollAnimVSpeed->setValue(1.0f);
+    ASSERT_GT(editor->getMaterialText().find("1.0 1.0"),0);
 
-    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureUScroll(), 1.0f);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureVScroll(), 1.0f);
     // Set animation u speed back
-    editor->getUI()->scrollAnimUSpeed->setValue(0.0);
-    editor->getUI()->scrollAnimVSpeed->setValue(0.0);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureUScroll(), 0.0f);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureVScroll(), 0.0f);
+    editor->getUI()->scrollAnimUSpeed->setValue(0.0f);
+    editor->getUI()->scrollAnimVSpeed->setValue(0.0f);
+    ASSERT_EQ(editor->getMaterialText().find("1.0 1.0"),-1);
     Ogre::MaterialManager::getSingleton().remove(material);
-} 
+}
