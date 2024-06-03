@@ -57,6 +57,8 @@ plugins:
       library: googletest
 exclude_patterns:
   - "src/OgreXML/"
+  - "src/dependencies/ogre-procedural/library/src/"
+  - "src/UnitTests_autogen/**/*.cpp"
   - "*_autogen*"
   - "src/dependencies/"
   - "**/CMakeFiles/*"
@@ -67,6 +69,7 @@ exclude_patterns:
   - "lib/"
   - "bin/"
   - "cfg/"
+  - "*.cc"
   - "*.md"
   - "*.in"
   - "*.yml"
