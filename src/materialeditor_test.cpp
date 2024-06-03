@@ -491,7 +491,6 @@ TEST_F(MaterialEditorTest, onShineSpecularValueChanged) {
     Ogre::MaterialManager::getSingleton().remove(material);
 }
 
-/*
 TEST_F(MaterialEditorTest, onScrollAnimSpeedValueChanged) {
     auto editor = std::make_unique<MaterialEditor>();
 
@@ -516,4 +515,4 @@ TEST_F(MaterialEditorTest, onScrollAnimSpeedValueChanged) {
     ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureUScroll(), 0.0f);
     ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureVScroll(), 0.0f);
     Ogre::MaterialManager::getSingleton().remove(material);
-} Enable after adding textures to the test*/
+} 

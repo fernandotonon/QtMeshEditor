@@ -248,7 +248,7 @@ bool MaterialEditor::validateScript(Ogre::DataStreamPtr& dataStream)
                 Ogre::Exception e{0,msg,"ScriptCompilerListener","error",file.c_str(),line};
                 errors.push_back(e);
             }
-                const std::vector<Ogre::Exception> &getErrors(){return errors;};
+                const std::vector<Ogre::Exception> &getErrors() const{return errors;};
         };
 
         if(!Ogre::ResourceGroupManager::getSingleton().resourceGroupExists("Test_Script"))
@@ -283,7 +283,6 @@ bool MaterialEditor::validateScript(Ogre::DataStreamPtr& dataStream)
         mBox.exec();
         return false;
     }
-    return true;
 }
 
 void MaterialEditor::on_techComboBox_currentIndexChanged(int index)
@@ -351,7 +350,7 @@ void MaterialEditor::on_ComboTextureUnit_currentIndexChanged(int index)
         ui->removeTexture->setEnabled(true);
 
         const auto effects = mSelectedTextureUnit->getEffects();
-        for(auto effectPair : effects){
+        for(const auto effectPair : effects){
             if(effectPair.first==Ogre::TextureUnitState::ET_UVSCROLL ||
                     effectPair.first==Ogre::TextureUnitState::ET_USCROLL)
                 ui->scrollAnimUSpeed->setValue(effectPair.second.arg1);
@@ -584,17 +583,16 @@ void MaterialEditor::on_passNewButton_clicked()
     QString text = QInputDialog::getText(this, tr("New Pass"),
                                          tr("Pass name:"), QLineEdit::Normal,
                                          "", &ok);
-    if (ok && mSelectedTechnique)
-    {
-        Ogre::Pass *p = mSelectedTechnique->createPass();
-        p->setName(text.toStdString().data());
+    if (!(ok && mSelectedTechnique)) return;
 
-        mPassMap.insert(mPassMap.size(),p);
+    Ogre::Pass *p = mSelectedTechnique->createPass();
+    p->setName(text.toStdString().data());
 
-        ui->passComboBox->addItem(text.toStdString().data());
+    mPassMap.insert(mPassMap.size(),p);
 
-        updateMaterialText();
-    }
+    ui->passComboBox->addItem(text.toStdString().data());
+
+    updateMaterialText();
 }
 
 
@@ -604,15 +602,14 @@ void MaterialEditor::on_TextureUnitNewButton_clicked()
     QString text = QInputDialog::getText(this, tr("New Texture Unit"),
                                          tr("Texture unit name:"), QLineEdit::Normal,
                                          "", &ok);
-    if (ok && mSelectedPass)
-    {
-        Ogre::TextureUnitState *t = mSelectedPass->createTextureUnitState();
-        t->setName(text.toStdString().data());
+    if (!(ok && mSelectedPass)) return;
 
-        ui->ComboTextureUnit->addItem(text.toStdString().data());
+    Ogre::TextureUnitState *t = mSelectedPass->createTextureUnitState();
+    t->setName(text.toStdString().data());
 
-        updateMaterialText();
-    }
+    ui->ComboTextureUnit->addItem(text.toStdString().data());
+
+    updateMaterialText();
 }
 
 
@@ -623,25 +620,23 @@ void MaterialEditor::on_selectTexture_clicked()
                                                      tr("Image File (*.bmp *.jpg *.gif *.raw *.png *.tga *.dds)"),
                                                     nullptr, QFileDialog::DontUseNativeDialog);
 
-    if(filePath.size()&&mSelectedTextureUnit)
-    {
+    if(!(filePath.size()&&mSelectedTextureUnit)) return;
 
-        QFileInfo file;
-        file.setFile(filePath);
+    QFileInfo file;
+    file.setFile(filePath);
 
-        try {
-            Ogre::TextureManager::getSingleton().getByName(file.fileName().toStdString().data(),file.path().toStdString().data());
-        } catch (...) {
-            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
-            Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+    try {
+        Ogre::TextureManager::getSingleton().getByName(file.fileName().toStdString().data(),file.path().toStdString().data());
+    } catch (...) {
+        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
+        Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
 
-            Ogre::Image i;
-            i.load(file.fileName().toStdString().data(),file.path().toStdString().data());
-            Ogre::TextureManager::getSingleton().loadImage(file.fileName().toStdString().data(),file.path().toStdString().data(),i);
-        }
-        ui->textureName->setText(file.fileName());
-        mSelectedTextureUnit->setTextureName(file.fileName().toStdString().data());
+        Ogre::Image i;
+        i.load(file.fileName().toStdString().data(),file.path().toStdString().data());
+        Ogre::TextureManager::getSingleton().loadImage(file.fileName().toStdString().data(),file.path().toStdString().data(),i);
     }
+    ui->textureName->setText(file.fileName());
+    mSelectedTextureUnit->setTextureName(file.fileName().toStdString().data());
 }
 
 void MaterialEditor::on_removeTexture_clicked()
