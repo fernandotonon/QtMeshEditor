@@ -610,6 +610,7 @@ jobs:
             '/home/runner/work/QtMeshEditor/QtMeshEditor/_deps/*' \
             'ui_files/*' \
             'moc_*' \
+            '*_test.cpp' \
             -o filtered_coverage.info
    
     - run: |
