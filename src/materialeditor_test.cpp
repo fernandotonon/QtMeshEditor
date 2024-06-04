@@ -56,6 +56,7 @@ TEST_F(MaterialEditorTest, SetTechFieldsTestWithEmptyList) {
     editor->setTechFields(techMap, passList);
 
     // Call the methods without selecting a tech, pass or texture unit
+    editor->getUI()->removeTexture->click();
     editor->on_checkBoxLightning_toggled(false);
     editor->on_checkBoxDepthWrite_toggled(false);
     editor->on_checkBoxDepthCheck_toggled(false);
