@@ -55,6 +55,21 @@ TEST_F(MaterialEditorTest, SetTechFieldsTestWithEmptyList) {
 
     editor->setTechFields(techMap, passList);
 
+    // Call the methods without selecting a tech, pass or texture unit
+    editor->getUI()->srcSceneBlendBox->setCurrentIndex(1);
+    editor->getUI()->dstSceneBlendBox->setCurrentIndex(1);
+    editor->on_checkBoxLightning_toggled(false);
+    editor->on_checkBoxDepthWrite_toggled(false);
+    editor->on_checkBoxDepthCheck_toggled(false);
+    editor->on_checkBoxUseVertexColorToAmbient_toggled(true);
+    editor->on_checkBoxUseVertexColorToDifuse_toggled(true);
+    editor->on_checkBoxUseVertexColorToSpecular_toggled(true);
+    editor->on_checkBoxUseVertexColorToEmissive_toggled(true);
+    editor->on_alphaDifuse_valueChanged(0.5);
+    editor->on_alphaSpecular_valueChanged(0.5);
+    editor->on_shineSpecular_valueChanged(0.5);
+    editor->on_comboPolygonMode_currentIndexChanged(1);
+
     // Verify that the passComboBox is in the default state
     ASSERT_EQ(editor->getUI()->passComboBox->count(), 1);
     ASSERT_EQ(editor->getUI()->passComboBox->itemText(0), "");
