@@ -56,13 +56,13 @@ plugins:
       standard: "cpp17"
       library: googletest
 exclude_patterns:
-  - "src/OgreXML/"
-  - "src/dependencies/ogre-procedural/library/src/"
+  - "src/OgreXML/*.*"
+  - "src/dependencies/ogre-procedural/library/src/*.*"
   - "src/UnitTests_autogen/**/*.cpp"
   - "*_autogen*"
-  - "src/dependencies/"
+  - "src/dependencies/**/*.*"
   - "**/CMakeFiles/*"
-  - "_deps/"
+  - "_deps/**/*.*"
   - "ui_files/"
   - "moc_*"
   - "media/"
