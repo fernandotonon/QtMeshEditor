@@ -596,8 +596,8 @@ jobs:
             lcov --capture --directory . --output-file coverage.info
             lcov --remove coverage.info '/usr/*' \
             '/home/runner/work/QtMeshEditor/Qt/*' \
-            '/home/runner/work/QtMeshEditor/src/OgreXML/*' \
-            '/home/runner/work/QtMeshEditor/src/dependencies/*' \
+            '/home/runner/work/QtMeshEditor/QtMeshEditor/src/OgreXML/*' \
+            '/home/runner/work/QtMeshEditor/QtMeshEditor/src/dependencies/*' \
             'src/OgreXML/*.*' \
             'src/dependencies/ogre-procedural/library/src/*.*' \
             'src/UnitTests_autogen/**/*.cpp' \
@@ -607,7 +607,7 @@ jobs:
             '_deps/**/*.h' \
             '_deps/**/*.cpp' \
             '_deps/**/*.cc' \
-            '/home/runner/work/QtMeshEditor/_deps/*' \
+            '/home/runner/work/QtMeshEditor/QtMeshEditor/_deps/*' \
             'ui_files/*' \
             'moc_*' \
             -o filtered_coverage.info
