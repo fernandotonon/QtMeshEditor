@@ -477,13 +477,13 @@ void MaterialEditor::on_srcSceneBlendBox_currentIndexChanged(int index)
 
 void MaterialEditor::on_dstSceneBlendBox_currentIndexChanged(int index)
 {
-    if(mSelectedPass)
+    if(!mSelectedPass) return;
+
+    if(index>0)
     {
-        if(index>0)
-        {
-            mSelectedPass->setSceneBlending(mSelectedPass->getSourceBlendFactor(),(Ogre::SceneBlendFactor)--index);
-        }
+        mSelectedPass->setSceneBlending(mSelectedPass->getSourceBlendFactor(),(Ogre::SceneBlendFactor)--index);
     }
+
     updateMaterialText();
 }
 
@@ -641,38 +641,41 @@ void MaterialEditor::on_selectTexture_clicked()
 
 void MaterialEditor::on_removeTexture_clicked()
 {
-    if(mSelectedTextureUnit)
-    {
-        mSelectedTextureUnit->setTextureName("");
-        ui->textureName->setText("*Select a texture*");
-    }
+    if(!mSelectedTextureUnit) return;
+
+    mSelectedTextureUnit->setTextureName("");
+    ui->textureName->setText("*Select a texture*");
 }
 
 void MaterialEditor::on_checkBoxLightning_toggled(bool checked)
 {
-    if(mSelectedPass)
-        mSelectedPass->setLightingEnabled(checked);
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setLightingEnabled(checked);
     updateMaterialText();
 }
 
 void MaterialEditor::on_checkBoxDepthWrite_toggled(bool checked)
 {
-    if(mSelectedPass)
-        mSelectedPass->setDepthWriteEnabled(checked);
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setDepthWriteEnabled(checked);
     updateMaterialText();
 }
 
 void MaterialEditor::on_checkBoxDepthCheck_toggled(bool checked)
 {
-    if(mSelectedPass)
-        mSelectedPass->setDepthCheckEnabled(checked);
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setDepthCheckEnabled(checked);
     updateMaterialText();
 }
 
 void MaterialEditor::on_comboPolygonMode_currentIndexChanged(int index)
 {
-    if(mSelectedPass)
-        mSelectedPass->setPolygonMode(static_cast<Ogre::PolygonMode>(index+1));
+    if(!mSelectedPass) return;
+
+    mSelectedPass->setPolygonMode(static_cast<Ogre::PolygonMode>(index+1));
     updateMaterialText();
 }
 

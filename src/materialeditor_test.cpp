@@ -68,7 +68,7 @@ TEST_F(MaterialEditorTest, SetTechFieldsTestWithEmptyList) {
     editor->on_shineSpecular_valueChanged(0.5);
     editor->on_comboPolygonMode_currentIndexChanged(1);
 
-    // Verify that the passComboBox is in the default state
+    // Verify that the fields are in the default state
     ASSERT_EQ(editor->getUI()->passComboBox->count(), 1);
     ASSERT_EQ(editor->getUI()->passComboBox->itemText(0), "");
     ASSERT_TRUE(editor->getUI()->passComboBox->isEnabled());
