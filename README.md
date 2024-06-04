@@ -6,7 +6,7 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 
 [![Github All Releases](https://img.shields.io/github/downloads/fernandotonon/QtMeshEditor/total.svg)]()
 [![Deploy](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml/badge.svg)](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=coverage)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
+[![Coverage](https://api.codeclimate.com/v1/badges/946bc0c606302904a589/test_coverage)](https://codeclimate.com/github/fernandotonon/QtMeshEditor/test_coverage)
 [![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Technical Debt](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=sqale_index)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
@@ -32,10 +32,11 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
   - View the bones
   - Animation Preview - Shows a list of animations and allows the animation preview.
   - Renaming Animation
-  - View keyframes positions and values
+  - View keyframe positions and values
 * Import/Export
   - Export mesh in older versions 
-  - Other 3D Format Importer - Can convert any 3D format provided by ASSIMP to Ogre Mesh, Material and Skeleton
+  - Other 3D Format Importer - Can convert any 3D format provided by ASSIMP to Ogre Mesh, Material, and Skeleton
+  - Other 3D Format Exporter - Can export the mesh to any other format supported by ASSIMP.
 
 ### :computer: Install from release binaries
 #### :apple: macOS
