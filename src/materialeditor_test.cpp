@@ -2,7 +2,9 @@
 #include <gmock/gmock.h>
 #include "materialeditor.h"
 #include "ui_materialeditor.h"
+#include "Manager.h"
 #include <QApplication>
+#include <QInputDialog>
 
 class MaterialEditorTest : public ::testing::Test {
 protected:
@@ -53,7 +55,21 @@ TEST_F(MaterialEditorTest, SetTechFieldsTestWithEmptyList) {
 
     editor->setTechFields(techMap, passList);
 
-    // Verify that the passComboBox is in the default state
+    // Call the methods without selecting a tech, pass or texture unit
+    editor->getUI()->removeTexture->click();
+    editor->on_checkBoxLightning_toggled(false);
+    editor->on_checkBoxDepthWrite_toggled(false);
+    editor->on_checkBoxDepthCheck_toggled(false);
+    editor->on_checkBoxUseVertexColorToAmbient_toggled(true);
+    editor->on_checkBoxUseVertexColorToDifuse_toggled(true);
+    editor->on_checkBoxUseVertexColorToSpecular_toggled(true);
+    editor->on_checkBoxUseVertexColorToEmissive_toggled(true);
+    editor->on_alphaDifuse_valueChanged(0.5);
+    editor->on_alphaSpecular_valueChanged(0.5);
+    editor->on_shineSpecular_valueChanged(0.5);
+    editor->on_comboPolygonMode_currentIndexChanged(1);
+
+    // Verify that the fields are in the default state
     ASSERT_EQ(editor->getUI()->passComboBox->count(), 1);
     ASSERT_EQ(editor->getUI()->passComboBox->itemText(0), "");
     ASSERT_TRUE(editor->getUI()->passComboBox->isEnabled());
@@ -446,15 +462,17 @@ TEST_F(MaterialEditorTest, onAlphaSpecularValueChanged) {
 
     //Create test material
     Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSpecular().a, 1.0f);
+
+    // Don't change the value if the pass is not selected
+    editor->on_alphaSpecular_valueChanged(0.5);
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSpecular().a, 1.0);
 
     // Set material
     editor->setMaterial("TestMaterial");
+    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
 
     // Set alpha specular
     editor->on_alphaSpecular_valueChanged(0.5);
-
-    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
     ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getSpecular().a, 0.5);
 
     // Set alpha specular to 0
@@ -471,15 +489,17 @@ TEST_F(MaterialEditorTest, onShineSpecularValueChanged) {
 
     //Create test material
     Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    // Don't change the value if the pass is not selected
+    editor->on_shineSpecular_valueChanged(0.5);
     ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getShininess(), 0.0);
 
     // Set material
     editor->setMaterial("TestMaterial");
+    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
 
     // Set shine specular
     editor->on_shineSpecular_valueChanged(0.5);
-
-    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
     ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getShininess(), 0.5);
 
     // Set shine specular back
@@ -491,29 +511,70 @@ TEST_F(MaterialEditorTest, onShineSpecularValueChanged) {
     Ogre::MaterialManager::getSingleton().remove(material);
 }
 
-/*
 TEST_F(MaterialEditorTest, onScrollAnimSpeedValueChanged) {
     auto editor = std::make_unique<MaterialEditor>();
 
     //Create test material
-    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureUScroll(), 0.0f);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureVScroll(), 0.0f);
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestScrollAnimSpeedMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     // Set material
-    editor->setMaterial("TestMaterial");
+    editor->setMaterial("TestScrollAnimSpeedMaterial");
+    editor->setMaterialText("\nmaterial TestScrollAnimSpeedMaterial\n{\n\ttechnique\n\t{\n\t\tpass test_pass \n\t\t{\n\t\tlighting off\n\t\ttexture_unit testTU \n\t\t{\n\t\t}\n\t\t}\n\n\t}\n\n}\n");
+    ASSERT_EQ(editor->getMaterialName(), "TestScrollAnimSpeedMaterial");
+
+    // Apply
+    editor->getUI()->applyButton->setEnabled(true);
+    editor->getUI()->applyButton->click();
+
+    // Select the first pass
+    editor->getUI()->passComboBox->setCurrentIndex(1);
+
+    // Create the texture unity
+    editor->getUI()->ComboTextureUnit->setCurrentIndex(1);
+    ASSERT_EQ(editor->getUI()->ComboTextureUnit->currentText(), "testTU");
+
+    // Assert initial state
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestScrollAnimSpeedMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureUScroll(), 0.0f);
+    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestScrollAnimSpeedMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureVScroll(), 0.0f);
 
     // Set animation u speed
-    editor->getUI()->scrollAnimUSpeed->setValue(1.0);
-    editor->getUI()->scrollAnimVSpeed->setValue(1.0);
+    editor->getUI()->scrollAnimUSpeed->setValue(1.0f);
+    editor->getUI()->scrollAnimVSpeed->setValue(1.0f);
+    ASSERT_GT(editor->getMaterialText().find("1.0 1.0"),0);
 
-    ASSERT_EQ(editor->getMaterialName(), "TestMaterial");
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureUScroll(), 1.0f);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureVScroll(), 1.0f);
     // Set animation u speed back
-    editor->getUI()->scrollAnimUSpeed->setValue(0.0);
-    editor->getUI()->scrollAnimVSpeed->setValue(0.0);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureUScroll(), 0.0f);
-    ASSERT_EQ(Ogre::MaterialManager::getSingleton().getByName("TestMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME)->getTechniques()[0]->getPasses()[0]->getTextureUnitState(0)->getTextureVScroll(), 0.0f);
+    editor->getUI()->scrollAnimUSpeed->setValue(0.0f);
+    editor->getUI()->scrollAnimVSpeed->setValue(0.0f);
+    ASSERT_EQ(editor->getMaterialText().find("1.0 1.0"),-1);
     Ogre::MaterialManager::getSingleton().remove(material);
-} Enable after adding textures to the test*/
+}
+
+TEST_F(MaterialEditorTest, onSrcBlendBoxCurrentIndexChanged) {
+    auto editor = std::make_unique<MaterialEditor>();
+
+    //Create test material
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create("TestSrcBlendBoxMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    // Set material
+    editor->setMaterial("TestSrcBlendBoxMaterial");
+    editor->setMaterialText("\nmaterial TestSrcBlendBoxMaterial\n{\n\ttechnique\n\t{\n\t\tpass test_pass \n\t\t{\n\t\tlighting off\n\t\ttexture_unit testTU \n\t\t{\n\t\t}\n\t\t}\n\n\t}\n\n}\n");
+
+    ASSERT_EQ(editor->getUI()->srcSceneBlendBox->currentIndex(), 6);
+
+    // Change the src blend box
+    editor->getUI()->srcSceneBlendBox->setCurrentIndex(1);
+
+    ASSERT_EQ(editor->getUI()->srcSceneBlendBox->currentIndex(), 1);
+    ASSERT_GT(editor->getMaterialText().find("alpha_blend"), 0);
+
+    // Don't change when selecting null
+    editor->getUI()->srcSceneBlendBox->setCurrentIndex(0);
+    ASSERT_GT(editor->getMaterialText().find("alpha_blend"), 0);
+
+    // Change the src blend box back
+    editor->getUI()->srcSceneBlendBox->setCurrentIndex(6);
+
+    ASSERT_EQ(editor->getUI()->srcSceneBlendBox->currentIndex(), 6);
+    ASSERT_EQ(editor->getMaterialText().find("alpha_blend"), -1);
+    ASSERT_GT(editor->getMaterialText().find("one"), 0);
+}
