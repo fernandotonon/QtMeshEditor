@@ -340,7 +340,7 @@ jobs:
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     runs-on: ubuntu-latest
     env: 
-      LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.7.1/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
+      LD_LIBRARY_PATH: /usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
     steps:
     - uses: actions/checkout@v3.5.3
       with:
@@ -461,7 +461,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: read-all
     env: 
-          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.7.1/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
+          LD_LIBRARY_PATH: /usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
           BUILD_WRAPPER_OUT_DIR: ./
           QT_QPA_PLATFORM: minimal
           QT_DEBUG_PLUGINS: 1
