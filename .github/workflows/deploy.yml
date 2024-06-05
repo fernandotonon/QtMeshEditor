@@ -12,7 +12,7 @@ env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
   AQT_VERSION: '==2.1.*'
-  QT_VERSION: '6.5.0'
+  QT_VERSION: '6.6.0'
 
 jobs:
 #  send-slack-notification:
@@ -174,7 +174,8 @@ jobs:
          OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
          CMAKE_GENERATOR: "MinGW Makefiles"
          ASSIMP_DIR: C:/PROGRA~2/Assimp
-      run: cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-5.2
+      run: |
+        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-5.2
       shell: cmd
 
     - name: Build
@@ -342,7 +343,7 @@ jobs:
     needs: [build-n-cache-assimp-linux, build-n-cache-ogre-linux]
     runs-on: ubuntu-latest
     env: 
-          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
+      LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/
     steps:
     - uses: actions/checkout@v3.5.3
       with:
@@ -400,18 +401,18 @@ jobs:
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
-            -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
-            -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools 
+            -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
+            -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
+            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6GuiTools 
 
     - name: Build
       run: sudo make install -j8
 
     - name: Add missing libraries
       run: |
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./bin
   
     - name: Manual Pack
       run: |
@@ -463,7 +464,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions: read-all
     env: 
-          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
+          LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.1/x64/lib:/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
           BUILD_WRAPPER_OUT_DIR: ./
           QT_QPA_PLATFORM: minimal
           QT_DEBUG_PLUGINS: 1
@@ -527,9 +528,9 @@ jobs:
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
-            -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
-            -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/cmake/Qt6GuiTools \
+            -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
+            -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
+            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6GuiTools \
             -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage \
             -DBUILD_QT_MESH_EDITOR=OFF
 
@@ -541,9 +542,9 @@ jobs:
 
     - name: Add missing libraries
       run: |
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicui18n.* ./bin
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicuuc.* ./bin
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/libicudata.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./bin
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./bin
             sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu
             sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu
             sudo cp -R /usr/local/lib/OGRE/* ./bin
@@ -556,7 +557,7 @@ jobs:
       run: |
             export QT_QPA_PLATFORM="minimal"
             export QT_DEBUG_PLUGINS=1
-            sudo cp -R /home/runner/work/QtMeshEditor/Qt/6.5.0/gcc_64/lib/ /lib/x86_64-linux-gnu/
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/ /lib/x86_64-linux-gnu/
             sudo apt -y install libxcb-xinerama0 libxcb-cursor0 libx11-dev xvfb
             Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
             export DISPLAY=:99
@@ -768,9 +769,9 @@ jobs:
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.4 \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
-            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
-            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/6.5.0/clang_64/lib/cmake/Qt6GuiTools \
+            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
+            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
+            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6GuiTools \
             -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/ 
     
     - name: Build
@@ -780,11 +781,11 @@ jobs:
 
     - name: Copy Qt libs to app folder
       run: |
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/6.5.0/macos/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
             sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
 
     - name: Prepare for packing
