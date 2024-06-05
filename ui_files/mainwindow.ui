@@ -23,7 +23,7 @@
    <string>QtMeshEditor</string>
   </property>
   <property name="windowIcon">
-   <iconset resource="../resources/resource.qrc">
+   <iconset>
     <normaloff>:/icones/icone.ico</normaloff>:/icones/icone.ico</iconset>
   </property>
   <property name="documentMode">
@@ -102,6 +102,7 @@
      <string>Help</string>
     </property>
     <addaction name="actionAbout"/>
+    <addaction name="actionVerify_Update"/>
    </widget>
    <addaction name="menuFile"/>
    <addaction name="menuOp_es"/>
@@ -220,7 +221,7 @@
   </action>
   <action name="actionAdd_Primitive">
    <property name="icon">
-    <iconset resource="../resources/resource.qrc">
+    <iconset>
      <normaloff>:/icones/cube.png</normaloff>:/icones/cube.png</iconset>
    </property>
    <property name="text">
@@ -278,7 +279,7 @@
     <bool>true</bool>
    </property>
    <property name="icon">
-    <iconset resource="../resources/resource.qrc">
+    <iconset>
      <normaloff>:/icones/move.png</normaloff>:/icones/move.png</iconset>
    </property>
    <property name="text">
@@ -296,7 +297,7 @@
     <bool>true</bool>
    </property>
    <property name="icon">
-    <iconset resource="../resources/resource.qrc">
+    <iconset>
      <normaloff>:/icones/rotacionar.png</normaloff>:/icones/rotacionar.png</iconset>
    </property>
    <property name="text">
@@ -314,7 +315,7 @@
     <bool>false</bool>
    </property>
    <property name="icon">
-    <iconset resource="../resources/resource.qrc">
+    <iconset>
      <normaloff>:/icones/selecionar.png</normaloff>:/icones/selecionar.png</iconset>
    </property>
    <property name="text">
@@ -326,7 +327,7 @@
   </action>
   <action name="actionRemove_Object">
    <property name="icon">
-    <iconset resource="../resources/resource.qrc">
+    <iconset>
      <normaloff>:/icones/remove.png</normaloff>:/icones/remove.png</iconset>
    </property>
    <property name="text">
@@ -415,10 +416,13 @@
     <string>Custom</string>
    </property>
   </action>
+  <action name="actionVerify_Update">
+   <property name="text">
+    <string>Verify Update</string>
+   </property>
+  </action>
  </widget>
  <layoutdefault spacing="6" margin="11"/>
- <resources>
-  <include location="../resources/resource.qrc"/>
- </resources>
+ <resources/>
  <connections/>
 </ui>

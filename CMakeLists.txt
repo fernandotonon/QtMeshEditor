@@ -64,7 +64,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 ##############################################################
 #Find Qt Packages
 find_package(QT NAMES Qt6)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick Test)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick Test Network)
 
 message("Found Qt (${QT_VERSION_MAJOR})")
 
@@ -74,6 +74,7 @@ SET (QTLIBLIST
     Qt${QT_VERSION_MAJOR}Widgets
     Qt${QT_VERSION_MAJOR}QuickWidgets
     Qt${QT_VERSION_MAJOR}Quick
+    Qt${QT_VERSION_MAJOR}Network
 )
 FOREACH(qtlib ${QTLIBLIST})
         include_directories(${${qtlib}_INCLUDE_DIRS})

@@ -13,6 +13,7 @@ int main(int argc, char *argv[])
     QCoreApplication::setOrganizationName("QtMeshEditor");
     QCoreApplication::setOrganizationDomain("none");
     QCoreApplication::setApplicationName("QtMeshEditor");
+    QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
 
     a.setStyle(QStyleFactory::create("Fusion"));
 

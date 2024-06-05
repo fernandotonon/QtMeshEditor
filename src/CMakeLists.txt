@@ -235,6 +235,7 @@ ${ASSIMP_LIBRARIES}
 Qt::Gui
 Qt::Core
 Qt::Widgets
+Qt::Network
 )
 ENDIF()
 
@@ -273,7 +274,7 @@ if(BUILD_TESTS)
     ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
-    Qt::Widgets Qt::Core Qt::Gui Qt::Test)
+    Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network)
     
     ADD_DEPENDENCIES(UnitTests ui)
 

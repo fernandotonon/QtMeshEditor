@@ -33,3 +33,6 @@ src/qrc_resource.cpp
 **/.cache/*
 compile_commands.json
 install_manifest.txt
+.ninja_deps
+.ninja_log
+build.ninja
