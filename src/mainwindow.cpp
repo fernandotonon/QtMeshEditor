@@ -1,6 +1,12 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QApplication>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonValue>
+#include <QJsonArray>
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "OgreWidget.h"
@@ -21,7 +27,8 @@
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
     customPaletteColorDialog(new QColorDialog(this)),
-    ambientLightColorDialog(new QColorDialog(this))
+    ambientLightColorDialog(new QColorDialog(this)),
+    networkManager(new QNetworkAccessManager(this))
 {
     ui->setupUi(this);
 
@@ -97,6 +104,7 @@ MainWindow::~MainWindow()
     }
 
     delete ui;
+    delete networkManager;
     if(m_pTransformWidget)
     {
         delete m_pTransformWidget;
@@ -694,5 +702,52 @@ void MainWindow::custom_Palette_Color_Selected(const QColor &color)
     ui->actionLight->setChecked(false);
     ui->actionDark->setChecked(false);
     ui->actionCustom->blockSignals(false);
+}
+
+
+void MainWindow::on_actionVerify_Update_triggered()
+{
+    // Verify if the latest release on GitHub is equal to the current version
+    // If not, ask the user if he wants to update
+    // If yes, download the latest release and install it
+
+    // Send a GET request to the GitHub API to retrieve the latest release information
+    QNetworkRequest request(QUrl("https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest"));
+    QNetworkReply* reply = networkManager->get(request);
+
+    // Connect the finished signal to a slot to handle the response
+    connect(reply, &QNetworkReply::finished, [=]() {
+        if (reply->error() == QNetworkReply::NoError) {
+            // Read the response data
+            QByteArray data = reply->readAll();
+
+            // Parse the JSON response
+            QJsonDocument doc = QJsonDocument::fromJson(data);
+            QJsonObject obj = doc.object();
+
+            // Get the tag name of the latest release
+            QString latestVersion = obj.value("tag_name").toString();
+            QString currentVersion = QApplication::applicationVersion();
+            if (latestVersion == currentVersion) {
+                // The latest release is equal to the current version
+                QMessageBox::information(nullptr, "Update", "You're using the latest release.");
+            } else {
+                // The latest release is different from the current version
+                QMessageBox::StandardButton reply = QMessageBox::question(nullptr, "Update", "A new version is available. Do you want to update?", QMessageBox::Yes | QMessageBox::No);
+                // if yes, open the download link in the default browser
+                if (reply == QMessageBox::Yes) {
+                    QString downloadUrl = obj.value("html_url").toString();
+                    QDesktopServices::openUrl(QUrl(downloadUrl));
+                }
+            }
+        } else {
+            // Handle the error
+            qDebug() << "Error: " << reply->errorString();
+        }
+
+        // Clean up
+        reply->deleteLater();
+    });
+    
 }
 

@@ -6,6 +6,7 @@
 #include <QTableWidget>
 #include <QColorDialog>
 #include <OgreFrameListener.h>
+#include <QNetworkAccessManager>
 
 #include "TransformOperator.h"
 
@@ -70,6 +71,8 @@ private slots:
 
     void on_actionCustom_toggled(bool arg1);
 
+    void on_actionVerify_Update_triggered();
+
 public slots:
     void setPlaying(bool playing);
 
@@ -90,6 +93,7 @@ private:
     QString                     mCurrentPalette;
     QColorDialog*               customPaletteColorDialog;
     QColorDialog*               ambientLightColorDialog;
+    QNetworkAccessManager       *networkManager;
 
     void custom_Palette_Color_Selected(const QColor& color);
 protected:
