@@ -93,7 +93,6 @@ private:
     QString                     mCurrentPalette;
     QColorDialog*               customPaletteColorDialog;
     QColorDialog*               ambientLightColorDialog;
-    QNetworkAccessManager       *networkManager;
 
     void custom_Palette_Color_Selected(const QColor& color);
 protected:
