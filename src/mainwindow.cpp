@@ -27,8 +27,7 @@
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
     customPaletteColorDialog(new QColorDialog(this)),
-    ambientLightColorDialog(new QColorDialog(this)),
-    networkManager(new QNetworkAccessManager(this))
+    ambientLightColorDialog(new QColorDialog(this))
 {
     ui->setupUi(this);
 
@@ -104,7 +103,6 @@ MainWindow::~MainWindow()
     }
 
     delete ui;
-    delete networkManager;
     if(m_pTransformWidget)
     {
         delete m_pTransformWidget;
@@ -711,12 +709,14 @@ void MainWindow::on_actionVerify_Update_triggered()
     // If not, ask the user if he wants to update
     // If yes, download the latest release and install it
 
+    auto networkManager = new QNetworkAccessManager(this);
+
     // Send a GET request to the GitHub API to retrieve the latest release information
     QNetworkRequest request(QUrl("https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest"));
     QNetworkReply* reply = networkManager->get(request);
 
     // Connect the finished signal to a slot to handle the response
-    connect(reply, &QNetworkReply::finished, [=]() {
+    connect(reply, &QNetworkReply::finished, this, [=]() {
         if (reply->error() == QNetworkReply::NoError) {
             // Read the response data
             QByteArray data = reply->readAll();
@@ -730,10 +730,10 @@ void MainWindow::on_actionVerify_Update_triggered()
             QString currentVersion = QApplication::applicationVersion();
             if (latestVersion == currentVersion) {
                 // The latest release is equal to the current version
-                QMessageBox::information(nullptr, "Update", "You're using the latest release.");
+                QMessageBox::information(nullptr, tr("Update"), tr("You're using the latest release."));
             } else {
                 // The latest release is different from the current version
-                QMessageBox::StandardButton reply = QMessageBox::question(nullptr, "Update", "A new version is available. Do you want to update?", QMessageBox::Yes | QMessageBox::No);
+                QMessageBox::StandardButton reply = QMessageBox::question(nullptr, tr("Update"), tr("A new version is available. Do you want to update?"), QMessageBox::Yes | QMessageBox::No);
                 // if yes, open the download link in the default browser
                 if (reply == QMessageBox::Yes) {
                     QString downloadUrl = obj.value("html_url").toString();
@@ -742,12 +742,18 @@ void MainWindow::on_actionVerify_Update_triggered()
             }
         } else {
             // Handle the error
-            qDebug() << "Error: " << reply->errorString();
+            QMessageBox::critical(nullptr, tr("Update"), reply->errorString());
         }
 
         // Clean up
+        networkManager->deleteLater();
         reply->deleteLater();
     });
-    
+
+    // Connect the SSL errors signal to a slot to handle SSL errors
+    connect(networkManager, &QNetworkAccessManager::sslErrors, this, [=](QNetworkReply* reply, const QList<QSslError>& errors) {
+        // Ignore SSL errors
+        reply->ignoreSslErrors();
+    });
 }
 
