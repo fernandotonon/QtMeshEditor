@@ -101,7 +101,8 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
         Ogre::VertexDeclaration* vertexDecl = vertexData->vertexDeclaration;
         size_t currOffset = vertexDecl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION).getSize();
         currOffset += vertexDecl->addElement(0, currOffset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL).getSize();
-        vertexDecl->addElement(0, currOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES).getSize();
+        if(!subMeshData->texCoords.empty())
+            vertexDecl->addElement(0, currOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES).getSize();
 
         // Set the vertex count
         vertexData->vertexCount = subMeshData->vertices.size();
@@ -120,6 +121,7 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
             *pVertex++ = subMeshData->normals[i].y;
             *pVertex++ = subMeshData->normals[i].z;
 
+            if(subMeshData->texCoords.empty()) continue;
             *pVertex++ = subMeshData->texCoords[i].x;
             *pVertex++ = subMeshData->texCoords[i].y;
         }
@@ -193,7 +195,8 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
         }
 
         // Assign the material
-        subMesh->setMaterialName(materialProcessor[subMeshData->materialIndex]->getName());
+        if(subMeshData->materialIndex < materialProcessor.size())
+            subMesh->setMaterialName(materialProcessor[subMeshData->materialIndex]->getName());
     }
 
     // Set the bounding box and bounding sphere radius
