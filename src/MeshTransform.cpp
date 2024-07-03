@@ -31,10 +31,6 @@ THE SOFTWARE.
 #include "Manager.h"
 #include "SkeletonTransform.h"
 
-MeshTransform::MeshTransform()
-{
-}
-
 void MeshTransform::scaleMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_scale)
 {
     Ogre::Mesh* mesh = _ent->getMesh().get();

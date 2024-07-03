@@ -13,7 +13,7 @@ class Material : public QMainWindow
     Q_OBJECT
     
 public:
-    explicit Material(QWidget *parent = 0);
+    explicit Material(QWidget *parent = nullptr);
     virtual ~Material();
     void SetMaterialList(const QStringList &_list);
     

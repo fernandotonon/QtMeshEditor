@@ -34,7 +34,7 @@ MainWindow::MainWindow(QWidget *parent) :
     // Essential behavior of mainWindow for docking widget
     setDockNestingEnabled(true);
     setDockOptions(dockOptions() & (~QMainWindow::AllowTabbedDocks));
-    setCentralWidget(0);  // Explicitly define that there is no central widget so dockable widget will take the place
+    setCentralWidget(nullptr);  // Explicitly define that there is no central widget so dockable widget will take the place
 
     Manager* manager = Manager::getSingleton(this); // init the Ogre Root/RenderSystem/SceneManager
 
@@ -99,7 +99,7 @@ MainWindow::~MainWindow()
     {
         m_pTimer->stop();
         delete m_pTimer;
-        m_pTimer = 0;
+        m_pTimer = nullptr;
     }
 
     delete ui;
@@ -231,7 +231,6 @@ void MainWindow::initToolBar()
             }
         }
     });
-
 
     // Viewport
     connect(ui->actionAdd_Viewport, SIGNAL(triggered()), this, SLOT(createEditorViewport()));
@@ -657,7 +656,6 @@ void MainWindow::on_actionLight_toggled(bool arg1)
     }
 }
 
-
 void MainWindow::on_actionDark_toggled(bool arg1)
 {
     if(arg1){
@@ -674,7 +672,6 @@ void MainWindow::on_actionDark_toggled(bool arg1)
                                    !ui->actionCustom->isChecked());
     }
 }
-
 
 void MainWindow::on_actionCustom_toggled(bool arg1)
 {
@@ -701,7 +698,6 @@ void MainWindow::custom_Palette_Color_Selected(const QColor &color)
     ui->actionDark->setChecked(false);
     ui->actionCustom->blockSignals(false);
 }
-
 
 void MainWindow::on_actionVerify_Update_triggered()
 {
@@ -742,7 +738,7 @@ void MainWindow::on_actionVerify_Update_triggered()
             }
         } else {
             // Handle the error
-            QMessageBox::critical(nullptr, tr("Update"), reply->errorString());
+            Ogre::LogManager::getSingleton().logMessage(reply->errorString().toStdString());
         }
 
         // Clean up

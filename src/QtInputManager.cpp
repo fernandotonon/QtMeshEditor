@@ -32,10 +32,6 @@ THE SOFTWARE.
 
 QtInputManager QtInputManager::mInstance;
 
-QtInputManager::QtInputManager()
-{
-}
-
 void QtInputManager::AddKeyListener(QtKeyListener* listener)
 {
     mKeyListeners.append(listener);

@@ -43,7 +43,7 @@ class ObjectItemModel : public QStandardItemModel
     Q_OBJECT
 
 public:
-    explicit ObjectItemModel(QObject *parent = 0);
+    explicit ObjectItemModel(QObject *parent = nullptr);
     ~ObjectItemModel();
 
 

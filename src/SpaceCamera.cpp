@@ -40,9 +40,9 @@ const QPoint    SpaceCamera::invalidPoint(-1,-1);
 
 SpaceCamera::SpaceCamera(OgreWidget* parent)
     :mSceneMgr(Manager::getSingleton()->getSceneMgr())
-    ,mCameraNode(NULL)
-    ,mTarget(NULL)
-    ,mCamera(NULL)
+    ,mCameraNode(nullptr)
+    ,mTarget(nullptr)
+    ,mCamera(nullptr)
     ,mCameraSpeed(0.5f)
     ,mOldPos(invalidPoint)
 {
@@ -52,7 +52,7 @@ SpaceCamera::SpaceCamera(OgreWidget* parent)
     }
     mCamera = mSceneMgr->createCamera(name.toLocal8Bit().constData());
 
-    if (mCamera == 0)
+    if (mCamera == nullptr)
         throw std::logic_error("TPCamera::TPCamera - 'Ogre::Camera* camera' == NULL");
 
     mCamera->setFarClipDistance(999999999.9f);

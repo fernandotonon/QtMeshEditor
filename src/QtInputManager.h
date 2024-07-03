@@ -51,7 +51,7 @@ public:
     void mouseMoveEvent(QMouseEvent *event);
     void wheelEvent(QWheelEvent *event);
 private:
-    QtInputManager();
+    QtInputManager() = default;
     static QtInputManager mInstance;
     QList<QtKeyListener*> mKeyListeners;
     QList<QtMouseListener*> mMouseListeners;

@@ -7,14 +7,14 @@
 
 ////////////////////////////////////////
 // Static variable initialisation
-SelectionSet* SelectionSet:: m_pSingleton = 0;
+SelectionSet* SelectionSet:: m_pSingleton = nullptr;
 
 ////////////////////////////////////////
 /// Static Member to build & destroy
 
 SelectionSet* SelectionSet::getSingleton()
 {
-  if (m_pSingleton == 0)
+  if (m_pSingleton == nullptr)
   {
       m_pSingleton =  new SelectionSet();
   }
@@ -24,10 +24,10 @@ SelectionSet* SelectionSet::getSingleton()
 
 void SelectionSet::kill()
 {
-    if (m_pSingleton != 0)
+    if (m_pSingleton != nullptr)
     {
         delete m_pSingleton;
-        m_pSingleton = 0;
+        m_pSingleton = nullptr;
     }
 }
 
@@ -36,11 +36,6 @@ void SelectionSet::kill()
 
 SelectionSet::SelectionSet()
     :QObject(nullptr)
-{
-
-}
-
-SelectionSet::~SelectionSet()
 {
 
 }

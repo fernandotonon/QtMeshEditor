@@ -63,11 +63,6 @@ MaterialWidget::MaterialWidget(QWidget *parent) :
 
 }
 
-MaterialWidget::~MaterialWidget()
-{
-
-}
-
 void MaterialWidget::onNodeSelected()
 {
     blockSignals(true);

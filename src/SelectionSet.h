@@ -18,7 +18,7 @@ public :
 
 private:
     SelectionSet();
-    ~SelectionSet(void);
+    ~SelectionSet(void) override = default;
 
 public :
     void append(Ogre::SceneNode* const& obj);

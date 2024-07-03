@@ -37,10 +37,6 @@ THE SOFTWARE.
 
 #include "Manager.h"
 
-SkeletonTransform::SkeletonTransform()
-{
-}
-
 void SkeletonTransform::scaleSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_scale)
 {
     if(_ent->hasSkeleton())
@@ -103,7 +99,7 @@ void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::
         auto bones = sk->getBones();
         for(const auto &bone : bones)
         {
-            if(bone->getParent()==NULL)
+            if(bone->getParent()==nullptr)
             {
                 if(_translate.isZeroLength())
                     continue;
@@ -139,7 +135,7 @@ void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vec
         auto bones = sk->getBones();
         for(const auto &bone : bones)
         {
-            if(bone->getParent()==NULL)
+            if(bone->getParent()==nullptr)
             {
                 if(_rotate.x!=0)
                     bone->rotate(Ogre::Quaternion(Ogre::Degree(_rotate.x), Ogre::Vector3::UNIT_Y),Ogre::Node::TS_WORLD);

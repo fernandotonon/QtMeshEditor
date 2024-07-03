@@ -38,10 +38,6 @@ MaterialHighlighter::MaterialHighlighter(QObject *parent) :
     mParent = parent;
 }
 
-MaterialHighlighter::~MaterialHighlighter()
-{
-}
-
 void MaterialHighlighter::highlightBlock(const QString &text)
 {
     if(mParent) mParent->blockSignals(true);

@@ -42,7 +42,7 @@ THE SOFTWARE.
 
 EditorViewport::EditorViewport(MainWindow* parent, int index)
     :QDockWidget(tr("Viewport ") + QString::number(index)), mIndex(index),
-      m_pOgreWidget(0), m_pMainWindow(parent)
+      m_pOgreWidget(nullptr), m_pMainWindow(parent)
 {
     // Essential behavior of dock widget
     setAllowedAreas( Qt::AllDockWidgetAreas);
@@ -58,7 +58,7 @@ EditorViewport::~EditorViewport()
     if(m_pOgreWidget)
     {
         delete m_pOgreWidget;
-        m_pOgreWidget = 0;
+        m_pOgreWidget = nullptr;
     }
 
     destroy();

@@ -38,7 +38,7 @@ class MaterialComboDelegate : public QStyledItemDelegate
     Q_OBJECT
 
 public:
-    MaterialComboDelegate(QObject *parent = 0);
+    MaterialComboDelegate(QObject *parent = nullptr);
 
     QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &option,
                           const QModelIndex &index) const;
