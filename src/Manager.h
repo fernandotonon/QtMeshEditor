@@ -60,7 +60,7 @@ class Manager : public QObject
     Q_OBJECT
 
 public:
-    static Manager* getSingleton(MainWindow* parent = 0);
+    static Manager* getSingleton(MainWindow* parent = nullptr);
     static void kill();
 
     Ogre::Root*         getRoot()               const;

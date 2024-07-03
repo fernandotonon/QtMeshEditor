@@ -42,8 +42,8 @@ class MaterialWidget : public QTableWidget
     Q_OBJECT
 
 public:
-    explicit MaterialWidget(QWidget *parent = 0);
-    virtual ~MaterialWidget();
+    explicit MaterialWidget(QWidget *parent = nullptr);
+    virtual ~MaterialWidget() = default;
 
 private:
     void populateTableWithEntities(const QList<Ogre::Entity*>& entities);

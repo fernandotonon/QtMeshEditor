@@ -16,7 +16,7 @@ const float RotationGizmo::mSolidThickness = 40.0f;
 // Constructor & destructor
 
 RotationGizmo::RotationGizmo(Ogre::SceneNode* linkNode, const Ogre::String &name, Ogre::Real scale)
-    : m_pXCircle(0), m_pYCircle(0), m_pZCircle(0),mFade(0.4f), mHighlighted(false), mScale(scale)
+    : m_pXCircle(nullptr), m_pYCircle(nullptr), m_pZCircle(nullptr),mFade(0.4f), mHighlighted(false), mScale(scale)
 {
     Ogre::SceneManager* pSceneMgr = linkNode->getCreator();
     //Creating the manual objects

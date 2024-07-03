@@ -36,8 +36,8 @@ class MaterialHighlighter : public QSyntaxHighlighter
     Q_OBJECT
     
 public:
-    explicit MaterialHighlighter(QObject *parent = 0);
-    ~MaterialHighlighter();
+    explicit MaterialHighlighter(QObject *parent = nullptr);
+    ~MaterialHighlighter() = default;
     
     void highlightBlock(const QString &text);
 

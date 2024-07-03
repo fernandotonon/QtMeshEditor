@@ -67,7 +67,7 @@ THE SOFTWARE.
 
 ////////////////////////////////////////
 // Static variable initialisation
-Manager* Manager:: m_pSingleton = 0;
+Manager* Manager:: m_pSingleton = nullptr;
 
 QString Manager::mValidFileExtention = ".mesh .dae .blend .3ds .ase .obj .ifc .xgl .zgl .ply .dxf .lwo "\
         ".lws .lxo .stl .x .ac .ms3d .cob .scn .bvh .csm .xml .irrmesh .irr .mdl .md2 .md3 "\
@@ -78,7 +78,7 @@ QString Manager::mValidFileExtention = ".mesh .dae .blend .3ds .ase .obj .ifc .x
 
 Manager* Manager::getSingleton(MainWindow* parent)
 {
-  if (m_pSingleton == 0)
+  if (m_pSingleton == nullptr)
   {
       assert(parent);
       m_pSingleton =  new Manager(parent);
@@ -89,10 +89,10 @@ Manager* Manager::getSingleton(MainWindow* parent)
 
 void Manager::kill()
 {
-    if (m_pSingleton != 0)
+    if (m_pSingleton != nullptr)
     {
         delete m_pSingleton;
-        m_pSingleton = 0;
+        m_pSingleton = nullptr;
     }
 }
 
@@ -100,7 +100,7 @@ void Manager::kill()
 // Constructor & Destructor
 
 Manager::Manager(MainWindow* parent):
-    mRoot(0), mSceneMgr(0), mPlane(0), m_pMainWindow(parent), m_pViewportGrid(0)/*, m_pSelectedNode(0)*/
+    mRoot(nullptr), mSceneMgr(nullptr), mPlane(nullptr), m_pMainWindow(parent), m_pViewportGrid(nullptr)
 {
     initRoot();         // Init Ogre Root
     initRenderSystem(); // Init Ogre Render System
@@ -111,22 +111,22 @@ Manager::~Manager()
     if(m_pViewportGrid)
     {
         delete m_pViewportGrid;
-        m_pViewportGrid = 0;
+        m_pViewportGrid = nullptr;
     }
 
     if (mPlane)
     {
         delete mPlane;
-        mPlane = 0;
+        mPlane = nullptr;
     }
 
     mSceneMgr->clearScene();
     mRoot->destroySceneManager(mSceneMgr);
-    mSceneMgr = 0;
+    mSceneMgr = nullptr;
 
     mRoot->shutdown();
     delete mRoot;
-    mRoot = 0;
+    mRoot = nullptr;
 }
 
 void Manager::CreateEmptyScene()
@@ -150,7 +150,7 @@ void Manager::CreateEmptyScene()
 
 Ogre::SceneNode* Manager::addSceneNode(const QString &_name)
 {
-    Ogre::SceneNode *sn = NULL;
+    Ogre::SceneNode *sn = nullptr;
     unsigned int number = 0;
 
     while(hasSceneNode(QString(_name+(number?QString::number(number):""))))
@@ -165,7 +165,7 @@ Ogre::SceneNode* Manager::addSceneNode(const QString &_name)
 
 Ogre::SceneNode* Manager::addSceneNode(const QString &_name, const Ogre::Any& anything)
 {
-    Ogre::SceneNode *sn = NULL;
+    Ogre::SceneNode *sn = nullptr;
     unsigned int number = 0;
 
     while(hasSceneNode(QString(_name+(number?QString::number(number):""))))
@@ -246,7 +246,7 @@ void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
 
 Ogre::SceneNode *Manager::getSceneNode(const QString &_name)
 {
-    return hasSceneNode(_name)?getSceneMgr()->getSceneNode(_name.toStdString().data()):NULL;
+    return hasSceneNode(_name) ? getSceneMgr()->getSceneNode(_name.toStdString().data()) : nullptr;
 }
 
 bool Manager::hasSceneNode(const QString &_name)

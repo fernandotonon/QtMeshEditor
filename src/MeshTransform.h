@@ -34,7 +34,7 @@ THE SOFTWARE.
 class MeshTransform
 {
 public:
-    MeshTransform();
+    MeshTransform() = delete;
     static void scaleMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_scale);
     static void scaleMesh(Ogre::Mesh *_mesh, const Ogre::Vector3 &_scale);
     static void translateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_translate);

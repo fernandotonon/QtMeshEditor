@@ -10,7 +10,7 @@ using ::testing::Mock;
 class MockMaterialHighlighter : public MaterialHighlighter
 {
 public:
-    explicit MockMaterialHighlighter(QTextEdit *editor=0){}
+    explicit MockMaterialHighlighter(QTextEdit *editor=nullptr){}
 
     MOCK_METHOD(void, applyHighlight, (const QTextCharFormat &format, const QString &pattern, const QString &text), (override));
 

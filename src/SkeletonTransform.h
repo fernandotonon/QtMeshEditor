@@ -35,7 +35,7 @@ THE SOFTWARE.
 class SkeletonTransform
 {
 public:
-    SkeletonTransform();
+    SkeletonTransform() = delete;
     static void scaleSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_scale);
     static void translateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_translate);
     static void rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate);

@@ -43,7 +43,7 @@ THE SOFTWARE.
 // TODO add nicer icons in the tree view
 
 ObjectItemModel::ObjectItemModel(QObject *parent)
-    : QStandardItemModel(parent), m_pRootNode(0),mRootItem(0)
+    : QStandardItemModel(parent), m_pRootNode(nullptr),mRootItem(nullptr)
 {
     reloadSceneNode();
 
@@ -56,7 +56,7 @@ ObjectItemModel::ObjectItemModel(QObject *parent)
 ObjectItemModel::~ObjectItemModel()
 {
     delete mRootItem;
-    m_pRootNode =0;
+    m_pRootNode = nullptr;
 }
 
 const QModelIndex ObjectItemModel::getRootIndex() const

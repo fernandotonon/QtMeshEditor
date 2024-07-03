@@ -12,7 +12,7 @@ class MockSpaceCamera : public SpaceCamera
 public:
     // Mock constructor
     MockSpaceCamera():SpaceCamera(){}
-    virtual ~MockSpaceCamera() {};
+    virtual ~MockSpaceCamera() = default;
 };
 
 TEST(SpaceCamera, InitialSpeed)

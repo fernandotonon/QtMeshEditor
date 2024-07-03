@@ -11,7 +11,7 @@ const float TranslationGizmo::mSolidThickness = 80.0f;
 
 
 TranslationGizmo::TranslationGizmo(Ogre::SceneNode* linkNode, const Ogre::String &name, Ogre::Real scale, bool leftHandCs)
-    : m_pXaxis(0), m_pYaxis(0), m_pZaxis(0), mFade(0.4f), mHighlighted(false)
+    : m_pXaxis(nullptr), m_pYaxis(nullptr), m_pZaxis(nullptr), mFade(0.4f), mHighlighted(false)
 {
     mScale        = scale;
     mLeftHandCs   = leftHandCs;

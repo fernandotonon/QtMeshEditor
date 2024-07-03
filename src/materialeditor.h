@@ -23,7 +23,7 @@ class MaterialEditor : public QDialog
     Q_OBJECT
     
 public:
-    explicit MaterialEditor(QWidget *parent = 0);
+    explicit MaterialEditor(QWidget *parent = nullptr);
     virtual ~MaterialEditor();
     void setMaterialText(const QString &_mat);
     void setMaterial(const QString& _material);
