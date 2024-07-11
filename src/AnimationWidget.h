@@ -3,11 +3,10 @@
 
 #include <QWidget>
 #include <QMap>
+#include <QScopedPointer>
 #include "SkeletonDebug.h"
+#include "ui_animationwidget.h"
 
-namespace Ui {
-class AnimationWidget;
-}
 namespace Ogre{
     class AnimationState;
 }
@@ -42,7 +41,7 @@ signals:
     void changeAnimationName(const std::string &newName);
 
 private:
-    Ui::AnimationWidget*  ui;
+    QScopedPointer<Ui::AnimationWidget> ui { new Ui::AnimationWidget };
     QMap<Ogre::Entity*,SkeletonDebug*> mShowSkeleton;
 };
 
