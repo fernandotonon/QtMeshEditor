@@ -218,9 +218,9 @@ void AnimationWidget::disableEntityAnimations(Ogre::Entity* entity)
 {
     if(auto set = entity->getAllAnimationStates(); set)
     {
-        for (const auto &animationState : set->getAnimationStates())
+        for (const auto &[key, value] : set->getAnimationStates())
         {
-            animationState.second->setEnabled(false);
+            value->setEnabled(false);
         }
     }
     updateAnimationTable();
@@ -235,9 +235,9 @@ void AnimationWidget::disableAllSelectedAnimations()
     {
         if(auto set = entity->getAllAnimationStates(); set)
         {
-            for (const auto &animationState : set->getAnimationStates())
+            for (const auto &[key, value] : set->getAnimationStates())
             {
-                animationState.second->setEnabled(false);
+                value->setEnabled(false);
             }
         }
     }
