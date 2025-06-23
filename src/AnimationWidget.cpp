@@ -257,7 +257,7 @@ void AnimationWidget::disableAllSkeletonDebug()
     updateSkeletonTable();
 }
 
-void AnimationWidget::on_animTable_clicked(const QModelIndex &index)
+void AnimationWidget::on_animTable_clicked(const QModelIndex &index) const
 {
     if(index.column()<2)
         return;
