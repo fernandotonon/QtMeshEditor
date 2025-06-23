@@ -183,16 +183,17 @@ jobs:
 
     - name: Copy assimp dll to the binary folder
       run: |
-            echo "Checking available DLL files:"
-            dir C:/PROGRA~2/Assimp/bin
-            if exist "C:/PROGRA~2/Assimp/bin/libassimp-5.dll" (
-                copy C:/PROGRA~2/Assimp/bin/libassimp-5.dll ${{github.workspace}}/bin
-            ) else if exist "C:/PROGRA~2/Assimp/bin/libassimp.dll" (
-                copy C:/PROGRA~2/Assimp/bin/libassimp.dll ${{github.workspace}}/bin
-            ) else (
-                echo "Looking for any assimp dll files:"
-                copy C:/PROGRA~2/Assimp/bin/libassimp*.dll ${{github.workspace}}/bin
-            )
+            Write-Host "Checking available DLL files:"
+            Get-ChildItem C:/PROGRA~2/Assimp/bin
+            if (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp-5.dll") {
+                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp-5.dll" "${{github.workspace}}/bin"
+            } elseif (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp.dll") {
+                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp.dll" "${{github.workspace}}/bin"
+            } else {
+                Write-Host "Looking for any assimp dll files:"
+                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp*.dll" "${{github.workspace}}/bin"
+            }
+      shell: powershell
 
     - name: Copy gcc dll to the binary folder
       run: |
@@ -586,7 +587,16 @@ jobs:
 
     - name: Collect coverage into one XML report
       run: |
-        gcovr --sonarqube > coverage.xml
+        gcovr --sonarqube \
+          --exclude='.*CMakeFiles.*' \
+          --exclude='.*_autogen.*' \
+          --exclude='.*dependencies.*' \
+          --exclude='.*ui_files.*' \
+          --exclude='.*moc_.*' \
+          --exclude='.*test.*' \
+          --root ${{github.workspace}} \
+          --object-directory . \
+          > coverage.xml
 
     - name: Run sonar-scanner
       env:
