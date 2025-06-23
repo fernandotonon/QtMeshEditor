@@ -585,71 +585,14 @@ jobs:
          
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
 
-    - name: Debug coverage files
-      run: |
-        echo "Listing gcda files:"
-        find . -name "*.gcda" | head -20
-        echo "Current directory:"
-        pwd
-        echo "Source directory contents:"
-        ls -la src/ || true
-
-    - name: Collect coverage into one XML report
-      run: |
-        gcovr --sonarqube \
-          --exclude='.*CMakeFiles.*' \
-          --exclude='.*_autogen.*' \
-          --exclude='.*dependencies.*' \
-          --exclude='.*ui_files.*' \
-          --exclude='.*moc_.*' \
-          --exclude='.*test.*' \
-          --root ${{github.workspace}} \
-          --verbose \
-          --keep \
-          > coverage.xml
-      continue-on-error: true
-
-    - name: Generate coverage with lcov as fallback
-      if: failure()
-      run: |
-        sudo apt install lcov
-        lcov --capture --directory . --output-file coverage_raw.info
-        lcov --remove coverage_raw.info '/usr/*' \
-          '/home/runner/work/QtMeshEditor/Qt/*' \
-          '*/CMakeFiles/*' \
-          '*_autogen*' \
-          '*/dependencies/*' \
-          '*/ui_files/*' \
-          'moc_*' \
-          '*_test.cpp' \
-          -o coverage_filtered.info
-        # Convert lcov to sonarqube format using gcovr
-        gcovr --sonarqube \
-          --add-tracefile coverage_filtered.info \
-          > coverage.xml || echo '<?xml version="1.0" encoding="UTF-8"?><coverage version="1"><file path="dummy.cpp"><lineToCover lineNumber="1" covered="false"/></file></coverage>' > coverage.xml
-
-    - name: Debug coverage file
-      run: |
-        echo "Coverage file size and first few lines:"
-        ls -la coverage.xml || echo "coverage.xml not found"
-        head -20 coverage.xml || echo "Could not read coverage.xml"
-
     - name: Run sonar-scanner
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} 
       run: |
-          # Check if coverage file exists and is valid
-          if [ -f "coverage.xml" ] && [ -s "coverage.xml" ]; then
-            echo "Using coverage report"
-            sonar-scanner \
-              --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" \
-              --define sonar.coverageReportPaths=coverage.xml
-          else
-            echo "Skipping coverage report - running without coverage"
-            sonar-scanner \
-              --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}"
-          fi
+          echo "Running SonarQube analysis"
+          sonar-scanner \
+            --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}"
           
     - name: Run lcov
       run: |
