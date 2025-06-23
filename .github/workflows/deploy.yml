@@ -585,6 +585,15 @@ jobs:
          
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
 
+    - name: Debug coverage files
+      run: |
+        echo "Listing gcda files:"
+        find . -name "*.gcda" | head -20
+        echo "Current directory:"
+        pwd
+        echo "Source directory contents:"
+        ls -la src/ || true
+
     - name: Collect coverage into one XML report
       run: |
         gcovr --sonarqube \
@@ -595,8 +604,29 @@ jobs:
           --exclude='.*moc_.*' \
           --exclude='.*test.*' \
           --root ${{github.workspace}} \
-          --object-directory . \
+          --verbose \
+          --keep \
           > coverage.xml
+      continue-on-error: true
+
+    - name: Generate coverage with lcov as fallback
+      if: failure()
+      run: |
+        sudo apt install lcov
+        lcov --capture --directory . --output-file coverage_raw.info
+        lcov --remove coverage_raw.info '/usr/*' \
+          '/home/runner/work/QtMeshEditor/Qt/*' \
+          '*/CMakeFiles/*' \
+          '*_autogen*' \
+          '*/dependencies/*' \
+          '*/ui_files/*' \
+          'moc_*' \
+          '*_test.cpp' \
+          -o coverage_filtered.info
+        # Convert lcov to sonarqube format using gcovr
+        gcovr --sonarqube \
+          --add-tracefile coverage_filtered.info \
+          > coverage.xml || echo "<?xml version=\"1.0\" ?><coverage version=\"1\"></coverage>" > coverage.xml
 
     - name: Run sonar-scanner
       env:
