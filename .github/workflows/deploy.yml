@@ -103,6 +103,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: OGRECave/ogre
+          ref: v14.3.4
           path: ${{github.workspace}}/ogre
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
@@ -329,6 +330,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: OGRECave/ogre
+          ref: v14.3.4
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre
          
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
@@ -722,6 +724,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: OGRECave/ogre
+          ref: v14.3.4
           path: ${{github.workspace}}/ogre
          
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
