@@ -654,7 +654,11 @@ jobs:
     - name: Run lcov
       run: |
             sudo apt install lcov
-            lcov --capture --directory . --output-file coverage.info
+            lcov --capture --directory . --output-file coverage.info \
+              --ignore-errors gcov,gcov \
+              --ignore-errors mismatch \
+              --ignore-errors source \
+              --rc geninfo_unexecuted_blocks=1
             lcov --remove coverage.info '/usr/*' \
             '/home/runner/work/QtMeshEditor/Qt/*' \
             '/home/runner/work/QtMeshEditor/QtMeshEditor/src/OgreXML/*' \
@@ -669,6 +673,7 @@ jobs:
             '_deps/**/*.cpp' \
             '_deps/**/*.cc' \
             '/home/runner/work/QtMeshEditor/QtMeshEditor/_deps/*' \
+            '_deps/*' \
             'ui_files/*' \
             'moc_*' \
             '*_test.cpp' \
