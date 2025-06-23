@@ -162,7 +162,7 @@ jobs:
     - name: Set up MinGW
       uses: bwoodsend/setup-winlibs-action@v1
       with:
-        tag: '13.2.0posix-17.0.6-11.0.1-ucrt-r5'   
+        tag: '13.1.0posix-16.0.3-11.0.0-ucrt-r1'   
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
