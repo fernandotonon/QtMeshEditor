@@ -677,6 +677,7 @@ jobs:
             'ui_files/*' \
             'moc_*' \
             '*_test.cpp' \
+            --ignore-errors unused \
             -o filtered_coverage.info
    
     - run: |
