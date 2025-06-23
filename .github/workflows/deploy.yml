@@ -53,6 +53,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
+          ref: v6.0.2
           path: ${{github.workspace}}/assimp
       
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
@@ -115,7 +116,7 @@ jobs:
       shell: cmd
       env:
           CMAKE_GENERATOR: "MinGW Makefiles"
-          ASSIMP_DIR: "C:/Program Files (x86)/Assimp/lib/cmake/assimp-5.2/"
+          ASSIMP_DIR: "C:/Program Files (x86)/Assimp/lib/cmake/assimp-6.0/"
       run: |
             cd ${{github.workspace}}/ogre
             cmake -B ${{github.workspace}}/ogre-build -S . -DDOXYGEN_EXECUTABLE="C:\Program Files\doxygen\bin\doxygen.exe" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DOGRE_BUILD_PLUGIN_PCZ=ON -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
@@ -175,7 +176,7 @@ jobs:
          CMAKE_GENERATOR: "MinGW Makefiles"
          ASSIMP_DIR: C:/PROGRA~2/Assimp
       run: |
-        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-5.2
+        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-6.0
       shell: cmd
 
     - name: Build
@@ -185,8 +186,8 @@ jobs:
       run: |
             Write-Host "Checking available DLL files:"
             Get-ChildItem C:/PROGRA~2/Assimp/bin
-            if (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp-5.dll") {
-                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp-5.dll" "${{github.workspace}}/bin"
+            if (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp-6.dll") {
+                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp-6.dll" "${{github.workspace}}/bin"
             } elseif (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp.dll") {
                 Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp.dll" "${{github.workspace}}/bin"
             } else {
@@ -263,6 +264,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
+          ref: v6.0.2
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
             
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
@@ -334,7 +336,7 @@ jobs:
       run: |
             sudo cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build \
             -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre \
-            -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-6.0 \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF \
             -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
@@ -406,7 +408,7 @@ jobs:
     - name: Configure CMake
       run: |
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-6.0 \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
@@ -533,7 +535,7 @@ jobs:
       run: |
             mkdir build
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-6.0 \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
@@ -668,6 +670,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
+          ref: v6.0.2
           path: /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp
       
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
@@ -725,7 +728,7 @@ jobs:
       name: Build Ogre3D repo
       run: |
             cd ${{github.workspace}}/ogre/
-            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.4/ \
+            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-6.0/ \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
@@ -793,7 +796,7 @@ jobs:
       run: |
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.4 \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-6.0 \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
