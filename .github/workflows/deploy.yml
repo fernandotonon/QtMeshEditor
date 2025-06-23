@@ -626,16 +626,30 @@ jobs:
         # Convert lcov to sonarqube format using gcovr
         gcovr --sonarqube \
           --add-tracefile coverage_filtered.info \
-          > coverage.xml || echo "<?xml version=\"1.0\" ?><coverage version=\"1\"></coverage>" > coverage.xml
+          > coverage.xml || echo '<?xml version="1.0" encoding="UTF-8"?><coverage version="1"><file path="dummy.cpp"><lineToCover lineNumber="1" covered="false"/></file></coverage>' > coverage.xml
+
+    - name: Debug coverage file
+      run: |
+        echo "Coverage file size and first few lines:"
+        ls -la coverage.xml || echo "coverage.xml not found"
+        head -20 coverage.xml || echo "Could not read coverage.xml"
 
     - name: Run sonar-scanner
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} 
       run: |
-          sonar-scanner \
-            --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" \
-            --define sonar.coverageReportPaths=coverage.xml
+          # Check if coverage file exists and is valid
+          if [ -f "coverage.xml" ] && [ -s "coverage.xml" ]; then
+            echo "Using coverage report"
+            sonar-scanner \
+              --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" \
+              --define sonar.coverageReportPaths=coverage.xml
+          else
+            echo "Skipping coverage report - running without coverage"
+            sonar-scanner \
+              --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}"
+          fi
           
     - name: Run lcov
       run: |
