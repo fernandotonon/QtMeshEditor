@@ -110,10 +110,20 @@ jobs:
           path: ${{github.workspace}}/ogre
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-      name: Set up MinGW
-      uses: bwoodsend/setup-winlibs-action@v1
+      name: Install Qt (for MinGW)
+      uses: jurplel/install-qt-action@v3
       with:
-        tag: '13.2.0posix-17.0.6-11.0.1-ucrt-r5'        
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_mingw'
+        tools: 'tools_cmake tools_mingw1120'
+        
+    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+      name: Add Qt MinGW to PATH
+      run: echo "D:/a/QtMeshEditor/Qt/Tools/mingw1120_64/bin" >> $GITHUB_PATH
+      shell: bash
           
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Build Ogre3D
@@ -159,11 +169,6 @@ jobs:
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Set up MinGW
-      uses: bwoodsend/setup-winlibs-action@v1
-      with:
-        tag: '13.1.0posix-16.0.3-11.0.0-ucrt-r1'   
-
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
@@ -172,7 +177,11 @@ jobs:
         host: 'windows'
         target: 'desktop'
         arch: 'win64_mingw'
-        tools: 'tools_cmake'
+        tools: 'tools_cmake tools_mingw1120'
+        
+    - name: Add Qt MinGW to PATH
+      run: echo "D:/a/QtMeshEditor/Qt/Tools/mingw1120_64/bin" >> $GITHUB_PATH
+      shell: bash
      
     - name: Configure CMake
       env:
@@ -180,7 +189,7 @@ jobs:
          CMAKE_GENERATOR: "MinGW Makefiles"
          ASSIMP_DIR: C:/PROGRA~2/Assimp
       run: |
-        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}
+        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}
       shell: cmd
 
     - name: Build
@@ -202,10 +211,8 @@ jobs:
 
     - name: Copy gcc dll to the binary folder
       run: |
-            echo "Looking for MinGW DLLs in PATH and common locations"
-            where gcc.exe
-            $gccPath = (Get-Command gcc.exe).Source
-            $mingwBin = Split-Path $gccPath
+            Write-Host "Using Qt MinGW DLLs"
+            $mingwBin = "D:/a/QtMeshEditor/Qt/Tools/mingw1120_64/bin"
             Write-Host "MinGW bin directory: $mingwBin"
             Get-ChildItem "$mingwBin/*.dll" | Where-Object { $_.Name -match "(libgcc|libstdc|libwinpthread)" }
             Copy-Item "$mingwBin/libgcc_s_seh-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
