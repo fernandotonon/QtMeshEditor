@@ -3,6 +3,7 @@
 #include <QInputDialog>
 #include <QFileDialog>
 #include <QMessageBox>
+#include <QPointer>
 
 #include <OgreAnimationState.h>
 
@@ -12,11 +13,9 @@
 #include "SelectionSet.h"
 #include "Manager.h"
 #include "AnimationWidget.h"
-#include "ui_animationwidget.h"
 
 AnimationWidget::AnimationWidget(QWidget *parent) :
-    QWidget(parent),
-    ui(new Ui::AnimationWidget)/*,mAnimationState(0)*/
+    QWidget(parent)
 {
     ui->setupUi(this);
 
@@ -35,8 +34,6 @@ AnimationWidget::AnimationWidget(QWidget *parent) :
 AnimationWidget::~AnimationWidget()
 {
     disableAllSkeletonDebug();
-
-    delete ui;
 }
 
 bool AnimationWidget::isSkeletonShown(Ogre::Entity * entity) const
@@ -59,28 +56,28 @@ void AnimationWidget::updateAnimationTable()
     for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
     {
         //Animation
-        Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
+        const Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
         if(!set) continue;
 
         for (const auto &animationState:set->getAnimationStates())
         {
-            QTableWidgetItem *entityItem = new QTableWidgetItem;
+            auto entityItem = new QTableWidgetItem;
             entityItem->setText(entity->getName().data());
             entityItem->setData(ENTITY_DATA,QVariant::fromValue((void *) entity));
             entityItem->setFlags(entityItem->flags() & ~Qt::ItemIsEditable);
 
-            QString animationName = animationState.second->getAnimationName().c_str();
+            const QString animationName = animationState.second->getAnimationName().c_str();
 
-            QTableWidgetItem *animationItem = new QTableWidgetItem;
+            auto animationItem = new QTableWidgetItem;
             animationItem->setText(animationName);
             animationItem->setFlags(animationItem->flags() & ~Qt::ItemIsEditable);
 
-            QTableWidgetItem* enabledCB = new QTableWidgetItem(0);
+            auto enabledCB = new QTableWidgetItem(0);
             enabledCB->setCheckState(animationState.second->getEnabled()?Qt::Checked:Qt::Unchecked);
             enabledCB->setFlags(enabledCB->flags() & ~Qt::ItemIsEditable);
             hasAnimationEnable = hasAnimationEnable || animationState.second->getEnabled();
 
-            QTableWidgetItem* loopCB = new QTableWidgetItem(0);
+            auto loopCB = new QTableWidgetItem(0);
             loopCB->setCheckState(animationState.second->getLoop()?Qt::Checked:Qt::Unchecked);
             loopCB->setFlags(loopCB->flags() & ~Qt::ItemIsEditable);
 
@@ -110,12 +107,12 @@ void AnimationWidget::updateSkeletonTable()
     for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
     {
         QString str = entity->getName().data();
-        QTableWidgetItem *entityItem = new QTableWidgetItem;
+        auto entityItem = new QTableWidgetItem;
         entityItem->setText(str);
         entityItem->setData(ENTITY_DATA,QVariant::fromValue((void *) entity));
         entityItem->setFlags(entityItem->flags() & ~Qt::ItemIsEditable);
 
-        QTableWidgetItem* showSkeletonCB = new QTableWidgetItem(0);
+        auto showSkeletonCB = new QTableWidgetItem(0);
         showSkeletonCB->setCheckState(mShowSkeleton.contains(entity)?Qt::Checked:Qt::Unchecked);
         showSkeletonCB->setFlags(showSkeletonCB->flags() & ~Qt::ItemIsEditable);
 
@@ -221,9 +218,9 @@ void AnimationWidget::disableEntityAnimations(Ogre::Entity* entity)
 {
     if(auto set = entity->getAllAnimationStates(); set)
     {
-        for (const auto &animationState : set->getAnimationStates())
+        for (const auto &[key, value] : set->getAnimationStates())
         {
-            animationState.second->setEnabled(false);
+            value->setEnabled(false);
         }
     }
     updateAnimationTable();
@@ -238,9 +235,9 @@ void AnimationWidget::disableAllSelectedAnimations()
     {
         if(auto set = entity->getAllAnimationStates(); set)
         {
-            for (const auto &animationState : set->getAnimationStates())
+            for (const auto &[key, value] : set->getAnimationStates())
             {
-                animationState.second->setEnabled(false);
+                value->setEnabled(false);
             }
         }
     }
@@ -260,7 +257,7 @@ void AnimationWidget::disableAllSkeletonDebug()
     updateSkeletonTable();
 }
 
-void AnimationWidget::on_animTable_clicked(const QModelIndex &index)
+void AnimationWidget::on_animTable_clicked(const QModelIndex &index) const
 {
     if(index.column()<2)
         return;

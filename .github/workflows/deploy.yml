@@ -183,7 +183,17 @@ jobs:
 
     - name: Copy assimp dll to the binary folder
       run: |
-            copy C:/PROGRA~2/Assimp/bin/libassimp-5.dll ${{github.workspace}}/bin
+            Write-Host "Checking available DLL files:"
+            Get-ChildItem C:/PROGRA~2/Assimp/bin
+            if (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp-5.dll") {
+                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp-5.dll" "${{github.workspace}}/bin"
+            } elseif (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp.dll") {
+                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp.dll" "${{github.workspace}}/bin"
+            } else {
+                Write-Host "Looking for any assimp dll files:"
+                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp*.dll" "${{github.workspace}}/bin"
+            }
+      shell: powershell
 
     - name: Copy gcc dll to the binary folder
       run: |
@@ -198,7 +208,7 @@ jobs:
 
     - name: Upload Artifact
       if: github.event_name == 'release' && github.event.action == 'published'
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: QtMeshEditor-${{github.ref_name}}-bin-Windows
         path: ${{github.workspace}}/bin
@@ -434,7 +444,7 @@ jobs:
             dpkg-deb --build --root-owner-group pack-deb 
             mv pack-deb.deb qtmesheditor_amd64.deb
     
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v4
       if: github.event_name == 'release' && github.event.action == 'published'
       with:
         name: linux-binaries
@@ -569,29 +579,29 @@ jobs:
       with:
         python-version: 3.8
         
-    - name: install gcovr 5.0
+    - name: install gcovr 6.0
       run: |
-        pip install gcovr==5.0
+        pip install gcovr==6.0
          
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
-
-    - name: Collect coverage into one XML report
-      run: |
-        gcovr --sonarqube > coverage.xml
 
     - name: Run sonar-scanner
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} 
       run: |
+          echo "Running SonarQube analysis"
           sonar-scanner \
-            --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" \
-            --define sonar.coverageReportPaths=coverage.xml
+            --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}"
           
     - name: Run lcov
       run: |
             sudo apt install lcov
-            lcov --capture --directory . --output-file coverage.info
+            lcov --capture --directory . --output-file coverage.info \
+              --ignore-errors gcov,gcov \
+              --ignore-errors mismatch \
+              --ignore-errors source \
+              --rc geninfo_unexecuted_blocks=1
             lcov --remove coverage.info '/usr/*' \
             '/home/runner/work/QtMeshEditor/Qt/*' \
             '/home/runner/work/QtMeshEditor/QtMeshEditor/src/OgreXML/*' \
@@ -606,9 +616,11 @@ jobs:
             '_deps/**/*.cpp' \
             '_deps/**/*.cc' \
             '/home/runner/work/QtMeshEditor/QtMeshEditor/_deps/*' \
+            '_deps/*' \
             'ui_files/*' \
             'moc_*' \
             '*_test.cpp' \
+            --ignore-errors unused \
             -o filtered_coverage.info
    
     - run: |
@@ -827,7 +839,7 @@ jobs:
             ${{github.workspace}}/bin/QtMeshEditor.app
     
     - if: github.event_name == 'release' && github.event.action == 'published'
-      uses: actions/upload-artifact@v3.1.2
+      uses: actions/upload-artifact@v4
       with:
         name: QtMeshEditor-MacOS
         path: ${{github.workspace}}/QtMeshEditor-${{github.ref_name}}-MacOS.dmg

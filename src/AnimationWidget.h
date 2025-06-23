@@ -3,11 +3,10 @@
 
 #include <QWidget>
 #include <QMap>
+#include <QScopedPointer>
 #include "SkeletonDebug.h"
+#include "ui_animationwidget.h"
 
-namespace Ui {
-class AnimationWidget;
-}
 namespace Ogre{
     class AnimationState;
 }
@@ -32,7 +31,7 @@ private slots:
     void updateSkeletonTable();
     void on_PlayPauseButton_toggled(bool checked);
     void on_animTable_cellDoubleClicked(int row, int column);
-    void on_animTable_clicked(const QModelIndex &index);
+    void on_animTable_clicked(const QModelIndex &index) const;
     void on_skeletonTable_clicked(const QModelIndex &index);
 
     void on_mergeButton_clicked();
@@ -42,7 +41,7 @@ signals:
     void changeAnimationName(const std::string &newName);
 
 private:
-    Ui::AnimationWidget*  ui;
+    QScopedPointer<Ui::AnimationWidget> ui { new Ui::AnimationWidget };
     QMap<Ogre::Entity*,SkeletonDebug*> mShowSkeleton;
 };
 
