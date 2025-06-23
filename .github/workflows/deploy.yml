@@ -183,7 +183,16 @@ jobs:
 
     - name: Copy assimp dll to the binary folder
       run: |
-            copy C:/PROGRA~2/Assimp/bin/libassimp-5.dll ${{github.workspace}}/bin
+            echo "Checking available DLL files:"
+            dir C:/PROGRA~2/Assimp/bin
+            if exist "C:/PROGRA~2/Assimp/bin/libassimp-5.dll" (
+                copy C:/PROGRA~2/Assimp/bin/libassimp-5.dll ${{github.workspace}}/bin
+            ) else if exist "C:/PROGRA~2/Assimp/bin/libassimp.dll" (
+                copy C:/PROGRA~2/Assimp/bin/libassimp.dll ${{github.workspace}}/bin
+            ) else (
+                echo "Looking for any assimp dll files:"
+                copy C:/PROGRA~2/Assimp/bin/libassimp*.dll ${{github.workspace}}/bin
+            )
 
     - name: Copy gcc dll to the binary folder
       run: |
@@ -569,9 +578,9 @@ jobs:
       with:
         python-version: 3.8
         
-    - name: install gcovr 5.0
+    - name: install gcovr 6.0
       run: |
-        pip install gcovr==5.0
+        pip install gcovr==6.0
          
     - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
 
