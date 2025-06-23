@@ -111,9 +111,9 @@ jobs:
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Set up MinGW
-      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
+      uses: bwoodsend/setup-winlibs-action@v1
       with:
-          platform: x64        
+        tag: 'latest'        
           
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Build Ogre3D
@@ -160,9 +160,9 @@ jobs:
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
     - name: Set up MinGW
-      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
+      uses: bwoodsend/setup-winlibs-action@v1
       with:
-          platform: x64   
+        tag: 'latest'   
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
@@ -202,14 +202,18 @@ jobs:
 
     - name: Copy gcc dll to the binary folder
       run: |
-            echo "mingw bin"
-            cd C:/ProgramData/mingw64/mingw64/bin
-            dir
-            copy C:/ProgramData/mingw64/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/mingw64/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/mingw64/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
-            copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
-            copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
+            echo "Looking for MinGW DLLs in PATH and common locations"
+            where gcc.exe
+            $gccPath = (Get-Command gcc.exe).Source
+            $mingwBin = Split-Path $gccPath
+            Write-Host "MinGW bin directory: $mingwBin"
+            Get-ChildItem "$mingwBin/*.dll" | Where-Object { $_.Name -match "(libgcc|libstdc|libwinpthread)" }
+            Copy-Item "$mingwBin/libgcc_s_seh-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            Copy-Item "$mingwBin/libstdc++-6.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            Copy-Item "$mingwBin/libwinpthread-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/zlib1__.dll" -ErrorAction SilentlyContinue
+            Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/libzlib.dll" -ErrorAction SilentlyContinue
+      shell: powershell
 
     - name: Upload Artifact
       if: github.event_name == 'release' && github.event.action == 'published'
