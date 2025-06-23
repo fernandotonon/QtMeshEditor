@@ -113,7 +113,7 @@ jobs:
       name: Set up MinGW
       uses: bwoodsend/setup-winlibs-action@v1
       with:
-        tag: 'latest'        
+        tag: '13.2.0posix-17.0.6-11.0.1-ucrt-r5'        
           
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Build Ogre3D
@@ -162,7 +162,7 @@ jobs:
     - name: Set up MinGW
       uses: bwoodsend/setup-winlibs-action@v1
       with:
-        tag: 'latest'   
+        tag: '13.2.0posix-17.0.6-11.0.1-ucrt-r5'   
 
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
