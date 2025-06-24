@@ -1,0 +1,5 @@
+module MaterialEditorQML
+singleton MaterialEditorQML 1.0 MaterialEditorQML.qml
+MaterialEditorWindow 1.0 MaterialEditorWindow.qml
+PassPropertiesPanel 1.0 PassPropertiesPanel.qml
+TexturePropertiesPanel 1.0 TexturePropertiesPanel.qml 

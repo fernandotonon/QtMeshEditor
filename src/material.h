@@ -21,6 +21,8 @@ private slots:
     void on_listMaterial_itemSelectionChanged();
 
     void on_buttonEdit_clicked();
+    
+    void on_buttonEditQML_clicked();
 
     void on_buttonExport_clicked();
 

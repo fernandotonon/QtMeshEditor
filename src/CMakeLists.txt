@@ -10,6 +10,7 @@ main.cpp
 Manager.cpp
 material.cpp
 materialeditor.cpp
+MaterialEditorQML.cpp
 mainwindow.cpp
 MeshTransform.cpp
 OgreWidget.cpp
@@ -45,6 +46,7 @@ mainwindow.h
 Manager.h
 material.h
 materialeditor.h
+MaterialEditorQML.h
 MeshTransform.h
 OgreWidget.h
 QtInputManager.h
@@ -178,6 +180,21 @@ ${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPrismGenerator.h
 #  Adding Resources
 ##############################################################
 qt_add_resources(RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../resources/resource.qrc")
+
+##############################################################
+#  Adding QML Resources  
+##############################################################
+qt_add_qml_module(${CMAKE_PROJECT_NAME}_qml
+    URI MaterialEditorQML
+    VERSION 1.0
+    QML_FILES
+        ${CMAKE_CURRENT_SOURCE_DIR}/../qml/MaterialEditorWindow.qml
+        ${CMAKE_CURRENT_SOURCE_DIR}/../qml/PassPropertiesPanel.qml
+        ${CMAKE_CURRENT_SOURCE_DIR}/../qml/TexturePropertiesPanel.qml
+    SOURCES
+        MaterialEditorQML.h
+        MaterialEditorQML.cpp
+)
 
 #if(WIN32)
         file(GLOB RES "${CMAKE_CURRENT_SOURCE_DIR}/../resources/*.rc")

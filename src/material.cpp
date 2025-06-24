@@ -1,8 +1,11 @@
 #include "material.h"
 #include "materialeditor.h"
+#include "MaterialEditorQML.h"
 #include "ui_material.h"
 #include <QDebug>
 #include <QFileDialog>
+#include <QQmlApplicationEngine>
+#include <QQuickWidget>
 #include <OgreMaterialManager.h>
 #include <OgreMaterialSerializer.h>
 #include <OgreTechnique.h>
@@ -48,6 +51,25 @@ void Material::on_buttonEdit_clicked()
     MaterialEditor *ME = new MaterialEditor(this);
     ME->setMaterial(ui->listMaterial->selectedItems()[0]->text());
     ME->show();
+}
+
+void Material::on_buttonEditQML_clicked()
+{
+    // Create QML Material Editor Window
+    QQuickWidget* qmlWidget = new QQuickWidget(this);
+    qmlWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+    qmlWidget->setAttribute(Qt::WA_DeleteOnClose);
+    qmlWidget->setWindowTitle("QML Material Editor - " + ui->listMaterial->selectedItems()[0]->text());
+    qmlWidget->resize(1200, 800);
+    
+    // Load the QML material editor
+    qmlWidget->setSource(QUrl("qrc:/qml/MaterialEditorWindow.qml"));
+    
+    // Load the selected material
+    MaterialEditorQML* qmlEditor = MaterialEditorQML::qmlInstance(nullptr, nullptr);
+    qmlEditor->loadMaterial(ui->listMaterial->selectedItems()[0]->text());
+    
+    qmlWidget->show();
 }
 
 void Material::on_buttonExport_clicked()
