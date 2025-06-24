@@ -131,19 +131,20 @@ jobs:
            
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Build Ogre3D
-      shell: cmd
+      shell: powershell
       env:
         CMAKE_GENERATOR: "MinGW Makefiles"
         ASSIMP_DIR: "C:/Program Files (x86)/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/"
-        PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;${{ env.PATH }}"
+        PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
       run: |
-        echo "Verifying Ogre build tools:"
-        where gcc.exe
-        where g++.exe
-        where mingw32-make.exe
-        cd ${{github.workspace}}/ogre
-        cmake -B ${{github.workspace}}/ogre-build -S . -DDOXYGEN_EXECUTABLE="C:\Program Files\doxygen\bin\doxygen.exe" -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DOGRE_BUILD_PLUGIN_PCZ=ON -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-        cd ${{github.workspace}}/ogre-build
+        Write-Host "Verifying Ogre build tools:"
+        where.exe gcc.exe
+        where.exe g++.exe
+        where.exe mingw32-make.exe
+        where.exe cmake.exe
+        Set-Location "${{github.workspace}}/ogre"
+        cmake -B "${{github.workspace}}/ogre-build" -S . -DDOXYGEN_EXECUTABLE="C:\Program Files\doxygen\bin\doxygen.exe" -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DOGRE_BUILD_PLUGIN_PCZ=ON -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+        Set-Location "${{github.workspace}}/ogre-build"
         D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/mingw32-make.exe install -j8
         
  build-windows:
@@ -201,25 +202,27 @@ jobs:
          OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
          CMAKE_GENERATOR: "MinGW Makefiles"
          ASSIMP_DIR: C:/PROGRA~2/Assimp
-         PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;${{ env.PATH }}"
+         PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
       run: |
-        echo "Verifying compiler paths:"
-        where gcc.exe
-        where g++.exe
-        where mingw32-make.exe
+        Write-Host "Verifying compiler paths:"
+        where.exe gcc.exe
+        where.exe g++.exe  
+        where.exe mingw32-make.exe
+        where.exe cmake.exe
         gcc --version
+        cmake --version
         cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}
-      shell: cmd
+      shell: powershell
 
     - name: Build
       env:
-        PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;${{ env.PATH }}"
+        PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
       run: |
-        echo "Using make from:"
-        where mingw32-make.exe
+        Write-Host "Using make from:"
+        where.exe mingw32-make.exe
         mingw32-make --version
         D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/mingw32-make.exe install -j8
-      shell: cmd
+      shell: powershell
 
     - name: Copy assimp dll to the binary folder
       run: |
