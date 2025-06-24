@@ -11,8 +11,11 @@ on:
 env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
-  AQT_VERSION: '==3.1.*'
-  QT_VERSION: '6.7.1'
+  AQT_VERSION: '==3.3.*'
+  QT_VERSION: '6.9.1'
+  ASSIMP_VERSION: '6.0.2'
+  ASSIMP_DIR_VERSION: '6.0'
+  OGRE_VERSION: '14.3.4'
 
 jobs:
 #  send-slack-notification:
@@ -53,6 +56,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
+          ref: v${{ env.ASSIMP_VERSION }}
           path: ${{github.workspace}}/assimp
       
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
@@ -79,7 +83,7 @@ jobs:
         path: |
                C:/PROGRA~2/Assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-      
+
     - name: Cache Ogre
       id: cache-ogre-windows
       uses: actions/cache@v3
@@ -102,25 +106,46 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: OGRECave/ogre
+          ref: v${{ env.OGRE_VERSION }}
           path: ${{github.workspace}}/ogre
 
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
-      name: Set up MinGW
-      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
+      name: Install Qt (for MinGW)
+      uses: jurplel/install-qt-action@v3
       with:
-          platform: x64        
-          
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_mingw'
+        tools: 'tools_cmake tools_mingw1310'
+        
+    - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
+      name: Add Qt MinGW to PATH for Ogre build
+      run: |
+        echo "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        echo "Added Qt MinGW 13.1.0 to PATH for Ogre build"
+        where gcc.exe
+        gcc --version
+      shell: powershell
+           
     - if: steps.cache-ogre-windows.outputs.cache-hit != 'true'
       name: Build Ogre3D
-      shell: cmd
+      shell: powershell
       env:
-          CMAKE_GENERATOR: "MinGW Makefiles"
-          ASSIMP_DIR: "C:/Program Files (x86)/Assimp/lib/cmake/assimp-5.2/"
+        CMAKE_GENERATOR: "MinGW Makefiles"
+        ASSIMP_DIR: "C:/Program Files (x86)/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/"
+        PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
       run: |
-            cd ${{github.workspace}}/ogre
-            cmake -B ${{github.workspace}}/ogre-build -S . -DDOXYGEN_EXECUTABLE="C:\Program Files\doxygen\bin\doxygen.exe" -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DOGRE_BUILD_PLUGIN_PCZ=ON -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cd ${{github.workspace}}/ogre-build
-            mingw32-make install -j8
+        Write-Host "Verifying Ogre build tools:"
+        Write-Host "gcc location: $((Get-Command gcc.exe).Source)"
+        Write-Host "g++ location: $((Get-Command g++.exe).Source)"
+        Write-Host "mingw32-make location: $((Get-Command mingw32-make.exe).Source)"
+        Write-Host "cmake location: $((Get-Command cmake.exe).Source)"
+        Set-Location "${{github.workspace}}/ogre"
+        cmake -B "${{github.workspace}}/ogre-build" -S . -DDOXYGEN_EXECUTABLE="C:\Program Files\doxygen\bin\doxygen.exe" -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_CXX_STANDARD=17 -DOGRE_BUILD_PLUGIN_ASSIMP=ON -DOGRE_BUILD_PLUGIN_PCZ=ON -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D9=OFF -DOGRE_BUILD_RENDERSYSTEM_D3D11=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+        Set-Location "${{github.workspace}}/ogre-build"
+        D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/mingw32-make.exe install -j8
         
  build-windows:
     # The CMake configure and build commands are platform agnostic and should work equally well on Windows or Mac.
@@ -154,11 +179,6 @@ jobs:
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the ogre repo.
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Set up MinGW
-      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
-      with:
-          platform: x64   
-
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
@@ -167,26 +187,49 @@ jobs:
         host: 'windows'
         target: 'desktop'
         arch: 'win64_mingw'
-        tools: 'tools_cmake'
+        tools: 'tools_cmake tools_mingw1310'
+        
+    - name: Add Qt MinGW to PATH
+      run: |
+        echo "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        echo "Added Qt MinGW 13.1.0 to PATH"
+        where gcc.exe
+        gcc --version
+      shell: powershell
      
     - name: Configure CMake
       env:
          OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
          CMAKE_GENERATOR: "MinGW Makefiles"
          ASSIMP_DIR: C:/PROGRA~2/Assimp
+         PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
       run: |
-        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++ -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/gcc_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-5.2
-      shell: cmd
+        Write-Host "Verifying compiler paths:"
+        Write-Host "gcc location: $((Get-Command gcc.exe).Source)"
+        Write-Host "g++ location: $((Get-Command g++.exe).Source)"  
+        Write-Host "mingw32-make location: $((Get-Command mingw32-make.exe).Source)"
+        Write-Host "cmake location: $((Get-Command cmake.exe).Source)"
+        gcc --version
+        cmake --version
+        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}
+      shell: powershell
 
     - name: Build
-      run: mingw32-make install -j8
+      env:
+        PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
+      run: |
+        Write-Host "Using make from:"
+        Write-Host "mingw32-make location: $((Get-Command mingw32-make.exe).Source)"
+        mingw32-make --version
+        D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/mingw32-make.exe install -j8
+      shell: powershell
 
     - name: Copy assimp dll to the binary folder
       run: |
             Write-Host "Checking available DLL files:"
             Get-ChildItem C:/PROGRA~2/Assimp/bin
-            if (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp-5.dll") {
-                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp-5.dll" "${{github.workspace}}/bin"
+            if (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp-6.dll") {
+                Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp-6.dll" "${{github.workspace}}/bin"
             } elseif (Test-Path "C:/PROGRA~2/Assimp/bin/libassimp.dll") {
                 Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp.dll" "${{github.workspace}}/bin"
             } else {
@@ -197,14 +240,16 @@ jobs:
 
     - name: Copy gcc dll to the binary folder
       run: |
-            echo "mingw bin"
-            cd C:/ProgramData/mingw64/mingw64/bin
-            dir
-            copy C:/ProgramData/mingw64/mingw64/bin/libgcc_s_seh-1.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/mingw64/mingw64/bin/libstdc++-6.dll ${{github.workspace}}/bin
-            copy C:/ProgramData/mingw64/mingw64/bin/libwinpthread-1.dll ${{github.workspace}}/bin
-            copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/zlib1__.dll
-            copy ${{github.workspace}}/src/dependencies/zlib1.dll ${{github.workspace}}/bin/libzlib.dll
+            Write-Host "Using Qt MinGW 13.1.0 DLLs"
+            $mingwBin = "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin"
+            Write-Host "MinGW bin directory: $mingwBin"
+            Get-ChildItem "$mingwBin/*.dll" | Where-Object { $_.Name -match "(libgcc|libstdc|libwinpthread)" }
+            Copy-Item "$mingwBin/libgcc_s_seh-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            Copy-Item "$mingwBin/libstdc++-6.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            Copy-Item "$mingwBin/libwinpthread-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/zlib1__.dll" -ErrorAction SilentlyContinue
+            Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/libzlib.dll" -ErrorAction SilentlyContinue
+      shell: powershell
 
     - name: Upload Artifact
       if: github.event_name == 'release' && github.event.action == 'published'
@@ -263,6 +308,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
+          ref: v${{ env.ASSIMP_VERSION }}
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/assimp
             
     - if: steps.cache-assimp-linux.outputs.cache-hit != 'true'
@@ -327,6 +373,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: OGRECave/ogre
+          ref: v${{ env.OGRE_VERSION }}
           path: /home/runner/work/QtMeshEditor/QtMeshEditor/ogre
          
     - if: steps.cache-ogre-linux.outputs.cache-hit != 'true'
@@ -334,7 +381,7 @@ jobs:
       run: |
             sudo cmake -B /home/runner/work/QtMeshEditor/QtMeshEditor/ogre-build \
             -S /home/runner/work/QtMeshEditor/QtMeshEditor/ogre \
-            -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF \
             -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
@@ -406,7 +453,7 @@ jobs:
     - name: Configure CMake
       run: |
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
@@ -533,7 +580,7 @@ jobs:
       run: |
             mkdir build
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.2 \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
@@ -668,6 +715,7 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: assimp/assimp
+          ref: v${{ env.ASSIMP_VERSION }}
           path: /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp
       
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
@@ -719,13 +767,14 @@ jobs:
       uses: actions/checkout@master
       with:
           repository: OGRECave/ogre
+          ref: v${{ env.OGRE_VERSION }}
           path: ${{github.workspace}}/ogre
          
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
       run: |
             cd ${{github.workspace}}/ogre/
-            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-5.4/ \
+            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
@@ -793,7 +842,7 @@ jobs:
       run: |
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-5.4 \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
             -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
