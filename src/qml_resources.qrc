@@ -3,5 +3,12 @@
     <file alias="MaterialEditorWindow.qml">../qml/MaterialEditorWindow.qml</file>
     <file alias="PassPropertiesPanel.qml">../qml/PassPropertiesPanel.qml</file>
     <file alias="TexturePropertiesPanel.qml">../qml/TexturePropertiesPanel.qml</file>
+    <file alias="qmldir">../qml/qmldir</file>
+    <file alias="ThemedButton.qml">../qml/ThemedButton.qml</file>
+    <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
+    <file alias="ThemedSpinBox.qml">../qml/ThemedSpinBox.qml</file>
+    <file alias="ThemedLabel.qml">../qml/ThemedLabel.qml</file>
+    <file alias="ThemedTextField.qml">../qml/ThemedTextField.qml</file>
+    <file alias="ThemedTextArea.qml">../qml/ThemedTextArea.qml</file>
   </qresource>
 </RCC> 

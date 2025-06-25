@@ -286,6 +286,12 @@ ApplicationWindow {
                                         case "emissive":
                                             MaterialEditorQML.setEmissiveColor(selectedColor)
                                             break
+                                        case "fog":
+                                            MaterialEditorQML.setFogColor(selectedColor)
+                                            break
+                                        case "textureBorder":
+                                            MaterialEditorQML.setTextureBorderColor(selectedColor)
+                                            break
                                     }
                                     
                                     colorPickerPopup.close()
@@ -308,7 +314,7 @@ ApplicationWindow {
                     Text {
                         anchors.centerIn: parent
                         text: "Current: " + colorPickerPopup.currentColor
-                        color: Qt.colorDistance(colorPickerPopup.currentColor, "white") > 0.5 ? "white" : "black"
+                        color: (colorPickerPopup.currentColor.r + colorPickerPopup.currentColor.g + colorPickerPopup.currentColor.b) > 1.5 ? "black" : "white"
                         font.pointSize: 10
                     }
                 }
@@ -340,6 +346,12 @@ ApplicationWindow {
                                     break
                                 case "emissive":
                                     MaterialEditorQML.setEmissiveColor(whiteColor)
+                                    break
+                                case "fog":
+                                    MaterialEditorQML.setFogColor(whiteColor)
+                                    break
+                                case "textureBorder":
+                                    MaterialEditorQML.setTextureBorderColor(whiteColor)
                                     break
                             }
                             colorPickerPopup.close()
@@ -579,394 +591,16 @@ ApplicationWindow {
                         }
 
                         // Pass Properties Panel
-                        GroupBox {
-                            title: "Pass Properties"
+                        PassPropertiesPanel {
                             Layout.fillWidth: true
                             enabled: MaterialEditorQML.selectedPassIndex >= 0
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                spacing: 15
-
-                                // Lighting and Depth Settings
-                                GroupBox {
-                                    title: "Lighting & Depth"
-                                    Layout.fillWidth: true
-
-                                    ColumnLayout {
-                                        anchors.fill: parent
-                                        spacing: 10
-
-                                        // First row: Lighting, Depth Write, Depth Check
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            spacing: 15
-
-                                            CheckBox {
-                                                text: "Lighting"
-                                                checked: MaterialEditorQML.lightingEnabled
-                                                onCheckedChanged: MaterialEditorQML.setLightingEnabled(checked)
-                                            }
-
-                                            CheckBox {
-                                                text: "Depth Write"
-                                                checked: MaterialEditorQML.depthWriteEnabled
-                                                onCheckedChanged: MaterialEditorQML.setDepthWriteEnabled(checked)
-                                            }
-
-                                            CheckBox {
-                                                text: "Depth Check"
-                                                checked: MaterialEditorQML.depthCheckEnabled
-                                                onCheckedChanged: MaterialEditorQML.setDepthCheckEnabled(checked)
-                                            }
-
-                                            // Spacer to push everything to the left
-                                            Item { Layout.fillWidth: true }
-                                        }
-
-                                        // Second row: Polygon Mode
-                                        RowLayout {
-                                            Layout.fillWidth: true
-                                            spacing: 15
-
-                                            ThemedLabel { 
-                                                text: "Polygon Mode:" 
-                                                Layout.alignment: Qt.AlignVCenter
-                                            }
-                                            ThemedComboBox {
-                                                id: polygonModeComboMain
-                                                model: MaterialEditorQML.getPolygonModeNames()
-                                                currentIndex: MaterialEditorQML.polygonMode
-                                                onCurrentIndexChanged: {
-                                                    if (currentIndex !== MaterialEditorQML.polygonMode) {
-                                                        MaterialEditorQML.setPolygonMode(currentIndex)
-                                                    }
-                                                }
-                                                
-                                                // Ensure the ComboBox updates when the backend changes
-                                                Connections {
-                                                    target: MaterialEditorQML
-                                                    function onPolygonModeChanged() {
-                                                        polygonModeComboMain.currentIndex = MaterialEditorQML.polygonMode
-                                                    }
-                                                }
-                                            }
-
-                                            // Spacer to push everything to the left
-                                            Item { Layout.fillWidth: true }
-                                        }
-                                    }
-                                }
-
-                                // Colors
-                                GroupBox {
-                                    title: "Colors"
-                                    Layout.fillWidth: true
-
-                                    GridLayout {
-                                        anchors.fill: parent
-                                        columns: 3
-                                        rowSpacing: 10
-                                        columnSpacing: 10
-
-                                        // Ambient
-                                        ThemedLabel { 
-                                            text: "Ambient:" 
-                                        }
-                                        Rectangle {
-                                            width: 60
-                                            height: 25
-                                            color: MaterialEditorQML.ambientColor
-                                            border.color: borderColor
-                                            border.width: 1
-                                            radius: 3
-
-                                            MouseArea {
-                                                anchors.fill: parent
-                                                onClicked: {
-                                                    console.log("Opening ambient color picker")
-                                                    colorPickerPopup.openForColor("ambient", MaterialEditorQML.ambientColor)
-                                                }
-                                                cursorShape: Qt.PointingHandCursor
-                                            }
-                                        }
-                                        CheckBox {
-                                            text: "Use Vertex"
-                                            checked: MaterialEditorQML.useVertexColorToAmbient
-                                            onCheckedChanged: MaterialEditorQML.setUseVertexColorToAmbient(checked)
-                                        }
-
-                                        // Diffuse
-                                        ThemedLabel { 
-                                            text: "Diffuse:" 
-                                        }
-                                        Rectangle {
-                                            width: 60
-                                            height: 25
-                                            color: MaterialEditorQML.diffuseColor
-                                            border.color: borderColor
-                                            border.width: 1
-                                            radius: 3
-
-                                            MouseArea {
-                                                anchors.fill: parent
-                                                onClicked: {
-                                                    console.log("Opening diffuse color picker")
-                                                    colorPickerPopup.openForColor("diffuse", MaterialEditorQML.diffuseColor)
-                                                }
-                                                cursorShape: Qt.PointingHandCursor
-                                            }
-                                        }
-                                        CheckBox {
-                                            text: "Use Vertex"
-                                            checked: MaterialEditorQML.useVertexColorToDiffuse
-                                            onCheckedChanged: MaterialEditorQML.setUseVertexColorToDiffuse(checked)
-                                        }
-
-                                        // Specular
-                                        ThemedLabel { 
-                                            text: "Specular:" 
-                                        }
-                                        Rectangle {
-                                            width: 60
-                                            height: 25
-                                            color: MaterialEditorQML.specularColor
-                                            border.color: borderColor
-                                            border.width: 1
-                                            radius: 3
-
-                                            MouseArea {
-                                                anchors.fill: parent
-                                                onClicked: {
-                                                    console.log("Opening specular color picker")
-                                                    colorPickerPopup.openForColor("specular", MaterialEditorQML.specularColor)
-                                                }
-                                                cursorShape: Qt.PointingHandCursor
-                                            }
-                                        }
-                                        CheckBox {
-                                            text: "Use Vertex"
-                                            checked: MaterialEditorQML.useVertexColorToSpecular
-                                            onCheckedChanged: MaterialEditorQML.setUseVertexColorToSpecular(checked)
-                                        }
-
-                                        // Emissive
-                                        ThemedLabel { 
-                                            text: "Emissive:" 
-                                        }
-                                        Rectangle {
-                                            width: 60
-                                            height: 25
-                                            color: MaterialEditorQML.emissiveColor
-                                            border.color: borderColor
-                                            border.width: 1
-                                            radius: 3
-
-                                            MouseArea {
-                                                anchors.fill: parent
-                                                onClicked: {
-                                                    console.log("Opening emissive color picker")
-                                                    colorPickerPopup.openForColor("emissive", MaterialEditorQML.emissiveColor)
-                                                }
-                                                cursorShape: Qt.PointingHandCursor
-                                            }
-                                        }
-                                        CheckBox {
-                                            text: "Use Vertex"
-                                            checked: MaterialEditorQML.useVertexColorToEmissive
-                                            onCheckedChanged: MaterialEditorQML.setUseVertexColorToEmissive(checked)
-                                        }
-                                    }
-                                }
-
-                                // Alpha and Material Properties
-                                GroupBox {
-                                    title: "Alpha & Material"
-                                    Layout.fillWidth: true
-
-                                    GridLayout {
-                                        anchors.fill: parent
-                                        columns: 2
-                                        rowSpacing: 10
-
-                                        ThemedLabel { text: "Diffuse Alpha:" }
-                                        RowLayout {
-                                            Slider {
-                                                id: diffuseAlphaSlider
-                                                from: 0.0
-                                                to: 1.0
-                                                property bool updating: false
-                                                value: MaterialEditorQML.diffuseAlpha
-                                                onValueChanged: {
-                                                    if (!updating && Math.abs(value - MaterialEditorQML.diffuseAlpha) > 0.001) {
-                                                        updating = true
-                                                        MaterialEditorQML.setDiffuseAlpha(value)
-                                                        updating = false
-                                                    }
-                                                }
-                                                Layout.fillWidth: true
-                                            }
-                                            ThemedSpinBox {
-                                                id: diffuseAlphaSpinBox
-                                                from: 0
-                                                to: 100
-                                                property bool updating: false
-                                                
-                                                Component.onCompleted: {
-                                                    value = Math.round(MaterialEditorQML.diffuseAlpha * 100)
-                                                }
-                                                
-                                                Connections {
-                                                    target: MaterialEditorQML
-                                                    function onDiffuseAlphaChanged() {
-                                                        if (!diffuseAlphaSpinBox.updating) {
-                                                            diffuseAlphaSpinBox.value = Math.round(MaterialEditorQML.diffuseAlpha * 100)
-                                                        }
-                                                    }
-                                                }
-                                                
-                                                onValueChanged: {
-                                                    if (!updating) {
-                                                        updating = true
-                                                        MaterialEditorQML.setDiffuseAlpha(value / 100.0)
-                                                        updating = false
-                                                    }
-                                                }
-                                                textFromValue: function(value) { return value + "%" }
-                                                valueFromText: function(text) { return parseInt(text.replace("%", "")) }
-                                            }
-                                        }
-
-                                        ThemedLabel { text: "Specular Alpha:" }
-                                        RowLayout {
-                                            Slider {
-                                                id: specularAlphaSlider
-                                                from: 0.0
-                                                to: 1.0
-                                                property bool updating: false
-                                                value: MaterialEditorQML.specularAlpha
-                                                onValueChanged: {
-                                                    if (!updating && Math.abs(value - MaterialEditorQML.specularAlpha) > 0.001) {
-                                                        updating = true
-                                                        MaterialEditorQML.setSpecularAlpha(value)
-                                                        updating = false
-                                                    }
-                                                }
-                                                Layout.fillWidth: true
-                                            }
-                                            ThemedSpinBox {
-                                                id: specularAlphaSpinBox
-                                                from: 0
-                                                to: 100
-                                                property bool updating: false
-                                                
-                                                Component.onCompleted: {
-                                                    value = Math.round(MaterialEditorQML.specularAlpha * 100)
-                                                }
-                                                
-                                                Connections {
-                                                    target: MaterialEditorQML
-                                                    function onSpecularAlphaChanged() {
-                                                        if (!specularAlphaSpinBox.updating) {
-                                                            specularAlphaSpinBox.value = Math.round(MaterialEditorQML.specularAlpha * 100)
-                                                        }
-                                                    }
-                                                }
-                                                
-                                                onValueChanged: {
-                                                    if (!updating) {
-                                                        updating = true
-                                                        MaterialEditorQML.setSpecularAlpha(value / 100.0)
-                                                        updating = false
-                                                    }
-                                                }
-                                                textFromValue: function(value) { return value + "%" }
-                                                valueFromText: function(text) { return parseInt(text.replace("%", "")) }
-                                            }
-                                        }
-
-                                        ThemedLabel { text: "Shininess:" }
-                                        RowLayout {
-                                            Slider {
-                                                id: shininessSlider
-                                                from: 0.0
-                                                to: 128.0
-                                                property bool updating: false
-                                                value: MaterialEditorQML.shininess
-                                                onValueChanged: {
-                                                    if (!updating && Math.abs(value - MaterialEditorQML.shininess) > 0.1) {
-                                                        updating = true
-                                                        MaterialEditorQML.setShininess(value)
-                                                        updating = false
-                                                    }
-                                                }
-                                                Layout.fillWidth: true
-                                            }
-                                            ThemedSpinBox {
-                                                id: shininessSpinBox
-                                                from: 0
-                                                to: 128
-                                                property bool updating: false
-                                                
-                                                Component.onCompleted: {
-                                                    value = Math.round(MaterialEditorQML.shininess)
-                                                }
-                                                
-                                                Connections {
-                                                    target: MaterialEditorQML
-                                                    function onShininessChanged() {
-                                                        if (!shininessSpinBox.updating) {
-                                                            shininessSpinBox.value = Math.round(MaterialEditorQML.shininess)
-                                                        }
-                                                    }
-                                                }
-                                                
-                                                onValueChanged: {
-                                                    if (!updating) {
-                                                        updating = true
-                                                        MaterialEditorQML.setShininess(value)
-                                                        updating = false
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Blending
-                                GroupBox {
-                                    title: "Blending"
-                                    Layout.fillWidth: true
-
-                                    GridLayout {
-                                        anchors.fill: parent
-                                        columns: 2
-                                        rowSpacing: 10
-
-                                        ThemedLabel { text: "Source Blend:" }
-                                        ThemedComboBox {
-                                            Layout.fillWidth: true
-                                            model: MaterialEditorQML.getBlendFactorNames()
-                                            currentIndex: MaterialEditorQML.sourceBlendFactor
-                                            onCurrentIndexChanged: MaterialEditorQML.setSourceBlendFactor(currentIndex)
-                                        }
-
-                                        ThemedLabel { text: "Dest Blend:" }
-                                        ThemedComboBox {
-                                            Layout.fillWidth: true
-                                            model: MaterialEditorQML.getBlendFactorNames()
-                                            currentIndex: MaterialEditorQML.destBlendFactor
-                                            onCurrentIndexChanged: MaterialEditorQML.setDestBlendFactor(currentIndex)
-                                        }
-                                    }
-                                }
-                            }
                         }
 
                         // Texture Unit Management
                         GroupBox {
                             title: "Texture Units"
                             Layout.fillWidth: true
+                            enabled: MaterialEditorQML.selectedPassIndex >= 0
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -976,12 +610,13 @@ ApplicationWindow {
                                     Layout.fillWidth: true
 
                                     ThemedComboBox {
-                                        id: textureUnitCombo
                                         Layout.fillWidth: true
                                         model: MaterialEditorQML.textureUnitList
                                         currentIndex: MaterialEditorQML.selectedTextureUnitIndex
                                         onCurrentIndexChanged: {
-                                            MaterialEditorQML.setSelectedTextureUnitIndex(currentIndex)
+                                            if (currentIndex !== MaterialEditorQML.selectedTextureUnitIndex) {
+                                                MaterialEditorQML.setSelectedTextureUnitIndex(currentIndex)
+                                            }
                                         }
                                     }
 
@@ -993,78 +628,10 @@ ApplicationWindow {
                             }
                         }
 
-                        // Texture Properties
-                        GroupBox {
-                            title: "Texture Properties"
+                        // Texture Properties Panel
+                        TexturePropertiesPanel {
                             Layout.fillWidth: true
                             enabled: MaterialEditorQML.selectedTextureUnitIndex >= 0
-
-                            GridLayout {
-                                anchors.fill: parent
-                                columns: 2
-                                rowSpacing: 10
-
-                                ThemedLabel { text: "Texture:" }
-                                RowLayout {
-                                    Layout.fillWidth: true
-                                    
-                                    Text {
-                                        id: textureNameField
-                                        Layout.fillWidth: true
-                                        text: MaterialEditorQML.textureName || "*No texture*"
-                                        color: textColor
-                                        elide: Text.ElideRight
-                                    }
-                                    
-                                    ThemedButton {
-                                        text: "Select"
-                                        onClicked: textureFileDialog.open()
-                                    }
-                                    
-                                    ThemedButton {
-                                        text: "Remove"
-                                        onClicked: MaterialEditorQML.removeTexture()
-                                    }
-                                }
-
-                                ThemedLabel { text: "U Scroll Speed:" }
-                                RowLayout {
-                                    Slider {
-                                        from: -10.0
-                                        to: 10.0
-                                        value: MaterialEditorQML.scrollAnimUSpeed
-                                        onValueChanged: MaterialEditorQML.setScrollAnimUSpeed(value)
-                                        Layout.fillWidth: true
-                                    }
-                                    ThemedSpinBox {
-                                        from: -1000
-                                        to: 1000
-                                        value: Math.round(MaterialEditorQML.scrollAnimUSpeed * 100)
-                                        onValueChanged: MaterialEditorQML.setScrollAnimUSpeed(value / 100.0)
-                                        textFromValue: function(value) { return (value / 100.0).toFixed(2) }
-                                        valueFromText: function(text) { return Math.round(parseFloat(text) * 100) }
-                                    }
-                                }
-
-                                ThemedLabel { text: "V Scroll Speed:" }
-                                RowLayout {
-                                    Slider {
-                                        from: -10.0
-                                        to: 10.0
-                                        value: MaterialEditorQML.scrollAnimVSpeed
-                                        onValueChanged: MaterialEditorQML.setScrollAnimVSpeed(value)
-                                        Layout.fillWidth: true
-                                    }
-                                    ThemedSpinBox {
-                                        from: -1000
-                                        to: 1000
-                                        value: Math.round(MaterialEditorQML.scrollAnimVSpeed * 100)
-                                        onValueChanged: MaterialEditorQML.setScrollAnimVSpeed(value / 100.0)
-                                        textFromValue: function(value) { return (value / 100.0).toFixed(2) }
-                                        valueFromText: function(text) { return Math.round(parseFloat(text) * 100) }
-                                    }
-                                }
-                            }
                         }
                     }
                 }

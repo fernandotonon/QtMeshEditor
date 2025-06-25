@@ -55,6 +55,61 @@ class MaterialEditorQML : public QObject
     Q_PROPERTY(double scrollAnimUSpeed READ scrollAnimUSpeed WRITE setScrollAnimUSpeed NOTIFY scrollAnimUSpeedChanged)
     Q_PROPERTY(double scrollAnimVSpeed READ scrollAnimVSpeed WRITE setScrollAnimVSpeed NOTIFY scrollAnimVSpeedChanged)
 
+    // Advanced Pass properties
+    Q_PROPERTY(int shadingMode READ shadingMode WRITE setShadingMode NOTIFY shadingModeChanged)
+    Q_PROPERTY(int cullHardware READ cullHardware WRITE setCullHardware NOTIFY cullHardwareChanged)
+    Q_PROPERTY(int cullSoftware READ cullSoftware WRITE setCullSoftware NOTIFY cullSoftwareChanged)
+    Q_PROPERTY(int depthFunction READ depthFunction WRITE setDepthFunction NOTIFY depthFunctionChanged)
+    Q_PROPERTY(float depthBiasConstant READ depthBiasConstant WRITE setDepthBiasConstant NOTIFY depthBiasConstantChanged)
+    Q_PROPERTY(float depthBiasSlopeScale READ depthBiasSlopeScale WRITE setDepthBiasSlopeScale NOTIFY depthBiasSlopeScaleChanged)
+    Q_PROPERTY(bool alphaRejectionEnabled READ alphaRejectionEnabled WRITE setAlphaRejectionEnabled NOTIFY alphaRejectionEnabledChanged)
+    Q_PROPERTY(int alphaRejectionFunction READ alphaRejectionFunction WRITE setAlphaRejectionFunction NOTIFY alphaRejectionFunctionChanged)
+    Q_PROPERTY(int alphaRejectionValue READ alphaRejectionValue WRITE setAlphaRejectionValue NOTIFY alphaRejectionValueChanged)
+    Q_PROPERTY(bool alphaToCoverageEnabled READ alphaToCoverageEnabled WRITE setAlphaToCoverageEnabled NOTIFY alphaToCoverageEnabledChanged)
+    Q_PROPERTY(bool colourWriteRed READ colourWriteRed WRITE setColourWriteRed NOTIFY colourWriteRedChanged)
+    Q_PROPERTY(bool colourWriteGreen READ colourWriteGreen WRITE setColourWriteGreen NOTIFY colourWriteGreenChanged)
+    Q_PROPERTY(bool colourWriteBlue READ colourWriteBlue WRITE setColourWriteBlue NOTIFY colourWriteBlueChanged)
+    Q_PROPERTY(bool colourWriteAlpha READ colourWriteAlpha WRITE setColourWriteAlpha NOTIFY colourWriteAlphaChanged)
+    Q_PROPERTY(int sceneBlendOperation READ sceneBlendOperation WRITE setSceneBlendOperation NOTIFY sceneBlendOperationChanged)
+    Q_PROPERTY(float pointSize READ pointSize WRITE setPointSize NOTIFY pointSizeChanged)
+    Q_PROPERTY(float lineWidth READ lineWidth WRITE setLineWidth NOTIFY lineWidthChanged)
+    Q_PROPERTY(bool pointSpritesEnabled READ pointSpritesEnabled WRITE setPointSpritesEnabled NOTIFY pointSpritesEnabledChanged)
+    Q_PROPERTY(int maxLights READ maxLights WRITE setMaxLights NOTIFY maxLightsChanged)
+    Q_PROPERTY(int startLight READ startLight WRITE setStartLight NOTIFY startLightChanged)
+    
+    // Fog properties
+    Q_PROPERTY(bool fogOverride READ fogOverride WRITE setFogOverride NOTIFY fogOverrideChanged)
+    Q_PROPERTY(int fogMode READ fogMode WRITE setFogMode NOTIFY fogModeChanged)
+    Q_PROPERTY(QColor fogColor READ fogColor WRITE setFogColor NOTIFY fogColorChanged)
+    Q_PROPERTY(float fogDensity READ fogDensity WRITE setFogDensity NOTIFY fogDensityChanged)
+    Q_PROPERTY(float fogStart READ fogStart WRITE setFogStart NOTIFY fogStartChanged)
+    Q_PROPERTY(float fogEnd READ fogEnd WRITE setFogEnd NOTIFY fogEndChanged)
+    
+    // Texture Unit properties
+    Q_PROPERTY(int texCoordSet READ texCoordSet WRITE setTexCoordSet NOTIFY texCoordSetChanged)
+    Q_PROPERTY(int textureAddressMode READ textureAddressMode WRITE setTextureAddressMode NOTIFY textureAddressModeChanged)
+    Q_PROPERTY(QColor textureBorderColor READ textureBorderColor WRITE setTextureBorderColor NOTIFY textureBorderColorChanged)
+    Q_PROPERTY(int textureFiltering READ textureFiltering WRITE setTextureFiltering NOTIFY textureFilteringChanged)
+    Q_PROPERTY(int maxAnisotropy READ maxAnisotropy WRITE setMaxAnisotropy NOTIFY maxAnisotropyChanged)
+    Q_PROPERTY(float textureUOffset READ textureUOffset WRITE setTextureUOffset NOTIFY textureUOffsetChanged)
+    Q_PROPERTY(float textureVOffset READ textureVOffset WRITE setTextureVOffset NOTIFY textureVOffsetChanged)
+    Q_PROPERTY(float textureUScale READ textureUScale WRITE setTextureUScale NOTIFY textureUScaleChanged)
+    Q_PROPERTY(float textureVScale READ textureVScale WRITE setTextureVScale NOTIFY textureVScaleChanged)
+    Q_PROPERTY(float textureRotation READ textureRotation WRITE setTextureRotation NOTIFY textureRotationChanged)
+    Q_PROPERTY(int environmentMapping READ environmentMapping WRITE setEnvironmentMapping NOTIFY environmentMappingChanged)
+    Q_PROPERTY(double rotateAnimSpeed READ rotateAnimSpeed WRITE setRotateAnimSpeed NOTIFY rotateAnimSpeedChanged)
+
+    // Theme color properties
+    Q_PROPERTY(QColor backgroundColor READ backgroundColor CONSTANT)
+    Q_PROPERTY(QColor panelColor READ panelColor CONSTANT)
+    Q_PROPERTY(QColor textColor READ textColor CONSTANT)
+    Q_PROPERTY(QColor borderColor READ borderColor CONSTANT)
+    Q_PROPERTY(QColor highlightColor READ highlightColor CONSTANT)
+    Q_PROPERTY(QColor buttonColor READ buttonColor CONSTANT)
+    Q_PROPERTY(QColor buttonTextColor READ buttonTextColor CONSTANT)
+    Q_PROPERTY(QColor disabledTextColor READ disabledTextColor CONSTANT)
+    Q_PROPERTY(QColor accentColor READ accentColor CONSTANT)
+
 public:
     explicit MaterialEditorQML(QObject *parent = nullptr);
     virtual ~MaterialEditorQML() = default;
@@ -94,6 +149,61 @@ public:
     QString textureName() const { return m_textureName; }
     double scrollAnimUSpeed() const { return m_scrollAnimUSpeed; }
     double scrollAnimVSpeed() const { return m_scrollAnimVSpeed; }
+
+    // Advanced Pass property getters
+    int shadingMode() const { return m_shadingMode; }
+    int cullHardware() const { return m_cullHardware; }
+    int cullSoftware() const { return m_cullSoftware; }
+    int depthFunction() const { return m_depthFunction; }
+    float depthBiasConstant() const { return m_depthBiasConstant; }
+    float depthBiasSlopeScale() const { return m_depthBiasSlopeScale; }
+    bool alphaRejectionEnabled() const { return m_alphaRejectionEnabled; }
+    int alphaRejectionFunction() const { return m_alphaRejectionFunction; }
+    int alphaRejectionValue() const { return m_alphaRejectionValue; }
+    bool alphaToCoverageEnabled() const { return m_alphaToCoverageEnabled; }
+    bool colourWriteRed() const { return m_colourWriteRed; }
+    bool colourWriteGreen() const { return m_colourWriteGreen; }
+    bool colourWriteBlue() const { return m_colourWriteBlue; }
+    bool colourWriteAlpha() const { return m_colourWriteAlpha; }
+    int sceneBlendOperation() const { return m_sceneBlendOperation; }
+    float pointSize() const { return m_pointSize; }
+    float lineWidth() const { return m_lineWidth; }
+    bool pointSpritesEnabled() const { return m_pointSpritesEnabled; }
+    int maxLights() const { return m_maxLights; }
+    int startLight() const { return m_startLight; }
+    
+    // Fog property getters
+    bool fogOverride() const { return m_fogOverride; }
+    int fogMode() const { return m_fogMode; }
+    QColor fogColor() const { return m_fogColor; }
+    float fogDensity() const { return m_fogDensity; }
+    float fogStart() const { return m_fogStart; }
+    float fogEnd() const { return m_fogEnd; }
+    
+    // Texture Unit property getters
+    int texCoordSet() const { return m_texCoordSet; }
+    int textureAddressMode() const { return m_textureAddressMode; }
+    QColor textureBorderColor() const { return m_textureBorderColor; }
+    int textureFiltering() const { return m_textureFiltering; }
+    int maxAnisotropy() const { return m_maxAnisotropy; }
+    float textureUOffset() const { return m_textureUOffset; }
+    float textureVOffset() const { return m_textureVOffset; }
+    float textureUScale() const { return m_textureUScale; }
+    float textureVScale() const { return m_textureVScale; }
+    float textureRotation() const { return m_textureRotation; }
+    int environmentMapping() const { return m_environmentMapping; }
+    double rotateAnimSpeed() const { return m_rotateAnimSpeed; }
+
+    // Theme color getters
+    QColor backgroundColor() const { return m_backgroundColor; }
+    QColor panelColor() const { return m_panelColor; }
+    QColor textColor() const { return m_textColor; }
+    QColor borderColor() const { return m_borderColor; }
+    QColor highlightColor() const { return m_highlightColor; }
+    QColor buttonColor() const { return m_buttonColor; }
+    QColor buttonTextColor() const { return m_buttonTextColor; }
+    QColor disabledTextColor() const { return m_disabledTextColor; }
+    QColor accentColor() const { return m_accentColor; }
 
     // Static factory for QML singleton
     static MaterialEditorQML* qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine);
@@ -138,6 +248,50 @@ public slots:
     void setScrollAnimUSpeed(double speed);
     void setScrollAnimVSpeed(double speed);
     
+    // Advanced Pass property setters
+    void setShadingMode(int mode);
+    void setCullHardware(int mode);
+    void setCullSoftware(int mode);
+    void setDepthFunction(int function);
+    void setDepthBiasConstant(float bias);
+    void setDepthBiasSlopeScale(float bias);
+    void setAlphaRejectionEnabled(bool enabled);
+    void setAlphaRejectionFunction(int function);
+    void setAlphaRejectionValue(int value);
+    void setAlphaToCoverageEnabled(bool enabled);
+    void setColourWriteRed(bool enabled);
+    void setColourWriteGreen(bool enabled);
+    void setColourWriteBlue(bool enabled);
+    void setColourWriteAlpha(bool enabled);
+    void setSceneBlendOperation(int operation);
+    void setPointSize(float size);
+    void setLineWidth(float width);
+    void setPointSpritesEnabled(bool enabled);
+    void setMaxLights(int maxLights);
+    void setStartLight(int startLight);
+    
+    // Fog property setters
+    void setFogOverride(bool override);
+    void setFogMode(int mode);
+    void setFogColor(const QColor &color);
+    void setFogDensity(float density);
+    void setFogStart(float start);
+    void setFogEnd(float end);
+    
+    // Texture Unit property setters
+    void setTexCoordSet(int set);
+    void setTextureAddressMode(int mode);
+    void setTextureBorderColor(const QColor &color);
+    void setTextureFiltering(int filtering);
+    void setMaxAnisotropy(int anisotropy);
+    void setTextureUOffset(float offset);
+    void setTextureVOffset(float offset);
+    void setTextureUScale(float scale);
+    void setTextureVScale(float scale);
+    void setTextureRotation(float rotation);
+    void setEnvironmentMapping(int mapping);
+    void setRotateAnimSpeed(double speed);
+    
     // Actions
     void createNewTechnique(const QString &name);
     void createNewPass(const QString &name);
@@ -149,6 +303,17 @@ public slots:
     QStringList getPolygonModeNames() const;
     QStringList getBlendFactorNames() const;
     QStringList getAvailableTextures() const;
+    
+    // Additional utility functions for new properties
+    QStringList getShadingModeNames() const;
+    QStringList getCullModeNames() const;
+    QStringList getDepthFunctionNames() const;
+    QStringList getAlphaRejectionFunctionNames() const;
+    QStringList getSceneBlendOperationNames() const;
+    QStringList getFogModeNames() const;
+    QStringList getTextureAddressModeNames() const;
+    QStringList getTextureFilteringNames() const;
+    QStringList getEnvironmentMappingNames() const;
     
     // File operations
     void openTextureFileDialog();
@@ -194,6 +359,50 @@ signals:
     void scrollAnimUSpeedChanged();
     void scrollAnimVSpeedChanged();
     
+    // Advanced Pass property change signals
+    void shadingModeChanged();
+    void cullHardwareChanged();
+    void cullSoftwareChanged();
+    void depthFunctionChanged();
+    void depthBiasConstantChanged();
+    void depthBiasSlopeScaleChanged();
+    void alphaRejectionEnabledChanged();
+    void alphaRejectionFunctionChanged();
+    void alphaRejectionValueChanged();
+    void alphaToCoverageEnabledChanged();
+    void colourWriteRedChanged();
+    void colourWriteGreenChanged();
+    void colourWriteBlueChanged();
+    void colourWriteAlphaChanged();
+    void sceneBlendOperationChanged();
+    void pointSizeChanged();
+    void lineWidthChanged();
+    void pointSpritesEnabledChanged();
+    void maxLightsChanged();
+    void startLightChanged();
+    
+    // Fog property change signals
+    void fogOverrideChanged();
+    void fogModeChanged();
+    void fogColorChanged();
+    void fogDensityChanged();
+    void fogStartChanged();
+    void fogEndChanged();
+    
+    // Texture Unit property change signals
+    void texCoordSetChanged();
+    void textureAddressModeChanged();
+    void textureBorderColorChanged();
+    void textureFilteringChanged();
+    void maxAnisotropyChanged();
+    void textureUOffsetChanged();
+    void textureVOffsetChanged();
+    void textureUScaleChanged();
+    void textureVScaleChanged();
+    void textureRotationChanged();
+    void environmentMappingChanged();
+    void rotateAnimSpeedChanged();
+    
     // Error and status signals
     void errorOccurred(const QString &error);
     void materialApplied();
@@ -224,10 +433,10 @@ private:
     bool m_lightingEnabled = true;
     bool m_depthWriteEnabled = true;
     bool m_depthCheckEnabled = true;
-    QColor m_ambientColor = QColor(0.5f * 255, 0.5f * 255, 0.5f * 255);
-    QColor m_diffuseColor = QColor(255, 255, 255);
-    QColor m_specularColor = QColor(0, 0, 0);
-    QColor m_emissiveColor = QColor(0, 0, 0);
+    QColor m_ambientColor;
+    QColor m_diffuseColor;
+    QColor m_specularColor;
+    QColor m_emissiveColor;
     float m_diffuseAlpha = 1.0f;
     float m_specularAlpha = 1.0f;
     float m_shininess = 0.0f;
@@ -252,6 +461,61 @@ private:
     QMap<int, QStringList> m_techMapName;
     QMap<int, Ogre::Pass*> m_passMap;
     QMap<QString, Ogre::TextureUnitState*> m_texUnitMap;
+
+    // Advanced Pass properties
+    int m_shadingMode = 0;
+    int m_cullHardware = 0;
+    int m_cullSoftware = 0;
+    int m_depthFunction = 0;
+    float m_depthBiasConstant = 0.0f;
+    float m_depthBiasSlopeScale = 0.0f;
+    bool m_alphaRejectionEnabled = false;
+    int m_alphaRejectionFunction = 0;
+    int m_alphaRejectionValue = 0;
+    bool m_alphaToCoverageEnabled = false;
+    bool m_colourWriteRed = true;
+    bool m_colourWriteGreen = true;
+    bool m_colourWriteBlue = true;
+    bool m_colourWriteAlpha = true;
+    int m_sceneBlendOperation = 0;
+    float m_pointSize = 1.0f;
+    float m_lineWidth = 1.0f;
+    bool m_pointSpritesEnabled = false;
+    int m_maxLights = 0;
+    int m_startLight = 0;
+    
+    // Fog properties
+    bool m_fogOverride = false;
+    int m_fogMode = 0;
+    QColor m_fogColor;
+    float m_fogDensity = 0.0f;
+    float m_fogStart = 0.0f;
+    float m_fogEnd = 1.0f;
+    
+    // Texture Unit properties
+    int m_texCoordSet = 0;
+    int m_textureAddressMode = 0;
+    QColor m_textureBorderColor;
+    int m_textureFiltering = 0;
+    int m_maxAnisotropy = 1;
+    float m_textureUOffset = 0.0f;
+    float m_textureVOffset = 0.0f;
+    float m_textureUScale = 1.0f;
+    float m_textureVScale = 1.0f;
+    float m_textureRotation = 0.0f;
+    int m_environmentMapping = 0;
+    double m_rotateAnimSpeed = 0.0;
+
+    // Theme color properties
+    QColor m_backgroundColor;
+    QColor m_panelColor;
+    QColor m_textColor;
+    QColor m_borderColor;
+    QColor m_highlightColor;
+    QColor m_buttonColor;
+    QColor m_buttonTextColor;
+    QColor m_disabledTextColor;
+    QColor m_accentColor;
 };
 
 #endif // MATERIALEDITORQML_H 

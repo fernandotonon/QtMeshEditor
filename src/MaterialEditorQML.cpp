@@ -8,6 +8,7 @@
 #include <QQmlEngine>
 #include <QJSEngine>
 #include <QStandardPaths>
+#include <QPalette>
 #include <OgreLog.h>
 #include <OgreScriptCompiler.h>
 #include <OgreScriptTranslator.h>
@@ -15,6 +16,25 @@
 MaterialEditorQML::MaterialEditorQML(QObject *parent)
     : QObject(parent)
 {
+    // Initialize theme colors from system palette
+    QPalette palette = QApplication::palette();
+    m_backgroundColor = palette.color(QPalette::Window);
+    m_panelColor = palette.color(QPalette::Base);
+    m_textColor = palette.color(QPalette::WindowText);
+    m_borderColor = palette.color(QPalette::Mid);
+    m_highlightColor = palette.color(QPalette::Highlight);
+    m_buttonColor = palette.color(QPalette::Button);
+    m_buttonTextColor = palette.color(QPalette::ButtonText);
+    m_disabledTextColor = palette.color(QPalette::PlaceholderText);
+    m_accentColor = palette.color(QPalette::Highlight);
+    
+    // Initialize material color properties with defaults
+    m_ambientColor = QColor(128, 128, 128);  // Gray
+    m_diffuseColor = QColor(255, 255, 255);  // White
+    m_specularColor = QColor(0, 0, 0);       // Black
+    m_emissiveColor = QColor(0, 0, 0);       // Black
+    m_fogColor = QColor(0, 0, 0);            // Black
+    m_textureBorderColor = QColor(0, 0, 0);  // Black
 }
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -535,13 +555,10 @@ void MaterialEditorQML::setScrollAnimVSpeed(double speed)
 {
     if (m_scrollAnimVSpeed != speed) {
         m_scrollAnimVSpeed = speed;
-        
-        Ogre::TextureUnitState* textureUnit = getCurrentTextureUnit();
-        if (textureUnit) {
-            textureUnit->setScrollAnimation(m_scrollAnimUSpeed, speed);
-            updateMaterialText();
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass && !pass->getTextureUnitStates().empty()) {
+            pass->getTextureUnitState(0)->setScrollAnimation(m_scrollAnimUSpeed, m_scrollAnimVSpeed);
         }
-        
         emit scrollAnimVSpeedChanged();
     }
 }
@@ -840,6 +857,75 @@ void MaterialEditorQML::updatePassProperties()
     m_useVertexColorToSpecular = tracking & 4;
     m_useVertexColorToEmissive = tracking & 8;
     
+    // Advanced Pass properties
+    m_shadingMode = static_cast<int>(pass->getShadingMode());
+    
+    // Map Ogre CullingMode to ComboBox index
+    // Ogre: CULL_NONE=1, CULL_CLOCKWISE=2, CULL_ANTICLOCKWISE=3
+    // ComboBox: None=0, Clockwise=1, Counter-Clockwise=2
+    Ogre::CullingMode cullMode = pass->getCullingMode();
+    switch (cullMode) {
+        case Ogre::CULL_NONE: m_cullHardware = 0; break;
+        case Ogre::CULL_CLOCKWISE: m_cullHardware = 1; break;
+        case Ogre::CULL_ANTICLOCKWISE: m_cullHardware = 2; break;
+        default: m_cullHardware = 1; break; // Default to Clockwise
+    }
+    
+    // Map Ogre ManualCullingMode to ComboBox index
+    // Ogre: MANUAL_CULL_NONE=0, MANUAL_CULL_BACK=1, MANUAL_CULL_FRONT=2
+    // ComboBox: None=0, Clockwise=1, Counter-Clockwise=2
+    Ogre::ManualCullingMode manualCullMode = pass->getManualCullingMode();
+    switch (manualCullMode) {
+        case Ogre::MANUAL_CULL_NONE: m_cullSoftware = 0; break;
+        case Ogre::MANUAL_CULL_BACK: m_cullSoftware = 1; break;
+        case Ogre::MANUAL_CULL_FRONT: m_cullSoftware = 2; break;
+        default: m_cullSoftware = 0; break; // Default to None
+    }
+    
+    m_depthFunction = static_cast<int>(pass->getDepthFunction());
+    
+    // Depth bias - these functions may not exist in this Ogre version
+    m_depthBiasConstant = 0.0f;  // Default value
+    m_depthBiasSlopeScale = 0.0f; // Default value
+    
+    // Alpha rejection - use simplified approach
+    m_alphaRejectionEnabled = false;  // Default
+    m_alphaRejectionFunction = 1;     // Always Pass
+    m_alphaRejectionValue = 0;        // Default
+    
+    m_alphaToCoverageEnabled = pass->isAlphaToCoverageEnabled();
+    
+    bool r, g, b, a;
+    pass->getColourWriteEnabled(r, g, b, a);
+    m_colourWriteRed = r;
+    m_colourWriteGreen = g;
+    m_colourWriteBlue = b;
+    m_colourWriteAlpha = a;
+    
+    m_sceneBlendOperation = static_cast<int>(pass->getSceneBlendingOperation());
+    m_pointSize = pass->getPointSize();
+    m_lineWidth = pass->getLineWidth();
+    m_pointSpritesEnabled = pass->getPointSpritesEnabled();
+    m_maxLights = pass->getMaxSimultaneousLights();
+    m_startLight = pass->getStartLight();
+    
+    // Fog properties - simplified approach
+    m_fogOverride = pass->getFogOverride();
+    if (m_fogOverride) {
+        // Get fog settings if available
+        m_fogMode = 0;           // Default to None
+        m_fogColor = QColor(0, 0, 0);
+        m_fogDensity = 0.0f;
+        m_fogStart = 0.0f;
+        m_fogEnd = 1.0f;
+    } else {
+        m_fogMode = 0;
+        m_fogColor = QColor(0, 0, 0);
+        m_fogDensity = 0.0f;
+        m_fogStart = 0.0f;
+        m_fogEnd = 1.0f;
+    }
+    
     // Emit all property change signals
     emit lightingEnabledChanged();
     emit depthWriteEnabledChanged();
@@ -858,6 +944,34 @@ void MaterialEditorQML::updatePassProperties()
     emit useVertexColorToDiffuseChanged();
     emit useVertexColorToSpecularChanged();
     emit useVertexColorToEmissiveChanged();
+    
+    // Emit new property change signals
+    emit shadingModeChanged();
+    emit cullHardwareChanged();
+    emit cullSoftwareChanged();
+    emit depthFunctionChanged();
+    emit depthBiasConstantChanged();
+    emit depthBiasSlopeScaleChanged();
+    emit alphaRejectionEnabledChanged();
+    emit alphaRejectionFunctionChanged();
+    emit alphaRejectionValueChanged();
+    emit alphaToCoverageEnabledChanged();
+    emit colourWriteRedChanged();
+    emit colourWriteGreenChanged();
+    emit colourWriteBlueChanged();
+    emit colourWriteAlphaChanged();
+    emit sceneBlendOperationChanged();
+    emit pointSizeChanged();
+    emit lineWidthChanged();
+    emit pointSpritesEnabledChanged();
+    emit maxLightsChanged();
+    emit startLightChanged();
+    emit fogOverrideChanged();
+    emit fogModeChanged();
+    emit fogColorChanged();
+    emit fogDensityChanged();
+    emit fogStartChanged();
+    emit fogEndChanged();
 }
 
 void MaterialEditorQML::resetPropertiesToDefaults()
@@ -866,10 +980,10 @@ void MaterialEditorQML::resetPropertiesToDefaults()
     m_lightingEnabled = true;
     m_depthWriteEnabled = true;
     m_depthCheckEnabled = true;
-    m_ambientColor = QColor(0.5f * 255, 0.5f * 255, 0.5f * 255);
-    m_diffuseColor = QColor(255, 255, 255);
-    m_specularColor = QColor(0, 0, 0);
-    m_emissiveColor = QColor(0, 0, 0);
+    m_ambientColor = QColor(128, 128, 128);  // Gray
+    m_diffuseColor = QColor(255, 255, 255);  // White
+    m_specularColor = QColor(0, 0, 0);       // Black
+    m_emissiveColor = QColor(0, 0, 0);       // Black
     m_diffuseAlpha = 1.0f;
     m_specularAlpha = 1.0f;
     m_shininess = 0.0f;
@@ -880,6 +994,50 @@ void MaterialEditorQML::resetPropertiesToDefaults()
     m_useVertexColorToDiffuse = false;
     m_useVertexColorToSpecular = false;
     m_useVertexColorToEmissive = false;
+    
+    // Reset new advanced properties to defaults
+    m_shadingMode = 1; // Gouraud
+    m_cullHardware = 1; // Clockwise
+    m_cullSoftware = 0; // None
+    m_depthFunction = 4; // Less Equal
+    m_depthBiasConstant = 0.0f;
+    m_depthBiasSlopeScale = 0.0f;
+    m_alphaRejectionEnabled = false;
+    m_alphaRejectionFunction = 1; // Always Pass
+    m_alphaRejectionValue = 0;
+    m_alphaToCoverageEnabled = false;
+    m_colourWriteRed = true;
+    m_colourWriteGreen = true;
+    m_colourWriteBlue = true;
+    m_colourWriteAlpha = true;
+    m_sceneBlendOperation = 0; // Add
+    m_pointSize = 1.0f;
+    m_lineWidth = 1.0f;
+    m_pointSpritesEnabled = false;
+    m_maxLights = 0; // Unlimited
+    m_startLight = 0;
+    
+    // Reset fog properties
+    m_fogOverride = false;
+    m_fogMode = 0; // None
+    m_fogColor = QColor(0, 0, 0);
+    m_fogDensity = 0.0f;
+    m_fogStart = 0.0f;
+    m_fogEnd = 1.0f;
+    
+    // Reset texture unit properties  
+    m_texCoordSet = 0;
+    m_textureAddressMode = 0; // Wrap
+    m_textureBorderColor = QColor(0, 0, 0);
+    m_textureFiltering = 1; // Bilinear
+    m_maxAnisotropy = 1;
+    m_textureUOffset = 0.0f;
+    m_textureVOffset = 0.0f;
+    m_textureUScale = 1.0f;
+    m_textureVScale = 1.0f;
+    m_textureRotation = 0.0f;
+    m_environmentMapping = 0; // None
+    m_rotateAnimSpeed = 0.0;
     
     // Emit all property change signals to update UI
     emit lightingEnabledChanged();
@@ -899,6 +1057,46 @@ void MaterialEditorQML::resetPropertiesToDefaults()
     emit useVertexColorToDiffuseChanged();
     emit useVertexColorToSpecularChanged();
     emit useVertexColorToEmissiveChanged();
+    
+    // Emit new property signals
+    emit shadingModeChanged();
+    emit cullHardwareChanged();
+    emit cullSoftwareChanged();
+    emit depthFunctionChanged();
+    emit depthBiasConstantChanged();
+    emit depthBiasSlopeScaleChanged();
+    emit alphaRejectionEnabledChanged();
+    emit alphaRejectionFunctionChanged();
+    emit alphaRejectionValueChanged();
+    emit alphaToCoverageEnabledChanged();
+    emit colourWriteRedChanged();
+    emit colourWriteGreenChanged();
+    emit colourWriteBlueChanged();
+    emit colourWriteAlphaChanged();
+    emit sceneBlendOperationChanged();
+    emit pointSizeChanged();
+    emit lineWidthChanged();
+    emit pointSpritesEnabledChanged();
+    emit maxLightsChanged();
+    emit startLightChanged();
+    emit fogOverrideChanged();
+    emit fogModeChanged();
+    emit fogColorChanged();
+    emit fogDensityChanged();
+    emit fogStartChanged();
+    emit fogEndChanged();
+    emit texCoordSetChanged();
+    emit textureAddressModeChanged();
+    emit textureBorderColorChanged();
+    emit textureFilteringChanged();
+    emit maxAnisotropyChanged();
+    emit textureUOffsetChanged();
+    emit textureVOffsetChanged();
+    emit textureUScaleChanged();
+    emit textureVScaleChanged();
+    emit textureRotationChanged();
+    emit environmentMappingChanged();
+    emit rotateAnimSpeedChanged();
 }
 
 void MaterialEditorQML::updateTextureUnitProperties()
@@ -908,6 +1106,20 @@ void MaterialEditorQML::updateTextureUnitProperties()
         m_textureName = "*Select a texture*";
         m_scrollAnimUSpeed = 0.0;
         m_scrollAnimVSpeed = 0.0;
+        
+        // Reset texture unit properties to defaults
+        m_texCoordSet = 0;
+        m_textureAddressMode = 0;
+        m_textureBorderColor = QColor(0, 0, 0);
+        m_textureFiltering = 1;
+        m_maxAnisotropy = 1;
+        m_textureUOffset = 0.0f;
+        m_textureVOffset = 0.0f;
+        m_textureUScale = 1.0f;
+        m_textureVScale = 1.0f;
+        m_textureRotation = 0.0f;
+        m_environmentMapping = 0;
+        m_rotateAnimSpeed = 0.0;
     } else {
         QString texName = QString::fromStdString(textureUnit->getTextureName());
         m_textureName = texName.isEmpty() ? "*Select a texture*" : texName;
@@ -926,11 +1138,57 @@ void MaterialEditorQML::updateTextureUnitProperties()
                 m_scrollAnimVSpeed = effectPair.second.arg1;
             }
         }
+        
+        // Load texture unit properties
+        m_texCoordSet = textureUnit->getTextureCoordSet();
+        
+        // Get texture addressing mode - simplified approach for this Ogre version
+        m_textureAddressMode = 0; // Default to Wrap
+        
+        const Ogre::ColourValue& borderCol = textureUnit->getTextureBorderColour();
+        m_textureBorderColor = QColor::fromRgbF(borderCol.r, borderCol.g, borderCol.b, borderCol.a);
+        
+        // Get texture filtering option - simplified approach
+        m_textureFiltering = 1; // Default to bilinear
+        
+        m_maxAnisotropy = textureUnit->getTextureAnisotropy();
+        
+        // Texture transform - simplified approach (these may not be available in this version)
+        m_textureUOffset = 0.0f;  // Default
+        m_textureVOffset = 0.0f;  // Default
+        m_textureUScale = textureUnit->getTextureUScale();
+        m_textureVScale = textureUnit->getTextureVScale();
+        m_textureRotation = textureUnit->getTextureRotate().valueDegrees();
+        
+        // Environment mapping - simplified approach
+        m_environmentMapping = 0; // Default to None
+        
+        // Get rotate animation speed from effects
+        for (const auto& effectPair : effects) {
+            if (effectPair.first == Ogre::TextureUnitState::ET_ROTATE) {
+                m_rotateAnimSpeed = effectPair.second.arg1;
+                break;
+            }
+        }
     }
     
     emit textureNameChanged();
     emit scrollAnimUSpeedChanged();
     emit scrollAnimVSpeedChanged();
+    
+    // Emit texture unit property signals
+    emit texCoordSetChanged();
+    emit textureAddressModeChanged();
+    emit textureBorderColorChanged();
+    emit textureFilteringChanged();
+    emit maxAnisotropyChanged();
+    emit textureUOffsetChanged();
+    emit textureVOffsetChanged();
+    emit textureUScaleChanged();
+    emit textureVScaleChanged();
+    emit textureRotationChanged();
+    emit environmentMappingChanged();
+    emit rotateAnimSpeedChanged();
 }
 
 void MaterialEditorQML::updateMaterialText()
@@ -982,20 +1240,11 @@ Ogre::Technique* MaterialEditorQML::getCurrentTechnique() const
 QStringList MaterialEditorQML::getAvailableTextures() const
 {
     QStringList textures;
-    textures << "Select from available textures..."; // Placeholder
     
-    try {
-        // Get available textures from Ogre TextureManager
-        Ogre::ResourceManager::ResourceMapIterator textureIterator = Ogre::TextureManager::getSingleton().getResourceIterator();
-        while (textureIterator.hasMoreElements()) {
-            QString texName = QString::fromStdString(textureIterator.peekNextValue()->getName());
-            if (!texName.isEmpty() && texName != "white" && !texName.startsWith("_")) { // Skip internal textures
-                textures << texName;
-            }
-            textureIterator.moveNext();
-        }
-    } catch (const std::exception& e) {
-        qDebug() << "Error getting available textures:" << e.what();
+    Ogre::ResourceManager::ResourceMapIterator it = Ogre::TextureManager::getSingleton().getResourceIterator();
+    while (it.hasMoreElements()) {
+        textures.append(QString::fromStdString(it.peekNextValue()->getName()));
+        it.moveNext();
     }
     
     return textures;
@@ -1076,4 +1325,628 @@ void MaterialEditorQML::openColorPicker(const QString &colorType)
             }
         }
     }
+}
+
+// Advanced Pass property setters
+void MaterialEditorQML::setShadingMode(int mode)
+{
+    if (m_shadingMode != mode) {
+        m_shadingMode = mode;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setShadingMode(static_cast<Ogre::ShadeOptions>(mode));
+            updateMaterialText();
+        }
+        emit shadingModeChanged();
+    }
+}
+
+void MaterialEditorQML::setCullHardware(int mode)
+{
+    if (m_cullHardware != mode) {
+        m_cullHardware = mode;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            // Map ComboBox index to Ogre CullingMode enum
+            // ComboBox: None=0, Clockwise=1, Counter-Clockwise=2
+            // Ogre: CULL_NONE=1, CULL_CLOCKWISE=2, CULL_ANTICLOCKWISE=3
+            Ogre::CullingMode cullingMode;
+            switch (mode) {
+                case 0: cullingMode = Ogre::CULL_NONE; break;
+                case 1: cullingMode = Ogre::CULL_CLOCKWISE; break;
+                case 2: cullingMode = Ogre::CULL_ANTICLOCKWISE; break;
+                default: cullingMode = Ogre::CULL_CLOCKWISE; break;
+            }
+            pass->setCullingMode(cullingMode);
+            updateMaterialText();
+        }
+        emit cullHardwareChanged();
+    }
+}
+
+void MaterialEditorQML::setCullSoftware(int mode)
+{
+    if (m_cullSoftware != mode) {
+        m_cullSoftware = mode;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            // Map ComboBox index to Ogre ManualCullingMode enum
+            // ComboBox: None=0, Clockwise=1, Counter-Clockwise=2
+            // Ogre: MANUAL_CULL_NONE=0, MANUAL_CULL_BACK=1, MANUAL_CULL_FRONT=2
+            Ogre::ManualCullingMode manualCullingMode;
+            switch (mode) {
+                case 0: manualCullingMode = Ogre::MANUAL_CULL_NONE; break;
+                case 1: manualCullingMode = Ogre::MANUAL_CULL_BACK; break;
+                case 2: manualCullingMode = Ogre::MANUAL_CULL_FRONT; break;
+                default: manualCullingMode = Ogre::MANUAL_CULL_NONE; break;
+            }
+            pass->setManualCullingMode(manualCullingMode);
+            updateMaterialText();
+        }
+        emit cullSoftwareChanged();
+    }
+}
+
+void MaterialEditorQML::setDepthFunction(int function)
+{
+    if (m_depthFunction != function) {
+        m_depthFunction = function;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setDepthFunction(static_cast<Ogre::CompareFunction>(function));
+            updateMaterialText();
+        }
+        emit depthFunctionChanged();
+    }
+}
+
+void MaterialEditorQML::setDepthBiasConstant(float bias)
+{
+    if (m_depthBiasConstant != bias) {
+        m_depthBiasConstant = bias;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setDepthBias(bias, m_depthBiasSlopeScale);
+            updateMaterialText();
+        }
+        emit depthBiasConstantChanged();
+    }
+}
+
+void MaterialEditorQML::setDepthBiasSlopeScale(float bias)
+{
+    if (m_depthBiasSlopeScale != bias) {
+        m_depthBiasSlopeScale = bias;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setDepthBias(m_depthBiasConstant, bias);
+            updateMaterialText();
+        }
+        emit depthBiasSlopeScaleChanged();
+    }
+}
+
+void MaterialEditorQML::setAlphaRejectionEnabled(bool enabled)
+{
+    if (m_alphaRejectionEnabled != enabled) {
+        m_alphaRejectionEnabled = enabled;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            if (enabled) {
+                pass->setAlphaRejectSettings(static_cast<Ogre::CompareFunction>(m_alphaRejectionFunction), 
+                                           static_cast<unsigned char>(m_alphaRejectionValue));
+            } else {
+                pass->setAlphaRejectSettings(Ogre::CMPF_ALWAYS_PASS, 0);
+            }
+            updateMaterialText();
+        }
+        emit alphaRejectionEnabledChanged();
+    }
+}
+
+void MaterialEditorQML::setAlphaRejectionFunction(int function)
+{
+    if (m_alphaRejectionFunction != function) {
+        m_alphaRejectionFunction = function;
+        if (m_alphaRejectionEnabled) {
+            Ogre::Pass* pass = getCurrentPass();
+            if (pass) {
+                pass->setAlphaRejectSettings(static_cast<Ogre::CompareFunction>(function), 
+                                           static_cast<unsigned char>(m_alphaRejectionValue));
+                updateMaterialText();
+            }
+        }
+        emit alphaRejectionFunctionChanged();
+    }
+}
+
+void MaterialEditorQML::setAlphaRejectionValue(int value)
+{
+    if (m_alphaRejectionValue != value) {
+        m_alphaRejectionValue = value;
+        if (m_alphaRejectionEnabled) {
+            Ogre::Pass* pass = getCurrentPass();
+            if (pass) {
+                pass->setAlphaRejectSettings(static_cast<Ogre::CompareFunction>(m_alphaRejectionFunction), 
+                                           static_cast<unsigned char>(value));
+                updateMaterialText();
+            }
+        }
+        emit alphaRejectionValueChanged();
+    }
+}
+
+void MaterialEditorQML::setAlphaToCoverageEnabled(bool enabled)
+{
+    if (m_alphaToCoverageEnabled != enabled) {
+        m_alphaToCoverageEnabled = enabled;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setAlphaToCoverageEnabled(enabled);
+            updateMaterialText();
+        }
+        emit alphaToCoverageEnabledChanged();
+    }
+}
+
+void MaterialEditorQML::setColourWriteRed(bool enabled)
+{
+    if (m_colourWriteRed != enabled) {
+        m_colourWriteRed = enabled;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setColourWriteEnabled(enabled, m_colourWriteGreen, m_colourWriteBlue, m_colourWriteAlpha);
+            updateMaterialText();
+        }
+        emit colourWriteRedChanged();
+    }
+}
+
+void MaterialEditorQML::setColourWriteGreen(bool enabled)
+{
+    if (m_colourWriteGreen != enabled) {
+        m_colourWriteGreen = enabled;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setColourWriteEnabled(m_colourWriteRed, enabled, m_colourWriteBlue, m_colourWriteAlpha);
+            updateMaterialText();
+        }
+        emit colourWriteGreenChanged();
+    }
+}
+
+void MaterialEditorQML::setColourWriteBlue(bool enabled)
+{
+    if (m_colourWriteBlue != enabled) {
+        m_colourWriteBlue = enabled;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setColourWriteEnabled(m_colourWriteRed, m_colourWriteGreen, enabled, m_colourWriteAlpha);
+            updateMaterialText();
+        }
+        emit colourWriteBlueChanged();
+    }
+}
+
+void MaterialEditorQML::setColourWriteAlpha(bool enabled)
+{
+    if (m_colourWriteAlpha != enabled) {
+        m_colourWriteAlpha = enabled;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setColourWriteEnabled(m_colourWriteRed, m_colourWriteGreen, m_colourWriteBlue, enabled);
+            updateMaterialText();
+        }
+        emit colourWriteAlphaChanged();
+    }
+}
+
+void MaterialEditorQML::setSceneBlendOperation(int operation)
+{
+    if (m_sceneBlendOperation != operation) {
+        m_sceneBlendOperation = operation;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setSceneBlendingOperation(static_cast<Ogre::SceneBlendOperation>(operation));
+            updateMaterialText();
+        }
+        emit sceneBlendOperationChanged();
+    }
+}
+
+void MaterialEditorQML::setPointSize(float size)
+{
+    if (m_pointSize != size) {
+        m_pointSize = size;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setPointSize(size);
+            updateMaterialText();
+        }
+        emit pointSizeChanged();
+    }
+}
+
+void MaterialEditorQML::setLineWidth(float width)
+{
+    if (m_lineWidth != width) {
+        m_lineWidth = width;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setLineWidth(width);
+            updateMaterialText();
+        }
+        emit lineWidthChanged();
+    }
+}
+
+void MaterialEditorQML::setPointSpritesEnabled(bool enabled)
+{
+    if (m_pointSpritesEnabled != enabled) {
+        m_pointSpritesEnabled = enabled;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setPointSpritesEnabled(enabled);
+            updateMaterialText();
+        }
+        emit pointSpritesEnabledChanged();
+    }
+}
+
+void MaterialEditorQML::setMaxLights(int maxLights)
+{
+    if (m_maxLights != maxLights) {
+        m_maxLights = maxLights;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setMaxSimultaneousLights(maxLights);
+            updateMaterialText();
+        }
+        emit maxLightsChanged();
+    }
+}
+
+void MaterialEditorQML::setStartLight(int startLight)
+{
+    if (m_startLight != startLight) {
+        m_startLight = startLight;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            pass->setStartLight(startLight);
+            updateMaterialText();
+        }
+        emit startLightChanged();
+    }
+}
+
+// Fog property setters
+void MaterialEditorQML::setFogOverride(bool override)
+{
+    if (m_fogOverride != override) {
+        m_fogOverride = override;
+        Ogre::Pass* pass = getCurrentPass();
+        if (pass) {
+            if (override) {
+                pass->setFog(override, static_cast<Ogre::FogMode>(m_fogMode), 
+                           Ogre::ColourValue(m_fogColor.redF(), m_fogColor.greenF(), m_fogColor.blueF()),
+                           m_fogDensity, m_fogStart, m_fogEnd);
+            } else {
+                pass->setFog(false);
+            }
+            updateMaterialText();
+        }
+        emit fogOverrideChanged();
+    }
+}
+
+void MaterialEditorQML::setFogMode(int mode)
+{
+    if (m_fogMode != mode) {
+        m_fogMode = mode;
+        if (m_fogOverride) {
+            Ogre::Pass* pass = getCurrentPass();
+            if (pass) {
+                pass->setFog(true, static_cast<Ogre::FogMode>(mode), 
+                           Ogre::ColourValue(m_fogColor.redF(), m_fogColor.greenF(), m_fogColor.blueF()),
+                           m_fogDensity, m_fogStart, m_fogEnd);
+                updateMaterialText();
+            }
+        }
+        emit fogModeChanged();
+    }
+}
+
+void MaterialEditorQML::setFogColor(const QColor &color)
+{
+    if (m_fogColor != color) {
+        m_fogColor = color;
+        if (m_fogOverride) {
+            Ogre::Pass* pass = getCurrentPass();
+            if (pass) {
+                pass->setFog(true, static_cast<Ogre::FogMode>(m_fogMode), 
+                           Ogre::ColourValue(color.redF(), color.greenF(), color.blueF()),
+                           m_fogDensity, m_fogStart, m_fogEnd);
+                updateMaterialText();
+            }
+        }
+        emit fogColorChanged();
+    }
+}
+
+void MaterialEditorQML::setFogDensity(float density)
+{
+    if (m_fogDensity != density) {
+        m_fogDensity = density;
+        if (m_fogOverride) {
+            Ogre::Pass* pass = getCurrentPass();
+            if (pass) {
+                pass->setFog(true, static_cast<Ogre::FogMode>(m_fogMode), 
+                           Ogre::ColourValue(m_fogColor.redF(), m_fogColor.greenF(), m_fogColor.blueF()),
+                           density, m_fogStart, m_fogEnd);
+                updateMaterialText();
+            }
+        }
+        emit fogDensityChanged();
+    }
+}
+
+void MaterialEditorQML::setFogStart(float start)
+{
+    if (m_fogStart != start) {
+        m_fogStart = start;
+        if (m_fogOverride) {
+            Ogre::Pass* pass = getCurrentPass();
+            if (pass) {
+                pass->setFog(true, static_cast<Ogre::FogMode>(m_fogMode), 
+                           Ogre::ColourValue(m_fogColor.redF(), m_fogColor.greenF(), m_fogColor.blueF()),
+                           m_fogDensity, start, m_fogEnd);
+                updateMaterialText();
+            }
+        }
+        emit fogStartChanged();
+    }
+}
+
+void MaterialEditorQML::setFogEnd(float end)
+{
+    if (m_fogEnd != end) {
+        m_fogEnd = end;
+        if (m_fogOverride) {
+            Ogre::Pass* pass = getCurrentPass();
+            if (pass) {
+                pass->setFog(true, static_cast<Ogre::FogMode>(m_fogMode), 
+                           Ogre::ColourValue(m_fogColor.redF(), m_fogColor.greenF(), m_fogColor.blueF()),
+                           m_fogDensity, m_fogStart, end);
+                updateMaterialText();
+            }
+        }
+        emit fogEndChanged();
+    }
+}
+
+// Texture Unit property setters
+void MaterialEditorQML::setTexCoordSet(int set)
+{
+    if (m_texCoordSet != set) {
+        m_texCoordSet = set;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            tus->setTextureCoordSet(set);
+            updateMaterialText();
+        }
+        emit texCoordSetChanged();
+    }
+}
+
+void MaterialEditorQML::setTextureAddressMode(int mode)
+{
+    if (m_textureAddressMode != mode) {
+        m_textureAddressMode = mode;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            switch (mode) {
+                case 0: tus->setTextureAddressingMode(Ogre::TAM_WRAP); break;
+                case 1: tus->setTextureAddressingMode(Ogre::TAM_CLAMP); break;
+                case 2: tus->setTextureAddressingMode(Ogre::TAM_MIRROR); break;
+                case 3: tus->setTextureAddressingMode(Ogre::TAM_BORDER); break;
+            }
+            updateMaterialText();
+        }
+        emit textureAddressModeChanged();
+    }
+}
+
+void MaterialEditorQML::setTextureBorderColor(const QColor &color)
+{
+    if (m_textureBorderColor != color) {
+        m_textureBorderColor = color;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            tus->setTextureBorderColour(Ogre::ColourValue(color.redF(), color.greenF(), color.blueF(), color.alphaF()));
+            updateMaterialText();
+        }
+        emit textureBorderColorChanged();
+    }
+}
+
+void MaterialEditorQML::setTextureFiltering(int filtering)
+{
+    if (m_textureFiltering != filtering) {
+        m_textureFiltering = filtering;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            switch (filtering) {
+                case 0: tus->setTextureFiltering(Ogre::TFO_NONE); break;
+                case 1: tus->setTextureFiltering(Ogre::TFO_BILINEAR); break;
+                case 2: tus->setTextureFiltering(Ogre::TFO_TRILINEAR); break;
+                case 3: tus->setTextureFiltering(Ogre::TFO_ANISOTROPIC); break;
+            }
+            updateMaterialText();
+        }
+        emit textureFilteringChanged();
+    }
+}
+
+void MaterialEditorQML::setMaxAnisotropy(int anisotropy)
+{
+    if (m_maxAnisotropy != anisotropy) {
+        m_maxAnisotropy = anisotropy;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            tus->setTextureAnisotropy(anisotropy);
+            updateMaterialText();
+        }
+        emit maxAnisotropyChanged();
+    }
+}
+
+void MaterialEditorQML::setTextureUOffset(float offset)
+{
+    if (m_textureUOffset != offset) {
+        m_textureUOffset = offset;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            // Create translation matrix for texture transform
+            Ogre::Matrix4 transform;
+            transform.makeTrans(offset, m_textureVOffset, 0);
+            tus->setTextureTransform(transform);
+            updateMaterialText();
+        }
+        emit textureUOffsetChanged();
+    }
+}
+
+void MaterialEditorQML::setTextureVOffset(float offset)
+{
+    if (m_textureVOffset != offset) {
+        m_textureVOffset = offset;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            // Create translation matrix for texture transform
+            Ogre::Matrix4 transform;
+            transform.makeTrans(m_textureUOffset, offset, 0);
+            tus->setTextureTransform(transform);
+            updateMaterialText();
+        }
+        emit textureVOffsetChanged();
+    }
+}
+
+void MaterialEditorQML::setTextureUScale(float scale)
+{
+    if (m_textureUScale != scale) {
+        m_textureUScale = scale;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            tus->setTextureUScale(scale);
+            updateMaterialText();
+        }
+        emit textureUScaleChanged();
+    }
+}
+
+void MaterialEditorQML::setTextureVScale(float scale)
+{
+    if (m_textureVScale != scale) {
+        m_textureVScale = scale;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            tus->setTextureVScale(scale);
+            updateMaterialText();
+        }
+        emit textureVScaleChanged();
+    }
+}
+
+void MaterialEditorQML::setTextureRotation(float rotation)
+{
+    if (m_textureRotation != rotation) {
+        m_textureRotation = rotation;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            tus->setTextureRotate(Ogre::Radian(Ogre::Degree(rotation)));
+            updateMaterialText();
+        }
+        emit textureRotationChanged();
+    }
+}
+
+void MaterialEditorQML::setEnvironmentMapping(int mapping)
+{
+    if (m_environmentMapping != mapping) {
+        m_environmentMapping = mapping;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            switch (mapping) {
+                case 0: /* None - remove env mapping */ break;
+                case 1: tus->setEnvironmentMap(true, Ogre::TextureUnitState::ENV_PLANAR); break;
+                case 2: tus->setEnvironmentMap(true, Ogre::TextureUnitState::ENV_CURVED); break;
+                case 3: tus->setEnvironmentMap(true, Ogre::TextureUnitState::ENV_REFLECTION); break;
+                case 4: tus->setEnvironmentMap(true, Ogre::TextureUnitState::ENV_NORMAL); break;
+            }
+            updateMaterialText();
+        }
+        emit environmentMappingChanged();
+    }
+}
+
+void MaterialEditorQML::setRotateAnimSpeed(double speed)
+{
+    if (m_rotateAnimSpeed != speed) {
+        m_rotateAnimSpeed = speed;
+        Ogre::TextureUnitState* tus = getCurrentTextureUnit();
+        if (tus) {
+            tus->setRotateAnimation(speed);
+            updateMaterialText();
+        }
+        emit rotateAnimSpeedChanged();
+    }
+}
+
+// Additional utility functions for new properties
+QStringList MaterialEditorQML::getShadingModeNames() const
+{
+    return QStringList() << "Flat" << "Gouraud" << "Phong";
+}
+
+QStringList MaterialEditorQML::getCullModeNames() const
+{
+    return QStringList() << "None" << "Clockwise" << "Counter-Clockwise";
+}
+
+QStringList MaterialEditorQML::getDepthFunctionNames() const
+{
+    return QStringList() << "Always Fail" << "Always Pass" << "Less" << "Less Equal" 
+                        << "Equal" << "Not Equal" << "Greater Equal" << "Greater";
+}
+
+QStringList MaterialEditorQML::getAlphaRejectionFunctionNames() const
+{
+    return QStringList() << "Always Fail" << "Always Pass" << "Less" << "Less Equal" 
+                        << "Equal" << "Not Equal" << "Greater Equal" << "Greater";
+}
+
+QStringList MaterialEditorQML::getSceneBlendOperationNames() const
+{
+    return QStringList() << "Add" << "Subtract" << "Reverse Subtract" << "Min" << "Max";
+}
+
+QStringList MaterialEditorQML::getFogModeNames() const
+{
+    return QStringList() << "None" << "Exp" << "Exp2" << "Linear";
+}
+
+QStringList MaterialEditorQML::getTextureAddressModeNames() const
+{
+    return QStringList() << "Wrap" << "Clamp" << "Mirror" << "Border";
+}
+
+QStringList MaterialEditorQML::getTextureFilteringNames() const
+{
+    return QStringList() << "None" << "Bilinear" << "Trilinear" << "Anisotropic";
+}
+
+QStringList MaterialEditorQML::getEnvironmentMappingNames() const
+{
+    return QStringList() << "None" << "Enabled";
 }
