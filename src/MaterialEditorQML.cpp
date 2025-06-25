@@ -1250,6 +1250,39 @@ QStringList MaterialEditorQML::getAvailableTextures() const
     return textures;
 }
 
+QString MaterialEditorQML::getTexturePreviewPath() const
+{
+    QString texName = m_textureName;
+    if (texName.isEmpty() || texName == "*Select a texture*" || texName.trimmed().isEmpty()) {
+        return "";
+    }
+    
+    // Construct relative path from working directory
+    // Try common texture locations
+    QStringList possiblePaths = {
+        QString("media/materials/textures/%1").arg(texName),
+        QString("../media/materials/textures/%1").arg(texName),
+        QString("../../media/materials/textures/%1").arg(texName)
+    };
+    
+    for (const QString& path : possiblePaths) {
+        QFileInfo fileInfo(path);
+        if (fileInfo.exists() && fileInfo.isFile()) {
+            return QString("file:///%1").arg(fileInfo.absoluteFilePath());
+        }
+    }
+    
+    // If not found in expected locations, try working directory relative
+    QString workingDirPath = QString("media/materials/textures/%1").arg(texName);
+    QFileInfo workingDirFile(workingDirPath);
+    if (workingDirFile.exists()) {
+        return QString("file:///%1").arg(workingDirFile.absoluteFilePath());
+    }
+    
+    // Return empty if texture file not found
+    return "";
+}
+
 void MaterialEditorQML::openTextureFileDialog()
 {
     // This will be handled by QML FileDialog

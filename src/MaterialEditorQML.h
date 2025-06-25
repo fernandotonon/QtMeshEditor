@@ -303,6 +303,7 @@ public slots:
     QStringList getPolygonModeNames() const;
     QStringList getBlendFactorNames() const;
     QStringList getAvailableTextures() const;
+    QString getTexturePreviewPath() const;
     
     // Additional utility functions for new properties
     QStringList getShadingModeNames() const;

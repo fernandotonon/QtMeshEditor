@@ -108,16 +108,14 @@ GroupBox {
                     width: Math.min(parent.width - 20, sourceSize.width)
                     height: Math.min(parent.height - 20, sourceSize.height)
                     fillMode: Image.PreserveAspectFit
-                    source: getTexturePreviewSource()
+                    source: MaterialEditorQML.getTexturePreviewPath()
                     
-                    function getTexturePreviewSource() {
-                        var texName = MaterialEditorQML.textureName
-                        if (texName && texName !== "*Select a texture*" && texName.trim() !== "") {
-                            // Try to construct a file path for the texture
-                            // This would need to be adapted based on your texture path structure
-                            return "file:///media/materials/textures/" + texName
+                    // Update source when texture name changes
+                    Connections {
+                        target: MaterialEditorQML
+                        function onTextureNameChanged() {
+                            texturePreview.source = MaterialEditorQML.getTexturePreviewPath()
                         }
-                        return ""
                     }
 
                     onStatusChanged: {
