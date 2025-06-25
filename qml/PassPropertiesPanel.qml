@@ -7,6 +7,140 @@ import MaterialEditorQML 1.0
 GroupBox {
     title: "Pass Properties"
 
+    // Enhanced dynamic theme colors based on system palette
+    readonly property color backgroundColor: palette.window
+    readonly property color panelColor: palette.base
+    readonly property color textColor: palette.windowText
+    readonly property color borderColor: palette.mid
+    readonly property color highlightColor: palette.highlight
+    readonly property color buttonColor: palette.button
+    readonly property color buttonTextColor: palette.buttonText
+    readonly property color disabledTextColor: palette.placeholderText
+    
+    SystemPalette {
+        id: palette
+        colorGroup: SystemPalette.Active
+    }
+
+    // Simplified ComboBox component (no Canvas)
+    component ThemedComboBox: ComboBox {
+        background: Rectangle {
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+        }
+        contentItem: Text {
+            text: parent.displayText
+            font: parent.font
+            color: textColor
+            verticalAlignment: Text.AlignVCenter
+            leftPadding: 8
+            rightPadding: 30
+        }
+        indicator: Text {
+            x: parent.width - width - 8
+            y: parent.topPadding + (parent.availableHeight - height) / 2
+            text: "▼"
+            color: textColor
+            font.pointSize: 8
+        }
+        popup: Popup {
+            y: parent.height - 1
+            width: parent.width
+            implicitHeight: contentItem.implicitHeight
+            padding: 1
+
+            contentItem: ListView {
+                clip: true
+                implicitHeight: contentHeight
+                model: parent.parent.popup.visible ? parent.parent.delegateModel : null
+                currentIndex: parent.parent.highlightedIndex
+                ScrollIndicator.vertical: ScrollIndicator { }
+            }
+
+            background: Rectangle {
+                color: panelColor
+                border.color: borderColor
+                border.width: 1
+                radius: 4
+            }
+        }
+        delegate: ItemDelegate {
+            width: parent.width
+            contentItem: Text {
+                text: modelData || ""
+                color: textColor
+                font: parent.font
+                elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 8
+            }
+            background: Rectangle {
+                color: parent.hovered ? highlightColor : "transparent"
+                radius: 2
+            }
+        }
+    }
+
+    // Simplified SpinBox component
+    component ThemedSpinBox: SpinBox {
+        background: Rectangle {
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+        }
+        contentItem: TextInput {
+            text: parent.textFromValue(parent.value, parent.locale)
+            font: parent.font
+            color: textColor
+            selectionColor: highlightColor
+            selectedTextColor: backgroundColor
+            horizontalAlignment: Qt.AlignHCenter
+            verticalAlignment: Qt.AlignVCenter
+            readOnly: !parent.editable
+            validator: parent.validator
+            inputMethodHints: parent.inputMethodHints
+        }
+        up.indicator: Rectangle {
+            x: parent.mirrored ? 0 : parent.width - width
+            height: parent.height / 2
+            color: parent.up.pressed ? Qt.darker(buttonColor, 1.2) : 
+                   parent.up.hovered ? Qt.lighter(buttonColor, 1.1) : buttonColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+            Text {
+                text: "+"
+                font.pointSize: 10
+                color: buttonTextColor
+                anchors.centerIn: parent
+            }
+        }
+        down.indicator: Rectangle {
+            x: parent.mirrored ? 0 : parent.width - width
+            y: parent.height / 2
+            height: parent.height / 2
+            color: parent.down.pressed ? Qt.darker(buttonColor, 1.2) : 
+                   parent.down.hovered ? Qt.lighter(buttonColor, 1.1) : buttonColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+            Text {
+                text: "-"
+                font.pointSize: 10
+                color: buttonTextColor
+                anchors.centerIn: parent
+            }
+        }
+    }
+
+    // Simplified Label component
+    component ThemedLabel: Label {
+        color: textColor
+    }
+
     ColumnLayout {
         anchors.fill: parent
         spacing: 15
@@ -52,11 +186,11 @@ GroupBox {
                     Layout.fillWidth: true
                     spacing: 15
 
-                    Label { 
+                    ThemedLabel { 
                         text: "Polygon Mode:" 
                         Layout.alignment: Qt.AlignVCenter
                     }
-                    ComboBox {
+                    ThemedComboBox {
                         id: polygonModeCombo
                         model: MaterialEditorQML.getPolygonModeNames()
                         currentIndex: MaterialEditorQML.polygonMode
@@ -81,7 +215,7 @@ GroupBox {
             }
         }
 
-        // Color Properties
+        // Colors
         GroupBox {
             title: "Colors"
             Layout.fillWidth: true
@@ -90,10 +224,10 @@ GroupBox {
                 anchors.fill: parent
                 columns: 3
                 rowSpacing: 10
-                columnSpacing: 10
+                columnSpacing: 15
 
                 // Ambient Color
-                Label { 
+                ThemedLabel { 
                     text: "Ambient:"
                     Layout.alignment: Qt.AlignVCenter
                 }
@@ -101,7 +235,7 @@ GroupBox {
                     width: 40
                     height: 25
                     color: MaterialEditorQML.ambientColor
-                    border.color: "#666666"
+                    border.color: borderColor
                     border.width: 1
                     Layout.alignment: Qt.AlignVCenter
                     
@@ -118,7 +252,7 @@ GroupBox {
                 }
 
                 // Diffuse Color
-                Label { 
+                ThemedLabel { 
                     text: "Diffuse:"
                     Layout.alignment: Qt.AlignVCenter
                 }
@@ -126,7 +260,7 @@ GroupBox {
                     width: 40
                     height: 25
                     color: MaterialEditorQML.diffuseColor
-                    border.color: "#666666"
+                    border.color: borderColor
                     border.width: 1
                     Layout.alignment: Qt.AlignVCenter
                     
@@ -143,7 +277,7 @@ GroupBox {
                 }
 
                 // Specular Color
-                Label { 
+                ThemedLabel { 
                     text: "Specular:"
                     Layout.alignment: Qt.AlignVCenter
                 }
@@ -151,7 +285,7 @@ GroupBox {
                     width: 40
                     height: 25
                     color: MaterialEditorQML.specularColor
-                    border.color: "#666666"
+                    border.color: borderColor
                     border.width: 1
                     Layout.alignment: Qt.AlignVCenter
                     
@@ -168,7 +302,7 @@ GroupBox {
                 }
 
                 // Emissive Color
-                Label { 
+                ThemedLabel { 
                     text: "Emissive:"
                     Layout.alignment: Qt.AlignVCenter
                 }
@@ -176,7 +310,7 @@ GroupBox {
                     width: 40
                     height: 25
                     color: MaterialEditorQML.emissiveColor
-                    border.color: "#666666"
+                    border.color: borderColor
                     border.width: 1
                     Layout.alignment: Qt.AlignVCenter
                     
@@ -196,17 +330,16 @@ GroupBox {
 
         // Alpha and Material Properties
         GroupBox {
-            title: "Alpha & Material Properties"
+            title: "Alpha & Material"
             Layout.fillWidth: true
 
             GridLayout {
                 anchors.fill: parent
                 columns: 2
                 rowSpacing: 10
-                columnSpacing: 15
 
                 // Diffuse Alpha
-                Label { text: "Diffuse Alpha:" }
+                ThemedLabel { text: "Diffuse Alpha:" }
                 RowLayout {
                     Slider {
                         id: diffuseAlphaSlider
@@ -216,7 +349,7 @@ GroupBox {
                         onValueChanged: MaterialEditorQML.setDiffuseAlpha(value)
                         Layout.fillWidth: true
                     }
-                    SpinBox {
+                    ThemedSpinBox {
                         from: 0
                         to: 100
                         value: Math.round(diffuseAlphaSlider.value * 100)
@@ -233,7 +366,7 @@ GroupBox {
                 }
 
                 // Specular Alpha
-                Label { text: "Specular Alpha:" }
+                ThemedLabel { text: "Specular Alpha:" }
                 RowLayout {
                     Slider {
                         id: specularAlphaSlider
@@ -243,7 +376,7 @@ GroupBox {
                         onValueChanged: MaterialEditorQML.setSpecularAlpha(value)
                         Layout.fillWidth: true
                     }
-                    SpinBox {
+                    ThemedSpinBox {
                         from: 0
                         to: 100
                         value: Math.round(specularAlphaSlider.value * 100)
@@ -260,7 +393,7 @@ GroupBox {
                 }
 
                 // Shininess
-                Label { text: "Shininess:" }
+                ThemedLabel { text: "Shininess:" }
                 RowLayout {
                     Slider {
                         id: shininessSlider
@@ -270,7 +403,7 @@ GroupBox {
                         onValueChanged: MaterialEditorQML.setShininess(value)
                         Layout.fillWidth: true
                     }
-                    SpinBox {
+                    ThemedSpinBox {
                         from: 0
                         to: 128
                         value: Math.round(shininessSlider.value)
@@ -280,7 +413,7 @@ GroupBox {
             }
         }
 
-        // Blending Settings
+        // Blending
         GroupBox {
             title: "Blending"
             Layout.fillWidth: true
@@ -291,16 +424,16 @@ GroupBox {
                 rowSpacing: 10
                 columnSpacing: 15
 
-                Label { text: "Source Blend Factor:" }
-                ComboBox {
+                ThemedLabel { text: "Source Blend Factor:" }
+                ThemedComboBox {
                     Layout.fillWidth: true
                     model: MaterialEditorQML.getBlendFactorNames()
                     currentIndex: MaterialEditorQML.sourceBlendFactor
                     onCurrentIndexChanged: MaterialEditorQML.setSourceBlendFactor(currentIndex)
                 }
 
-                Label { text: "Dest Blend Factor:" }
-                ComboBox {
+                ThemedLabel { text: "Dest Blend Factor:" }
+                ThemedComboBox {
                     Layout.fillWidth: true
                     model: MaterialEditorQML.getBlendFactorNames()
                     currentIndex: MaterialEditorQML.destBlendFactor
@@ -310,7 +443,7 @@ GroupBox {
         }
     }
 
-    // Color Dialogs
+    // Simple color dialogs using standard Dialog components
     ColorDialog {
         id: ambientColorDialog
         title: "Select Ambient Color"

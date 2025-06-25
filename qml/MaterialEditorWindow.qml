@@ -13,16 +13,185 @@ ApplicationWindow {
 
     property bool isLoading: true
     
-    // Dynamic theme colors based on system palette
+    // Enhanced dynamic theme colors based on system palette
     readonly property color backgroundColor: palette.window
     readonly property color panelColor: palette.base
     readonly property color textColor: palette.windowText
     readonly property color borderColor: palette.mid
     readonly property color highlightColor: palette.highlight
+    readonly property color buttonColor: palette.button
+    readonly property color buttonTextColor: palette.buttonText
+    readonly property color alternateColor: palette.alternateBase
+    readonly property color lightColor: palette.light
+    readonly property color darkColor: palette.dark
+    readonly property color disabledTextColor: palette.placeholderText
     
     SystemPalette {
         id: palette
         colorGroup: SystemPalette.Active
+    }
+
+    // Simplified Button component
+    component ThemedButton: Button {
+        background: Rectangle {
+            color: parent.down ? Qt.darker(buttonColor, 1.2) : 
+                   parent.hovered ? Qt.lighter(buttonColor, 1.1) : buttonColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+        }
+        contentItem: Text {
+            text: parent.text
+            font: parent.font
+            color: parent.enabled ? buttonTextColor : disabledTextColor
+            horizontalAlignment: Text.AlignHCenter
+            verticalAlignment: Text.AlignVCenter
+        }
+    }
+
+    // Simplified ComboBox component (no Canvas)
+    component ThemedComboBox: ComboBox {
+        background: Rectangle {
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+        }
+        contentItem: Text {
+            text: parent.displayText
+            font: parent.font
+            color: textColor
+            verticalAlignment: Text.AlignVCenter
+            leftPadding: 8
+            rightPadding: 30
+        }
+        indicator: Text {
+            x: parent.width - width - 8
+            y: parent.topPadding + (parent.availableHeight - height) / 2
+            text: "▼"
+            color: textColor
+            font.pointSize: 8
+        }
+        popup: Popup {
+            y: parent.height - 1
+            width: parent.width
+            implicitHeight: contentItem.implicitHeight
+            padding: 1
+
+            contentItem: ListView {
+                clip: true
+                implicitHeight: contentHeight
+                model: parent.parent.popup.visible ? parent.parent.delegateModel : null
+                currentIndex: parent.parent.highlightedIndex
+                ScrollIndicator.vertical: ScrollIndicator { }
+            }
+
+            background: Rectangle {
+                color: panelColor
+                border.color: borderColor
+                border.width: 1
+                radius: 4
+            }
+        }
+        delegate: ItemDelegate {
+            width: parent.width
+            contentItem: Text {
+                text: modelData || ""
+                color: textColor
+                font: parent.font
+                elide: Text.ElideRight
+                verticalAlignment: Text.AlignVCenter
+                leftPadding: 8
+            }
+            background: Rectangle {
+                color: parent.hovered ? highlightColor : "transparent"
+                radius: 2
+            }
+        }
+    }
+
+    // Simplified SpinBox component
+    component ThemedSpinBox: SpinBox {
+        background: Rectangle {
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+        }
+        contentItem: TextInput {
+            text: parent.textFromValue(parent.value, parent.locale)
+            font: parent.font
+            color: textColor
+            selectionColor: highlightColor
+            selectedTextColor: backgroundColor
+            horizontalAlignment: Qt.AlignHCenter
+            verticalAlignment: Qt.AlignVCenter
+            readOnly: !parent.editable
+            validator: parent.validator
+            inputMethodHints: parent.inputMethodHints
+        }
+        up.indicator: Rectangle {
+            x: parent.mirrored ? 0 : parent.width - width
+            height: parent.height / 2
+            color: parent.up.pressed ? Qt.darker(buttonColor, 1.2) : 
+                   parent.up.hovered ? Qt.lighter(buttonColor, 1.1) : buttonColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+            Text {
+                text: "+"
+                font.pointSize: 10
+                color: buttonTextColor
+                anchors.centerIn: parent
+            }
+        }
+        down.indicator: Rectangle {
+            x: parent.mirrored ? 0 : parent.width - width
+            y: parent.height / 2
+            height: parent.height / 2
+            color: parent.down.pressed ? Qt.darker(buttonColor, 1.2) : 
+                   parent.down.hovered ? Qt.lighter(buttonColor, 1.1) : buttonColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+            Text {
+                text: "-"
+                font.pointSize: 10
+                color: buttonTextColor
+                anchors.centerIn: parent
+            }
+        }
+    }
+
+    // Simplified TextArea component
+    component ThemedTextArea: TextArea {
+        color: textColor
+        selectionColor: highlightColor
+        selectedTextColor: backgroundColor
+        background: Rectangle {
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+        }
+    }
+
+    // Simplified Label component
+    component ThemedLabel: Label {
+        color: textColor
+    }
+
+    // Simplified TextField component
+    component ThemedTextField: TextField {
+        color: textColor
+        selectionColor: highlightColor
+        selectedTextColor: backgroundColor
+        background: Rectangle {
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+        }
     }
 
     // Custom color picker popup - working alternative to ColorDialog
@@ -83,7 +252,7 @@ ApplicationWindow {
                             width: 30
                             height: 30
                             color: modelData
-                            border.color: "#404040"
+                            border.color: borderColor
                             border.width: 1
                             radius: 3
                             
@@ -137,14 +306,14 @@ ApplicationWindow {
                 RowLayout {
                     Layout.fillWidth: true
                     
-                    Button {
+                    ThemedButton {
                         text: "Cancel"
                         onClicked: colorPickerPopup.close()
                     }
                     
                     Item { Layout.fillWidth: true }
                     
-                    Button {
+                    ThemedButton {
                         text: "Reset to White"
                         onClicked: {
                             var whiteColor = Qt.color("white")
@@ -222,10 +391,9 @@ ApplicationWindow {
         SplitView {
             anchors.fill: parent
             anchors.margins: 10
-            orientation: Qt.Horizontal
-            visible: !isLoading
+            spacing: 10
 
-            // Left Panel - Script Editor
+            // Left Panel - Text Editor
             Rectangle {
                 SplitView.minimumWidth: 400
                 SplitView.preferredWidth: 600
@@ -239,69 +407,20 @@ ApplicationWindow {
                     anchors.margins: 15
                     spacing: 15
 
-                    // Header
-                    Text {
-                        text: "Material Script Editor"
-                        font.pointSize: 16
-                        font.bold: true
-                        color: textColor
-                    }
-
-                    // Material Info
-                    Rectangle {
-                        Layout.fillWidth: true
-                        height: 80
-                        color: Qt.darker(panelColor, 1.1)
-                        border.color: borderColor
-                        border.width: 1
-                        radius: 4
-
-                        ColumnLayout {
-                            anchors.fill: parent
-                            anchors.margins: 10
-                            spacing: 5
-
-                            Text {
-                                text: "Material: " + (MaterialEditorQML.materialName || "No material")
-                                font.pointSize: 12
-                                font.bold: true
-                                color: textColor
-                            }
-
-                            RowLayout {
-                                Text {
-                                    text: "Techniques: " + (MaterialEditorQML.techniqueList ? MaterialEditorQML.techniqueList.length : 0)
-                                    color: Qt.darker(textColor, 1.3)
-                                }
-                                Text {
-                                    text: "Passes: " + (MaterialEditorQML.passList ? MaterialEditorQML.passList.length : 0)
-                                    color: Qt.darker(textColor, 1.3)
-                                }
-                                Text {
-                                    text: "Size: " + (MaterialEditorQML.materialText ? MaterialEditorQML.materialText.length : 0) + " chars"
-                                    color: Qt.darker(textColor, 1.3)
-                                }
-                            }
-                        }
-                    }
-
-                    // Toolbar
+                    // Header with actions
                     RowLayout {
                         Layout.fillWidth: true
-                        spacing: 10
 
-                        Button {
-                            text: "Apply"
-                            enabled: materialTextArea.text !== MaterialEditorQML.materialText
-                            onClicked: {
-                                if (materialTextArea.text) {
-                                    MaterialEditorQML.setMaterialText(materialTextArea.text)
-                                    MaterialEditorQML.applyMaterial()
-                                }
-                            }
+                        Text {
+                            text: "Material Script Editor"
+                            font.pointSize: 16
+                            font.bold: true
+                            color: textColor
                         }
 
-                        Button {
+                        Item { Layout.fillWidth: true }
+
+                        ThemedButton {
                             text: "Validate"
                             onClicked: {
                                 if (MaterialEditorQML.validateMaterialScript(materialTextArea.text || "")) {
@@ -314,40 +433,41 @@ ApplicationWindow {
                             }
                         }
 
-                        Button {
-                            text: "Smart Technique"
-                            ToolTip.text: "Add technique at cursor position"
+                        ThemedButton {
+                            text: "Apply"
+                            enabled: materialTextArea.text !== MaterialEditorQML.materialText
                             onClicked: {
-                                var context = getCurrentContext()
-                                // Create the new technique directly (this updates the Ogre material)
-                                MaterialEditorQML.createNewTechnique("technique" + (context.technique + 1))
-                                // Force refresh of the material text from the updated Ogre material
-                                materialTextArea.text = MaterialEditorQML.materialText
-                                statusText.text = "Added technique at position " + (context.technique + 1)
-                                statusText.color = "blue"
+                                if (materialTextArea.text) {
+                                    MaterialEditorQML.setMaterialText(materialTextArea.text)
+                                    if (MaterialEditorQML.applyMaterial()) {
+                                        statusText.text = "Applied successfully"
+                                        statusText.color = "green"
+                                    } else {
+                                        statusText.text = "Apply failed"
+                                        statusText.color = "red"
+                                    }
+                                }
                             }
                         }
+                    }
 
-                        Button {
-                            text: "Smart Pass"
-                            ToolTip.text: "Add pass to current technique"
-                            onClicked: {
-                                var context = getCurrentContext()
-                                // Create the new pass directly (this updates the Ogre material)
-                                MaterialEditorQML.createNewPass("pass" + (context.pass + 1))
-                                // Force refresh of the material text from the updated Ogre material
-                                materialTextArea.text = MaterialEditorQML.materialText
-                                statusText.text = "Added pass to technique " + context.technique
-                                statusText.color = "blue"
-                            }
+                    // Status
+                    RowLayout {
+                        Layout.fillWidth: true
+                        
+                        Text {
+                            text: "Material: " + (MaterialEditorQML.materialName || "None")
+                            color: textColor
+                            font.pointSize: 10
                         }
-
+                        
                         Item { Layout.fillWidth: true }
-
+                        
                         Text {
                             id: statusText
                             text: "Ready"
-                            color: "black"
+                            color: textColor
+                            font.pointSize: 10
                         }
                     }
 
@@ -357,19 +477,13 @@ ApplicationWindow {
                         Layout.fillHeight: true
                         clip: true
 
-                        TextArea {
+                        ThemedTextArea {
                             id: materialTextArea
                             text: MaterialEditorQML.materialText || "material default_material\n{\n\ttechnique\n\t{\n\t\tpass\n\t\t{\n\t\t}\n\t}\n}"
                             selectByMouse: true
                             font.family: "monospace"
                             font.pointSize: 11
                             wrapMode: TextArea.Wrap
-                            background: Rectangle {
-                                color: "white"
-                                border.color: "#ccc"
-                                border.width: 1
-                                radius: 2
-                            }
 
                             onTextChanged: {
                                 if (text !== MaterialEditorQML.materialText) {
@@ -389,7 +503,7 @@ ApplicationWindow {
                     Text {
                         id: cursorInfoText
                         text: "Cursor: T0 P0"
-                        color: "#666"
+                        color: disabledTextColor
                         font.pointSize: 9
                     }
                 }
@@ -433,7 +547,7 @@ ApplicationWindow {
                                 RowLayout {
                                     Layout.fillWidth: true
 
-                                    ComboBox {
+                                    ThemedComboBox {
                                         id: techniqueCombo
                                         Layout.fillWidth: true
                                         model: MaterialEditorQML.techniqueList
@@ -443,7 +557,7 @@ ApplicationWindow {
                                         }
                                     }
 
-                                    Button {
+                                    ThemedButton {
                                         text: "New"
                                         onClicked: newTechniqueDialog.open()
                                     }
@@ -464,7 +578,7 @@ ApplicationWindow {
                                 RowLayout {
                                     Layout.fillWidth: true
 
-                                    ComboBox {
+                                    ThemedComboBox {
                                         id: passCombo
                                         Layout.fillWidth: true
                                         model: MaterialEditorQML.passList
@@ -476,7 +590,7 @@ ApplicationWindow {
                                         }
                                     }
 
-                                    Button {
+                                    ThemedButton {
                                         text: "New"
                                         onClicked: newPassDialog.open()
                                     }
@@ -535,12 +649,11 @@ ApplicationWindow {
                                             Layout.fillWidth: true
                                             spacing: 15
 
-                                            Label { 
+                                            ThemedLabel { 
                                                 text: "Polygon Mode:" 
-                                                color: textColor
                                                 Layout.alignment: Qt.AlignVCenter
                                             }
-                                            ComboBox {
+                                            ThemedComboBox {
                                                 id: polygonModeComboMain
                                                 model: MaterialEditorQML.getPolygonModeNames()
                                                 currentIndex: MaterialEditorQML.polygonMode
@@ -577,9 +690,8 @@ ApplicationWindow {
                                         columnSpacing: 10
 
                                         // Ambient
-                                        Label { 
+                                        ThemedLabel { 
                                             text: "Ambient:" 
-                                            color: textColor
                                         }
                                         Rectangle {
                                             width: 60
@@ -605,9 +717,8 @@ ApplicationWindow {
                                         }
 
                                         // Diffuse
-                                        Label { 
+                                        ThemedLabel { 
                                             text: "Diffuse:" 
-                                            color: textColor
                                         }
                                         Rectangle {
                                             width: 60
@@ -633,9 +744,8 @@ ApplicationWindow {
                                         }
 
                                         // Specular
-                                        Label { 
+                                        ThemedLabel { 
                                             text: "Specular:" 
-                                            color: textColor
                                         }
                                         Rectangle {
                                             width: 60
@@ -661,9 +771,8 @@ ApplicationWindow {
                                         }
 
                                         // Emissive
-                                        Label { 
+                                        ThemedLabel { 
                                             text: "Emissive:" 
-                                            color: textColor
                                         }
                                         Rectangle {
                                             width: 60
@@ -700,7 +809,7 @@ ApplicationWindow {
                                         columns: 2
                                         rowSpacing: 10
 
-                                        Label { text: "Diffuse Alpha:" }
+                                        ThemedLabel { text: "Diffuse Alpha:" }
                                         RowLayout {
                                             Slider {
                                                 id: diffuseAlphaSlider
@@ -717,7 +826,7 @@ ApplicationWindow {
                                                 }
                                                 Layout.fillWidth: true
                                             }
-                                            SpinBox {
+                                            ThemedSpinBox {
                                                 id: diffuseAlphaSpinBox
                                                 from: 0
                                                 to: 100
@@ -748,7 +857,7 @@ ApplicationWindow {
                                             }
                                         }
 
-                                        Label { text: "Specular Alpha:" }
+                                        ThemedLabel { text: "Specular Alpha:" }
                                         RowLayout {
                                             Slider {
                                                 id: specularAlphaSlider
@@ -765,7 +874,7 @@ ApplicationWindow {
                                                 }
                                                 Layout.fillWidth: true
                                             }
-                                            SpinBox {
+                                            ThemedSpinBox {
                                                 id: specularAlphaSpinBox
                                                 from: 0
                                                 to: 100
@@ -796,7 +905,7 @@ ApplicationWindow {
                                             }
                                         }
 
-                                        Label { text: "Shininess:" }
+                                        ThemedLabel { text: "Shininess:" }
                                         RowLayout {
                                             Slider {
                                                 id: shininessSlider
@@ -813,7 +922,7 @@ ApplicationWindow {
                                                 }
                                                 Layout.fillWidth: true
                                             }
-                                            SpinBox {
+                                            ThemedSpinBox {
                                                 id: shininessSpinBox
                                                 from: 0
                                                 to: 128
@@ -854,16 +963,16 @@ ApplicationWindow {
                                         columns: 2
                                         rowSpacing: 10
 
-                                        Label { text: "Source Blend:" }
-                                        ComboBox {
+                                        ThemedLabel { text: "Source Blend:" }
+                                        ThemedComboBox {
                                             Layout.fillWidth: true
                                             model: MaterialEditorQML.getBlendFactorNames()
                                             currentIndex: MaterialEditorQML.sourceBlendFactor
                                             onCurrentIndexChanged: MaterialEditorQML.setSourceBlendFactor(currentIndex)
                                         }
 
-                                        Label { text: "Dest Blend:" }
-                                        ComboBox {
+                                        ThemedLabel { text: "Dest Blend:" }
+                                        ThemedComboBox {
                                             Layout.fillWidth: true
                                             model: MaterialEditorQML.getBlendFactorNames()
                                             currentIndex: MaterialEditorQML.destBlendFactor
@@ -886,7 +995,7 @@ ApplicationWindow {
                                 RowLayout {
                                     Layout.fillWidth: true
 
-                                    ComboBox {
+                                    ThemedComboBox {
                                         id: textureUnitCombo
                                         Layout.fillWidth: true
                                         model: MaterialEditorQML.textureUnitList
@@ -896,143 +1005,83 @@ ApplicationWindow {
                                         }
                                     }
 
-                                    Button {
+                                    ThemedButton {
                                         text: "New"
                                         onClicked: newTextureUnitDialog.open()
                                     }
+                                }
+                            }
+                        }
 
-                                    Button {
+                        // Texture Properties
+                        GroupBox {
+                            title: "Texture Properties"
+                            Layout.fillWidth: true
+                            enabled: MaterialEditorQML.selectedTextureUnitIndex >= 0
+
+                            GridLayout {
+                                anchors.fill: parent
+                                columns: 2
+                                rowSpacing: 10
+
+                                ThemedLabel { text: "Texture:" }
+                                RowLayout {
+                                    Layout.fillWidth: true
+                                    
+                                    Text {
+                                        id: textureNameField
+                                        Layout.fillWidth: true
+                                        text: MaterialEditorQML.textureName || "*No texture*"
+                                        color: textColor
+                                        elide: Text.ElideRight
+                                    }
+                                    
+                                    ThemedButton {
+                                        text: "Select"
+                                        onClicked: textureFileDialog.open()
+                                    }
+                                    
+                                    ThemedButton {
                                         text: "Remove"
-                                        enabled: MaterialEditorQML.selectedTextureUnitIndex >= 0
                                         onClicked: MaterialEditorQML.removeTexture()
                                     }
                                 }
 
-                                // Texture Properties
-                                GroupBox {
-                                    title: "Texture Properties"
-                                    Layout.fillWidth: true
-                                    enabled: MaterialEditorQML.selectedTextureUnitIndex >= 0
+                                ThemedLabel { text: "U Scroll Speed:" }
+                                RowLayout {
+                                    Slider {
+                                        from: -10.0
+                                        to: 10.0
+                                        value: MaterialEditorQML.scrollAnimUSpeed
+                                        onValueChanged: MaterialEditorQML.setScrollAnimUSpeed(value)
+                                        Layout.fillWidth: true
+                                    }
+                                    ThemedSpinBox {
+                                        from: -1000
+                                        to: 1000
+                                        value: Math.round(MaterialEditorQML.scrollAnimUSpeed * 100)
+                                        onValueChanged: MaterialEditorQML.setScrollAnimUSpeed(value / 100.0)
+                                        textFromValue: function(value) { return (value / 100.0).toFixed(2) }
+                                        valueFromText: function(text) { return Math.round(parseFloat(text) * 100) }
+                                    }
+                                }
 
-                                    ColumnLayout {
-                                        anchors.fill: parent
-                                        spacing: 10
-
-                                        RowLayout {
-                                            TextField {
-                                                id: textureNameField
-                                                text: MaterialEditorQML.textureName
-                                                placeholderText: "Texture filename"
-                                                Layout.fillWidth: true
-                                                onTextChanged: {
-                                                    if (text !== MaterialEditorQML.textureName) {
-                                                        MaterialEditorQML.setTextureName(text)
-                                                    }
-                                                }
-                                            }
-
-                                            Button {
-                                                text: "Browse"
-                                                onClicked: textureFileDialog.open()
-                                            }
-                                        }
-
-                                        // Animation Controls
-                                                                                 Label { text: "U Scroll Speed:" }
-                                         RowLayout {
-                                             Slider {
-                                                 id: uScrollSlider
-                                                 from: -10.0
-                                                 to: 10.0
-                                                 property bool updating: false
-                                                 value: MaterialEditorQML.scrollAnimUSpeed
-                                                 onValueChanged: {
-                                                     if (!updating && Math.abs(value - MaterialEditorQML.scrollAnimUSpeed) > 0.01) {
-                                                         updating = true
-                                                         MaterialEditorQML.setScrollAnimUSpeed(value)
-                                                         updating = false
-                                                     }
-                                                 }
-                                                 Layout.fillWidth: true
-                                             }
-                                             SpinBox {
-                                                 id: uScrollSpinBox
-                                                 from: -1000
-                                                 to: 1000
-                                                 property bool updating: false
-                                                 
-                                                 Component.onCompleted: {
-                                                     value = Math.round(MaterialEditorQML.scrollAnimUSpeed * 100)
-                                                 }
-                                                 
-                                                 Connections {
-                                                     target: MaterialEditorQML
-                                                     function onScrollAnimUSpeedChanged() {
-                                                         if (!uScrollSpinBox.updating) {
-                                                             uScrollSpinBox.value = Math.round(MaterialEditorQML.scrollAnimUSpeed * 100)
-                                                         }
-                                                     }
-                                                 }
-                                                 
-                                                 onValueChanged: {
-                                                     if (!updating) {
-                                                         updating = true
-                                                         MaterialEditorQML.setScrollAnimUSpeed(value / 100.0)
-                                                         updating = false
-                                                     }
-                                                 }
-                                                 textFromValue: function(value) { return (value / 100).toFixed(2) }
-                                                 valueFromText: function(text) { return parseFloat(text) * 100 }
-                                             }
-                                         }
-
-                                         Label { text: "V Scroll Speed:" }
-                                         RowLayout {
-                                             Slider {
-                                                 id: vScrollSlider
-                                                 from: -10.0
-                                                 to: 10.0
-                                                 property bool updating: false
-                                                 value: MaterialEditorQML.scrollAnimVSpeed
-                                                 onValueChanged: {
-                                                     if (!updating && Math.abs(value - MaterialEditorQML.scrollAnimVSpeed) > 0.01) {
-                                                         updating = true
-                                                         MaterialEditorQML.setScrollAnimVSpeed(value)
-                                                         updating = false
-                                                     }
-                                                 }
-                                                 Layout.fillWidth: true
-                                             }
-                                             SpinBox {
-                                                 id: vScrollSpinBox
-                                                 from: -1000
-                                                 to: 1000
-                                                 property bool updating: false
-                                                 
-                                                 Component.onCompleted: {
-                                                     value = Math.round(MaterialEditorQML.scrollAnimVSpeed * 100)
-                                                 }
-                                                 
-                                                 Connections {
-                                                     target: MaterialEditorQML
-                                                     function onScrollAnimVSpeedChanged() {
-                                                         if (!vScrollSpinBox.updating) {
-                                                             vScrollSpinBox.value = Math.round(MaterialEditorQML.scrollAnimVSpeed * 100)
-                                                         }
-                                                     }
-                                                 }
-                                                 
-                                                 onValueChanged: {
-                                                     if (!updating) {
-                                                         updating = true
-                                                         MaterialEditorQML.setScrollAnimVSpeed(value / 100.0)
-                                                         updating = false
-                                                     }
-                                                 }
-                                                 textFromValue: function(value) { return (value / 100).toFixed(2) }
-                                                 valueFromText: function(text) { return parseFloat(text) * 100 }
-                                             }
-                                         }
+                                ThemedLabel { text: "V Scroll Speed:" }
+                                RowLayout {
+                                    Slider {
+                                        from: -10.0
+                                        to: 10.0
+                                        value: MaterialEditorQML.scrollAnimVSpeed
+                                        onValueChanged: MaterialEditorQML.setScrollAnimVSpeed(value)
+                                        Layout.fillWidth: true
+                                    }
+                                    ThemedSpinBox {
+                                        from: -1000
+                                        to: 1000
+                                        value: Math.round(MaterialEditorQML.scrollAnimVSpeed * 100)
+                                        onValueChanged: MaterialEditorQML.setScrollAnimVSpeed(value / 100.0)
+                                        textFromValue: function(value) { return (value / 100.0).toFixed(2) }
+                                        valueFromText: function(text) { return Math.round(parseFloat(text) * 100) }
                                     }
                                 }
                             }
@@ -1041,184 +1090,607 @@ ApplicationWindow {
                 }
             }
         }
+    }
 
-        // Loading overlay
-        Rectangle {
-            anchors.fill: parent
-            color: "#80000000"
-            visible: isLoading
-
-            Text {
-                anchors.centerIn: parent
-                text: "Loading Material Editor..."
-                color: "white"
-                font.pointSize: 18
-            }
+    // Dialog components
+    FileDialog {
+        id: openMaterialDialog
+        title: "Open Material File"
+        nameFilters: ["Material files (*.material)", "All files (*)"]
+        onAccepted: {
+            console.log("Opening material file:", selectedFile)
+            // Handle material file opening
         }
     }
 
-    // Dialogs
+    FileDialog {
+        id: exportMaterialDialog
+        title: "Export Material"
+        fileMode: FileDialog.SaveFile
+        nameFilters: ["Material files (*.material)", "All files (*)"]
+        onAccepted: {
+            MaterialEditorQML.exportMaterial(selectedFile.toString())
+        }
+    }
+
+    Dialog {
+        id: newMaterialDialog
+        title: "New Material"
+        modal: true
+        anchors.centerIn: parent
+        
+        ColumnLayout {
+            ThemedLabel { text: "Material Name:" }
+            ThemedTextField {
+                id: newMaterialNameField
+                placeholderText: "Enter material name"
+            }
+        }
+        
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onAccepted: {
+            MaterialEditorQML.createNewMaterial(newMaterialNameField.text)
+            newMaterialNameField.text = ""
+        }
+    }
+
     Dialog {
         id: newTechniqueDialog
-        title: "Create New Technique"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        width: 300
-        height: 150
-
+        title: "New Technique"
+        modal: true
+        anchors.centerIn: parent
+        width: 350
+        height: 200
+        
+        background: Rectangle {
+            color: backgroundColor
+            border.color: borderColor
+            border.width: 2
+            radius: 8
+        }
+        
+        header: Rectangle {
+            height: 40
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 8
+            
+            Text {
+                text: "New Technique"
+                font.pointSize: 12
+                font.bold: true
+                color: textColor
+                anchors.centerIn: parent
+            }
+        }
+        
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 10
-
-            Text { text: "Technique name:" }
-            TextField {
-                id: techniqueNameField
+            anchors.margins: 20
+            spacing: 15
+            
+            ThemedLabel { 
+                text: "Technique Name:" 
+                font.pointSize: 11
+            }
+            ThemedTextField {
+                id: newTechniqueNameField
                 Layout.fillWidth: true
                 placeholderText: "Enter technique name"
             }
-        }
-
-        onAccepted: {
-            if (techniqueNameField.text.trim() !== "") {
-                // Create the new technique directly (this updates the Ogre material)
-                MaterialEditorQML.createNewTechnique(techniqueNameField.text.trim())
-                // Force refresh of the material text from the updated Ogre material
-                materialTextArea.text = MaterialEditorQML.materialText
-                techniqueNameField.text = ""
+            
+            Item { Layout.fillHeight: true }
+            
+            RowLayout {
+                Layout.fillWidth: true
+                
+                Item { Layout.fillWidth: true }
+                
+                ThemedButton {
+                    text: "Cancel"
+                    onClicked: {
+                        newTechniqueNameField.text = ""
+                        newTechniqueDialog.close()
+                    }
+                }
+                
+                ThemedButton {
+                    text: "OK"
+                    enabled: newTechniqueNameField.text.trim() !== ""
+                    onClicked: {
+                        MaterialEditorQML.createNewTechnique(newTechniqueNameField.text)
+                        newTechniqueNameField.text = ""
+                        newTechniqueDialog.close()
+                    }
+                }
             }
         }
     }
 
     Dialog {
         id: newPassDialog
-        title: "Create New Pass"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        width: 300
-        height: 150
-
+        title: "New Pass"
+        modal: true
+        anchors.centerIn: parent
+        width: 350
+        height: 200
+        
+        background: Rectangle {
+            color: backgroundColor
+            border.color: borderColor
+            border.width: 2
+            radius: 8
+        }
+        
+        header: Rectangle {
+            height: 40
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 8
+            
+            Text {
+                text: "New Pass"
+                font.pointSize: 12
+                font.bold: true
+                color: textColor
+                anchors.centerIn: parent
+            }
+        }
+        
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 10
-
-            Text { text: "Pass name:" }
-            TextField {
-                id: passNameField
+            anchors.margins: 20
+            spacing: 15
+            
+            ThemedLabel { 
+                text: "Pass Name:" 
+                font.pointSize: 11
+            }
+            ThemedTextField {
+                id: newPassNameField
                 Layout.fillWidth: true
                 placeholderText: "Enter pass name"
             }
-        }
-
-        onAccepted: {
-            if (passNameField.text.trim() !== "") {
-                // Create the new pass directly (this updates the Ogre material)
-                MaterialEditorQML.createNewPass(passNameField.text.trim())
-                // Force refresh of the material text from the updated Ogre material
-                materialTextArea.text = MaterialEditorQML.materialText
-                passNameField.text = ""
+            
+            Item { Layout.fillHeight: true }
+            
+            RowLayout {
+                Layout.fillWidth: true
+                
+                Item { Layout.fillWidth: true }
+                
+                ThemedButton {
+                    text: "Cancel"
+                    onClicked: {
+                        newPassNameField.text = ""
+                        newPassDialog.close()
+                    }
+                }
+                
+                ThemedButton {
+                    text: "OK"
+                    enabled: newPassNameField.text.trim() !== ""
+                    onClicked: {
+                        MaterialEditorQML.createNewPass(newPassNameField.text)
+                        newPassNameField.text = ""
+                        newPassDialog.close()
+                    }
+                }
             }
         }
     }
 
     Dialog {
         id: newTextureUnitDialog
-        title: "Create New Texture Unit"
-        standardButtons: Dialog.Ok | Dialog.Cancel
-        width: 300
-        height: 150
-
+        title: "New Texture Unit"
+        modal: true
+        anchors.centerIn: parent
+        width: 350
+        height: 200
+        
+        background: Rectangle {
+            color: backgroundColor
+            border.color: borderColor
+            border.width: 2
+            radius: 8
+        }
+        
+        header: Rectangle {
+            height: 40
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 8
+            
+            Text {
+                text: "New Texture Unit"
+                font.pointSize: 12
+                font.bold: true
+                color: textColor
+                anchors.centerIn: parent
+            }
+        }
+        
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 10
-
-            Text { text: "Texture unit name:" }
-            TextField {
-                id: textureUnitNameField
+            anchors.margins: 20
+            spacing: 15
+            
+            ThemedLabel { 
+                text: "Texture Unit Name:" 
+                font.pointSize: 11
+            }
+            ThemedTextField {
+                id: newTextureUnitNameField
                 Layout.fillWidth: true
                 placeholderText: "Enter texture unit name"
             }
-        }
-
-        onAccepted: {
-            if (textureUnitNameField.text.trim() !== "") {
-                MaterialEditorQML.createNewTextureUnit(textureUnitNameField.text.trim())
-                textureUnitNameField.text = ""
+            
+            Item { Layout.fillHeight: true }
+            
+            RowLayout {
+                Layout.fillWidth: true
+                
+                Item { Layout.fillWidth: true }
+                
+                ThemedButton {
+                    text: "Cancel"
+                    onClicked: {
+                        newTextureUnitNameField.text = ""
+                        newTextureUnitDialog.close()
+                    }
+                }
+                
+                ThemedButton {
+                    text: "OK"
+                    enabled: newTextureUnitNameField.text.trim() !== ""
+                    onClicked: {
+                        MaterialEditorQML.createNewTextureUnit(newTextureUnitNameField.text)
+                        newTextureUnitNameField.text = ""
+                        newTextureUnitDialog.close()
+                    }
+                }
             }
         }
     }
 
-    // Color pickers are now declared at the top of the window for proper accessibility
-
-    // File dialog for texture selection
-    FileDialog {
+    // File browser dialog for texture selection
+    Dialog {
         id: textureFileDialog
-        title: "Select Texture"
-        fileMode: FileDialog.OpenFile
-        nameFilters: [
-            "Image files (*.png *.jpg *.jpeg *.bmp *.tga *.dds)",
-            "All files (*)"
-        ]
-        onAccepted: {
-            var path = selectedFile.toString()
-            var fileName = path.substring(path.lastIndexOf('/') + 1)
-            MaterialEditorQML.setTextureName(fileName)
-            textureNameField.text = fileName
+        title: "Select Texture File"
+        modal: true
+        anchors.centerIn: parent
+        width: 700
+        height: 500
+        
+        background: Rectangle {
+            color: backgroundColor
+            border.color: borderColor
+            border.width: 2
+            radius: 8
         }
-    }
-
-    // Update connections
-    Connections {
-        target: MaterialEditorQML
-        function onMaterialTextChanged() {
-            if (materialTextArea.text !== MaterialEditorQML.materialText) {
-                materialTextArea.text = MaterialEditorQML.materialText
+        
+        header: Rectangle {
+            height: 45
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 8
+            
+            Text {
+                text: "Select Texture File"
+                font.pointSize: 14
+                font.bold: true
+                color: textColor
+                anchors.centerIn: parent
             }
         }
         
-        function onErrorOccurred(error) {
-            statusText.text = "Error: " + error
-            statusText.color = "red"
-        }
+        property string currentPath: "/media/materials/textures"
+        property var fileList: []
         
-        function onMaterialApplied() {
-            statusText.text = "Material applied successfully"
-            statusText.color = "green"
-        }
-        
-        function onTextureNameChanged() {
-            if (textureNameField.text !== MaterialEditorQML.textureName) {
-                textureNameField.text = MaterialEditorQML.textureName
+        function refreshFileList() {
+            // This would ideally call a C++ function to list real files
+            // For now, we'll simulate a file browser with some common texture files
+            var simulatedFiles = [
+                {name: "..", type: "dir", size: "", path: getParentPath(currentPath)},
+                {name: "textures", type: "dir", size: "", path: currentPath + "/textures"},
+                {name: "materials", type: "dir", size: "", path: currentPath + "/materials"},
+                {name: "concrete01.jpg", type: "file", size: "2.4 MB", path: currentPath + "/concrete01.jpg"},
+                {name: "metal_brushed.png", type: "file", size: "1.8 MB", path: currentPath + "/metal_brushed.png"},
+                {name: "wood_oak.dds", type: "file", size: "4.2 MB", path: currentPath + "/wood_oak.dds"},
+                {name: "brick_red.tga", type: "file", size: "3.1 MB", path: currentPath + "/brick_red.tga"},
+                {name: "grass_summer.jpg", type: "file", size: "1.9 MB", path: currentPath + "/grass_summer.jpg"},
+                {name: "stone_cobble.png", type: "file", size: "2.7 MB", path: currentPath + "/stone_cobble.png"},
+                {name: "water_normal.dds", type: "file", size: "5.5 MB", path: currentPath + "/water_normal.dds"},
+                {name: "sand_desert.jpg", type: "file", size: "2.2 MB", path: currentPath + "/sand_desert.jpg"},
+                {name: "fabric_canvas.png", type: "file", size: "1.6 MB", path: currentPath + "/fabric_canvas.png"},
+                {name: "plastic_white.jpg", type: "file", size: "0.8 MB", path: currentPath + "/plastic_white.jpg"},
+                {name: "rubber_black.dds", type: "file", size: "3.8 MB", path: currentPath + "/rubber_black.dds"},
+                {name: "glass_clear.png", type: "file", size: "1.2 MB", path: currentPath + "/glass_clear.png"}
+            ]
+            
+            fileListModel.clear()
+            for (var i = 0; i < simulatedFiles.length; i++) {
+                fileListModel.append(simulatedFiles[i])
             }
         }
         
-        // Hierarchy update signals
-        function onSelectedTechniqueIndexChanged() {
-            if (techniqueCombo.currentIndex !== MaterialEditorQML.selectedTechniqueIndex) {
-                techniqueCombo.currentIndex = MaterialEditorQML.selectedTechniqueIndex
+        function getParentPath(path) {
+            var parts = path.split('/')
+            if (parts.length > 1) {
+                parts.pop()
+                return parts.join('/')
             }
+            return path
         }
         
-        function onSelectedPassIndexChanged() {
-            if (passCombo.currentIndex !== MaterialEditorQML.selectedPassIndex) {
-                passCombo.currentIndex = MaterialEditorQML.selectedPassIndex
+        function getFileName(fullPath) {
+            return fullPath.split('/').pop()
+        }
+        
+        Component.onCompleted: refreshFileList()
+        
+        ColumnLayout {
+            anchors.fill: parent
+            anchors.margins: 15
+            spacing: 15
+            
+            // Navigation bar
+            RowLayout {
+                Layout.fillWidth: true
+                
+                ThemedLabel {
+                    text: "Path:"
+                }
+                
+                ThemedTextField {
+                    id: pathField
+                    Layout.fillWidth: true
+                    text: textureFileDialog.currentPath
+                    onTextChanged: {
+                        if (text !== textureFileDialog.currentPath) {
+                            textureFileDialog.currentPath = text
+                        }
+                    }
+                }
+                
+                ThemedButton {
+                    text: "↑ Up"
+                    onClicked: {
+                        textureFileDialog.currentPath = textureFileDialog.getParentPath(textureFileDialog.currentPath)
+                        pathField.text = textureFileDialog.currentPath
+                        textureFileDialog.refreshFileList()
+                    }
+                }
+                
+                ThemedButton {
+                    text: "🔄 Refresh"
+                    onClicked: textureFileDialog.refreshFileList()
+                }
             }
-        }
-        
-        function onSelectedTextureUnitIndexChanged() {
-            if (textureUnitCombo.currentIndex !== MaterialEditorQML.selectedTextureUnitIndex) {
-                textureUnitCombo.currentIndex = MaterialEditorQML.selectedTextureUnitIndex
+            
+            // File type filter
+            RowLayout {
+                Layout.fillWidth: true
+                
+                ThemedLabel {
+                    text: "Filter:"
+                }
+                
+                ThemedComboBox {
+                    id: filterCombo
+                    model: [
+                        "All Image Files (*.jpg *.png *.dds *.tga *.bmp)",
+                        "JPEG Files (*.jpg *.jpeg)",
+                        "PNG Files (*.png)",
+                        "DDS Files (*.dds)",
+                        "TGA Files (*.tga)",
+                        "All Files (*.*)"
+                    ]
+                    currentIndex: 0
+                }
             }
-        }
-        
-        // List update signals
-        function onTechniqueListChanged() {
-            console.log("Technique list updated:", MaterialEditorQML.techniqueList)
-        }
-        
-        function onPassListChanged() {
-            console.log("Pass list updated:", MaterialEditorQML.passList)
-        }
-        
-        function onTextureUnitListChanged() {
-            console.log("Texture unit list updated:", MaterialEditorQML.textureUnitList)
+            
+            // File list
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: backgroundColor
+                border.color: borderColor
+                border.width: 1
+                radius: 4
+                
+                ColumnLayout {
+                    anchors.fill: parent
+                    anchors.margins: 5
+                    spacing: 0
+                    
+                    // Header row
+                    Rectangle {
+                        Layout.fillWidth: true
+                        height: 30
+                        color: alternateColor
+                        border.color: borderColor
+                        border.width: 1
+                        
+                        RowLayout {
+                            anchors.fill: parent
+                            anchors.margins: 5
+                            spacing: 10
+                            
+                            Text {
+                                text: "Name"
+                                font.bold: true
+                                color: textColor
+                                Layout.preferredWidth: 300
+                            }
+                            
+                            Text {
+                                text: "Size"
+                                font.bold: true
+                                color: textColor
+                                Layout.preferredWidth: 80
+                            }
+                            
+                            Text {
+                                text: "Type"
+                                font.bold: true
+                                color: textColor
+                                Layout.fillWidth: true
+                            }
+                        }
+                    }
+                    
+                    // File list view
+                    ListView {
+                        id: fileListView
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        
+                        model: ListModel {
+                            id: fileListModel
+                        }
+                        
+                        delegate: ItemDelegate {
+                            width: fileListView.width
+                            height: 35
+                            
+                            property bool isDirectory: type === "dir"
+                            property bool isImageFile: name.match(/\.(jpg|jpeg|png|dds|tga|bmp)$/i)
+                            
+                            Rectangle {
+                                anchors.fill: parent
+                                color: parent.hovered ? highlightColor : 
+                                       (index % 2 === 0 ? "transparent" : Qt.darker(backgroundColor, 1.05))
+                                radius: 2
+                                
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 5
+                                    spacing: 10
+                                    
+                                    // Icon and name
+                                    RowLayout {
+                                        Layout.preferredWidth: 300
+                                        spacing: 5
+                                        
+                                        Text {
+                                            text: isDirectory ? "📁" : (isImageFile ? "🖼️" : "📄")
+                                            font.pointSize: 12
+                                        }
+                                        
+                                        Text {
+                                            text: name
+                                            color: textColor
+                                            font.pointSize: 11
+                                            elide: Text.ElideRight
+                                            Layout.fillWidth: true
+                                        }
+                                    }
+                                    
+                                    // Size
+                                    Text {
+                                        text: size
+                                        color: disabledTextColor
+                                        font.pointSize: 10
+                                        Layout.preferredWidth: 80
+                                    }
+                                    
+                                    // Type
+                                    Text {
+                                        text: isDirectory ? "Folder" : "Image File"
+                                        color: disabledTextColor
+                                        font.pointSize: 10
+                                        Layout.fillWidth: true
+                                    }
+                                }
+                            }
+                            
+                            onClicked: {
+                                if (isDirectory) {
+                                    // Navigate to directory
+                                    if (name === "..") {
+                                        textureFileDialog.currentPath = textureFileDialog.getParentPath(textureFileDialog.currentPath)
+                                    } else {
+                                        textureFileDialog.currentPath = path
+                                    }
+                                    pathField.text = textureFileDialog.currentPath
+                                    textureFileDialog.refreshFileList()
+                                } else {
+                                    // Select file
+                                    selectedFileField.text = name
+                                }
+                            }
+                            
+                            onDoubleClicked: {
+                                if (!isDirectory) {
+                                    // Double-click on file to select and close
+                                    MaterialEditorQML.setTextureName(name)
+                                    textureFileDialog.close()
+                                }
+                            }
+                        }
+                        
+                        ScrollIndicator.vertical: ScrollIndicator {
+                            active: true
+                        }
+                    }
+                }
+            }
+            
+            // Selected file
+            RowLayout {
+                Layout.fillWidth: true
+                
+                ThemedLabel {
+                    text: "Selected file:"
+                }
+                
+                ThemedTextField {
+                    id: selectedFileField
+                    Layout.fillWidth: true
+                    placeholderText: "Select a file from the list above..."
+                }
+            }
+            
+            // Buttons
+            RowLayout {
+                Layout.fillWidth: true
+                
+                ThemedButton {
+                    text: "Create New Folder"
+                    onClicked: {
+                        // This would create a new folder in a real implementation
+                        console.log("Create new folder functionality would go here")
+                    }
+                }
+                
+                Item { Layout.fillWidth: true }
+                
+                ThemedButton {
+                    text: "Cancel"
+                    onClicked: {
+                        selectedFileField.text = ""
+                        textureFileDialog.close()
+                    }
+                }
+                
+                ThemedButton {
+                    text: "Open"
+                    enabled: selectedFileField.text.trim() !== ""
+                    onClicked: {
+                        if (selectedFileField.text.trim() !== "") {
+                            MaterialEditorQML.setTextureName(selectedFileField.text.trim())
+                            selectedFileField.text = ""
+                            textureFileDialog.close()
+                        }
+                    }
+                }
+            }
         }
     }
 } 
