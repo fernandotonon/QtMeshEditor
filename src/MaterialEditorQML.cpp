@@ -506,7 +506,8 @@ void MaterialEditorQML::setTextureName(const QString &name)
         m_textureName = name;
         
         Ogre::TextureUnitState* textureUnit = getCurrentTextureUnit();
-        if (textureUnit) {
+        if (textureUnit && !name.isEmpty() && name != "*Select a texture*") {
+            // Only set non-empty, valid texture names to avoid OGRE crashes
             textureUnit->setTextureName(name.toStdString());
             updateMaterialText();
         }
@@ -618,6 +619,12 @@ void MaterialEditorQML::selectTexture()
     if (!textureUnit) return;
 
     QFileInfo file(filePath);
+    
+    // Validate file name is not empty
+    if (file.fileName().isEmpty()) {
+        emit errorOccurred("Selected file has an empty name.");
+        return;
+    }
 
     try {
         // Try to get existing texture
@@ -643,8 +650,46 @@ void MaterialEditorQML::removeTexture()
     Ogre::TextureUnitState* textureUnit = getCurrentTextureUnit();
     if (!textureUnit) return;
 
-    textureUnit->setTextureName("");
-    setTextureName("*Select a texture*");
+    Ogre::Pass* pass = getCurrentPass();
+    if (!pass) return;
+
+    // Instead of setting empty texture name, remove the entire texture unit and recreate it
+    // This avoids the empty name issue while properly updating the material
+    try {
+        // Get the texture unit index
+        int textureUnitIndex = -1;
+        const auto textureUnits = pass->getTextureUnitStates();
+        for (size_t i = 0; i < textureUnits.size(); ++i) {
+            if (textureUnits[i] == textureUnit) {
+                textureUnitIndex = static_cast<int>(i);
+                break;
+            }
+        }
+        
+        if (textureUnitIndex >= 0) {
+            // Store the texture unit name before removal
+            std::string unitName = textureUnit->getName();
+            
+            // Remove the texture unit
+            pass->removeTextureUnitState(textureUnitIndex);
+            
+            // Create a new empty texture unit with the same name
+            Ogre::TextureUnitState* newTextureUnit = pass->createTextureUnitState();
+            if (!unitName.empty()) {
+                newTextureUnit->setName(unitName);
+            }
+            
+            // Update our internal lists
+            updateTextureUnitList();
+            updateMaterialText();
+        }
+    } catch (const std::exception& e) {
+        qDebug() << "Error removing texture:" << e.what();
+    }
+
+    // Update the UI display
+    m_textureName = "*Select a texture*";
+    emit textureNameChanged();
 }
 
 QStringList MaterialEditorQML::getPolygonModeNames() const

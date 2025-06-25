@@ -469,7 +469,7 @@ void MaterialEditor::on_srcSceneBlendBox_currentIndexChanged(int index)
         }
         else
         {
-            mSelectedPass->setSceneBlending((Ogre::SceneBlendFactor)(index-6),mSelectedPass->getDestBlendFactor());
+            mSelectedPass->setSceneBlending(mSelectedPass->getSourceBlendFactor(),(Ogre::SceneBlendFactor)(index-6));
         }
     }
     updateMaterialText();
@@ -624,6 +624,12 @@ void MaterialEditor::on_selectTexture_clicked()
 
     QFileInfo file;
     file.setFile(filePath);
+    
+    // Validate file name is not empty
+    if (file.fileName().isEmpty()) {
+        QMessageBox::warning(this, "Invalid File", "Selected file has an empty name.");
+        return;
+    }
 
     try {
         Ogre::TextureManager::getSingleton().getByName(file.fileName().toStdString().data(),file.path().toStdString().data());
@@ -643,8 +649,42 @@ void MaterialEditor::on_removeTexture_clicked()
 {
     if(!mSelectedTextureUnit) return;
 
-    mSelectedTextureUnit->setTextureName("");
-    ui->textureName->setText("*Select a texture*");
+    // Instead of setting empty texture name, remove the entire texture unit and recreate it
+    // This avoids the empty name issue while properly updating the material
+    try {
+        // Get the texture unit index
+        int textureUnitIndex = -1;
+        const auto textureUnits = mSelectedPass->getTextureUnitStates();
+        for (size_t i = 0; i < textureUnits.size(); ++i) {
+            if (textureUnits[i] == mSelectedTextureUnit) {
+                textureUnitIndex = static_cast<int>(i);
+                break;
+            }
+        }
+        
+        if (textureUnitIndex >= 0) {
+            // Store the texture unit name before removal
+            std::string unitName = mSelectedTextureUnit->getName();
+            
+            // Remove the texture unit
+            mSelectedPass->removeTextureUnitState(textureUnitIndex);
+            
+            // Create a new empty texture unit with the same name
+            Ogre::TextureUnitState* newTextureUnit = mSelectedPass->createTextureUnitState();
+            if (!unitName.empty()) {
+                newTextureUnit->setName(unitName);
+            }
+            
+            // Update the material text
+            updateMaterialText();
+            
+            // Refresh the texture unit selection
+            setPassFields(mSelectedPass);
+        }
+    } catch (const std::exception& e) {
+        // Fallback to just updating UI if OGRE operations fail
+        ui->textureName->setText("*Select a texture*");
+    }
 }
 
 void MaterialEditor::on_checkBoxLightning_toggled(bool checked)
