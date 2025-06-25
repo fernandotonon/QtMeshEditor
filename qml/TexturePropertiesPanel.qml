@@ -1,7 +1,7 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
-import QtQuick.Dialogs 1.3
+import QtQuick 6.0
+import QtQuick.Controls 6.0
+import QtQuick.Layouts 6.0
+import QtQuick.Dialogs
 import MaterialEditorQML 1.0
 
 GroupBox {
@@ -9,70 +9,129 @@ GroupBox {
     
     ColumnLayout {
         anchors.fill: parent
-        spacing: 10
+        spacing: 15
         
         // Texture Selection
         GroupBox {
-            title: "Texture"
+            title: "Texture Selection"
             Layout.fillWidth: true
             
             ColumnLayout {
                 anchors.fill: parent
+                spacing: 10
                 
                 RowLayout {
-                    Label {
-                        text: "Current Texture:"
-                        Layout.preferredWidth: 100
-                    }
+                    Layout.fillWidth: true
+                    spacing: 10
                     
                     Label {
-                        text: MaterialEditorQML.textureName
-                        Layout.fillWidth: true
-                        color: MaterialEditorQML.textureName === "*Select a texture*" ? "#999" : "#000"
-                        font.italic: MaterialEditorQML.textureName === "*Select a texture*"
+                        text: "Texture:"
+                        Layout.alignment: Qt.AlignVCenter
                     }
-                }
-                
-                RowLayout {
+                    
+                    TextField {
+                        id: textureNameField
+                        Layout.fillWidth: true
+                        text: MaterialEditorQML.textureName
+                        placeholderText: "Select a texture..."
+                        readOnly: true
+                        background: Rectangle {
+                            color: textureNameField.readOnly ? "#f0f0f0" : "white"
+                            border.color: "#cccccc"
+                            border.width: 1
+                        }
+                    }
+                    
                     Button {
                         text: "Browse..."
-                        icon.source: "qrc:/icons/folder.png"
-                        onClicked: MaterialEditorQML.selectTexture()
+                        onClicked: textureFileDialog.open()
                     }
-                    
-                    Button {
-                        text: "Remove"
-                        icon.source: "qrc:/icons/remove.png"
-                        enabled: MaterialEditorQML.textureName !== "*Select a texture*"
-                        onClicked: MaterialEditorQML.removeTexture()
-                    }
-                    
-                    Item { Layout.fillWidth: true }
                 }
                 
-                // Texture preview (if available)
-                Rectangle {
+                // Available textures dropdown
+                RowLayout {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 150
-                    color: "#f0f0f0"
-                    border.color: "#ccc"
-                    border.width: 1
-                    visible: MaterialEditorQML.textureName !== "*Select a texture*"
+                    spacing: 10
                     
                     Label {
-                        anchors.centerIn: parent
-                        text: "Texture Preview\n(Not implemented)"
-                        color: "#999"
-                        horizontalAlignment: Text.AlignHCenter
-                        font.italic: true
+                        text: "Available:"
+                        Layout.alignment: Qt.AlignVCenter
                     }
                     
-                    // TODO: Add actual texture preview using Image or custom renderer
+                    ComboBox {
+                        id: availableTexturesCombo
+                        Layout.fillWidth: true
+                        model: MaterialEditorQML.getAvailableTextures()
+                        displayText: "Select from available textures..."
+                        onCurrentTextChanged: {
+                            if (currentIndex > 0) { // Skip the placeholder
+                                MaterialEditorQML.setTextureName(currentText)
+                                textureNameField.text = currentText
+                                currentIndex = 0 // Reset to placeholder
+                            }
+                        }
+                    }
                 }
             }
         }
         
-        // Texture Animation
+        // Texture Preview
+        GroupBox {
+            title: "Preview"
+            Layout.fillWidth: true
+            Layout.preferredHeight: 200
+            
+            Rectangle {
+                anchors.fill: parent
+                anchors.margins: 5
+                color: "#f5f5f5"
+                border.color: "#cccccc"
+                border.width: 1
+                
+                Image {
+                    id: texturePreview
+                    anchors.centerIn: parent
+                    width: Math.min(parent.width - 20, sourceSize.width)
+                    height: Math.min(parent.height - 20, sourceSize.height)
+                    fillMode: Image.PreserveAspectFit
+                    source: getTexturePreviewSource()
+                    
+                    function getTexturePreviewSource() {
+                        var texName = MaterialEditorQML.textureName
+                        if (texName && texName !== "*Select a texture*" && texName.trim() !== "") {
+                            // Try to construct a file path for the texture
+                            // This would need to be adapted based on your texture path structure
+                            return "file:///media/materials/textures/" + texName
+                        }
+                        return ""
+                    }
+
+                    onStatusChanged: {
+                        if (status === Image.Error) {
+                            // If the constructed path fails, show placeholder
+                            texturePreview.visible = false
+                            placeholderText.visible = true
+                        } else if (status === Image.Ready) {
+                            texturePreview.visible = true
+                            placeholderText.visible = false
+                        }
+                    }
+                }
+                
+                Text {
+                    id: placeholderText
+                    anchors.centerIn: parent
+                    text: MaterialEditorQML.textureName === "*Select a texture*" ? 
+                          "No texture selected" : 
+                          "Texture preview\nnot available"
+                    color: "#666666"
+                    horizontalAlignment: Text.AlignHCenter
+                    visible: !texturePreview.visible || texturePreview.status === Image.Error
+                }
+            }
+        }
+        
+        // Animation Controls
         GroupBox {
             title: "Texture Animation"
             Layout.fillWidth: true
@@ -80,186 +139,166 @@ GroupBox {
             GridLayout {
                 anchors.fill: parent
                 columns: 2
-                columnSpacing: 10
-                rowSpacing: 8
+                rowSpacing: 10
+                columnSpacing: 15
                 
-                Label { text: "U Scroll Speed:" }
+                // U Scroll Speed
+                Label { 
+                    text: "U Scroll Speed:"
+                    Layout.alignment: Qt.AlignVCenter
+                }
                 RowLayout {
+                    Layout.fillWidth: true
+                    
                     Slider {
                         id: uScrollSlider
                         Layout.fillWidth: true
-                        from: -5.0
-                        to: 5.0
+                        from: -10.0
+                        to: 10.0
                         value: MaterialEditorQML.scrollAnimUSpeed
-                        stepSize: 0.1
-                        onValueChanged: {
-                            if (Math.abs(value - MaterialEditorQML.scrollAnimUSpeed) > 0.01) {
-                                MaterialEditorQML.scrollAnimUSpeed = value
-                            }
-                        }
+                        onValueChanged: MaterialEditorQML.setScrollAnimUSpeed(value)
+                        stepSize: 0.01
                     }
+                    
                     SpinBox {
-                        from: -500
-                        to: 500
-                        value: Math.round(uScrollSlider.value * 100)
+                        property int decimals: 2
+                        
+                        from: -1000
+                        to: 1000
+                        value: uScrollSlider.value * 100
                         onValueChanged: uScrollSlider.value = value / 100.0
-                        textFromValue: function(value, locale) {
-                            return Number(value / 100).toLocaleString(locale, 'f', 2)
+                        
+                        validator: DoubleValidator {
+                            bottom: Math.min(uScrollSlider.from, uScrollSlider.to)
+                            top: Math.max(uScrollSlider.from, uScrollSlider.to)
                         }
+                        
+                        textFromValue: function(value, locale) {
+                            return Number(value / 100).toLocaleString(locale, 'f', decimals)
+                        }
+                        
                         valueFromText: function(text, locale) {
-                            return Math.round(Number.fromLocaleString(locale, text) * 100)
+                            return Number.fromLocaleString(locale, text) * 100
                         }
                     }
                 }
                 
-                Label { text: "V Scroll Speed:" }
+                // V Scroll Speed
+                Label { 
+                    text: "V Scroll Speed:"
+                    Layout.alignment: Qt.AlignVCenter
+                }
                 RowLayout {
+                    Layout.fillWidth: true
+                    
                     Slider {
                         id: vScrollSlider
                         Layout.fillWidth: true
-                        from: -5.0
-                        to: 5.0
+                        from: -10.0
+                        to: 10.0
                         value: MaterialEditorQML.scrollAnimVSpeed
-                        stepSize: 0.1
-                        onValueChanged: {
-                            if (Math.abs(value - MaterialEditorQML.scrollAnimVSpeed) > 0.01) {
-                                MaterialEditorQML.scrollAnimVSpeed = value
-                            }
-                        }
+                        onValueChanged: MaterialEditorQML.setScrollAnimVSpeed(value)
+                        stepSize: 0.01
                     }
+                    
                     SpinBox {
-                        from: -500
-                        to: 500
-                        value: Math.round(vScrollSlider.value * 100)
+                        property int decimals: 2
+                        
+                        from: -1000
+                        to: 1000
+                        value: vScrollSlider.value * 100
                         onValueChanged: vScrollSlider.value = value / 100.0
+                        
+                        validator: DoubleValidator {
+                            bottom: Math.min(vScrollSlider.from, vScrollSlider.to)
+                            top: Math.max(vScrollSlider.from, vScrollSlider.to)
+                        }
+                        
                         textFromValue: function(value, locale) {
-                            return Number(value / 100).toLocaleString(locale, 'f', 2)
+                            return Number(value / 100).toLocaleString(locale, 'f', decimals)
                         }
+                        
                         valueFromText: function(text, locale) {
-                            return Math.round(Number.fromLocaleString(locale, text) * 100)
+                            return Number.fromLocaleString(locale, text) * 100
                         }
                     }
                 }
-            }
-        }
-        
-        // Texture Coordinate Transformation (Future Enhancement)
-        GroupBox {
-            title: "Texture Coordinates"
-            Layout.fillWidth: true
-            visible: false // Hidden for now, can be enabled for future features
-            
-            GridLayout {
-                anchors.fill: parent
-                columns: 2
-                columnSpacing: 10
-                rowSpacing: 5
                 
-                Label { text: "U Scale:" }
-                SpinBox {
-                    Layout.fillWidth: true
-                    from: 1
-                    to: 1000
-                    value: 100
-                    textFromValue: function(value, locale) {
-                        return Number(value / 100).toLocaleString(locale, 'f', 2)
-                    }
-                    valueFromText: function(text, locale) {
-                        return Math.round(Number.fromLocaleString(locale, text) * 100)
-                    }
-                }
-                
-                Label { text: "V Scale:" }
-                SpinBox {
-                    Layout.fillWidth: true
-                    from: 1
-                    to: 1000
-                    value: 100
-                    textFromValue: function(value, locale) {
-                        return Number(value / 100).toLocaleString(locale, 'f', 2)
-                    }
-                    valueFromText: function(text, locale) {
-                        return Math.round(Number.fromLocaleString(locale, text) * 100)
-                    }
-                }
-                
-                Label { text: "U Offset:" }
-                SpinBox {
-                    Layout.fillWidth: true
-                    from: -1000
-                    to: 1000
-                    value: 0
-                    textFromValue: function(value, locale) {
-                        return Number(value / 100).toLocaleString(locale, 'f', 2)
-                    }
-                    valueFromText: function(text, locale) {
-                        return Math.round(Number.fromLocaleString(locale, text) * 100)
-                    }
-                }
-                
-                Label { text: "V Offset:" }
-                SpinBox {
-                    Layout.fillWidth: true
-                    from: -1000
-                    to: 1000
-                    value: 0
-                    textFromValue: function(value, locale) {
-                        return Number(value / 100).toLocaleString(locale, 'f', 2)
-                    }
-                    valueFromText: function(text, locale) {
-                        return Math.round(Number.fromLocaleString(locale, text) * 100)
-                    }
-                }
-                
-                Label { text: "Rotation:" }
-                RowLayout {
-                    Slider {
-                        Layout.fillWidth: true
-                        from: 0
-                        to: 360
-                        value: 0
-                    }
-                    Label {
-                        text: "0°"
-                        Layout.preferredWidth: 30
+                // Reset button
+                Item { Layout.fillWidth: true }
+                Button {
+                    text: "Reset Animation"
+                    onClicked: {
+                        MaterialEditorQML.setScrollAnimUSpeed(0.0)
+                        MaterialEditorQML.setScrollAnimVSpeed(0.0)
                     }
                 }
             }
         }
         
-        // Texture Filtering (Future Enhancement)
+        // Texture Information
         GroupBox {
-            title: "Filtering"
+            title: "Information"
             Layout.fillWidth: true
-            visible: false // Hidden for now
             
-            GridLayout {
+            ColumnLayout {
                 anchors.fill: parent
-                columns: 2
-                columnSpacing: 10
-                rowSpacing: 5
+                spacing: 5
                 
-                Label { text: "Min Filter:" }
-                ComboBox {
-                    Layout.fillWidth: true
-                    model: ["None", "Point", "Linear", "Anisotropic"]
-                    currentIndex: 2
+                Text {
+                    text: "Texture: " + (MaterialEditorQML.textureName || "None")
+                    font.pointSize: 10
+                    color: "#444444"
                 }
                 
-                Label { text: "Mag Filter:" }
-                ComboBox {
-                    Layout.fillWidth: true
-                    model: ["None", "Point", "Linear", "Anisotropic"]
-                    currentIndex: 2
+                Text {
+                    text: texturePreview.source != "" && texturePreview.status === Image.Ready ? 
+                          "Size: " + texturePreview.sourceSize.width + " x " + texturePreview.sourceSize.height :
+                          "Size: Unknown"
+                    font.pointSize: 10
+                    color: "#444444"
                 }
                 
-                Label { text: "Mip Filter:" }
-                ComboBox {
-                    Layout.fillWidth: true
-                    model: ["None", "Point", "Linear"]
-                    currentIndex: 2
+                Text {
+                    text: "Animation: " + 
+                          (MaterialEditorQML.scrollAnimUSpeed != 0.0 || MaterialEditorQML.scrollAnimVSpeed != 0.0 ? 
+                           "Enabled (" + MaterialEditorQML.scrollAnimUSpeed.toFixed(2) + ", " + MaterialEditorQML.scrollAnimVSpeed.toFixed(2) + ")" : 
+                           "Disabled")
+                    font.pointSize: 10
+                    color: "#444444"
                 }
             }
+        }
+    }
+
+    // File dialog for texture selection
+    FileDialog {
+        id: textureFileDialog
+        title: "Select Texture"
+        fileMode: FileDialog.OpenFile
+        nameFilters: [
+            "Image files (*.png *.jpg *.jpeg *.bmp *.tga *.dds)",
+            "PNG files (*.png)",
+            "JPEG files (*.jpg *.jpeg)",
+            "Bitmap files (*.bmp)",
+            "TGA files (*.tga)",
+            "DDS files (*.dds)",
+            "All files (*)"
+        ]
+        onAccepted: {
+            var path = selectedFile.toString()
+            var fileName = path.substring(path.lastIndexOf('/') + 1)
+            MaterialEditorQML.setTextureName(fileName)
+            textureNameField.text = fileName
+        }
+    }
+
+    // Update UI when texture properties change
+    Connections {
+        target: MaterialEditorQML
+        function onTextureNameChanged() {
+            textureNameField.text = MaterialEditorQML.textureName
+            texturePreview.source = texturePreview.getTexturePreviewSource()
         }
     }
 } 

@@ -1,0 +1,7 @@
+<RCC>
+  <qresource prefix="/MaterialEditorQML">
+    <file alias="MaterialEditorWindow.qml">../qml/MaterialEditorWindow.qml</file>
+    <file alias="PassPropertiesPanel.qml">../qml/PassPropertiesPanel.qml</file>
+    <file alias="TexturePropertiesPanel.qml">../qml/TexturePropertiesPanel.qml</file>
+  </qresource>
+</RCC> 

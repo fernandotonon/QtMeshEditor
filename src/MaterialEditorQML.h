@@ -148,6 +148,14 @@ public slots:
     // Utility functions
     QStringList getPolygonModeNames() const;
     QStringList getBlendFactorNames() const;
+    QStringList getAvailableTextures() const;
+    
+    // File operations
+    void openTextureFileDialog();
+    void exportMaterial(const QString &fileName);
+    
+    // Color picker
+    void openColorPicker(const QString &colorType);
 
 signals:
     // Property change signals
@@ -197,6 +205,7 @@ private:
     void updatePassProperties();
     void updateTextureUnitProperties();
     void updateMaterialText();
+    void resetPropertiesToDefaults();
     Ogre::Pass* getCurrentPass() const;
     Ogre::TextureUnitState* getCurrentTextureUnit() const;
     Ogre::Technique* getCurrentTechnique() const;
@@ -222,7 +231,7 @@ private:
     float m_diffuseAlpha = 1.0f;
     float m_specularAlpha = 1.0f;
     float m_shininess = 0.0f;
-    int m_polygonMode = 1; // PM_SOLID
+    int m_polygonMode = 2; // PM_SOLID (0=Points, 1=Wireframe, 2=Solid)
     int m_sourceBlendFactor = 6; // SBF_ONE 
     int m_destBlendFactor = 1; // SBF_ZERO
     

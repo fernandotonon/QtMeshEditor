@@ -1,227 +1,274 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
-import QtQuick.Layouts 1.15
-import QtQuick.Dialogs 1.3
+import QtQuick 6.0
+import QtQuick.Controls 6.0
+import QtQuick.Layouts 6.0
+import QtQuick.Dialogs
 import MaterialEditorQML 1.0
 
 GroupBox {
     title: "Pass Properties"
-    
+
     ColumnLayout {
         anchors.fill: parent
-        spacing: 10
-        
-        // Basic Properties
-        GridLayout {
-            columns: 2
-            columnSpacing: 10
-            rowSpacing: 5
+        spacing: 15
+
+        // Lighting and Depth Settings
+        GroupBox {
+            title: "Lighting & Depth"
             Layout.fillWidth: true
-            
-            Label { text: "Lighting:" }
-            CheckBox {
-                checked: MaterialEditorQML.lightingEnabled
-                onCheckedChanged: MaterialEditorQML.lightingEnabled = checked
-            }
-            
-            Label { text: "Depth Write:" }
-            CheckBox {
-                checked: MaterialEditorQML.depthWriteEnabled
-                onCheckedChanged: MaterialEditorQML.depthWriteEnabled = checked
-            }
-            
-            Label { text: "Depth Check:" }
-            CheckBox {
-                checked: MaterialEditorQML.depthCheckEnabled
-                onCheckedChanged: MaterialEditorQML.depthCheckEnabled = checked
-            }
-            
-            Label { text: "Polygon Mode:" }
-            ComboBox {
-                Layout.fillWidth: true
-                model: MaterialEditorQML.getPolygonModeNames()
-                currentIndex: MaterialEditorQML.polygonMode
-                onCurrentIndexChanged: {
-                    if (currentIndex !== MaterialEditorQML.polygonMode) {
-                        MaterialEditorQML.polygonMode = currentIndex
+
+            ColumnLayout {
+                anchors.fill: parent
+                spacing: 10
+
+                // First row: Lighting, Depth Write, Depth Check
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 15
+
+                    CheckBox {
+                        text: "Lighting"
+                        checked: MaterialEditorQML.lightingEnabled
+                        onCheckedChanged: MaterialEditorQML.setLightingEnabled(checked)
                     }
+
+                    CheckBox {
+                        text: "Depth Write"
+                        checked: MaterialEditorQML.depthWriteEnabled
+                        onCheckedChanged: MaterialEditorQML.setDepthWriteEnabled(checked)
+                    }
+
+                    CheckBox {
+                        text: "Depth Check"
+                        checked: MaterialEditorQML.depthCheckEnabled
+                        onCheckedChanged: MaterialEditorQML.setDepthCheckEnabled(checked)
+                    }
+
+                    // Spacer to push everything to the left
+                    Item { Layout.fillWidth: true }
+                }
+
+                // Second row: Polygon Mode
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 15
+
+                    Label { 
+                        text: "Polygon Mode:" 
+                        Layout.alignment: Qt.AlignVCenter
+                    }
+                    ComboBox {
+                        id: polygonModeCombo
+                        model: MaterialEditorQML.getPolygonModeNames()
+                        currentIndex: MaterialEditorQML.polygonMode
+                        onCurrentIndexChanged: {
+                            if (currentIndex !== MaterialEditorQML.polygonMode) {
+                                MaterialEditorQML.setPolygonMode(currentIndex)
+                            }
+                        }
+                        
+                        // Ensure the ComboBox updates when the backend changes
+                        Connections {
+                            target: MaterialEditorQML
+                            function onPolygonModeChanged() {
+                                polygonModeCombo.currentIndex = MaterialEditorQML.polygonMode
+                            }
+                        }
+                    }
+
+                    // Spacer to push everything to the left
+                    Item { Layout.fillWidth: true }
                 }
             }
         }
-        
-        // Colors Section
+
+        // Color Properties
         GroupBox {
             title: "Colors"
             Layout.fillWidth: true
-            
+
             GridLayout {
                 anchors.fill: parent
                 columns: 3
+                rowSpacing: 10
                 columnSpacing: 10
-                rowSpacing: 8
-                
+
                 // Ambient Color
-                Label { text: "Ambient:" }
+                Label { 
+                    text: "Ambient:"
+                    Layout.alignment: Qt.AlignVCenter
+                }
                 Rectangle {
                     width: 40
                     height: 25
                     color: MaterialEditorQML.ambientColor
-                    border.color: "#999"
+                    border.color: "#666666"
                     border.width: 1
+                    Layout.alignment: Qt.AlignVCenter
                     
                     MouseArea {
                         anchors.fill: parent
-                        onClicked: {
-                            ambientColorDialog.color = MaterialEditorQML.ambientColor
-                            ambientColorDialog.open()
-                        }
+                        onClicked: ambientColorDialog.open()
+                        cursorShape: Qt.PointingHandCursor
                     }
                 }
                 CheckBox {
                     text: "Use Vertex Color"
                     checked: MaterialEditorQML.useVertexColorToAmbient
-                    onCheckedChanged: MaterialEditorQML.useVertexColorToAmbient = checked
+                    onCheckedChanged: MaterialEditorQML.setUseVertexColorToAmbient(checked)
                 }
-                
+
                 // Diffuse Color
-                Label { text: "Diffuse:" }
+                Label { 
+                    text: "Diffuse:"
+                    Layout.alignment: Qt.AlignVCenter
+                }
                 Rectangle {
                     width: 40
                     height: 25
                     color: MaterialEditorQML.diffuseColor
-                    border.color: "#999"
+                    border.color: "#666666"
                     border.width: 1
+                    Layout.alignment: Qt.AlignVCenter
                     
                     MouseArea {
                         anchors.fill: parent
-                        onClicked: {
-                            diffuseColorDialog.color = MaterialEditorQML.diffuseColor
-                            diffuseColorDialog.open()
-                        }
+                        onClicked: diffuseColorDialog.open()
+                        cursorShape: Qt.PointingHandCursor
                     }
                 }
                 CheckBox {
                     text: "Use Vertex Color"
                     checked: MaterialEditorQML.useVertexColorToDiffuse
-                    onCheckedChanged: MaterialEditorQML.useVertexColorToDiffuse = checked
+                    onCheckedChanged: MaterialEditorQML.setUseVertexColorToDiffuse(checked)
                 }
-                
+
                 // Specular Color
-                Label { text: "Specular:" }
+                Label { 
+                    text: "Specular:"
+                    Layout.alignment: Qt.AlignVCenter
+                }
                 Rectangle {
                     width: 40
                     height: 25
                     color: MaterialEditorQML.specularColor
-                    border.color: "#999"
+                    border.color: "#666666"
                     border.width: 1
+                    Layout.alignment: Qt.AlignVCenter
                     
                     MouseArea {
                         anchors.fill: parent
-                        onClicked: {
-                            specularColorDialog.color = MaterialEditorQML.specularColor
-                            specularColorDialog.open()
-                        }
+                        onClicked: specularColorDialog.open()
+                        cursorShape: Qt.PointingHandCursor
                     }
                 }
                 CheckBox {
                     text: "Use Vertex Color"
                     checked: MaterialEditorQML.useVertexColorToSpecular
-                    onCheckedChanged: MaterialEditorQML.useVertexColorToSpecular = checked
+                    onCheckedChanged: MaterialEditorQML.setUseVertexColorToSpecular(checked)
                 }
-                
+
                 // Emissive Color
-                Label { text: "Emissive:" }
+                Label { 
+                    text: "Emissive:"
+                    Layout.alignment: Qt.AlignVCenter
+                }
                 Rectangle {
                     width: 40
                     height: 25
                     color: MaterialEditorQML.emissiveColor
-                    border.color: "#999"
+                    border.color: "#666666"
                     border.width: 1
+                    Layout.alignment: Qt.AlignVCenter
                     
                     MouseArea {
                         anchors.fill: parent
-                        onClicked: {
-                            emissiveColorDialog.color = MaterialEditorQML.emissiveColor
-                            emissiveColorDialog.open()
-                        }
+                        onClicked: emissiveColorDialog.open()
+                        cursorShape: Qt.PointingHandCursor
                     }
                 }
                 CheckBox {
                     text: "Use Vertex Color"
                     checked: MaterialEditorQML.useVertexColorToEmissive
-                    onCheckedChanged: MaterialEditorQML.useVertexColorToEmissive = checked
+                    onCheckedChanged: MaterialEditorQML.setUseVertexColorToEmissive(checked)
                 }
             }
         }
-        
-        // Alpha and Shininess
+
+        // Alpha and Material Properties
         GroupBox {
-            title: "Material Properties"
+            title: "Alpha & Material Properties"
             Layout.fillWidth: true
-            
+
             GridLayout {
                 anchors.fill: parent
                 columns: 2
-                columnSpacing: 10
-                rowSpacing: 5
-                
+                rowSpacing: 10
+                columnSpacing: 15
+
+                // Diffuse Alpha
                 Label { text: "Diffuse Alpha:" }
                 RowLayout {
                     Slider {
                         id: diffuseAlphaSlider
-                        Layout.fillWidth: true
                         from: 0.0
                         to: 1.0
                         value: MaterialEditorQML.diffuseAlpha
-                        onValueChanged: {
-                            if (Math.abs(value - MaterialEditorQML.diffuseAlpha) > 0.001) {
-                                MaterialEditorQML.diffuseAlpha = value
-                            }
-                        }
+                        onValueChanged: MaterialEditorQML.setDiffuseAlpha(value)
+                        Layout.fillWidth: true
                     }
                     SpinBox {
                         from: 0
                         to: 100
                         value: Math.round(diffuseAlphaSlider.value * 100)
                         onValueChanged: diffuseAlphaSlider.value = value / 100.0
+                        
+                        textFromValue: function(value, locale) {
+                            return value + "%"
+                        }
+                        
+                        valueFromText: function(text, locale) {
+                            return parseInt(text.replace("%", ""))
+                        }
                     }
                 }
-                
+
+                // Specular Alpha
                 Label { text: "Specular Alpha:" }
                 RowLayout {
                     Slider {
                         id: specularAlphaSlider
-                        Layout.fillWidth: true
                         from: 0.0
                         to: 1.0
                         value: MaterialEditorQML.specularAlpha
-                        onValueChanged: {
-                            if (Math.abs(value - MaterialEditorQML.specularAlpha) > 0.001) {
-                                MaterialEditorQML.specularAlpha = value
-                            }
-                        }
+                        onValueChanged: MaterialEditorQML.setSpecularAlpha(value)
+                        Layout.fillWidth: true
                     }
                     SpinBox {
                         from: 0
                         to: 100
                         value: Math.round(specularAlphaSlider.value * 100)
                         onValueChanged: specularAlphaSlider.value = value / 100.0
+                        
+                        textFromValue: function(value, locale) {
+                            return value + "%"
+                        }
+                        
+                        valueFromText: function(text, locale) {
+                            return parseInt(text.replace("%", ""))
+                        }
                     }
                 }
-                
+
+                // Shininess
                 Label { text: "Shininess:" }
                 RowLayout {
                     Slider {
                         id: shininessSlider
-                        Layout.fillWidth: true
                         from: 0.0
                         to: 128.0
                         value: MaterialEditorQML.shininess
-                        onValueChanged: {
-                            if (Math.abs(value - MaterialEditorQML.shininess) > 0.1) {
-                                MaterialEditorQML.shininess = value
-                            }
-                        }
+                        onValueChanged: MaterialEditorQML.setShininess(value)
+                        Layout.fillWidth: true
                     }
                     SpinBox {
                         from: 0
@@ -232,67 +279,71 @@ GroupBox {
                 }
             }
         }
-        
-        // Blending
+
+        // Blending Settings
         GroupBox {
-            title: "Scene Blending"
+            title: "Blending"
             Layout.fillWidth: true
-            
+
             GridLayout {
                 anchors.fill: parent
                 columns: 2
-                columnSpacing: 10
-                rowSpacing: 5
-                
-                Label { text: "Source Blend:" }
+                rowSpacing: 10
+                columnSpacing: 15
+
+                Label { text: "Source Blend Factor:" }
                 ComboBox {
                     Layout.fillWidth: true
                     model: MaterialEditorQML.getBlendFactorNames()
                     currentIndex: MaterialEditorQML.sourceBlendFactor
-                    onCurrentIndexChanged: {
-                        if (currentIndex !== MaterialEditorQML.sourceBlendFactor) {
-                            MaterialEditorQML.sourceBlendFactor = currentIndex
-                        }
-                    }
+                    onCurrentIndexChanged: MaterialEditorQML.setSourceBlendFactor(currentIndex)
                 }
-                
-                Label { text: "Dest Blend:" }
+
+                Label { text: "Dest Blend Factor:" }
                 ComboBox {
                     Layout.fillWidth: true
                     model: MaterialEditorQML.getBlendFactorNames()
                     currentIndex: MaterialEditorQML.destBlendFactor
-                    onCurrentIndexChanged: {
-                        if (currentIndex !== MaterialEditorQML.destBlendFactor) {
-                            MaterialEditorQML.destBlendFactor = currentIndex
-                        }
-                    }
+                    onCurrentIndexChanged: MaterialEditorQML.setDestBlendFactor(currentIndex)
                 }
             }
         }
     }
-    
+
     // Color Dialogs
     ColorDialog {
         id: ambientColorDialog
         title: "Select Ambient Color"
-        onAccepted: MaterialEditorQML.ambientColor = color
+        selectedColor: MaterialEditorQML.ambientColor
+        onAccepted: {
+            MaterialEditorQML.setAmbientColor(selectedColor)
+        }
     }
-    
+
     ColorDialog {
         id: diffuseColorDialog
         title: "Select Diffuse Color"
-        onAccepted: MaterialEditorQML.diffuseColor = color
+        selectedColor: MaterialEditorQML.diffuseColor
+        onAccepted: {
+            MaterialEditorQML.setDiffuseColor(selectedColor)
+        }
     }
-    
+
     ColorDialog {
         id: specularColorDialog
         title: "Select Specular Color"
-        onAccepted: MaterialEditorQML.specularColor = color
+        selectedColor: MaterialEditorQML.specularColor
+        onAccepted: {
+            MaterialEditorQML.setSpecularColor(selectedColor)
+        }
     }
-    
+
     ColorDialog {
         id: emissiveColorDialog
         title: "Select Emissive Color"
-        onAccepted: MaterialEditorQML.emissiveColor = color
+        selectedColor: MaterialEditorQML.emissiveColor
+        onAccepted: {
+            MaterialEditorQML.setEmissiveColor(selectedColor)
+        }
     }
 } 

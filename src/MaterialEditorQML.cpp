@@ -2,6 +2,9 @@
 #include "Manager.h"
 #include <QDebug>
 #include <QFileDialog>
+#include <QColorDialog>
+#include <QApplication>
+#include <QMainWindow>
 #include <QQmlEngine>
 #include <QJSEngine>
 #include <QStandardPaths>
@@ -46,6 +49,11 @@ void MaterialEditorQML::loadMaterial(const QString &materialName)
         ms.queueForExport(m_ogreMaterial, false, false, materialName.toStdString());
         setMaterialText(QString::fromStdString(ms.getQueuedAsString()));
 
+        // Reset selection indices first
+        m_selectedTechniqueIndex = -1;
+        m_selectedPassIndex = -1;
+        m_selectedTextureUnitIndex = -1;
+
         // Update technique and pass maps
         updateTechniqueList();
         
@@ -54,6 +62,9 @@ void MaterialEditorQML::loadMaterial(const QString &materialName)
         // Auto-select first technique if available
         if (!m_techniqueList.isEmpty()) {
             setSelectedTechniqueIndex(0);
+        } else {
+            // If no techniques available, reset properties to defaults
+            resetPropertiesToDefaults();
         }
         
     } catch (const std::exception& e) {
@@ -545,6 +556,13 @@ void MaterialEditorQML::createNewTechnique(const QString &name)
     
     updateTechniqueList();
     updateMaterialText();
+    
+    // Auto-select the newly created technique (it will be the last one)
+    if (!m_techniqueList.isEmpty()) {
+        setSelectedTechniqueIndex(m_techniqueList.size() - 1);
+        // Force refresh of pass list after selection
+        updatePassList();
+    }
 }
 
 void MaterialEditorQML::createNewPass(const QString &name)
@@ -557,8 +575,14 @@ void MaterialEditorQML::createNewPass(const QString &name)
         pass->setName(name.toStdString());
     }
     
-    updatePassList();
+    // Refresh technique list to update the internal maps
+    updateTechniqueList();
     updateMaterialText();
+    
+    // Auto-select the newly created pass (it will be the last one)
+    if (!m_passList.isEmpty()) {
+        setSelectedPassIndex(m_passList.size() - 1);
+    }
 }
 
 void MaterialEditorQML::createNewTextureUnit(const QString &name)
@@ -573,6 +597,11 @@ void MaterialEditorQML::createNewTextureUnit(const QString &name)
     
     updateTextureUnitList();
     updateMaterialText();
+    
+    // Auto-select the newly created texture unit (it will be the last one)
+    if (!m_textureUnitList.isEmpty()) {
+        setSelectedTextureUnitIndex(m_textureUnitList.size() - 1);
+    }
 }
 
 void MaterialEditorQML::selectTexture()
@@ -675,6 +704,9 @@ void MaterialEditorQML::updateTechniqueList()
     }
     
     emit techniqueListChanged();
+    
+    // Force refresh of pass list for currently selected technique
+    updatePassList();
 }
 
 void MaterialEditorQML::updatePassList()
@@ -722,7 +754,10 @@ void MaterialEditorQML::updateTextureUnitList()
 void MaterialEditorQML::updatePassProperties()
 {
     Ogre::Pass* pass = getCurrentPass();
-    if (!pass) return;
+    if (!pass) {
+        resetPropertiesToDefaults();
+        return;
+    }
 
     m_lightingEnabled = pass->getLightingEnabled();
     m_depthWriteEnabled = pass->getDepthWriteEnabled();
@@ -744,6 +779,10 @@ void MaterialEditorQML::updatePassProperties()
     m_emissiveColor = QColor::fromRgbF(emissive.r, emissive.g, emissive.b);
     
     m_shininess = pass->getShininess();
+    
+    // Polygon mode (Ogre values: PM_POINTS=1, PM_WIREFRAME=2, PM_SOLID=3)
+    // Convert to 0-based index for ComboBox (Points=0, Wireframe=1, Solid=2)
+    m_polygonMode = static_cast<int>(pass->getPolygonMode()) - 1;
     
     // Blend factors
     m_sourceBlendFactor = pass->getSourceBlendFactor() + 6;
@@ -767,6 +806,48 @@ void MaterialEditorQML::updatePassProperties()
     emit diffuseAlphaChanged();
     emit specularAlphaChanged();
     emit shininessChanged();
+    emit polygonModeChanged();
+    emit sourceBlendFactorChanged();
+    emit destBlendFactorChanged();
+    emit useVertexColorToAmbientChanged();
+    emit useVertexColorToDiffuseChanged();
+    emit useVertexColorToSpecularChanged();
+    emit useVertexColorToEmissiveChanged();
+}
+
+void MaterialEditorQML::resetPropertiesToDefaults()
+{
+    // Reset all properties to their default values
+    m_lightingEnabled = true;
+    m_depthWriteEnabled = true;
+    m_depthCheckEnabled = true;
+    m_ambientColor = QColor(0.5f * 255, 0.5f * 255, 0.5f * 255);
+    m_diffuseColor = QColor(255, 255, 255);
+    m_specularColor = QColor(0, 0, 0);
+    m_emissiveColor = QColor(0, 0, 0);
+    m_diffuseAlpha = 1.0f;
+    m_specularAlpha = 1.0f;
+    m_shininess = 0.0f;
+    m_polygonMode = 2; // Solid
+    m_sourceBlendFactor = 6; // SBF_ONE 
+    m_destBlendFactor = 1; // SBF_ZERO
+    m_useVertexColorToAmbient = false;
+    m_useVertexColorToDiffuse = false;
+    m_useVertexColorToSpecular = false;
+    m_useVertexColorToEmissive = false;
+    
+    // Emit all property change signals to update UI
+    emit lightingEnabledChanged();
+    emit depthWriteEnabledChanged();
+    emit depthCheckEnabledChanged();
+    emit ambientColorChanged();
+    emit diffuseColorChanged();
+    emit specularColorChanged();
+    emit emissiveColorChanged();
+    emit diffuseAlphaChanged();
+    emit specularAlphaChanged();
+    emit shininessChanged();
+    emit polygonModeChanged();
     emit sourceBlendFactorChanged();
     emit destBlendFactorChanged();
     emit useVertexColorToAmbientChanged();
@@ -851,4 +932,103 @@ Ogre::Technique* MaterialEditorQML::getCurrentTechnique() const
     }
     
     return nullptr;
-} 
+}
+
+QStringList MaterialEditorQML::getAvailableTextures() const
+{
+    QStringList textures;
+    textures << "Select from available textures..."; // Placeholder
+    
+    try {
+        // Get available textures from Ogre TextureManager
+        Ogre::ResourceManager::ResourceMapIterator textureIterator = Ogre::TextureManager::getSingleton().getResourceIterator();
+        while (textureIterator.hasMoreElements()) {
+            QString texName = QString::fromStdString(textureIterator.peekNextValue()->getName());
+            if (!texName.isEmpty() && texName != "white" && !texName.startsWith("_")) { // Skip internal textures
+                textures << texName;
+            }
+            textureIterator.moveNext();
+        }
+    } catch (const std::exception& e) {
+        qDebug() << "Error getting available textures:" << e.what();
+    }
+    
+    return textures;
+}
+
+void MaterialEditorQML::openTextureFileDialog()
+{
+    // This will be handled by QML FileDialog
+    // Just a placeholder for future C++ implementation if needed
+}
+
+void MaterialEditorQML::exportMaterial(const QString &fileName)
+{
+    if (m_ogreMaterial.isNull()) {
+        emit errorOccurred("No material to export");
+        return;
+    }
+    
+    try {
+        Ogre::MaterialSerializer ms;
+        ms.exportMaterial(m_ogreMaterial, fileName.toStdString());
+        emit materialApplied(); // Reuse this signal to indicate success
+    } catch (const Ogre::Exception& e) {
+        emit errorOccurred(QString("Failed to export material: ") + e.getDescription().c_str());
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Failed to export material: ") + e.what());
+    }
+}
+
+void MaterialEditorQML::openColorPicker(const QString &colorType)
+{
+    QColor currentColor;
+    
+    if (colorType == "ambient") {
+        currentColor = m_ambientColor;
+    } else if (colorType == "diffuse") {
+        currentColor = m_diffuseColor;
+    } else if (colorType == "specular") {
+        currentColor = m_specularColor;
+    } else if (colorType == "emissive") {
+        currentColor = m_emissiveColor;
+    } else {
+        currentColor = Qt::white;
+    }
+    
+    // Find the main application window as parent
+    QWidget* parent = nullptr;
+    QWidgetList topLevelWidgets = QApplication::topLevelWidgets();
+    for (QWidget* widget : topLevelWidgets) {
+        if (widget->isVisible() && widget->inherits("QMainWindow")) {
+            parent = widget;
+            break;
+        }
+    }
+    
+    // Create color dialog with proper parent
+    QColorDialog colorDialog(currentColor, parent);
+    colorDialog.setWindowTitle(QString("Select %1 Color").arg(colorType.toUpper()));
+    colorDialog.setOption(QColorDialog::ShowAlphaChannel, false);
+    colorDialog.setOption(QColorDialog::DontUseNativeDialog, false); // Use native dialog for better compatibility
+    
+    // Make dialog modal to application
+    colorDialog.setWindowModality(Qt::ApplicationModal);
+    
+    // Use exec() only - it handles showing and modal behavior
+    if (colorDialog.exec() == QDialog::Accepted) {
+        QColor selectedColor = colorDialog.selectedColor();
+        
+        if (selectedColor.isValid()) {
+            if (colorType == "ambient") {
+                setAmbientColor(selectedColor);
+            } else if (colorType == "diffuse") {
+                setDiffuseColor(selectedColor);
+            } else if (colorType == "specular") {
+                setSpecularColor(selectedColor);
+            } else if (colorType == "emissive") {
+                setEmissiveColor(selectedColor);
+            }
+        }
+    }
+}

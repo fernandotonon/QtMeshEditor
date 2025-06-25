@@ -177,24 +177,39 @@ ${OGRE_PROCEDURAL_LIB_DIR}include/ProceduralPrismGenerator.h
 )
 
 ##############################################################
-#  Adding Resources
+#  Adding resources  
 ##############################################################
 qt_add_resources(RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../resources/resource.qrc")
 
 ##############################################################
 #  Adding QML Resources  
 ##############################################################
-qt_add_qml_module(${CMAKE_PROJECT_NAME}_qml
-    URI MaterialEditorQML
-    VERSION 1.0
-    QML_FILES
-        ${CMAKE_CURRENT_SOURCE_DIR}/../qml/MaterialEditorWindow.qml
-        ${CMAKE_CURRENT_SOURCE_DIR}/../qml/PassPropertiesPanel.qml
-        ${CMAKE_CURRENT_SOURCE_DIR}/../qml/TexturePropertiesPanel.qml
-    SOURCES
-        MaterialEditorQML.h
-        MaterialEditorQML.cpp
-)
+qt_add_resources(QML_RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/qml_resources.qrc")
+
+##############################################################
+#  Adding QML Resources  
+##############################################################
+# Set Qt policies to suppress warnings
+if(POLICY QTP0001)
+    qt_policy(SET QTP0001 NEW)
+endif()
+if(POLICY QTP0004)
+    qt_policy(SET QTP0004 NEW)
+endif()
+
+# Temporarily disable qt_add_qml_module to use simple QRC approach
+# qt_add_qml_module(${CMAKE_PROJECT_NAME}_qml
+#     URI MaterialEditorQML
+#     VERSION 1.0
+#     OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/MaterialEditorQML
+#     QML_FILES
+#         qml/MaterialEditorWindow.qml
+#         qml/PassPropertiesPanel.qml
+#         qml/TexturePropertiesPanel.qml
+#     SOURCES
+#         MaterialEditorQML.h
+#         MaterialEditorQML.cpp
+# )
 
 #if(WIN32)
         file(GLOB RES "${CMAKE_CURRENT_SOURCE_DIR}/../resources/*.rc")
@@ -213,12 +228,18 @@ if(WIN32)
 	${HEADER_FILES}
 	${SRC_FILES}
         ${RESOURCE_SRCS}
+        ${QML_RESOURCE_SRCS}
+        MaterialEditorQML.h
+        MaterialEditorQML.cpp
         )
 elseif(APPLE)
         add_executable(${CMAKE_PROJECT_NAME}
 	${HEADER_FILES}
 	${SRC_FILES}
         ${RESOURCE_SRCS}
+        ${QML_RESOURCE_SRCS}
+        MaterialEditorQML.h
+        MaterialEditorQML.cpp
         )
         set_target_properties(${CMAKE_PROJECT_NAME} PROPERTIES MACOSX_BUNDLE TRUE)
 else()
@@ -226,6 +247,9 @@ else()
         ${HEADER_FILES}
         ${SRC_FILES}
         ${RESOURCE_SRCS}
+        ${QML_RESOURCE_SRCS}
+        MaterialEditorQML.h
+        MaterialEditorQML.cpp
         )
 endif()
 
@@ -253,6 +277,9 @@ Qt::Gui
 Qt::Core
 Qt::Widgets
 Qt::Network
+Qt::Qml
+Qt::Quick
+Qt::QuickWidgets
 )
 ENDIF()
 
@@ -291,7 +318,7 @@ if(BUILD_TESTS)
     ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
-    Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network)
+    Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets)
     
     ADD_DEPENDENCIES(UnitTests ui)
 

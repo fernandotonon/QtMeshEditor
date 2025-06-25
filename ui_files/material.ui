@@ -62,6 +62,16 @@
        </widget>
       </item>
       <item>
+       <widget class="QPushButton" name="buttonEditQML">
+        <property name="enabled">
+         <bool>false</bool>
+        </property>
+        <property name="text">
+         <string>Edit QML</string>
+        </property>
+       </widget>
+      </item>
+      <item>
        <widget class="QPushButton" name="buttonExport">
         <property name="enabled">
          <bool>false</bool>
