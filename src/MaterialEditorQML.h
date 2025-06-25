@@ -7,6 +7,9 @@
 #include <QStringList>
 #include <QVariantMap>
 #include <QQuickItem>
+#include <QDir>
+#include <QFileInfo>
+#include <QVariantList>
 #include <OgreMaterialManager.h>
 #include <OgreMeshManager.h>
 #include <OgreTextureManager.h>
@@ -319,6 +322,18 @@ public slots:
     // File operations
     void openTextureFileDialog();
     void exportMaterial(const QString &fileName);
+    
+    // File system browsing methods
+    Q_INVOKABLE QVariantList listDirectory(const QString &path);
+    Q_INVOKABLE bool isDirectory(const QString &path);
+    Q_INVOKABLE QString getParentDirectory(const QString &path);
+    Q_INVOKABLE QString getFileName(const QString &path);
+    Q_INVOKABLE qint64 getFileSize(const QString &path);
+    Q_INVOKABLE QString getFileSizeString(const QString &path);
+    Q_INVOKABLE bool pathExists(const QString &path);
+    Q_INVOKABLE QString openFileDialog();
+    Q_INVOKABLE QString showNativeFileDialog(QObject *parentWindow);
+    Q_INVOKABLE QString testConnection();
     
     // Color picker
     void openColorPicker(const QString &colorType);

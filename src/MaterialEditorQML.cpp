@@ -9,9 +9,12 @@
 #include <QJSEngine>
 #include <QStandardPaths>
 #include <QPalette>
+#include <QQuickWindow>
+#include <QWindow>
 #include <OgreLog.h>
 #include <OgreScriptCompiler.h>
 #include <OgreScriptTranslator.h>
+#include <QProcess>
 
 MaterialEditorQML::MaterialEditorQML(QObject *parent)
     : QObject(parent)
@@ -1982,4 +1985,202 @@ QStringList MaterialEditorQML::getTextureFilteringNames() const
 QStringList MaterialEditorQML::getEnvironmentMappingNames() const
 {
     return QStringList() << "None" << "Enabled";
+}
+
+// File system browsing methods
+QVariantList MaterialEditorQML::listDirectory(const QString &path)
+{
+    QVariantList result;
+    QDir dir(path);
+    
+    if (!dir.exists()) {
+        return result;
+    }
+    
+    // Set filters for files and directories
+    dir.setFilter(QDir::Files | QDir::Dirs | QDir::NoDotAndDotDot);
+    dir.setSorting(QDir::DirsFirst | QDir::Name);
+    
+    QFileInfoList entries = dir.entryInfoList();
+    
+    for (const QFileInfo &entry : entries) {
+        QVariantMap item;
+        item["name"] = entry.fileName();
+        item["path"] = entry.absoluteFilePath();
+        item["type"] = entry.isDir() ? "dir" : "file";
+        item["size"] = entry.isDir() ? "" : getFileSizeString(entry.absoluteFilePath());
+        
+        // Filter image files for better UX
+        if (entry.isFile()) {
+            QString suffix = entry.suffix().toLower();
+            if (suffix == "jpg" || suffix == "jpeg" || suffix == "png" || 
+                suffix == "dds" || suffix == "tga" || suffix == "bmp") {
+                result.append(item);
+            }
+        } else {
+            result.append(item);
+        }
+    }
+    
+    return result;
+}
+
+bool MaterialEditorQML::isDirectory(const QString &path)
+{
+    QFileInfo info(path);
+    return info.isDir();
+}
+
+QString MaterialEditorQML::getParentDirectory(const QString &path)
+{
+    QFileInfo info(path);
+    return info.absoluteDir().absolutePath();
+}
+
+QString MaterialEditorQML::getFileName(const QString &path)
+{
+    QFileInfo info(path);
+    return info.fileName();
+}
+
+qint64 MaterialEditorQML::getFileSize(const QString &path)
+{
+    QFileInfo info(path);
+    return info.size();
+}
+
+QString MaterialEditorQML::getFileSizeString(const QString &path)
+{
+    qint64 size = getFileSize(path);
+    
+    if (size < 1024) {
+        return QString("%1 B").arg(size);
+    } else if (size < 1024 * 1024) {
+        return QString("%1 KB").arg(QString::number(size / 1024.0, 'f', 1));
+    } else {
+        return QString("%1 MB").arg(QString::number(size / (1024.0 * 1024.0), 'f', 1));
+    }
+}
+
+bool MaterialEditorQML::pathExists(const QString &path)
+{
+    return QFileInfo::exists(path);
+}
+
+QString MaterialEditorQML::openFileDialog()
+{
+    QString texturesPath = "./media/materials/textures";
+    QDir texturesDir(texturesPath);
+    
+    // Use absolute path if the directory exists, otherwise use current directory
+    QString startDir = texturesDir.exists() ? texturesDir.absolutePath() : QDir::currentPath();
+    
+    qDebug() << "=== FIXED openFileDialog START ===";
+    qDebug() << "Starting directory:" << startDir;
+    
+    // Force Qt to process all pending events first
+    QApplication::processEvents();
+    
+    // Force the application to be active and on top
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+        qDebug() << "Activated window:" << activeWin->objectName();
+    }
+    
+    // Add a small delay to ensure window activation
+    QApplication::processEvents();
+    
+    qDebug() << "About to open QFileDialog with specific flags...";
+    
+    // Use Qt's file dialog with explicit flags to force it to be visible
+    QString selectedFile = QFileDialog::getOpenFileName(
+        nullptr,                                                      // no parent to avoid issues
+        "Select Texture File",                                        
+        startDir,                                                     
+        "Image files (*.jpg *.jpeg *.png *.dds *.tga *.bmp);;All files (*)",
+        nullptr,                                                      // no selected filter
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons  // Force Qt dialog with simpler display
+    );
+    
+    qDebug() << "QFileDialog finished, result:" << selectedFile;
+    
+    if (!selectedFile.isEmpty()) {
+        qDebug() << "SUCCESS! File selected:" << selectedFile;
+        QString fileName = QFileInfo(selectedFile).fileName();
+        qDebug() << "Extracted filename:" << fileName;
+        qDebug() << "=== openFileDialog SUCCESS ===";
+        return fileName;
+    } else {
+        qDebug() << "Dialog was cancelled or no file selected";
+        qDebug() << "=== openFileDialog CANCELLED ===";
+        return QString();
+    }
+}
+
+QString MaterialEditorQML::showNativeFileDialog(QObject *parentWindow)
+{
+    QString texturesPath = "./media/materials/textures";
+    QDir texturesDir(texturesPath);
+    
+    // Use absolute path if the directory exists, otherwise use current directory
+    QString startDir = texturesDir.exists() ? texturesDir.absolutePath() : QDir::currentPath();
+    
+    qDebug() << "=== showNativeFileDialog START ===";
+    qDebug() << "Called with parent:" << parentWindow;
+    qDebug() << "Starting directory:" << startDir;
+    
+    // Don't try to create window containers as they can be problematic
+    // Instead, just use nullptr or find a simple top-level widget
+    QWidget *parentWidget = nullptr;
+    
+    // Try to find a simple top-level widget
+    QWidgetList topLevelWidgets = QApplication::topLevelWidgets();
+    qDebug() << "Found" << topLevelWidgets.size() << "top-level widgets";
+    
+    for (QWidget *widget : topLevelWidgets) {
+        qDebug() << "Widget:" << widget->objectName() << "type:" << widget->metaObject()->className() 
+                 << "visible:" << widget->isVisible() << "window:" << widget->isWindow();
+        if (widget->isWindow() && widget->isVisible()) {
+            parentWidget = widget;
+            qDebug() << "Selected widget:" << widget->objectName() << "as parent";
+            break;
+        }
+    }
+    
+    if (!parentWidget) {
+        qDebug() << "No suitable parent widget found, using nullptr";
+    }
+    
+    qDebug() << "About to call QFileDialog::getOpenFileName...";
+    
+    // Use Qt's file dialog with proper flags
+    QString selectedFile = QFileDialog::getOpenFileName(
+        parentWidget,                                                 // parent widget
+        "Select Texture File",                                        // dialog title
+        startDir,                                                     // starting directory
+        "Image files (*.jpg *.jpeg *.png *.dds *.tga *.bmp);;All files (*)", // file filters
+        nullptr,                                                      // selected filter
+        QFileDialog::Options()                                        // use default options
+    );
+    
+    qDebug() << "QFileDialog returned:" << selectedFile;
+    
+    if (!selectedFile.isEmpty()) {
+        qDebug() << "File selected via showNativeFileDialog:" << selectedFile;
+        QString fileName = QFileInfo(selectedFile).fileName();
+        qDebug() << "Extracted filename:" << fileName;
+        qDebug() << "=== showNativeFileDialog SUCCESS ===";
+        return fileName;
+    } else {
+        qDebug() << "File dialog was cancelled or failed";
+        qDebug() << "=== showNativeFileDialog CANCELLED ===";
+        return QString();
+    }
+}
+
+QString MaterialEditorQML::testConnection()
+{
+    qDebug() << "=== TEST CONNECTION METHOD CALLED ===";
+    return "C++ method called successfully!";
 }
