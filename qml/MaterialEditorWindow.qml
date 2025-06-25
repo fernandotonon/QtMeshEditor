@@ -49,8 +49,10 @@ ApplicationWindow {
         }
     }
 
-    // Simplified ComboBox component (no Canvas)
+    // Themed ComboBox - simplified approach
     component ThemedComboBox: ComboBox {
+        id: themedCombo
+        
         background: Rectangle {
             color: panelColor
             border.color: borderColor
@@ -58,54 +60,63 @@ ApplicationWindow {
             radius: 4
         }
         contentItem: Text {
-            text: parent.displayText
-            font: parent.font
+            text: themedCombo.displayText
+            font: themedCombo.font
             color: textColor
             verticalAlignment: Text.AlignVCenter
             leftPadding: 8
             rightPadding: 30
         }
         indicator: Text {
-            x: parent.width - width - 8
-            y: parent.topPadding + (parent.availableHeight - height) / 2
+            x: themedCombo.width - width - 8
+            y: themedCombo.topPadding + (themedCombo.availableHeight - height) / 2
             text: "▼"
             color: textColor
             font.pointSize: 8
         }
+        
         popup: Popup {
-            y: parent.height - 1
-            width: parent.width
+            y: themedCombo.height - 1
+            width: themedCombo.width
             implicitHeight: contentItem.implicitHeight
             padding: 1
-
-            contentItem: ListView {
-                clip: true
-                implicitHeight: contentHeight
-                model: parent.parent.popup.visible ? parent.parent.delegateModel : null
-                currentIndex: parent.parent.highlightedIndex
-                ScrollIndicator.vertical: ScrollIndicator { }
-            }
-
+            
             background: Rectangle {
                 color: panelColor
                 border.color: borderColor
                 border.width: 1
                 radius: 4
             }
+            
+            contentItem: ListView {
+                clip: true
+                implicitHeight: contentHeight
+                model: themedCombo.delegateModel
+                currentIndex: themedCombo.highlightedIndex
+                ScrollIndicator.vertical: ScrollIndicator { 
+                    active: true
+                }
+            }
         }
+        
         delegate: ItemDelegate {
-            width: parent.width
+            width: themedCombo.width
+            height: 30
+            
             contentItem: Text {
                 text: modelData || ""
                 color: textColor
-                font: parent.font
+                font.pointSize: 11
                 elide: Text.ElideRight
                 verticalAlignment: Text.AlignVCenter
                 leftPadding: 8
             }
+            
             background: Rectangle {
-                color: parent.hovered ? highlightColor : "transparent"
+                color: parent.hovered ? highlightColor : panelColor
                 radius: 2
+                border.color: parent.hovered ? borderColor : "transparent"
+                border.width: 1
             }
         }
     }
@@ -471,33 +482,33 @@ ApplicationWindow {
                         }
                     }
 
-                    // Text editor
-                    ScrollView {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        clip: true
+                            // Text editor
+                            ScrollView {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
 
-                        ThemedTextArea {
-                            id: materialTextArea
-                            text: MaterialEditorQML.materialText || "material default_material\n{\n\ttechnique\n\t{\n\t\tpass\n\t\t{\n\t\t}\n\t}\n}"
-                            selectByMouse: true
-                            font.family: "monospace"
-                            font.pointSize: 11
-                            wrapMode: TextArea.Wrap
+                                ThemedTextArea {
+                                    id: materialTextArea
+                                    text: MaterialEditorQML.materialText || "material default_material\n{\n\ttechnique\n\t{\n\t\tpass\n\t\t{\n\t\t}\n\t}\n}"
+                                    selectByMouse: true
+                                    font.family: "monospace"
+                                    font.pointSize: 11
+                                    wrapMode: TextArea.Wrap
 
-                            onTextChanged: {
-                                if (text !== MaterialEditorQML.materialText) {
-                                    statusText.text = "Modified"
-                                    statusText.color = "orange"
+                                    onTextChanged: {
+                                        if (text !== MaterialEditorQML.materialText) {
+                                            statusText.text = "Modified"
+                                            statusText.color = "orange"
+                                        }
+                                    }
+
+                                    onCursorPositionChanged: {
+                                        var context = getCurrentContext()
+                                        cursorInfoText.text = "Cursor: T" + context.technique + " P" + context.pass
+                                    }
                                 }
                             }
-
-                            onCursorPositionChanged: {
-                                var context = getCurrentContext()
-                                cursorInfoText.text = "Cursor: T" + context.technique + " P" + context.pass
-                            }
-                        }
-                    }
 
                     // Cursor info
                     Text {
