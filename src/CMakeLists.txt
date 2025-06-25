@@ -9,7 +9,6 @@ animationcontrolslider.cpp
 main.cpp
 Manager.cpp
 material.cpp
-materialeditor.cpp
 MaterialEditorQML.cpp
 mainwindow.cpp
 MeshTransform.cpp
@@ -45,7 +44,6 @@ about.h
 mainwindow.h
 Manager.h
 material.h
-materialeditor.h
 MaterialEditorQML.h
 MeshTransform.h
 OgreWidget.h
