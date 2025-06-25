@@ -375,25 +375,6 @@ ApplicationWindow {
         }
     }
 
-    // Helper function to get current cursor context
-    function getCurrentContext() {
-        var text = materialTextArea.text
-        var cursorPos = materialTextArea.cursorPosition
-        var beforeCursor = text.substring(0, cursorPos)
-        
-        // Count techniques and passes before cursor
-        var techniqueMatches = beforeCursor.match(/technique/g)
-        var passMatches = beforeCursor.match(/pass(?!\s*{)/g) // pass not followed by {
-        
-        var currentTechnique = techniqueMatches ? techniqueMatches.length - 1 : 0
-        var currentPass = passMatches ? passMatches.length - 1 : 0
-        
-        return {
-            technique: Math.max(0, currentTechnique),
-            pass: Math.max(0, currentPass)
-        }
-    }
-
     // Main content
     Rectangle {
         anchors.fill: parent
@@ -408,6 +389,7 @@ ApplicationWindow {
             Rectangle {
                 SplitView.minimumWidth: 400
                 SplitView.preferredWidth: 600
+                SplitView.fillWidth: true
                 color: panelColor
                 border.color: borderColor
                 border.width: 1
@@ -502,28 +484,15 @@ ApplicationWindow {
                                             statusText.color = "orange"
                                         }
                                     }
-
-                                    onCursorPositionChanged: {
-                                        var context = getCurrentContext()
-                                        cursorInfoText.text = "Cursor: T" + context.technique + " P" + context.pass
-                                    }
                                 }
                             }
-
-                    // Cursor info
-                    Text {
-                        id: cursorInfoText
-                        text: "Cursor: T0 P0"
-                        color: disabledTextColor
-                        font.pointSize: 9
-                    }
                 }
             }
 
             // Right Panel - Properties Form
             Rectangle {
-                SplitView.minimumWidth: 350
-                SplitView.preferredWidth: 450
+                SplitView.minimumWidth: 410
+                SplitView.preferredWidth: 410
                 color: panelColor
                 border.color: borderColor
                 border.width: 1
