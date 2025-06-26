@@ -594,10 +594,13 @@ jobs:
                /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
+    - name: Install sonar-scanner and build-wrapper
+      uses: SonarSource/sonarcloud-github-c-cpp@v2
+
     - name: Configure CMake for Tests
       run: |
             mkdir build
-            sudo cmake -S . -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
@@ -607,14 +610,20 @@ jobs:
             -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
             -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
             -DBUILD_QT_MESH_EDITOR=OFF
-
-    - name: Install sonar-scanner and build-wrapper
-      uses: SonarSource/sonarcloud-github-c-cpp@v2
       
     - name: Run build-wrapper
       run: |
           echo "=== Running build-wrapper for SonarCloud analysis ==="
-          ./.sonar/build-wrapper-linux-x86/build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} cmake --build build --target install
+          echo "Build wrapper output directory: ${{ env.BUILD_WRAPPER_OUT_DIR }}"
+          
+          # Clean any previous build artifacts to ensure fresh compilation
+          make -C build clean 2>/dev/null || echo "No previous build to clean"
+          
+          # Run build-wrapper to capture compilation
+          ./.sonar/build-wrapper-linux-x86/build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} make -C build -j$(nproc)
+          
+          echo "=== Build wrapper completed ==="
+          ls -la ${{ env.BUILD_WRAPPER_OUT_DIR }} || echo "Build wrapper output directory not created"
 
     - name: Add missing libraries
       run: |
