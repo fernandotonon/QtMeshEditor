@@ -434,6 +434,7 @@ private:
     Ogre::Pass* getCurrentPass() const;
     Ogre::TextureUnitState* getCurrentTextureUnit() const;
     Ogre::Technique* getCurrentTechnique() const;
+    bool isOgreAvailable() const;
 
 private:
     QString m_materialName;
