@@ -52,3 +52,20 @@ qmlcache/
 *_qmlplugin_*.cpp
 *_qml_foreign_types.txt
 *.qrc.depends
+
+# Test-related build artifacts
+Testing/
+tests/*_autogen/
+tests/qrc_*.cpp
+tests/moc_*.cpp
+
+# Additional build artifacts
+*.so
+*.so.*
+*.dylib
+*.a
+CTestTestfile.cmake
+DartConfiguration.tcl
+
+# Temporary test files
+TESTING_CRASH_FIX.md

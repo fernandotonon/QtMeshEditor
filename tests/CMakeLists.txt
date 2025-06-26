@@ -223,6 +223,32 @@ if(BUILD_TESTS)
         add_test(NAME ${target_name} COMMAND ${target_name})
     endfunction()
     
+    # Helper function to create test executables without auto-adding to CTest
+    function(create_test_executable_no_autotest target_name test_source_file)
+        add_executable(${target_name} 
+            ${test_source_file}
+            ${TEST_HEADER_FILES}
+            ${TEST_SRC_FILES}
+            ${TEST_RESOURCE_SRCS}
+            ${TEST_QML_RESOURCE_SRCS}
+        )
+        
+        target_include_directories(${target_name} PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src
+            ${CMAKE_CURRENT_SOURCE_DIR}/../ui_files
+            ${BUILD_INCLUDE_DIR}
+            ${BUILD_UIH_DIR}
+            ${OGRE_PROCEDURAL_LIB_DIR}include
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/OgreXML
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/Assimp
+        )
+        
+        target_link_libraries(${target_name} ${COMMON_TEST_LIBRARIES})
+        
+        # Add dependency on UI generation
+        ADD_DEPENDENCIES(${target_name} ui)
+    endfunction()
+    
     # 1. MaterialEditorQML C++ Unit Tests (comprehensive suite)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialEditorQML_test.cpp")
         create_test_executable(MaterialEditorQML_test 
@@ -244,8 +270,8 @@ if(BUILD_TESTS)
         )
     endif()
     
-    # 4. QML Component Test Runner (existing)
-    create_test_executable(MaterialEditorQML_qml_test_runner
+    # 4. QML Component Test Runner (existing) - special handling for CI
+    create_test_executable_no_autotest(MaterialEditorQML_qml_test_runner
         MaterialEditorQML_qml_test_runner.cpp
     )
     
@@ -267,6 +293,7 @@ if(BUILD_TESTS)
     include(GoogleTest)
     
     # Discover individual Google Test cases for better reporting
+    # Skip auto-discovery for QML tests in CI environments to avoid Qt platform issues
     if(TARGET MaterialEditorQML_test)
         gtest_discover_tests(MaterialEditorQML_test)
     endif()
@@ -280,7 +307,14 @@ if(BUILD_TESTS)
     endif()
     
     if(TARGET MaterialEditorQML_qml_test_runner)
-        gtest_discover_tests(MaterialEditorQML_qml_test_runner)
+        # Don't use gtest_discover_tests for QML runner to avoid CI issues
+        # Just add it as a simple test
+        add_test(NAME MaterialEditorQML_qml_test_runner 
+                COMMAND MaterialEditorQML_qml_test_runner)
+        
+        # Set environment variables for headless execution
+        set_tests_properties(MaterialEditorQML_qml_test_runner PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_LOGGING_RULES=*.debug=false")
     endif()
     
     # Create a comprehensive test target that runs all MaterialEditorQML tests
