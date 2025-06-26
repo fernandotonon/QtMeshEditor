@@ -153,6 +153,10 @@ ADD_SUBDIRECTORY(src)
 ADD_SUBDIRECTORY(media)
 ADD_SUBDIRECTORY(cfg)
 
+if(BUILD_TESTS)
+    ADD_SUBDIRECTORY(tests)
+endif()
+
 ##############################################################
 #  Install Qt dependencies
 ##############################################################

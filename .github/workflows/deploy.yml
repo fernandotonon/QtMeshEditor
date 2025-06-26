@@ -273,6 +273,129 @@ jobs:
           update_latest_release: true
           overwrite: false
           verbose: true
+
+####################################################################
+# Unit Tests - on Windows
+####################################################################
+      
+ unit-tests-windows:
+    needs: [build-n-cache-assimp-windows, build-n-cache-ogre-windows]
+    runs-on: windows-latest
+    permissions: read-all
+    env: 
+          QT_QPA_PLATFORM: minimal
+          QT_DEBUG_PLUGINS: 1
+    steps:
+    - uses: actions/checkout@v3
+      with:
+         submodules: true
+         fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
+
+    - name: Cache Assimp
+      id: cache-assimp-windows
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-windows
+      with:
+        path: |
+               C:/PROGRA~2/Assimp
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+    
+    - name: Cache Ogre
+      id: cache-ogre-windows
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-windows
+      with:
+        path: ${{github.workspace}}/ogre-build/SDK
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_mingw'
+        tools: 'tools_cmake tools_mingw1310'
+        
+    - name: Add Qt MinGW to PATH
+      run: |
+        echo "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        echo "Added Qt MinGW 13.1.0 to PATH"
+        where gcc.exe
+        gcc --version
+      shell: powershell
+
+    - name: Configure CMake for Tests
+      env:
+         OGRE_DIR: ${{github.workspace}}/ogre-build/SDK/CMake/
+         CMAKE_GENERATOR: "MinGW Makefiles"
+         ASSIMP_DIR: C:/PROGRA~2/Assimp
+         PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
+      run: |
+        Write-Host "Configuring CMake for Windows tests with coverage"
+        cmake -S . -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DQT_QMAKE_EXECUTABLE=qmake -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DCMAKE_EXE_LINKER_FLAGS=-static -DQt6_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQT_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6 -DQt6GuiTools_DIR=D:/a/QtMeshEditor/Qt/${{env.QT_VERSION}}/mingw_64/lib/cmake/Qt6GuiTools -DOGRE_DIR=${{github.workspace}}/ogre-build/SDK/CMake/ -DASSIMP_DIR=C:/PROGRA~2/Assimp/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} -DBUILD_TESTS=ON -DBUILD_QT_MESH_EDITOR=OFF
+      shell: powershell
+
+    - name: Build Tests
+      env:
+        PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
+      run: |
+        Write-Host "Building test executables"
+        D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/mingw32-make.exe -C build install -j8
+      shell: powershell
+
+    - name: Copy dependencies for tests
+      run: |
+            Write-Host "Copying dependencies for test execution"
+            Copy-Item "C:/PROGRA~2/Assimp/bin/libassimp*.dll" "${{github.workspace}}/bin"
+            Copy-Item "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/libgcc_s_seh-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            Copy-Item "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/libstdc++-6.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+            Copy-Item "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/libwinpthread-1.dll" "${{github.workspace}}/bin" -ErrorAction SilentlyContinue
+      shell: powershell
+
+    - name: Run Comprehensive Test Suite on Windows
+      env:
+         QT_QPA_PLATFORM: minimal
+         QT_DEBUG_PLUGINS: 1
+      run: |
+            $env:QT_QPA_PLATFORM="minimal"
+            $env:QT_DEBUG_PLUGINS=1
+            
+            Write-Host "Running MaterialEditorQML Unit Tests on Windows..."
+            if (Test-Path "${{github.workspace}}/bin/MaterialEditorQML_test.exe") {
+                & "${{github.workspace}}/bin/MaterialEditorQML_test.exe" --gtest_output=xml:test-results-unit-windows.xml
+            } else {
+                Write-Host "MaterialEditorQML_test.exe not found, trying UnitTests.exe..."
+                & "${{github.workspace}}/bin/UnitTests.exe" --gtest_output=xml:test-results-unit-windows.xml
+            }
+            
+            Write-Host "Running MaterialEditorQML QML Integration Tests on Windows..."
+            if (Test-Path "${{github.workspace}}/bin/MaterialEditorQML_qml_test.exe") {
+                & "${{github.workspace}}/bin/MaterialEditorQML_qml_test.exe" --gtest_output=xml:test-results-qml-windows.xml
+            }
+            
+            Write-Host "Running MaterialEditorQML Performance Tests on Windows..."
+            if (Test-Path "${{github.workspace}}/bin/MaterialEditorQML_perf_test.exe") {
+                & "${{github.workspace}}/bin/MaterialEditorQML_perf_test.exe" --gtest_output=xml:test-results-perf-windows.xml
+            }
+            
+            Write-Host "Running QML Component Tests on Windows..."
+            if (Test-Path "${{github.workspace}}/bin/MaterialEditorQML_qml_test_runner.exe") {
+                & "${{github.workspace}}/bin/MaterialEditorQML_qml_test_runner.exe" --gtest_output=xml:test-results-qml-component-windows.xml
+            }
+      shell: powershell
+
+    - name: Upload Windows Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results-windows
+        path: |
+          test-results-*-windows.xml
+
 ####################################################################
 # Linux Deploy
 ####################################################################
@@ -576,23 +699,26 @@ jobs:
                /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Configure CMake
+    - name: Configure CMake for Tests
       run: |
             mkdir build
-            sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            sudo cmake -S . -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
             -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6GuiTools \
-            -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS=--coverage -DCMAKE_EXE_LINKER_FLAGS=--coverage \
+            -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
+            -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
+            -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
             -DBUILD_QT_MESH_EDITOR=OFF
 
     - name: Install sonar-scanner and build-wrapper
       uses: SonarSource/sonarcloud-github-c-cpp@v2
+      
     - name: Run build-wrapper
       run: |
-          sudo ./.sonar/build-wrapper-linux-x86/build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} sudo cmake --build . --target install
+          sudo ./.sonar/build-wrapper-linux-x86/build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} sudo cmake --build build --target install
 
     - name: Add missing libraries
       run: |
@@ -603,7 +729,16 @@ jobs:
             sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu
             sudo cp -R /usr/local/lib/OGRE/* ./bin
     
-    - name: Test
+    - name: Setup X11 for QML tests
+      run: |
+            sudo apt -y install libxcb-xinerama0 libxcb-cursor0 libx11-dev xvfb
+            Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+            export DISPLAY=:99
+            sleep 5
+            ps -ef | grep Xvfb
+            echo "DISPLAY=:99" >> $GITHUB_ENV
+
+    - name: Run Comprehensive Test Suite
       env:
          QT_QPA_PLATFORM: minimal
          QT_DEBUG_PLUGINS: 1
@@ -612,15 +747,39 @@ jobs:
             export QT_QPA_PLATFORM="minimal"
             export QT_DEBUG_PLUGINS=1
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/ /lib/x86_64-linux-gnu/
-            sudo apt -y install libxcb-xinerama0 libxcb-cursor0 libx11-dev xvfb
-            Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
             export DISPLAY=:99
-            sleep 5
-            ps -ef | grep Xvfb
-            echo "DISPLAY=:99" >> $GITHUB_ENV
-            sudo ./bin/UnitTests
-          #  sudo ctest -C ${{env.BUILD_TYPE}} --rerun-failed --output-on-failure
+            
+            echo "Running MaterialEditorQML Unit Tests..."
+            if [ -f "./bin/MaterialEditorQML_test" ]; then
+                sudo ./bin/MaterialEditorQML_test --gtest_output=xml:test-results-unit.xml
+            else
+                echo "MaterialEditorQML_test not found, trying UnitTests..."
+                sudo ./bin/UnitTests --gtest_output=xml:test-results-unit.xml
+            fi
+            
+            echo "Running MaterialEditorQML QML Integration Tests..."
+            if [ -f "./bin/MaterialEditorQML_qml_test" ]; then
+                sudo ./bin/MaterialEditorQML_qml_test --gtest_output=xml:test-results-qml.xml
+            fi
+            
+            echo "Running MaterialEditorQML Performance Tests..."
+            if [ -f "./bin/MaterialEditorQML_perf_test" ]; then
+                sudo ./bin/MaterialEditorQML_perf_test --gtest_output=xml:test-results-perf.xml
+            fi
+            
+            echo "Running QML Component Tests..."
+            if [ -f "./bin/MaterialEditorQML_qml_test_runner" ]; then
+                sudo ./bin/MaterialEditorQML_qml_test_runner --gtest_output=xml:test-results-qml-component.xml
+            fi
 
+    - name: Upload Test Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: test-results
+        path: |
+          test-results-*.xml
+          
     - name: Set up Python 3.8 for gcovr
       uses: actions/setup-python@v4
       with:
@@ -630,21 +789,40 @@ jobs:
       run: |
         pip install gcovr==6.0
          
-    - run: sudo gcov ${{github.workspace}}/src/CMakeFiles/UnitTests.dir/*.o
+    - name: Generate coverage data
+      run: |
+        # Generate gcov files for all object files including the new tests
+        sudo find build -name "*.o" -exec gcov {} \;
+        
+        # Run gcovr to generate coverage reports
+        gcovr --root . --filter src/ \
+              --exclude 'src/OgreXML/.*' \
+              --exclude 'src/dependencies/.*' \
+              --exclude '.*_test\.cpp' \
+              --exclude '.*_autogen.*' \
+              --exclude '.*/CMakeFiles/.*' \
+              --exclude '.*/ui_files/.*' \
+              --exclude '.*/moc_.*' \
+              --xml-pretty --xml coverage.xml \
+              --html --html-details -o coverage.html
 
     - name: Run sonar-scanner
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }} 
       run: |
-          echo "Running SonarQube analysis"
+          echo "Running SonarQube analysis with comprehensive test coverage"
           sonar-scanner \
-            --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}"
+            --define sonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" \
+            --define sonar.cfamily.gcov.reportsPath=. \
+            --define sonar.tests=src/,tests/ \
+            --define sonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
+            --define sonar.test.exclusions=src/MaterialEditorQML.cpp,src/main.cpp
           
-    - name: Run lcov
+    - name: Run lcov for CodeClimate
       run: |
             sudo apt install lcov
-            lcov --capture --directory . --output-file coverage.info \
+            lcov --capture --directory build --output-file coverage.info \
               --ignore-errors gcov,gcov \
               --ignore-errors mismatch \
               --ignore-errors source \
@@ -667,15 +845,28 @@ jobs:
             'ui_files/*' \
             'moc_*' \
             '*_test.cpp' \
+            '**/tests/*' \
             --ignore-errors unused \
             -o filtered_coverage.info
-   
-    - run: |
+
+    - name: Upload Coverage to CodeClimate
+      run: |
             cd ${{github.workspace}}
-            curl -L -O codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
+            curl -L -O https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
             sudo chmod +x test-reporter-latest-linux-amd64
             sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json filtered_coverage.info
             sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
+            
+    - name: Upload Coverage Reports
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-reports
+        path: |
+          coverage.xml
+          coverage.html
+          filtered_coverage.info
+          coverage.json
             
 ####################################################################
 # MacOS Deploy 

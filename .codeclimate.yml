@@ -76,3 +76,18 @@ exclude_patterns:
   - "*.cmake"
   - "*.txt"
   - "makefile"
+  # Exclude all test files from code quality analysis
+  - "**/*_test.cpp"
+  - "**/test_*.cpp"
+  - "tests/**/*.cpp"
+  - "tests/**/*.qml"
+  - "tests/**/*.h"
+  - "**/*_test_runner.cpp"
+  - "**/*_perf_test.cpp"
+  - "**/*_qml_test.cpp"
+
+# Test coverage settings
+prepare:
+  fetch:
+  - url: https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
+    path: ./cc-test-reporter
