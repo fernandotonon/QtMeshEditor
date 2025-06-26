@@ -465,9 +465,25 @@ jobs:
 
     - name: Add missing libraries
       run: |
+            # Create the bin directory since cmake builds to build/bin but we need ./bin for the tests
+            mkdir -p ./bin
+            mkdir -p ./build/bin
+            
+            # Copy Qt ICU libraries to both locations
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./bin
+            
+            # Also copy to build/bin where cmake actually puts the executables
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./build/bin/ || true
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./build/bin/ || true
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./build/bin/ || true
+            
+            # Copy libraries to system locations
+            sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu || true
+            sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu || true
+            sudo cp -R /usr/local/lib/OGRE/* ./bin || true
+            sudo cp -R /usr/local/lib/OGRE/* ./build/bin/ || true
   
     - name: Manual Pack
       run: |
@@ -601,12 +617,25 @@ jobs:
 
     - name: Add missing libraries
       run: |
+            # Create the bin directory since cmake builds to build/bin but we need ./bin for the tests
+            mkdir -p ./bin
+            mkdir -p ./build/bin
+            
+            # Copy Qt ICU libraries to both locations
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./bin
-            sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu
-            sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu
-            sudo cp -R /usr/local/lib/OGRE/* ./bin
+            
+            # Also copy to build/bin where cmake actually puts the executables
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./build/bin/ || true
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./build/bin/ || true
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./build/bin/ || true
+            
+            # Copy libraries to system locations
+            sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu || true
+            sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu || true
+            sudo cp -R /usr/local/lib/OGRE/* ./bin || true
+            sudo cp -R /usr/local/lib/OGRE/* ./build/bin/ || true
     
     - name: Setup headless environment for Qt tests
       run: |
@@ -629,28 +658,37 @@ jobs:
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/ /lib/x86_64-linux-gnu/
             export DISPLAY=:99
             
+            # Function to find and run test executable
+            run_test() {
+                local test_name=$1
+                local output_file=$2
+                
+                if [ -f "./build/bin/$test_name" ]; then
+                    echo "Found $test_name in ./build/bin/"
+                    sudo -E ./build/bin/$test_name --gtest_output=xml:$output_file
+                elif [ -f "./bin/$test_name" ]; then
+                    echo "Found $test_name in ./bin/"
+                    sudo -E ./bin/$test_name --gtest_output=xml:$output_file
+                else
+                    echo "$test_name not found in ./build/bin/ or ./bin/"
+                    return 1
+                fi
+            }
+            
             echo "Running MaterialEditorQML Unit Tests..."
-            if [ -f "./bin/MaterialEditorQML_test" ]; then
-                sudo -E ./bin/MaterialEditorQML_test --gtest_output=xml:test-results-unit.xml
-            else
+            if ! run_test "MaterialEditorQML_test" "test-results-unit.xml"; then
                 echo "MaterialEditorQML_test not found, trying UnitTests..."
-                sudo -E ./bin/UnitTests --gtest_output=xml:test-results-unit.xml
+                run_test "UnitTests" "test-results-unit.xml" || echo "UnitTests also not found"
             fi
             
             echo "Running MaterialEditorQML QML Integration Tests..."
-            if [ -f "./bin/MaterialEditorQML_qml_test" ]; then
-                sudo -E ./bin/MaterialEditorQML_qml_test --gtest_output=xml:test-results-qml.xml
-            fi
+            run_test "MaterialEditorQML_qml_test" "test-results-qml.xml" || echo "MaterialEditorQML_qml_test not found"
             
             echo "Running MaterialEditorQML Performance Tests..."
-            if [ -f "./bin/MaterialEditorQML_perf_test" ]; then
-                sudo -E ./bin/MaterialEditorQML_perf_test --gtest_output=xml:test-results-perf.xml
-            fi
+            run_test "MaterialEditorQML_perf_test" "test-results-perf.xml" || echo "MaterialEditorQML_perf_test not found"
             
             echo "Running QML Component Tests..."
-            if [ -f "./bin/MaterialEditorQML_qml_test_runner" ]; then
-                sudo -E ./bin/MaterialEditorQML_qml_test_runner --gtest_output=xml:test-results-qml-component.xml
-            fi
+            run_test "MaterialEditorQML_qml_test_runner" "test-results-qml-component.xml" || echo "MaterialEditorQML_qml_test_runner not found"
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
