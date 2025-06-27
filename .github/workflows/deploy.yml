@@ -790,57 +790,7 @@ jobs:
             -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/** \
             -Dsonar.verbose=true || echo "SonarCloud analysis completed with warnings"
           
-    - name: Run lcov for CodeClimate
-      run: |
-            echo "=== Installing lcov ==="
-            sudo apt install -y lcov
-            
-            echo "=== Capturing coverage data with lcov ==="
-            lcov --capture --directory build --output-file coverage.info \
-              --ignore-errors gcov,gcov \
-              --ignore-errors mismatch \
-              --ignore-errors source \
-              --ignore-errors negative \
-              --rc geninfo_unexecuted_blocks=1 \
-              --rc lcov_branch_coverage=1 2>&1 || echo "lcov capture completed with warnings"
-              
-            echo "=== Initial coverage.info size ==="
-            ls -la coverage.info || echo "coverage.info not created"
-            
-            echo "=== Filtering coverage data ==="
-            lcov --remove coverage.info '/usr/*' \
-            '/home/runner/work/QtMeshEditor/Qt/*' \
-            '/home/runner/work/QtMeshEditor/QtMeshEditor/src/OgreXML/*' \
-            '/home/runner/work/QtMeshEditor/QtMeshEditor/src/dependencies/*' \
-            'src/OgreXML/*.*' \
-            'src/dependencies/ogre-procedural/library/src/*.*' \
-            'src/UnitTests_autogen/**/*.cpp' \
-            '*_autogen*' \
-            'src/dependencies/*' \
-            '**/CMakeFiles/*' \
-            '_deps/**/*.h' \
-            '_deps/**/*.cpp' \
-            '_deps/**/*.cc' \
-            '/home/runner/work/QtMeshEditor/QtMeshEditor/_deps/*' \
-            '_deps/*' \
-            'ui_files/*' \
-            'moc_*' \
-            '*_test.cpp' \
-            '**/tests/*' \
-            --ignore-errors unused \
-            --ignore-errors negative \
-            -o filtered_coverage.info 2>&1 || echo "lcov filtering completed with warnings"
-            
-            echo "=== Final filtered_coverage.info size ==="
-            ls -la filtered_coverage.info || echo "filtered_coverage.info not created"
 
-    - name: Upload Coverage to CodeClimate
-      run: |
-            cd ${{github.workspace}}
-            curl -L -O https://codeclimate.com/downloads/test-reporter/test-reporter-latest-linux-amd64
-            sudo chmod +x test-reporter-latest-linux-amd64
-            sudo ./test-reporter-latest-linux-amd64 format-coverage --input-type lcov --output coverage.json filtered_coverage.info
-            sudo ./test-reporter-latest-linux-amd64 upload-coverage --input coverage.json -r ${{secrets.CODECLIMATE_COVERAGE_ID}}
             
     - name: Upload Coverage Reports
       uses: actions/upload-artifact@v4
@@ -850,8 +800,6 @@ jobs:
         path: |
           coverage.xml
           coverage.html
-          filtered_coverage.info
-          coverage.json
             
 ####################################################################
 # MacOS Deploy 
