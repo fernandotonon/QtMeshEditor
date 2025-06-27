@@ -14,11 +14,13 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 
 ### :movie_camera: Preview
 
-![QtMeshEditor1 5 0](https://user-images.githubusercontent.com/996529/210196572-7b49da4c-c5db-406d-9ab4-7fa20bacb6ae.gif)
+Split View|Skeleton Animation Controls
+---|---
+![QtMeshEditor1 5 0](https://user-images.githubusercontent.com/996529/210196572-7b49da4c-c5db-406d-9ab4-7fa20bacb6ae.gif)|![QtMeshEditor1 6 0](https://user-images.githubusercontent.com/996529/218779819-0a61156d-c014-4ad1-aa8b-cee900c9da56.gif)
 
-#### Skeleton Animation Controls
+#### :robot: AI-enhanced Material Editor
 
-![QtMeshEditor1 6 0](https://user-images.githubusercontent.com/996529/218779819-0a61156d-c014-4ad1-aa8b-cee900c9da56.gif)
+![Screencast From 2025-06-26 23-35-53](https://github.com/user-attachments/assets/c58978d7-7564-41f2-8c95-527ddf7ae78e)
 
 ### :sparkles: Features
 * Mesh
@@ -27,10 +29,10 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
   - Primitives creation, using ogre-procedural - Easy tool to create Box, Sphere, and Plane
 * Material
   - Shows in real time the material changes on the model
-  - Material can be edited using GUI or code editor
+  - Material can be edited using a form or a code editor, and also with the AI-assistant's help
 * Skeleton
   - View the bones
-  - Animation Preview - Shows a list of animations and allows the animation preview.
+  - Animation Preview - Shows a list of animations and allows for animation preview.
   - Renaming Animation
   - View keyframe positions and values
 * Import/Export
