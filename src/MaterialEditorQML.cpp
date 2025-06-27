@@ -106,7 +106,7 @@ void MaterialEditorQML::loadMaterial(const QString &materialName)
         m_ogreMaterial = Ogre::static_pointer_cast<Ogre::Material>(
             Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString()));
         
-        if (m_ogreMaterial.isNull()) {
+        if (!m_ogreMaterial) {
             emit errorOccurred("Material not found: " + materialName);
             return;
         }
@@ -204,7 +204,7 @@ bool MaterialEditorQML::applyMaterial()
         m_ogreMaterial = Ogre::static_pointer_cast<Ogre::Material>(
             Ogre::MaterialManager::getSingleton().getByName(m_materialName.toStdString()));
         
-        if (!m_ogreMaterial.isNull()) {
+        if (m_ogreMaterial) {
             m_ogreMaterial->compile();
         }
 
@@ -236,7 +236,28 @@ bool MaterialEditorQML::validateMaterialScript(const QString &script)
 {
     // Safety check for Ogre availability
     if (!isOgreAvailable()) {
-        return true; // Assume script is valid if Ogre is not available
+        // Perform basic syntax validation when Ogre is not available
+        QString trimmedScript = script.trimmed();
+        if (trimmedScript.isEmpty()) {
+            emit errorOccurred("Material script is empty");
+            return false;
+        }
+        
+        // Basic syntax checks
+        if (!trimmedScript.contains("material")) {
+            emit errorOccurred("Script must contain 'material' declaration");
+            return false;
+        }
+        
+        // Check for balanced braces
+        int openBraces = trimmedScript.count('{');
+        int closeBraces = trimmedScript.count('}');
+        if (openBraces != closeBraces) {
+            emit errorOccurred(QString("Unbalanced braces: %1 open, %2 close").arg(openBraces).arg(closeBraces));
+            return false;
+        }
+        
+        return true; // Basic validation passed
     }
     
     try {
@@ -251,7 +272,39 @@ bool MaterialEditorQML::validateMaterialScript(const QString &script)
             return false;
         }
 
-        return true; // Basic validation - more sophisticated validation could be added
+        // Try to compile the script by parsing it directly with the manager
+        // This is a safer approach that works with different Ogre versions
+        try {
+            // Create a temporary group for validation
+            const std::string tempGroupName = "TEMP_VALIDATION_GROUP";
+            
+            // Remove the group if it exists
+            if (Ogre::ResourceGroupManager::getSingleton().resourceGroupExists(tempGroupName)) {
+                Ogre::ResourceGroupManager::getSingleton().destroyResourceGroup(tempGroupName);
+            }
+            
+            // Create temporary resource group
+            Ogre::ResourceGroupManager::getSingleton().createResourceGroup(tempGroupName);
+            
+            // Try to parse the script
+            Ogre::MaterialManager::getSingleton().parseScript(dataStream, tempGroupName);
+            
+            // If we get here, the script parsed successfully
+            // Clean up the temporary group
+            Ogre::ResourceGroupManager::getSingleton().destroyResourceGroup(tempGroupName);
+            
+            return true; // Script validation passed
+            
+        } catch (const Ogre::Exception& ogreEx) {
+            // Clean up on error
+            const std::string tempGroupName = "TEMP_VALIDATION_GROUP";
+            if (Ogre::ResourceGroupManager::getSingleton().resourceGroupExists(tempGroupName)) {
+                Ogre::ResourceGroupManager::getSingleton().destroyResourceGroup(tempGroupName);
+            }
+            
+            emit errorOccurred(QString("Material script validation failed: %1").arg(ogreEx.getDescription().c_str()));
+            return false;
+        }
         
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Script validation error: %1").arg(e.what()));
@@ -627,7 +680,7 @@ void MaterialEditorQML::setScrollAnimVSpeed(double speed)
 
 void MaterialEditorQML::createNewTechnique(const QString &name)
 {
-    if (m_ogreMaterial.isNull()) return;
+    if (!m_ogreMaterial) return;
     
     Ogre::Technique *technique = m_ogreMaterial->createTechnique();
     if (!name.isEmpty()) {
@@ -791,7 +844,7 @@ void MaterialEditorQML::updateTechniqueList()
     m_techMap.clear();
     m_techMapName.clear();
     
-    if (m_ogreMaterial.isNull()) {
+    if (!m_ogreMaterial) {
         emit techniqueListChanged();
         return;
     }
@@ -1255,7 +1308,7 @@ void MaterialEditorQML::updateTextureUnitProperties()
 
 void MaterialEditorQML::updateMaterialText()
 {
-    if (m_ogreMaterial.isNull()) return;
+    if (!m_ogreMaterial) return;
 
     try {
         Ogre::MaterialSerializer ms;
@@ -1287,7 +1340,7 @@ Ogre::TextureUnitState* MaterialEditorQML::getCurrentTextureUnit() const
 
 Ogre::Technique* MaterialEditorQML::getCurrentTechnique() const
 {
-    if (m_ogreMaterial.isNull() || m_selectedTechniqueIndex < 0) {
+    if (!m_ogreMaterial || m_selectedTechniqueIndex < 0) {
         return nullptr;
     }
     
@@ -1363,7 +1416,7 @@ void MaterialEditorQML::openTextureFileDialog()
 
 void MaterialEditorQML::exportMaterial(const QString &fileName)
 {
-    if (m_ogreMaterial.isNull()) {
+    if (!m_ogreMaterial) {
         emit errorOccurred("No material to export");
         return;
     }
@@ -2283,7 +2336,14 @@ void MaterialEditorQML::generateMaterialFromPrompt(const QString &prompt)
     
     QJsonObject userMessage;
     userMessage["role"] = "user";
-    userMessage["content"] = prompt;
+    
+    // Include current material context if available
+    QString userContent = prompt;
+    if (!m_materialText.isEmpty() && m_materialText.trimmed() != "") {
+        userContent = QString("Current material:\n%1\n\nUser request: %2").arg(m_materialText).arg(prompt);
+    }
+    
+    userMessage["content"] = userContent;
     
     QJsonArray messages;
     messages.append(systemMessage);
