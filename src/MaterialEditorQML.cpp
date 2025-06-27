@@ -15,6 +15,12 @@
 #include <OgreScriptCompiler.h>
 #include <OgreScriptTranslator.h>
 #include <QProcess>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 
 MaterialEditorQML::MaterialEditorQML(QObject *parent)
     : QObject(parent)
@@ -51,6 +57,9 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     m_emissiveColor = QColor(0, 0, 0);       // Black
     m_fogColor = QColor(0, 0, 0);            // Black
     m_textureBorderColor = QColor(0, 0, 0);  // Black
+    
+    // Initialize AI network manager
+    m_networkManager = new QNetworkAccessManager(this);
 }
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -2255,4 +2264,69 @@ bool MaterialEditorQML::isOgreAvailable() const
     } catch (...) {
         return false;
     }
+}
+
+// AI Material Generation Implementation
+void MaterialEditorQML::generateMaterialFromPrompt(const QString &prompt)
+{
+    if (prompt.isEmpty()) {
+        emit aiGenerationError("Please enter a prompt");
+        return;
+    }
+    
+    emit aiGenerationStarted();
+    
+    // Create the JSON payload
+    QJsonObject systemMessage;
+    systemMessage["role"] = "system";
+    systemMessage["content"] = "You are a helpful assistant integrated into a 3D Ogre Mesh Editor. Your task is to generate and edit Ogre3D material scripts. Always respond with only the script, in plain text. Do not use markdown formatting (no triple backticks), and do not include explanations or additional text.";
+    
+    QJsonObject userMessage;
+    userMessage["role"] = "user";
+    userMessage["content"] = prompt;
+    
+    QJsonArray messages;
+    messages.append(systemMessage);
+    messages.append(userMessage);
+    
+    QJsonObject payload;
+    payload["messages"] = messages;
+    
+    QJsonDocument doc(payload);
+    QByteArray jsonData = doc.toJson();
+    
+    // Create the HTTP request
+    QNetworkRequest request(QUrl("https://aiworker.ftonon.uk/"));
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    
+    // Send the POST request
+    QNetworkReply *reply = m_networkManager->post(request, jsonData);
+    
+    // Connect to handle the response
+    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+        onAiRequestFinished(reply);
+    });
+}
+
+void MaterialEditorQML::onAiRequestFinished(QNetworkReply *reply)
+{
+    reply->deleteLater();
+    
+    if (reply->error() != QNetworkReply::NoError) {
+        emit aiGenerationError(QString("Network error: %1").arg(reply->errorString()));
+        return;
+    }
+    
+    QByteArray response = reply->readAll();
+    QString generatedScript = QString::fromUtf8(response).trimmed();
+    
+    if (generatedScript.isEmpty()) {
+        emit aiGenerationError("Received empty response from AI service");
+        return;
+    }
+    
+    // Update the material text with the AI-generated script
+    setMaterialText(generatedScript);
+    
+    emit aiGenerationCompleted(generatedScript);
 }

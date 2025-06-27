@@ -32,6 +32,42 @@ ApplicationWindow {
         colorGroup: SystemPalette.Active
     }
 
+    // AI Status Management
+    QtObject {
+        id: aiStatusIndicator
+        property bool isGenerating: false
+        property bool hasError: false
+        property string errorMessage: ""
+    }
+
+    // Connect to MaterialEditorQML AI signals
+    Connections {
+        target: MaterialEditorQML
+        
+        function onAiGenerationStarted() {
+            aiStatusIndicator.isGenerating = true
+            aiStatusIndicator.hasError = false
+            aiStatusIndicator.errorMessage = ""
+            statusText.text = "AI generating material..."
+            statusText.color = "orange"
+        }
+        
+        function onAiGenerationCompleted(generatedScript) {
+            aiStatusIndicator.isGenerating = false
+            aiStatusIndicator.hasError = false
+            statusText.text = "AI generation completed"
+            statusText.color = "green"
+        }
+        
+        function onAiGenerationError(error) {
+            aiStatusIndicator.isGenerating = false
+            aiStatusIndicator.hasError = true
+            aiStatusIndicator.errorMessage = error
+            statusText.text = "AI error: " + error
+            statusText.color = "red"
+        }
+    }
+
     // Simplified Button component
     component ThemedButton: Button {
         background: Rectangle {
@@ -474,6 +510,89 @@ ApplicationWindow {
                             text: "Ready"
                             color: textColor
                             font.pointSize: 10
+                        }
+                    }
+
+                    // AI Prompt Input Section
+                    Rectangle {
+                        Layout.fillWidth: true
+                        height: 80
+                        color: panelColor
+                        border.color: borderColor
+                        border.width: 1
+                        radius: 4
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 10
+                            spacing: 8
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                Text {
+                                    text: "🤖 AI Assistant"
+                                    font.pointSize: 12
+                                    font.bold: true
+                                    color: textColor
+                                }
+
+                                Item { Layout.fillWidth: true }
+
+                                Rectangle {
+                                    width: 12
+                                    height: 12
+                                    radius: 6
+                                    color: aiStatusIndicator.isGenerating ? "orange" : 
+                                           aiStatusIndicator.hasError ? "red" : "green"
+                                    
+                                    SequentialAnimation on opacity {
+                                        running: aiStatusIndicator.isGenerating
+                                        loops: Animation.Infinite
+                                        NumberAnimation { to: 0.3; duration: 500 }
+                                        NumberAnimation { to: 1.0; duration: 500 }
+                                    }
+                                }
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                ThemedTextField {
+                                    id: aiPromptInput
+                                    Layout.fillWidth: true
+                                    placeholderText: "💡 Type a command like: 'add texture glow.png', 'make it transparent green', 'convert to PBR'"
+                                    enabled: !aiStatusIndicator.isGenerating
+                                    
+                                    background: Rectangle {
+                                        color: panelColor
+                                        border.color: borderColor
+                                        border.width: 1
+                                        radius: 4
+                                    }
+
+                                    onAccepted: {
+                                        if (text.trim() !== "") {
+                                            generateButton.clicked()
+                                        }
+                                    }
+                                }
+
+                                ThemedButton {
+                                    id: generateButton
+                                    text: aiStatusIndicator.isGenerating ? "Generating..." : "Generate"
+                                    enabled: !aiStatusIndicator.isGenerating && aiPromptInput.text.trim() !== ""
+                                    
+                                    onClicked: {
+                                        if (aiPromptInput.text.trim() !== "") {
+                                            MaterialEditorQML.generateMaterialFromPrompt(aiPromptInput.text.trim())
+                                            aiPromptInput.text = ""
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 

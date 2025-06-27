@@ -10,6 +10,12 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QVariantList>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <OgreMaterialManager.h>
 #include <OgreMeshManager.h>
 #include <OgreTextureManager.h>
@@ -337,6 +343,9 @@ public slots:
     
     // Color picker
     void openColorPicker(const QString &colorType);
+    
+    // AI Material Generation
+    Q_INVOKABLE void generateMaterialFromPrompt(const QString &prompt);
 
 signals:
     // Property change signals
@@ -422,6 +431,11 @@ signals:
     // Error and status signals
     void errorOccurred(const QString &error);
     void materialApplied();
+    
+    // AI Material Generation signals
+    void aiGenerationStarted();
+    void aiGenerationCompleted(const QString &generatedScript);
+    void aiGenerationError(const QString &error);
 
 private:
     void updateTechniqueList();
@@ -523,6 +537,13 @@ private:
     int m_environmentMapping = 0;
     double m_rotateAnimSpeed = 0.0;
 
+    // AI Material Generation
+    QNetworkAccessManager* m_networkManager;
+    
+private slots:
+    void onAiRequestFinished(QNetworkReply* reply);
+
+private:
     // Theme color properties
     QColor m_backgroundColor;
     QColor m_panelColor;
