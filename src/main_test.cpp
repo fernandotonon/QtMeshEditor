@@ -55,8 +55,10 @@ TEST(MainTest, QApplicationAndMainWindowMock)
 TEST(MainTest, ImportMeshs) {
     auto before = Manager::getSingleton()->getEntities().count();
     int argc = 2;
-    char* argv[] = { "./media/models/ninja.mesh", "./media/models/robot.mesh" };
-    QApplication app(argc, argv);
+    const char* argv[] = { "./media/models/ninja.mesh", "./media/models/robot.mesh" };
+    // Convert to char* for QApplication constructor
+    char* mutable_argv[] = { const_cast<char*>(argv[0]), const_cast<char*>(argv[1]) };
+    QApplication app(argc, mutable_argv);
     MainWindow mainWindow;
     Manager::getSingleton()->getRoot()->renderOneFrame();
     auto after = Manager::getSingleton()->getEntities().count();

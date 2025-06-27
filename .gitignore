@@ -30,9 +30,42 @@ src/QtMeshEditor_autogen/*
 src/UnitTests_autogen/*
 src/__/*
 src/qrc_resource.cpp
+src/qrc_qml_resources.cpp
 **/.cache/*
 compile_commands.json
 install_manifest.txt
 .ninja_deps
 .ninja_log
 build.ninja
+.rcc/qmlcache/*
+
+# QML-related files
+*.qmlc
+*.jsc
+.qml/
+qmlcache/
+*.qm
+*.ts
+
+# QML auto-generated files
+*_qmlplugin_*_in.cpp
+*_qmlplugin_*.cpp
+*_qml_foreign_types.txt
+*.qrc.depends
+
+# Test-related build artifacts
+Testing/
+tests/*_autogen/
+tests/qrc_*.cpp
+tests/moc_*.cpp
+
+# Additional build artifacts
+*.so
+*.so.*
+*.dylib
+*.a
+CTestTestfile.cmake
+DartConfiguration.tcl
+
+# Temporary test files
+TESTING_CRASH_FIX.md

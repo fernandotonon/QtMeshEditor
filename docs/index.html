@@ -1,21 +1,702 @@
-Hello QtMeshEditor!
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QtMeshEditor - Graphical Editor for Ogre3D Mesh and Material</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Source+Code+Pro:wght@400;600&display=swap');
+        
+        :root {
+            --primary-green: #00ff41;
+            --secondary-green: #00cc33;
+            --dark-green: #003d0f;
+            --qt-blue: #41cd52;
+            --ogre-orange: #ff6b35;
+            --retro-purple: #8b00ff;
+            --neon-cyan: #00ffff;
+            --dark-bg: #0a0a0a;
+            --grid-color: #1a1a1a;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            background: linear-gradient(135deg, var(--dark-bg) 0%, #1a1a2e 50%, #0f0f23 100%);
+            background-attachment: fixed;
+            color: var(--primary-green);
+            font-family: 'Orbitron', monospace;
+            line-height: 1.6;
+            overflow-x: hidden;
+        }
+        
+        /* Retro grid background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(var(--grid-color) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
+            background-size: 50px 50px;
+            opacity: 0.1;
+            z-index: -1;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+        
+        /* Header */
+        .header {
+            text-align: center;
+            padding: 60px 0;
+            position: relative;
+        }
+        
+        .logo {
+            font-size: 4rem;
+            font-weight: 900;
+            background: linear-gradient(45deg, var(--primary-green), var(--neon-cyan), var(--ogre-orange));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-shadow: 0 0 30px var(--primary-green);
+            animation: glow 2s ease-in-out infinite alternate;
+            margin-bottom: 20px;
+        }
+        
+        @keyframes glow {
+            from { text-shadow: 0 0 20px var(--primary-green), 0 0 30px var(--primary-green); }
+            to { text-shadow: 0 0 30px var(--neon-cyan), 0 0 40px var(--neon-cyan); }
+        }
+        
+        .version {
+            font-size: 1.5rem;
+            color: var(--ogre-orange);
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        
+        .tagline {
+            font-size: 1.2rem;
+            color: var(--secondary-green);
+            margin-bottom: 30px;
+        }
+        
+        .cta-buttons {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 15px 30px;
+            background: linear-gradient(45deg, var(--retro-purple), var(--qt-blue));
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 700;
+            font-family: 'Orbitron', monospace;
+            text-transform: uppercase;
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+        
+        .btn:hover::before {
+            left: 100%;
+        }
+        
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 25px rgba(0,255,65,0.3);
+            border-color: var(--primary-green);
+        }
+        
+        .btn-secondary {
+            background: linear-gradient(45deg, var(--dark-green), var(--ogre-orange));
+        }
+        
+        /* Sections */
+        .section {
+            padding: 80px 0;
+            border-bottom: 1px solid rgba(0,255,65,0.2);
+        }
+        
+        .section-title {
+            font-size: 2.5rem;
+            text-align: center;
+            margin-bottom: 60px;
+            color: var(--neon-cyan);
+            text-transform: uppercase;
+            letter-spacing: 3px;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 30px;
+            margin-top: 40px;
+        }
+        
+        .feature-card {
+            background: linear-gradient(135deg, rgba(0,255,65,0.1), rgba(139,0,255,0.1));
+            border: 2px solid var(--primary-green);
+            border-radius: 15px;
+            padding: 30px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .feature-card::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: linear-gradient(45deg, transparent, rgba(0,255,65,0.1), transparent);
+            transform: rotate(45deg);
+            transition: all 0.6s ease;
+            opacity: 0;
+        }
+        
+        .feature-card:hover::before {
+            opacity: 1;
+            animation: scan 1.5s linear infinite;
+        }
+        
+        @keyframes scan {
+            0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
+            100% { transform: translateX(100%) translateY(100%) rotate(45deg); }
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-10px);
+            box-shadow: 0 20px 40px rgba(0,255,65,0.2);
+            border-color: var(--neon-cyan);
+        }
+        
+        .feature-icon {
+            font-size: 3rem;
+            margin-bottom: 20px;
+            color: var(--ogre-orange);
+        }
+        
+        .feature-title {
+            font-size: 1.5rem;
+            margin-bottom: 15px;
+            color: var(--primary-green);
+            font-weight: 700;
+        }
+        
+        .feature-desc {
+            color: #cccccc;
+            line-height: 1.6;
+        }
+        
+        /* Installation Steps */
+        .install-steps {
+            counter-reset: step-counter;
+        }
+        
+        .install-step {
+            background: rgba(0,255,65,0.05);
+            border-left: 4px solid var(--primary-green);
+            padding: 25px;
+            margin-bottom: 20px;
+            border-radius: 0 10px 10px 0;
+            position: relative;
+            counter-increment: step-counter;
+        }
+        
+        .install-step::before {
+            content: counter(step-counter);
+            position: absolute;
+            left: -15px;
+            top: 15px;
+            background: var(--primary-green);
+            color: var(--dark-bg);
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 0.9rem;
+        }
+        
+        .install-step h3 {
+            color: var(--neon-cyan);
+            margin-bottom: 10px;
+            font-size: 1.3rem;
+        }
+        
+        .code-wrapper {
+            position: relative;
+            margin: 25px 0 15px 0;
+        }
+        
+        .code-block {
+            background: #111;
+            border: 1px solid var(--primary-green);
+            border-radius: 8px;
+            padding: 20px;
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.9rem;
+            color: var(--primary-green);
+            overflow-x: auto;
+            margin: 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        
+        .code-wrapper::before {
+            content: 'TERMINAL';
+            position: absolute;
+            top: -15px;
+            left: 15px;
+            background: var(--dark-bg);
+            padding: 2px 8px;
+            color: var(--ogre-orange);
+            font-size: 0.75rem;
+            font-weight: 700;
+            z-index: 10;
+            white-space: nowrap;
+            border: 1px solid var(--primary-green);
+            border-radius: 4px 4px 0 0;
+        }
+        
+        /* Community Section */
+        .community {
+            background: linear-gradient(135deg, rgba(139,0,255,0.1), rgba(255,107,53,0.1));
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            margin: 40px 0;
+        }
+        
+        .community h3 {
+            color: var(--ogre-orange);
+            font-size: 2rem;
+            margin-bottom: 20px;
+        }
+        
+        .forum-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            background: linear-gradient(45deg, var(--ogre-orange), var(--retro-purple));
+            color: white;
+            text-decoration: none;
+            padding: 15px 30px;
+            border-radius: 50px;
+            font-weight: 700;
+            transition: all 0.3s ease;
+            margin-top: 20px;
+        }
+        
+        .forum-link:hover {
+            transform: scale(1.05);
+            box-shadow: 0 10px 30px rgba(255,107,53,0.4);
+        }
+        
+        /* Footer */
+        .footer {
+            text-align: center;
+            padding: 40px 0;
+            border-top: 1px solid rgba(0,255,65,0.3);
+            margin-top: 60px;
+        }
+        
+        .footer-text {
+            color: #888;
+            font-size: 0.9rem;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .logo {
+                font-size: 2.5rem;
+            }
+            
+            .section-title {
+                font-size: 2rem;
+            }
+            
+            .cta-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 12px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: var(--dark-bg);
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(var(--primary-green), var(--neon-cyan));
+            border-radius: 6px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(var(--neon-cyan), var(--primary-green));
+        }
+    </style>
+    <script>
+        // Function to fetch latest release version from GitHub API
+        async function fetchLatestVersion() {
+            try {
+                const response = await fetch('https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const release = await response.json();
+                return release.tag_name;
+            } catch (error) {
+                console.warn('Failed to fetch latest version:', error);
+                return '2.0.0'; // Fallback version
+            }
+        }
 
-✨ Features
-* Mesh
-Translation, Scale, and Rotation (Easier than OgreMeshMagick)
-Change the material of the mesh 
-- Allows the change of the mesh material
-Primitives creation, using ogre-procedural
--Easy tool to create Box, Sphere, and Plane
-* Material
-Shows in real time the material changes on the model
-Material can be edited using GUI or code editor
-* Skeleton
-View the bones
-Animation Preview 
-- Shows a list of animations and allows the animation preview.
-Renaming Animation
-View keyframes positions and values
-* Import/Export
-Export mesh in older versions 
-Other 3D Format Importer - Can be used to convert any 3D format provided by ASSIMP to Ogre Mesh, Material and Skeleton
+        // Function to update version elements on the page
+        async function updateVersionDisplay() {
+            const version = await fetchLatestVersion();
+            const currentYear = new Date().getFullYear();
+            
+            // Update page title
+            document.title = `QtMeshEditor ${version} - Graphical Editor for Ogre3D Mesh and Material`;
+            
+            // Update version display in header
+            const versionElement = document.querySelector('.version');
+            if (versionElement) {
+                versionElement.textContent = `v${version}`;
+            }
+            
+            // Update footer text with current year
+            const footerText = document.querySelector('.footer-text');
+            if (footerText) {
+                footerText.innerHTML = `
+                    QtMeshEditor ${version} © 2013-${currentYear} Fernando Tonon | 
+                    <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> | 
+                    <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--ogre-orange);">Ogre3D Forum</a>
+                `;
+            }
+
+            // Update download button to point to latest release
+            const downloadBtn = document.querySelector('a[href*="releases"]');
+            if (downloadBtn) {
+                downloadBtn.href = `https://github.com/fernandotonon/QtMeshEditor/releases/tag/${version}`;
+                downloadBtn.title = `Download QtMeshEditor ${version}`;
+            }
+        }
+
+        // Initialize version fetching when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            updateVersionDisplay();
+            
+            // Add loading indicator for version
+            const versionElement = document.querySelector('.version');
+            if (versionElement) {
+                versionElement.style.opacity = '0.6';
+                versionElement.textContent = 'v...';
+                
+                // Restore opacity after version is loaded
+                setTimeout(() => {
+                    if (versionElement) {
+                        versionElement.style.opacity = '1';
+                        versionElement.style.transition = 'opacity 0.3s ease';
+                    }
+                }, 1000);
+            }
+        });
+
+        // Optional: Refresh version every 5 minutes for long-running sessions
+        setInterval(updateVersionDisplay, 5 * 60 * 1000);
+    </script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1 class="logo">QtMeshEditor</h1>
+            <div class="version">v2.0.0</div>
+            <p class="tagline">Graphical Editor for Ogre3D Mesh and Material • Built with Qt Framework</p>
+            <div class="cta-buttons">
+                <a href="https://github.com/fernandotonon/QtMeshEditor/releases" class="btn">Download Latest</a>
+                <a href="https://github.com/fernandotonon/QtMeshEditor" class="btn btn-secondary">View Source</a>
+            </div>
+        </header>
+
+        <!-- Features Section -->
+        <section class="section">
+            <h2 class="section-title">🚀 Comprehensive Ogre3D Editing Suite</h2>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">🎨</div>
+                    <h3 class="feature-title">Advanced Material System</h3>
+                    <p class="feature-desc">Modern QML-based material editor with real-time preview. Visual material editing alongside script-based authoring for complete Ogre3D material workflow.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🤖</div>
+                    <h3 class="feature-title">AI-Powered Generation</h3>
+                    <p class="feature-desc">OpenAI GPT integration for intelligent material script generation. Auto-validation and auto-apply with context-aware suggestions.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">⏪</div>
+                    <h3 class="feature-title">Professional Undo/Redo</h3>
+                    <p class="feature-desc">Complete undo/redo system with 50-step history, keyboard shortcuts (Ctrl+Z/Y), and smart button management.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🔍</div>
+                    <h3 class="feature-title">Enhanced Validation</h3>
+                    <p class="feature-desc">Comprehensive material script validation with syntax error detection, line-specific reporting, and detailed error descriptions.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">⚙️</div>
+                    <h3 class="feature-title">Mesh Transformation & Operations</h3>
+                    <p class="feature-desc">Complete mesh editing suite with translation, scaling, rotation, and format conversion. Easier than OgreMeshMagick with visual feedback and batch operations.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🦴</div>
+                    <h3 class="feature-title">Skeleton & Animation</h3>
+                    <p class="feature-desc">Bone visualization, animation preview, keyframe inspection, and animation renaming tools for complete skeletal mesh workflow.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">📦</div>
+                    <h3 class="feature-title">Multi-Format Support</h3>
+                    <p class="feature-desc">Import/export various 3D formats via ASSIMP. Convert to Ogre mesh, material, and skeleton formats with version compatibility.</p>
+                </div>
+                
+                <div class="feature-card">
+                    <div class="feature-icon">🎯</div>
+                    <h3 class="feature-title">Primitive Creation</h3>
+                    <p class="feature-desc">Built-in primitive generation using Ogre-Procedural. Create boxes, spheres, planes, and more with customizable parameters.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Installation Section -->
+        <section class="section">
+            <h2 class="section-title">⚡ Quick Start Guide</h2>
+            
+            <div class="install-steps">
+                <div class="install-step">
+                    <h3>Download QtMeshEditor</h3>
+                    <p>Get the latest release from GitHub or build from source:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+git clone https://github.com/fernandotonon/QtMeshEditor.git
+cd QtMeshEditor</div>
+                    </div>
+                </div>
+                
+                <div class="install-step">
+                    <h3>Install Dependencies</h3>
+                    <p>Ensure you have Qt6, Ogre3D, and ASSIMP installed:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+# Ubuntu/Debian
+sudo apt install qt6-base-dev libogre-1.12-dev libassimp-dev
+
+# Build dependencies
+sudo apt install cmake build-essential</div>
+                    </div>
+                </div>
+                
+                <div class="install-step">
+                    <h3>Build the Project</h3>
+                    <p>Compile QtMeshEditor with CMake:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+mkdir build && cd build
+cmake ..
+make -j$(nproc)</div>
+                    </div>
+                </div>
+                
+                <div class="install-step">
+                    <h3>Run QtMeshEditor</h3>
+                    <p>Launch the application and start creating:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+./bin/QtMeshEditor</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Usage Section -->
+        <section class="section">
+            <h2 class="section-title">🎮 Complete Ogre3D Workflow</h2>
+            
+            <div class="features-grid">
+                <div class="feature-card">
+                    <h3 class="feature-title">Material Editing</h3>
+                    <p class="feature-desc">
+                        • Open the QML Material Editor<br>
+                        • Use AI assistance for script generation<br>
+                        • Edit materials with real-time preview<br>
+                        • Validate and apply changes instantly<br>
+                        • Use Ctrl+Z/Y for undo/redo
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3 class="feature-title">Mesh Operations</h3>
+                    <p class="feature-desc">
+                        • Import meshes via File → Import<br>
+                        • Transform with scale/rotate/translate tools<br>
+                        • Preview animations in real-time<br>
+                        • Export to different Ogre versions<br>
+                        • Convert between 3D formats
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3 class="feature-title">AI Material Generation</h3>
+                    <p class="feature-desc">
+                        • Describe your desired material<br>
+                        • AI generates Ogre material script<br>
+                        • Automatic validation and application<br>
+                        • Edit AI suggestions as needed<br>
+                        • Save successful materials
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3 class="feature-title">Integrated Ogre3D Workflow</h3>
+                    <p class="feature-desc">
+                        • Complete mesh and material pipeline<br>
+                        • Create primitives with procedural tools<br>
+                        • Manage entire Ogre3D asset libraries<br>
+                        • Export scenes with version compatibility<br>
+                        • Seamless Qt-based interface
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Community Section -->
+        <section class="section">
+            <div class="community">
+                <h3>🌟 Join the Community</h3>
+                <p>Connect with other QtMeshEditor users and Ogre3D developers. Share your creations, get help, and contribute to the project!</p>
+                <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" class="forum-link" target="_blank">
+                    🏛️ Ogre3D Forum Discussion
+                </a>
+                <div style="margin-top: 20px;">
+                    <p style="color: #888; font-size: 0.9rem;">
+                        Active community since 2013 • 63+ posts • Regular updates and support
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Technical Info -->
+        <section class="section">
+            <h2 class="section-title">🔧 Technical Details</h2>
+            
+            <div class="features-grid">
+                <div class="feature-card">
+                    <h3 class="feature-title">Requirements</h3>
+                    <p class="feature-desc">
+                        • Qt 6.x framework<br>
+                        • Ogre3D 1.12+ engine<br>
+                        • ASSIMP library<br>
+                        • CMake 3.24+<br>
+                        • C++17 compiler
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3 class="feature-title">Supported Formats</h3>
+                    <p class="feature-desc">
+                        • Ogre .mesh/.skeleton/.material<br>
+                        • FBX, OBJ, 3DS, DAE<br>
+                        • X, PLY, STL files<br>
+                        • Various texture formats<br>
+                        • Legacy Ogre versions
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3 class="feature-title">Platforms</h3>
+                    <p class="feature-desc">
+                        • Linux (Ubuntu, Debian, etc.)<br>
+                        • Windows 10/11<br>
+                        • macOS (experimental)<br>
+                        • Cross-platform Qt deployment<br>
+                        • CI/CD automated builds
+                    </p>
+                </div>
+                
+                <div class="feature-card">
+                    <h3 class="feature-title">License & Source</h3>
+                    <p class="feature-desc">
+                        • MIT License (open source)<br>
+                        • GitHub repository available<br>
+                        • Community contributions welcome<br>
+                        • Comprehensive test suite<br>
+                        • SonarCloud quality analysis
+                    </p>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="container">
+            <p class="footer-text">
+                QtMeshEditor 2.0.0 © 2013-2024 Fernando Tonon | 
+                <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> | 
+                <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--ogre-orange);">Ogre3D Forum</a>
+            </p>
+            <p style="margin-top: 10px; color: #666; font-size: 0.8rem;">
+                Built with ❤️ for the Ogre3D and Qt communities
+            </p>
+        </div>
+    </footer>
+</body>
+</html>

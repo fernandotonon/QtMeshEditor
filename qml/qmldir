@@ -1,0 +1,11 @@
+module MaterialEditorQML
+singleton MaterialEditorQML 1.0 MaterialEditorQML.qml
+MaterialEditorWindow 1.0 MaterialEditorWindow.qml
+PassPropertiesPanel 1.0 PassPropertiesPanel.qml
+TexturePropertiesPanel 1.0 TexturePropertiesPanel.qml
+ThemedButton 1.0 ThemedButton.qml
+ThemedComboBox 1.0 ThemedComboBox.qml
+ThemedSpinBox 1.0 ThemedSpinBox.qml
+ThemedLabel 1.0 ThemedLabel.qml
+ThemedTextField 1.0 ThemedTextField.qml
+ThemedTextArea 1.0 ThemedTextArea.qml 
