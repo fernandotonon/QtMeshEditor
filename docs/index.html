@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QtMeshEditor 2.0.0 - Professional 3D Material Editor</title>
+    <title>QtMeshEditor - Graphical Editor for Ogre3D Mesh and Material</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Source+Code+Pro:wght@400;600&display=swap');
         
@@ -367,6 +367,76 @@
             background: linear-gradient(var(--neon-cyan), var(--primary-green));
         }
     </style>
+    <script>
+        // Function to fetch latest release version from GitHub API
+        async function fetchLatestVersion() {
+            try {
+                const response = await fetch('https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest');
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const release = await response.json();
+                return release.tag_name;
+            } catch (error) {
+                console.warn('Failed to fetch latest version:', error);
+                return '2.0.0'; // Fallback version
+            }
+        }
+
+        // Function to update version elements on the page
+        async function updateVersionDisplay() {
+            const version = await fetchLatestVersion();
+            
+            // Update page title
+            document.title = `QtMeshEditor ${version} - Graphical Editor for Ogre3D Mesh and Material`;
+            
+            // Update version display in header
+            const versionElement = document.querySelector('.version');
+            if (versionElement) {
+                versionElement.textContent = `v${version}`;
+            }
+            
+            // Update footer text
+            const footerText = document.querySelector('.footer-text');
+            if (footerText) {
+                footerText.innerHTML = `
+                    QtMeshEditor ${version} © 2013-2024 Fernando Tonon | 
+                    <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> | 
+                    <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--ogre-orange);">Ogre3D Forum</a>
+                `;
+            }
+
+            // Update download button to point to latest release
+            const downloadBtn = document.querySelector('a[href*="releases"]');
+            if (downloadBtn) {
+                downloadBtn.href = `https://github.com/fernandotonon/QtMeshEditor/releases/tag/${version}`;
+                downloadBtn.title = `Download QtMeshEditor ${version}`;
+            }
+        }
+
+        // Initialize version fetching when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            updateVersionDisplay();
+            
+            // Add loading indicator for version
+            const versionElement = document.querySelector('.version');
+            if (versionElement) {
+                versionElement.style.opacity = '0.6';
+                versionElement.textContent = 'v...';
+                
+                // Restore opacity after version is loaded
+                setTimeout(() => {
+                    if (versionElement) {
+                        versionElement.style.opacity = '1';
+                        versionElement.style.transition = 'opacity 0.3s ease';
+                    }
+                }, 1000);
+            }
+        });
+
+        // Optional: Refresh version every 5 minutes for long-running sessions
+        setInterval(updateVersionDisplay, 5 * 60 * 1000);
+    </script>
 </head>
 <body>
     <div class="container">
@@ -374,7 +444,7 @@
         <header class="header">
             <h1 class="logo">QtMeshEditor</h1>
             <div class="version">v2.0.0</div>
-            <p class="tagline">Professional AI-Enhanced 3D Material Editor</p>
+            <p class="tagline">Graphical Editor for Ogre3D Mesh and Material • Built with Qt Framework</p>
             <div class="cta-buttons">
                 <a href="https://github.com/fernandotonon/QtMeshEditor/releases" class="btn">Download Latest</a>
                 <a href="https://github.com/fernandotonon/QtMeshEditor" class="btn btn-secondary">View Source</a>
@@ -383,12 +453,12 @@
 
         <!-- Features Section -->
         <section class="section">
-            <h2 class="section-title">🚀 Revolutionary Features</h2>
+            <h2 class="section-title">🚀 Comprehensive Ogre3D Editing Suite</h2>
             <div class="features-grid">
                 <div class="feature-card">
                     <div class="feature-icon">🎨</div>
-                    <h3 class="feature-title">QML Material Editor</h3>
-                    <p class="feature-desc">Modern, intuitive interface built with Qt QML. Real-time material preview with responsive design and seamless workflow integration.</p>
+                    <h3 class="feature-title">Advanced Material System</h3>
+                    <p class="feature-desc">Modern QML-based material editor with real-time preview. Visual material editing alongside script-based authoring for complete Ogre3D material workflow.</p>
                 </div>
                 
                 <div class="feature-card">
@@ -411,8 +481,8 @@
                 
                 <div class="feature-card">
                     <div class="feature-icon">⚙️</div>
-                    <h3 class="feature-title">Mesh Transformation</h3>
-                    <p class="feature-desc">Translation, scaling, and rotation of meshes. Easier than OgreMeshMagick with real-time preview and precise controls.</p>
+                    <h3 class="feature-title">Mesh Transformation & Operations</h3>
+                    <p class="feature-desc">Complete mesh editing suite with translation, scaling, rotation, and format conversion. Easier than OgreMeshMagick with visual feedback and batch operations.</p>
                 </div>
                 
                 <div class="feature-card">
@@ -479,7 +549,7 @@ make -j$(nproc)</div>
 
         <!-- Usage Section -->
         <section class="section">
-            <h2 class="section-title">🎮 How to Use</h2>
+            <h2 class="section-title">🎮 Complete Ogre3D Workflow</h2>
             
             <div class="features-grid">
                 <div class="feature-card">
@@ -516,13 +586,13 @@ make -j$(nproc)</div>
                 </div>
                 
                 <div class="feature-card">
-                    <h3 class="feature-title">Project Workflow</h3>
+                    <h3 class="feature-title">Integrated Ogre3D Workflow</h3>
                     <p class="feature-desc">
-                        • Open existing Ogre projects<br>
+                        • Complete mesh and material pipeline<br>
                         • Create primitives with procedural tools<br>
-                        • Manage material libraries<br>
-                        • Export complete scenes<br>
-                        • Maintain version compatibility
+                        • Manage entire Ogre3D asset libraries<br>
+                        • Export scenes with version compatibility<br>
+                        • Seamless Qt-based interface
                     </p>
                 </div>
             </div>
