@@ -234,82 +234,239 @@ bool MaterialEditorQML::applyMaterial()
 
 bool MaterialEditorQML::validateMaterialScript(const QString &script)
 {
-    // Safety check for Ogre availability
-    if (!isOgreAvailable()) {
-        // Perform basic syntax validation when Ogre is not available
-        QString trimmedScript = script.trimmed();
-        if (trimmedScript.isEmpty()) {
-            emit errorOccurred("Material script is empty");
-            return false;
-        }
-        
-        // Basic syntax checks
-        if (!trimmedScript.contains("material")) {
-            emit errorOccurred("Script must contain 'material' declaration");
-            return false;
-        }
-        
-        // Check for balanced braces
-        int openBraces = trimmedScript.count('{');
-        int closeBraces = trimmedScript.count('}');
-        if (openBraces != closeBraces) {
-            emit errorOccurred(QString("Unbalanced braces: %1 open, %2 close").arg(openBraces).arg(closeBraces));
-            return false;
-        }
-        
-        return true; // Basic validation passed
-    }
-    
-    try {
-        Ogre::String ogreScript = script.toStdString();
-        Ogre::MemoryDataStream *memoryStream = new Ogre::MemoryDataStream(
-            (void*)ogreScript.c_str(), ogreScript.length() * sizeof(char));
-        Ogre::DataStreamPtr dataStream(memoryStream);
-
-        Ogre::ScriptCompilerManager* compilerManager = Ogre::ScriptCompilerManager::getSingletonPtr();
-        if (!compilerManager) {
-            emit errorOccurred("Script compiler not available");
-            return false;
-        }
-
-        // Try to compile the script by parsing it directly with the manager
-        // This is a safer approach that works with different Ogre versions
-        try {
-            // Create a temporary group for validation
-            const std::string tempGroupName = "TEMP_VALIDATION_GROUP";
-            
-            // Remove the group if it exists
-            if (Ogre::ResourceGroupManager::getSingleton().resourceGroupExists(tempGroupName)) {
-                Ogre::ResourceGroupManager::getSingleton().destroyResourceGroup(tempGroupName);
-            }
-            
-            // Create temporary resource group
-            Ogre::ResourceGroupManager::getSingleton().createResourceGroup(tempGroupName);
-            
-            // Try to parse the script
-            Ogre::MaterialManager::getSingleton().parseScript(dataStream, tempGroupName);
-            
-            // If we get here, the script parsed successfully
-            // Clean up the temporary group
-            Ogre::ResourceGroupManager::getSingleton().destroyResourceGroup(tempGroupName);
-            
-            return true; // Script validation passed
-            
-        } catch (const Ogre::Exception& ogreEx) {
-            // Clean up on error
-            const std::string tempGroupName = "TEMP_VALIDATION_GROUP";
-            if (Ogre::ResourceGroupManager::getSingleton().resourceGroupExists(tempGroupName)) {
-                Ogre::ResourceGroupManager::getSingleton().destroyResourceGroup(tempGroupName);
-            }
-            
-            emit errorOccurred(QString("Material script validation failed: %1").arg(ogreEx.getDescription().c_str()));
-            return false;
-        }
-        
-    } catch (const std::exception& e) {
-        emit errorOccurred(QString("Script validation error: %1").arg(e.what()));
+    QString trimmedScript = script.trimmed();
+    if (trimmedScript.isEmpty()) {
+        emit errorOccurred("Material script is empty");
         return false;
     }
+    
+    // Enhanced syntax validation - always perform regardless of Ogre availability
+    QStringList lines = trimmedScript.split('\n');
+    int braceLevel = 0;
+    bool inMaterialBlock = false;
+    bool hasTechnique = false;
+    bool hasPass = false;
+    
+    for (int i = 0; i < lines.size(); i++) {
+        QString line = lines[i].trimmed();
+        if (line.isEmpty() || line.startsWith("//")) continue; // Skip comments and empty lines
+        
+        // Count braces
+        int openBracesInLine = line.count('{');
+        int closeBracesInLine = line.count('}');
+        braceLevel += openBracesInLine - closeBracesInLine;
+        
+        // Check for negative brace level (more closing than opening)
+        if (braceLevel < 0) {
+            emit errorOccurred(QString("Unexpected closing brace '}' at line %1").arg(i + 1));
+            return false;
+        }
+        
+        // Check for material declaration
+        if (line.startsWith("material ")) {
+            if (inMaterialBlock) {
+                emit errorOccurred(QString("Nested material declaration at line %1").arg(i + 1));
+                return false;
+            }
+            inMaterialBlock = true;
+            
+            // Check if material name is provided
+            QStringList parts = line.split(' ', Qt::SkipEmptyParts);
+            if (parts.size() < 2) {
+                emit errorOccurred(QString("Material declaration missing name at line %1").arg(i + 1));
+                return false;
+            }
+            
+            // Material declaration should end with { or be on next line
+            if (!line.contains('{') && i + 1 < lines.size()) {
+                QString nextLine = lines[i + 1].trimmed();
+                if (!nextLine.startsWith('{')) {
+                    emit errorOccurred(QString("Expected '{' after material declaration at line %1").arg(i + 1));
+                    return false;
+                }
+            }
+        }
+        
+        // Check for technique declaration
+        else if (line.startsWith("technique")) {
+            if (!inMaterialBlock) {
+                emit errorOccurred(QString("Technique declaration outside material block at line %1").arg(i + 1));
+                return false;
+            }
+            hasTechnique = true;
+        }
+        
+        // Check for pass declaration
+        else if (line.startsWith("pass")) {
+            if (!inMaterialBlock) {
+                emit errorOccurred(QString("Pass declaration outside material block at line %1").arg(i + 1));
+                return false;
+            }
+            hasPass = true;
+        }
+        
+        // Check for texture_unit (catch common typos)
+        else if (line.startsWith("texture_unit")) {
+            if (!hasPass) {
+                emit errorOccurred(QString("texture_unit must be inside a pass block at line %1").arg(i + 1));
+                return false;
+            }
+        }
+        
+        // Check for common typos and malformed declarations
+        else if (line.contains("texture_unt") || line.contains("textre")) {
+            emit errorOccurred(QString("Syntax error: Invalid keyword '%1' at line %2. Did you mean 'texture_unit' or 'texture'?").arg(line.split(' ').first()).arg(i + 1));
+            return false;
+        }
+        
+        // Check for malformed lines with random text like "asd"
+        else if (line.contains("asd") && !line.startsWith("//")) {
+            emit errorOccurred(QString("Malformed syntax: Invalid characters 'asd' at line %1").arg(i + 1));
+            return false;
+        }
+        
+        // Check for unterminated strings
+        int quoteCount = line.count('"');
+        if (quoteCount % 2 != 0) {
+            emit errorOccurred(QString("Unterminated string at line %1").arg(i + 1));
+            return false;
+        }
+        
+        // Check for lines that should end with values but don't
+        if (line.endsWith("texture") || line.endsWith("ambient") || line.endsWith("diffuse") || line.endsWith("specular")) {
+            if (!line.contains(' ')) { // No space means no value
+                emit errorOccurred(QString("Property '%1' missing value at line %2").arg(line).arg(i + 1));
+                return false;
+            }
+        }
+        
+        // Check for malformed property lines (properties without proper syntax)
+        QStringList knownProperties = {"ambient", "diffuse", "specular", "emissive", "texture", "alpha", "shininess", 
+                                       "lighting", "depth_write", "depth_check", "scene_blend", "cull_hardware", "cull_software"};
+        for (const QString& prop : knownProperties) {
+            if (line.startsWith(prop + " ") && line.contains("asd")) {
+                emit errorOccurred(QString("Malformed property value for '%1' at line %2").arg(prop).arg(i + 1));
+                return false;
+            }
+        }
+    }
+    
+    // Final validation checks
+    if (!inMaterialBlock) {
+        emit errorOccurred("No valid material declaration found");
+        return false;
+    }
+    
+    if (braceLevel != 0) {
+        if (braceLevel > 0) {
+            emit errorOccurred(QString("Missing %1 closing brace(s) '}' - found %2 open braces but %3 close braces").arg(braceLevel).arg(trimmedScript.count('{')).arg(trimmedScript.count('}')));
+        } else {
+            emit errorOccurred(QString("Too many closing braces - %1 extra '}'").arg(-braceLevel));
+        }
+        return false;
+    }
+    
+    if (!hasTechnique) {
+        emit errorOccurred("Material must contain at least one technique block");
+        return false;
+    }
+    
+    if (!hasPass) {
+        emit errorOccurred("Material must contain at least one pass block");
+        return false;
+    }
+    
+    // If we get here, basic syntax validation passed
+    // Now try Ogre validation if available for additional checks
+    if (isOgreAvailable()) {
+        try {
+            // Custom ScriptCompilerListener to capture compilation errors
+            class ValidationListener : public Ogre::ScriptCompilerListener
+            {
+            private:
+                std::vector<Ogre::Exception> errors;
+            public:
+                virtual void handleError(Ogre::ScriptCompiler *compiler, Ogre::uint32 code, const Ogre::String &file, int line, const Ogre::String &msg) override {
+                    Ogre::Exception e{0, msg, "ScriptCompilerListener", "error", file.c_str(), line};
+                    errors.push_back(e);
+                }
+                const std::vector<Ogre::Exception> &getErrors() const { return errors; }
+            };
+
+            Ogre::String ogreScript = script.toStdString();
+            Ogre::MemoryDataStream *memoryStream = new Ogre::MemoryDataStream(
+                (void*)ogreScript.c_str(), ogreScript.length() * sizeof(char));
+            Ogre::DataStreamPtr dataStream(memoryStream);
+
+            // Create test resource group if it doesn't exist
+            const std::string testGroupName = "Test_Script_Validation";
+            if (!Ogre::ResourceGroupManager::getSingleton().resourceGroupExists(testGroupName)) {
+                Ogre::ResourceGroupManager::getSingleton().createResourceGroup(testGroupName);
+            }
+            
+            // Remove any existing test material
+            if (Ogre::MaterialManager::getSingleton().resourceExists(m_materialName.toStdString(), testGroupName)) {
+                Ogre::MaterialManager::getSingleton().remove(m_materialName.toStdString(), testGroupName);
+            }
+
+            // Set up validation listener
+            ValidationListener* listener = new ValidationListener();
+            Ogre::ScriptCompilerManager* compilerManager = Ogre::ScriptCompilerManager::getSingletonPtr();
+            if (compilerManager) {
+                // Store current listener and set our validation listener
+                Ogre::ScriptCompilerListener* originalListener = compilerManager->getListener();
+                compilerManager->setListener(listener);
+
+                try {
+                    // Parse the script to validate
+                    compilerManager->parseScript(dataStream, testGroupName);
+                    
+                    // Clean up test material if it was created
+                    if (Ogre::MaterialManager::getSingleton().resourceExists(m_materialName.toStdString(), testGroupName)) {
+                        Ogre::MaterialManager::getSingleton().remove(m_materialName.toStdString(), testGroupName);
+                    }
+
+                    // Restore original listener
+                    compilerManager->setListener(originalListener);
+
+                    // Check for validation errors from Ogre
+                    const auto& errors = listener->getErrors();
+                    if (!errors.empty()) {
+                        QString errorMessages;
+                        for (const auto& e : errors) {
+                            errorMessages += QString("Ogre validation error on line %1: %2\n").arg(e.getLine()).arg(e.getDescription().c_str());
+                        }
+                        emit errorOccurred(errorMessages.trimmed());
+                        delete listener;
+                        return false;
+                    }
+
+                } catch (const Ogre::Exception& ogreEx) {
+                    // Restore original listener
+                    compilerManager->setListener(originalListener);
+                    
+                    // Clean up test material if it was created
+                    if (Ogre::MaterialManager::getSingleton().resourceExists(m_materialName.toStdString(), testGroupName)) {
+                        Ogre::MaterialManager::getSingleton().remove(m_materialName.toStdString(), testGroupName);
+                    }
+                    
+                    delete listener;
+                    emit errorOccurred(QString("Ogre compilation failed: %1").arg(ogreEx.getDescription().c_str()));
+                    return false;
+                }
+            }
+            
+            delete listener;
+        } catch (const std::exception& e) {
+            emit errorOccurred(QString("Additional validation error: %1").arg(e.what()));
+            return false;
+        } catch (...) {
+            emit errorOccurred("Unknown error during additional Ogre validation");
+            return false;
+        }
+    }
+    
+    return true; // All validation passed
 }
 
 void MaterialEditorQML::setMaterialName(const QString &name)
@@ -323,6 +480,11 @@ void MaterialEditorQML::setMaterialName(const QString &name)
 void MaterialEditorQML::setMaterialText(const QString &text)
 {
     if (m_materialText != text) {
+        // Add current text to undo stack before changing
+        if (!m_materialText.isEmpty()) {
+            addToUndoStack(m_materialText);
+        }
+        
         m_materialText = text;
         emit materialTextChanged();
     }
@@ -2426,4 +2588,67 @@ void MaterialEditorQML::onAiRequestFinished(QNetworkReply *reply)
     setMaterialText(generatedScript);
     
     emit aiGenerationCompleted(generatedScript);
+}
+
+// Undo/Redo Implementation
+void MaterialEditorQML::addToUndoStack(const QString &text)
+{
+    // Clear redo stack when a new action is performed
+    if (!m_redoStack.isEmpty()) {
+        m_redoStack.clear();
+        emit undoRedoStateChanged();
+    }
+    
+    // Add to undo stack
+    m_undoStack.append(text);
+    
+    // Limit stack size to prevent memory issues
+    if (m_undoStack.size() > m_maxUndoSteps) {
+        m_undoStack.removeFirst();
+    }
+    
+    emit undoRedoStateChanged();
+}
+
+void MaterialEditorQML::undo()
+{
+    if (!canUndo()) {
+        return;
+    }
+    
+    // Move current text to redo stack
+    m_redoStack.append(m_materialText);
+    
+    // Get previous text from undo stack
+    QString previousText = m_undoStack.takeLast();
+    
+    // Set the text without adding to undo stack again
+    m_materialText = previousText;
+    emit materialTextChanged();
+    emit undoRedoStateChanged();
+}
+
+void MaterialEditorQML::redo()
+{
+    if (!canRedo()) {
+        return;
+    }
+    
+    // Move current text to undo stack
+    m_undoStack.append(m_materialText);
+    
+    // Get next text from redo stack
+    QString nextText = m_redoStack.takeLast();
+    
+    // Set the text without adding to undo stack again
+    m_materialText = nextText;
+    emit materialTextChanged();
+    emit undoRedoStateChanged();
+}
+
+void MaterialEditorQML::clearUndoHistory()
+{
+    m_undoStack.clear();
+    m_redoStack.clear();
+    emit undoRedoStateChanged();
 }

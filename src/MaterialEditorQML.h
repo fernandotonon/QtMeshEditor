@@ -119,6 +119,10 @@ class MaterialEditorQML : public QObject
     Q_PROPERTY(QColor disabledTextColor READ disabledTextColor CONSTANT)
     Q_PROPERTY(QColor accentColor READ accentColor CONSTANT)
 
+    // Undo/Redo properties
+    Q_PROPERTY(bool canUndo READ canUndo NOTIFY undoRedoStateChanged)
+    Q_PROPERTY(bool canRedo READ canRedo NOTIFY undoRedoStateChanged)
+
 public:
     explicit MaterialEditorQML(QObject *parent = nullptr);
     virtual ~MaterialEditorQML() = default;
@@ -213,6 +217,10 @@ public:
     QColor buttonTextColor() const { return m_buttonTextColor; }
     QColor disabledTextColor() const { return m_disabledTextColor; }
     QColor accentColor() const { return m_accentColor; }
+
+    // Undo/Redo getters
+    bool canUndo() const { return m_undoStack.size() > 0; }
+    bool canRedo() const { return m_redoStack.size() > 0; }
 
     // Static factory for QML singleton
     static MaterialEditorQML* qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine);
@@ -347,6 +355,11 @@ public slots:
     // AI Material Generation
     Q_INVOKABLE void generateMaterialFromPrompt(const QString &prompt);
 
+    // Undo/Redo functionality
+    Q_INVOKABLE void undo();
+    Q_INVOKABLE void redo();
+    Q_INVOKABLE void clearUndoHistory();
+
 signals:
     // Property change signals
     void materialNameChanged();
@@ -437,6 +450,9 @@ signals:
     void aiGenerationCompleted(const QString &generatedScript);
     void aiGenerationError(const QString &error);
 
+    // Undo/Redo signals
+    void undoRedoStateChanged();
+
 private:
     void updateTechniqueList();
     void updatePassList();
@@ -449,6 +465,9 @@ private:
     Ogre::TextureUnitState* getCurrentTextureUnit() const;
     Ogre::Technique* getCurrentTechnique() const;
     bool isOgreAvailable() const;
+    
+    // Undo/Redo helper methods
+    void addToUndoStack(const QString &text);
 
 private:
     QString m_materialName;
@@ -539,6 +558,11 @@ private:
 
     // AI Material Generation
     QNetworkAccessManager* m_networkManager;
+    
+    // Undo/Redo stacks
+    QStringList m_undoStack;
+    QStringList m_redoStack;
+    const int m_maxUndoSteps = 50; // Limit history to prevent memory issues
     
 private slots:
     void onAiRequestFinished(QNetworkReply* reply);

@@ -55,8 +55,21 @@ ApplicationWindow {
         function onAiGenerationCompleted(generatedScript) {
             aiStatusIndicator.isGenerating = false
             aiStatusIndicator.hasError = false
-            statusText.text = "AI generation completed"
-            statusText.color = "green"
+            
+            // Update the text area with the new script
+            materialTextArea.text = generatedScript
+            
+            // Validate the script first
+            if (MaterialEditorQML.validateMaterialScript(generatedScript)) {
+                // Auto-apply if valid
+                MaterialEditorQML.applyMaterial()
+                statusText.text = "AI generation completed and applied successfully"
+                statusText.color = "green"
+            } else {
+                // Show validation error if invalid
+                statusText.text = "AI generation completed but script is invalid - please fix errors"
+                statusText.color = "orange"
+            }
         }
         
         function onAiGenerationError(error) {
@@ -428,6 +441,28 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         color: backgroundColor
+        
+        // Keyboard shortcuts for undo/redo
+        focus: true
+        Keys.onPressed: (event) => {
+            if (event.modifiers & Qt.ControlModifier) {
+                if (event.key === Qt.Key_Z && !(event.modifiers & Qt.ShiftModifier)) {
+                    if (MaterialEditorQML.canUndo) {
+                        MaterialEditorQML.undo()
+                        statusText.text = "Undo performed (Ctrl+Z)"
+                        statusText.color = "blue"
+                    }
+                    event.accepted = true
+                } else if ((event.key === Qt.Key_Y) || (event.key === Qt.Key_Z && (event.modifiers & Qt.ShiftModifier))) {
+                    if (MaterialEditorQML.canRedo) {
+                        MaterialEditorQML.redo()
+                        statusText.text = "Redo performed (Ctrl+Y)"
+                        statusText.color = "blue"
+                    }
+                    event.accepted = true
+                }
+            }
+        }
 
         SplitView {
             anchors.fill: parent
@@ -461,6 +496,26 @@ ApplicationWindow {
                         }
 
                         Item { Layout.fillWidth: true }
+
+                        ThemedButton {
+                            text: "Undo"
+                            enabled: MaterialEditorQML.canUndo
+                            onClicked: {
+                                MaterialEditorQML.undo()
+                                statusText.text = "Undo performed"
+                                statusText.color = "blue"
+                            }
+                        }
+
+                        ThemedButton {
+                            text: "Redo"
+                            enabled: MaterialEditorQML.canRedo
+                            onClicked: {
+                                MaterialEditorQML.redo()
+                                statusText.text = "Redo performed"
+                                statusText.color = "blue"
+                            }
+                        }
 
                         ThemedButton {
                             text: "Validate"
