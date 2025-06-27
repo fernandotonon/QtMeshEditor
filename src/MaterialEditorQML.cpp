@@ -2291,6 +2291,7 @@ void MaterialEditorQML::generateMaterialFromPrompt(const QString &prompt)
     
     QJsonObject payload;
     payload["messages"] = messages;
+    payload["client"] = QString("QtMeshEditor %1").arg(QTMESHEDITOR_VERSION);
     
     QJsonDocument doc(payload);
     QByteArray jsonData = doc.toJson();
@@ -2318,10 +2319,46 @@ void MaterialEditorQML::onAiRequestFinished(QNetworkReply *reply)
     }
     
     QByteArray response = reply->readAll();
-    QString generatedScript = QString::fromUtf8(response).trimmed();
+    
+    // Parse JSON response
+    QJsonParseError parseError;
+    QJsonDocument doc = QJsonDocument::fromJson(response, &parseError);
+    
+    if (parseError.error != QJsonParseError::NoError) {
+        emit aiGenerationError(QString("JSON parse error: %1").arg(parseError.errorString()));
+        return;
+    }
+    
+    QJsonObject responseObj = doc.object();
+    
+    // Extract message content from choices array
+    if (!responseObj.contains("choices") || !responseObj["choices"].isArray()) {
+        emit aiGenerationError("Invalid response format: missing choices array");
+        return;
+    }
+    
+    QJsonArray choices = responseObj["choices"].toArray();
+    if (choices.isEmpty()) {
+        emit aiGenerationError("Invalid response format: empty choices array");
+        return;
+    }
+    
+    QJsonObject firstChoice = choices[0].toObject();
+    if (!firstChoice.contains("message") || !firstChoice["message"].isObject()) {
+        emit aiGenerationError("Invalid response format: missing message object");
+        return;
+    }
+    
+    QJsonObject message = firstChoice["message"].toObject();
+    if (!message.contains("content") || !message["content"].isString()) {
+        emit aiGenerationError("Invalid response format: missing content string");
+        return;
+    }
+    
+    QString generatedScript = message["content"].toString().trimmed();
     
     if (generatedScript.isEmpty()) {
-        emit aiGenerationError("Received empty response from AI service");
+        emit aiGenerationError("Received empty material script from AI service");
         return;
     }
     
