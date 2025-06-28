@@ -925,10 +925,19 @@ jobs:
             echo "Available Xcode SDKs:"
             xcodebuild -showsdks | grep macosx || echo "No macOS SDKs found"
             
+            echo "=== Checking Assimp availability for OGRE ==="
+            ls -la /usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ || echo "Assimp cmake files not found"
+            ls -la /usr/local/lib/libassimp* || echo "Assimp libraries not found"
+            
             cd ${{github.workspace}}/ogre/
             
+            # Create and ensure permissions for build directory
+            mkdir -p build
+            sudo chown -R $(whoami) build
+            
             # Configure with explicit universal binary support and proper SDK
-            sudo cmake -S . -B build \
+            echo "=== Configuring OGRE with CMake ==="
+            cmake -S . -B build \
             -DOGRE_BUILD_PLUGIN_ASSIMP=ON \
             -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON \
@@ -952,9 +961,9 @@ jobs:
             -DCMAKE_VERBOSE_MAKEFILE=ON \
             -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK
             
-            cd build
             echo "=== Building OGRE ==="
-            sudo make install -j8
+            cd build
+            make install -j8
             
             echo "=== Verifying Ogre3D universal binaries ==="
             echo "OGRE installation structure:"
