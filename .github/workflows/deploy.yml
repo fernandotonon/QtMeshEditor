@@ -1042,8 +1042,28 @@ jobs:
 
     - name: Code Sign Application (for Sequoia compatibility)
       run: |
-            # Ad-hoc signing for compatibility with Sequoia
-            sudo codesign --force --deep --sign - ${{github.workspace}}/bin/QtMeshEditor.app
+            echo "=== Code Signing for macOS Sequoia Compatibility ==="
+            
+            # Sign all frameworks first
+            echo "Signing Qt frameworks..."
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework/Versions/Current/QtCore || true
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework/Versions/Current/QtGui || true
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework/Versions/Current/QtWidgets || true
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework/Versions/Current/QtDBus || true
+            
+            # Sign any dynamic libraries
+            echo "Signing dynamic libraries..."
+            find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ -name "*.dylib" -exec sudo codesign --force --sign - {} \; || true
+            
+            # Sign the main executable
+            echo "Signing main executable..."
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+            
+            # Finally sign the entire app bundle
+            echo "Signing app bundle..."
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app
+            
+            echo "Code signing completed successfully"
             
     - name: Verify App Bundle
       run: |
