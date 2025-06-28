@@ -991,11 +991,13 @@ jobs:
             
             echo "Using Qt architecture directory: $QT_ARCH_DIR"
             
-            # Configure with dynamic architecture detection and proper universal binary support
+            # Configure with explicit Intel x64 architecture for compatibility
+            echo "Building for Intel x64 architecture for maximum compatibility"
+            echo "GitHub runner architecture: $(uname -m)"
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/cmake/Qt6 \
@@ -1138,7 +1140,23 @@ jobs:
       run: |
             # Verify the app bundle structure
             ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
+            echo "=== Binary Architecture Verification ==="
             file ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+            echo "=== Detailed Architecture Info ==="
+            lipo -info ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor || echo "lipo info failed"
+            echo "=== Qt Framework Architecture ==="
+            if [ -f "${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/QtCore" ]; then
+                lipo -info ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/QtCore || echo "QtCore lipo info failed"
+            elif [ -f "${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/Versions/Current/QtCore" ]; then
+                lipo -info ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/Versions/Current/QtCore || echo "QtCore lipo info failed"
+            else
+                echo "QtCore framework executable not found"
+                find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework -name "QtCore" -type f || echo "No QtCore executable found anywhere"
+            fi
+            echo "=== Build Environment Info ==="
+            echo "Runner architecture: $(uname -m)"
+            echo "Xcode version: $(xcode-select --version)"
+            echo "macOS version: $(sw_vers -productVersion)"
 
     - name: Pack
       run: | 
