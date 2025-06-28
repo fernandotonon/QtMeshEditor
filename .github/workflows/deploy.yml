@@ -828,11 +828,9 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
-        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}-universal-v2
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-universal-v3
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
+          ${{ runner.os }}-build-${{ env.cache-name }}-universal-v3-
           
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Check out Assimp repo
@@ -845,15 +843,34 @@ jobs:
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
-            echo "Building Assimp as universal binary"
+            echo "=== Building Assimp as universal binary ==="
+            echo "Runner architecture: $(uname -m)"
+            echo "Available Xcode SDKs:"
+            xcodebuild -showsdks | grep macosx || echo "No macOS SDKs found"
+            
+            # Configure with explicit universal binary support and proper SDK
             cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_VERBOSE_MAKEFILE=ON \
+            -DASSIMP_BUILD_TESTS=OFF \
+            -DASSIMP_BUILD_ASSIMP_TOOLS=OFF
+            
             cd /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
+            echo "=== Building Assimp ==="
             sudo make install -j8
-            echo "Verifying Assimp universal binary:"
-            lipo -info /usr/local/lib/libassimp.* || echo "Assimp lipo verification failed"
+            
+            echo "=== Verifying Assimp universal binary ==="
+            echo "Installed Assimp files:"
+            ls -la /usr/local/lib/libassimp*
+            echo "Assimp library architectures:"
+            for lib in /usr/local/lib/libassimp*.dylib; do
+                if [ -f "$lib" ]; then
+                    echo "Checking $lib:"
+                    lipo -info "$lib" || echo "Failed to check $lib"
+                fi
+            done
 
  build-n-cache-ogre-macos:
     needs: build-n-cache-assimp-macos
@@ -879,9 +896,9 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-universal-v3
         restore-keys: |
-          ${{ runner.os }}-build-${{ env.cache-name }}-
+          ${{ runner.os }}-build-${{ env.cache-name }}-universal-v3-
       
     - name: Cache Ogre
       id: cache-ogre-macos
@@ -890,7 +907,7 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-universal-v3
     
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Check out ogre repo
@@ -903,19 +920,52 @@ jobs:
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
       run: |
+            echo "=== Building Ogre3D as universal binary ==="
+            echo "Runner architecture: $(uname -m)"
+            echo "Available Xcode SDKs:"
+            xcodebuild -showsdks | grep macosx || echo "No macOS SDKs found"
+            
             cd ${{github.workspace}}/ogre/
-            echo "Building Ogre3D as universal binary"
-            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
-            -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
-            -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
-            -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
-            -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
+            
+            # Configure with explicit universal binary support and proper SDK
+            sudo cmake -S . -B build \
+            -DOGRE_BUILD_PLUGIN_ASSIMP=ON \
+            -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
+            -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON \
+            -DOGRE_BUILD_RENDERSYSTEM_GL=ON \
+            -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
+            -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF \
+            -DOGRE_BUILD_TESTS=OFF \
+            -DOGRE_BUILD_TOOLS=OFF \
+            -DOGRE_BUILD_SAMPLES=OFF \
+            -DOGRE_BUILD_COMPONENT_CSHARP=OFF \
+            -DOGRE_BUILD_COMPONENT_JAVA=OFF \
+            -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
+            -DOGRE_BUILD_COMPONENT_BITES=OFF \
+            -DOGRE_INSTALL_TOOLS=OFF \
+            -DOGRE_INSTALL_DOCS=OFF \
+            -DOGRE_INSTALL_SAMPLES=OFF \
+            -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_VERBOSE_MAKEFILE=ON \
+            -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK
+            
+            cd build
+            echo "=== Building OGRE ==="
             sudo make install -j8
-            echo "Verifying Ogre3D universal binaries:"
-            find ${{github.workspace}}/ogre/SDK -name "*.dylib" | head -3 | xargs lipo -info || echo "Ogre lipo verification failed"
+            
+            echo "=== Verifying Ogre3D universal binaries ==="
+            echo "OGRE installation structure:"
+            find ${{github.workspace}}/ogre/SDK -name "*.dylib" | head -10
+            echo "OGRE library architectures:"
+            for lib in ${{github.workspace}}/ogre/SDK/lib/*.dylib; do
+                if [ -f "$lib" ]; then
+                    echo "Checking $lib:"
+                    lipo -info "$lib" || echo "Failed to check $lib"
+                fi
+            done
 
  build-macos:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
@@ -974,7 +1024,7 @@ jobs:
                /usr/local/lib/pkgconfig/assimp.pc
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-universal-v3
       
     - name: Cache Ogre
       id: cache-ogre-macos
@@ -983,7 +1033,7 @@ jobs:
         cache-name: cache-ogre-macos
       with:
         path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-universal-v3
     
     - name: Configure CMake
       env:
@@ -1019,6 +1069,28 @@ jobs:
     - name: Build
       # Build your program with the given configuration
       run: |
+            echo "=== Build Environment Debug ==="
+            echo "Runner architecture: $(uname -m)"
+            echo "Available Assimp libraries:"
+            ls -la /usr/local/lib/libassimp* || echo "No Assimp libraries found"
+            echo "Assimp library architectures:"
+            for lib in /usr/local/lib/libassimp*.dylib; do
+                if [ -f "$lib" ]; then
+                    echo "Checking $lib:"
+                    lipo -info "$lib" || echo "Failed to check $lib"
+                fi
+            done
+            echo "Available OGRE libraries:"
+            ls -la ${{github.workspace}}/ogre/SDK/lib/*.dylib | head -5 || echo "No OGRE libraries found"
+            echo "OGRE library architectures:"
+            for lib in ${{github.workspace}}/ogre/SDK/lib/*.dylib; do
+                if [ -f "$lib" ]; then
+                    echo "Checking $lib:"
+                    lipo -info "$lib" || echo "Failed to check $lib"
+                    break  # Just check the first one to avoid too much output
+                fi
+            done
+            echo "=== Starting Build ==="
             sudo make install -j8
 
     - name: Copy Qt libs to app folder
