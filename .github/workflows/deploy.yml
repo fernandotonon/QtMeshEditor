@@ -1087,9 +1087,9 @@ jobs:
                     echo "Found direct executable: $executable"
                 else
                     echo "No executable found for $framework_name, listing contents:"
-                    find "$framework_path" -type f -executable 2>/dev/null || find "$framework_path" -type f
+                    find "$framework_path" -type f -perm /111 2>/dev/null || find "$framework_path" -type f
                     # Try to find any executable file
-                    executable=$(find "$framework_path" -type f -executable 2>/dev/null | head -1)
+                    executable=$(find "$framework_path" -type f -perm /111 2>/dev/null | head -1)
                     if [ -n "$executable" ]; then
                         echo "Found executable via search: $executable"
                     else
