@@ -936,6 +936,20 @@ jobs:
         arch: 'clang_64'
         tools: 'tools_cmake'
 
+    - name: Debug Qt Installation
+      run: |
+        echo "=== Qt Installation Debug ==="
+        echo "Qt installation directory:"
+        ls -la /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/
+        echo "Looking for lib directories:"
+        find /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/ -name "lib" -type d
+        echo "Looking for QtWidgets.framework:"
+        find /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/ -name "QtWidgets.framework" -type d
+        echo "Architecture of current runner:"
+        uname -m
+        echo "Available Qt architectures:"
+        file /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/*/bin/qmake 2>/dev/null || echo "qmake not found"
+
     - name: Cache Assimp
       id: cache-assimp-macos
       uses: actions/cache@v3
@@ -964,15 +978,29 @@ jobs:
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
+            # Detect the actual Qt path structure
+            if [ -d "/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos" ]; then
+                QT_ARCH_DIR="macos"
+            elif [ -d "/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64" ]; then
+                QT_ARCH_DIR="clang_64"
+            else
+                echo "ERROR: Could not find Qt installation directory"
+                ls -la /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/
+                exit 1
+            fi
+            
+            echo "Using Qt architecture directory: $QT_ARCH_DIR"
+            
+            # Configure with dynamic architecture detection and proper universal binary support
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
-            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
-            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6GuiTools \
+            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/cmake/Qt6 \
+            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/cmake/Qt6 \
+            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/cmake/Qt6GuiTools \
             -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/ 
     
     - name: Build
@@ -982,12 +1010,24 @@ jobs:
 
     - name: Copy Qt libs to app folder
       run: |
-            # Fix Qt framework paths for Qt 6.9.1
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
+            # Detect the actual Qt path structure
+            if [ -d "/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos" ]; then
+                QT_ARCH_DIR="macos"
+            elif [ -d "/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64" ]; then
+                QT_ARCH_DIR="clang_64"
+            else
+                echo "ERROR: Could not find Qt installation directory"
+                exit 1
+            fi
+            
+            echo "Copying Qt frameworks from: /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/"
+            
+            # Copy Qt frameworks using detected path
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
             sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
 
     - name: Prepare for packing
