@@ -31,7 +31,7 @@ jobs:
             runs-on: [self-hosted, macos-intel]  # Your Intel Mac
     runs-on: ${{ matrix.runs-on }}
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
          submodules: true
          
@@ -72,7 +72,7 @@ jobs:
 
     - name: Cache Assimp for ${{ matrix.arch }}
       id: cache-assimp
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: |
                /usr/local/lib/cmake
@@ -85,7 +85,7 @@ jobs:
         
     - name: Cache Ogre for ${{ matrix.arch }}
       id: cache-ogre
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ${{github.workspace}}/ogre-${{ matrix.arch }}/SDK
         key: ${{ runner.os }}-ogre-${{ matrix.arch }}-${{ env.OGRE_VERSION }}-v2
@@ -266,7 +266,7 @@ jobs:
           "$APP_PATH"
         
     - name: Upload ${{ matrix.arch }} artifacts
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: qtmesheditor-${{ matrix.arch }}-macos
         path: |
