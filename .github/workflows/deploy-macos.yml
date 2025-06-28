@@ -23,7 +23,15 @@ jobs:
 ####################################################################
 
  build-n-cache-assimp-macos:
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        runner: [macos-latest, macos-intel]
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-intel  
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
     - name: change folder permissions
       run: |
@@ -36,7 +44,7 @@ jobs:
       id: cache-assimp-macos
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-macos
+        cache-name: cache-assimp-macos-${{ matrix.arch }}
       with:
         path: |
                /usr/local/lib/cmake
@@ -68,7 +76,15 @@ jobs:
 
  build-n-cache-ogre-macos:
     needs: build-n-cache-assimp-macos
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        runner: [macos-latest, macos-intel]
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-intel  
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:    
     - name: change folder permissions
       run: |
@@ -81,7 +97,7 @@ jobs:
       id: cache-assimp-macos
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-macos
+        cache-name: cache-assimp-macos-${{ matrix.arch }}
       with:
         path: |
                /usr/local/lib/cmake
@@ -98,7 +114,7 @@ jobs:
       id: cache-ogre-macos
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-macos
+        cache-name: cache-ogre-macos-${{ matrix.arch }}
       with:
         path: ${{github.workspace}}/ogre/SDK
         key: ${{ runner.os }}-build-${{ env.cache-name }}
@@ -125,7 +141,15 @@ jobs:
 
  build-macos:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
-    runs-on: macos-latest
+    strategy:
+      matrix:
+        runner: [macos-latest, macos-intel]
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-intel  
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
     - name: change folder permissions
       run: |
@@ -157,7 +181,7 @@ jobs:
       id: cache-assimp-macos
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-macos
+        cache-name: cache-assimp-macos-${{ matrix.arch }}
       with:
         path: |
                /usr/local/lib/cmake
@@ -172,7 +196,7 @@ jobs:
       id: cache-ogre-macos
       uses: actions/cache@v3
       env:
-        cache-name: cache-ogre-macos
+        cache-name: cache-ogre-macos-${{ matrix.arch }}
       with:
         path: ${{github.workspace}}/ogre/SDK
         key: ${{ runner.os }}-build-${{ env.cache-name }}
@@ -225,21 +249,21 @@ jobs:
             --icon-size 100 \
             --icon "QtMeshEditor.app" 200 190 \
             --app-drop-link 600 185 \
-            QtMeshEditor-${{github.ref_name}}-MacOS.dmg \
+            QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg \
             ${{github.workspace}}/bin/QtMeshEditor.app
     
     - if: github.event_name == 'release' && github.event.action == 'published'
       uses: actions/upload-artifact@v4
       with:
-        name: QtMeshEditor-MacOS
-        path: ${{github.workspace}}/QtMeshEditor-${{github.ref_name}}-MacOS.dmg
+        name: QtMeshEditor-MacOS-${{ matrix.arch }}
+        path: ${{github.workspace}}/QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
         
     - if: github.event_name == 'release' && github.event.action == 'published'
       uses: xresloader/upload-to-github-release@main
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-          file: QtMeshEditor-${{github.ref_name}}-MacOS.dmg
+          file: QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
           update_latest_release: true
           overwrite: false
           verbose: true 
