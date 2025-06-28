@@ -830,7 +830,7 @@ jobs:
                /usr/local/lib/libzlibstatic.a
         #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
         # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        key: ${{ runner.os }}-build-${{ env.cache-name }}-universal-v2
         restore-keys: |
           ${{ runner.os }}-build-${{ env.cache-name }}-
           
@@ -845,9 +845,15 @@ jobs:
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
-            cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            echo "Building Assimp as universal binary"
+            cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp \
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
             cd /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             sudo make install -j8
+            echo "Verifying Assimp universal binary:"
+            lipo -info /usr/local/lib/libassimp.* || echo "Assimp lipo verification failed"
 
  build-n-cache-ogre-macos:
     needs: build-n-cache-assimp-macos
@@ -898,13 +904,18 @@ jobs:
       name: Build Ogre3D repo
       run: |
             cd ${{github.workspace}}/ogre/
+            echo "Building Ogre3D as universal binary"
             sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
             -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
             sudo make install -j8
+            echo "Verifying Ogre3D universal binaries:"
+            find ${{github.workspace}}/ogre/SDK -name "*.dylib" | head -3 | xargs lipo -info || echo "Ogre lipo verification failed"
 
  build-macos:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
@@ -991,13 +1002,13 @@ jobs:
             
             echo "Using Qt architecture directory: $QT_ARCH_DIR"
             
-            # Configure with explicit Intel x64 architecture for compatibility
-            echo "Building for Intel x64 architecture for maximum compatibility"
+            # Configure with universal binary support for both Intel and Apple Silicon
+            echo "Building universal binary for both Intel (x86_64) and Apple Silicon (arm64)"
             echo "GitHub runner architecture: $(uname -m)"
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_OSX_ARCHITECTURES="x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/cmake/Qt6 \
@@ -1144,6 +1155,12 @@ jobs:
             file ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
             echo "=== Detailed Architecture Info ==="
             lipo -info ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor || echo "lipo info failed"
+            echo "=== Checking for Universal Binary ==="
+            if lipo -info ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor | grep -q "arm64.*x86_64\|x86_64.*arm64"; then
+                echo "✅ SUCCESS: Universal binary detected with both architectures!"
+            else
+                echo "⚠️  WARNING: Not a universal binary or missing architecture"
+            fi
             echo "=== Qt Framework Architecture ==="
             if [ -f "${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/QtCore" ]; then
                 lipo -info ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/QtCore || echo "QtCore lipo info failed"
