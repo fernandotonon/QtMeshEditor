@@ -1063,50 +1063,102 @@ jobs:
             ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "No Frameworks directory"
             ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/ || echo "No QtCore.framework"
             
-                        # Sign all frameworks first - detect actual framework structure
+            # Function to sign frameworks properly
+            sign_framework() {
+                local framework_name=$1
+                local framework_path="${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/${framework_name}.framework"
+                
+                if [ ! -d "$framework_path" ]; then
+                    echo "Framework $framework_name not found at $framework_path"
+                    return 1
+                fi
+                
+                echo "=== Signing $framework_name framework ==="
+                echo "Framework path: $framework_path"
+                ls -la "$framework_path"
+                
+                # Find the actual executable - handle both direct and versioned structures
+                local executable=""
+                if [ -f "$framework_path/Versions/Current/$framework_name" ]; then
+                    executable="$framework_path/Versions/Current/$framework_name"
+                    echo "Found versioned executable: $executable"
+                elif [ -f "$framework_path/$framework_name" ]; then
+                    executable="$framework_path/$framework_name"
+                    echo "Found direct executable: $executable"
+                else
+                    echo "No executable found for $framework_name, listing contents:"
+                    find "$framework_path" -type f -executable 2>/dev/null || find "$framework_path" -type f
+                    # Try to find any executable file
+                    executable=$(find "$framework_path" -type f -executable 2>/dev/null | head -1)
+                    if [ -n "$executable" ]; then
+                        echo "Found executable via search: $executable"
+                    else
+                        echo "No executable found, will try to sign framework bundle directly"
+                    fi
+                fi
+                
+                # Sign the executable if found
+                if [ -n "$executable" ] && [ -f "$executable" ]; then
+                    echo "Signing executable: $executable"
+                    sudo codesign --force --verify --verbose --sign - "$executable" || {
+                        echo "Failed to sign $executable, continuing..."
+                    }
+                fi
+                
+                # Sign the framework bundle
+                echo "Signing framework bundle: $framework_path"
+                sudo codesign --force --verify --verbose --sign - "$framework_path" || {
+                    echo "Failed to sign framework bundle $framework_path"
+                    return 1
+                }
+                
+                echo "Successfully signed $framework_name framework"
+                return 0
+            }
+            
+            # Sign all frameworks
             echo "Signing Qt frameworks..."
             for framework in QtCore QtGui QtWidgets QtDBus; do
-                FRAMEWORK_PATH="${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/${framework}.framework"
-                if [ -d "$FRAMEWORK_PATH" ]; then
-                    echo "Signing $framework framework..."
-                    echo "Framework structure for $framework:"
-                    ls -la "$FRAMEWORK_PATH" || true
-                    
-                    # Sign the main framework executable (try different paths)
-                    echo "Signing $framework executable..."
-                    if [ -f "$FRAMEWORK_PATH/Versions/Current/$framework" ]; then
-                        echo "Signing $FRAMEWORK_PATH/Versions/Current/$framework"
-                        sudo codesign --force --sign - "$FRAMEWORK_PATH/Versions/Current/$framework" || echo "Failed to sign framework executable"
-                    elif [ -f "$FRAMEWORK_PATH/$framework" ]; then
-                        echo "Signing $FRAMEWORK_PATH/$framework"
-                        sudo codesign --force --sign - "$FRAMEWORK_PATH/$framework" || echo "Failed to sign framework executable"
-                    else
-                        echo "Could not find $framework executable, trying to sign framework bundle directly"
-                    fi
-                    
-                    # Sign the framework bundle itself
-                    echo "Signing $framework framework bundle..."
-                    sudo codesign --force --sign - "$FRAMEWORK_PATH" || echo "Failed to sign framework bundle $FRAMEWORK_PATH"
-                 else
-                     echo "Framework $framework not found"
-                 fi
-             done
+                sign_framework "$framework"
+            done
             
             # Sign plugins
             echo "Signing plugins..."
-            find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/ -name "*.dylib" -exec sudo codesign --force --sign - {} \; 2>/dev/null || echo "No plugins found to sign"
+            if [ -d "${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/" ]; then
+                find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/ -name "*.dylib" | while read -r plugin; do
+                    echo "Signing plugin: $plugin"
+                    sudo codesign --force --sign - "$plugin" || echo "Failed to sign $plugin"
+                done
+            fi
             
             # Sign any dynamic libraries in MacOS directory
-            echo "Signing dynamic libraries..."
-            find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ -name "*.dylib" -exec sudo codesign --force --sign - {} \; 2>/dev/null || echo "No dylibs found to sign"
+            echo "Signing dynamic libraries in MacOS directory..."
+            if [ -d "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/" ]; then
+                find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ -name "*.dylib" | while read -r lib; do
+                    echo "Signing library: $lib"
+                    sudo codesign --force --sign - "$lib" || echo "Failed to sign $lib"
+                done
+            fi
             
             # Sign the main executable
             echo "Signing main executable..."
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+            main_exec="${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor"
+            if [ -f "$main_exec" ]; then
+                sudo codesign --force --verify --verbose --sign - "$main_exec" || {
+                    echo "Failed to sign main executable"
+                    exit 1
+                }
+            else
+                echo "Main executable not found at $main_exec"
+                exit 1
+            fi
             
             # Finally sign the entire app bundle
             echo "Signing app bundle..."
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app
+            sudo codesign --force --verify --verbose --sign - ${{github.workspace}}/bin/QtMeshEditor.app || {
+                echo "Failed to sign app bundle"
+                exit 1
+            }
             
             echo "Code signing completed successfully"
             
