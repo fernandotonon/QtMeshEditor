@@ -1058,21 +1058,42 @@ jobs:
             # Debug: Show app bundle structure
             echo "App bundle structure:"
             find ${{github.workspace}}/bin/QtMeshEditor.app -type f -name "Qt*" | head -20
+            echo ""
+            echo "Framework structure:"
+            ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "No Frameworks directory"
+            ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/ || echo "No QtCore.framework"
             
-            # Sign all frameworks first (in correct Frameworks directory)
+            # Sign all frameworks first - detect actual framework structure
             echo "Signing Qt frameworks..."
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/Versions/Current/QtCore || true
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtGui.framework/Versions/Current/QtGui || true
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtWidgets.framework/Versions/Current/QtWidgets || true
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtDBus.framework/Versions/Current/QtDBus || true
+            for framework in QtCore QtGui QtWidgets QtDBus; do
+                FRAMEWORK_PATH="${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/${framework}.framework"
+                if [ -d "$FRAMEWORK_PATH" ]; then
+                    echo "Signing $framework framework..."
+                    # Try different possible framework structures
+                    if [ -f "$FRAMEWORK_PATH/Versions/Current/$framework" ]; then
+                        sudo codesign --force --sign - "$FRAMEWORK_PATH/Versions/Current/$framework" || true
+                    elif [ -f "$FRAMEWORK_PATH/$framework" ]; then
+                        sudo codesign --force --sign - "$FRAMEWORK_PATH/$framework" || true
+                    elif [ -f "$FRAMEWORK_PATH/Versions/A/$framework" ]; then
+                        sudo codesign --force --sign - "$FRAMEWORK_PATH/Versions/A/$framework" || true
+                    else
+                        echo "Could not find executable for $framework framework"
+                        find "$FRAMEWORK_PATH" -type f -perm +111 | head -5
+                    fi
+                    # Sign the framework itself
+                    sudo codesign --force --sign - "$FRAMEWORK_PATH" || true
+                else
+                    echo "Framework $framework not found"
+                fi
+            done
             
             # Sign plugins
             echo "Signing plugins..."
-            find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/ -name "*.dylib" -exec sudo codesign --force --sign - {} \; || true
+            find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/ -name "*.dylib" -exec sudo codesign --force --sign - {} \; 2>/dev/null || echo "No plugins found to sign"
             
             # Sign any dynamic libraries in MacOS directory
             echo "Signing dynamic libraries..."
-            find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ -name "*.dylib" -exec sudo codesign --force --sign - {} \; || true
+            find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ -name "*.dylib" -exec sudo codesign --force --sign - {} \; 2>/dev/null || echo "No dylibs found to sign"
             
             # Sign the main executable
             echo "Signing main executable..."
