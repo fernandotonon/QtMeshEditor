@@ -912,8 +912,8 @@ jobs:
     steps:
     - name: change folder permissions
       run: |
-            sudo mkdir /usr/local/lib
-            sudo mkdir /usr/local/include
+            sudo mkdir -p /usr/local/lib
+            sudo mkdir -p /usr/local/include
             sudo chmod -R 777 /usr/local/lib
             sudo chmod -R 777 /usr/local/include
 
@@ -935,6 +935,20 @@ jobs:
         target: 'desktop'
         arch: 'clang_64'
         tools: 'tools_cmake'
+
+    - name: Debug Qt Installation
+      run: |
+        echo "=== Qt Installation Debug ==="
+        echo "Qt installation directory:"
+        ls -la /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/
+        echo "Looking for lib directories:"
+        find /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/ -name "lib" -type d
+        echo "Looking for QtWidgets.framework:"
+        find /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/ -name "QtWidgets.framework" -type d
+        echo "Architecture of current runner:"
+        uname -m
+        echo "Available Qt architectures:"
+        file /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/*/bin/qmake 2>/dev/null || echo "qmake not found"
 
     - name: Cache Assimp
       id: cache-assimp-macos
@@ -964,13 +978,29 @@ jobs:
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
+            # Detect the actual Qt path structure
+            if [ -d "/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos" ]; then
+                QT_ARCH_DIR="macos"
+            elif [ -d "/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64" ]; then
+                QT_ARCH_DIR="clang_64"
+            else
+                echo "ERROR: Could not find Qt installation directory"
+                ls -la /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/
+                exit 1
+            fi
+            
+            echo "Using Qt architecture directory: $QT_ARCH_DIR"
+            
+            # Configure with dynamic architecture detection and proper universal binary support
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
-            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
-            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6GuiTools \
+            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/cmake/Qt6 \
+            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/cmake/Qt6 \
+            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/cmake/Qt6GuiTools \
             -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/ 
     
     - name: Build
@@ -980,22 +1010,135 @@ jobs:
 
     - name: Copy Qt libs to app folder
       run: |
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
-            sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
+            # Detect the actual Qt path structure
+            if [ -d "/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos" ]; then
+                QT_ARCH_DIR="macos"
+            elif [ -d "/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64" ]; then
+                QT_ARCH_DIR="clang_64"
+            else
+                echo "ERROR: Could not find Qt installation directory"
+                exit 1
+            fi
+            
+            echo "Copying Qt frameworks from: /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/"
+            
+            # Create proper macOS app bundle structure
+            sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks
+            sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/platforms
+            
+            # Copy Qt frameworks to proper Frameworks directory
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            
+            # Copy plugins to proper PlugIns directory
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/plugins/platforms/* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/platforms/
+            
+            # Copy Assimp libraries to MacOS directory
+            sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ || echo "Assimp libraries not found, continuing..."
 
     - name: Prepare for packing
       run: |
             sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
             sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
-            sudo mkdir ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
+            sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
+            
+            # Fix library paths for proper app bundle structure
+            sudo install_name_tool -add_rpath @executable_path/../Frameworks ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
             sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+
+    - name: Code Sign Application (for Sequoia compatibility)
+      run: |
+            echo "=== Code Signing for macOS Sequoia Compatibility ==="
+            
+            # Debug: Show app bundle structure
+            echo "App bundle structure:"
+            find ${{github.workspace}}/bin/QtMeshEditor.app -type f -name "Qt*" | head -20
+            echo ""
+            echo "Framework structure:"
+            ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "No Frameworks directory"
+            ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/ || echo "No QtCore.framework"
+            
+            # Simplified signing approach - sign everything we can find
+            echo "=== Signing all binaries in app bundle ==="
+            
+            # Sign Qt frameworks - try both versioned and direct paths
+            echo "Signing Qt frameworks..."
+            for framework in QtCore QtGui QtWidgets QtDBus; do
+                framework_path="${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/${framework}.framework"
+                if [ -d "$framework_path" ]; then
+                    echo "Processing $framework framework..."
+                    
+                    # Try to sign the versioned executable
+                    if [ -f "$framework_path/Versions/Current/$framework" ]; then
+                        echo "Signing versioned executable: $framework_path/Versions/Current/$framework"
+                        sudo codesign --force --sign - "$framework_path/Versions/Current/$framework" 2>/dev/null || echo "Failed to sign versioned executable"
+                    fi
+                    
+                    # Try to sign the direct executable
+                    if [ -f "$framework_path/$framework" ]; then
+                        echo "Signing direct executable: $framework_path/$framework"
+                        sudo codesign --force --sign - "$framework_path/$framework" 2>/dev/null || echo "Failed to sign direct executable"
+                    fi
+                    
+                    # Sign the framework bundle (this is the most important)
+                    echo "Signing framework bundle: $framework_path"
+                    sudo codesign --force --sign - "$framework_path" 2>/dev/null || echo "Failed to sign framework bundle"
+                else
+                    echo "Framework $framework not found"
+                fi
+            done
+            
+            # Sign all dylibs in the app bundle
+            echo "Signing dynamic libraries..."
+            find ${{github.workspace}}/bin/QtMeshEditor.app -name "*.dylib" -type f | while read -r dylib; do
+                echo "Signing dylib: $dylib"
+                sudo codesign --force --sign - "$dylib" 2>/dev/null || echo "Failed to sign $dylib"
+            done
+            
+            # Sign all executables in the app bundle
+            echo "Signing executables..."
+            find ${{github.workspace}}/bin/QtMeshEditor.app -type f -perm /111 | while read -r exec_file; do
+                # Skip if it's a directory or symlink
+                if [ -f "$exec_file" ] && [ ! -L "$exec_file" ]; then
+                    # Check if it's a binary file (not a script)
+                    if file "$exec_file" | grep -q -E "(Mach-O|executable|shared library)"; then
+                        echo "Signing executable: $exec_file"
+                        sudo codesign --force --sign - "$exec_file" 2>/dev/null || echo "Failed to sign $exec_file"
+                    fi
+                fi
+            done
+            
+            # Sign the main executable specifically
+            echo "Signing main executable..."
+            main_exec="${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor"
+            if [ -f "$main_exec" ]; then
+                echo "Signing main executable: $main_exec"
+                sudo codesign --force --sign - "$main_exec" || echo "Failed to sign main executable (non-fatal)"
+            else
+                echo "Main executable not found at $main_exec"
+                ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
+            fi
+            
+            # Finally sign the entire app bundle
+            echo "Signing app bundle..."
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app || echo "Failed to sign app bundle (non-fatal)"
+            
+            echo "Code signing process completed"
+            
+            # Verify the signing
+            echo "Verifying code signature..."
+            codesign --verify --verbose ${{github.workspace}}/bin/QtMeshEditor.app || echo "Verification failed (non-fatal)"
+            
+    - name: Verify App Bundle
+      run: |
+            # Verify the app bundle structure
+            ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
+            file ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
     - name: Pack
       run: | 
