@@ -1072,16 +1072,21 @@ jobs:
                     echo "Framework structure for $framework:"
                     ls -la "$FRAMEWORK_PATH" || true
                     
-                    # Find and sign all executables in the framework
-                    echo "Looking for executables in $framework framework..."
-                    find "$FRAMEWORK_PATH" -type f -executable 2>/dev/null | while read -r exec_file; do
-                        echo "Signing executable: $exec_file"
-                        sudo codesign --force --sign - "$exec_file" 2>/dev/null || echo "Failed to sign $exec_file"
-                    done
+                    # Sign the main framework executable (try different paths)
+                    echo "Signing $framework executable..."
+                    if [ -f "$FRAMEWORK_PATH/Versions/Current/$framework" ]; then
+                        echo "Signing $FRAMEWORK_PATH/Versions/Current/$framework"
+                        sudo codesign --force --sign - "$FRAMEWORK_PATH/Versions/Current/$framework" || echo "Failed to sign framework executable"
+                    elif [ -f "$FRAMEWORK_PATH/$framework" ]; then
+                        echo "Signing $FRAMEWORK_PATH/$framework"
+                        sudo codesign --force --sign - "$FRAMEWORK_PATH/$framework" || echo "Failed to sign framework executable"
+                    else
+                        echo "Could not find $framework executable, trying to sign framework bundle directly"
+                    fi
                     
                     # Sign the framework bundle itself
                     echo "Signing $framework framework bundle..."
-                    sudo codesign --force --sign - "$FRAMEWORK_PATH" 2>/dev/null || echo "Failed to sign framework bundle $FRAMEWORK_PATH"
+                    sudo codesign --force --sign - "$FRAMEWORK_PATH" || echo "Failed to sign framework bundle $FRAMEWORK_PATH"
                  else
                      echo "Framework $framework not found"
                  fi
