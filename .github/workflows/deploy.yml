@@ -1022,13 +1022,21 @@ jobs:
             
             echo "Copying Qt frameworks from: /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/"
             
-            # Copy Qt frameworks using detected path
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
-            sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
+            # Create proper macOS app bundle structure
+            sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks
+            sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/platforms
+            
+            # Copy Qt frameworks to proper Frameworks directory
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            
+            # Copy plugins to proper PlugIns directory
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/plugins/platforms/* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/platforms/
+            
+            # Copy Assimp libraries to MacOS directory
+            sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ || echo "Assimp libraries not found, continuing..."
 
     - name: Prepare for packing
       run: |
@@ -1038,20 +1046,31 @@ jobs:
             sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
+            
+            # Fix library paths for proper app bundle structure
+            sudo install_name_tool -add_rpath @executable_path/../Frameworks ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
             sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
     - name: Code Sign Application (for Sequoia compatibility)
       run: |
             echo "=== Code Signing for macOS Sequoia Compatibility ==="
             
-            # Sign all frameworks first
-            echo "Signing Qt frameworks..."
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework/Versions/Current/QtCore || true
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework/Versions/Current/QtGui || true
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework/Versions/Current/QtWidgets || true
-            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework/Versions/Current/QtDBus || true
+            # Debug: Show app bundle structure
+            echo "App bundle structure:"
+            find ${{github.workspace}}/bin/QtMeshEditor.app -type f -name "Qt*" | head -20
             
-            # Sign any dynamic libraries
+            # Sign all frameworks first (in correct Frameworks directory)
+            echo "Signing Qt frameworks..."
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtCore.framework/Versions/Current/QtCore || true
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtGui.framework/Versions/Current/QtGui || true
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtWidgets.framework/Versions/Current/QtWidgets || true
+            sudo codesign --force --sign - ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/QtDBus.framework/Versions/Current/QtDBus || true
+            
+            # Sign plugins
+            echo "Signing plugins..."
+            find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/ -name "*.dylib" -exec sudo codesign --force --sign - {} \; || true
+            
+            # Sign any dynamic libraries in MacOS directory
             echo "Signing dynamic libraries..."
             find ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ -name "*.dylib" -exec sudo codesign --force --sign - {} \; || true
             
