@@ -1,0 +1,308 @@
+name: macOS Matrix Build (Separate Architectures)
+
+on: 
+   push:
+      branches: [ "master" ]
+   pull_request:
+      branches: [ "master" ]
+   release:
+      types: [published]
+
+env:
+  BUILD_TYPE: Release
+  AQT_VERSION: '==3.3.*'
+  QT_VERSION: '6.9.1'
+  ASSIMP_VERSION: '6.0.2'
+  ASSIMP_DIR_VERSION: '6.0'
+  OGRE_VERSION: '14.3.4'
+
+jobs:
+  ####################################################################
+  # Build QtMeshEditor using matrix strategy for both architectures
+  ####################################################################
+  build-macos:
+    strategy:
+      matrix:
+        arch: [arm64, x86_64]
+        include:
+          - arch: arm64
+            runs-on: macos-latest  # GitHub-hosted ARM64 runner
+          - arch: x86_64
+            runs-on: [self-hosted, macos-intel]  # Your Intel Mac
+    runs-on: ${{ matrix.runs-on }}
+    steps:
+    - uses: actions/checkout@v3
+      with:
+         submodules: true
+         
+    - name: Verify build environment for ${{ matrix.arch }}
+      run: |
+        echo "=== Building QtMeshEditor for ${{ matrix.arch }} ==="
+        echo "Runner architecture: $(uname -m)"
+        echo "Expected architecture: ${{ matrix.arch }}"
+        echo "macOS version: $(sw_vers -productVersion)"
+        
+        # Verify we're on the right architecture
+        if [ "${{ matrix.arch }}" = "arm64" ] && [ "$(uname -m)" != "arm64" ]; then
+          echo "❌ ERROR: Expected ARM64 runner but got $(uname -m)"
+          exit 1
+        elif [ "${{ matrix.arch }}" = "x86_64" ] && [ "$(uname -m)" != "x86_64" ]; then
+          echo "❌ ERROR: Expected x86_64 runner but got $(uname -m)"
+          exit 1
+        fi
+        echo "✅ Architecture verified correctly"
+         
+    - name: Setup dependencies
+      run: |
+        sudo mkdir -p /usr/local/lib /usr/local/include
+        sudo chmod -R 777 /usr/local/lib /usr/local/include
+        cd ${{github.workspace}}/src/dependencies/ogre-procedural
+        git checkout master
+        git pull
+            
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
+        host: 'mac'
+        target: 'desktop'
+        arch: 'clang_64'
+        tools: 'tools_cmake'
+
+    - name: Cache Assimp for ${{ matrix.arch }}
+      id: cache-assimp
+      uses: actions/cache@v3
+      with:
+        path: |
+               /usr/local/lib/cmake
+               /usr/local/include/assimp
+               /usr/local/include/contrib
+               /usr/local/lib/pkgconfig/assimp.pc
+               /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
+        key: ${{ runner.os }}-assimp-${{ matrix.arch }}-${{ env.ASSIMP_VERSION }}-v2
+        
+    - name: Cache Ogre for ${{ matrix.arch }}
+      id: cache-ogre
+      uses: actions/cache@v3
+      with:
+        path: ${{github.workspace}}/ogre-${{ matrix.arch }}/SDK
+        key: ${{ runner.os }}-ogre-${{ matrix.arch }}-${{ env.OGRE_VERSION }}-v2
+        
+    - if: steps.cache-assimp.outputs.cache-hit != 'true'
+      name: Build Assimp for ${{ matrix.arch }}
+      run: |
+        git clone --depth 1 --branch v${{ env.ASSIMP_VERSION }} https://github.com/assimp/assimp.git assimp-src
+        mkdir assimp-build && cd assimp-build
+        cmake ../assimp-src \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+          -DASSIMP_BUILD_TESTS=OFF \
+          -DASSIMP_BUILD_ASSIMP_TOOLS=OFF
+        make -j$(sysctl -n hw.ncpu)
+        sudo make install
+        
+    - if: steps.cache-ogre.outputs.cache-hit != 'true'
+      name: Build Ogre for ${{ matrix.arch }}
+      run: |
+        git clone --depth 1 --branch v${{ env.OGRE_VERSION }} https://github.com/OGRECave/ogre.git ogre-src
+        mkdir -p ogre-${{ matrix.arch }}/build && cd ogre-${{ matrix.arch }}/build
+        cmake ../../ogre-src \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+          -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre-${{ matrix.arch }}/SDK \
+          -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
+          -DOGRE_BUILD_PLUGIN_ASSIMP=ON \
+          -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON \
+          -DOGRE_BUILD_RENDERSYSTEM_GL=ON \
+          -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
+          -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF \
+          -DOGRE_BUILD_TESTS=OFF \
+          -DOGRE_BUILD_TOOLS=OFF \
+          -DOGRE_BUILD_SAMPLES=OFF \
+          -DOGRE_BUILD_COMPONENT_CSHARP=OFF \
+          -DOGRE_BUILD_COMPONENT_JAVA=OFF \
+          -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
+          -DOGRE_INSTALL_TOOLS=OFF \
+          -DOGRE_INSTALL_DOCS=OFF \
+          -DOGRE_INSTALL_SAMPLES=OFF \
+          -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF
+        make -j$(sysctl -n hw.ncpu) install
+    
+    - name: Configure CMake for ${{ matrix.arch }}
+      env:
+         OGRE_DIR: ${{github.workspace}}/ogre-${{ matrix.arch }}/SDK/CMake/
+      run: |
+        echo "Configuring CMake for ${{ matrix.arch }} architecture"
+        cmake -S . -B build-${{ matrix.arch }} \
+          -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+          -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+          -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
+          -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
+          -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
+          -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
+          -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6GuiTools \
+          -DOGRE_DIR=${{github.workspace}}/ogre-${{ matrix.arch }}/SDK/CMake/ \
+          -DBUILD_TESTS=OFF
+    
+    - name: Build QtMeshEditor for ${{ matrix.arch }}
+      run: |
+        echo "Building QtMeshEditor for ${{ matrix.arch }}"
+        cmake --build build-${{ matrix.arch }} --config ${{ env.BUILD_TYPE }} --parallel $(sysctl -n hw.ncpu)
+        
+    - name: Install and verify ${{ matrix.arch }} build
+      run: |
+        cd build-${{ matrix.arch }}
+        sudo make install
+        
+        echo "=== ${{ matrix.arch }} Binary Verification ==="
+        if [ -f "bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor" ]; then
+          lipo -info bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+          file bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+          
+          # Verify architecture is correct
+          if ! lipo -info bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor | grep -q "${{ matrix.arch }}"; then
+            echo "❌ ERROR: Binary does not contain ${{ matrix.arch }} architecture"
+            exit 1
+          fi
+          echo "✅ ${{ matrix.arch }} binary verified successfully"
+        else
+          echo "❌ Binary not found"
+          find . -name "QtMeshEditor" -type f
+          exit 1
+        fi
+
+    - name: Copy Qt frameworks and dependencies for ${{ matrix.arch }}
+      run: |
+        echo "Copying Qt frameworks for ${{ matrix.arch }}"
+        APP_PATH="build-${{ matrix.arch }}/bin/QtMeshEditor.app"
+        
+        # Detect Qt installation path
+        if [ -d "/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos" ]; then
+            QT_LIB_DIR="/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib"
+            QT_PLUGINS_DIR="/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/plugins"
+        else
+            QT_LIB_DIR="/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib"
+            QT_PLUGINS_DIR="/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/plugins"
+        fi
+        
+        # Create proper app bundle structure
+        sudo mkdir -p "$APP_PATH/Contents/Frameworks"
+        sudo mkdir -p "$APP_PATH/Contents/PlugIns/platforms"
+        
+        # Copy Qt frameworks
+        sudo cp -R "$QT_LIB_DIR/QtWidgets.framework" "$APP_PATH/Contents/Frameworks/" || echo "QtWidgets.framework not found"
+        sudo cp -R "$QT_LIB_DIR/QtCore.framework" "$APP_PATH/Contents/Frameworks/" || echo "QtCore.framework not found"
+        sudo cp -R "$QT_LIB_DIR/QtGui.framework" "$APP_PATH/Contents/Frameworks/" || echo "QtGui.framework not found"
+        sudo cp -R "$QT_LIB_DIR/QtDBus.framework" "$APP_PATH/Contents/Frameworks/" || echo "QtDBus.framework not found"
+        
+        # Copy plugins
+        sudo cp -R "$QT_PLUGINS_DIR/platforms"/* "$APP_PATH/Contents/PlugIns/platforms/" || echo "Platforms plugins not found"
+        
+        # Copy Assimp libraries
+        sudo cp -R /usr/local/lib/libassimp* "$APP_PATH/Contents/MacOS/" || echo "Assimp libraries not found"
+        
+        # Copy resources
+        sudo cp -R "${{github.workspace}}/bin/media" "$APP_PATH/Contents/MacOS/media" || echo "Media not found"
+        sudo cp -R "${{github.workspace}}/bin/cfg" "$APP_PATH/Contents/MacOS/cfg" || echo "Cfg not found"
+        sudo mkdir -p "$APP_PATH/Contents/Resources"
+        sudo cp -R "${{github.workspace}}/resources/icon.icns" "$APP_PATH/Contents/Resources/" || echo "Icon not found"
+        sudo cp -R "${{github.workspace}}/bin/Info.plist" "$APP_PATH/Contents/" || echo "Info.plist not found"
+        
+        # Fix library paths
+        sudo install_name_tool -add_rpath @executable_path/../Frameworks "$APP_PATH/Contents/MacOS/QtMeshEditor" || echo "install_name_tool failed"
+        sudo install_name_tool -add_rpath @loader_path/ "$APP_PATH/Contents/MacOS/QtMeshEditor" || echo "install_name_tool failed"
+
+    - name: Code sign ${{ matrix.arch }} app bundle
+      run: |
+        echo "Code signing ${{ matrix.arch }} app bundle"
+        APP_PATH="build-${{ matrix.arch }}/bin/QtMeshEditor.app"
+        
+        # Sign frameworks
+        find "$APP_PATH/Contents/Frameworks" -name "*.framework" -type d | while read framework; do
+          echo "Signing framework: $framework"
+          sudo codesign --force --sign - "$framework" || echo "Failed to sign $framework"
+        done
+        
+        # Sign libraries
+        find "$APP_PATH" -name "*.dylib" -type f | while read lib; do
+          echo "Signing library: $lib"
+          sudo codesign --force --sign - "$lib" || echo "Failed to sign $lib"
+        done
+        
+        # Sign main executable
+        sudo codesign --force --sign - "$APP_PATH/Contents/MacOS/QtMeshEditor" || echo "Failed to sign main executable"
+        
+        # Sign entire app bundle
+        sudo codesign --force --sign - "$APP_PATH" || echo "Failed to sign app bundle"
+        
+        # Verify signing
+        codesign --verify --verbose "$APP_PATH" || echo "Verification failed (non-fatal)"
+
+    - name: Create DMG for ${{ matrix.arch }}
+      run: |
+        echo "Creating DMG for ${{ matrix.arch }}"
+        APP_PATH="build-${{ matrix.arch }}/bin/QtMeshEditor.app"
+        
+        # Install create-dmg if needed
+        if ! command -v create-dmg &> /dev/null; then
+          brew install create-dmg
+        fi
+        
+        # Create DMG
+        create-dmg \
+          --volname "QtMeshEditor ${{ matrix.arch }}" \
+          --volicon "${{github.workspace}}/resources/icon.icns" \
+          --window-pos 200 120 \
+          --window-size 800 400 \
+          --icon-size 100 \
+          --icon "QtMeshEditor.app" 200 190 \
+          --app-drop-link 600 185 \
+          "QtMeshEditor-${GITHUB_REF_NAME:-latest}-${{ matrix.arch }}-macOS.dmg" \
+          "$APP_PATH"
+        
+    - name: Upload ${{ matrix.arch }} artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: qtmesheditor-${{ matrix.arch }}-macos
+        path: |
+          build-${{ matrix.arch }}/bin/QtMeshEditor.app
+          QtMeshEditor-*-${{ matrix.arch }}-macOS.dmg
+        retention-days: 30
+        
+    - name: Upload ${{ matrix.arch }} DMG to release
+      if: github.event_name == 'release' && github.event.action == 'published'
+      uses: xresloader/upload-to-github-release@main
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        file: QtMeshEditor-*-${{ matrix.arch }}-macOS.dmg
+        update_latest_release: true
+        overwrite: false
+        verbose: true
+
+    - name: Final verification for ${{ matrix.arch }}
+      run: |
+        echo "=== Final ${{ matrix.arch }} Build Report ==="
+        APP_PATH="build-${{ matrix.arch }}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor"
+        
+        echo "Binary info:"
+        file "$APP_PATH"
+        echo ""
+        
+        echo "Architecture verification:"
+        lipo -info "$APP_PATH"
+        echo ""
+        
+        echo "File size: $(stat -f%z "$APP_PATH") bytes"
+        
+        if lipo -info "$APP_PATH" | grep -q "${{ matrix.arch }}"; then
+          echo "✅ SUCCESS: ${{ matrix.arch }} binary is correct!"
+        else
+          echo "❌ ERROR: ${{ matrix.arch }} binary verification failed"
+          exit 1
+        fi 

@@ -1,6 +1,6 @@
-# Dual Runner vs Single Runner: Universal Binary Approaches
+# Matrix Strategy vs Single Runner: Separate Architecture Binaries
 
-This document compares the current single-runner approach with the new dual-runner `lipo -create` approach for building universal binaries.
+This document compares the current single-runner approach with the new matrix strategy approach for building separate architecture binaries.
 
 ## Current Approach: Single Runner with CMAKE_OSX_ARCHITECTURES
 
@@ -19,36 +19,33 @@ make
                      +-> Output: Universal binary
 ```
 
-## New Approach: Dual Runner with lipo -create
+## New Approach: Matrix Strategy with Separate Binaries
 
 ### How it works:
 ```yaml
-# Job 1: ARM64 build
-runs-on: macos-latest  # GitHub ARM64 runner
-cmake -DCMAKE_OSX_ARCHITECTURES=arm64 ..
+strategy:
+  matrix:
+    arch: [arm64, x86_64]
+    include:
+      - arch: arm64
+        runs-on: macos-latest  # GitHub ARM64 runner
+      - arch: x86_64  
+        runs-on: [self-hosted, macos-intel]  # Your Intel Mac
 
-# Job 2: x86_64 build  
-runs-on: [self-hosted, macOS, x64]  # Your Intel Mac
-cmake -DCMAKE_OSX_ARCHITECTURES=x86_64 ..
-
-# Job 3: Combine
-lipo -create -output universal arm64-binary x86_64-binary
+# Each job builds for its specific architecture
+cmake -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} ..
 ```
 
 ### Architecture:
 ```
-[GitHub ARM64 Runner] -> [ARM64 Binary] ----+
-                                             |
-                                             v
-                                        [lipo -create] -> [Universal Binary]
-                                             ^
-                                             |
-[Intel Mac Self-hosted] -> [x86_64 Binary] -+
+[GitHub ARM64 Runner] -> [ARM64 Binary] -> [ARM64 DMG]
+                                             
+[Intel Mac Self-hosted] -> [x86_64 Binary] -> [x86_64 DMG]
 ```
 
 ## Detailed Comparison
 
-| Aspect | Current (Single Runner) | New (Dual Runner) |
+| Aspect | Current (Single Runner) | New (Matrix Strategy) |
 |--------|------------------------|-------------------|
 | **Build Time** | ⚠️ Slower (sequential cross-compile) | ✅ Faster (parallel native builds) |
 | **GitHub Actions Cost** | 💰 Higher (all minutes on GitHub) | 💰 Lower (x86_64 on your hardware) |
@@ -57,7 +54,8 @@ lipo -create -output universal arm64-binary x86_64-binary
 | **Setup Complexity** | ✅ Simple (single runner) | ❌ Complex (self-hosted setup) |
 | **Resource Usage** | ❌ GitHub runner does everything | ✅ Distributed across machines |
 | **Architecture Separation** | ❌ Same config for both | ✅ Different configs possible |
-| **Dependency Management** | ❌ Must be universal | ✅ Can be architecture-specific |
+| **Distribution** | ❌ Universal binary (larger) | ✅ Separate binaries (smaller each) |
+| **User Choice** | ❌ One size fits all | ✅ Users download their architecture |
 | **Testing** | ❌ Can't test individual archs | ✅ Can test each arch separately |
 | **Maintenance** | ✅ Zero maintenance | ❌ Runner maintenance required |
 
@@ -78,26 +76,19 @@ Parallel Jobs:
 ├── GitHub Runner (ARM64):
 │   ├── Configure: ~1 min
 │   ├── Build ARM64: ~7 min
-│   └── Package: ~1 min
-│   └── Subtotal: ~9 min
+│   ├── Package ARM64 DMG: ~2 min
+│   └── Subtotal: ~10 min
 │
 ├── Intel Mac (x86_64):
 │   ├── Configure: ~1 min  
 │   ├── Build x86_64: ~7 min
-│   └── Package: ~1 min
-│   └── Subtotal: ~9 min
-│
-└── Combine Job:
-    ├── Download artifacts: ~1 min
-    ├── lipo -create: ~30 sec
-    ├── Code sign: ~1 min
-    └── Create DMG: ~2 min
-    └── Subtotal: ~5 min
+│   ├── Package x86_64 DMG: ~2 min
+│   └── Subtotal: ~10 min
 
-Total: ~14 min (9 min parallel + 5 min sequential)
+Total: ~10 min (fully parallel)
 ```
 
-**Result: ~30% faster builds** 🚀
+**Result: ~50% faster builds** 🚀
 
 ## Reliability Comparison
 
@@ -124,13 +115,12 @@ Total: ~14 min (9 min parallel + 5 min sequential)
 
 **New Approach:**
 ```
-GitHub Runner: 9 minutes × 10x = 90 minutes
-Intel Mac: 9 minutes × 0x = 0 minutes (your hardware)
-Combine Job: 5 minutes × 10x = 50 minutes
-Total: 140 GitHub minutes per build
+GitHub Runner: 10 minutes × 10x = 100 minutes
+Intel Mac: 10 minutes × 0x = 0 minutes (your hardware)
+Total: 100 GitHub minutes per build
 ```
 
-**Savings: 30% reduction in GitHub Actions costs** 💰
+**Savings: 50% reduction in GitHub Actions costs** 💰
 
 ## Migration Strategy
 
@@ -170,18 +160,19 @@ Total: 140 GitHub minutes per build
 
 ## Recommendation
 
-**Recommended approach: Dual Runner with lipo -create**
+**Recommended approach: Matrix Strategy with Separate Binaries**
 
 ### Why:
 1. **Better reliability**: Native builds are more reliable than cross-compilation
-2. **Cost savings**: 30% reduction in GitHub Actions minutes
-3. **Performance**: 30% faster build times  
+2. **Cost savings**: 50% reduction in GitHub Actions minutes
+3. **Performance**: 50% faster build times  
 4. **Debugging**: Much easier to troubleshoot architecture-specific issues
-5. **Future-proofing**: Better foundation for additional architectures
+5. **User choice**: Smaller downloads, users pick their architecture
+6. **Future-proofing**: Better foundation for additional architectures
 
 ### Implementation Plan:
 1. Follow `SELF_HOSTED_RUNNER_SETUP.md` to set up your Intel Mac
-2. Test using the new workflow `.github/workflows/dual-runner-universal.yml`
+2. Test using the new workflow `.github/workflows/macos-matrix-build.yml`
 3. Compare results with current approach
 4. Switch over once confident in the new system
 
@@ -189,14 +180,14 @@ Total: 140 GitHub minutes per build
 
 ### Key Metrics to Track:
 - **Build success rate**: Should improve with native builds
-- **Build time**: Target 30% improvement
-- **GitHub Actions cost**: Target 30% reduction  
+- **Build time**: Target 50% improvement
+- **GitHub Actions cost**: Target 50% reduction  
 - **Issue resolution time**: Should be faster with better debugging
 
 ### Success Criteria:
-- ✅ Universal binaries pass all architecture tests
-- ✅ Build times under 15 minutes
+- ✅ Architecture-specific binaries pass all tests
+- ✅ Build times under 12 minutes
 - ✅ 95%+ build success rate
 - ✅ Zero architecture-related issues for 2 weeks
 
-This dual-runner approach gives you the perfect implementation of your `lipo -create` idea! 🎯 
+This matrix strategy approach gives you clean, separate architecture binaries with much better performance! 🎯 
