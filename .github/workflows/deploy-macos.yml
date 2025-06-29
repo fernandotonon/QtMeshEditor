@@ -1,0 +1,265 @@
+name: Deploy macOS
+
+on: 
+   push:
+      branches: [ "master" ]
+   release:
+      types: [published]
+   workflow_dispatch:
+
+env:
+  # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
+  BUILD_TYPE: Release
+  AQT_VERSION: '==3.3.*'
+  QT_VERSION: '6.9.1'
+  ASSIMP_VERSION: '6.0.2'
+  ASSIMP_DIR_VERSION: '6.0'
+  OGRE_VERSION: '14.3.4'
+
+jobs:
+####################################################################
+# MacOS Deploy 
+####################################################################
+
+ build-n-cache-assimp-macos:
+    strategy:
+      matrix:
+        runner: [macos-latest, macos-latest-large]
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-latest-large  
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - name: change folder permissions
+      run: |
+            sudo mkdir -p /usr/local/lib
+            sudo mkdir -p /usr/local/include
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
+    - name: Cache Assimp
+      id: cache-assimp-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-macos-${{ matrix.arch }}
+      with:
+        path: |
+               /usr/local/lib/cmake
+               /usr/local/include/assimp
+               /usr/local/include/contrib
+               /usr/local/lib/pkgconfig/assimp.pc
+               /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
+        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
+        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+          
+    - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
+      name: Check out Assimp repo
+      uses: actions/checkout@master
+      with:
+          repository: assimp/assimp
+          ref: v${{ env.ASSIMP_VERSION }}
+          path: ${{github.workspace}}/assimp
+      
+    - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
+      name: Build Assimp repo
+      run: |
+            cmake -B ${{github.workspace}}/assimp-build -S ${{github.workspace}}/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cd ${{github.workspace}}/assimp-build/
+            make -j8
+            sudo make install
+ build-n-cache-ogre-macos:
+    needs: build-n-cache-assimp-macos
+    strategy:
+      matrix:
+        runner: [macos-latest, macos-latest-large]
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-latest-large  
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:    
+    - name: change folder permissions
+      run: |
+          sudo mkdir -p /usr/local/lib
+          sudo mkdir -p /usr/local/include
+          sudo chmod -R 777 /usr/local/lib
+          sudo chmod -R 777 /usr/local/include
+    - name: Cache Assimp
+      id: cache-assimp-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-macos-${{ matrix.arch }}
+      with:
+        path: |
+               /usr/local/lib/cmake
+               /usr/local/include/assimp
+               /usr/local/include/contrib
+               /usr/local/lib/pkgconfig/assimp.pc
+               /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+      
+    - name: Cache Ogre
+      id: cache-ogre-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-macos-${{ matrix.arch }}
+      with:
+        path: ${{github.workspace}}/ogre/SDK
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+    
+    - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
+      name: Check out ogre repo
+      uses: actions/checkout@master
+      with:
+          repository: OGRECave/ogre
+          ref: v${{ env.OGRE_VERSION }}
+          path: ${{github.workspace}}/ogre
+         
+    - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
+      name: Build Ogre3D repo
+      run: |
+            cd ${{github.workspace}}/ogre/
+            cmake -S . -B build \
+            -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK \
+            -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
+            -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
+            -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
+            -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
+            -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cd build
+            make -j8
+            make install
+ build-macos:
+    needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
+    strategy:
+      matrix:
+        runner: [macos-latest, macos-latest-large]
+        include:
+          - runner: macos-latest
+            arch: arm64
+          - runner: macos-latest-large  
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+    - name: change folder permissions
+      run: |
+            sudo mkdir -p /usr/local/lib
+            sudo mkdir -p /usr/local/include
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
+    - uses: actions/checkout@v3
+      with:
+         submodules: true
+         
+    - run: |
+            cd ${{github.workspace}}/src/dependencies/ogre-procedural
+            git checkout master
+            git pull
+            
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
+        host: 'mac'
+        target: 'desktop'
+        arch: 'clang_64'
+        tools: 'tools_cmake'
+
+    - name: Cache Assimp
+      id: cache-assimp-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-macos-${{ matrix.arch }}
+      with:
+        path: |
+               /usr/local/lib/cmake
+               /usr/local/include/assimp
+               /usr/local/include/contrib
+               /usr/local/lib/pkgconfig/assimp.pc
+               /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+      
+    - name: Cache Ogre
+      id: cache-ogre-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-macos-${{ matrix.arch }}
+      with:
+        path: ${{github.workspace}}/ogre/SDK
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+    
+    - name: Configure CMake
+      run: |
+            cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DCMAKE_PREFIX_PATH="${{github.workspace}}/ogre/SDK" \
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
+            -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
+            -DQt6_DIR=${{env.Qt6_DIR}} \
+            -DQT_DIR=${{env.Qt6_DIR}} \
+            -DQt6GuiTools_DIR=${{env.QT_ROOT_DIR}}/lib/cmake/Qt6GuiTools \
+            -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/
+    
+    - name: Build
+      run: |
+            cd build
+            make -j8
+            sudo make install
+    - name: Copy Qt libs to app folder
+      run: |
+            sudo cp -R ${{env.QT_ROOT_DIR}}/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
+            sudo cp -R ${{env.QT_ROOT_DIR}}/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
+            sudo cp -R ${{env.QT_ROOT_DIR}}/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
+            sudo cp -R ${{env.QT_ROOT_DIR}}/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
+            sudo cp -R ${{env.QT_ROOT_DIR}}/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
+            sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
+    - name: Prepare for packing
+      run: |
+            sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
+            sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
+            sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
+            sudo mkdir ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
+            sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
+            sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
+            sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+    - name: Pack
+      run: | 
+            brew install create-dmg
+            sudo create-dmg \
+            --volname "QtMeshEditor Installer" \
+            --volicon "${{github.workspace}}/resources/icon.icns" \
+            --window-pos 200 120 \
+            --window-size 800 400 \
+            --icon-size 100 \
+            --icon "QtMeshEditor.app" 200 190 \
+            --app-drop-link 600 185 \
+            QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg \
+            ${{github.workspace}}/bin/QtMeshEditor.app
+    
+    - if: github.event_name == 'release' && github.event.action == 'published'
+      uses: actions/upload-artifact@v4
+      with:
+        name: QtMeshEditor-MacOS-${{ matrix.arch }}
+        path: ${{github.workspace}}/QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
+        
+    - if: github.event_name == 'release' && github.event.action == 'published'
+      uses: xresloader/upload-to-github-release@main
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+          file: QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
+          update_latest_release: true
+          overwrite: false
+          verbose: true 
