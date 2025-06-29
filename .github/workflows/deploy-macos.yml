@@ -263,8 +263,37 @@ jobs:
             cd ${{github.workspace}}/src/dependencies/ogre-procedural
             git checkout master
             git pull
+
+    - name: Setup Qt for self-hosted runner
+      if: matrix.runner == 'macos-intel'
+      run: |
+            echo "🔧 Setting up Qt from local installation for self-hosted runner"
             
-    - name: Install Qt
+            # Use existing Qt installation
+            QT_LOCAL_PATH="/Users/fernandotonon/Qt/${{ env.QT_VERSION }}/macos"
+            
+            if [ -d "$QT_LOCAL_PATH" ]; then
+              echo "✅ Found local Qt installation at: $QT_LOCAL_PATH"
+              echo "QT_ROOT_DIR=$QT_LOCAL_PATH" >> $GITHUB_ENV
+              echo "Qt6_DIR=$QT_LOCAL_PATH/lib/cmake/Qt6" >> $GITHUB_ENV
+              echo "QT_PLUGIN_PATH=$QT_LOCAL_PATH/plugins" >> $GITHUB_ENV
+              echo "QT_QML2_PATH=$QT_LOCAL_PATH/qml" >> $GITHUB_ENV
+              
+              # Verify Qt installation
+              ls -la "$QT_LOCAL_PATH/lib/cmake/" || echo "Warning: Qt cmake files not found"
+              echo "Qt version check:"
+              "$QT_LOCAL_PATH/bin/qmake" -version || echo "Warning: qmake not found"
+            else
+              echo "❌ Qt installation not found at: $QT_LOCAL_PATH"
+              echo "Searching for Qt installations..."
+              find /Users/fernandotonon/Qt -maxdepth 2 -type d -name "macos" 2>/dev/null || echo "No Qt installations found"
+              exit 1
+            fi
+            
+            echo "✅ Qt setup completed for self-hosted runner"
+
+    - name: Install Qt (GitHub-hosted runner only)
+      if: matrix.runner == 'macos-latest'
       uses: jurplel/install-qt-action@v3
       with:
         aqtversion: ${{ env.AQT_VERSION }}
@@ -274,9 +303,10 @@ jobs:
         arch: 'clang_64'
         tools: 'tools_cmake'
 
-    - name: Setup Qt environment variables
+    - name: Setup Qt environment variables (GitHub-hosted runner only)
+      if: matrix.runner == 'macos-latest'
       run: |
-            echo "Setting up Qt environment variables..."
+            echo "Setting up Qt environment variables for GitHub-hosted runner..."
             # The Qt action should have set these, but let's ensure they're available
             if [ -z "$QT_ROOT_DIR" ]; then
               # Fallback: find Qt installation directory
