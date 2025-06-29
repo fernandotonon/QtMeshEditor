@@ -211,15 +211,76 @@ jobs:
 
     - name: Packaging
       run: |
+            Write-Host "=== Windows Packaging Debug ==="
+            Write-Host "Current directory: $(Get-Location)"
+            Write-Host "Workspace: ${{github.workspace}}"
+            Write-Host "Bin directory contents:"
+            if (Test-Path "${{github.workspace}}/bin") {
+                Get-ChildItem "${{github.workspace}}/bin" -Recurse | Select-Object Name, FullName | Format-Table -AutoSize
+            } else {
+                Write-Host "Bin directory does not exist!"
+            }
+            
+            Write-Host "=== Creating Package Directory ==="
             mkdir ${{github.workspace}}/pack
-            cp ${{github.workspace}}/bin/QtMeshEditor.exe ${{github.workspace}}/pack/
-            cp ${{github.workspace}}/bin/qt.conf ${{github.workspace}}/pack/
-            cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/pack/
-            cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/pack/
-            cp -R ${{github.workspace}}/bin/platforms ${{github.workspace}}/pack/
-            cp -R ${{github.workspace}}/bin/*.dll ${{github.workspace}}/pack/
-            cd ${{github.workspace}}/pack/
-            7z a -tzip ${{github.workspace}}/QtMeshEditor-${{github.ref_name}}-win64.zip *
+            
+            # Copy main executable (required)
+            if (Test-Path "${{github.workspace}}/bin/QtMeshEditor.exe") {
+                Write-Host "✅ Copying QtMeshEditor.exe"
+                cp "${{github.workspace}}/bin/QtMeshEditor.exe" "${{github.workspace}}/pack/"
+            } else {
+                Write-Host "❌ QtMeshEditor.exe not found!"
+                exit 1
+            }
+            
+            # Create qt.conf if it doesn't exist (Qt configuration file)
+            if (Test-Path "${{github.workspace}}/bin/qt.conf") {
+                Write-Host "✅ Copying existing qt.conf"
+                cp "${{github.workspace}}/bin/qt.conf" "${{github.workspace}}/pack/"
+            } else {
+                Write-Host "⚠️  qt.conf not found, creating default one"
+                "[Paths]`nPlugins = platforms" | Out-File -FilePath "${{github.workspace}}/pack/qt.conf" -Encoding UTF8
+            }
+            
+            # Copy directories (optional)
+            if (Test-Path "${{github.workspace}}/bin/cfg") {
+                Write-Host "✅ Copying cfg directory"
+                cp -R "${{github.workspace}}/bin/cfg" "${{github.workspace}}/pack/"
+            } else {
+                Write-Host "⚠️  cfg directory not found, skipping"
+            }
+            
+            if (Test-Path "${{github.workspace}}/bin/media") {
+                Write-Host "✅ Copying media directory"
+                cp -R "${{github.workspace}}/bin/media" "${{github.workspace}}/pack/"
+            } else {
+                Write-Host "⚠️  media directory not found, skipping"
+            }
+            
+            if (Test-Path "${{github.workspace}}/bin/platforms") {
+                Write-Host "✅ Copying platforms directory"
+                cp -R "${{github.workspace}}/bin/platforms" "${{github.workspace}}/pack/"
+            } else {
+                Write-Host "⚠️  platforms directory not found, skipping"
+            }
+            
+            # Copy DLL files
+            $dllFiles = Get-ChildItem "${{github.workspace}}/bin/*.dll" -ErrorAction SilentlyContinue
+            if ($dllFiles) {
+                Write-Host "✅ Copying $($dllFiles.Count) DLL files"
+                cp "${{github.workspace}}/bin/*.dll" "${{github.workspace}}/pack/"
+            } else {
+                Write-Host "⚠️  No DLL files found in bin directory"
+            }
+            
+            Write-Host "=== Package Contents ==="
+            Get-ChildItem "${{github.workspace}}/pack" -Recurse | Select-Object Name, FullName | Format-Table -AutoSize
+            
+            Write-Host "=== Creating ZIP Archive ==="
+            cd "${{github.workspace}}/pack"
+            7z a -tzip "${{github.workspace}}/QtMeshEditor-${{github.ref_name}}-win64.zip" *
+            
+            Write-Host "✅ Packaging completed successfully"
       shell: powershell
 
     - if: github.event_name == 'release' && github.event.action == 'published'

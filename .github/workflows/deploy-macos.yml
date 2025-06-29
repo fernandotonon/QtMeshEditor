@@ -72,17 +72,26 @@ jobs:
       with:
           repository: assimp/assimp
           ref: v${{ env.ASSIMP_VERSION }}
-          path: /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp
+          path: ${{github.workspace}}/assimp
       
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
             echo "Building Assimp for ${{ matrix.arch }} architecture"
-            cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            cd /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
+            echo "Workspace: ${{github.workspace}}"
+            cmake -B ${{github.workspace}}/assimp-build -S ${{github.workspace}}/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
+            cd ${{github.workspace}}/assimp-build/
             # Build first, then install (safer for self-hosted)
             make -j8
             sudo make install
+
+    - name: Cleanup Assimp build (self-hosted runner safety)
+      if: always() && matrix.runner == 'macos-intel'
+      run: |
+            echo "🧹 Cleaning up Assimp build files on self-hosted runner"
+            rm -rf ${{github.workspace}}/assimp/ || true
+            rm -rf ${{github.workspace}}/assimp-build/ || true
+            echo "✅ Assimp cleanup completed"
 
  build-n-cache-ogre-macos:
     needs: build-n-cache-assimp-macos
@@ -162,6 +171,13 @@ jobs:
             make -j8
             sudo make install
 
+    - name: Cleanup Ogre build (self-hosted runner safety)
+      if: always() && matrix.runner == 'macos-intel'
+      run: |
+            echo "🧹 Cleaning up Ogre build files on self-hosted runner"
+            rm -rf ${{github.workspace}}/ogre/ || true
+            echo "✅ Ogre cleanup completed"
+
  build-macos:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
     strategy:
@@ -207,6 +223,19 @@ jobs:
         arch: 'clang_64'
         tools: 'tools_cmake'
 
+    - name: Debug paths (for troubleshooting)
+      run: |
+            echo "=== Path Debug Information ==="
+            echo "Runner: ${{ matrix.runner }} (${{ matrix.arch }})"
+            echo "GitHub Workspace: ${{github.workspace}}"
+            echo "Qt Root Dir: $QT_ROOT_DIR"
+            echo "Qt Plugin Path: $QT_PLUGIN_PATH"
+            echo "Qt QML Path: $QT_QML2_PATH"
+            echo "Current working directory: $(pwd)"
+            echo "Directory contents:"
+            ls -la
+            echo "=== End Debug Information ==="
+
     - name: Cache Assimp
       id: cache-assimp-macos
       uses: actions/cache@v3
@@ -236,14 +265,16 @@ jobs:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
             echo "Configuring QtMeshEditor for ${{ matrix.arch }} architecture"
+            echo "Qt installation directory: $QT_ROOT_DIR"
+            echo "Workspace: ${{github.workspace}}"
             # Configure without sudo first (safer for self-hosted)
             cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
-            -DQt6_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
-            -DQT_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/clang_64/lib/cmake/Qt6GuiTools \
+            -DQt6_DIR="$QT_ROOT_DIR/lib/cmake/Qt6" \
+            -DQT_DIR="$QT_ROOT_DIR/lib/cmake/Qt6" \
+            -DQt6GuiTools_DIR="$QT_ROOT_DIR/lib/cmake/Qt6GuiTools" \
             -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/ 
     
     - name: Build
@@ -256,11 +287,15 @@ jobs:
 
     - name: Copy Qt libs to app folder
       run: |
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/macos/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
+            echo "Copying Qt frameworks for ${{ matrix.arch }} architecture"
+            echo "Qt installation directory: $QT_ROOT_DIR"
+            # Copy Qt frameworks (use dynamic Qt path)
+            sudo cp -R "$QT_ROOT_DIR/lib/QtWidgets.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework"
+            sudo cp -R "$QT_ROOT_DIR/lib/QtCore.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework"
+            sudo cp -R "$QT_ROOT_DIR/lib/QtGui.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework"
+            sudo cp -R "$QT_ROOT_DIR/lib/QtDBus.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework"
+            sudo cp -R "$QT_ROOT_DIR/plugins/platforms" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms"
+            # Copy Assimp libraries
             sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
 
     - name: Prepare for packing
@@ -306,9 +341,8 @@ jobs:
     - name: Cleanup (self-hosted runner safety)
       if: always() && matrix.runner == 'macos-intel'
       run: |
-            echo "🧹 Cleaning up temporary build files on self-hosted runner"
-            # Clean up build directories in workspace
-            rm -rf build/ || true
-            rm -rf /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/ || true
-            rm -rf ${{github.workspace}}/ogre/build/ || true
-            echo "✅ Cleanup completed" 
+            echo "🧹 Cleaning up main build files on self-hosted runner"
+            echo "Workspace: ${{github.workspace}}"
+            # Clean up main build directory (dependencies cleaned in their own jobs)
+            rm -rf ${{github.workspace}}/build/ || true
+            echo "✅ Main build cleanup completed" 
