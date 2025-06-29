@@ -25,55 +25,40 @@ jobs:
  build-n-cache-assimp-macos:
     strategy:
       matrix:
-        runner: [macos-latest, macos-intel]
+        runner: [macos-15, macos-15-large]
         include:
-          - runner: macos-latest
+          - runner: macos-15
             arch: arm64
-          - runner: macos-intel  
+          - runner: macos-15-large  
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
-    - name: Pre-checkout cleanup for Assimp (self-hosted runner safety)
-      if: matrix.runner == 'macos-intel'
+    - name: change folder permissions
       run: |
-            echo "🧹 Pre-checkout cleanup for Assimp build on self-hosted runner"
-            
-            # Force remove any leftover files with permission issues
-            sudo rm -rf "${{github.workspace}}/assimp/" || true
-            sudo rm -rf "${{github.workspace}}/assimp-build/" || true
-            sudo rm -rf /Users/fernandotonon/actions-runner/_work/QtMeshEditor/QtMeshEditor/assimp/ || true
-            sudo rm -rf /Users/fernandotonon/actions-runner/_work/QtMeshEditor/QtMeshEditor/assimp-build/ || true
-            
-            echo "✅ Pre-checkout cleanup for Assimp completed"
-
-    - name: Setup build environment (safe for self-hosted)
-      run: |
-            echo "Running on: ${{ matrix.runner }} (${{ matrix.arch }})"
-            if [ "${{ matrix.runner }}" = "macos-intel" ]; then
-              echo "⚠️  Self-hosted runner detected - using safe operations"
-            fi
-            # Create directories safely (won't fail if they exist)
             sudo mkdir -p /usr/local/lib
             sudo mkdir -p /usr/local/include
-            # Use safer permissions (755 instead of 777)
-            sudo chmod -R 755 /usr/local/lib
-            sudo chmod -R 755 /usr/local/include
-            echo "✅ Build environment ready"
-
-    - name: Check existing Assimp installation (self-hosted runner)
-      if: matrix.runner == 'macos-intel'
-      id: check-assimp-self-hosted
-      run: |
-            echo "🔍 Checking for existing Assimp installation on self-hosted runner"
-            if [ -d "/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}" ] && [ -d "/usr/local/include/assimp" ]; then
-              echo "✅ Assimp already installed on self-hosted runner"
-              echo "assimp_exists=true" >> $GITHUB_OUTPUT
-            else
-              echo "❌ Assimp not found, will build it"
-              echo "assimp_exists=false" >> $GITHUB_OUTPUT
-            fi
-
-    - if: (matrix.runner == 'macos-latest' && steps.cache-assimp-macos.outputs.cache-hit != 'true') || (matrix.runner == 'macos-intel' && steps.check-assimp-self-hosted.outputs.assimp_exists != 'true')
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
+    - name: Cache Assimp
+      id: cache-assimp-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-assimp-macos-${{ matrix.arch }}
+      with:
+        path: |
+               /usr/local/lib/cmake
+               /usr/local/include/assimp
+               /usr/local/include/contrib
+               /usr/local/lib/pkgconfig/assimp.pc
+               /usr/local/lib/libassimp*
+               /usr/local/lib/libzlibstatic.a
+        #key: ${{ runner.os }}-build-${{ env.cache-name }}-${{ hashFiles('/home/runner/work/QtMeshEditor/QtMeshEditor/assimp') }}
+        # Need to delete manually if needed to rebuild. Until I find a better solution for detecting changes in the assimp repo.
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
+          
+    - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Check out Assimp repo
       uses: actions/checkout@master
       with:
@@ -81,27 +66,32 @@ jobs:
           ref: v${{ env.ASSIMP_VERSION }}
           path: ${{github.workspace}}/assimp
       
-    - if: (matrix.runner == 'macos-latest' && steps.cache-assimp-macos.outputs.cache-hit != 'true') || (matrix.runner == 'macos-intel' && steps.check-assimp-self-hosted.outputs.assimp_exists != 'true')
+    - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
-            echo "Building Assimp for ${{ matrix.arch }} architecture"
-            echo "Workspace: ${{github.workspace}}"
             cmake -B ${{github.workspace}}/assimp-build -S ${{github.workspace}}/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd ${{github.workspace}}/assimp-build/
-            # Build first, then install (safer for self-hosted)
             make -j8
             sudo make install
-
-    - name: Cleanup Assimp build (self-hosted runner safety)
-      if: always() && matrix.runner == 'macos-intel'
+ build-n-cache-ogre-macos:
+    needs: build-n-cache-assimp-macos
+    strategy:
+      matrix:
+        runner: [macos-15, macos-15-large]
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-large  
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:    
+    - name: change folder permissions
       run: |
-            echo "🧹 Cleaning up Assimp build files on self-hosted runner"
-            rm -rf ${{github.workspace}}/assimp/ || true
-            rm -rf ${{github.workspace}}/assimp-build/ || true
-            echo "✅ Assimp cleanup completed"
-
-    - name: Cache Assimp (GitHub-hosted runner only)
-      if: matrix.runner == 'macos-latest'
+          sudo mkdir -p /usr/local/lib
+          sudo mkdir -p /usr/local/include
+          sudo chmod -R 777 /usr/local/lib
+          sudo chmod -R 777 /usr/local/include
+    - name: Cache Assimp
       id: cache-assimp-macos
       uses: actions/cache@v3
       env:
@@ -115,63 +105,19 @@ jobs:
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
- build-n-cache-ogre-macos:
-    needs: build-n-cache-assimp-macos
-    strategy:
-      matrix:
-        runner: [macos-latest, macos-intel]
-        include:
-          - runner: macos-latest
-            arch: arm64
-          - runner: macos-intel  
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
-    steps:    
-    - name: Pre-checkout cleanup for Ogre (self-hosted runner safety)
-      if: matrix.runner == 'macos-intel'
-      run: |
-            echo "🧹 Pre-checkout cleanup for Ogre build on self-hosted runner"
-            
-            # Force remove any leftover Ogre files with permission issues
-            sudo rm -rf "${{github.workspace}}/ogre/" || true
-            sudo rm -rf /Users/fernandotonon/actions-runner/_work/QtMeshEditor/QtMeshEditor/ogre/ || true
-            
-            # Clean any leftover Assimp files too
-            sudo rm -rf "${{github.workspace}}/assimp/" || true
-            sudo rm -rf "${{github.workspace}}/assimp-build/" || true
-            sudo rm -rf /Users/fernandotonon/actions-runner/_work/QtMeshEditor/QtMeshEditor/assimp/ || true
-            
-            echo "✅ Pre-checkout cleanup for Ogre completed"
-
-    - name: Setup build environment (safe for self-hosted)
-      run: |
-          echo "Running on: ${{ matrix.runner }} (${{ matrix.arch }})"
-          if [ "${{ matrix.runner }}" = "macos-intel" ]; then
-            echo "⚠️  Self-hosted runner detected - using safe operations"
-          fi
-          # Create directories safely (won't fail if they exist)
-          sudo mkdir -p /usr/local/lib
-          sudo mkdir -p /usr/local/include
-          # Use safer permissions (755 instead of 777)
-          sudo chmod -R 755 /usr/local/lib
-          sudo chmod -R 755 /usr/local/include
-          echo "✅ Build environment ready"
-
-    - name: Check existing Ogre installation (self-hosted runner)
-      if: matrix.runner == 'macos-intel'
-      id: check-ogre-self-hosted
-      run: |
-            echo "🔍 Checking for existing Ogre installation on self-hosted runner"
-            if [ -d "${{github.workspace}}/ogre/SDK" ]; then
-              echo "✅ Ogre SDK already exists on self-hosted runner"
-              echo "ogre_exists=true" >> $GITHUB_OUTPUT
-            else
-              echo "❌ Ogre SDK not found, will build it"
-              echo "ogre_exists=false" >> $GITHUB_OUTPUT
-            fi
+        restore-keys: |
+          ${{ runner.os }}-build-${{ env.cache-name }}-
       
-    - if: (matrix.runner == 'macos-latest' && steps.cache-ogre-macos.outputs.cache-hit != 'true') || (matrix.runner == 'macos-intel' && steps.check-ogre-self-hosted.outputs.ogre_exists != 'true')
+    - name: Cache Ogre
+      id: cache-ogre-macos
+      uses: actions/cache@v3
+      env:
+        cache-name: cache-ogre-macos-${{ matrix.arch }}
+      with:
+        path: ${{github.workspace}}/ogre/SDK
+        key: ${{ runner.os }}-build-${{ env.cache-name }}
+    
+    - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Check out ogre repo
       uses: actions/checkout@master
       with:
@@ -179,12 +125,10 @@ jobs:
           ref: v${{ env.OGRE_VERSION }}
           path: ${{github.workspace}}/ogre
          
-    - if: (matrix.runner == 'macos-latest' && steps.cache-ogre-macos.outputs.cache-hit != 'true') || (matrix.runner == 'macos-intel' && steps.check-ogre-self-hosted.outputs.ogre_exists != 'true')
+    - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
       run: |
-            echo "Building Ogre3D for ${{ matrix.arch }} architecture"
             cd ${{github.workspace}}/ogre/
-            # Install to SDK directory for caching (no sudo needed)
             cmake -S . -B build \
             -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK \
             -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
@@ -193,320 +137,27 @@ jobs:
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
             -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            # Build and install to local SDK directory
             cd build
             make -j8
             make install
-
-    - name: Cleanup Ogre build (self-hosted runner safety)
-      if: always() && matrix.runner == 'macos-intel'
-      run: |
-            echo "🧹 Cleaning up Ogre build files on self-hosted runner"
-            rm -rf ${{github.workspace}}/ogre/ || true
-            echo "✅ Ogre cleanup completed"
-
-    - name: Cache Ogre (GitHub-hosted runner only)
-      if: matrix.runner == 'macos-latest'
-      id: cache-ogre-macos
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-ogre-macos-${{ matrix.arch }}
-      with:
-        path: ${{github.workspace}}/ogre/SDK
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - name: Cache Assimp (GitHub-hosted runner only)
-      if: matrix.runner == 'macos-latest'
-      id: cache-assimp-ogre-macos
-      uses: actions/cache@v3
-      env:
-        cache-name: cache-assimp-macos-${{ matrix.arch }}
-      with:
-        path: |
-               /usr/local/lib/cmake
-               /usr/local/include/assimp
-               /usr/local/include/contrib
-               /usr/local/lib/pkgconfig/assimp.pc
-               /usr/local/lib/libassimp*
-               /usr/local/lib/libzlibstatic.a
-        key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - name: Ensure OGRE availability (fallback)
-      run: |
-            echo "🔍 Ensuring OGRE is available for build..."
-            
-            # Check if OGRE SDK exists from cache/previous job
-            if [ ! -d "${{github.workspace}}/ogre/SDK" ]; then
-              echo "⚠️  OGRE SDK not found, attempting to build inline as fallback"
-              
-              # Check if we have the OGRE source from cache/previous job
-              if [ ! -d "${{github.workspace}}/ogre" ]; then
-                echo "📥 Checking out OGRE source..."
-                git clone --depth 1 --branch v${{ env.OGRE_VERSION }} https://github.com/OGRECave/ogre.git ${{github.workspace}}/ogre
-              fi
-              
-              echo "🔨 Building OGRE inline..."
-              cd ${{github.workspace}}/ogre/
-              
-              # Configure OGRE
-              cmake -S . -B build \
-              -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK \
-              -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
-              -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
-              -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
-              -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
-              -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
-              -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-              
-              # Build and install
-              cd build
-              make -j8
-              make install
-              
-              echo "✅ OGRE built and installed inline"
-            else
-              echo "✅ OGRE SDK already available from cache/previous job"
-            fi
-            
-            # Final verification
-            if [ -d "${{github.workspace}}/ogre/SDK" ]; then
-              echo "✅ OGRE SDK confirmed available"
-            else
-              echo "❌ OGRE SDK still not available after fallback - build will likely fail"
-              exit 1
-            fi
-
-    - name: Pre-CMake Debug Check
-      run: |
-            echo "=== Pre-CMake Environment Debug ==="
-            echo "Runner: ${{ matrix.runner }} (${{ matrix.arch }})"
-            echo "Current directory: $(pwd)"
-            echo "Workspace: ${{github.workspace}}"
-            echo ""
-            echo "Environment Variables:"
-            echo "QT_ROOT_DIR: '$QT_ROOT_DIR'"
-            echo "Qt6_DIR: '$Qt6_DIR'"
-            echo "QT_PLUGIN_PATH: '$QT_PLUGIN_PATH'"
-            echo "QT_QML2_PATH: '$QT_QML2_PATH'"
-            echo ""
-            echo "File System Check:"
-            echo "CMakeLists.txt exists: $([ -f CMakeLists.txt ] && echo "YES" || echo "NO")"
-            echo "Workspace CMakeLists.txt exists: $([ -f "${{github.workspace}}/CMakeLists.txt" ] && echo "YES" || echo "NO")"
-            echo ""
-            echo "Current directory contents:"
-            ls -la
-            echo ""
-            echo "Workspace directory contents:"
-            ls -la "${{github.workspace}}" 2>/dev/null || echo "Workspace directory not accessible"
-            echo ""
-            if [ "${{ matrix.runner }}" = "macos-intel" ]; then
-              echo "Local installations check:"
-              echo "Local Qt exists: $([ -d "/Users/fernandotonon/Qt/${{ env.QT_VERSION }}/macos" ] && echo "YES" || echo "NO")"
-              echo "Local Assimp exists: $([ -d "/Users/fernandotonon/assimp" ] && echo "YES" || echo "NO")"
-              echo "Local OGRE exists: $([ -d "/Users/fernandotonon/ogre" ] && echo "YES" || echo "NO")"
-            fi
-            echo "=== End Pre-CMake Debug ==="
-
-    - name: Configure CMake
-      run: |
-            # Ensure we're in the correct directory
-            cd "${{github.workspace}}"
-            
-            echo "Configuring QtMeshEditor for ${{ matrix.arch }} architecture"
-            echo "Qt installation directory: $QT_ROOT_DIR"
-            echo "Workspace: ${{github.workspace}}"
-            echo "Current directory: $(pwd)"
-            
-            # Verify we have CMakeLists.txt
-            if [ ! -f "CMakeLists.txt" ]; then
-              echo "❌ CMakeLists.txt not found in current directory!"
-              echo "Directory contents:"
-              ls -la
-              echo "Checking workspace directory:"
-              ls -la "${{github.workspace}}"
-              exit 1
-            fi
-            
-            # Setup paths based on runner type
-            if [ "${{ matrix.runner }}" = "macos-intel" ]; then
-              echo "🔧 Using local installations for self-hosted runner"
-              
-              # Use local Assimp
-              if [ -d "/Users/fernandotonon/assimp" ]; then
-                ASSIMP_CMAKE_DIR="/Users/fernandotonon/assimp/lib/cmake/assimp"
-                ASSIMP_INCLUDE_DIR="/Users/fernandotonon/assimp/include"
-                echo "Using local Assimp: $ASSIMP_CMAKE_DIR"
-              else
-                echo "❌ Local Assimp not found, falling back to system installation"
-                ASSIMP_CMAKE_DIR="/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}"
-                ASSIMP_INCLUDE_DIR="/usr/local/include/assimp"
-              fi
-              
-              # Use local OGRE 
-              if [ -d "/Users/fernandotonon/ogre/SDK" ]; then
-                OGRE_CMAKE_DIR="/Users/fernandotonon/ogre/SDK/lib/cmake/OGRE"
-                echo "Using local OGRE: $OGRE_CMAKE_DIR"
-                # Ensure symbolic link exists
-                mkdir -p ${{github.workspace}}/ogre
-                ln -sf /Users/fernandotonon/ogre/SDK ${{github.workspace}}/ogre/SDK || true
-              else
-                echo "Using workspace OGRE"
-                OGRE_CMAKE_DIR="${{github.workspace}}/ogre/SDK/lib/cmake/OGRE"
-              fi
-            else
-              echo "🔧 Using GitHub-hosted runner installations"
-              ASSIMP_CMAKE_DIR="/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}"
-              ASSIMP_INCLUDE_DIR="/usr/local/include/assimp"
-              
-              # Find OGRE cmake files for GitHub-hosted runner
-              if [ -d "${{github.workspace}}/ogre/SDK/lib/cmake/OGRE" ]; then
-                OGRE_CMAKE_DIR="${{github.workspace}}/ogre/SDK/lib/cmake/OGRE"
-              elif [ -d "${{github.workspace}}/ogre/SDK/CMake" ]; then
-                OGRE_CMAKE_DIR="${{github.workspace}}/ogre/SDK/CMake"
-              else
-                echo "Searching for OGRE cmake files..."
-                find "${{github.workspace}}/ogre/SDK" -name "*OGRE*" -type d 2>/dev/null || true
-                find "${{github.workspace}}/ogre/SDK" -name "*.cmake" 2>/dev/null || true
-                OGRE_CMAKE_DIR=""
-              fi
-            fi
-            
-            echo "ASSIMP CMAKE DIR: $ASSIMP_CMAKE_DIR"
-            echo "OGRE CMAKE DIR: $OGRE_CMAKE_DIR"
-            echo "Qt6_DIR: $Qt6_DIR"
-            
-            # Verify Qt6_DIR is set
-            if [ -z "$Qt6_DIR" ]; then
-              echo "❌ Qt6_DIR not set, cannot proceed with CMake configuration"
-              exit 1
-            fi
-            
-            # Configure CMake
-            cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_PREFIX_PATH="${{github.workspace}}/ogre/SDK" \
-            -DASSIMP_DIR="$ASSIMP_CMAKE_DIR" \
-            -DASSIMP_INCLUDE_DIR="$ASSIMP_INCLUDE_DIR" \
-            -DQt6_DIR="$Qt6_DIR" \
-            -DQT_DIR="$Qt6_DIR" \
-            -DQt6GuiTools_DIR="$QT_ROOT_DIR/lib/cmake/Qt6GuiTools" \
-            ${OGRE_CMAKE_DIR:+-DOGRE_DIR="$OGRE_CMAKE_DIR"}
-    
-    - name: Build
-      run: |
-            echo "Building QtMeshEditor for ${{ matrix.arch }} architecture"
-            cd build
-            # Build first, then install (safer for self-hosted)
-            make -j8
-            sudo make install
-
-    - name: Copy Qt libs to app folder
-      run: |
-            echo "Copying Qt frameworks for ${{ matrix.arch }} architecture"
-            echo "Qt installation directory: $QT_ROOT_DIR"
-            # Copy Qt frameworks (use dynamic Qt path)
-            sudo cp -R "$QT_ROOT_DIR/lib/QtWidgets.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework"
-            sudo cp -R "$QT_ROOT_DIR/lib/QtCore.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework"
-            sudo cp -R "$QT_ROOT_DIR/lib/QtGui.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework"
-            sudo cp -R "$QT_ROOT_DIR/lib/QtDBus.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework"
-            sudo cp -R "$QT_ROOT_DIR/plugins/platforms" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms"
-            # Copy Assimp libraries
-            sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
-
-    - name: Prepare for packing
-      run: |
-            sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
-            sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
-            sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
-            sudo mkdir ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
-            sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
-            sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
-            sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
-
-    - name: Pack
-      run: | 
-            brew install create-dmg
-            sudo create-dmg \
-            --volname "QtMeshEditor Installer" \
-            --volicon "${{github.workspace}}/resources/icon.icns" \
-            --window-pos 200 120 \
-            --window-size 800 400 \
-            --icon-size 100 \
-            --icon "QtMeshEditor.app" 200 190 \
-            --app-drop-link 600 185 \
-            QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg \
-            ${{github.workspace}}/bin/QtMeshEditor.app
-    
-    - if: github.event_name == 'release' && github.event.action == 'published'
-      uses: actions/upload-artifact@v4
-      with:
-        name: QtMeshEditor-MacOS-${{ matrix.arch }}
-        path: ${{github.workspace}}/QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
-        
-    - if: github.event_name == 'release' && github.event.action == 'published'
-      uses: xresloader/upload-to-github-release@main
-      env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-          file: QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
-          update_latest_release: true
-          overwrite: false
-          verbose: true
-
-    - name: Cleanup (self-hosted runner safety)
-      if: always() && matrix.runner == 'macos-intel'
-      run: |
-            echo "🧹 Cleaning up main build files on self-hosted runner"
-            echo "Workspace: ${{github.workspace}}"
-            # Clean up main build directory (dependencies cleaned in their own jobs)
-            rm -rf ${{github.workspace}}/build/ || true
-            echo "✅ Main build cleanup completed"
-
  build-macos:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
     strategy:
       matrix:
-        runner: [macos-latest]
+        runner: [macos-15, macos-15-large]
         include:
-          - runner: macos-latest
+          - runner: macos-15
             arch: arm64
+          - runner: macos-15-large  
+            arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
-    - name: Pre-checkout cleanup (self-hosted runner safety)
-      if: matrix.runner == 'macos-intel'
+    - name: change folder permissions
       run: |
-            echo "🧹 Pre-checkout cleanup for self-hosted runner"
-            echo "Workspace path: ${{github.workspace}}"
-            
-            # Force remove any leftover files with permission issues
-            if [ -d "${{github.workspace}}" ]; then
-              echo "Cleaning workspace directory..."
-              sudo rm -rf "${{github.workspace}}" || true
-              echo "Creating fresh workspace directory..."
-              mkdir -p "${{github.workspace}}"
-            fi
-            
-            # Also clean any potential build artifacts in common locations
-            sudo rm -rf /Users/fernandotonon/actions-runner/_work/QtMeshEditor/QtMeshEditor/ogre/ || true
-            sudo rm -rf /Users/fernandotonon/actions-runner/_work/QtMeshEditor/QtMeshEditor/assimp/ || true
-            sudo rm -rf /Users/fernandotonon/actions-runner/_work/QtMeshEditor/QtMeshEditor/build/ || true
-            
-            echo "✅ Pre-checkout cleanup completed"
-
-    - name: Setup build environment (safe for self-hosted)
-      run: |
-            echo "Running on: ${{ matrix.runner }} (${{ matrix.arch }})"
-            if [ "${{ matrix.runner }}" = "macos-intel" ]; then
-              echo "⚠️  Self-hosted runner detected - using safe operations"
-            fi
-            # Create directories safely (won't fail if they exist)
             sudo mkdir -p /usr/local/lib
             sudo mkdir -p /usr/local/include
-            # Use safer permissions (755 instead of 777)
-            sudo chmod -R 755 /usr/local/lib
-            sudo chmod -R 755 /usr/local/include
-            echo "✅ Build environment ready"
-
+            sudo chmod -R 777 /usr/local/lib
+            sudo chmod -R 777 /usr/local/include
     - uses: actions/checkout@v3
       with:
          submodules: true
@@ -515,76 +166,8 @@ jobs:
             cd ${{github.workspace}}/src/dependencies/ogre-procedural
             git checkout master
             git pull
-
-    - name: Setup Qt for self-hosted runner
-      if: matrix.runner == 'macos-intel'
-      run: |
-            echo "🔧 Setting up Qt from local installation for self-hosted runner"
             
-            # Use existing Qt installation
-            QT_LOCAL_PATH="/Users/fernandotonon/Qt/${{ env.QT_VERSION }}/macos"
-            
-            if [ -d "$QT_LOCAL_PATH" ]; then
-              echo "✅ Found local Qt installation at: $QT_LOCAL_PATH"
-              echo "QT_ROOT_DIR=$QT_LOCAL_PATH" >> $GITHUB_ENV
-              echo "Qt6_DIR=$QT_LOCAL_PATH/lib/cmake/Qt6" >> $GITHUB_ENV
-              echo "QT_PLUGIN_PATH=$QT_LOCAL_PATH/plugins" >> $GITHUB_ENV
-              echo "QT_QML2_PATH=$QT_LOCAL_PATH/qml" >> $GITHUB_ENV
-              
-              # Also export for current shell (immediate use)
-              export QT_ROOT_DIR="$QT_LOCAL_PATH"
-              export Qt6_DIR="$QT_LOCAL_PATH/lib/cmake/Qt6"
-              export QT_PLUGIN_PATH="$QT_LOCAL_PATH/plugins"
-              export QT_QML2_PATH="$QT_LOCAL_PATH/qml"
-              
-              # Verify Qt installation
-              ls -la "$QT_LOCAL_PATH/lib/cmake/" || echo "Warning: Qt cmake files not found"
-              echo "Qt version check:"
-              "$QT_LOCAL_PATH/bin/qmake" -version || echo "Warning: qmake not found"
-              
-              # Verify the environment variables were set
-              echo "Verification - QT_ROOT_DIR: $QT_ROOT_DIR"
-              echo "Verification - Qt6_DIR: $Qt6_DIR"
-            else
-              echo "❌ Qt installation not found at: $QT_LOCAL_PATH"
-              echo "Searching for Qt installations..."
-              find /Users/fernandotonon/Qt -maxdepth 2 -type d -name "macos" 2>/dev/null || echo "No Qt installations found"
-              exit 1
-            fi
-            
-            echo "✅ Qt setup completed for self-hosted runner"
-
-    - name: Setup local dependencies (self-hosted runner)
-      if: matrix.runner == 'macos-intel'
-      run: |
-            echo "🔧 Setting up local Assimp and OGRE for self-hosted runner"
-            
-            # Setup local Assimp
-            if [ -d "/Users/fernandotonon/assimp" ]; then
-              echo "✅ Found local Assimp at: /Users/fernandotonon/assimp"
-              echo "ASSIMP_LOCAL_DIR=/Users/fernandotonon/assimp" >> $GITHUB_ENV
-            else
-              echo "❌ Local Assimp not found at: /Users/fernandotonon/assimp"
-              exit 1
-            fi
-            
-            # Setup local OGRE  
-            if [ -d "/Users/fernandotonon/ogre" ]; then
-              echo "✅ Found local OGRE at: /Users/fernandotonon/ogre"
-              echo "OGRE_LOCAL_DIR=/Users/fernandotonon/ogre" >> $GITHUB_ENV
-              
-              # Create a symbolic link for consistency with cache path
-              mkdir -p ${{github.workspace}}/ogre
-              ln -sf /Users/fernandotonon/ogre/SDK ${{github.workspace}}/ogre/SDK || true
-            else
-              echo "❌ Local OGRE not found at: /Users/fernandotonon/ogre"
-              exit 1
-            fi
-            
-            echo "✅ Local dependencies setup completed"
-
-    - name: Install Qt (GitHub-hosted runner only)
-      if: matrix.runner == 'macos-latest'
+    - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
         aqtversion: ${{ env.AQT_VERSION }}
@@ -594,120 +177,8 @@ jobs:
         arch: 'clang_64'
         tools: 'tools_cmake'
 
-    - name: Setup Qt environment variables (GitHub-hosted runner only)
-      if: matrix.runner == 'macos-latest'
-      run: |
-            echo "Setting up Qt environment variables for GitHub-hosted runner..."
-            echo "Current QT_ROOT_DIR: '$QT_ROOT_DIR'"
-            
-            # The Qt action should have set QT_ROOT_DIR, but let's verify and fix if needed
-            if [ -z "$QT_ROOT_DIR" ] || [ ! -d "$QT_ROOT_DIR" ]; then
-              echo "QT_ROOT_DIR not set correctly, searching for Qt installation..."
-              
-              # Search for Qt installation in common locations
-              QT_SEARCH_PATHS=(
-                "${{github.workspace}}/Qt/${{ env.QT_VERSION }}/macos"
-                "$RUNNER_WORKSPACE/Qt/${{ env.QT_VERSION }}/macos"
-                "/opt/hostedtoolcache/Qt/${{ env.QT_VERSION }}/x64/macos"
-                "$(find ${{github.workspace}} -name "Qt*" -type d 2>/dev/null | head -1)/${{ env.QT_VERSION }}/macos"
-              )
-              
-              for qt_path in "${QT_SEARCH_PATHS[@]}"; do
-                if [ -d "$qt_path" ]; then
-                  export QT_ROOT_DIR="$qt_path"
-                  echo "QT_ROOT_DIR=$qt_path" >> $GITHUB_ENV
-                  echo "✅ Found Qt at: $qt_path"
-                  break
-                fi
-              done
-              
-              # If still not found, do a more comprehensive search
-              if [ -z "$QT_ROOT_DIR" ] || [ ! -d "$QT_ROOT_DIR" ]; then
-                echo "Comprehensive Qt search..."
-                QT_FOUND=$(find /opt /Users -name "qmake" -type f 2>/dev/null | grep -E "/${{ env.QT_VERSION }}/" | head -1)
-                if [ -n "$QT_FOUND" ]; then
-                  QT_ROOT_DIR=$(dirname $(dirname "$QT_FOUND"))
-                  echo "QT_ROOT_DIR=$QT_ROOT_DIR" >> $GITHUB_ENV
-                  echo "✅ Found Qt via qmake search at: $QT_ROOT_DIR"
-                fi
-              fi
-            else
-              echo "QT_ROOT_DIR already set to: $QT_ROOT_DIR"
-            fi
-            
-            # Verify Qt installation and set additional variables
-            if [ -d "$QT_ROOT_DIR" ] && [ -f "$QT_ROOT_DIR/bin/qmake" ]; then
-              echo "✅ Qt installation verified at: $QT_ROOT_DIR"
-              echo "Qt6_DIR=$QT_ROOT_DIR/lib/cmake/Qt6" >> $GITHUB_ENV
-              echo "QT_PLUGIN_PATH=$QT_ROOT_DIR/plugins" >> $GITHUB_ENV
-              echo "QT_QML2_PATH=$QT_ROOT_DIR/qml" >> $GITHUB_ENV
-              
-              # Verify cmake files exist
-              ls -la "$QT_ROOT_DIR/lib/cmake/" || echo "Warning: cmake directory not found"
-              "$QT_ROOT_DIR/bin/qmake" -version || echo "Warning: qmake failed"
-            else
-              echo "❌ Qt installation not found or invalid!"
-              echo "Current QT_ROOT_DIR: '$QT_ROOT_DIR'"
-              echo "Listing possible Qt locations:"
-              find /opt /Users -name "*Qt*" -type d -maxdepth 3 2>/dev/null || true
-              find /opt /Users -name "qmake" -type f 2>/dev/null || true
-              exit 1
-            fi
-
-    - name: Debug paths (for troubleshooting)
-      run: |
-            echo "=== Path Debug Information ==="
-            echo "Runner: ${{ matrix.runner }} (${{ matrix.arch }})"
-            echo "GitHub Workspace: ${{github.workspace}}"
-            echo "Qt Root Dir: $QT_ROOT_DIR"
-            echo "Qt Plugin Path: $QT_PLUGIN_PATH"
-            echo "Qt QML Path: $QT_QML2_PATH"
-            echo "Current working directory: $(pwd)"
-            echo "Directory contents:"
-            ls -la
-            
-            echo "=== Dependency Check ==="
-            echo "Checking Assimp installation:"
-            if [ -d "/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}" ]; then
-              echo "✅ Assimp found at /usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}"
-              ls -la "/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/" || true
-            else
-              echo "❌ Assimp not found at /usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}"
-              echo "Searching for Assimp..."
-              find /usr/local -name "*assimp*" -type d 2>/dev/null || echo "No Assimp found"
-            fi
-            
-            echo "Checking OGRE installation:"
-            if [ -d "${{github.workspace}}/ogre/SDK" ]; then
-              echo "✅ OGRE SDK found at ${{github.workspace}}/ogre/SDK"
-              ls -la "${{github.workspace}}/ogre/SDK/" || true
-              ls -la "${{github.workspace}}/ogre/SDK/lib/" 2>/dev/null || echo "No lib directory"
-              ls -la "${{github.workspace}}/ogre/SDK/lib/cmake/" 2>/dev/null || echo "No cmake directory"
-              find "${{github.workspace}}/ogre/SDK" -name "*OGRE*" -type d 2>/dev/null || echo "No OGRE directories found"
-              find "${{github.workspace}}/ogre/SDK" -name "*.cmake" -type f 2>/dev/null || echo "No cmake files found"
-            else
-              echo "❌ OGRE SDK not found at ${{github.workspace}}/ogre/SDK"
-              echo "Searching for OGRE..."
-              find "${{github.workspace}}" -name "*ogre*" -type d 2>/dev/null || echo "No OGRE found in workspace"
-            fi
-            echo "=== End Debug Information ==="
-
-    - name: Check existing Assimp installation (self-hosted runner)
-      if: matrix.runner == 'macos-intel'
-      id: check-assimp-build-self-hosted  
-      run: |
-            echo "🔍 Checking Assimp installation for main build"
-            if [ -d "/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}" ]; then
-              echo "✅ Assimp found for main build"
-              echo "assimp_exists=true" >> $GITHUB_OUTPUT
-            else
-              echo "❌ Assimp not found for main build"
-              echo "assimp_exists=false" >> $GITHUB_OUTPUT
-            fi
-
-    - name: Cache Assimp (GitHub-hosted runner only)
-      if: matrix.runner == 'macos-latest'
-      id: cache-assimp-build-macos
+    - name: Cache Assimp
+      id: cache-assimp-macos
       uses: actions/cache@v3
       env:
         cache-name: cache-assimp-macos-${{ matrix.arch }}
@@ -720,212 +191,41 @@ jobs:
                /usr/local/lib/libassimp*
                /usr/local/lib/libzlibstatic.a
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - name: Check existing Ogre installation (self-hosted runner)  
-      if: matrix.runner == 'macos-intel'
-      id: check-ogre-build-self-hosted
-      run: |
-            echo "🔍 Checking Ogre installation for main build"
-            if [ -d "${{github.workspace}}/ogre/SDK" ]; then
-              echo "✅ Ogre SDK found for main build"
-              echo "ogre_exists=true" >> $GITHUB_OUTPUT
-            else
-              echo "❌ Ogre SDK not found for main build"  
-              echo "ogre_exists=false" >> $GITHUB_OUTPUT
-            fi
       
-    - name: Cache Ogre (GitHub-hosted runner only)
-      if: matrix.runner == 'macos-latest'
-      id: cache-ogre-build-macos
+    - name: Cache Ogre
+      id: cache-ogre-macos
       uses: actions/cache@v3
       env:
         cache-name: cache-ogre-macos-${{ matrix.arch }}
       with:
         path: ${{github.workspace}}/ogre/SDK
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-
-    - name: Ensure OGRE availability (fallback)
-      run: |
-            echo "🔍 Ensuring OGRE is available for build..."
-            
-            # Check if OGRE SDK exists from cache/previous job
-            if [ ! -d "${{github.workspace}}/ogre/SDK" ]; then
-              echo "⚠️  OGRE SDK not found, attempting to build inline as fallback"
-              
-              # Check if we have the OGRE source from cache/previous job
-              if [ ! -d "${{github.workspace}}/ogre" ]; then
-                echo "📥 Checking out OGRE source..."
-                git clone --depth 1 --branch v${{ env.OGRE_VERSION }} https://github.com/OGRECave/ogre.git ${{github.workspace}}/ogre
-              fi
-              
-              echo "🔨 Building OGRE inline..."
-              cd ${{github.workspace}}/ogre/
-              
-              # Configure OGRE
-              cmake -S . -B build \
-              -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK \
-              -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
-              -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
-              -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
-              -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
-              -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
-              -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-              
-              # Build and install
-              cd build
-              make -j8
-              make install
-              
-              echo "✅ OGRE built and installed inline"
-            else
-              echo "✅ OGRE SDK already available from cache/previous job"
-            fi
-            
-            # Final verification
-            if [ -d "${{github.workspace}}/ogre/SDK" ]; then
-              echo "✅ OGRE SDK confirmed available"
-            else
-              echo "❌ OGRE SDK still not available after fallback - build will likely fail"
-              exit 1
-            fi 
-    
-    - name: Pre-CMake Debug Check
-      run: |
-            echo "=== Pre-CMake Environment Debug ==="
-            echo "Runner: ${{ matrix.runner }} (${{ matrix.arch }})"
-            echo "Current directory: $(pwd)"
-            echo "Workspace: ${{github.workspace}}"
-            echo ""
-            echo "Environment Variables:"
-            echo "QT_ROOT_DIR: '$QT_ROOT_DIR'"
-            echo "Qt6_DIR: '$Qt6_DIR'"
-            echo "QT_PLUGIN_PATH: '$QT_PLUGIN_PATH'"
-            echo "QT_QML2_PATH: '$QT_QML2_PATH'"
-            echo ""
-            echo "File System Check:"
-            echo "CMakeLists.txt exists: $([ -f CMakeLists.txt ] && echo "YES" || echo "NO")"
-            echo "Workspace CMakeLists.txt exists: $([ -f "${{github.workspace}}/CMakeLists.txt" ] && echo "YES" || echo "NO")"
-            echo ""
-            echo "Current directory contents:"
-            ls -la
-            echo ""
-            echo "Workspace directory contents:"
-            ls -la "${{github.workspace}}" 2>/dev/null || echo "Workspace directory not accessible"
-            echo ""
-            if [ "${{ matrix.runner }}" = "macos-intel" ]; then
-              echo "Local installations check:"
-              echo "Local Qt exists: $([ -d "/Users/fernandotonon/Qt/${{ env.QT_VERSION }}/macos" ] && echo "YES" || echo "NO")"
-              echo "Local Assimp exists: $([ -d "/Users/fernandotonon/assimp" ] && echo "YES" || echo "NO")"
-              echo "Local OGRE exists: $([ -d "/Users/fernandotonon/ogre" ] && echo "YES" || echo "NO")"
-            fi
-            echo "=== End Pre-CMake Debug ==="
     
     - name: Configure CMake
       run: |
-            # Ensure we're in the correct directory
-            cd "${{github.workspace}}"
-            
-            echo "Configuring QtMeshEditor for ${{ matrix.arch }} architecture"
-            echo "Qt installation directory: $QT_ROOT_DIR"
-            echo "Workspace: ${{github.workspace}}"
-            echo "Current directory: $(pwd)"
-            
-            # Verify we have CMakeLists.txt
-            if [ ! -f "CMakeLists.txt" ]; then
-              echo "❌ CMakeLists.txt not found in current directory!"
-              echo "Directory contents:"
-              ls -la
-              echo "Checking workspace directory:"
-              ls -la "${{github.workspace}}"
-              exit 1
-            fi
-            
-            # Setup paths based on runner type
-            if [ "${{ matrix.runner }}" = "macos-intel" ]; then
-              echo "🔧 Using local installations for self-hosted runner"
-              
-              # Use local Assimp
-              if [ -d "/Users/fernandotonon/assimp" ]; then
-                ASSIMP_CMAKE_DIR="/Users/fernandotonon/assimp/lib/cmake/assimp"
-                ASSIMP_INCLUDE_DIR="/Users/fernandotonon/assimp/include"
-                echo "Using local Assimp: $ASSIMP_CMAKE_DIR"
-              else
-                echo "❌ Local Assimp not found, falling back to system installation"
-                ASSIMP_CMAKE_DIR="/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}"
-                ASSIMP_INCLUDE_DIR="/usr/local/include/assimp"
-              fi
-              
-              # Use local OGRE 
-              if [ -d "/Users/fernandotonon/ogre/SDK" ]; then
-                OGRE_CMAKE_DIR="/Users/fernandotonon/ogre/SDK/lib/cmake/OGRE"
-                echo "Using local OGRE: $OGRE_CMAKE_DIR"
-                # Ensure symbolic link exists
-                mkdir -p ${{github.workspace}}/ogre
-                ln -sf /Users/fernandotonon/ogre/SDK ${{github.workspace}}/ogre/SDK || true
-              else
-                echo "Using workspace OGRE"
-                OGRE_CMAKE_DIR="${{github.workspace}}/ogre/SDK/lib/cmake/OGRE"
-              fi
-            else
-              echo "🔧 Using GitHub-hosted runner installations"
-              ASSIMP_CMAKE_DIR="/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}"
-              ASSIMP_INCLUDE_DIR="/usr/local/include/assimp"
-              
-              # Find OGRE cmake files for GitHub-hosted runner
-              if [ -d "${{github.workspace}}/ogre/SDK/lib/cmake/OGRE" ]; then
-                OGRE_CMAKE_DIR="${{github.workspace}}/ogre/SDK/lib/cmake/OGRE"
-              elif [ -d "${{github.workspace}}/ogre/SDK/CMake" ]; then
-                OGRE_CMAKE_DIR="${{github.workspace}}/ogre/SDK/CMake"
-              else
-                echo "Searching for OGRE cmake files..."
-                find "${{github.workspace}}/ogre/SDK" -name "*OGRE*" -type d 2>/dev/null || true
-                find "${{github.workspace}}/ogre/SDK" -name "*.cmake" 2>/dev/null || true
-                OGRE_CMAKE_DIR=""
-              fi
-            fi
-            
-            echo "ASSIMP CMAKE DIR: $ASSIMP_CMAKE_DIR"
-            echo "OGRE CMAKE DIR: $OGRE_CMAKE_DIR"
-            echo "Qt6_DIR: $Qt6_DIR"
-            
-            # Verify Qt6_DIR is set
-            if [ -z "$Qt6_DIR" ]; then
-              echo "❌ Qt6_DIR not set, cannot proceed with CMake configuration"
-              exit 1
-            fi
-            
-            # Configure CMake
             cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_PREFIX_PATH="${{github.workspace}}/ogre/SDK" \
-            -DASSIMP_DIR="$ASSIMP_CMAKE_DIR" \
-            -DASSIMP_INCLUDE_DIR="$ASSIMP_INCLUDE_DIR" \
-            -DQt6_DIR="$Qt6_DIR" \
-            -DQT_DIR="$Qt6_DIR" \
-            -DQt6GuiTools_DIR="$QT_ROOT_DIR/lib/cmake/Qt6GuiTools" \
-            ${OGRE_CMAKE_DIR:+-DOGRE_DIR="$OGRE_CMAKE_DIR"}
+            -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
+            -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
+            -DQt6_DIR=${{env.Qt6_DIR}} \
+            -DQT_DIR=${{env.Qt6_DIR}} \
+            -DQt6GuiTools_DIR=${{env.QT_ROOT_DIR}}/lib/cmake/Qt6GuiTools \
+            -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/
     
     - name: Build
       run: |
-            echo "Building QtMeshEditor for ${{ matrix.arch }} architecture"
             cd build
-            # Build first, then install (safer for self-hosted)
             make -j8
             sudo make install
-
     - name: Copy Qt libs to app folder
       run: |
-            echo "Copying Qt frameworks for ${{ matrix.arch }} architecture"
-            echo "Qt installation directory: $QT_ROOT_DIR"
-            # Copy Qt frameworks (use dynamic Qt path)
-            sudo cp -R "$QT_ROOT_DIR/lib/QtWidgets.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework"
-            sudo cp -R "$QT_ROOT_DIR/lib/QtCore.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework"
-            sudo cp -R "$QT_ROOT_DIR/lib/QtGui.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework"
-            sudo cp -R "$QT_ROOT_DIR/lib/QtDBus.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework"
-            sudo cp -R "$QT_ROOT_DIR/plugins/platforms" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms"
-            # Copy Assimp libraries
+            sudo cp -R ${{env.QT_ROOT_DIR}}/lib/QtWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework
+            sudo cp -R ${{env.QT_ROOT_DIR}}/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework
+            sudo cp -R ${{env.QT_ROOT_DIR}}/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework
+            sudo cp -R ${{env.QT_ROOT_DIR}}/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework
+            sudo cp -R ${{env.QT_ROOT_DIR}}/plugins/platforms ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms
             sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
-
     - name: Prepare for packing
       run: |
             sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
@@ -935,7 +235,6 @@ jobs:
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
             sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
-
     - name: Pack
       run: | 
             brew install create-dmg
@@ -964,179 +263,4 @@ jobs:
           file: QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
           update_latest_release: true
           overwrite: false
-          verbose: true
-
-    - name: Cleanup (self-hosted runner safety)
-      if: always() && matrix.runner == 'macos-intel'
-      run: |
-            echo "🧹 Cleaning up main build files on self-hosted runner"
-            echo "Workspace: ${{github.workspace}}"
-            # Clean up main build directory (dependencies cleaned in their own jobs)
-            rm -rf ${{github.workspace}}/build/ || true
-            echo "✅ Main build cleanup completed"
-
- build-macos-simplified:
-    # Skip dependency jobs for self-hosted runners
-    needs: []
-    strategy:
-      matrix:
-        runner: [macos-intel]
-        include:
-          - runner: macos-intel  
-            arch: x86_64
-    runs-on: ${{ matrix.runner }}
-    steps:
-    - name: Pre-checkout cleanup (self-hosted runner safety)
-      run: |
-            echo "🧹 Pre-checkout cleanup for self-hosted runner"
-            echo "Workspace path: ${{github.workspace}}"
-            
-            # Force remove any leftover files with permission issues
-            if [ -d "${{github.workspace}}" ]; then
-              echo "Cleaning workspace directory..."
-              sudo rm -rf "${{github.workspace}}" || true
-              echo "Creating fresh workspace directory..."
-              mkdir -p "${{github.workspace}}"
-            fi
-            
-            echo "✅ Pre-checkout cleanup completed"
-
-    - name: Setup build environment
-      run: |
-            echo "Running on: ${{ matrix.runner }} (${{ matrix.arch }})"
-            echo "⚠️  Self-hosted runner detected - using local installations"
-            echo "✅ Build environment ready"
-
-    - uses: actions/checkout@v3
-      with:
-         submodules: true
-         
-    - run: |
-            cd ${{github.workspace}}/src/dependencies/ogre-procedural
-            git checkout master
-            git pull
-
-    - name: Setup local Qt, Assimp, and OGRE
-      run: |
-            echo "🔧 Setting up local installations for self-hosted runner"
-            
-            # Setup Qt
-            QT_LOCAL_PATH="/Users/fernandotonon/Qt/${{ env.QT_VERSION }}/macos"
-            if [ -d "$QT_LOCAL_PATH" ]; then
-              echo "✅ Found local Qt installation at: $QT_LOCAL_PATH"
-              echo "QT_ROOT_DIR=$QT_LOCAL_PATH" >> $GITHUB_ENV
-              echo "Qt6_DIR=$QT_LOCAL_PATH/lib/cmake/Qt6" >> $GITHUB_ENV
-              echo "QT_PLUGIN_PATH=$QT_LOCAL_PATH/plugins" >> $GITHUB_ENV
-              echo "QT_QML2_PATH=$QT_LOCAL_PATH/qml" >> $GITHUB_ENV
-            else
-              echo "❌ Qt installation not found at: $QT_LOCAL_PATH"
-              exit 1
-            fi
-            
-            # Setup Assimp
-            if [ -d "/Users/fernandotonon/assimp" ]; then
-              echo "✅ Found local Assimp at: /Users/fernandotonon/assimp"
-              echo "ASSIMP_CMAKE_DIR=/Users/fernandotonon/assimp/lib/cmake/assimp" >> $GITHUB_ENV
-              echo "ASSIMP_INCLUDE_DIR=/Users/fernandotonon/assimp/include" >> $GITHUB_ENV
-            else
-              echo "❌ Local Assimp not found at: /Users/fernandotonon/assimp"
-              exit 1
-            fi
-            
-            # Setup OGRE
-            if [ -d "/Users/fernandotonon/ogre/SDK" ]; then
-              echo "✅ Found local OGRE at: /Users/fernandotonon/ogre/SDK"
-              echo "OGRE_CMAKE_DIR=/Users/fernandotonon/ogre/SDK/lib/cmake/OGRE" >> $GITHUB_ENV
-              # Create symbolic link for consistency
-              mkdir -p ${{github.workspace}}/ogre
-              ln -sf /Users/fernandotonon/ogre/SDK ${{github.workspace}}/ogre/SDK || true
-            else
-              echo "❌ Local OGRE not found at: /Users/fernandotonon/ogre/SDK"
-              exit 1
-            fi
-            
-            echo "✅ All local dependencies setup completed"
-
-    - name: Configure CMake
-      run: |
-            echo "Configuring QtMeshEditor for ${{ matrix.arch }} architecture"
-            echo "Qt installation directory: $QT_ROOT_DIR"
-            echo "Assimp directory: $ASSIMP_CMAKE_DIR"
-            echo "OGRE directory: $OGRE_CMAKE_DIR"
-            
-            # Configure CMake
-            cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_PREFIX_PATH="/Users/fernandotonon/ogre/SDK" \
-            -DASSIMP_DIR="$ASSIMP_CMAKE_DIR" \
-            -DASSIMP_INCLUDE_DIR="$ASSIMP_INCLUDE_DIR" \
-            -DQt6_DIR="$Qt6_DIR" \
-            -DQT_DIR="$Qt6_DIR" \
-            -DQt6GuiTools_DIR="$QT_ROOT_DIR/lib/cmake/Qt6GuiTools" \
-            -DOGRE_DIR="$OGRE_CMAKE_DIR"
-    
-    - name: Build
-      run: |
-            echo "Building QtMeshEditor for ${{ matrix.arch }} architecture"
-            cd build
-            make -j8
-            sudo make install
-
-    - name: Copy Qt libs to app folder
-      run: |
-            echo "Copying Qt frameworks for ${{ matrix.arch }} architecture"
-            # Copy Qt frameworks (use dynamic Qt path)
-            sudo cp -R "$QT_ROOT_DIR/lib/QtWidgets.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtWidgets.framework"
-            sudo cp -R "$QT_ROOT_DIR/lib/QtCore.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtCore.framework"
-            sudo cp -R "$QT_ROOT_DIR/lib/QtGui.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtGui.framework"
-            sudo cp -R "$QT_ROOT_DIR/lib/QtDBus.framework" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtDBus.framework"
-            sudo cp -R "$QT_ROOT_DIR/plugins/platforms" "${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/platforms"
-            # Copy Assimp libraries from local installation
-            sudo cp -R /Users/fernandotonon/assimp/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ || true
-
-    - name: Prepare for packing
-      run: |
-            sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
-            sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
-            sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
-            sudo mkdir ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
-            sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
-            sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
-            sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
-
-    - name: Pack
-      run: | 
-            brew install create-dmg
-            sudo create-dmg \
-            --volname "QtMeshEditor Installer" \
-            --volicon "${{github.workspace}}/resources/icon.icns" \
-            --window-pos 200 120 \
-            --window-size 800 400 \
-            --icon-size 100 \
-            --icon "QtMeshEditor.app" 200 190 \
-            --app-drop-link 600 185 \
-            QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg \
-            ${{github.workspace}}/bin/QtMeshEditor.app
-    
-    - if: github.event_name == 'release' && github.event.action == 'published'
-      uses: actions/upload-artifact@v4
-      with:
-        name: QtMeshEditor-MacOS-${{ matrix.arch }}
-        path: ${{github.workspace}}/QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
-        
-    - if: github.event_name == 'release' && github.event.action == 'published'
-      uses: xresloader/upload-to-github-release@main
-      env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-          file: QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
-          update_latest_release: true
-          overwrite: false
-          verbose: true
-
-    - name: Cleanup
-      if: always()
-      run: |
-            echo "🧹 Cleaning up build files"
-            rm -rf ${{github.workspace}}/build/ || true
-            echo "✅ Cleanup completed" 
+          verbose: true 
