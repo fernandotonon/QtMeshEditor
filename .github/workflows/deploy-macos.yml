@@ -33,12 +33,19 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
-    - name: change folder permissions
+    - name: Setup build environment (safe for self-hosted)
       run: |
-            sudo mkdir /usr/local/lib
-            sudo mkdir /usr/local/include
-            sudo chmod -R 777 /usr/local/lib
-            sudo chmod -R 777 /usr/local/include
+            echo "Running on: ${{ matrix.runner }} (${{ matrix.arch }})"
+            if [ "${{ matrix.runner }}" = "macos-intel" ]; then
+              echo "⚠️  Self-hosted runner detected - using safe operations"
+            fi
+            # Create directories safely (won't fail if they exist)
+            sudo mkdir -p /usr/local/lib
+            sudo mkdir -p /usr/local/include
+            # Use safer permissions (755 instead of 777)
+            sudo chmod -R 755 /usr/local/lib
+            sudo chmod -R 755 /usr/local/include
+            echo "✅ Build environment ready"
 
     - name: Cache Assimp
       id: cache-assimp-macos
@@ -70,9 +77,12 @@ jobs:
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
+            echo "Building Assimp for ${{ matrix.arch }} architecture"
             cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
-            sudo make install -j8
+            # Build first, then install (safer for self-hosted)
+            make -j8
+            sudo make install
 
  build-n-cache-ogre-macos:
     needs: build-n-cache-assimp-macos
@@ -86,12 +96,19 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:    
-    - name: change folder permissions
+    - name: Setup build environment (safe for self-hosted)
       run: |
-          sudo mkdir /usr/local/lib
-          sudo mkdir /usr/local/include
-          sudo chmod -R 777 /usr/local/lib
-          sudo chmod -R 777 /usr/local/include
+          echo "Running on: ${{ matrix.runner }} (${{ matrix.arch }})"
+          if [ "${{ matrix.runner }}" = "macos-intel" ]; then
+            echo "⚠️  Self-hosted runner detected - using safe operations"
+          fi
+          # Create directories safely (won't fail if they exist)
+          sudo mkdir -p /usr/local/lib
+          sudo mkdir -p /usr/local/include
+          # Use safer permissions (755 instead of 777)
+          sudo chmod -R 755 /usr/local/lib
+          sudo chmod -R 755 /usr/local/include
+          echo "✅ Build environment ready"
 
     - name: Cache Assimp
       id: cache-assimp-macos
@@ -130,14 +147,20 @@ jobs:
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
       run: |
+            echo "Building Ogre3D for ${{ matrix.arch }} architecture"
             cd ${{github.workspace}}/ogre/
-            sudo cmake -S . -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
+            # Configure without sudo first
+            cmake -S . -B build \
+            -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
             -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
-            sudo make install -j8
+            # Build first, then install (safer for self-hosted)
+            cd build
+            make -j8
+            sudo make install
 
  build-macos:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
@@ -151,12 +174,19 @@ jobs:
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
-    - name: change folder permissions
+    - name: Setup build environment (safe for self-hosted)
       run: |
-            sudo mkdir /usr/local/lib
-            sudo mkdir /usr/local/include
-            sudo chmod -R 777 /usr/local/lib
-            sudo chmod -R 777 /usr/local/include
+            echo "Running on: ${{ matrix.runner }} (${{ matrix.arch }})"
+            if [ "${{ matrix.runner }}" = "macos-intel" ]; then
+              echo "⚠️  Self-hosted runner detected - using safe operations"
+            fi
+            # Create directories safely (won't fail if they exist)
+            sudo mkdir -p /usr/local/lib
+            sudo mkdir -p /usr/local/include
+            # Use safer permissions (755 instead of 777)
+            sudo chmod -R 755 /usr/local/lib
+            sudo chmod -R 755 /usr/local/include
+            echo "✅ Build environment ready"
 
     - uses: actions/checkout@v3
       with:
@@ -205,7 +235,9 @@ jobs:
       env:
          OGRE_DIR: ${{github.workspace}}/ogre/SDK/CMake/
       run: |
-            sudo cmake -S . \
+            echo "Configuring QtMeshEditor for ${{ matrix.arch }} architecture"
+            # Configure without sudo first (safer for self-hosted)
+            cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
@@ -215,9 +247,12 @@ jobs:
             -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/ 
     
     - name: Build
-      # Build your program with the given configuration
       run: |
-            sudo make install -j8
+            echo "Building QtMeshEditor for ${{ matrix.arch }} architecture"
+            cd build
+            # Build first, then install (safer for self-hosted)
+            make -j8
+            sudo make install
 
     - name: Copy Qt libs to app folder
       run: |
@@ -266,4 +301,14 @@ jobs:
           file: QtMeshEditor-${{github.ref_name}}-MacOS-${{ matrix.arch }}.dmg
           update_latest_release: true
           overwrite: false
-          verbose: true 
+          verbose: true
+
+    - name: Cleanup (self-hosted runner safety)
+      if: always() && matrix.runner == 'macos-intel'
+      run: |
+            echo "🧹 Cleaning up temporary build files on self-hosted runner"
+            # Clean up build directories in workspace
+            rm -rf build/ || true
+            rm -rf /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/ || true
+            rm -rf ${{github.workspace}}/ogre/build/ || true
+            echo "✅ Cleanup completed" 
