@@ -25,11 +25,11 @@ jobs:
  build-n-cache-assimp-macos:
     strategy:
       matrix:
-        runner: [macos-15, macos-15-large]
+        runner: [macos-latest, macos-latest-large]
         include:
-          - runner: macos-15
+          - runner: macos-latest
             arch: arm64
-          - runner: macos-15-large  
+          - runner: macos-latest-large  
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
@@ -77,11 +77,11 @@ jobs:
     needs: build-n-cache-assimp-macos
     strategy:
       matrix:
-        runner: [macos-15, macos-15-large]
+        runner: [macos-latest, macos-latest-large]
         include:
-          - runner: macos-15
+          - runner: macos-latest
             arch: arm64
-          - runner: macos-15-large  
+          - runner: macos-latest-large  
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:    
@@ -144,11 +144,11 @@ jobs:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
     strategy:
       matrix:
-        runner: [macos-15, macos-15-large]
+        runner: [macos-latest, macos-latest-large]
         include:
-          - runner: macos-15
+          - runner: macos-latest
             arch: arm64
-          - runner: macos-15-large  
+          - runner: macos-latest-large  
             arch: x86_64
     runs-on: ${{ matrix.runner }}
     steps:
