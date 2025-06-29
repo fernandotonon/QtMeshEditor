@@ -281,7 +281,7 @@ jobs:
     permissions: read-all
     env: 
           LD_LIBRARY_PATH: gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
-          BUILD_WRAPPER_OUT_DIR: ./
+          BUILD_WRAPPER_OUT_DIR: build-wrapper-output
           QT_QPA_PLATFORM: offscreen
           QT_DEBUG_PLUGINS: 0
           DISPLAY: :99
@@ -352,18 +352,33 @@ jobs:
         unzip -o build-wrapper-linux-x86.zip
         echo "${GITHUB_WORKSPACE}/build-wrapper-linux-x86" >> $GITHUB_PATH
 
-    - name: Configure CMake with SonarCloud build wrapper
+    - name: Fix workspace permissions for SonarCloud
       run: |
-          echo "=== CMake Configuration with Build Wrapper ==="
-          echo "Using build wrapper: $(which build-wrapper-linux-x86-64)"
-          echo "Build wrapper output directory: ${{ env.BUILD_WRAPPER_OUT_DIR }}"
+          echo "=== Fixing Workspace Permissions ==="
+          # Ensure the current user owns the workspace
+          sudo chown -R $USER:$USER ${{github.workspace}}
           
-          sudo cmake -B build -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+          # Create build wrapper output directory
+          mkdir -p ${{ env.BUILD_WRAPPER_OUT_DIR }}
+          
+          # Ensure build directory will be owned by current user
+          mkdir -p build
+          
+    - name: Configure CMake for SonarCloud analysis
+      run: |
+          echo "=== CMake Configuration for SonarCloud ==="
+          echo "Build wrapper output directory: ${{ env.BUILD_WRAPPER_OUT_DIR }}"
+          echo "Current user: $(whoami)"
+          echo "Workspace ownership: $(ls -la ${{github.workspace}} | head -3)"
+          
+          # Configure WITHOUT sudo to avoid permission issues
+          cmake -B build -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
           -DCMAKE_CXX_FLAGS="-g -O0 --coverage -fprofile-arcs -ftest-coverage" \
           -DCMAKE_C_FLAGS="-g -O0 --coverage -fprofile-arcs -ftest-coverage" \
           -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
           -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
           -DBUILD_TESTS=ON \
+          -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/install \
           -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
           -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
           -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
@@ -374,32 +389,55 @@ jobs:
       run: |
           echo "=== Building with SonarCloud build wrapper ==="
           echo "Build wrapper output directory: ${{ env.BUILD_WRAPPER_OUT_DIR }}"
+          echo "Build wrapper location:"
           ls -la "${GITHUB_WORKSPACE}/build-wrapper-linux-x86/" || echo "Build wrapper directory not found"
           
-          # Use the full path to build-wrapper since it might not be in PATH yet
-          "${GITHUB_WORKSPACE}/build-wrapper-linux-x86/build-wrapper-linux-x86-64" --out-dir "${{ env.BUILD_WRAPPER_OUT_DIR }}" make -C build install -j8
+          # Build only (no install) to avoid permission issues with build wrapper
+          "${GITHUB_WORKSPACE}/build-wrapper-linux-x86/build-wrapper-linux-x86-64" --out-dir "${{ env.BUILD_WRAPPER_OUT_DIR }}" make -C build -j8
+          
+    - name: Install built binaries
+      run: |
+          echo "=== Installing built binaries ==="
+          # Install after build wrapper analysis is complete
+          cd build
+          sudo make install
 
     - name: Add missing libraries
       run: |
+          echo "=== Setting up test libraries ==="
           # Create the bin directory since cmake builds to build/bin but we need ./bin for the tests
           mkdir -p ./bin
           mkdir -p ./build/bin
+          mkdir -p ./install/bin || true
+          
+          echo "Available build outputs:"
+          find build -name "QtMeshEditor*" -o -name "*Test*" -o -name "*.so" 2>/dev/null | head -10 || echo "No binaries found yet"
           
           # Copy Qt ICU libraries to both locations
-          sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./bin
-          sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./bin
-          sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./bin
+          echo "Copying Qt ICU libraries..."
+          sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./bin || true
+          sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./bin || true
+          sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./bin || true
           
           # Also copy to build/bin where cmake actually puts the executables
           sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./build/bin/ || true
           sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./build/bin/ || true
           sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./build/bin/ || true
           
+          # And to install/bin if it exists
+          sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./install/bin/ || true
+          sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./install/bin/ || true
+          sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./install/bin/ || true
+          
           # Copy libraries to system locations
+          echo "Copying system libraries..."
           sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu || true
           sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu || true
           sudo cp -R /usr/local/lib/OGRE/* ./bin || true
           sudo cp -R /usr/local/lib/OGRE/* ./build/bin/ || true
+          sudo cp -R /usr/local/lib/OGRE/* ./install/bin/ || true
+          
+          echo "✅ Library setup completed"
 
     - name: Start display server for QML tests
       run: |
@@ -421,20 +459,31 @@ jobs:
             echo "DISPLAY: $DISPLAY"
             
             echo "=== Available test executables ==="
-            find build -name "*test*" -type f -executable 2>/dev/null | head -20 || echo "Test search completed"
-            find . -name "*test*" -type f -executable 2>/dev/null | head -20 || echo "Test search completed"
+            find build -name "*test*" -type f -executable 2>/dev/null | head -20 || echo "Test search in build completed"
+            find install -name "*test*" -type f -executable 2>/dev/null | head -20 || echo "Test search in install completed"
+            find . -name "*test*" -type f -executable 2>/dev/null | head -20 || echo "Test search in current dir completed"
             
             # Function to run tests and capture results
             run_test() {
                 local test_name="$1"
                 local result_file="$2"
                 echo "=== Running $test_name ==="
+                
+                # Check build/bin first
                 if [ -f "build/bin/$test_name" ]; then
                     echo "Found test executable: build/bin/$test_name"
                     sudo chmod +x "build/bin/$test_name"
                     cd build/bin
                     timeout 300 ./"$test_name" -o "$result_file,junitxml" || echo "$test_name completed with exit code $?"
                     cd ../..
+                # Check install/bin  
+                elif [ -f "install/bin/$test_name" ]; then
+                    echo "Found test executable: install/bin/$test_name"
+                    sudo chmod +x "install/bin/$test_name"
+                    cd install/bin
+                    timeout 300 ./"$test_name" -o "$result_file,junitxml" || echo "$test_name completed with exit code $?"
+                    cd ../..
+                # Check current directory
                 elif [ -f "./$test_name" ]; then
                     echo "Found test executable: ./$test_name"
                     sudo chmod +x "./$test_name"
@@ -442,6 +491,7 @@ jobs:
                 else
                     echo "Test executable $test_name not found"
                     # Look for it in common locations
+                    echo "Searching for $test_name in all directories:"
                     find . -name "$test_name" -type f 2>/dev/null | head -5
                 fi
                 echo "=== $test_name execution completed ==="
