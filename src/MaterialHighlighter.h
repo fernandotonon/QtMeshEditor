@@ -43,6 +43,7 @@ public:
 
 protected:
     virtual void applyHighlight(const QTextCharFormat &format, const QString &pattern, const QString &text);
+    void highlightComments(const QString &text, bool dark);
 
 private:
     QObject *mParent;

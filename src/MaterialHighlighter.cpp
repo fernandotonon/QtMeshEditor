@@ -71,6 +71,9 @@ void MaterialHighlighter::highlightBlock(const QString &text)
     pattern = "(?<!_)\\b(\\d+(\\.\\d+)?)\\b(?![\\w.])";
     applyHighlight(format,pattern, text);
 
+    // Comments - applied last to override other highlighting
+    highlightComments(text, dark);
+
     if(mParent) mParent->blockSignals(false);
 }
 
@@ -81,5 +84,52 @@ void MaterialHighlighter::applyHighlight(const QTextCharFormat &format, const QS
     while(i.hasNext()){
         QRegularExpressionMatch match = i.next();
         setFormat(match.capturedStart(),match.capturedLength(),format);
+    }
+}
+
+void MaterialHighlighter::highlightComments(const QString &text, bool dark)
+{
+    // Comment format
+    QTextCharFormat commentFormat;
+    commentFormat.setFontWeight(QFont::Normal);
+    commentFormat.setForeground(dark ? QColor("lightgray") : QColor("gray"));
+    commentFormat.setFontItalic(true);
+    
+    // Single-line comments: // comment text
+    QRegularExpression singleLineComment("//.*$");
+    QRegularExpressionMatchIterator singleLineIterator = singleLineComment.globalMatch(text);
+    while (singleLineIterator.hasNext()) {
+        QRegularExpressionMatch match = singleLineIterator.next();
+        setFormat(match.capturedStart(), match.capturedLength(), commentFormat);
+    }
+    
+    // Multi-line comments: /* ... */
+    // Block state: 0 = normal, 1 = inside multi-line comment
+    setCurrentBlockState(0);
+    
+    QRegularExpression startExpression("/\\*");
+    QRegularExpression endExpression("\\*/");
+    
+    int startIndex = 0;
+    if (previousBlockState() != 1) {
+        startIndex = text.indexOf(startExpression);
+    }
+    
+    while (startIndex >= 0) {
+        QRegularExpressionMatch endMatch = endExpression.match(text, startIndex);
+        int endIndex = endMatch.capturedStart();
+        int commentLength = 0;
+        
+        if (endIndex == -1) {
+            // No end found in this block, comment continues to next block
+            setCurrentBlockState(1);
+            commentLength = text.length() - startIndex;
+        } else {
+            // End found in this block
+            commentLength = endIndex - startIndex + endMatch.capturedLength();
+        }
+        
+        setFormat(startIndex, commentLength, commentFormat);
+        startIndex = text.indexOf(startExpression, startIndex + commentLength);
     }
 }

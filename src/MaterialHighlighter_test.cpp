@@ -153,3 +153,127 @@ TEST(MaterialHighlighterTest, EdgeCases) {
     EXPECT_FALSE(numberPattern.match("_123").hasMatch()) << "Should NOT match number preceded by underscore";
     EXPECT_FALSE(numberPattern.match("123.jpg").hasMatch()) << "Should NOT match number followed by dot+text";
 }
+
+TEST(MaterialHighlighterTest, CommentHighlighting) {
+    // Test comment patterns
+    QRegularExpression singleLineCommentPattern("//.*$");
+    QRegularExpression multiLineCommentPattern("/\\*.*?\\*/");
+    
+    // Single-line comments
+    EXPECT_TRUE(singleLineCommentPattern.match("// This is a comment").hasMatch()) << "Should match single-line comment";
+    EXPECT_TRUE(singleLineCommentPattern.match("material test // inline comment").hasMatch()) << "Should match inline comment";
+    EXPECT_TRUE(singleLineCommentPattern.match("    // indented comment").hasMatch()) << "Should match indented comment";
+    
+    // Multi-line comments
+    EXPECT_TRUE(multiLineCommentPattern.match("/* comment */").hasMatch()) << "Should match simple multi-line comment";
+    EXPECT_TRUE(multiLineCommentPattern.match("/* multi word comment */").hasMatch()) << "Should match multi-word comment";
+    
+    // Comments should not interfere with normal syntax when not present
+    EXPECT_FALSE(singleLineCommentPattern.match("material TestMaterial").hasMatch()) << "Should NOT match normal material syntax";
+    EXPECT_FALSE(multiLineCommentPattern.match("technique standard").hasMatch()) << "Should NOT match normal technique syntax";
+}
+
+TEST(MaterialHighlighterTest, CommentedOutCode) {
+    // Test that keywords inside comments are properly handled
+    QRegularExpression keywordPattern("\\b(material|technique|pass)\\b(?!\\.)");
+    QRegularExpression commentPattern("//.*$");
+    
+    // These tests verify the concept - in actual implementation, 
+    // comments would override keyword highlighting
+    QString commentedKeyword = "// material TestMaterial";
+    EXPECT_TRUE(commentPattern.match(commentedKeyword).hasMatch()) << "Should match comment containing keywords";
+    
+    QString inlineComment = "pass main // this is a pass comment";
+    EXPECT_TRUE(commentPattern.match(inlineComment).hasMatch()) << "Should match inline comment";
+    EXPECT_TRUE(keywordPattern.match(inlineComment).hasMatch()) << "Should also match keyword before comment";
+}
+
+TEST(MaterialHighlighterTest, ComplexCommentScenarios) {
+    QRegularExpression singleLineCommentPattern("//.*$");
+    QRegularExpression multiLineCommentPattern("/\\*.*?\\*/");
+    
+    // Real-world material script with comments
+    QString materialWithComments = R"(
+// Material definition for grass
+material GrassMaterial
+{
+    technique
+    {
+        pass
+        {
+            // Basic lighting properties
+            ambient 0.3 0.3 0.3 1.0
+            diffuse 0.8 0.8 0.8 1.0  // Main grass color
+            
+            /* Texture setup for grass
+               Using high-res grass texture */
+            texture_unit
+            {
+                texture grass_1024.jpg
+            }
+        }
+    }
+}
+)";
+    
+    // Count comment matches
+    auto singleMatches = singleLineCommentPattern.globalMatch(materialWithComments);
+    int singleCommentCount = 0;
+    while (singleMatches.hasNext()) {
+        singleMatches.next();
+        singleCommentCount++;
+    }
+    
+    auto multiMatches = multiLineCommentPattern.globalMatch(materialWithComments);
+    int multiCommentCount = 0;
+    while (multiMatches.hasNext()) {
+        multiMatches.next();
+        multiCommentCount++;
+    }
+    
+    EXPECT_GE(singleCommentCount, 3) << "Should find at least 3 single-line comments";
+    EXPECT_GE(multiCommentCount, 1) << "Should find at least 1 multi-line comment";
+}
+
+TEST(MaterialHighlighterTest, MultiLineCommentSpanningBlocks) {
+    // Test multi-line comment patterns that span multiple blocks
+    QRegularExpression multiLineStart("/\\*");
+    QRegularExpression multiLineEnd("\\*/");
+    
+    // Test case 1: Multi-line comment start
+    QString startBlock = "material Test /* this comment";
+    EXPECT_TRUE(multiLineStart.match(startBlock).hasMatch()) << "Should detect multi-line comment start";
+    EXPECT_FALSE(multiLineEnd.match(startBlock).hasMatch()) << "Should not find end in start block";
+    
+    // Test case 2: Multi-line comment middle (no start or end)
+    QString middleBlock = "   continues here with keywords material pass";
+    EXPECT_FALSE(multiLineStart.match(middleBlock).hasMatch()) << "Should not find start in middle block";
+    EXPECT_FALSE(multiLineEnd.match(middleBlock).hasMatch()) << "Should not find end in middle block";
+    
+    // Test case 3: Multi-line comment end
+    QString endBlock = "   and ends here */ technique";
+    EXPECT_FALSE(multiLineStart.match(endBlock).hasMatch()) << "Should not find start in end block";
+    EXPECT_TRUE(multiLineEnd.match(endBlock).hasMatch()) << "Should find end in end block";
+}
+
+TEST(MaterialHighlighterTest, NestedAndComplexComments) {
+    QRegularExpression singleLineComment("//.*$");
+    QRegularExpression multiLineStart("/\\*");
+    QRegularExpression multiLineEnd("\\*/");
+    
+    // Test nested-like comments (single-line inside multi-line conceptually)
+    QString nestedCase = "/* this is // not a separate comment */";
+    EXPECT_TRUE(multiLineStart.match(nestedCase).hasMatch()) << "Should find multi-line start";
+    EXPECT_TRUE(multiLineEnd.match(nestedCase).hasMatch()) << "Should find multi-line end";
+    EXPECT_TRUE(singleLineComment.match(nestedCase).hasMatch()) << "Would find // pattern but it should be overridden by /* */";
+    
+    // Test multiple single-line comments
+    QString multiSingle = "// comment 1\n// comment 2\nmaterial Test // comment 3";
+    auto matches = singleLineComment.globalMatch(multiSingle);
+    int count = 0;
+    while (matches.hasNext()) {
+        matches.next();
+        count++;
+    }
+    EXPECT_GE(count, 3) << "Should find at least 3 single-line comments";
+}
