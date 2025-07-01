@@ -44,6 +44,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialHighlighter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
     )
     
     set(TEST_HEADER_FILES
@@ -80,6 +81,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialHighlighter.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)

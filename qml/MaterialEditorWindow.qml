@@ -497,6 +497,12 @@ ApplicationWindow {
                             color: panelColor
                         }
                         
+                        // MaterialHighlighter for syntax highlighting
+                        MaterialHighlighter {
+                            id: materialHighlighter
+                            document: textArea.textDocument
+                        }
+                        
                         // Simple tab handling
                         Keys.onPressed: function(event) {
                             if (event.key === Qt.Key_Tab) {
