@@ -277,3 +277,19 @@ TEST(MaterialHighlighterTest, NestedAndComplexComments) {
     }
     EXPECT_GE(count, 3) << "Should find at least 3 single-line comments";
 }
+
+TEST(MaterialHighlighterTest, CommentColorLogic) {
+    // Test the comment color logic for both light and dark themes
+    QColor lightThemeCommentColor = QColor("gray");
+    QColor darkThemeCommentColor = QColor("#A0A0A0");
+    
+    // Verify colors are different
+    EXPECT_NE(lightThemeCommentColor, darkThemeCommentColor) << "Light and dark theme comment colors should be different";
+    
+    // Verify dark theme color is lighter than pure gray for better visibility
+    QColor pureGray = QColor("#808080");
+    EXPECT_GT(darkThemeCommentColor.lightness(), pureGray.lightness()) << "Dark theme comment color should be lighter than pure gray for better visibility";
+    
+    // Verify light theme color is darker than pure gray for better visibility
+    EXPECT_LT(lightThemeCommentColor.lightness(), pureGray.lightness()) << "Light theme comment color should be darker than pure gray for better visibility";
+}

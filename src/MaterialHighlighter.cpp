@@ -92,7 +92,7 @@ void MaterialHighlighter::highlightComments(const QString &text, bool dark)
     // Comment format
     QTextCharFormat commentFormat;
     commentFormat.setFontWeight(QFont::Normal);
-    commentFormat.setForeground(dark ? QColor("lightgray") : QColor("gray"));
+    commentFormat.setForeground(dark ? QColor("#A0A0A0") : QColor("gray"));
     commentFormat.setFontItalic(true);
     
     // Single-line comments: // comment text
