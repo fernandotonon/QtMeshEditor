@@ -8,6 +8,7 @@
 ##############################################################
 #  Versions
 ##############################################################
+
 cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
