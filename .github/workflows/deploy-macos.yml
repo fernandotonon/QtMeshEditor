@@ -79,6 +79,9 @@ jobs:
           brew install pkg-config freetype cmake zlib
           # Ensure FreeType is properly linked
           brew link freetype --force
+          # Create symlinks if needed
+          sudo ln -sf /usr/local/lib/libfreetype.dylib /usr/local/lib/libfreetype.6.dylib
+          sudo ln -sf /usr/local/lib/libfreetype.dylib /usr/local/lib/libfreetype.2.dylib
           
     - name: change folder permissions
       run: |
@@ -124,11 +127,16 @@ jobs:
       name: Build Ogre3D repo
       run: |
             cd ${{github.workspace}}/ogre/
+            export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
+            export LDFLAGS="-L/usr/local/lib"
+            export CPPFLAGS="-I/usr/local/include"
             cmake -S . -B build \
             -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_CXX_FLAGS="-w -Wno-error" \
             -DCMAKE_C_FLAGS="-w -Wno-error" \
+            -DCMAKE_EXE_LINKER_FLAGS="-lfreetype" \
+            -DCMAKE_SHARED_LINKER_FLAGS="-lfreetype" \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
             -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
@@ -150,6 +158,9 @@ jobs:
           brew install pkg-config freetype cmake zlib
           # Ensure FreeType is properly linked
           brew link freetype --force
+          # Create symlinks if needed
+          sudo ln -sf /usr/local/lib/libfreetype.dylib /usr/local/lib/libfreetype.6.dylib
+          sudo ln -sf /usr/local/lib/libfreetype.dylib /usr/local/lib/libfreetype.2.dylib
           
     - name: change folder permissions
       run: |
