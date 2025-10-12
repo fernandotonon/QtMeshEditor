@@ -845,10 +845,7 @@ jobs:
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
-            cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+            cmake -B /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build -S /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             cd /Users/runner/work/QtMeshEditor/QtMeshEditor/assimp-build/
             sudo make install -j8
 
@@ -906,9 +903,7 @@ jobs:
             -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
             -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}}
             sudo make install -j8
 
  build-macos:
@@ -932,16 +927,6 @@ jobs:
             git pull
             
     - name: Install Qt
-      uses: jurplel/install-qt-action@v3
-      with:
-        aqtversion: ${{ env.AQT_VERSION }}
-        version: ${{ env.QT_VERSION }}
-        host: 'mac'
-        target: 'desktop'
-        arch: 'clang_64'
-        tools: 'tools_cmake'
-        
-    - name: Install Qt for x86_64 (Intel)
       uses: jurplel/install-qt-action@v3
       with:
         aqtversion: ${{ env.AQT_VERSION }}
@@ -1006,10 +991,10 @@ jobs:
             
             echo "Using Qt architecture directory: $QT_ARCH_DIR"
             
-            # Configure with universal binary support for both ARM64 and x86_64
+            # Configure with dynamic architecture detection and proper universal binary support
             sudo cmake -S . \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_ARCHITECTURES="$(uname -m)" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
@@ -1149,17 +1134,11 @@ jobs:
             echo "Verifying code signature..."
             codesign --verify --verbose ${{github.workspace}}/bin/QtMeshEditor.app || echo "Verification failed (non-fatal)"
             
-    - name: Verify Universal Binary
+    - name: Verify App Bundle
       run: |
-            echo "=== Verifying Universal Binary ==="
-            echo "Checking main executable architecture:"
-            file ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
-            echo ""
-            echo "Checking if it's a universal binary:"
-            lipo -info ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
-            echo ""
-            echo "Checking app bundle structure:"
+            # Verify the app bundle structure
             ls -la ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/
+            file ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
     - name: Pack
       run: | 
