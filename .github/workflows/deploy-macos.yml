@@ -77,14 +77,6 @@ jobs:
     - name: Install Ogre3D dependencies
       run: |
           brew install pkg-config freetype cmake zlib
-          # Ensure FreeType is properly linked
-          brew link freetype --force
-          # Find and create symlinks for FreeType
-          FREETYPE_LIB=$(find /usr/local/lib -name "libfreetype*.dylib" | head -1)
-          if [ -n "$FREETYPE_LIB" ]; then
-            sudo ln -sf "$FREETYPE_LIB" /usr/local/lib/libfreetype.6.dylib
-            sudo ln -sf "$FREETYPE_LIB" /usr/local/lib/libfreetype.2.dylib
-          fi
           
     - name: change folder permissions
       run: |
@@ -125,23 +117,17 @@ jobs:
           repository: OGRECave/ogre
           ref: v${{ env.OGRE_VERSION }}
           path: ${{github.workspace}}/ogre
-         
+
+    # TODO: Fix FreeType linking, for now I'm disabling the overlay component. (-DOGRE_BUILD_COMPONENT_OVERLAY=OFF)         
     - if: steps.cache-ogre-macos.outputs.cache-hit != 'true'
       name: Build Ogre3D repo
       run: |
             cd ${{github.workspace}}/ogre/
-            export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH"
-            export LDFLAGS="-L/usr/local/lib"
-            export CPPFLAGS="-I/usr/local/include"
-            # Find FreeType library dynamically
-            FREETYPE_LIB=$(find /usr/local/lib -name "libfreetype*.dylib" | head -1)
             cmake -S . -B build \
             -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
             -DCMAKE_CXX_FLAGS="-w -Wno-error" \
             -DCMAKE_C_FLAGS="-w -Wno-error" \
-            -DCMAKE_EXE_LINKER_FLAGS="-lfreetype" \
-            -DCMAKE_SHARED_LINKER_FLAGS="-lfreetype" \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
             -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
@@ -149,8 +135,7 @@ jobs:
             -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
             -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
-            -DFREETYPE_INCLUDE_DIRS=/usr/local/include/freetype2 \
-            -DFREETYPE_LIBRARIES="$FREETYPE_LIB"
+            -DOGRE_BUILD_COMPONENT_OVERLAY=OFF
             cd build
             make -j8
             make install
@@ -161,14 +146,6 @@ jobs:
     - name: Install dependencies
       run: |
           brew install pkg-config freetype cmake zlib
-          # Ensure FreeType is properly linked
-          brew link freetype --force
-          # Find and create symlinks for FreeType
-          FREETYPE_LIB=$(find /usr/local/lib -name "libfreetype*.dylib" | head -1)
-          if [ -n "$FREETYPE_LIB" ]; then
-            sudo ln -sf "$FREETYPE_LIB" /usr/local/lib/libfreetype.6.dylib
-            sudo ln -sf "$FREETYPE_LIB" /usr/local/lib/libfreetype.2.dylib
-          fi
           
     - name: change folder permissions
       run: |
