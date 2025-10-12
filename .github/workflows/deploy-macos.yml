@@ -15,7 +15,7 @@ env:
   QT_VERSION: '6.9.1'
   ASSIMP_VERSION: '6.0.2'
   ASSIMP_DIR_VERSION: '6.0'
-  OGRE_VERSION: '14.3.4'
+  OGRE_VERSION: '14.4.1'
 
 jobs:
 ####################################################################
@@ -63,6 +63,8 @@ jobs:
       run: |
             cmake -B ${{github.workspace}}/assimp-build -S ${{github.workspace}}/assimp \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DCMAKE_CXX_FLAGS="-w -Wno-error" \
+            -DCMAKE_C_FLAGS="-w -Wno-error" \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
             cd ${{github.workspace}}/assimp-build/
@@ -74,7 +76,7 @@ jobs:
     steps:    
     - name: Install Ogre3D dependencies
       run: |
-          brew install pkg-config freetype cmake
+          brew install pkg-config freetype cmake zlib
           
     - name: change folder permissions
       run: |
@@ -123,6 +125,8 @@ jobs:
             cmake -S . -B build \
             -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DCMAKE_CXX_FLAGS="-w -Wno-error" \
+            -DCMAKE_C_FLAGS="-w -Wno-error" \
             -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
             -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
@@ -139,7 +143,7 @@ jobs:
     steps:
     - name: Install dependencies
       run: |
-          brew install pkg-config freetype cmake
+          brew install pkg-config freetype cmake zlib
           
     - name: change folder permissions
       run: |
