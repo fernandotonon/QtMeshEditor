@@ -412,6 +412,112 @@ ApplicationWindow {
         }
     }
 
+    // Simple Code Editor Component - reliable and functional
+    component MaterialCodeEditor: Item {
+        id: codeEditor
+        
+        property alias text: textArea.text
+        property alias readOnly: textArea.readOnly
+        property bool showLineNumbers: true
+        
+        Rectangle {
+            anchors.fill: parent
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+            
+            Row {
+                anchors.fill: parent
+                spacing: 0
+                
+                // Line Numbers Area (simplified)
+                Rectangle {
+                    id: lineNumberArea
+                    width: showLineNumbers ? 50 : 0
+                    height: parent.height
+                    color: Qt.darker(panelColor, 1.05)
+                    visible: showLineNumbers
+                    clip: true
+                    
+                    Rectangle {
+                        anchors.right: parent.right
+                        width: 1
+                        height: parent.height
+                        color: borderColor
+                    }
+                    
+                    Column {
+                        id: lineNumberColumn
+                        width: lineNumberArea.width
+                        y: showLineNumbers ? -textScrollView.contentItem.contentY : 0
+                        
+                        Repeater {
+                            model: Math.max(50, textArea.text.split('\n').length + 10)
+                            
+                            Rectangle {
+                                width: lineNumberArea.width
+                                height: 20
+                                color: "transparent"
+                                
+                                Text {
+                                    text: index + 1
+                                    font.family: "monospace"
+                                    font.pointSize: 10
+                                    color: Qt.darker(textColor, 1.5)
+                                    anchors.right: parent.right
+                                    anchors.rightMargin: 8
+                                    anchors.verticalCenter: parent.verticalCenter
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Editor Area (simplified)
+                ScrollView {
+                    id: textScrollView
+                    width: parent.width - lineNumberArea.width
+                    height: parent.height
+                    clip: true
+                    
+                    TextArea {
+                        id: textArea
+                        
+                        font.family: "monospace"
+                        font.pointSize: 11
+                        wrapMode: TextArea.NoWrap
+                        selectByMouse: true
+                        
+                        color: textColor
+                        selectionColor: highlightColor
+                        selectedTextColor: backgroundColor
+                        
+                        background: Rectangle {
+                            color: panelColor
+                        }
+                        
+                        // MaterialHighlighter for syntax highlighting
+                        MaterialHighlighter {
+                            id: materialHighlighter
+                            document: textArea.textDocument
+                        }
+                        
+                        // Simple tab handling
+                        Keys.onPressed: function(event) {
+                            if (event.key === Qt.Key_Tab) {
+                                event.accepted = true
+                                var pos = cursorPosition
+                                text = text.slice(0, pos) + "    " + text.slice(pos)
+                                cursorPosition = pos + 4
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Component.onCompleted: {
         console.log("MaterialEditorWindow loaded")
         console.log("MaterialEditorQML.materialName:", MaterialEditorQML.materialName)
@@ -523,9 +629,12 @@ ApplicationWindow {
                                 if (MaterialEditorQML.validateMaterialScript(materialTextArea.text || "")) {
                                     statusText.text = "Material script is valid"
                                     statusText.color = "green"
+                                    materialTextArea.highlightErrors([]) // Clear errors
                                 } else {
                                     statusText.text = "Material script has errors"
                                     statusText.color = "red"
+                                    // You could get error line numbers from MaterialEditorQML here
+                                    // materialTextArea.highlightErrors([3, 7, 12]) // Example error lines
                                 }
                             }
                         }
@@ -542,6 +651,77 @@ ApplicationWindow {
                                     } else {
                                         statusText.text = "Apply failed"
                                         statusText.color = "red"
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Code Editor Toolbar
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 10
+                        
+                        ThemedButton {
+                            text: "↹ Format"
+                            ToolTip.text: "Auto-format the script"
+                            onClicked: {
+                                // Simple auto-formatting
+                                var formatted = formatMaterialScript(materialTextArea.text)
+                                materialTextArea.text = formatted
+                                statusText.text = "Script formatted"
+                                statusText.color = "blue"
+                            }
+                        }
+                        
+                        Rectangle {
+                            width: 1
+                            height: 20
+                            color: borderColor
+                        }
+                        
+                        Text {
+                            text: "Material Script Editor"
+                            color: textColor
+                            font.pointSize: 9
+                        }
+                        
+                        Item { Layout.fillWidth: true }
+                        
+                        ThemedButton {
+                            text: "📝 Templates"
+                            ToolTip.text: "Insert template code"
+                            onClicked: templateMenu.open()
+                            
+                            Menu {
+                                id: templateMenu
+                                y: parent.height
+                                
+                                MenuItem {
+                                    text: "Basic Material"
+                                    onTriggered: {
+                                        materialTextArea.text = "material MaterialName\n{\n    technique\n    {\n        pass\n        {\n            ambient 0.5 0.5 0.5 1.0\n            diffuse 1.0 1.0 1.0 1.0\n            specular 0.0 0.0 0.0 1.0\n        }\n    }\n}"
+                                    }
+                                }
+                                
+                                MenuItem {
+                                    text: "Textured Material"
+                                    onTriggered: {
+                                        materialTextArea.text = "material TexturedMaterial\n{\n    technique\n    {\n        pass\n        {\n            texture_unit\n            {\n                texture diffuse.png\n                filtering linear linear none\n            }\n        }\n    }\n}"
+                                    }
+                                }
+                                
+                                MenuItem {
+                                    text: "Transparent Material"
+                                    onTriggered: {
+                                        materialTextArea.text = "material TransparentMaterial\n{\n    technique\n    {\n        pass\n        {\n            scene_blend alpha_blend\n            depth_write off\n            \n            ambient 1.0 1.0 1.0 0.5\n            diffuse 1.0 1.0 1.0 0.5\n        }\n    }\n}"
+                                    }
+                                }
+                                
+                                MenuItem {
+                                    text: "PBR Material"
+                                    onTriggered: {
+                                        materialTextArea.text = "material PBRMaterial\n{\n    technique\n    {\n        pass\n        {\n            ambient 0.1 0.1 0.1 1.0\n            diffuse 0.8 0.8 0.8 1.0\n            specular 0.04 0.04 0.04 1.0\n            \n            texture_unit // Albedo\n            {\n                texture albedo.png\n            }\n            \n            texture_unit // Normal\n            {\n                texture normal.png\n            }\n            \n            texture_unit // Roughness\n            {\n                texture roughness.png\n            }\n        }\n    }\n}"
                                     }
                                 }
                             }
@@ -651,28 +831,33 @@ ApplicationWindow {
                         }
                     }
 
-                            // Text editor
-                            ScrollView {
-                                Layout.fillWidth: true
-                                Layout.fillHeight: true
-                                clip: true
-
-                                ThemedTextArea {
-                                    id: materialTextArea
-                                    text: MaterialEditorQML.materialText || "material default_material\n{\n\ttechnique\n\t{\n\t\tpass\n\t\t{\n\t\t}\n\t}\n}"
-                                    selectByMouse: true
-                                    font.family: "monospace"
-                                    font.pointSize: 11
-                                    wrapMode: TextArea.Wrap
-
-                                    onTextChanged: {
-                                        if (text !== MaterialEditorQML.materialText) {
-                                            statusText.text = "Modified"
-                                            statusText.color = "orange"
-                                        }
-                                    }
-                                }
+                    // Text editor
+                    MaterialCodeEditor {
+                        id: materialTextArea
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        
+                        text: {
+                            // Clean up the material text to avoid weird content
+                            var materialText = MaterialEditorQML.materialText || ""
+                            if (materialText.trim() === "" || materialText.indexOf("import") >= 0 || materialText.indexOf("Item") >= 0 || materialText.indexOf("Rectangle") >= 0) {
+                                // If material text is empty or contains QML code, use default
+                                return "material default_material\n{\n    technique\n    {\n        pass\n        {\n            ambient 0.5 0.5 0.5 1.0\n            diffuse 1.0 1.0 1.0 1.0\n            specular 0.0 0.0 0.0 1.0\n        }\n    }\n}"
                             }
+                            return materialText
+                        }
+                        
+                        onTextChanged: {
+                            if (text !== MaterialEditorQML.materialText) {
+                                statusText.text = "Modified"
+                                statusText.color = "orange"
+                            }
+                        }
+                        
+                        Component.onCompleted: {
+                            // Simple code editor ready to use
+                        }
+                    }
                 }
             }
 
@@ -1077,5 +1262,41 @@ ApplicationWindow {
                 }
             }
         }
+    }
+
+    // Find dialog removed for simplicity - will be re-implemented later
+
+    // Helper function for formatting
+    function formatMaterialScript(input) {
+        if (!input) return ""
+        
+        var lines = input.split('\n')
+        var formatted = []
+        var indentLevel = 0
+        var indentString = "    " // 4 spaces
+        
+        for (var i = 0; i < lines.length; i++) {
+            var line = lines[i].trim()
+            if (!line) continue
+            
+            // Decrease indent before line with closing brace
+            if (line === '}') {
+                indentLevel = Math.max(0, indentLevel - 1)
+            }
+            
+            // Add line with proper indentation
+            var indent = ""
+            for (var j = 0; j < indentLevel; j++) {
+                indent += indentString
+            }
+            formatted.push(indent + line)
+            
+            // Increase indent after line with opening brace
+            if (line.endsWith('{')) {
+                indentLevel++
+            }
+        }
+        
+        return formatted.join('\n')
     }
 } 

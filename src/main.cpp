@@ -8,6 +8,7 @@
 #include <QtQml/qjsengine.h>
 #include "mainwindow.h"
 #include "MaterialEditorQML.h"
+#include "QMLMaterialHighlighter.h"
 
 int main(int argc, char *argv[])
 {
@@ -25,6 +26,9 @@ int main(int argc, char *argv[])
         [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
             return MaterialEditorQML::qmlInstance(engine, scriptEngine);
         });
+    
+    // Register QMLMaterialHighlighter for QML use
+    qmlRegisterType<QMLMaterialHighlighter>("MaterialEditorQML", 1, 0, "MaterialHighlighter");
 
     MainWindow w;
     w.show();

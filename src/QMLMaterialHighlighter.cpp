@@ -26,27 +26,36 @@ THE SOFTWARE.
 -----------------------------------------------------------------------------------
 */
 
-#ifndef MATERIALHIGHLIGHTER_H
-#define MATERIALHIGHLIGHTER_H
+#include "QMLMaterialHighlighter.h"
 
-#include <QSyntaxHighlighter>
-
-class MaterialHighlighter : public QSyntaxHighlighter
+QMLMaterialHighlighter::QMLMaterialHighlighter(QObject *parent)
+    : QObject(parent)
+    , m_document(nullptr)
+    , m_highlighter(nullptr)
 {
-    Q_OBJECT
+}
+
+QQuickTextDocument* QMLMaterialHighlighter::document() const
+{
+    return m_document;
+}
+
+void QMLMaterialHighlighter::setDocument(QQuickTextDocument* document)
+{
+    if (m_document == document)
+        return;
+        
+    if (m_highlighter) {
+        delete m_highlighter;
+        m_highlighter = nullptr;
+    }
     
-public:
-    explicit MaterialHighlighter(QObject *parent = nullptr);
-    ~MaterialHighlighter() = default;
+    m_document = document;
     
-    void highlightBlock(const QString &text);
-
-protected:
-    virtual void applyHighlight(const QTextCharFormat &format, const QString &pattern, const QString &text);
-    void highlightComments(const QString &text, bool dark);
-
-private:
-    QObject *mParent;
-};
-
-#endif // MATERIALHIGHLIGHTER_H
+    if (m_document && m_document->textDocument()) {
+        m_highlighter = new MaterialHighlighter(this);
+        m_highlighter->setDocument(m_document->textDocument());
+    }
+    
+    emit documentChanged();
+} 

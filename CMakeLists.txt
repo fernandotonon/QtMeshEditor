@@ -8,11 +8,12 @@
 ##############################################################
 #  Versions
 ##############################################################
+
 cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 2.0.2 LANGUAGES CXX)
+project(QtMeshEditor VERSION 2.0.3 LANGUAGES CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -74,7 +75,10 @@ SET (QTLIBLIST
     Qt${QT_VERSION_MAJOR}Widgets
     Qt${QT_VERSION_MAJOR}QuickWidgets
     Qt${QT_VERSION_MAJOR}Quick
+    Qt${QT_VERSION_MAJOR}Qml
     Qt${QT_VERSION_MAJOR}Network
+    Qt${QT_VERSION_MAJOR}OpenGL
+    Qt${QT_VERSION_MAJOR}QmlMeta
 )
 FOREACH(qtlib ${QTLIBLIST})
         include_directories(${${qtlib}_INCLUDE_DIRS})

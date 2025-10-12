@@ -15,7 +15,7 @@ env:
   QT_VERSION: '6.9.1'
   ASSIMP_VERSION: '6.0.2'
   ASSIMP_DIR_VERSION: '6.0'
-  OGRE_VERSION: '14.3.4'
+  OGRE_VERSION: '14.4.1'
 
 jobs:
 #  send-slack-notification:

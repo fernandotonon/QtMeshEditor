@@ -33,6 +33,7 @@ ObjectItemModel.cpp
 MaterialWidget.cpp
 MaterialComboDelegate.cpp
 MaterialHighlighter.cpp
+QMLMaterialHighlighter.cpp
 )
 
 set(HEADER_FILES
@@ -69,6 +70,7 @@ ObjectItemModel.h
 MaterialWidget.h
 MaterialComboDelegate.h
 MaterialHighlighter.h
+QMLMaterialHighlighter.h
 )
 
 set(TEST_SOURCES "")
