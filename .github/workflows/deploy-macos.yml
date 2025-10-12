@@ -77,6 +77,8 @@ jobs:
     - name: Install Ogre3D dependencies
       run: |
           brew install pkg-config freetype cmake zlib
+          # Ensure FreeType is properly linked
+          brew link freetype --force
           
     - name: change folder permissions
       run: |
@@ -133,7 +135,9 @@ jobs:
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
-            -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF
+            -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
+            -DFREETYPE_INCLUDE_DIRS=/usr/local/include/freetype2 \
+            -DFREETYPE_LIBRARIES=/usr/local/lib/libfreetype.dylib
             cd build
             make -j8
             make install
@@ -144,6 +148,8 @@ jobs:
     - name: Install dependencies
       run: |
           brew install pkg-config freetype cmake zlib
+          # Ensure FreeType is properly linked
+          brew link freetype --force
           
     - name: change folder permissions
       run: |
