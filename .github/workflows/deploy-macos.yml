@@ -61,7 +61,12 @@ jobs:
     - if: steps.cache-assimp-macos.outputs.cache-hit != 'true'
       name: Build Assimp repo
       run: |
-            cmake -B ${{github.workspace}}/assimp-build -S ${{github.workspace}}/assimp -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+            cmake -B ${{github.workspace}}/assimp-build -S ${{github.workspace}}/assimp \
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DCMAKE_CXX_FLAGS="-std=c++17 -stdlib=libc++" \
+            -DCMAKE_C_FLAGS="-stdlib=libc++" \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
             cd ${{github.workspace}}/assimp-build/
             make -j8
             sudo make install
@@ -69,6 +74,10 @@ jobs:
     needs: build-n-cache-assimp-macos
     runs-on: macos-latest
     steps:    
+    - name: Install Ogre3D dependencies
+      run: |
+          brew install cmake libzzip freetype rapidjson pkg-config
+          
     - name: change folder permissions
       run: |
           sudo mkdir -p /usr/local/lib
@@ -115,12 +124,15 @@ jobs:
             cd ${{github.workspace}}/ogre/
             cmake -S . -B build \
             -DCMAKE_INSTALL_PREFIX=${{github.workspace}}/ogre/SDK \
+            -DCMAKE_CXX_FLAGS="-std=c++17 -stdlib=libc++" \
+            -DCMAKE_C_FLAGS="-stdlib=libc++" \
             -DOGRE_BUILD_PLUGIN_ASSIMP=ON -Dassimp_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }}/ \
             -DOGRE_BUILD_PLUGIN_DOT_SCENE=ON -DOGRE_BUILD_RENDERSYSTEM_GL=ON -DOGRE_BUILD_RENDERSYSTEM_GL3PLUS=ON \
             -DOGRE_BUILD_RENDERSYSTEM_GLES2=OFF -DOGRE_BUILD_TESTS=OFF -DOGRE_BUILD_TOOLS=OFF -DOGRE_BUILD_SAMPLES=OFF \
             -DOGRE_BUILD_COMPONENT_CSHARP=OFF -DOGRE_BUILD_COMPONENT_JAVA=OFF -DOGRE_BUILD_COMPONENT_PYTHON=OFF \
             -DOGRE_INSTALL_TOOLS=OFF -DOGRE_INSTALL_DOCS=OFF -DOGRE_INSTALL_SAMPLES=OFF -DOGRE_BUILD_LIBS_AS_FRAMEWORKS=OFF \
-            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+            -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
             cd build
             make -j8
             make install
@@ -128,6 +140,10 @@ jobs:
     needs: [build-n-cache-assimp-macos, build-n-cache-ogre-macos]
     runs-on: macos-latest
     steps:
+    - name: Install dependencies
+      run: |
+          brew install cmake libzzip freetype rapidjson pkg-config
+          
     - name: change folder permissions
       run: |
             sudo mkdir -p /usr/local/lib
@@ -182,6 +198,8 @@ jobs:
       run: |
             cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            -DCMAKE_CXX_FLAGS="-std=c++17 -stdlib=libc++" \
+            -DCMAKE_C_FLAGS="-stdlib=libc++" \
             -DCMAKE_PREFIX_PATH="${{github.workspace}}/ogre/SDK" \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
@@ -189,7 +207,8 @@ jobs:
             -DQT_DIR=${{env.Qt6_DIR}} \
             -DQt6GuiTools_DIR=${{env.QT_ROOT_DIR}}/lib/cmake/Qt6GuiTools \
             -DOGRE_DIR=${{github.workspace}}/ogre/SDK/CMake/ \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15
     
     - name: Build
       run: |
