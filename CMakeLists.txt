@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 2.0.3 LANGUAGES CXX)
+project(QtMeshEditor VERSION 2.0.4 LANGUAGES CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -65,7 +65,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 ##############################################################
 #Find Qt Packages
 find_package(QT NAMES Qt6)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick Test Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick Qml QmlModels OpenGL QmlMeta Test Network)
 
 message("Found Qt (${QT_VERSION_MAJOR})")
 
@@ -76,6 +76,7 @@ SET (QTLIBLIST
     Qt${QT_VERSION_MAJOR}QuickWidgets
     Qt${QT_VERSION_MAJOR}Quick
     Qt${QT_VERSION_MAJOR}Qml
+    Qt${QT_VERSION_MAJOR}QmlModels
     Qt${QT_VERSION_MAJOR}Network
     Qt${QT_VERSION_MAJOR}OpenGL
     Qt${QT_VERSION_MAJOR}QmlMeta
@@ -165,7 +166,10 @@ endif()
 #  Install Qt dependencies
 ##############################################################
 IF(WIN32)
+        MESSAGE(STATUS "Installing Qt DLLs for Windows...")
+        MESSAGE(STATUS "QT_DIR: ${QT_DIR}")
         FOREACH(qtlib ${QTLIBLIST})
+                MESSAGE(STATUS "Installing ${qtlib}.dll from ${QT_DIR}/../../../bin/")
                 INSTALL(FILES ${QT_DIR}/../../../bin/${qtlib}.dll DESTINATION ${CMAKE_INSTALL_PREFIX})
         ENDFOREACH(qtlib)
 
@@ -174,8 +178,10 @@ IF(WIN32)
                 qoffscreen
                 qwindows)
         FOREACH(platform ${QTPLATFORMSLIST})
+                MESSAGE(STATUS "Installing platform plugin ${platform}.dll")
                 INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
         ENDFOREACH(platform)
+        
 ELSEIF(APPLE)
 #        FOREACH(qtlib ${QTLIBLIST})
 #                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.${QT_VERSION_MAJOR}.dylib DESTINATION ${CMAKE_INSTALL_PREFIX})
