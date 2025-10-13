@@ -65,7 +65,7 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 ##############################################################
 #Find Qt Packages
 find_package(QT NAMES Qt6)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick Qml QmlModels OpenGL QmlMeta Test Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick Qml QmlModels QmlMeta Test Network)
 
 message("Found Qt (${QT_VERSION_MAJOR})")
 
@@ -181,7 +181,7 @@ IF(WIN32)
                 MESSAGE(STATUS "Installing platform plugin ${platform}.dll")
                 INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
         ENDFOREACH(platform)
-        
+
 ELSEIF(APPLE)
 #        FOREACH(qtlib ${QTLIBLIST})
 #                INSTALL(FILES ${QT_DIR}/../../lib${qtlib}.${QT_VERSION_MAJOR}.dylib DESTINATION ${CMAKE_INSTALL_PREFIX})
