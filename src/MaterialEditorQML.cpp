@@ -7,6 +7,8 @@
 #include <QMainWindow>
 #include <QQmlEngine>
 #include <QJSEngine>
+#include <QQmlApplicationEngine>
+#include <QQmlContext>
 #include <QStandardPaths>
 #include <QPalette>
 #include <QQuickWindow>
@@ -2402,6 +2404,113 @@ QString MaterialEditorQML::openFileDialog()
     }
 }
 
+QString MaterialEditorQML::openMaterialImportDialog()
+{
+    QString materialsPath = "./media/materials/scripts";
+    QDir materialsDir(materialsPath);
+    
+    // Use absolute path if the directory exists, otherwise use current directory
+    QString startDir = materialsDir.exists() ? materialsDir.absolutePath() : QDir::currentPath();
+    
+    qDebug() << "=== openMaterialImportDialog START ===";
+    qDebug() << "Starting directory:" << startDir;
+    
+    // Force Qt to process all pending events first
+    QApplication::processEvents();
+    
+    // Force the application to be active and on top
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+        qDebug() << "Activated window:" << activeWin->objectName();
+    }
+    
+    // Add a small delay to ensure window activation
+    QApplication::processEvents();
+    
+    qDebug() << "About to open QFileDialog for material import...";
+    
+    // Use Qt's file dialog with explicit flags to force it to be visible
+    QString selectedFile = QFileDialog::getOpenFileName(
+        nullptr,                                                      // no parent to avoid issues
+        "Import Material File",                                        
+        startDir,                                                     
+        "Material files (*.material);;All files (*)",
+        nullptr,                                                      // no selected filter
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons  // Force Qt dialog with simpler display
+    );
+    
+    qDebug() << "QFileDialog finished, result:" << selectedFile;
+    
+    if (!selectedFile.isEmpty()) {
+        qDebug() << "SUCCESS! Material file selected:" << selectedFile;
+        qDebug() << "=== openMaterialImportDialog SUCCESS ===";
+        return selectedFile;  // Return full path for import
+    } else {
+        qDebug() << "Dialog was cancelled or no file selected";
+        qDebug() << "=== openMaterialImportDialog CANCELLED ===";
+        return QString();
+    }
+}
+
+QString MaterialEditorQML::openMaterialExportDialog(const QString &materialName)
+{
+    QString materialsPath = "./media/materials/scripts";
+    QDir materialsDir(materialsPath);
+    
+    // Use absolute path if the directory exists, otherwise use current directory
+    QString startDir = materialsDir.exists() ? materialsDir.absolutePath() : QDir::currentPath();
+    
+    // Create default filename from material name
+    QString defaultFileName = materialName.isEmpty() ? "material" : materialName;
+    if (!defaultFileName.endsWith(".material")) {
+        defaultFileName += ".material";
+    }
+    QString defaultPath = QDir(startDir).filePath(defaultFileName);
+    
+    qDebug() << "=== openMaterialExportDialog START ===";
+    qDebug() << "Starting directory:" << startDir;
+    qDebug() << "Default filename:" << defaultFileName;
+    qDebug() << "Default path:" << defaultPath;
+    
+    // Force Qt to process all pending events first
+    QApplication::processEvents();
+    
+    // Force the application to be active and on top
+    if (QWidget *activeWin = QApplication::activeWindow()) {
+        activeWin->raise();
+        activeWin->activateWindow();
+        qDebug() << "Activated window:" << activeWin->objectName();
+    }
+    
+    // Add a small delay to ensure window activation
+    QApplication::processEvents();
+    
+    qDebug() << "About to open QFileDialog for material export...";
+    
+    // Use Qt's file dialog with explicit flags to force it to be visible
+    QString selectedFile = QFileDialog::getSaveFileName(
+        nullptr,                                                      // no parent to avoid issues
+        "Export Material File",                                        
+        defaultPath,                                                  // use default path with material name
+        "Material files (*.material);;All files (*)",
+        nullptr,                                                      // no selected filter
+        QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons  // Force Qt dialog with simpler display
+    );
+    
+    qDebug() << "QFileDialog finished, result:" << selectedFile;
+    
+    if (!selectedFile.isEmpty()) {
+        qDebug() << "SUCCESS! Material file selected for export:" << selectedFile;
+        qDebug() << "=== openMaterialExportDialog SUCCESS ===";
+        return selectedFile;  // Return full path for export
+    } else {
+        qDebug() << "Dialog was cancelled or no file selected";
+        qDebug() << "=== openMaterialExportDialog CANCELLED ===";
+        return QString();
+    }
+}
+
 QString MaterialEditorQML::showNativeFileDialog(QObject *parentWindow)
 {
     QString texturesPath = "./media/materials/textures";
@@ -2651,4 +2760,154 @@ void MaterialEditorQML::clearUndoHistory()
     m_undoStack.clear();
     m_redoStack.clear();
     emit undoRedoStateChanged();
+}
+
+// Material list operations
+QStringList MaterialEditorQML::getMaterialList() const
+{
+    QStringList materialList;
+    
+    // Safety check for Ogre availability
+    if (!isOgreAvailable()) {
+        return materialList;
+    }
+    
+    try {
+        Ogre::ResourceManager::ResourceMapIterator materialIterator = 
+            Ogre::MaterialManager::getSingleton().getResourceIterator();
+        
+        while (materialIterator.hasMoreElements()) {
+            Ogre::MaterialPtr material = Ogre::static_pointer_cast<Ogre::Material>(
+                materialIterator.peekNextValue());
+            materialList.append(QString::fromStdString(material->getName()));
+            materialIterator.moveNext();
+        }
+    } catch (const std::exception& e) {
+        qDebug() << "Error getting material list:" << e.what();
+    }
+    
+    return materialList;
+}
+
+void MaterialEditorQML::importMaterialFile(const QString &filePath)
+{
+    if (filePath.isEmpty()) {
+        return;
+    }
+    
+    // Safety check for Ogre availability
+    if (!isOgreAvailable()) {
+        qDebug() << "Ogre not available for material import";
+        return;
+    }
+    
+    try {
+        QFileInfo fileInfo(filePath);
+        QString directory = fileInfo.absolutePath();
+        QString fileName = fileInfo.fileName();
+        
+        // Add resource location
+        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+            directory.toStdString(), "FileSystem", fileName.toStdString(), true);
+        
+        // Initialize resource groups
+        Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+        
+        // Reload materials
+        Ogre::MaterialManager::getSingleton().reloadAll(true);
+        Ogre::MeshManager::getSingleton().reloadAll(true);
+        
+        qDebug() << "Successfully imported material file:" << filePath;
+    } catch (const std::exception& e) {
+        qDebug() << "Error importing material file:" << e.what();
+        emit errorOccurred(QString("Error importing material file: %1").arg(e.what()));
+    }
+}
+
+void MaterialEditorQML::exportMaterial(const QString &fileName, const QString &materialName)
+{
+    if (fileName.isEmpty() || materialName.isEmpty()) {
+        return;
+    }
+    
+    // Safety check for Ogre availability
+    if (!isOgreAvailable()) {
+        qDebug() << "Ogre not available for material export";
+        return;
+    }
+    
+    try {
+        Ogre::MaterialPtr material = Ogre::static_pointer_cast<Ogre::Material>(
+            Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString()));
+        
+        if (!material) {
+            emit errorOccurred("Material not found: " + materialName);
+            return;
+        }
+        
+        Ogre::MaterialSerializer ms;
+        ms.exportMaterial(material, fileName.toStdString());
+        
+        qDebug() << "Successfully exported material:" << materialName << "to" << fileName;
+    } catch (const std::exception& e) {
+        qDebug() << "Error exporting material:" << e.what();
+        emit errorOccurred(QString("Error exporting material: %1").arg(e.what()));
+    }
+}
+
+void MaterialEditorQML::openMaterialEditorWindow(const QString &materialName)
+{
+    try {
+        // Force software rendering to avoid OpenGL conflicts with Ogre
+        qputenv("QSG_RHI_BACKEND", "software");
+        qputenv("QT_QUICK_BACKEND", "software");
+        QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+        
+        // Load the material first
+        loadMaterial(materialName);
+        
+        // Create QML Application Engine for material editor
+        QQmlApplicationEngine* engine = new QQmlApplicationEngine();
+        
+        // Force software rendering on the engine
+        engine->setProperty("_q_sg_renderloop", "basic");
+        
+        // Register QML types
+        qmlRegisterSingletonType<MaterialEditorQML>("MaterialEditorQML", 1, 0, "MaterialEditorQML", 
+            [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject * {
+                Q_UNUSED(engine)
+                Q_UNUSED(scriptEngine)
+                return MaterialEditorQML::qmlInstance(engine, scriptEngine);
+            });
+        
+        // Set window properties in QML context
+        engine->rootContext()->setContextProperty("materialName", materialName);
+        
+        // Load the QML material editor
+        QUrl qmlUrl("qrc:/MaterialEditorQML/MaterialEditorWindow.qml");
+        qDebug() << "Opening Material Editor for:" << materialName;
+        
+        // Connect to check for loading errors
+        connect(engine, &QQmlApplicationEngine::objectCreated, this, [this, engine, materialName](QObject *obj, const QUrl &objUrl) {
+            if (!obj) {
+                qDebug() << "QML Material Editor failed to load";
+                engine->deleteLater();
+            } else {
+                qDebug() << "QML Material Editor loaded successfully for:" << materialName;
+                // Set window title
+                if (auto window = qobject_cast<QQuickWindow*>(obj)) {
+                    window->setTitle("QML Material Editor - " + (materialName.isEmpty() ? "New Material" : materialName));
+                }
+            }
+        });
+        
+        engine->load(qmlUrl);
+        
+    } catch (const std::exception& e) {
+        qDebug() << "Exception in Material Editor creation:" << e.what();
+        emit errorOccurred(QString("Material Editor encountered an error: %1").arg(e.what()));
+    } catch (...) {
+        qDebug() << "Unknown exception in Material Editor creation";
+        emit errorOccurred("Material Editor encountered an unknown error.");
+    }
 }

@@ -337,6 +337,12 @@ public slots:
     void openTextureFileDialog();
     void exportMaterial(const QString &fileName);
     
+    // Material list operations
+    Q_INVOKABLE QStringList getMaterialList() const;
+    Q_INVOKABLE void importMaterialFile(const QString &filePath);
+    Q_INVOKABLE void exportMaterial(const QString &fileName, const QString &materialName);
+    Q_INVOKABLE void openMaterialEditorWindow(const QString &materialName = "");
+    
     // File system browsing methods
     Q_INVOKABLE QVariantList listDirectory(const QString &path);
     Q_INVOKABLE bool isDirectory(const QString &path);
@@ -346,6 +352,8 @@ public slots:
     Q_INVOKABLE QString getFileSizeString(const QString &path);
     Q_INVOKABLE bool pathExists(const QString &path);
     Q_INVOKABLE QString openFileDialog();
+    Q_INVOKABLE QString openMaterialImportDialog();
+    Q_INVOKABLE QString openMaterialExportDialog(const QString &materialName = "");
     Q_INVOKABLE QString showNativeFileDialog(QObject *parentWindow);
     Q_INVOKABLE QString testConnection();
     

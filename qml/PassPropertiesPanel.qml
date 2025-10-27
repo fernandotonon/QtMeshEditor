@@ -7,6 +7,22 @@ import MaterialEditorQML 1.0
 GroupBox {
     title: "Pass Properties"
     
+    // Apply theme colors to GroupBox
+    background: Rectangle {
+        color: panelColor
+        border.color: borderColor
+        border.width: 1
+        radius: 4
+    }
+    
+    label: Label {
+        text: parent.title
+        color: textColor
+        font.bold: true
+        x: parent.leftPadding
+        width: parent.availableWidth
+    }
+    
     Component.onCompleted: {
         console.log("PassPropertiesPanel: loaded successfully")
     }
