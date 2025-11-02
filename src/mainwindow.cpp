@@ -7,6 +7,16 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QJsonArray>
+#include <QQmlApplicationEngine>
+#include <QQmlEngine>
+#include <QJSEngine>
+#include <QQuickWindow>
+#include <QDialog>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QListWidget>
+#include <QPushButton>
 #include "mainwindow.h"
 #include "ui_mainwindow.h"
 #include "OgreWidget.h"
@@ -23,6 +33,7 @@
 #include "AnimationWidget.h"
 #include "SelectionSet.h"
 #include "animationcontrolwidget.h"
+#include "MaterialEditorQML.h"
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
@@ -402,20 +413,59 @@ void MainWindow::on_actionExport_Selected_triggered()
 
 void MainWindow::on_actionMaterial_Editor_triggered()
 {
-    auto m = new Material(this);
-
-    QStringList List;
-    Ogre::ResourceManager::ResourceMapIterator materialIterator = Ogre::MaterialManager::getSingleton().getResourceIterator();
-    while (materialIterator.hasMoreElements())
-    {
-        List.append(Ogre::static_pointer_cast<Ogre::Material>(materialIterator.peekNextValue())->getName().data());
-
-        materialIterator.moveNext();
+    try {
+        // Force software rendering to avoid OpenGL conflicts with Ogre
+        qputenv("QSG_RHI_BACKEND", "software");
+        qputenv("QT_QUICK_BACKEND", "software");
+        QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+        
+        // Create QML Application Engine for material list modal
+        QQmlApplicationEngine* engine = new QQmlApplicationEngine(this);
+        
+        // Force software rendering on the engine
+        engine->setProperty("_q_sg_renderloop", "basic");
+        
+        // Register QML types
+        qmlRegisterSingletonType<MaterialEditorQML>("MaterialEditorQML", 1, 0, "MaterialEditorQML", 
+            [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject * {
+                Q_UNUSED(engine)
+                Q_UNUSED(scriptEngine)
+                return MaterialEditorQML::qmlInstance(engine, scriptEngine);
+            });
+        
+        // Load the QML material list modal
+        QUrl qmlUrl("qrc:/MaterialEditorQML/MaterialListModal.qml");
+        qDebug() << "Attempting to load QML Material List Modal from:" << qmlUrl.toString();
+        
+        // Connect to check for loading errors
+        connect(engine, &QQmlApplicationEngine::objectCreated, this, [this, engine](QObject *obj, const QUrl &objUrl) {
+            if (!obj) {
+                qDebug() << "QML Material List Modal failed to load";
+                engine->deleteLater();
+                
+                QMessageBox::critical(this, "QML Modal Error", 
+                    "QML Material List Modal failed to load. Please check the QML files and try again.");
+            } else {
+                qDebug() << "QML Material List Modal loaded successfully";
+                // Set window title
+                if (auto window = qobject_cast<QQuickWindow*>(obj)) {
+                    window->setTitle("Material List");
+                }
+            }
+        });
+        
+        engine->load(qmlUrl);
+        
+    } catch (const std::exception& e) {
+        qDebug() << "Exception in QML Material List Modal creation:" << e.what();
+        QMessageBox::critical(this, "Material List Error", 
+            QString("QML Material List Modal encountered an error: %1").arg(e.what()));
+        
+    } catch (...) {
+        qDebug() << "Unknown exception in QML Material List Modal creation";
+        QMessageBox::critical(this, "Material List Error", 
+            "QML Material List Modal encountered an unknown error.");
     }
-    m->setWindowTitle("Material List");
-    m->SetMaterialList(List);
-
-    m->show();
 }
 
 void MainWindow::on_actionAbout_triggered()

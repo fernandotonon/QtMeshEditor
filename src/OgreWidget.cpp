@@ -107,43 +107,43 @@ void OgreWidget::initOgreWindow(void)
     mOgreRoot = Manager::getSingleton()->getRoot();
 
     // Get the parameters of the window QT created
-  Ogre::String winHandle;
+    Ogre::String winHandle;
 #ifdef WIN32
-  // Windows code
-  winHandle = Ogre::StringConverter::toString((unsigned long)(this->parentWidget()->winId()));
+    // Windows code
+    winHandle = Ogre::StringConverter::toString((unsigned long)(this->parentWidget()->winId()));
 #else
-        winHandle  = Ogre::StringConverter::toString(winId());
+    winHandle  = Ogre::StringConverter::toString(winId());
 #endif
 
-  Ogre::NameValuePairList params;
+    Ogre::NameValuePairList params;
 
-  params["externalWindowHandle"] = winHandle;
+    params["externalWindowHandle"] = winHandle;
 #ifdef Q_OS_MACOS
-  // code for Mac
-  params["macAPI"] = "cocoa";
-  params["macAPICocoaUseNSView"] = "true";
+    // code for Mac
+    params["macAPI"] = "cocoa";
+    params["macAPICocoaUseNSView"] = "true";
 #endif
 
-  QString name = "Viewport " + QString::number(getIndex());
-  while (mOgreRoot->getRenderTarget(name.toStdString())) {
+    QString name = "Viewport " + QString::number(getIndex());
+    while (mOgreRoot->getRenderTarget(name.toStdString())) {
         name+=".";
-  }
+    }
 
-  mOgreWindow = mOgreRoot->createRenderWindow( name.toStdString().data(),
+    mOgreWindow = mOgreRoot->createRenderWindow( name.toStdString().data(),
                            width(),
                            height(),
                            false,
                            &params );
 
-  mOgreWindow->setActive(true);
+    mOgreWindow->setActive(true);
 
-  mCamera = std::make_unique<SpaceCamera>(this);
+    mCamera = std::make_unique<SpaceCamera>(this);
 
-  mViewport = mOgreWindow->addViewport( mCamera->getCamera() );
-  mViewport->setBackgroundColour( Ogre::ColourValue( 0,0,0 ) );
-  mViewport->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
+    mViewport = mOgreWindow->addViewport( mCamera->getCamera() );
+    mViewport->setBackgroundColour( Ogre::ColourValue( 0,0,0 ) );
+    mViewport->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
 
-  mOgreRoot->addFrameListener(this);
+    mOgreRoot->addFrameListener(this);
 }
 
 bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)

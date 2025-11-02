@@ -11,6 +11,7 @@ ApplicationWindow {
     height: 900
     visible: true
     title: "QML Material Editor"
+    color: backgroundColor
 
     property bool isLoading: true
     
@@ -891,6 +892,21 @@ ApplicationWindow {
                         GroupBox {
                             title: "Techniques"
                             Layout.fillWidth: true
+                            
+                            background: Rectangle {
+                                color: panelColor
+                                border.color: borderColor
+                                border.width: 1
+                                radius: 4
+                            }
+                            
+                            label: Label {
+                                text: parent.title
+                                color: textColor
+                                font.bold: true
+                                x: parent.leftPadding
+                                width: parent.availableWidth
+                            }
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -922,6 +938,21 @@ ApplicationWindow {
                             title: "Passes"
                             Layout.fillWidth: true
                             enabled: MaterialEditorQML.selectedTechniqueIndex >= 0
+                            
+                            background: Rectangle {
+                                color: panelColor
+                                border.color: borderColor
+                                border.width: 1
+                                radius: 4
+                            }
+                            
+                            label: Label {
+                                text: parent.title
+                                color: textColor
+                                font.bold: true
+                                x: parent.leftPadding
+                                width: parent.availableWidth
+                            }
 
                             ColumnLayout {
                                 anchors.fill: parent
@@ -961,6 +992,21 @@ ApplicationWindow {
                             title: "Texture Units"
                             Layout.fillWidth: true
                             enabled: MaterialEditorQML.selectedPassIndex >= 0
+                            
+                            background: Rectangle {
+                                color: panelColor
+                                border.color: borderColor
+                                border.width: 1
+                                radius: 4
+                            }
+                            
+                            label: Label {
+                                text: parent.title
+                                color: textColor
+                                font.bold: true
+                                x: parent.leftPadding
+                                width: parent.availableWidth
+                            }
 
                             ColumnLayout {
                                 anchors.fill: parent
