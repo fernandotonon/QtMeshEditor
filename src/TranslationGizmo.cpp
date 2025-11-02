@@ -4,10 +4,7 @@
 #include "Manager.h"
 #include <Ogre.h>
 
-const float TranslationGizmo::mSolidThickness = 80.0f;
-
-
-// TODO add a square to allow plane trnaslation with mouse
+const float TranslationGizmo::mSolidThickness = 30.0f; 
 
 
 TranslationGizmo::TranslationGizmo(Ogre::SceneNode* linkNode, const Ogre::String &name, Ogre::Real scale, bool leftHandCs)
@@ -51,57 +48,44 @@ TranslationGizmo::~TranslationGizmo()
 
 void TranslationGizmo::createXaxis(const Ogre::ColourValue& colour)
 {
-    m_pXaxis->clear();
-    m_pXaxis->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_LINE_LIST);
-        m_pXaxis->colour(colour);
-        m_pXaxis->position(Ogre::Vector3(0, 0, 0));
-        m_pXaxis->position(Ogre::Vector3(mScale, 0, 0));
-    m_pXaxis->end();
+    // Use solid arrows instead of lines for better mouse interaction
+    createSolidXaxis(colour);
 }
 
 void TranslationGizmo::createYaxis(const Ogre::ColourValue& colour)
 {
-    m_pYaxis->clear();
-    m_pYaxis->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_LINE_LIST);
-        m_pYaxis->colour(colour);
-        m_pYaxis->position(Ogre::Vector3(0, 0, 0));
-        m_pYaxis->position(Ogre::Vector3(0, mScale, 0));
-    m_pYaxis->end();
+    // Use solid arrows instead of lines for better mouse interaction
+    createSolidYaxis(colour);
 }
 
 void TranslationGizmo::createZaxis(const Ogre::ColourValue& colour)
 {
-    Ogre::Real z = 1.0f;
-
-    if(mLeftHandCs)
-       z = -1.0f;
-
-    m_pZaxis->clear();
-    m_pZaxis->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_LINE_LIST);
-        m_pZaxis->colour(colour);
-        m_pZaxis->position(Ogre::Vector3(0, 0, 0));
-        m_pZaxis->position(Ogre::Vector3(0, 0, z*mScale));
-    m_pZaxis->end();
+    // Use solid arrows instead of lines for better mouse interaction
+    createSolidZaxis(colour);
 }
 
 void TranslationGizmo::createSolidXaxis(const Ogre::ColourValue& colour)
 {
     float thickness = mScale / mSolidThickness;
+    float shaftLength = mScale * 0.85f; // Arrow shaft ends at 85% to make room for arrow head
+    float headBaseRadius = thickness * 2.5f; // Arrow head base is 2.5x thicker than shaft
 
     m_pXaxis->clear();
     m_pXaxis->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_TRIANGLE_LIST);
         m_pXaxis->colour(colour);
 
+        // Arrow shaft - box from origin to shaftLength
         m_pXaxis->position(Ogre::Vector3(0,       thickness,  thickness));
         m_pXaxis->position(Ogre::Vector3(0,      -thickness,  thickness));
-        m_pXaxis->position(Ogre::Vector3(mScale, -thickness,  thickness));
-        m_pXaxis->position(Ogre::Vector3(mScale,  thickness,  thickness));
+        m_pXaxis->position(Ogre::Vector3(shaftLength, -thickness,  thickness));
+        m_pXaxis->position(Ogre::Vector3(shaftLength,  thickness,  thickness));
 
         m_pXaxis->position(Ogre::Vector3(0,       thickness, -thickness));
         m_pXaxis->position(Ogre::Vector3(0,      -thickness, -thickness));
-        m_pXaxis->position(Ogre::Vector3(mScale, -thickness, -thickness));
-        m_pXaxis->position(Ogre::Vector3(mScale,  thickness, -thickness));
+        m_pXaxis->position(Ogre::Vector3(shaftLength, -thickness, -thickness));
+        m_pXaxis->position(Ogre::Vector3(shaftLength,  thickness, -thickness));
 
+        // Arrow shaft quads
         m_pXaxis->quad(0, 1, 2, 3);
         m_pXaxis->quad(7, 6, 5, 4);
         m_pXaxis->quad(0, 3, 7, 4);
@@ -109,33 +93,75 @@ void TranslationGizmo::createSolidXaxis(const Ogre::ColourValue& colour)
         m_pXaxis->quad(3, 2, 6, 7);
         m_pXaxis->quad(1, 0, 4, 5);
 
+        // Arrow head - pyramid pointing in +X direction
+        int headBaseIdx = 8;
+        // Base of arrow head (square at shaftLength)
+        m_pXaxis->position(Ogre::Vector3(shaftLength,  headBaseRadius,  headBaseRadius));
+        m_pXaxis->position(Ogre::Vector3(shaftLength, -headBaseRadius,  headBaseRadius));
+        m_pXaxis->position(Ogre::Vector3(shaftLength, -headBaseRadius, -headBaseRadius));
+        m_pXaxis->position(Ogre::Vector3(shaftLength,  headBaseRadius, -headBaseRadius));
+        // Tip of arrow head (at mScale)
+        int headTipIdx = 12;
+        m_pXaxis->position(Ogre::Vector3(mScale, 0, 0));
+
+        // Arrow head faces (4 triangles forming a pyramid)
+        m_pXaxis->triangle(headBaseIdx, headBaseIdx+1, headTipIdx);     // Right face
+        m_pXaxis->triangle(headBaseIdx+1, headBaseIdx+2, headTipIdx);   // Bottom face
+        m_pXaxis->triangle(headBaseIdx+2, headBaseIdx+3, headTipIdx);    // Left face
+        m_pXaxis->triangle(headBaseIdx+3, headBaseIdx, headTipIdx);      // Top face
+        // Base quad of arrow head
+        m_pXaxis->quad(headBaseIdx, headBaseIdx+3, headBaseIdx+2, headBaseIdx+1);
+
     m_pXaxis->end();
 }
 
 void TranslationGizmo::createSolidYaxis(const Ogre::ColourValue& colour)
 {
     float thickness = mScale / mSolidThickness;
+    float shaftLength = mScale * 0.85f; // Arrow shaft ends at 85% to make room for arrow head
+    float headBaseRadius = thickness * 2.5f; // Arrow head base is 2.5x thicker than shaft
 
     m_pYaxis->clear();
     m_pYaxis->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_TRIANGLE_LIST);
         m_pYaxis->colour(colour);
 
+        // Arrow shaft - box from origin to shaftLength
         m_pYaxis->position(Ogre::Vector3( thickness, 0,       thickness));
-        m_pYaxis->position(Ogre::Vector3( thickness, mScale,  thickness));
-        m_pYaxis->position(Ogre::Vector3(-thickness, mScale,  thickness));
+        m_pYaxis->position(Ogre::Vector3( thickness, shaftLength,  thickness));
+        m_pYaxis->position(Ogre::Vector3(-thickness, shaftLength,  thickness));
         m_pYaxis->position(Ogre::Vector3(-thickness, 0,       thickness));
 
         m_pYaxis->position(Ogre::Vector3( thickness, 0,      -thickness));
-        m_pYaxis->position(Ogre::Vector3( thickness, mScale, -thickness));
-        m_pYaxis->position(Ogre::Vector3(-thickness, mScale, -thickness));
+        m_pYaxis->position(Ogre::Vector3( thickness, shaftLength, -thickness));
+        m_pYaxis->position(Ogre::Vector3(-thickness, shaftLength, -thickness));
         m_pYaxis->position(Ogre::Vector3(-thickness, 0,      -thickness));
 
+        // Arrow shaft quads
         m_pYaxis->quad(0, 1, 2, 3);
         m_pYaxis->quad(7, 6, 5, 4);
         m_pYaxis->quad(1, 0, 4, 5);
         m_pYaxis->quad(3, 2, 6, 7);
         m_pYaxis->quad(2, 1, 5, 6);
         m_pYaxis->quad(0, 3, 7, 4);
+
+        // Arrow head - pyramid pointing in +Y direction
+        int headBaseIdx = 8;
+        // Base of arrow head (square at shaftLength)
+        m_pYaxis->position(Ogre::Vector3( headBaseRadius, shaftLength,  headBaseRadius));
+        m_pYaxis->position(Ogre::Vector3(-headBaseRadius, shaftLength,  headBaseRadius));
+        m_pYaxis->position(Ogre::Vector3(-headBaseRadius, shaftLength, -headBaseRadius));
+        m_pYaxis->position(Ogre::Vector3( headBaseRadius, shaftLength, -headBaseRadius));
+        // Tip of arrow head (at mScale)
+        int headTipIdx = 12;
+        m_pYaxis->position(Ogre::Vector3(0, mScale, 0));
+
+        // Arrow head faces (4 triangles forming a pyramid)
+        m_pYaxis->triangle(headBaseIdx, headBaseIdx+1, headTipIdx);     // Right face
+        m_pYaxis->triangle(headBaseIdx+1, headBaseIdx+2, headTipIdx);   // Bottom face
+        m_pYaxis->triangle(headBaseIdx+2, headBaseIdx+3, headTipIdx);    // Left face
+        m_pYaxis->triangle(headBaseIdx+3, headBaseIdx, headTipIdx);      // Top face
+        // Base quad of arrow head
+        m_pYaxis->quad(headBaseIdx, headBaseIdx+3, headBaseIdx+2, headBaseIdx+1);
 
     m_pYaxis->end();
 }
@@ -148,38 +174,75 @@ void TranslationGizmo::createSolidZaxis(const Ogre::ColourValue& colour)
     if(mLeftHandCs)
        z = -1.0f;
 
+    float shaftLength = mScale * 0.85f; // Arrow shaft ends at 85% to make room for arrow head
+    float headLength = mScale * 0.15f;  // Arrow head is 15% of total length
+    float headBaseRadius = thickness * 2.5f; // Arrow head base is 2.5x thicker than shaft
+
     m_pZaxis->clear();
     m_pZaxis->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_TRIANGLE_LIST);
         m_pZaxis->colour(colour);
 
+        // Arrow shaft - box from origin to shaftLength
         m_pZaxis->position(Ogre::Vector3( thickness,  thickness,        0));
-        m_pZaxis->position(Ogre::Vector3( thickness,  thickness, z*mScale));
-        m_pZaxis->position(Ogre::Vector3( thickness, -thickness, z*mScale));
+        m_pZaxis->position(Ogre::Vector3( thickness,  thickness, z*shaftLength));
+        m_pZaxis->position(Ogre::Vector3( thickness, -thickness, z*shaftLength));
         m_pZaxis->position(Ogre::Vector3( thickness, -thickness,        0));
 
         m_pZaxis->position(Ogre::Vector3(-thickness,  thickness,        0));
-        m_pZaxis->position(Ogre::Vector3(-thickness,  thickness, z*mScale));
-        m_pZaxis->position(Ogre::Vector3(-thickness, -thickness, z*mScale));
+        m_pZaxis->position(Ogre::Vector3(-thickness,  thickness, z*shaftLength));
+        m_pZaxis->position(Ogre::Vector3(-thickness, -thickness, z*shaftLength));
         m_pZaxis->position(Ogre::Vector3(-thickness, -thickness,        0));
 
-    if(mLeftHandCs)
-    {
-        m_pZaxis->quad(3, 2, 1, 0);
-        m_pZaxis->quad(4, 5, 6, 7);
-        m_pZaxis->quad(0, 1, 5, 4);
-        m_pZaxis->quad(2, 3, 7, 6);
-        m_pZaxis->quad(1, 2, 6, 5);
-        m_pZaxis->quad(0, 4, 7, 3);
-    }
-     else
-    {
-        m_pZaxis->quad(0, 1, 2, 3);
-        m_pZaxis->quad(7, 6, 5, 4);
-        m_pZaxis->quad(1, 0, 4, 5);
-        m_pZaxis->quad(3, 2, 6, 7);
-        m_pZaxis->quad(2, 1, 5, 6);
-        m_pZaxis->quad(0, 3, 7, 4);
-    }
+        // Arrow shaft quads
+        if(mLeftHandCs)
+        {
+            m_pZaxis->quad(3, 2, 1, 0);
+            m_pZaxis->quad(4, 5, 6, 7);
+            m_pZaxis->quad(0, 1, 5, 4);
+            m_pZaxis->quad(2, 3, 7, 6);
+            m_pZaxis->quad(1, 2, 6, 5);
+            m_pZaxis->quad(0, 4, 7, 3);
+        }
+        else
+        {
+            m_pZaxis->quad(0, 1, 2, 3);
+            m_pZaxis->quad(7, 6, 5, 4);
+            m_pZaxis->quad(1, 0, 4, 5);
+            m_pZaxis->quad(3, 2, 6, 7);
+            m_pZaxis->quad(2, 1, 5, 6);
+            m_pZaxis->quad(0, 3, 7, 4);
+        }
+
+        // Arrow head - pyramid pointing in +Z or -Z direction
+        int headBaseIdx = 8;
+        // Base of arrow head (square at shaftLength)
+        m_pZaxis->position(Ogre::Vector3( headBaseRadius,  headBaseRadius, z*shaftLength));
+        m_pZaxis->position(Ogre::Vector3(-headBaseRadius,  headBaseRadius, z*shaftLength));
+        m_pZaxis->position(Ogre::Vector3(-headBaseRadius, -headBaseRadius, z*shaftLength));
+        m_pZaxis->position(Ogre::Vector3( headBaseRadius, -headBaseRadius, z*shaftLength));
+        // Tip of arrow head (at z*mScale)
+        int headTipIdx = 12;
+        m_pZaxis->position(Ogre::Vector3(0, 0, z*mScale));
+
+        // Arrow head faces (4 triangles forming a pyramid)
+        if(mLeftHandCs)
+        {
+            m_pZaxis->triangle(headBaseIdx+1, headBaseIdx, headTipIdx);     // Right face
+            m_pZaxis->triangle(headBaseIdx+2, headBaseIdx+1, headTipIdx);   // Bottom face
+            m_pZaxis->triangle(headBaseIdx+3, headBaseIdx+2, headTipIdx);    // Left face
+            m_pZaxis->triangle(headBaseIdx, headBaseIdx+3, headTipIdx);      // Top face
+            // Base quad of arrow head
+            m_pZaxis->quad(headBaseIdx+1, headBaseIdx, headBaseIdx+3, headBaseIdx+2);
+        }
+        else
+        {
+            m_pZaxis->triangle(headBaseIdx, headBaseIdx+1, headTipIdx);     // Right face
+            m_pZaxis->triangle(headBaseIdx+1, headBaseIdx+2, headTipIdx);   // Bottom face
+            m_pZaxis->triangle(headBaseIdx+2, headBaseIdx+3, headTipIdx);    // Left face
+            m_pZaxis->triangle(headBaseIdx+3, headBaseIdx, headTipIdx);      // Top face
+            // Base quad of arrow head
+            m_pZaxis->quad(headBaseIdx, headBaseIdx+3, headBaseIdx+2, headBaseIdx+1);
+        }
 
     m_pZaxis->end();
 }
@@ -279,8 +342,8 @@ void TranslationGizmo::createAxis(void)
     createYaxis(mYaxisColor);
     createZaxis(mZaxisColor);
 
-    // Increasing size of Boundinx box (actually 0 thickness.....)
-    float bbSize = mScale/mSolidThickness;
+    // Update bounding boxes for the 3D arrows with arrow heads
+    float bbSize = (mScale / mSolidThickness) * 2.5f; // Account for arrow head thickness
 
     Ogre::AxisAlignedBox boundingBox = m_pXaxis->getBoundingBox();
     boundingBox.setExtents(Ogre::Vector3(0,-bbSize,-bbSize),Ogre::Vector3(mScale,bbSize,bbSize));
