@@ -743,16 +743,16 @@ jobs:
         find build -name "*.gcov" | head -10 || echo "No .gcov files found in build directory"
         
         echo "=== Running gcovr ==="
-        # Generate XML (Cobertura) format
+        # Generate SonarQube Generic Coverage XML (version=1) to avoid parser errors
         gcovr --root . --filter src/ \
               --exclude 'src/OgreXML/.*' \
               --exclude 'src/dependencies/.*' \
-              --exclude '.*_test\.cpp' \
+              --exclude '.*_test\\.cpp' \
               --exclude '.*_autogen.*' \
               --exclude '.*/CMakeFiles/.*' \
               --exclude '.*/ui_files/.*' \
               --exclude '.*/moc_.*' \
-              --xml-pretty --xml coverage.xml \
+              --sonarqube --output coverage.xml \
               --html --html-details -o coverage.html \
               --gcov-executable gcov \
               --verbose 2>&1 || echo "gcovr completed with warnings"
