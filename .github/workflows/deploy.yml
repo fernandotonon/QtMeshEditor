@@ -765,20 +765,45 @@ jobs:
             sudo apt-get update && sudo apt-get install -y lcov || echo "Failed to install lcov"
         fi
         
-        # Generate LCOV format from coverage data
-        # lcov needs to be run from build directory and capture all .gcda files
-        cd build
-        lcov --capture --directory . --output-file ../coverage.lcov \
-             --base-directory .. \
-             --exclude '*/OgreXML/*' \
-             --exclude '*/dependencies/*' \
-             --exclude '*/_test.cpp' \
-             --exclude '*/test_*.cpp' \
-             --exclude '*_autogen*' \
-             --exclude '*/CMakeFiles/*' \
-             --exclude '*/ui_files/*' \
-             --exclude '*/moc_*' 2>&1 || echo "lcov generation completed with warnings"
-        cd ..
+        # Check for .gcda files before running lcov
+        echo "Checking for .gcda files in build directory..."
+        GCDA_COUNT=$(find build -name "*.gcda" -type f 2>/dev/null | wc -l)
+        echo "Found $GCDA_COUNT .gcda files"
+        
+        if [ "$GCDA_COUNT" -eq 0 ]; then
+            echo "WARNING: No .gcda files found! Coverage data may not have been generated."
+            echo "This usually means tests didn't run or coverage flags weren't applied correctly."
+        else
+            # Generate LCOV format from coverage data
+            # lcov captures from the build directory but outputs to root
+            # Use --base-directory to make paths relative to project root
+            cd build
+            lcov --capture --directory . --output-file ../coverage.lcov \
+                 --base-directory "$(cd .. && pwd)" \
+                 --rc lcov_branch_coverage=1 \
+                 --exclude '*/OgreXML/*' \
+                 --exclude '*/dependencies/*' \
+                 --exclude '*/_test.cpp' \
+                 --exclude '*/test_*.cpp' \
+                 --exclude '*_autogen*' \
+                 --exclude '*/CMakeFiles/*' \
+                 --exclude '*/ui_files/*' \
+                 --exclude '*/moc_*' \
+                 --quiet 2>&1 | head -20 || echo "lcov generation had issues"
+            cd ..
+            
+            # If lcov file was created but is empty or has issues, try without exclusions first
+            if [ -f coverage.lcov ] && [ ! -s coverage.lcov ]; then
+                echo "First attempt created empty file, trying with minimal exclusions..."
+                cd build
+                lcov --capture --directory . --output-file ../coverage.lcov \
+                     --base-directory "$(cd .. && pwd)" \
+                     --rc lcov_branch_coverage=1 \
+                     --exclude '*/CMakeFiles/*' \
+                     --quiet 2>&1 | head -20 || echo "lcov generation with minimal exclusions had issues"
+                cd ..
+            fi
+        fi
         
         echo "=== Validating coverage files ==="
         # Check if coverage files exist and have content
