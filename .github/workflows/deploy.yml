@@ -743,7 +743,8 @@ jobs:
         find build -name "*.gcov" | head -10 || echo "No .gcov files found in build directory"
         
         echo "=== Running gcovr ==="
-        # Run gcovr to generate coverage reports with better error handling
+        # Generate both XML (Cobertura) and LCOV formats
+        # LCOV format is more universally supported by SonarQube for C++ projects
         gcovr --root . --filter src/ \
               --exclude 'src/OgreXML/.*' \
               --exclude 'src/dependencies/.*' \
@@ -753,18 +754,25 @@ jobs:
               --exclude '.*/ui_files/.*' \
               --exclude '.*/moc_.*' \
               --xml-pretty --xml coverage.xml \
+              --lcov --output coverage.lcov \
               --html --html-details -o coverage.html \
               --gcov-executable gcov \
               --verbose 2>&1 || echo "gcovr completed with warnings"
               
-        echo "=== Validating coverage.xml format ==="
-        # Check if coverage.xml exists and has content
+        echo "=== Validating coverage files ==="
+        # Check if coverage files exist and have content
         if [ -f coverage.xml ] && [ -s coverage.xml ]; then
-            echo "coverage.xml exists and has content"
-            # Check if it's valid Cobertura XML
-            head -5 coverage.xml | grep -q "coverage\|cobertura" && echo "Coverage XML format detected" || echo "Warning: XML format may not be Cobertura"
+            echo "coverage.xml exists and has content ($(wc -l < coverage.xml) lines)"
+            head -5 coverage.xml
         else
             echo "ERROR: coverage.xml is missing or empty!"
+        fi
+        
+        if [ -f coverage.lcov ] && [ -s coverage.lcov ]; then
+            echo "coverage.lcov exists and has content ($(wc -l < coverage.lcov) lines)"
+            head -10 coverage.lcov
+        else
+            echo "WARNING: coverage.lcov is missing or empty!"
         fi
               
         echo "=== Coverage files generated ==="
@@ -782,24 +790,57 @@ jobs:
           
           echo "=== Checking required files ==="
           ls -la sonar-project.properties || echo "sonar-project.properties not found"
-          ls -la coverage.xml || echo "coverage.xml not found"
+          ls -la coverage.xml coverage.lcov 2>/dev/null || echo "Coverage files not found"
           
-          echo "=== Checking coverage.xml format ==="
-          head -20 coverage.xml || echo "Cannot read coverage.xml"
+          echo "=== Checking coverage file formats ==="
+          if [ -f coverage.lcov ]; then
+            echo "--- coverage.lcov (first 10 lines) ---"
+            head -10 coverage.lcov || echo "Cannot read coverage.lcov"
+          fi
+          if [ -f coverage.xml ]; then
+            echo "--- coverage.xml (first 10 lines) ---"
+            head -10 coverage.xml || echo "Cannot read coverage.xml"
+          fi
           
           echo "=== Running SonarCloud analysis ==="
-          sonar-scanner \
-            -Dsonar.projectKey=fernandotonon_QtMeshEditor \
-            -Dsonar.organization=fernandotonon \
-            -Dsonar.host.url=https://sonarcloud.io \
-            -Dsonar.login="$SONAR_TOKEN" \
-            -Dsonar.sources=src/ \
-            -Dsonar.tests=src/,tests/ \
-            -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
-            -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
-            -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/** \
-            -Dsonar.coverageReportPaths=coverage.xml \
-            -Dsonar.verbose=true || echo "SonarCloud analysis completed with warnings"
+          # Try LCOV first, then XML as fallback
+          if [ -f coverage.lcov ]; then
+            echo "Using LCOV format for coverage"
+            COVERAGE_PATH="coverage.lcov"
+          elif [ -f coverage.xml ]; then
+            echo "Using XML format for coverage (fallback)"
+            COVERAGE_PATH="coverage.xml"
+          else
+            echo "WARNING: No coverage file found!"
+            COVERAGE_PATH=""
+          fi
+          
+          if [ -n "$COVERAGE_PATH" ]; then
+            sonar-scanner \
+              -Dsonar.projectKey=fernandotonon_QtMeshEditor \
+              -Dsonar.organization=fernandotonon \
+              -Dsonar.host.url=https://sonarcloud.io \
+              -Dsonar.login="$SONAR_TOKEN" \
+              -Dsonar.sources=src/ \
+              -Dsonar.tests=src/,tests/ \
+              -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
+              -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
+              -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/** \
+              -Dsonar.coverageReportPaths=$COVERAGE_PATH \
+              -Dsonar.verbose=true || echo "SonarCloud analysis completed with warnings"
+          else
+            echo "Skipping coverage upload - no coverage file available"
+            sonar-scanner \
+              -Dsonar.projectKey=fernandotonon_QtMeshEditor \
+              -Dsonar.organization=fernandotonon \
+              -Dsonar.host.url=https://sonarcloud.io \
+              -Dsonar.login="$SONAR_TOKEN" \
+              -Dsonar.sources=src/ \
+              -Dsonar.tests=src/,tests/ \
+              -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
+              -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
+              -Dsonar.verbose=true || echo "SonarCloud analysis completed with warnings"
+          fi
           
 
             
@@ -810,6 +851,7 @@ jobs:
         name: coverage-reports
         path: |
           coverage.xml
+          coverage.lcov
           coverage.html
             
 ####################################################################
