@@ -685,11 +685,11 @@ jobs:
                 fi
             }
             
+            echo "Running UnitTests (Google Tests - includes Assimp and other unit tests)..."
+            run_test "UnitTests" "test-results-unittests.xml" || echo "UnitTests not found"
+            
             echo "Running MaterialEditorQML Unit Tests..."
-            if ! run_test "MaterialEditorQML_test" "test-results-unit.xml"; then
-                echo "MaterialEditorQML_test not found, trying UnitTests..."
-                run_test "UnitTests" "test-results-unit.xml" || echo "UnitTests also not found"
-            fi
+            run_test "MaterialEditorQML_test" "test-results-materialeditor.xml" || echo "MaterialEditorQML_test not found"
             
             echo "Running MaterialEditorQML QML Integration Tests..."
             run_test "MaterialEditorQML_qml_test" "test-results-qml.xml" || echo "MaterialEditorQML_qml_test not found"
