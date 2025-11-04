@@ -55,18 +55,57 @@ OgreWidget::OgreWidget( QWidget *parent ):
 
 OgreWidget::~OgreWidget()
 {
-
-    if(mOgreWindow)
-    {
-        mOgreWindow->removeAllViewports();
-        mViewport = nullptr;
-    }
+    // Safely clean up OGRE resources
+    // Order is important: remove listeners first, then destroy camera, then detach render target, then remove viewports
+    
     if(mOgreRoot)
     {
-        mOgreRoot->removeFrameListener(this);
-        mOgreRoot->detachRenderTarget(mOgreWindow);
-        mOgreWindow->setActive(false);
-        mOgreWindow = nullptr;
+        try {
+            // Remove frame listener first
+            mOgreRoot->removeFrameListener(this);
+        } catch (...) {
+            // Ignore exceptions during shutdown
+        }
+    }
+    
+    // Destroy camera BEFORE removing viewports (viewport may reference camera)
+    // This must happen before removing viewports
+    mCamera.reset();
+    
+    if(mOgreWindow)
+    {
+        try {
+            // Remove all viewports (they should be cleared after camera destruction)
+            try {
+                mOgreWindow->removeAllViewports();
+            } catch (...) {
+                // Ignore exceptions during shutdown
+            }
+            
+            // Detach render target from root if root still exists
+            if(mOgreRoot)
+            {
+                try {
+                    mOgreRoot->detachRenderTarget(mOgreWindow);
+                } catch (...) {
+                    // Ignore exceptions during shutdown
+                }
+            }
+            
+            // Deactivate window
+            try {
+                mOgreWindow->setActive(false);
+            } catch (...) {
+                // Ignore exceptions during shutdown
+            }
+            
+            mViewport = nullptr;
+            mOgreWindow = nullptr;
+        } catch (...) {
+            // If something goes wrong, just nullify pointers
+            mViewport = nullptr;
+            mOgreWindow = nullptr;
+        }
     }
 
     destroy();
@@ -158,10 +197,16 @@ bool OgreWidget::frameRenderingQueued(const Ogre::FrameEvent &e)
 
 bool OgreWidget::frameEnded(const Ogre::FrameEvent& e)
 {
-    if(mOgreWindow)
+    // Safety check: don't access window if widget is being destroyed
+    if(mOgreWindow && mOgreRoot)
     {
-        mOgreWindow->windowMovedOrResized();
-        mOgreWindow->update();
+        try {
+            mOgreWindow->windowMovedOrResized();
+            mOgreWindow->update();
+        } catch (...) {
+            // Ignore exceptions during shutdown
+            return false;
+        }
     }
 
     return true;

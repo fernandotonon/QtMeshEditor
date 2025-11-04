@@ -120,14 +120,7 @@ MainWindow::~MainWindow()
         m_pTimer = nullptr;
     }
 
-    // Now safely close all viewports (their windows can be destroyed without rendering issues)
-    foreach (EditorViewport* pOgreWidget, mDockWidgetList)
-    {
-        pOgreWidget->close();
-    }
-    mDockWidgetList.clear();
-
-    // Safely remove frame listener if root still exists
+    // Safely remove frame listener if root still exists (before destroying widgets)
     if(m_pRoot)
     {
         try {
@@ -136,6 +129,23 @@ MainWindow::~MainWindow()
             // Ignore exceptions during shutdown
         }
     }
+
+    // Now safely close all viewports (their windows can be destroyed without rendering issues)
+    // IMPORTANT: During MainWindow destruction, we must NOT call close() which emits signals
+    // Instead, we delete the widgets directly to avoid signal/slot issues during destruction
+    // IMPORTANT: Destroy widgets BEFORE destroying Manager to ensure they can safely
+    // detach from OGRE resources while Manager still exists
+    foreach (EditorViewport* pOgreWidget, mDockWidgetList)
+    {
+        if(pOgreWidget)
+        {
+            // Disconnect signals to prevent onWidgetClosing from being called during destruction
+            disconnect(pOgreWidget, nullptr, this, nullptr);
+            // Delete directly instead of calling close() to avoid signal emission
+            delete pOgreWidget;
+        }
+    }
+    mDockWidgetList.clear();
 
     delete ui;
     if(m_pTransformWidget)
@@ -153,6 +163,12 @@ MainWindow::~MainWindow()
         delete m_pMaterialWidget;
         m_pMaterialWidget = nullptr;
     }
+    
+    // CRITICAL: Destroy Manager AFTER all widgets that depend on it are destroyed
+    // This ensures that OGRE resources are cleaned up in the correct order
+    // The Manager will clean up all OGRE resources (scene manager, root, etc.)
+    // kill() already checks if Manager exists, so it's safe to call
+    Manager::kill();
 }
 
 void MainWindow::initToolBar()
@@ -613,14 +629,24 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
 void MainWindow::onWidgetClosing(EditorViewport* const& widget)
 {
     // Artificial MUTEX !!! don't know if required
-    m_pTimer->stop();
+    // Safety check: don't access timer if MainWindow is being destroyed
+    if(m_pTimer)
+    {
+        m_pTimer->stop();
+    }
+    
     bool result = mDockWidgetList.removeOne(widget);
 
     if(result)
         delete widget;
     else
         qDebug()<<"Unable to remove viewport "<<widget->getIndex();
-    m_pTimer->start(0);
+    
+    // Safety check: don't restart timer if MainWindow is being destroyed
+    if(m_pTimer)
+    {
+        m_pTimer->start(0);
+    }
 }
 
 void MainWindow::on_actionSingle_toggled(bool arg1)
