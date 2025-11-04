@@ -89,7 +89,19 @@ MainWindow::MainWindow(QWidget *parent) :
     ///// Workaround, when using mRoot->startRendering() there's a flickering effect on the grid
     m_pTimer = new QTimer(this);
     connect(m_pTimer, &QTimer::timeout, this, [this](){
-        m_pRoot->renderOneFrame();
+        // Safely check if root and windows still exist before rendering
+        if(m_pRoot && m_pRoot->getRenderSystem())
+        {
+            try {
+                m_pRoot->renderOneFrame();
+            } catch (...) {
+                // Stop timer if rendering fails (e.g., during shutdown)
+                if(m_pTimer)
+                {
+                    m_pTimer->stop();
+                }
+            }
+        }
     });
     m_pTimer->start(0);
 }
@@ -98,6 +110,17 @@ MainWindow::MainWindow(QWidget *parent) :
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)
 MainWindow::~MainWindow()
 {
+    // CRITICAL: Stop the timer FIRST to prevent any renderOneFrame() calls
+    // during shutdown. This prevents swap buffer errors when windows are destroyed.
+    if(m_pTimer)
+    {
+        m_pTimer->stop();
+        m_pTimer->disconnect(); // Disconnect all signals to prevent any pending calls
+        delete m_pTimer;
+        m_pTimer = nullptr;
+    }
+
+    // Now safely close all viewports (their windows can be destroyed without rendering issues)
     foreach (EditorViewport* pOgreWidget, mDockWidgetList)
     {
         pOgreWidget->close();
@@ -112,13 +135,6 @@ MainWindow::~MainWindow()
         } catch (...) {
             // Ignore exceptions during shutdown
         }
-    }
-
-    if(m_pTimer)
-    {
-        m_pTimer->stop();
-        delete m_pTimer;
-        m_pTimer = nullptr;
     }
 
     delete ui;

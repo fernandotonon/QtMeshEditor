@@ -216,7 +216,13 @@ Manager::~Manager()
     // Shutdown and destroy OGRE root
     if (mRoot)
     {
-        mRoot->shutdown();
+        try {
+            // Shutdown the root - this will clean up all render targets
+            mRoot->shutdown();
+        } catch (...) {
+            // Ignore exceptions during shutdown - some resources may already be destroyed
+        }
+        
         delete mRoot;
         mRoot = nullptr;
     }
