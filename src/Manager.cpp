@@ -108,25 +108,118 @@ Manager::Manager(MainWindow* parent):
 }
 Manager::~Manager()
 {
+    // Clean up viewport grid first
     if(m_pViewportGrid)
     {
         delete m_pViewportGrid;
         m_pViewportGrid = nullptr;
     }
 
+    // Clean up plane
     if (mPlane)
     {
         delete mPlane;
         mPlane = nullptr;
     }
 
-    mSceneMgr->clearScene();
-    mRoot->destroySceneManager(mSceneMgr);
-    mSceneMgr = nullptr;
+    // Safely destroy all scene nodes before clearing the scene
+    // This ensures proper cleanup of attached objects (entities, primitives, etc.)
+    if (mSceneMgr)
+    {
+        try {
+            // Get all scene nodes and destroy them properly
+            // We need to collect them first because destroySceneNode modifies the tree
+            QList<Ogre::SceneNode*> nodesToDestroy;
+            auto rootNode = mSceneMgr->getRootSceneNode();
+            if (rootNode)
+            {
+                try {
+                    auto children = rootNode->getChildren();
+                    for (auto child : children)
+                    {
+                        try {
+                            Ogre::SceneNode* sceneNode = static_cast<Ogre::SceneNode*>(child);
+                            QString name = sceneNode->getName().data();
+                            // Don't destroy forbidden nodes (like root node itself)
+                            if (!isForbiddenNodeName(name))
+                            {
+                                nodesToDestroy.append(sceneNode);
+                            }
+                        } catch (...) {
+                            // Skip invalid nodes
+                            continue;
+                        }
+                    }
+                } catch (...) {
+                    // If we can't get children, proceed to clearScene
+                }
+                
+                // Destroy all collected nodes
+                for (Ogre::SceneNode* node : nodesToDestroy)
+                {
+                    try {
+                        // During shutdown, destroy nodes directly without emitting signals
+                        // to avoid issues with signal handlers accessing destroyed objects
+                        if(PrimitiveObject::isPrimitive(node))
+                        {
+                            PrimitiveObject* primitive = PrimitiveObject::getPrimitiveFromSceneNode(node);
+                            node->getUserObjectBindings().clear();
+                            delete primitive;
+                        }
+                        
+                        destroyAllAttachedMovableObjects(node);
+                        node->removeAndDestroyAllChildren();
+                        // Don't emit signals during shutdown - object is being destroyed
+                        mSceneMgr->destroySceneNode(node);
+                    } catch (...) {
+                        // Continue with next node if this one fails
+                        continue;
+                    }
+                }
+            }
+            
+            // Clear the scene (should be mostly empty now, but ensures everything is cleaned)
+            try {
+                mSceneMgr->clearScene();
+            } catch (...) {
+                // Ignore exceptions during shutdown
+            }
+            
+            // Destroy the scene manager
+            if (mRoot)
+            {
+                try {
+                    mRoot->destroySceneManager(mSceneMgr);
+                } catch (...) {
+                    // Ignore exceptions during shutdown
+                }
+            }
+            mSceneMgr = nullptr;
+        } catch (...) {
+            // If something goes wrong, try to at least destroy the scene manager
+            if (mRoot && mSceneMgr)
+            {
+                try {
+                    mRoot->destroySceneManager(mSceneMgr);
+                } catch (...) {
+                    // Last resort - ignore
+                }
+            }
+            mSceneMgr = nullptr;
+        }
+    }
 
-    mRoot->shutdown();
-    delete mRoot;
-    mRoot = nullptr;
+    // Clear our reference lists
+    mSceneNodesList.clear();
+    mEntitiesList.clear();
+
+    // Shutdown and destroy OGRE root
+    if (mRoot)
+    {
+        mRoot->shutdown();
+        delete mRoot;
+        mRoot = nullptr;
+    }
 }
 
 void Manager::CreateEmptyScene()
@@ -193,13 +286,32 @@ Ogre::Entity* Manager::createEntity(Ogre::SceneNode* const& sceneNode, const Ogr
 
 void Manager::destroySceneNode(const QString & name)
 {
-    destroySceneNode(mSceneMgr->getSceneNode(name.toStdString().data()));
+    if (!mSceneMgr)
+        return;
+    
+    try {
+        Ogre::SceneNode* node = mSceneMgr->getSceneNode(name.toStdString().data());
+        if (node)
+        {
+            destroySceneNode(node);
+        }
+    } catch (...) {
+        // Node may not exist or scene manager may be shutting down
+    }
 }
 void Manager::destroySceneNode(Ogre::SceneNode* node)
 {
-    if(!node || isForbiddenNodeName(node->getName().c_str()))
+    if(!node || !mSceneMgr || isForbiddenNodeName(node->getName().c_str()))
         return;
 
+    // Check if node still exists and belongs to our scene manager
+    try {
+        if (node->getCreator() != mSceneMgr)
+            return;
+    } catch (...) {
+        // Node may already be destroyed or invalid
+        return;
+    }
 
     if(PrimitiveObject::isPrimitive(node))
     {
@@ -213,20 +325,45 @@ void Manager::destroySceneNode(Ogre::SceneNode* node)
     destroyAllAttachedMovableObjects(node);
     node->removeAndDestroyAllChildren();
     emit sceneNodeDestroyed(node);  //emitted just before destroying
-    mSceneMgr->destroySceneNode(node);
+    
+    // Safely destroy the scene node
+    try {
+        mSceneMgr->destroySceneNode(node);
+    } catch (...) {
+        // Ignore exceptions during shutdown
+    }
 }
 
 
 void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
 {
-   if(!node)
+   if(!node || !mSceneMgr)
        return;
 
-   // Destroy all the attached objects
-   auto attachedObjects = node->getAttachedObjects();
+   // Check if node is still valid
+   try {
+       if (node->getCreator() != mSceneMgr)
+           return;
+   } catch (...) {
+       // Node may already be destroyed or invalid
+       return;
+   }
 
-   for(auto attachedObject : attachedObjects)
-      node->getCreator()->destroyMovableObject(attachedObject);
+   // Destroy all the attached objects
+   try {
+       auto attachedObjects = node->getAttachedObjects();
+
+       for(auto attachedObject : attachedObjects)
+       {
+           try {
+               node->getCreator()->destroyMovableObject(attachedObject);
+           } catch (...) {
+               // Ignore exceptions during cleanup
+           }
+       }
+   } catch (...) {
+       // Ignore exceptions during cleanup
+   }
 
    /* TODO check to free up the meshmanager
    if(ent->getMesh().getPointer()->isManuallyLoaded())
@@ -236,11 +373,15 @@ void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
    }*/
 
    // Recurse to child SceneNodes
-   auto children = node->getChildren();
-   for(auto child : children)
-   {
-      Ogre::SceneNode* pChildNode = static_cast<Ogre::SceneNode*>(child);
-      destroyAllAttachedMovableObjects( pChildNode );
+   try {
+       auto children = node->getChildren();
+       for(auto child : children)
+       {
+          Ogre::SceneNode* pChildNode = static_cast<Ogre::SceneNode*>(child);
+          destroyAllAttachedMovableObjects( pChildNode );
+       }
+   } catch (...) {
+       // Ignore exceptions during cleanup
    }
 }
 

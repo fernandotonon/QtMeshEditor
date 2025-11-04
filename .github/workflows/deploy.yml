@@ -558,9 +558,9 @@ jobs:
 
     - name: change folder permissions
       run: |
-            sudo chmod -R 777 /usr/local/lib
-            sudo chmod -R 777 /usr/local/include
-            sudo chmod -R 777 /usr/local/share
+            sudo chmod 777 /usr/local/lib
+            sudo chmod 777 /usr/local/include
+            sudo chmod 777 /usr/local/share
         
     - name: Cache Assimp
       id: cache-assimp-linux

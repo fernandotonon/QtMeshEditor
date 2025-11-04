@@ -104,7 +104,15 @@ MainWindow::~MainWindow()
     }
     mDockWidgetList.clear();
 
-    m_pRoot->removeFrameListener(this);
+    // Safely remove frame listener if root still exists
+    if(m_pRoot)
+    {
+        try {
+            m_pRoot->removeFrameListener(this);
+        } catch (...) {
+            // Ignore exceptions during shutdown
+        }
+    }
 
     if(m_pTimer)
     {

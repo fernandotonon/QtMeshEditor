@@ -2,15 +2,47 @@
 #include <GlobalDefinitions.h>
 #include "RotationGizmo.h"
 #include "Manager.h"
+#include "mainwindow.h"
+#include <OgreMaterialManager.h>
+#include <OgreResourceGroupManager.h>
+#include <QApplication>
+
+// Helper function to create required OGRE materials for tests
+static void createOGREMaterials()
+{
+    // Create GUI_Material (used by RotationGizmo)
+    Ogre::MaterialPtr guiMat = Ogre::MaterialManager::getSingleton().getByName(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!guiMat)
+    {
+        guiMat = Ogre::MaterialManager::getSingleton().create(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        guiMat->getTechnique(0)->setLightingEnabled(false);
+        guiMat->getTechnique(0)->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        guiMat->getTechnique(0)->setDepthCheckEnabled(false);
+    }
+}
 
 // Test fixture for RotationGizmo class
 class RotationGizmoTests : public ::testing::Test {
 protected:
+    QApplication* app;
+    MainWindow* mainWindow;
     Ogre::SceneManager* mSceneMgr;
     Ogre::SceneNode* mLinkNode;
     RotationGizmo* mRotationGizmo;
 
     void SetUp() override {
+        // Create QApplication
+        int argc = 0;
+        char* argv[] = { nullptr };
+        app = new QApplication(argc, argv);
+        
+        // Create MainWindow to initialize Manager
+        mainWindow = new MainWindow();
+        Manager::getSingleton(mainWindow);
+        
+        // Create required OGRE materials
+        createOGREMaterials();
+        
         // Set up the scene manager and link node
         mSceneMgr = Manager::getSingleton()->getSceneMgr();
         mLinkNode = mSceneMgr->createSceneNode();
@@ -22,7 +54,17 @@ protected:
     void TearDown() override {
         // Clean up the RotationGizmo and scene manager
         delete mRotationGizmo;
+        mRotationGizmo = nullptr;
         delete mLinkNode;
+        mLinkNode = nullptr;
+        
+        // Clean up MainWindow first (it may have references to Manager)
+        // Then clean up Manager
+        delete mainWindow;
+        mainWindow = nullptr;
+        Manager::kill();
+        delete app;
+        app = nullptr;
     }
 };
 

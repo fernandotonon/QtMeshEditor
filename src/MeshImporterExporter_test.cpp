@@ -4,20 +4,31 @@
 #include <QApplication>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "mainwindow.h"
 
 class MeshImporterExporterTest : public ::testing::Test {
 protected:
     QApplication* app;
+    MainWindow* mainWindow;
 
     void SetUp() override {
         // Create a QApplication instance for testing
         int argc = 0;
         char* argv[] = { nullptr };
         app = new QApplication(argc, argv);
+        
+        // Create MainWindow to initialize Manager (needed for tests that use Manager)
+        mainWindow = new MainWindow();
+        Manager::getSingleton(mainWindow);
     }
 
     void TearDown() override {
+        // Clean up MainWindow first, then Manager
+        delete mainWindow;
+        mainWindow = nullptr;
+        Manager::kill();
         delete app;
+        app = nullptr;
     }
 };
 

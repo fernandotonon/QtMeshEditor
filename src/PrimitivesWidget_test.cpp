@@ -6,6 +6,33 @@
 #include <QInputDialog>
 #include "PrimitivesWidget.h"
 #include "Manager.h"
+#include "mainwindow.h"
+#include <OgreMaterialManager.h>
+#include <OgreResourceGroupManager.h>
+
+// Helper function to create required OGRE materials for tests
+static void createOGREMaterials()
+{
+    // Create BaseWhiteNoLighting material (used by ogre-procedural)
+    Ogre::MaterialPtr baseWhiteMat = Ogre::MaterialManager::getSingleton().getByName("BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat)
+    {
+        baseWhiteMat = Ogre::MaterialManager::getSingleton().create("BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setSelfIllumination(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->setLightingEnabled(false);
+    }
+    
+    // Create BaseWhite material (used by PrimitiveObject)
+    Ogre::MaterialPtr baseWhiteMat2 = Ogre::MaterialManager::getSingleton().getByName("BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat2)
+    {
+        baseWhiteMat2 = Ogre::MaterialManager::getSingleton().create("BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+    }
+}
 
 // Test case for MaterialWidget
 class PrimitivesWidgetTest : public ::testing::Test
@@ -17,16 +44,29 @@ protected:
         int argc = 0;
         char* argv[] = { nullptr };
         app = new QApplication(argc, argv);
+        
+        // Create MainWindow to initialize Manager
+        mainWindow = new MainWindow();
+        Manager::getSingleton(mainWindow);
+        
+        // Create required OGRE materials
+        createOGREMaterials();
     }
 
     void TearDown() override
     {
-        // Clean up the QApplication instance
+        // Clean up MainWindow first (it may have references to Manager)
+        // Then clean up Manager
+        delete mainWindow;
+        mainWindow = nullptr;
+        Manager::kill();
         delete app;
+        app = nullptr;
     }
 
 private:
     QApplication* app;
+    MainWindow* mainWindow;
 };
 
 TEST_F(PrimitivesWidgetTest, CreateCube)
