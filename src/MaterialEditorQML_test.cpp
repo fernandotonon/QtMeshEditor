@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <QApplication>
+#include <QCoreApplication>
 #include <QQmlEngine>
 #include <QJSEngine>
 
@@ -8,12 +9,8 @@
 class MaterialEditorQMLTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Create QApplication if not exists
-        if (!QApplication::instance()) {
-            int argc = 0;
-            char* argv[] = { nullptr };
-            app = new QApplication(argc, argv);
-        }
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
     }
 
     void TearDown() override {

@@ -43,12 +43,30 @@ RotationGizmo::RotationGizmo(Ogre::SceneNode* linkNode, const Ogre::String &name
 
 RotationGizmo::~RotationGizmo()
 {
-    Ogre::SceneManager* pSceneMgr = m_pXCircle->getParentSceneNode()->getCreator();
-    //TODO unload material ??
-
-    pSceneMgr->destroyManualObject(m_pXCircle);
-    pSceneMgr->destroyManualObject(m_pYCircle);
-    pSceneMgr->destroyManualObject(m_pZCircle);
+    // Safety checks to prevent SIGFAULT if objects are already destroyed
+    if (m_pXCircle && m_pXCircle->getParentSceneNode())
+    {
+        Ogre::SceneManager* pSceneMgr = m_pXCircle->getParentSceneNode()->getCreator();
+        if (pSceneMgr)
+        {
+            //TODO unload material ??
+            if (m_pXCircle)
+            {
+                pSceneMgr->destroyManualObject(m_pXCircle);
+                m_pXCircle = nullptr;
+            }
+            if (m_pYCircle)
+            {
+                pSceneMgr->destroyManualObject(m_pYCircle);
+                m_pYCircle = nullptr;
+            }
+            if (m_pZCircle)
+            {
+                pSceneMgr->destroyManualObject(m_pZCircle);
+                m_pZCircle = nullptr;
+            }
+        }
+    }
 }
 
 void RotationGizmo::createXCircle(const Ogre::ColourValue& colour)

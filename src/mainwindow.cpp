@@ -167,8 +167,14 @@ MainWindow::~MainWindow()
     // CRITICAL: Destroy Manager AFTER all widgets that depend on it are destroyed
     // This ensures that OGRE resources are cleaned up in the correct order
     // The Manager will clean up all OGRE resources (scene manager, root, etc.)
-    // kill() already checks if Manager exists, so it's safe to call
-    Manager::kill();
+    // Only destroy Manager if it still exists and belongs to this MainWindow
+    // (In tests, Manager may be destroyed separately in TearDown)
+    Manager* manager = Manager::getSingletonPtr();
+    if(manager && manager->getMainWindow() == this)
+    {
+        // Only destroy if this MainWindow owns the Manager
+        Manager::kill();
+    }
 }
 
 void MainWindow::initToolBar()

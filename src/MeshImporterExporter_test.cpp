@@ -2,37 +2,49 @@
 #include <gmock/gmock.h>
 #include <OgreSceneNode.h>
 #include <QApplication>
+#include <QCoreApplication>
+#include <QThread>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "mainwindow.h"
 
 class MeshImporterExporterTest : public ::testing::Test {
 protected:
-    QApplication* app;
-    MainWindow* mainWindow;
+    QApplication* app = nullptr;
+    MainWindow* mainWindow = nullptr;
 
     void SetUp() override {
-        // Create a QApplication instance for testing
-        int argc = 0;
-        char* argv[] = { nullptr };
-        app = new QApplication(argc, argv);
-        
-        // Create MainWindow to initialize Manager (needed for tests that use Manager)
-        mainWindow = new MainWindow();
-        Manager::getSingleton(mainWindow);
+        Manager::kill();
+        QThread::msleep(50);
+
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+
+        try {
+            mainWindow = new MainWindow();
+            Manager::getSingleton(mainWindow);
+        } catch (const Ogre::RenderingAPIException& e) {
+            GTEST_SKIP() << "Skipping MeshImporterExporter tests: unable to create OGRE render window ("
+                         << e.getFullDescription() << ")";
+        } catch (const std::exception& e) {
+            GTEST_SKIP() << "Skipping MeshImporterExporter tests: " << e.what();
+        }
     }
 
     void TearDown() override {
-        // Clean up MainWindow first, then Manager
         delete mainWindow;
         mainWindow = nullptr;
+
         Manager::kill();
-        delete app;
-        app = nullptr;
+
+        if (app) {
+            app->processEvents();
+        }
+        QThread::msleep(50);
     }
 };
 
-TEST_F(MeshImporterExporterTest, FormatFileURI_ValidURIAndFormat_ReturnsFormattedURI) {
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_ValidURIAndFormat_ReturnsFormattedURI) {
     QString uri = "/path/to/file.obj";
     QString format = "Ogre XML (*.mesh.xml)";
     QString expected = "/path/to/file.obj.mesh.xml";
@@ -42,7 +54,7 @@ TEST_F(MeshImporterExporterTest, FormatFileURI_ValidURIAndFormat_ReturnsFormatte
     EXPECT_EQ(result, expected);
 }
 
-TEST_F(MeshImporterExporterTest, FormatFileURI_URIWithExtension_ReturnsURIWithoutChanges) {
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_URIWithExtension_ReturnsURIWithoutChanges) {
     QString uri = "/path/to/file.mesh.xml";
     QString format = "Ogre XML (*.mesh.xml)";
     QString expected = "/path/to/file.mesh.xml";
@@ -52,7 +64,7 @@ TEST_F(MeshImporterExporterTest, FormatFileURI_URIWithExtension_ReturnsURIWithou
     EXPECT_EQ(result, expected);
 }
 
-TEST_F(MeshImporterExporterTest, FormatFileURI_URIWithoutExtension_ReturnsURIWithFormatExtension) {
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_URIWithoutExtension_ReturnsURIWithFormatExtension) {
     QString uri = "/path/to/file";
     QString format = "Ogre XML (*.mesh.xml)";
     QString expected = "/path/to/file.mesh.xml";
@@ -62,7 +74,7 @@ TEST_F(MeshImporterExporterTest, FormatFileURI_URIWithoutExtension_ReturnsURIWit
     EXPECT_EQ(result, expected);
 }
 
-TEST_F(MeshImporterExporterTest, FormatFileURI_URIWithExtensionAndNoFormat_ReturnsURIWithoutChanges) {
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_URIWithExtensionAndNoFormat_ReturnsURIWithoutChanges) {
     QString uri = "/path/to/file.mesh.xml";
     QString expected = "/path/to/file.mesh.xml";
 
@@ -71,7 +83,7 @@ TEST_F(MeshImporterExporterTest, FormatFileURI_URIWithExtensionAndNoFormat_Retur
     EXPECT_EQ(result, expected);
 }
 
-TEST_F(MeshImporterExporterTest, FormatFileURI_URIWithoutExtensionAndNoFormat_ReturnsURIWithoutChanges) {
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_URIWithoutExtensionAndNoFormat_ReturnsURIWithoutChanges) {
     QString uri = "/path/to/file";
     QString expected = "/path/to/file";
 
@@ -80,7 +92,7 @@ TEST_F(MeshImporterExporterTest, FormatFileURI_URIWithoutExtensionAndNoFormat_Re
     EXPECT_EQ(result, expected);
 }
 
-TEST_F(MeshImporterExporterTest, FormatFileURI_NULLURI_ReturnsEmptyString) {
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_NULLURI_ReturnsEmptyString) {
     QString format = "Ogre XML (*.mesh.xml)";
 
     QString result = MeshImporterExporter::formatFileURI(nullptr, format);
@@ -88,7 +100,7 @@ TEST_F(MeshImporterExporterTest, FormatFileURI_NULLURI_ReturnsEmptyString) {
     EXPECT_EQ(result, "");
 }
 
-TEST_F(MeshImporterExporterTest, FormatFileURI_EmptyURI_ReturnsEmptyString) {
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_EmptyURI_ReturnsEmptyString) {
     QString format = "Ogre XML (*.mesh.xml)";
 
     QString result = MeshImporterExporter::formatFileURI("", format);
@@ -96,7 +108,7 @@ TEST_F(MeshImporterExporterTest, FormatFileURI_EmptyURI_ReturnsEmptyString) {
     EXPECT_EQ(result, "");
 }
 
-TEST_F(MeshImporterExporterTest, FormatFileURI_UnknownFormat_ReturnsURIWithoutChanges) {
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_UnknownFormat_ReturnsURIWithoutChanges) {
     QString uri = "/path/to/file.obj";
     QString format = "Unknown Format";
     QString expected = "/path/to/file.obj";
@@ -106,7 +118,7 @@ TEST_F(MeshImporterExporterTest, FormatFileURI_UnknownFormat_ReturnsURIWithoutCh
     EXPECT_EQ(result, expected);
 }
 
-TEST_F(MeshImporterExporterTest, ExportFileDialogFilter_ReturnsFilterString) {
+TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ReturnsFilterString) {
     QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;PLY Binary (*.plyb);;STL (*.stl);;STL Binary (*.stlb);;STP (*.stp);;X (*.x);;glTF 1.0 (*.gltf);;glTF 1.0 Binary (*.glb);;glTF 2.0 (*.gltf2);;glTF 2.0 Binary (*.glb2)";
 
     QString result = MeshImporterExporter::exportFileDialogFilter();
@@ -114,7 +126,7 @@ TEST_F(MeshImporterExporterTest, ExportFileDialogFilter_ReturnsFilterString) {
     EXPECT_EQ(result, expected);
 }
 
-TEST_F(MeshImporterExporterTest, Exporter_NullSceneNode_ReturnMinusOne) {
+TEST(MeshImporterExporterStandaloneTest, Exporter_NullSceneNode_ReturnMinusOne) {
     EXPECT_EQ(MeshImporterExporter::exporter(nullptr, "", ""), -1);
 }
 

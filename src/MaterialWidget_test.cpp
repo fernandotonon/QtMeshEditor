@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <QApplication>
+#include <QCoreApplication>
 #include <QTableWidget>
 #include <QHeaderView>
 #include "MaterialWidget.h"
@@ -10,16 +11,12 @@ class MaterialWidgetTest : public ::testing::Test
 protected:
     void SetUp() override
     {
-        // Create a QApplication instance for testing
-        int argc = 0;
-        char* argv[] = { nullptr };
-        app = new QApplication(argc, argv);
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
     }
 
     void TearDown() override
     {
-        // Clean up the QApplication instance
-        delete app;
     }
 
     QApplication* app;

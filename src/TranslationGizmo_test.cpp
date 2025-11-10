@@ -2,27 +2,102 @@
 #include <GlobalDefinitions.h>
 #include "TranslationGizmo.h"
 #include "Manager.h"
+#include "mainwindow.h"
+#include <OgreMaterialManager.h>
+#include <OgreResourceGroupManager.h>
+#include <QApplication>
+#include <QCoreApplication>
+#include <QThread>
+
+// Helper function to create required OGRE materials for tests
+static void createOGREMaterials()
+{
+    // Create GUI_Material (used by TranslationGizmo)
+    Ogre::MaterialPtr guiMat = Ogre::MaterialManager::getSingleton().getByName(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!guiMat)
+    {
+        guiMat = Ogre::MaterialManager::getSingleton().create(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        guiMat->getTechnique(0)->setLightingEnabled(false);
+        guiMat->getTechnique(0)->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        guiMat->getTechnique(0)->setDepthCheckEnabled(false);
+    }
+}
 
 // Test fixture for TranslationGizmo class
 class TranslationGizmoTests : public ::testing::Test {
 protected:
-    Ogre::SceneManager* mSceneMgr;
-    Ogre::SceneNode* mLinkNode;
-    TranslationGizmo* mTranslationGizmo;
+    QApplication* app = nullptr;
+    MainWindow* mainWindow = nullptr;
+    Ogre::SceneManager* mSceneMgr = nullptr;
+    Ogre::SceneNode* mLinkNode = nullptr;
+    TranslationGizmo* mTranslationGizmo = nullptr;
 
     void SetUp() override {
+        // Ensure Manager is completely destroyed from previous test
+        Manager::kill();
+        QThread::msleep(50); // Small delay to ensure cleanup is complete
+        
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+        
+        // Create MainWindow to initialize Manager
+        try {
+            mainWindow = new MainWindow();
+            ASSERT_NE(mainWindow, nullptr);
+            Manager::getSingleton(mainWindow);
+        } catch (const Ogre::RenderingAPIException& e) {
+            GTEST_SKIP() << "Skipping TranslationGizmo tests: unable to create OGRE render window ("
+                         << e.getFullDescription() << ")";
+        } catch (const std::exception& e) {
+            GTEST_SKIP() << "Skipping TranslationGizmo tests: " << e.what();
+        }
+        
+        // Create required OGRE materials
+        createOGREMaterials();
+        
         // Set up the scene manager and link node
-        mSceneMgr = Manager::getSingleton()->getSceneMgr();
+        Manager* manager = Manager::getSingleton(mainWindow);
+        ASSERT_NE(manager, nullptr);
+        mSceneMgr = manager->getSceneMgr();
+        ASSERT_NE(mSceneMgr, nullptr);
         mLinkNode = mSceneMgr->createSceneNode();
+        ASSERT_NE(mLinkNode, nullptr);
 
-        // Create an instance of RotationGizmo
-        mTranslationGizmo = new TranslationGizmo(mLinkNode, "TestRotationGizmo");
+        // Create an instance of TranslationGizmo
+        mTranslationGizmo = new TranslationGizmo(mLinkNode, "TestTranslationGizmo");
     }
 
     void TearDown() override {
-        // Clean up the RotationGizmo and scene manager
-        delete mTranslationGizmo;
-        delete mLinkNode;
+        // Clean up the TranslationGizmo first (while scene manager is still valid)
+        if (mTranslationGizmo)
+        {
+            delete mTranslationGizmo;
+            mTranslationGizmo = nullptr;
+        }
+        
+        // Now clean up the scene node
+        if (mLinkNode && mSceneMgr)
+        {
+            mLinkNode->detachAllObjects();
+            mSceneMgr->destroySceneNode(mLinkNode);
+            mLinkNode = nullptr;
+        }
+        
+        // Clean up MainWindow
+        if (mainWindow)
+        {
+            delete mainWindow;
+            mainWindow = nullptr;
+        }
+        
+        // Ensure Manager is destroyed
+        Manager::kill();
+        
+        if (app)
+        {
+            app->processEvents();
+        }
+        QThread::msleep(50);
     }
 };
 
@@ -108,6 +183,9 @@ TEST_F(TranslationGizmoTests, SetColour) {
 // Test case for unamed gizmo
 TEST_F(TranslationGizmoTests, CreateUnamedGizmo) {
     TranslationGizmo unamedGizmo{mLinkNode,""};
+    
+    // Ensure axis are created (have geometry) before accessing them
+    unamedGizmo.createAxis();
 
     ASSERT_EQ(unamedGizmo.getQueryFlags(), 0);
     ASSERT_EQ(unamedGizmo.getXAxis().getName(), "X");

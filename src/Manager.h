@@ -61,6 +61,7 @@ class Manager : public QObject
 
 public:
     static Manager* getSingleton(MainWindow* parent = nullptr);
+    static Manager* getSingletonPtr(); // Get singleton without creating (returns nullptr if doesn't exist)
     static void kill();
 
     Ogre::Root*         getRoot()               const;
@@ -111,6 +112,7 @@ private:
 
     MainWindow*          m_pMainWindow;
     ViewportGrid*        m_pViewportGrid;
+    bool                 mInitializingScene = false;
 
     Ogre::Plane*         mPlane;
     static QString       mValidFileExtention;
