@@ -850,6 +850,17 @@ jobs:
           fi
           
           echo "=== Running SonarCloud analysis ==="
+          # Check if build-wrapper output exists
+          BUILD_WRAPPER_OUTPUT="${{ env.BUILD_WRAPPER_OUT_DIR }}bw-output"
+          if [ -d "$BUILD_WRAPPER_OUTPUT" ] && [ -f "$BUILD_WRAPPER_OUTPUT/build-wrapper-output.json" ]; then
+            echo "Build-wrapper output found at: $BUILD_WRAPPER_OUTPUT"
+            ls -la "$BUILD_WRAPPER_OUTPUT" | head -5
+          else
+            echo "WARNING: Build-wrapper output not found at $BUILD_WRAPPER_OUTPUT"
+            echo "Checking for alternative locations..."
+            find . -name "build-wrapper-output.json" -type f 2>/dev/null | head -5 || echo "No build-wrapper-output.json found"
+          fi
+          
           # Build scanner command base
           SCANNER_CMD="sonar-scanner \
             -Dsonar.projectKey=fernandotonon_QtMeshEditor \
@@ -861,10 +872,18 @@ jobs:
             -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
             -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
             -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/** \
-            -Dsonar.c.file.suffixes=- \
-            -Dsonar.cpp.file.suffixes=- \
-            -Dsonar.objc.file.suffixes=- \
+            -Dsonar.c.file.suffixes=.c \
+            -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++ \
+            -Dsonar.objc.file.suffixes=.m,.mm \
             -Dsonar.verbose=true"
+          
+          # Add build-wrapper output if it exists
+          if [ -d "$BUILD_WRAPPER_OUTPUT" ] && [ -f "$BUILD_WRAPPER_OUTPUT/build-wrapper-output.json" ]; then
+            echo "Adding build-wrapper output to analysis"
+            SCANNER_CMD="$SCANNER_CMD -Dsonar.cfamily.build-wrapper-output=$BUILD_WRAPPER_OUTPUT"
+          else
+            echo "WARNING: Skipping build-wrapper output (not found). Analysis will proceed without compilation database."
+          fi
           
           # Only add coverage if file exists and is not empty
           if [ -f coverage.lcov ] && [ -s coverage.lcov ]; then
