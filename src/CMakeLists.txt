@@ -296,8 +296,8 @@ if(BUILD_TESTS)
         endif() 
     endforeach()
 
-    # Add all files ending with _test.cpp to the set
-    file(GLOB TestFiles "*_test.cpp")
+    # Add all files ending with _test.cpp to the set (recursively to include subdirectories like Assimp)
+    file(GLOB_RECURSE TestFiles "${CMAKE_CURRENT_SOURCE_DIR}/*_test.cpp")
     foreach(TestFile ${TestFiles})
         list(APPEND TEST_SOURCES ${TestFile})
     endforeach()    
@@ -371,7 +371,7 @@ else()
     ENDIF()
     SET(OGRELIBLIST ${OGRELIBLIST}
         OgreMain
-        Codec_Assimp
+        #Codec_Assimp
         Codec_STBI
         RenderSystem_GL
         Plugin_OctreeSceneManager

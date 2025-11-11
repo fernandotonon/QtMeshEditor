@@ -89,7 +89,19 @@ MainWindow::MainWindow(QWidget *parent) :
     ///// Workaround, when using mRoot->startRendering() there's a flickering effect on the grid
     m_pTimer = new QTimer(this);
     connect(m_pTimer, &QTimer::timeout, this, [this](){
-        m_pRoot->renderOneFrame();
+        // Safely check if root and windows still exist before rendering
+        if(m_pRoot && m_pRoot->getRenderSystem())
+        {
+            try {
+                m_pRoot->renderOneFrame();
+            } catch (...) {
+                // Stop timer if rendering fails (e.g., during shutdown)
+                if(m_pTimer)
+                {
+                    m_pTimer->stop();
+                }
+            }
+        }
     });
     m_pTimer->start(0);
 }
@@ -98,20 +110,42 @@ MainWindow::MainWindow(QWidget *parent) :
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)
 MainWindow::~MainWindow()
 {
-    foreach (EditorViewport* pOgreWidget, mDockWidgetList)
-    {
-        pOgreWidget->close();
-    }
-    mDockWidgetList.clear();
-
-    m_pRoot->removeFrameListener(this);
-
+    // CRITICAL: Stop the timer FIRST to prevent any renderOneFrame() calls
+    // during shutdown. This prevents swap buffer errors when windows are destroyed.
     if(m_pTimer)
     {
         m_pTimer->stop();
+        m_pTimer->disconnect(); // Disconnect all signals to prevent any pending calls
         delete m_pTimer;
         m_pTimer = nullptr;
     }
+
+    // Safely remove frame listener if root still exists (before destroying widgets)
+    if(m_pRoot)
+    {
+        try {
+            m_pRoot->removeFrameListener(this);
+        } catch (...) {
+            // Ignore exceptions during shutdown
+        }
+    }
+
+    // Now safely close all viewports (their windows can be destroyed without rendering issues)
+    // IMPORTANT: During MainWindow destruction, we must NOT call close() which emits signals
+    // Instead, we delete the widgets directly to avoid signal/slot issues during destruction
+    // IMPORTANT: Destroy widgets BEFORE destroying Manager to ensure they can safely
+    // detach from OGRE resources while Manager still exists
+    foreach (EditorViewport* pOgreWidget, mDockWidgetList)
+    {
+        if(pOgreWidget)
+        {
+            // Disconnect signals to prevent onWidgetClosing from being called during destruction
+            disconnect(pOgreWidget, nullptr, this, nullptr);
+            // Delete directly instead of calling close() to avoid signal emission
+            delete pOgreWidget;
+        }
+    }
+    mDockWidgetList.clear();
 
     delete ui;
     if(m_pTransformWidget)
@@ -128,6 +162,18 @@ MainWindow::~MainWindow()
     {
         delete m_pMaterialWidget;
         m_pMaterialWidget = nullptr;
+    }
+    
+    // CRITICAL: Destroy Manager AFTER all widgets that depend on it are destroyed
+    // This ensures that OGRE resources are cleaned up in the correct order
+    // The Manager will clean up all OGRE resources (scene manager, root, etc.)
+    // Only destroy Manager if it still exists and belongs to this MainWindow
+    // (In tests, Manager may be destroyed separately in TearDown)
+    Manager* manager = Manager::getSingletonPtr();
+    if(manager && manager->getMainWindow() == this)
+    {
+        // Only destroy if this MainWindow owns the Manager
+        Manager::kill();
     }
 }
 
@@ -589,14 +635,24 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
 void MainWindow::onWidgetClosing(EditorViewport* const& widget)
 {
     // Artificial MUTEX !!! don't know if required
-    m_pTimer->stop();
+    // Safety check: don't access timer if MainWindow is being destroyed
+    if(m_pTimer)
+    {
+        m_pTimer->stop();
+    }
+    
     bool result = mDockWidgetList.removeOne(widget);
 
     if(result)
         delete widget;
     else
         qDebug()<<"Unable to remove viewport "<<widget->getIndex();
-    m_pTimer->start(0);
+    
+    // Safety check: don't restart timer if MainWindow is being destroyed
+    if(m_pTimer)
+    {
+        m_pTimer->start(0);
+    }
 }
 
 void MainWindow::on_actionSingle_toggled(bool arg1)

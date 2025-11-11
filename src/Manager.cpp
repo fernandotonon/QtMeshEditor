@@ -35,6 +35,7 @@ THE SOFTWARE.
 
 #include "Manager.h"
 #include "SelectionSet.h"
+#include "TransformOperator.h"
 #include "mainwindow.h"
 #include "ViewportGrid.h"
 
@@ -87,10 +88,17 @@ Manager* Manager::getSingleton(MainWindow* parent)
   return m_pSingleton;
 }
 
+Manager* Manager::getSingletonPtr()
+{
+    return m_pSingleton;
+}
+
 void Manager::kill()
 {
     if (m_pSingleton != nullptr)
     {
+        TransformOperator::kill();
+        SelectionSet::kill();
         delete m_pSingleton;
         m_pSingleton = nullptr;
     }
@@ -108,29 +116,73 @@ Manager::Manager(MainWindow* parent):
 }
 Manager::~Manager()
 {
+    // Clean up viewport grid first
     if(m_pViewportGrid)
     {
         delete m_pViewportGrid;
         m_pViewportGrid = nullptr;
     }
 
+    // Clean up plane
     if (mPlane)
     {
         delete mPlane;
         mPlane = nullptr;
     }
 
-    mSceneMgr->clearScene();
-    mRoot->destroySceneManager(mSceneMgr);
-    mSceneMgr = nullptr;
+    if (mSceneMgr)
+    {
+        try {
+            mSceneMgr->clearScene();
+        } catch (...) {
+            // Ignore exceptions during shutdown
+        }
 
-    mRoot->shutdown();
-    delete mRoot;
-    mRoot = nullptr;
+        if (mRoot)
+        {
+            try {
+                mRoot->destroySceneManager(mSceneMgr);
+            } catch (...) {
+                // Ignore exceptions during shutdown
+            }
+        }
+        mSceneMgr = nullptr;
+    }
+
+    // Clear our reference lists
+    mSceneNodesList.clear();
+    mEntitiesList.clear();
+
+    // Shutdown and destroy OGRE root
+    // CRITICAL: Ensure proper shutdown order to avoid crashes when multiple tests run
+    // The render targets should already be detached by OgreWidget destructors
+    if (mRoot)
+    {
+        try {
+            // Shutdown the root - this will clean up all render targets and resources
+            // Note: Render targets should already be detached by OgreWidget destructors
+            mRoot->shutdown();
+        } catch (const Ogre::Exception& e) {
+            // Log but continue - some resources may already be destroyed
+            // This can happen when multiple tests run in sequence
+        } catch (...) {
+            // Ignore other exceptions during shutdown
+        }
+        
+        try {
+            delete mRoot;
+        } catch (...) {
+            // Ignore exceptions during deletion
+        }
+        mRoot = nullptr;
+    }
 }
 
 void Manager::CreateEmptyScene()
 {
+    const bool previousState = mInitializingScene;
+    mInitializingScene = true;
+
     { //TODO: Add the hability of the user adding/removing lights
         Ogre::Light* light = mSceneMgr->createLight();
 
@@ -145,6 +197,8 @@ void Manager::CreateEmptyScene()
     }
 
     m_pViewportGrid = new ViewportGrid();
+
+    mInitializingScene = previousState;
 }
 
 
@@ -159,7 +213,8 @@ Ogre::SceneNode* Manager::addSceneNode(const QString &_name)
     sn = getSceneMgr()->getRootSceneNode()->createChildSceneNode(QString(_name+(number?QString::number(number):"")).toStdString());
 
     emit sceneNodeCreated(sn);
-    SelectionSet::getSingleton()->selectOne(sn);
+    if(!mInitializingScene)
+        SelectionSet::getSingleton()->selectOne(sn);
     return sn;
 }
 
@@ -175,7 +230,8 @@ Ogre::SceneNode* Manager::addSceneNode(const QString &_name, const Ogre::Any& an
     sn->getUserObjectBindings().setUserAny(anything);
 
     emit sceneNodeCreated(sn);
-    SelectionSet::getSingleton()->selectOne(sn);
+    if(!mInitializingScene)
+        SelectionSet::getSingleton()->selectOne(sn);
     return sn;
 }
 
@@ -187,19 +243,39 @@ Ogre::Entity* Manager::createEntity(Ogre::SceneNode* const& sceneNode, const Ogr
 
     sceneNode->attachObject(ent);
     emit entityCreated(ent);
-    SelectionSet::getSingleton()->selectOne(sceneNode);
+    if(!mInitializingScene)
+        SelectionSet::getSingleton()->selectOne(sceneNode);
     return ent;
 }
 
 void Manager::destroySceneNode(const QString & name)
 {
-    destroySceneNode(mSceneMgr->getSceneNode(name.toStdString().data()));
+    if (!mSceneMgr)
+        return;
+    
+    try {
+        Ogre::SceneNode* node = mSceneMgr->getSceneNode(name.toStdString().data());
+        if (node)
+        {
+            destroySceneNode(node);
+        }
+    } catch (...) {
+        // Node may not exist or scene manager may be shutting down
+    }
 }
 void Manager::destroySceneNode(Ogre::SceneNode* node)
 {
-    if(!node || isForbiddenNodeName(node->getName().c_str()))
+    if(!node || !mSceneMgr || isForbiddenNodeName(node->getName().c_str()))
         return;
 
+    // Check if node still exists and belongs to our scene manager
+    try {
+        if (node->getCreator() != mSceneMgr)
+            return;
+    } catch (...) {
+        // Node may already be destroyed or invalid
+        return;
+    }
 
     if(PrimitiveObject::isPrimitive(node))
     {
@@ -213,20 +289,45 @@ void Manager::destroySceneNode(Ogre::SceneNode* node)
     destroyAllAttachedMovableObjects(node);
     node->removeAndDestroyAllChildren();
     emit sceneNodeDestroyed(node);  //emitted just before destroying
-    mSceneMgr->destroySceneNode(node);
+    
+    // Safely destroy the scene node
+    try {
+        mSceneMgr->destroySceneNode(node);
+    } catch (...) {
+        // Ignore exceptions during shutdown
+    }
 }
 
 
 void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
 {
-   if(!node)
+   if(!node || !mSceneMgr)
        return;
 
-   // Destroy all the attached objects
-   auto attachedObjects = node->getAttachedObjects();
+   // Check if node is still valid
+   try {
+       if (node->getCreator() != mSceneMgr)
+           return;
+   } catch (...) {
+       // Node may already be destroyed or invalid
+       return;
+   }
 
-   for(auto attachedObject : attachedObjects)
-      node->getCreator()->destroyMovableObject(attachedObject);
+   // Destroy all the attached objects
+   try {
+       auto attachedObjects = node->getAttachedObjects();
+
+       for(auto attachedObject : attachedObjects)
+       {
+           try {
+               node->getCreator()->destroyMovableObject(attachedObject);
+           } catch (...) {
+               // Ignore exceptions during cleanup
+           }
+       }
+   } catch (...) {
+       // Ignore exceptions during cleanup
+   }
 
    /* TODO check to free up the meshmanager
    if(ent->getMesh().getPointer()->isManuallyLoaded())
@@ -236,11 +337,15 @@ void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
    }*/
 
    // Recurse to child SceneNodes
-   auto children = node->getChildren();
-   for(auto child : children)
-   {
-      Ogre::SceneNode* pChildNode = static_cast<Ogre::SceneNode*>(child);
-      destroyAllAttachedMovableObjects( pChildNode );
+   try {
+       auto children = node->getChildren();
+       for(auto child : children)
+       {
+          Ogre::SceneNode* pChildNode = static_cast<Ogre::SceneNode*>(child);
+          destroyAllAttachedMovableObjects( pChildNode );
+       }
+   } catch (...) {
+       // Ignore exceptions during cleanup
    }
 }
 
@@ -469,6 +574,3 @@ QString Manager::getValidFileExtention()
 {
     return mValidFileExtention;
 }
-
-
-

@@ -3,6 +3,7 @@
 #include "Manager.h"
 #include "GlobalDefinitions.h"
 #include <QApplication>
+#include <QCoreApplication>
 
 using ::testing::Mock;
 
@@ -10,30 +11,16 @@ using ::testing::Mock;
 class ManagerTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Create QApplication if not exists
-        if (!QApplication::instance()) {
-            int argc = 0;
-            char* argv[] = { nullptr };
-            app = new QApplication(argc, argv);
-            app_created = true;
-        } else {
-            app_created = false;
-        }
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
     }
 
     void TearDown() override {
         // Clean up the Manager singleton
         Manager::kill();
-        
-        // Only delete app if we created it
-        if (app_created && app) {
-            delete app;
-            app = nullptr;
-        }
     }
 
     QApplication* app = nullptr;
-    bool app_created = false;
 };
 
 // Test the forbidden name function without creating full Manager

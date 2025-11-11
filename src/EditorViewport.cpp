@@ -75,15 +75,19 @@ MainWindow*   EditorViewport::getMainWindow() const
 
 void EditorViewport::paintEvent(QPaintEvent *e)
 {
-    if (m_pOgreWidget->hasFocus())
+    // Safety check: don't access OgreWidget if it's being destroyed
+    if (m_pOgreWidget)
     {
-        setPalette(QPalette(QColor(0, 255, 127)));
-        setAutoFillBackground(true);
-    }
-    else
-    {
-        setPalette(QGuiApplication::palette());
-        setAutoFillBackground(true);
+        if (m_pOgreWidget->hasFocus())
+        {
+            setPalette(QPalette(QColor(0, 255, 127)));
+            setAutoFillBackground(true);
+        }
+        else
+        {
+            setPalette(QGuiApplication::palette());
+            setAutoFillBackground(true);
+        }
     }
 
     QDockWidget::paintEvent(e);

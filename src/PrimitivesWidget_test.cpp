@@ -4,8 +4,36 @@
 #include <QSignalSpy>
 #include <QKeyEvent>
 #include <QInputDialog>
+#include <QCoreApplication>
 #include "PrimitivesWidget.h"
 #include "Manager.h"
+#include "mainwindow.h"
+#include <OgreMaterialManager.h>
+#include <OgreResourceGroupManager.h>
+
+// Helper function to create required OGRE materials for tests
+static void createOGREMaterials()
+{
+    // Create BaseWhiteNoLighting material (used by ogre-procedural)
+    Ogre::MaterialPtr baseWhiteMat = Ogre::MaterialManager::getSingleton().getByName("BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat)
+    {
+        baseWhiteMat = Ogre::MaterialManager::getSingleton().create("BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setSelfIllumination(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->setLightingEnabled(false);
+    }
+    
+    // Create BaseWhite material (used by PrimitiveObject)
+    Ogre::MaterialPtr baseWhiteMat2 = Ogre::MaterialManager::getSingleton().getByName("BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat2)
+    {
+        baseWhiteMat2 = Ogre::MaterialManager::getSingleton().create("BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+    }
+}
 
 // Test case for MaterialWidget
 class PrimitivesWidgetTest : public ::testing::Test
@@ -13,20 +41,53 @@ class PrimitivesWidgetTest : public ::testing::Test
 protected:
     void SetUp() override
     {
-        // Create a QApplication instance for testing
-        int argc = 0;
-        char* argv[] = { nullptr };
-        app = new QApplication(argc, argv);
+        // Ensure Manager is completely destroyed from previous test
+        Manager::kill();
+        QThread::msleep(50); // Small delay to ensure cleanup is complete
+        
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+        
+        // Create MainWindow to initialize Manager
+        try {
+            mainWindow = new MainWindow();
+            Manager::getSingleton(mainWindow);
+        } catch (const Ogre::RenderingAPIException& e) {
+            GTEST_SKIP() << "Skipping PrimitivesWidget tests: unable to create OGRE render window ("
+                         << e.getFullDescription() << ")";
+        } catch (const std::exception& e) {
+            GTEST_SKIP() << "Skipping PrimitivesWidget tests: " << e.what();
+        }
+        
+        // Create required OGRE materials
+        createOGREMaterials();
     }
 
     void TearDown() override
     {
-        // Clean up the QApplication instance
-        delete app;
+        // Clean up MainWindow first (it may have references to Manager)
+        // The MainWindow destructor will handle cleanup of widgets and may call Manager::kill()
+        delete mainWindow;
+        mainWindow = nullptr;
+        
+        // Ensure Manager is destroyed (in case MainWindow didn't destroy it)
+        Manager::kill();
+        
+        // Process any pending events to ensure cleanup is complete
+        if(app)
+        {
+            app->processEvents();
+        }
+        
+        // Small delay to ensure OGRE resources are fully cleaned up before next test
+        // This helps prevent crashes when multiple tests run in sequence
+        QThread::msleep(50);
+        
     }
 
 private:
-    QApplication* app;
+    QApplication* app = nullptr;
+    MainWindow* mainWindow = nullptr;
 };
 
 TEST_F(PrimitivesWidgetTest, CreateCube)

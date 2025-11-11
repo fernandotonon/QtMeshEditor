@@ -41,8 +41,15 @@ TransformOperator* TransformOperator::getSingleton()
 
 TransformOperator::TransformOperator() : QObject(nullptr)
 {
-
-    Ogre::SceneManager* pSceneMgr = Manager::getSingleton()->getSceneMgr();
+    // Get Manager singleton - it must already exist (created by MainWindow)
+    // Use getSingletonPtr() to avoid creating a new instance with null parent
+    Manager* manager = Manager::getSingletonPtr();
+    if (!manager)
+    {
+        // This should not happen in normal operation - Manager should be created by MainWindow first
+        throw std::runtime_error("TransformOperator requires Manager to be initialized first");
+    }
+    Ogre::SceneManager* pSceneMgr = manager->getSceneMgr();
     m_pTransformNode = pSceneMgr->getRootSceneNode()->createChildSceneNode(TRANSFORM_OBJECT_NAME);
 
     m_pRotationGizmo = new RotationGizmo(m_pTransformNode);
@@ -66,6 +73,61 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     connect(SelectionSet::getSingleton(),SIGNAL(selectionChanged()),this,SLOT(onSelectionChanged()));
 
     QtInputManager::getInstance().AddMouseListener(this);
+}
+
+TransformOperator::~TransformOperator()
+{
+    QtInputManager::getInstance().RemoveMouseListener(this);
+
+    delete m_pRotationGizmo;
+    m_pRotationGizmo = nullptr;
+    delete m_pTranslationGizmo;
+    m_pTranslationGizmo = nullptr;
+
+    if (auto manager = Manager::getSingletonPtr())
+    {
+        if (auto sceneMgr = manager->getSceneMgr())
+        {
+            if (m_pSelectionBoxNode)
+            {
+                m_pSelectionBoxNode->detachAllObjects();
+            }
+            if (m_pSelectionBox)
+            {
+                sceneMgr->destroyManualObject(m_pSelectionBox);
+                m_pSelectionBox = nullptr;
+            }
+            if (m_pSelectionBoxNode)
+            {
+                sceneMgr->destroySceneNode(m_pSelectionBoxNode);
+                m_pSelectionBoxNode = nullptr;
+            }
+            if (m_pTransformNode)
+            {
+                sceneMgr->destroySceneNode(m_pTransformNode);
+                m_pTransformNode = nullptr;
+            }
+            if (m_pVolQuery)
+            {
+                sceneMgr->destroyQuery(m_pVolQuery);
+                m_pVolQuery = nullptr;
+            }
+            if (m_pRayQuery)
+            {
+                sceneMgr->destroyQuery(m_pRayQuery);
+                m_pRayQuery = nullptr;
+            }
+        }
+    }
+}
+
+void TransformOperator::kill()
+{
+    if (m_pSingleton)
+    {
+        delete m_pSingleton;
+        m_pSingleton = nullptr;
+    }
 }
 
 void TransformOperator::swap(int& x, int& y)

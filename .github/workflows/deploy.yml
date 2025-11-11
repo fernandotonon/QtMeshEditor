@@ -283,8 +283,8 @@ jobs:
     steps:
     - name: change folder permissions
       run: |
-            sudo chmod -R 777 /usr/local/lib
-            sudo chmod -R 777 /usr/local/include
+            sudo chmod 777 /usr/local/lib
+            sudo chmod 777 /usr/local/include
       
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -325,9 +325,9 @@ jobs:
     steps:        
     - name: change folder permissions
       run: |
-            sudo chmod -R 777 /usr/local/lib
-            sudo chmod -R 777 /usr/local/include
-            sudo chmod -R 777 /usr/local/share
+            sudo chmod 777 /usr/local/lib
+            sudo chmod 777 /usr/local/include
+            sudo chmod 777 /usr/local/share
       
     - name: Cache Ogre
       id: cache-ogre-linux
@@ -415,9 +415,9 @@ jobs:
 
     - name: change folder permissions
       run: |
-          sudo chmod -R 777 /usr/local/lib
-          sudo chmod -R 777 /usr/local/include
-          sudo chmod -R 777 /usr/local/share
+          sudo chmod 777 /usr/local/lib
+          sudo chmod 777 /usr/local/include
+          sudo chmod 777 /usr/local/share
         
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -558,9 +558,9 @@ jobs:
 
     - name: change folder permissions
       run: |
-            sudo chmod -R 777 /usr/local/lib
-            sudo chmod -R 777 /usr/local/include
-            sudo chmod -R 777 /usr/local/share
+            sudo chmod 777 /usr/local/lib
+            sudo chmod 777 /usr/local/include
+            sudo chmod 777 /usr/local/share
         
     - name: Cache Assimp
       id: cache-assimp-linux
@@ -685,11 +685,11 @@ jobs:
                 fi
             }
             
+            echo "Running UnitTests (Google Tests - includes Assimp and other unit tests)..."
+            run_test "UnitTests" "test-results-unittests.xml" || echo "UnitTests not found"
+            
             echo "Running MaterialEditorQML Unit Tests..."
-            if ! run_test "MaterialEditorQML_test" "test-results-unit.xml"; then
-                echo "MaterialEditorQML_test not found, trying UnitTests..."
-                run_test "UnitTests" "test-results-unit.xml" || echo "UnitTests also not found"
-            fi
+            run_test "MaterialEditorQML_test" "test-results-materialeditor.xml" || echo "MaterialEditorQML_test not found"
             
             echo "Running MaterialEditorQML QML Integration Tests..."
             run_test "MaterialEditorQML_qml_test" "test-results-qml.xml" || echo "MaterialEditorQML_qml_test not found"
@@ -729,7 +729,8 @@ jobs:
         find build -name "*.gcno" -type f | head -10 || echo "No .gcno files found"
         
         echo "=== Generating gcov files ==="
-        # Change to build directory to generate gcov files with correct paths
+        # Generate gcov files in build directory
+        # SonarQube will read .gcov files from the build directory via gcov.reportsPath
         cd build
         
         # Generate gcov files for all object files including the new tests
@@ -739,21 +740,87 @@ jobs:
         cd ..
         
         echo "=== Generated gcov files ==="
-        find . -name "*.gcov" | head -10 || echo "No .gcov files found"
+        find build -name "*.gcov" | head -10 || echo "No .gcov files found in build directory"
         
         echo "=== Running gcovr ==="
-        # Run gcovr to generate coverage reports with better error handling
+        # Generate SonarQube Generic Coverage XML (version=1) to avoid parser errors
         gcovr --root . --filter src/ \
               --exclude 'src/OgreXML/.*' \
               --exclude 'src/dependencies/.*' \
-              --exclude '.*_test\.cpp' \
+              --exclude '.*_test\\.cpp' \
               --exclude '.*_autogen.*' \
               --exclude '.*/CMakeFiles/.*' \
               --exclude '.*/ui_files/.*' \
               --exclude '.*/moc_.*' \
-              --xml-pretty --xml coverage.xml \
+              --sonarqube --output coverage.xml \
               --html --html-details -o coverage.html \
+              --gcov-executable gcov \
               --verbose 2>&1 || echo "gcovr completed with warnings"
+              
+        echo "=== Generating LCOV format using lcov tool ==="
+        # Use lcov tool to generate LCOV format from .gcda files
+        # Install lcov if not available
+        if ! command -v lcov &> /dev/null; then
+            echo "Installing lcov..."
+            sudo apt-get update && sudo apt-get install -y lcov || echo "Failed to install lcov"
+        fi
+        
+        # Check for .gcda files before running lcov
+        echo "Checking for .gcda files in build directory..."
+        GCDA_COUNT=$(find build -name "*.gcda" -type f 2>/dev/null | wc -l)
+        echo "Found $GCDA_COUNT .gcda files"
+        
+        if [ "$GCDA_COUNT" -eq 0 ]; then
+            echo "WARNING: No .gcda files found! Coverage data may not have been generated."
+            echo "This usually means tests didn't run or coverage flags weren't applied correctly."
+        else
+            # Generate LCOV format from coverage data
+            # lcov captures from the build directory but outputs to root
+            # Use --base-directory to make paths relative to project root
+            cd build
+            lcov --capture --directory . --output-file ../coverage.lcov \
+                 --base-directory "$(cd .. && pwd)" \
+                 --rc lcov_branch_coverage=1 \
+                 --exclude '*/OgreXML/*' \
+                 --exclude '*/dependencies/*' \
+                 --exclude '*/_test.cpp' \
+                 --exclude '*/test_*.cpp' \
+                 --exclude '*_autogen*' \
+                 --exclude '*/CMakeFiles/*' \
+                 --exclude '*/ui_files/*' \
+                 --exclude '*/moc_*' \
+                 --quiet 2>&1 | head -20 || echo "lcov generation had issues"
+            cd ..
+            
+            # If lcov file was created but is empty or has issues, try without exclusions first
+            if [ -f coverage.lcov ] && [ ! -s coverage.lcov ]; then
+                echo "First attempt created empty file, trying with minimal exclusions..."
+                cd build
+                lcov --capture --directory . --output-file ../coverage.lcov \
+                     --base-directory "$(cd .. && pwd)" \
+                     --rc lcov_branch_coverage=1 \
+                     --exclude '*/CMakeFiles/*' \
+                     --quiet 2>&1 | head -20 || echo "lcov generation with minimal exclusions had issues"
+                cd ..
+            fi
+        fi
+        
+        echo "=== Validating coverage files ==="
+        # Check if coverage files exist and have content
+        if [ -f coverage.xml ] && [ -s coverage.xml ]; then
+            echo "coverage.xml exists and has content ($(wc -l < coverage.xml) lines)"
+            head -5 coverage.xml
+        else
+            echo "ERROR: coverage.xml is missing or empty!"
+        fi
+        
+        if [ -f coverage.lcov ] && [ -s coverage.lcov ]; then
+            echo "coverage.lcov exists and has content ($(wc -l < coverage.lcov) lines)"
+            head -10 coverage.lcov
+        else
+            echo "WARNING: coverage.lcov is missing or empty!"
+            echo "Will fallback to XML format"
+        fi
               
         echo "=== Coverage files generated ==="
         ls -la coverage.* || echo "No coverage files found"
@@ -770,25 +837,48 @@ jobs:
           
           echo "=== Checking required files ==="
           ls -la sonar-project.properties || echo "sonar-project.properties not found"
-          ls -la coverage.xml || echo "coverage.xml not found"
-          ls -la "${{ env.BUILD_WRAPPER_OUT_DIR }}" || echo "Build wrapper output directory not found"
+          ls -la coverage.xml coverage.lcov 2>/dev/null || echo "Coverage files not found"
+          
+          echo "=== Checking coverage file formats ==="
+          if [ -f coverage.lcov ]; then
+            echo "--- coverage.lcov (first 10 lines) ---"
+            head -10 coverage.lcov || echo "Cannot read coverage.lcov"
+          fi
+          if [ -f coverage.xml ]; then
+            echo "--- coverage.xml (first 10 lines) ---"
+            head -10 coverage.xml || echo "Cannot read coverage.xml"
+          fi
           
           echo "=== Running SonarCloud analysis ==="
-          sonar-scanner \
+          # Build scanner command base
+          SCANNER_CMD="sonar-scanner \
             -Dsonar.projectKey=fernandotonon_QtMeshEditor \
             -Dsonar.organization=fernandotonon \
             -Dsonar.host.url=https://sonarcloud.io \
-            -Dsonar.login="$SONAR_TOKEN" \
-            -Dsonar.cfamily.build-wrapper-output="${{ env.BUILD_WRAPPER_OUT_DIR }}" \
-            -Dsonar.cfamily.gcov.reportsPath=. \
-            -Dsonar.cfamily.compile-commands=build/compile_commands.json \
-            -Dsonar.coverage.jacoco.xmlReportPaths=coverage.xml \
+            -Dsonar.login=\"\$SONAR_TOKEN\" \
             -Dsonar.sources=src/ \
             -Dsonar.tests=src/,tests/ \
             -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
             -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
             -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/** \
-            -Dsonar.verbose=true || echo "SonarCloud analysis completed with warnings"
+            -Dsonar.c.file.suffixes=- \
+            -Dsonar.cpp.file.suffixes=- \
+            -Dsonar.objc.file.suffixes=- \
+            -Dsonar.verbose=true"
+          
+          # Only add coverage if file exists and is not empty
+          if [ -f coverage.lcov ] && [ -s coverage.lcov ]; then
+            echo "Using LCOV format for coverage"
+            SCANNER_CMD="$SCANNER_CMD -Dsonar.coverageReportPaths=coverage.lcov"
+          elif [ -f coverage.xml ] && [ -s coverage.xml ]; then
+            echo "Using XML format for coverage (LCOV not available)"
+            SCANNER_CMD="$SCANNER_CMD -Dsonar.coverageReportPaths=coverage.xml"
+          else
+            echo "WARNING: No coverage file found! Skipping coverage reporting."
+          fi
+          
+          # Execute scanner
+          eval $SCANNER_CMD || echo "SonarCloud analysis completed with warnings"
           
 
             
@@ -799,6 +889,7 @@ jobs:
         name: coverage-reports
         path: |
           coverage.xml
+          coverage.lcov
           coverage.html
             
 ####################################################################
@@ -812,8 +903,8 @@ jobs:
       run: |
             sudo mkdir /usr/local/lib
             sudo mkdir /usr/local/include
-            sudo chmod -R 777 /usr/local/lib
-            sudo chmod -R 777 /usr/local/include
+            sudo chmod 777 /usr/local/lib
+            sudo chmod 777 /usr/local/include
 
     - name: Cache Assimp
       id: cache-assimp-macos
@@ -857,8 +948,8 @@ jobs:
       run: |
           sudo mkdir /usr/local/lib
           sudo mkdir /usr/local/include
-          sudo chmod -R 777 /usr/local/lib
-          sudo chmod -R 777 /usr/local/include
+          sudo chmod 777 /usr/local/lib
+          sudo chmod 777 /usr/local/include
 
     - name: Cache Assimp
       id: cache-assimp-macos

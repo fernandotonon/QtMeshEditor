@@ -26,6 +26,7 @@ class TransformOperator : public QObject, public QtMouseListener
 public:
 
     static TransformOperator* getSingleton();
+    static void kill();
 
     enum TransformState
     {
@@ -49,7 +50,7 @@ public:
 
 private:
     TransformOperator ();
-    ~TransformOperator () = default;
+    ~TransformOperator () override;
 
     Ogre::MovableObject*    performRaySelection(const QPoint& pos, bool findGizmo = false);
     void                    performBoxSelection(const QPoint& first, const QPoint& second, SelectionMode mode = NEW_SELECT);
@@ -113,4 +114,3 @@ private:
 
 
 #endif //TRANSFORM_OPERATOR
-
