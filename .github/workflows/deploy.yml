@@ -839,6 +839,17 @@ jobs:
           ls -la sonar-project.properties || echo "sonar-project.properties not found"
           ls -la coverage.xml coverage.lcov 2>/dev/null || echo "Coverage files not found"
           
+          # Ensure compile_commands.json is available for C++ analysis
+          if [ -f build/compile_commands.json ]; then
+            echo "Copying compile_commands.json from build/ to root"
+            cp build/compile_commands.json . || echo "Failed to copy compile_commands.json"
+          elif [ -f compile_commands.json ]; then
+            echo "compile_commands.json already exists in root"
+          else
+            echo "WARNING: compile_commands.json not found! C++ analysis may be limited."
+          fi
+          ls -la compile_commands.json 2>/dev/null || echo "compile_commands.json not found"
+          
           echo "=== Checking coverage file formats ==="
           if [ -f coverage.lcov ]; then
             echo "--- coverage.lcov (first 10 lines) ---"
@@ -872,9 +883,12 @@ jobs:
             -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
             -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
             -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/** \
-            -Dsonar.c.file.suffixes=.c \
-            -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++ \
+            -Dsonar.c.file.suffixes=.c,.h \
+            -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h \
             -Dsonar.objc.file.suffixes=.m,.mm \
+            -Dsonar.cfamily.compile-commands=compile_commands.json \
+            -Dsonar.cfamily.cache.enabled=true \
+            -Dsonar.cfamily.threads=4 \
             -Dsonar.verbose=true"
           
           # Add build-wrapper output if it exists
