@@ -1203,6 +1203,28 @@ jobs:
             sudo install_name_tool -add_rpath @executable_path/../Frameworks ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
             sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
 
+            # Fix all dylibs in MacOS directory to use @rpath for their dependencies
+            echo "Fixing dylib install names and rpaths..."
+            for dylib in ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/*.dylib; do
+                if [ -f "$dylib" ]; then
+                    dylib_name=$(basename "$dylib")
+                    echo "Processing $dylib_name"
+
+                    # Change the install name to use @rpath
+                    sudo install_name_tool -id "@rpath/$dylib_name" "$dylib" 2>/dev/null || true
+
+                    # Add rpath to find other dylibs in the same directory
+                    sudo install_name_tool -add_rpath @loader_path/ "$dylib" 2>/dev/null || true
+
+                    # Fix references to build machine paths
+                    otool -L "$dylib" 2>/dev/null | grep -E "runner|build|SDK" | awk '{print $1}' | while read -r dep; do
+                        dep_name=$(basename "$dep")
+                        echo "  Fixing dependency: $dep -> @rpath/$dep_name"
+                        sudo install_name_tool -change "$dep" "@rpath/$dep_name" "$dylib" 2>/dev/null || true
+                    done
+                fi
+            done
+
     - name: Code Sign Application (for Sequoia compatibility)
       run: |
             echo "=== Code Signing for macOS Sequoia Compatibility ==="

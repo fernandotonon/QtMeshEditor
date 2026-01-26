@@ -371,7 +371,7 @@ else()
     ENDIF()
     SET(OGRELIBLIST ${OGRELIBLIST}
         OgreMain
-        #Codec_Assimp
+        Codec_Assimp
         Codec_STBI
         RenderSystem_GL
         Plugin_OctreeSceneManager
