@@ -594,8 +594,14 @@ jobs:
                /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Install sonar-scanner and build-wrapper
-      uses: SonarSource/sonarcloud-github-c-cpp@v2
+    - name: Install Build Wrapper
+      uses: SonarSource/sonarqube-scan-action/install-build-wrapper@v4
+      env:
+        SONAR_HOST_URL: https://sonarcloud.io
+
+    - name: Install sonar-scanner
+      run: |
+        npm install -g sonar-scanner
 
     - name: Configure CMake for Tests
       run: |
@@ -620,7 +626,7 @@ jobs:
           make -C build clean 2>/dev/null || echo "No previous build to clean"
           
           # Run build-wrapper to capture compilation
-          ./.sonar/build-wrapper-linux-x86/build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} make -C build -j$(nproc)
+          build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} make -C build -j$(nproc)
           
           echo "=== Build wrapper completed ==="
           ls -la ${{ env.BUILD_WRAPPER_OUT_DIR }} || echo "Build wrapper output directory not created"
