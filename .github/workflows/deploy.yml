@@ -1189,11 +1189,7 @@ jobs:
             sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
 
             # Create qt.conf to help Qt find plugins in the bundle
-            cat << 'EOF' | sudo tee ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources/qt.conf
-[Paths]
-Plugins = PlugIns
-Qml2Imports = PlugIns/qml
-EOF
+            echo -e "[Paths]\nPlugins = PlugIns\nQml2Imports = PlugIns/qml" | sudo tee ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources/qt.conf
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
             
