@@ -594,8 +594,14 @@ jobs:
                /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
-    - name: Install sonar-scanner and build-wrapper
-      uses: SonarSource/sonarcloud-github-c-cpp@v2
+    - name: Install Build Wrapper
+      uses: SonarSource/sonarqube-scan-action/install-build-wrapper@v4
+      env:
+        SONAR_HOST_URL: https://sonarcloud.io
+
+    - name: Install sonar-scanner
+      run: |
+        npm install -g sonar-scanner
 
     - name: Configure CMake for Tests
       run: |
@@ -620,7 +626,7 @@ jobs:
           make -C build clean 2>/dev/null || echo "No previous build to clean"
           
           # Run build-wrapper to capture compilation
-          ./.sonar/build-wrapper-linux-x86/build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} make -C build -j$(nproc)
+          build-wrapper-linux-x86-64 --out-dir ${{ env.BUILD_WRAPPER_OUT_DIR }} make -C build -j$(nproc)
           
           echo "=== Build wrapper completed ==="
           ls -la ${{ env.BUILD_WRAPPER_OUT_DIR }} || echo "Build wrapper output directory not created"
@@ -1155,10 +1161,29 @@ jobs:
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtGui.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtDBus.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickWidgets.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuick.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQml.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQmlModels.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQmlMeta.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtNetwork.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtOpenGL.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickControls2.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickControls2 not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickDialogs2.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickDialogs2 not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickTemplates2.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickTemplates2 not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtLabsPlatform.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtLabsPlatform not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQmlCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQmlCore not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQmlWorkerScript.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQmlWorkerScript not found, continuing..."
             
             # Copy plugins to proper PlugIns directory
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/plugins/platforms/* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/platforms/
-            
+
+            # Copy QML plugins for QtQuick components
+            sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/qml
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/qml/QtQuick ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/qml/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/qml/QtQml ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/qml/
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/qml/Qt ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/qml/ || echo "Qt labs plugins not found, continuing..."
+
             # Copy Assimp libraries to MacOS directory
             sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ || echo "Assimp libraries not found, continuing..."
 
@@ -1168,6 +1193,9 @@ jobs:
             sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
             sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
+
+            # Create qt.conf to help Qt find plugins in the bundle
+            echo -e "[Paths]\nPlugins = PlugIns\nQml2Imports = PlugIns/qml" | sudo tee ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources/qt.conf
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
             
@@ -1192,7 +1220,7 @@ jobs:
             
             # Sign Qt frameworks - try both versioned and direct paths
             echo "Signing Qt frameworks..."
-            for framework in QtCore QtGui QtWidgets QtDBus; do
+            for framework in QtCore QtGui QtWidgets QtDBus QtQuickWidgets QtQuick QtQml QtQmlModels QtQmlMeta QtNetwork QtOpenGL QtQuickControls2 QtQuickDialogs2 QtQuickTemplates2 QtLabsPlatform QtQmlCore QtQmlWorkerScript; do
                 framework_path="${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/${framework}.framework"
                 if [ -d "$framework_path" ]; then
                     echo "Processing $framework framework..."
