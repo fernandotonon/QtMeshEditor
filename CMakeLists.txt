@@ -176,10 +176,16 @@ if(ENABLE_LOCAL_LLM)
     # Disable native optimizations for cross-platform compatibility
     set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
 
+    # On Windows with MinGW, disable CPU backend to avoid SDK compatibility issues
+    if(WIN32 AND MINGW)
+        set(GGML_CPU OFF CACHE BOOL "" FORCE)
+        message(STATUS "Disabling CPU backend on MinGW due to SDK compatibility")
+    endif()
+
     FetchContent_Declare(
         llama_cpp
         GIT_REPOSITORY https://github.com/ggerganov/llama.cpp.git
-        GIT_TAG b5200
+        GIT_TAG master
         GIT_SHALLOW TRUE
     )
 
