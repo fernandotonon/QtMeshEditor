@@ -1402,11 +1402,11 @@ jobs:
 
         echo "Updating cask to version $VERSION with SHA256 $SHA256"
 
-        # Update version
-        sed -i "s/version \".*\"/version \"$VERSION\"/" "$CASK_FILE"
+        # Update version (Homebrew cask uses single quotes)
+        sed -i "s/version '.*'/version '$VERSION'/" "$CASK_FILE"
 
-        # Update sha256
-        sed -i "s/sha256 \".*\"/sha256 \"$SHA256\"/" "$CASK_FILE"
+        # Update sha256 (Homebrew cask uses single quotes)
+        sed -i "s/sha256 '.*'/sha256 '$SHA256'/" "$CASK_FILE"
 
         echo "Updated cask file:"
         cat "$CASK_FILE"
