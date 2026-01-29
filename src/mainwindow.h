@@ -10,6 +10,8 @@
 
 #include "TransformOperator.h"
 
+class LLMSettingsWidget;
+
 namespace Ui {
 class MainWindow;
 }
@@ -72,6 +74,8 @@ private slots:
     void on_actionCustom_toggled(bool arg1);
 
     void on_actionVerify_Update_triggered();
+
+    void on_actionAI_Model_Settings_triggered();
 
 public slots:
     void setPlaying(bool playing);

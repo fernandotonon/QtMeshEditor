@@ -123,6 +123,11 @@ class MaterialEditorQML : public QObject
     Q_PROPERTY(bool canUndo READ canUndo NOTIFY undoRedoStateChanged)
     Q_PROPERTY(bool canRedo READ canRedo NOTIFY undoRedoStateChanged)
 
+    // LLM properties
+    Q_PROPERTY(bool llmModelLoaded READ llmModelLoaded NOTIFY llmModelLoadedChanged)
+    Q_PROPERTY(QString llmCurrentModel READ llmCurrentModel NOTIFY llmCurrentModelChanged)
+    Q_PROPERTY(float llmGenerationProgress READ llmGenerationProgress NOTIFY llmGenerationProgressChanged)
+
 public:
     explicit MaterialEditorQML(QObject *parent = nullptr);
     virtual ~MaterialEditorQML() = default;
@@ -221,6 +226,11 @@ public:
     // Undo/Redo getters
     bool canUndo() const { return m_undoStack.size() > 0; }
     bool canRedo() const { return m_redoStack.size() > 0; }
+
+    // LLM getters
+    bool llmModelLoaded() const;
+    QString llmCurrentModel() const;
+    float llmGenerationProgress() const { return m_llmGenerationProgress; }
 
     // Static factory for QML singleton
     static MaterialEditorQML* qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine);
@@ -362,6 +372,7 @@ public slots:
     
     // AI Material Generation
     Q_INVOKABLE void generateMaterialFromPrompt(const QString &prompt);
+    Q_INVOKABLE void stopAIGeneration();
 
     // Undo/Redo functionality
     Q_INVOKABLE void undo();
@@ -460,6 +471,11 @@ signals:
 
     // Undo/Redo signals
     void undoRedoStateChanged();
+
+    // LLM signals
+    void llmModelLoadedChanged();
+    void llmCurrentModelChanged();
+    void llmGenerationProgressChanged();
 
 private:
     void updateTechniqueList();
@@ -566,7 +582,8 @@ private:
 
     // AI Material Generation
     QNetworkAccessManager* m_networkManager;
-    
+    float m_llmGenerationProgress = 0.0f;
+
     // Undo/Redo stacks
     QStringList m_undoStack;
     QStringList m_redoStack;
@@ -574,6 +591,11 @@ private:
     
 private slots:
     void onAiRequestFinished(QNetworkReply* reply);
+    void onLLMGenerationStarted();
+    void onLLMGenerationProgress(const QString &partialText, float progress);
+    void onLLMGenerationCompleted(const QString &generatedText);
+    void onLLMGenerationError(const QString &error);
+    void onLLMModelLoadedChanged();
 
 private:
     // Theme color properties

@@ -1,5 +1,6 @@
 #include "MaterialEditorQML.h"
 #include "Manager.h"
+#include "LLMManager.h"
 #include <QDebug>
 #include <QFileDialog>
 #include <QColorDialog>
@@ -62,6 +63,14 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     
     // Initialize AI network manager
     m_networkManager = new QNetworkAccessManager(this);
+
+    // Connect to LLMManager signals
+    LLMManager *llmManager = LLMManager::instance();
+    connect(llmManager, &LLMManager::generationStarted, this, &MaterialEditorQML::onLLMGenerationStarted);
+    connect(llmManager, &LLMManager::generationProgress, this, &MaterialEditorQML::onLLMGenerationProgress);
+    connect(llmManager, &LLMManager::generationCompleted, this, &MaterialEditorQML::onLLMGenerationCompleted);
+    connect(llmManager, &LLMManager::generationError, this, &MaterialEditorQML::onLLMGenerationError);
+    connect(llmManager, &LLMManager::modelLoadedChanged, this, &MaterialEditorQML::onLLMModelLoadedChanged);
 }
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -2597,47 +2606,23 @@ void MaterialEditorQML::generateMaterialFromPrompt(const QString &prompt)
         emit aiGenerationError("Please enter a prompt");
         return;
     }
-    
-    emit aiGenerationStarted();
-    
-    // Create the JSON payload
-    QJsonObject systemMessage;
-    systemMessage["role"] = "system";
-    systemMessage["content"] = "You are a helpful assistant integrated into a 3D Ogre Mesh Editor. Your task is to generate and edit Ogre3D material scripts. Always respond with only the script, in plain text. Do not use markdown formatting (no triple backticks), and do not include explanations or additional text.";
-    
-    QJsonObject userMessage;
-    userMessage["role"] = "user";
-    
-    // Include current material context if available
-    QString userContent = prompt;
-    if (!m_materialText.isEmpty() && m_materialText.trimmed() != "") {
-        userContent = QString("Current material:\n%1\n\nUser request: %2").arg(m_materialText).arg(prompt);
+
+    // Check if local LLM is loaded
+    LLMManager *llmManager = LLMManager::instance();
+    if (!llmManager->isModelLoaded()) {
+        emit aiGenerationError("No AI model loaded. Please download and load a model from AI Settings.");
+        return;
     }
-    
-    userMessage["content"] = userContent;
-    
-    QJsonArray messages;
-    messages.append(systemMessage);
-    messages.append(userMessage);
-    
-    QJsonObject payload;
-    payload["messages"] = messages;
-    payload["client"] = QString("QtMeshEditor %1").arg(QTMESHEDITOR_VERSION);
-    
-    QJsonDocument doc(payload);
-    QByteArray jsonData = doc.toJson();
-    
-    // Create the HTTP request
-    QNetworkRequest request(QUrl("https://aiworker.ftonon.uk/"));
-    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
-    
-    // Send the POST request
-    QNetworkReply *reply = m_networkManager->post(request, jsonData);
-    
-    // Connect to handle the response
-    connect(reply, &QNetworkReply::finished, this, [this, reply]() {
-        onAiRequestFinished(reply);
-    });
+
+    // Use local LLM
+    m_llmGenerationProgress = 0.0f;
+    emit llmGenerationProgressChanged();
+    llmManager->generateMaterial(prompt, m_materialText);
+}
+
+void MaterialEditorQML::stopAIGeneration()
+{
+    LLMManager::instance()->stopGeneration();
 }
 
 void MaterialEditorQML::onAiRequestFinished(QNetworkReply *reply)
@@ -2695,8 +2680,71 @@ void MaterialEditorQML::onAiRequestFinished(QNetworkReply *reply)
     
     // Update the material text with the AI-generated script
     setMaterialText(generatedScript);
-    
+
     emit aiGenerationCompleted(generatedScript);
+}
+
+// LLM getter implementations
+bool MaterialEditorQML::llmModelLoaded() const
+{
+    return LLMManager::instance()->isModelLoaded();
+}
+
+QString MaterialEditorQML::llmCurrentModel() const
+{
+    return LLMManager::instance()->currentModelName();
+}
+
+// LLM slot implementations
+void MaterialEditorQML::onLLMGenerationStarted()
+{
+    m_llmGenerationProgress = 0.0f;
+    emit llmGenerationProgressChanged();
+    emit aiGenerationStarted();
+}
+
+void MaterialEditorQML::onLLMGenerationProgress(const QString &partialText, float progress)
+{
+    Q_UNUSED(partialText);
+    m_llmGenerationProgress = progress;
+    emit llmGenerationProgressChanged();
+}
+
+void MaterialEditorQML::onLLMGenerationCompleted(const QString &generatedText)
+{
+    m_llmGenerationProgress = 1.0f;
+    emit llmGenerationProgressChanged();
+
+    // Clean up the generated text - remove any markdown code blocks
+    QString cleanedText = generatedText;
+    if (cleanedText.startsWith("```")) {
+        int firstNewline = cleanedText.indexOf('\n');
+        if (firstNewline != -1) {
+            cleanedText = cleanedText.mid(firstNewline + 1);
+        }
+    }
+    if (cleanedText.endsWith("```")) {
+        cleanedText = cleanedText.left(cleanedText.length() - 3);
+    }
+    cleanedText = cleanedText.trimmed();
+
+    // Update the material text with the AI-generated script
+    setMaterialText(cleanedText);
+
+    emit aiGenerationCompleted(cleanedText);
+}
+
+void MaterialEditorQML::onLLMGenerationError(const QString &error)
+{
+    m_llmGenerationProgress = 0.0f;
+    emit llmGenerationProgressChanged();
+    emit aiGenerationError(error);
+}
+
+void MaterialEditorQML::onLLMModelLoadedChanged()
+{
+    emit llmModelLoadedChanged();
+    emit llmCurrentModelChanged();
 }
 
 // Undo/Redo Implementation

@@ -34,6 +34,8 @@
 #include "SelectionSet.h"
 #include "animationcontrolwidget.h"
 #include "MaterialEditorQML.h"
+#include "LLMSettingsWidget.h"
+#include "LLMManager.h"
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
@@ -295,6 +297,14 @@ void MainWindow::initToolBar()
 
     // show grid
     connect(ui->actionShow_Grid, SIGNAL(toggled(bool)),Manager::getSingleton()->getViewportGrid(),SLOT(setVisible(bool)));
+
+    // AI Settings menu
+    QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
+    QAction* aiSettingsAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Model Settings..."));
+    connect(aiSettingsAction, &QAction::triggered, this, &MainWindow::on_actionAI_Model_Settings_triggered);
+
+    // Initialize LLMManager
+    LLMManager::instance();
 }
 
 const QPalette &MainWindow::darkPalette()
@@ -857,5 +867,12 @@ void MainWindow::on_actionVerify_Update_triggered()
         // Ignore SSL errors
         reply->ignoreSslErrors();
     });
+}
+
+void MainWindow::on_actionAI_Model_Settings_triggered()
+{
+    LLMSettingsWidget* settingsWidget = new LLMSettingsWidget(this);
+    settingsWidget->setAttribute(Qt::WA_DeleteOnClose);
+    settingsWidget->exec();
 }
 
