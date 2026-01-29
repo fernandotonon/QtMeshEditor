@@ -752,7 +752,7 @@ ApplicationWindow {
                     // AI Prompt Input Section
                     Rectangle {
                         Layout.fillWidth: true
-                        height: 80
+                        height: LLMManager.modelLoaded ? 120 : 140
                         color: panelColor
                         border.color: borderColor
                         border.width: 1
@@ -768,7 +768,7 @@ ApplicationWindow {
                                 spacing: 8
 
                                 Text {
-                                    text: "🤖 AI Assistant"
+                                    text: "AI Assistant"
                                     font.pointSize: 12
                                     font.bold: true
                                     color: textColor
@@ -776,18 +776,85 @@ ApplicationWindow {
 
                                 Item { Layout.fillWidth: true }
 
+                                // Model status indicator
+                                Text {
+                                    id: modelStatusText
+                                    text: LLMManager.isLoading ? "Loading..." :
+                                          LLMManager.modelLoaded ? LLMManager.currentModelName : "No model"
+                                    font.pointSize: 9
+                                    color: LLMManager.modelLoaded ? "#4CAF50" :
+                                           LLMManager.isLoading ? "#FF9800" : "#9E9E9E"
+                                }
+
                                 Rectangle {
                                     width: 12
                                     height: 12
                                     radius: 6
-                                    color: aiStatusIndicator.isGenerating ? "orange" : 
-                                           aiStatusIndicator.hasError ? "red" : "green"
-                                    
+                                    color: aiStatusIndicator.isGenerating ? "orange" :
+                                           aiStatusIndicator.hasError ? "red" :
+                                           LLMManager.modelLoaded ? "#4CAF50" :
+                                           LLMManager.isLoading ? "#FF9800" : "#9E9E9E"
+
                                     SequentialAnimation on opacity {
-                                        running: aiStatusIndicator.isGenerating
+                                        running: aiStatusIndicator.isGenerating || LLMManager.isLoading
                                         loops: Animation.Infinite
                                         NumberAnimation { to: 0.3; duration: 500 }
                                         NumberAnimation { to: 1.0; duration: 500 }
+                                    }
+
+                                    MouseArea {
+                                        id: modelStatusMouseArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: aiSettingsDialog.open()
+                                    }
+
+                                    ToolTip.visible: modelStatusMouseArea.containsMouse
+                                    ToolTip.text: LLMManager.modelLoaded ?
+                                                  "Model: " + LLMManager.currentModelName + " (click to configure)" :
+                                                  "No model loaded (click to setup)"
+                                }
+
+                                ThemedButton {
+                                    text: "Settings"
+                                    font.pointSize: 9
+                                    implicitHeight: 24
+                                    onClicked: aiSettingsDialog.open()
+                                }
+                            }
+
+                            // Setup prompt when no model is loaded
+                            Rectangle {
+                                Layout.fillWidth: true
+                                height: 36
+                                color: "#FFF3E0"
+                                border.color: "#FF9800"
+                                border.width: 1
+                                radius: 4
+                                visible: !LLMManager.modelLoaded && !LLMManager.isLoading
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.margins: 8
+                                    spacing: 10
+
+                                    Text {
+                                        text: "No AI model loaded."
+                                        color: "#E65100"
+                                        font.pointSize: 10
+                                    }
+
+                                    Item { Layout.fillWidth: true }
+
+                                    ThemedButton {
+                                        text: "Download & Setup Model"
+                                        font.pointSize: 9
+                                        implicitHeight: 24
+                                        onClicked: {
+                                            aiSettingsDialog.open()
+                                            // Switch to download tab
+                                        }
                                     }
                                 }
                             }
@@ -795,13 +862,14 @@ ApplicationWindow {
                             RowLayout {
                                 Layout.fillWidth: true
                                 spacing: 8
+                                visible: LLMManager.modelLoaded || LLMManager.isLoading
 
                                 ThemedTextField {
                                     id: aiPromptInput
                                     Layout.fillWidth: true
-                                    placeholderText: "💡 Type a command like: 'add texture glow.png', 'make it transparent green', 'convert to PBR'"
-                                    enabled: !aiStatusIndicator.isGenerating
-                                    
+                                    placeholderText: "Type a command like: 'add texture glow.png', 'make it transparent', 'create PBR material'"
+                                    enabled: !aiStatusIndicator.isGenerating && LLMManager.modelLoaded
+
                                     background: Rectangle {
                                         color: panelColor
                                         border.color: borderColor
@@ -810,7 +878,7 @@ ApplicationWindow {
                                     }
 
                                     onAccepted: {
-                                        if (text.trim() !== "") {
+                                        if (text.trim() !== "" && LLMManager.modelLoaded) {
                                             generateButton.clicked()
                                         }
                                     }
@@ -819,8 +887,8 @@ ApplicationWindow {
                                 ThemedButton {
                                     id: generateButton
                                     text: aiStatusIndicator.isGenerating ? "Generating..." : "Generate"
-                                    enabled: !aiStatusIndicator.isGenerating && aiPromptInput.text.trim() !== ""
-                                    
+                                    enabled: !aiStatusIndicator.isGenerating && aiPromptInput.text.trim() !== "" && LLMManager.modelLoaded
+
                                     onClicked: {
                                         if (aiPromptInput.text.trim() !== "") {
                                             MaterialEditorQML.generateMaterialFromPrompt(aiPromptInput.text.trim())
@@ -828,8 +896,42 @@ ApplicationWindow {
                                         }
                                     }
                                 }
+
+                                ThemedButton {
+                                    id: stopButton
+                                    text: "Stop"
+                                    visible: aiStatusIndicator.isGenerating
+                                    onClicked: MaterialEditorQML.stopAIGeneration()
+                                }
+                            }
+
+                            // Progress indicator for local LLM
+                            RowLayout {
+                                Layout.fillWidth: true
+                                visible: aiStatusIndicator.isGenerating && LLMManager.modelLoaded
+                                spacing: 8
+
+                                ProgressBar {
+                                    id: llmProgressBar
+                                    Layout.fillWidth: true
+                                    from: 0
+                                    to: 1
+                                    value: MaterialEditorQML.llmGenerationProgress
+                                }
+
+                                Text {
+                                    text: Math.round(MaterialEditorQML.llmGenerationProgress * 100) + "%"
+                                    font.pointSize: 9
+                                    color: textColor
+                                }
                             }
                         }
+                    }
+
+                    // AI Settings Dialog
+                    AISettingsDialog {
+                        id: aiSettingsDialog
+                        anchors.centerIn: parent
                     }
 
                     // Text editor

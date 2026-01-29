@@ -45,6 +45,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialHighlighter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMWorker.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
     )
     
     set(TEST_HEADER_FILES
@@ -82,6 +86,10 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialHighlighter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMWorker.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)
@@ -194,7 +202,13 @@ if(BUILD_TESTS)
         Qt::Widgets
         Qt::Network
         Qt::QuickWidgets
+        Qt::QuickControls2
     )
+
+    # Add llama.cpp libraries if local LLM is enabled
+    if(ENABLE_LOCAL_LLM)
+        list(APPEND COMMON_TEST_LIBRARIES llama ggml)
+    endif()
     
     # Helper function to create test executables
     function(create_test_executable target_name test_source_file)

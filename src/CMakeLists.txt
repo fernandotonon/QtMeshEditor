@@ -2,7 +2,7 @@
 #  adding the files
 ##############################################################
 
-set(SRC_FILES 
+set(SRC_FILES
 about.cpp
 animationcontrolwidget.cpp
 animationcontrolslider.cpp
@@ -34,6 +34,10 @@ MaterialWidget.cpp
 MaterialComboDelegate.cpp
 MaterialHighlighter.cpp
 QMLMaterialHighlighter.cpp
+LLMWorker.cpp
+LLMManager.cpp
+ModelDownloader.cpp
+LLMSettingsWidget.cpp
 )
 
 set(HEADER_FILES
@@ -71,6 +75,10 @@ MaterialWidget.h
 MaterialComboDelegate.h
 MaterialHighlighter.h
 QMLMaterialHighlighter.h
+LLMWorker.h
+LLMManager.h
+ModelDownloader.h
+LLMSettingsWidget.h
 )
 
 set(TEST_SOURCES "")
@@ -264,13 +272,22 @@ elseif(WIN32)
     SET(OGRE_Codec_Assimp_LIBRARY_REL ${OGRE_PLUGIN_DIR}/libCodec_Assimp.dll.a)
 endif()
 
+# Check if Codec_Assimp exists (optional - QtMeshEditor has its own Assimp integration)
+if(EXISTS "${OGRE_Codec_Assimp_LIBRARY_REL}")
+    set(CODEC_ASSIMP_LINK_LIB ${OGRE_Codec_Assimp_LIBRARY_REL})
+    message(STATUS "Found OGRE Codec_Assimp: ${OGRE_Codec_Assimp_LIBRARY_REL}")
+else()
+    set(CODEC_ASSIMP_LINK_LIB "")
+    message(STATUS "OGRE Codec_Assimp not found, using built-in Assimp integration")
+endif()
+
 if(UNIX)
     IF(NOT Qt6_FOUND)
         target_link_libraries(${CMAKE_PROJECT_NAME} Qt5::X11Extras)
     ENDIF()
 endif()
 target_link_libraries(${CMAKE_PROJECT_NAME}
-${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
+${CODEC_ASSIMP_LINK_LIB}
 ${OGRE_LIBRARIES}
 ${ASSIMP_LIBRARIES}
 Qt::Gui
@@ -280,7 +297,21 @@ Qt::Network
 Qt::Qml
 Qt::Quick
 Qt::QuickWidgets
+Qt::QuickControls2
 )
+
+
+# Link llama.cpp if enabled
+if(ENABLE_LOCAL_LLM)
+    target_link_libraries(${CMAKE_PROJECT_NAME} llama ggml)
+    if(APPLE)
+        target_link_libraries(${CMAKE_PROJECT_NAME}
+            "-framework Metal"
+            "-framework Foundation"
+            "-framework MetalKit"
+        )
+    endif()
+endif()
 ENDIF()
 
 ##############################################################
@@ -310,16 +341,21 @@ if(BUILD_TESTS)
     )
 
     # Link against Google Test libraries
-    target_link_libraries(UnitTests 
-    gtest 
-    gtest_main 
+    target_link_libraries(UnitTests
+    gtest
+    gtest_main
     gmock
     gmock_main
     ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
-    Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets)
-    
+    Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2)
+
+    # Link llama.cpp for tests if enabled
+    if(ENABLE_LOCAL_LLM)
+        target_link_libraries(UnitTests llama ggml)
+    endif()
+
     ADD_DEPENDENCIES(UnitTests ui)
 
     gtest_discover_tests(UnitTests)

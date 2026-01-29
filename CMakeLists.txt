@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 2.0.8 LANGUAGES CXX)
+project(QtMeshEditor VERSION 2.1.0 LANGUAGES CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -63,9 +63,38 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 ##############################################################
 #  Searching Qt dependencies
 ##############################################################
+# On newer macOS (11+), AGL framework is deprecated and has no actual library.
+# Create a stub AGL.framework for linking purposes
+if(APPLE)
+    set(AGL_STUB_DIR "${CMAKE_BINARY_DIR}/AGL_stub")
+    set(AGL_FW_DIR "${AGL_STUB_DIR}/AGL.framework")
+    set(AGL_FW_LIB "${AGL_FW_DIR}/Versions/A/AGL")
+
+    if(NOT EXISTS "${AGL_FW_LIB}")
+        file(MAKE_DIRECTORY "${AGL_FW_DIR}/Versions/A")
+        file(WRITE "${AGL_STUB_DIR}/agl_stub.c" "void __agl_stub_placeholder(void) {}")
+        # Build for arm64 since that's what modern macOS uses
+        execute_process(
+            COMMAND clang -arch arm64 -dynamiclib
+                -o "${AGL_FW_LIB}"
+                "${AGL_STUB_DIR}/agl_stub.c"
+                -install_name "/System/Library/Frameworks/AGL.framework/Versions/A/AGL"
+                -current_version 1.0.0 -compatibility_version 1.0.0
+            WORKING_DIRECTORY "${AGL_STUB_DIR}"
+        )
+        # Create symlinks
+        execute_process(COMMAND ln -sf A "${AGL_FW_DIR}/Versions/Current")
+        execute_process(COMMAND ln -sf Versions/Current/AGL "${AGL_FW_DIR}/AGL")
+    endif()
+
+    # Add our stub framework directory to the framework search path
+    link_directories("${AGL_STUB_DIR}")
+    set(CMAKE_FRAMEWORK_PATH "${AGL_STUB_DIR}" ${CMAKE_FRAMEWORK_PATH})
+endif()
+
 #Find Qt Packages
 find_package(QT NAMES Qt6)
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick Qml QmlModels QmlMeta Test Network)
+find_package(Qt6 REQUIRED COMPONENTS Core Widgets Gui QuickWidgets Quick Qml QmlModels QmlMeta Test Network QuickControls2)
 
 message("Found Qt (${QT_VERSION_MAJOR})")
 
@@ -104,8 +133,8 @@ if(BUILD_TESTS)
 
     # Include Google Test headers
     include_directories(
-        ${gtest_SOURCE_DIR}/include 
-        ${gtest_SOURCE_DIR} 
+        ${gtest_SOURCE_DIR}/include
+        ${gtest_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/ui_files
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
@@ -115,6 +144,61 @@ if(BUILD_TESTS)
     # Add the test
     add_test(NAME UnitTests COMMAND UnitTests)
     include(GoogleTest)
+endif()
+
+##############################################################
+#  llama.cpp for local LLM inference
+##############################################################
+option(ENABLE_LOCAL_LLM "Enable local LLM inference with llama.cpp" ON)
+
+if(ENABLE_LOCAL_LLM)
+    include(FetchContent)
+
+    # Configure llama.cpp build options
+    set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+    set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
+    # Enable Metal on macOS for GPU acceleration
+    if(APPLE)
+        set(GGML_METAL ON CACHE BOOL "" FORCE)
+        set(GGML_METAL_EMBED_LIBRARY ON CACHE BOOL "" FORCE)
+        message(STATUS "Enabling Metal acceleration for llama.cpp on macOS")
+    endif()
+
+    # Enable CUDA on systems with NVIDIA GPUs
+    if(CMAKE_CUDA_COMPILER OR DEFINED ENV{CUDA_PATH})
+        set(GGML_CUDA ON CACHE BOOL "" FORCE)
+        message(STATUS "Enabling CUDA acceleration for llama.cpp")
+    endif()
+
+    # Disable native optimizations for cross-platform compatibility
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+
+    # On Windows with MinGW, disable CPU backend to avoid SDK compatibility issues
+    if(WIN32 AND MINGW)
+        set(GGML_CPU OFF CACHE BOOL "" FORCE)
+        message(STATUS "Disabling CPU backend on MinGW due to SDK compatibility")
+    endif()
+
+    FetchContent_Declare(
+        llama_cpp
+        GIT_REPOSITORY https://github.com/ggerganov/llama.cpp.git
+        GIT_TAG master
+        GIT_SHALLOW TRUE
+    )
+
+    FetchContent_MakeAvailable(llama_cpp)
+
+    # Include llama.cpp headers
+    include_directories(
+        ${llama_cpp_SOURCE_DIR}/include
+        ${llama_cpp_SOURCE_DIR}/ggml/include
+    )
+
+    add_definitions(-DENABLE_LOCAL_LLM)
+    message(STATUS "Local LLM support enabled with llama.cpp")
 endif()
 ##############################################################
 #  Find Ogre
