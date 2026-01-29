@@ -173,10 +173,13 @@ if(ENABLE_LOCAL_LLM)
         message(STATUS "Enabling CUDA acceleration for llama.cpp")
     endif()
 
+    # Disable native optimizations for cross-platform compatibility
+    set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+
     FetchContent_Declare(
         llama_cpp
         GIT_REPOSITORY https://github.com/ggerganov/llama.cpp.git
-        GIT_TAG master
+        GIT_TAG b5200
         GIT_SHALLOW TRUE
     )
 
