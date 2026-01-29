@@ -341,16 +341,21 @@ if(BUILD_TESTS)
     )
 
     # Link against Google Test libraries
-    target_link_libraries(UnitTests 
-    gtest 
-    gtest_main 
+    target_link_libraries(UnitTests
+    gtest
+    gtest_main
     gmock
     gmock_main
     ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
-    Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets)
-    
+    Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2)
+
+    # Link llama.cpp for tests if enabled
+    if(ENABLE_LOCAL_LLM)
+        target_link_libraries(UnitTests llama ggml)
+    endif()
+
     ADD_DEPENDENCIES(UnitTests ui)
 
     gtest_discover_tests(UnitTests)
