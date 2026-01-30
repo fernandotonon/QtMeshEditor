@@ -2617,7 +2617,10 @@ void MaterialEditorQML::generateMaterialFromPrompt(const QString &prompt)
     // Use local LLM
     m_llmGenerationProgress = 0.0f;
     emit llmGenerationProgressChanged();
-    llmManager->generateMaterial(prompt, m_materialText);
+
+    // Get available textures to provide context to the LLM
+    QStringList availableTextures = getAvailableTextures();
+    llmManager->generateMaterial(prompt, m_materialText, availableTextures);
 }
 
 void MaterialEditorQML::stopAIGeneration()

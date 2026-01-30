@@ -230,47 +230,110 @@ bool LLMManager::isGenerating() const
 
 QString LLMManager::getOgre3DSystemPrompt()
 {
-    return R"(You generate Ogre3D material scripts.
+    return R"(You are an expert Ogre3D material script generator. Output ONLY valid material scripts.
+
+STRUCTURE:
+material NAME { technique { pass { texture_unit { } } } }
+
+PASS ATTRIBUTES (all colors are R G B values 0.0-1.0):
+- ambient R G B [A]          : Ambient color (default: 1.0 1.0 1.0)
+- diffuse R G B [A]          : Diffuse color (default: 1.0 1.0 1.0)
+- specular R G B [A] SHINE   : Specular color + shininess 1-128 (default: 0 0 0 0)
+- emissive R G B [A]         : Self-illumination (default: 0 0 0)
+- lighting on|off            : Enable dynamic lighting (default: on)
+- shading flat|gouraud|phong : Shading mode (default: gouraud)
+- scene_blend <mode>         : Blending: add, modulate, alpha_blend, colour_blend
+- scene_blend <src> <dest>   : Custom blend: one, zero, src_alpha, one_minus_src_alpha, dest_colour, etc.
+- depth_check on|off         : Depth buffer check (default: on)
+- depth_write on|off         : Write to depth buffer (default: on)
+- depth_func <func>          : always_fail, always_pass, less, less_equal, equal, not_equal, greater_equal, greater
+- cull_hardware clockwise|anticlockwise|none : Back-face culling (default: clockwise)
+- polygon_mode solid|wireframe|points
+
+TEXTURE_UNIT ATTRIBUTES:
+- texture <filename> [2d|cubic]     : Texture file to use
+- filtering none|bilinear|trilinear|anisotropic
+- tex_address_mode wrap|clamp|mirror|border
+- scroll <u> <v>                    : Static UV offset
+- scroll_anim <u_speed> <v_speed>   : Animated scrolling
+- rotate <degrees>                  : Static rotation
+- rotate_anim <revs_per_sec>        : Animated rotation
+- scale <u_scale> <v_scale>         : UV scaling
+- colour_op replace|add|modulate|alpha_blend
+- colour_op_ex <op> <src1> <src2> [manual_factor] [manual_color]
+- env_map off|spherical|planar|cubic_reflection|cubic_normal
+- alpha_rejection greater_equal 128 : Alpha testing
+
+COLOUR_OP_EX operations: add, subtract, modulate, modulate_x2, modulate_x4, add_signed, add_smooth, blend_diffuse_alpha, blend_texture_alpha, blend_current_alpha, blend_manual
+COLOUR_OP_EX sources: src_current, src_texture, src_diffuse, src_specular, src_manual
 
 RULES:
-1. Output ONLY the material script, nothing else
-2. Keep the same material name if one is provided
-3. All color values must be NUMBERS between 0.0 and 1.0
-4. NO WORDS in property values - only numbers
+1. Output ONLY the material script - no markdown, no explanations
+2. Keep the same material name if modifying an existing material
+3. All color/numeric values must be NUMBERS (0.0 to 1.0 for colors)
+4. If textures are needed, ONLY use textures from the provided available list
+5. Ensure balanced braces - every { must have a matching }
 
-SYNTAX:
-material NAME
+EXAMPLE - Textured material with glow:
+material Example/GlowingTextured
 {
     technique
     {
         pass
         {
-            ambient R G B
-            diffuse R G B
-            specular R G B SHININESS
-            emissive R G B
+            ambient 0.3 0.3 0.3
+            diffuse 0.8 0.8 0.8
+            specular 1.0 1.0 1.0 64
+            emissive 0.2 0.1 0.0
+
+            texture_unit
+            {
+                texture myTexture.png
+                filtering trilinear
+            }
         }
     }
 }
 
-COLORS (use these exact values):
-- green: ambient 0.0 0.2 0.0  diffuse 0.0 1.0 0.0  specular 0.5 0.5 0.5 32
-- red: ambient 0.2 0.0 0.0  diffuse 1.0 0.0 0.0  specular 0.5 0.5 0.5 32
-- blue: ambient 0.0 0.0 0.2  diffuse 0.0 0.0 1.0  specular 0.5 0.5 0.5 32
-- yellow: ambient 0.2 0.2 0.0  diffuse 1.0 1.0 0.0  specular 0.5 0.5 0.5 32
-- white: ambient 0.2 0.2 0.2  diffuse 1.0 1.0 1.0  specular 0.5 0.5 0.5 32
-
-EXAMPLE - green material:
-material MyMaterial
+EXAMPLE - Transparent material:
+material Example/Transparent
 {
     technique
     {
         pass
         {
-            ambient 0.0 0.2 0.0
-            diffuse 0.0 1.0 0.0
-            specular 0.5 0.5 0.5 32
-            emissive 0.0 0.0 0.0
+            scene_blend alpha_blend
+            depth_write off
+
+            diffuse 1.0 1.0 1.0 0.5
+
+            texture_unit
+            {
+                texture glass.png
+            }
+        }
+    }
+}
+
+EXAMPLE - Animated water:
+material Example/Water
+{
+    technique
+    {
+        pass
+        {
+            ambient 0.1 0.2 0.4
+            diffuse 0.3 0.5 0.8
+            specular 1.0 1.0 1.0 128
+            scene_blend alpha_blend
+            depth_write off
+
+            texture_unit
+            {
+                texture water.png
+                scroll_anim 0.05 0.02
+                wave_xform scale_x sine 1.0 0.1 0.0 0.5
+            }
         }
     }
 })";
@@ -393,7 +456,7 @@ void LLMManager::scanForModels()
     emit availableModelsChanged();
 }
 
-void LLMManager::generateMaterial(const QString &prompt, const QString &currentMaterial)
+void LLMManager::generateMaterial(const QString &prompt, const QString &currentMaterial, const QStringList &availableTextures)
 {
     if (!isModelLoaded()) {
         emit generationError("No model loaded. Please load a model first.");
@@ -403,20 +466,70 @@ void LLMManager::generateMaterial(const QString &prompt, const QString &currentM
     // Store for potential retry
     m_pendingPrompt = prompt;
     m_pendingCurrentMaterial = currentMaterial;
+    m_pendingAvailableTextures = availableTextures;
     m_retryCount = 0;
 
-    QString userPrompt;
-    if (!currentMaterial.isEmpty()) {
-        userPrompt = QString("Here is the current material script (keep the same material name):\n%1\n\nModify it to: %2\n\nOutput only the modified material script:")
-                         .arg(currentMaterial)
-                         .arg(prompt);
-    } else {
-        userPrompt = QString("Create a new Ogre3D material: %1\n\nOutput only the material script:").arg(prompt);
-    }
+    QString userPrompt = buildUserPrompt(prompt, currentMaterial, availableTextures);
 
     QMetaObject::invokeMethod(m_worker, [this, userPrompt]() {
         m_worker->generate(getOgre3DSystemPrompt(), userPrompt);
     }, Qt::QueuedConnection);
+}
+
+QString LLMManager::buildUserPrompt(const QString &prompt, const QString &currentMaterial, const QStringList &availableTextures) const
+{
+    QString userPrompt;
+
+    // Add available textures section if any exist
+    QString texturesSection;
+    if (!availableTextures.isEmpty()) {
+        // Filter to only include image-like textures (exclude internal Ogre textures)
+        QStringList filteredTextures;
+        for (const QString &tex : availableTextures) {
+            // Skip internal Ogre textures and non-image resources
+            if (!tex.startsWith("Ogre/") &&
+                !tex.startsWith("RTT") &&
+                !tex.startsWith("__") &&
+                !tex.contains("RenderTarget") &&
+                (tex.endsWith(".png", Qt::CaseInsensitive) ||
+                 tex.endsWith(".jpg", Qt::CaseInsensitive) ||
+                 tex.endsWith(".jpeg", Qt::CaseInsensitive) ||
+                 tex.endsWith(".dds", Qt::CaseInsensitive) ||
+                 tex.endsWith(".tga", Qt::CaseInsensitive) ||
+                 tex.endsWith(".bmp", Qt::CaseInsensitive) ||
+                 // Also include textures without extensions (might be valid)
+                 !tex.contains("."))) {
+                filteredTextures.append(tex);
+            }
+        }
+
+        if (!filteredTextures.isEmpty()) {
+            // Limit to reasonable number to avoid prompt bloat
+            int maxTextures = qMin(filteredTextures.size(), 50);
+            QStringList limitedTextures = filteredTextures.mid(0, maxTextures);
+
+            texturesSection = QString("\nAVAILABLE TEXTURES (use ONLY these if you need textures):\n%1\n")
+                                  .arg(limitedTextures.join(", "));
+
+            if (filteredTextures.size() > maxTextures) {
+                texturesSection += QString("... and %1 more textures available.\n")
+                                       .arg(filteredTextures.size() - maxTextures);
+            }
+        }
+    }
+
+    if (!currentMaterial.isEmpty()) {
+        userPrompt = QString("Here is the current material script (keep the same material name):\n%1\n%2\nModify it to: %3\n\nOutput only the modified material script:")
+                         .arg(currentMaterial)
+                         .arg(texturesSection)
+                         .arg(prompt);
+    } else {
+        userPrompt = QString("%1Create a new Ogre3D material: %2\n\nOutput only the material script:")
+                         .arg(texturesSection)
+                         .arg(prompt);
+    }
+
+    return userPrompt;
 }
 
 void LLMManager::stopGeneration()
@@ -600,27 +713,16 @@ void LLMManager::onWorkerGenerationCompleted(const QString &fullText)
         qDebug() << "LLMManager: Invalid script generated (" << errorMessage << "), retry" << m_retryCount << "of" << MAX_RETRIES;
 
         if (m_retryCount <= MAX_RETRIES) {
-            // Build a correction prompt
-            QString correctionPrompt;
-            if (!m_pendingCurrentMaterial.isEmpty()) {
-                correctionPrompt = QString(
-                    "The previous output was invalid: %1\n\n"
-                    "Here is the current material script (keep the same material name):\n%2\n\n"
-                    "Modify it to: %3\n\n"
-                    "IMPORTANT: Output ONLY a valid Ogre3D material script with proper numeric values (0.0 to 1.0 for colors).\n"
-                    "Do not include any words in the color values, only numbers.")
-                    .arg(errorMessage)
-                    .arg(m_pendingCurrentMaterial)
-                    .arg(m_pendingPrompt);
-            } else {
-                correctionPrompt = QString(
-                    "The previous output was invalid: %1\n\n"
-                    "Create a new Ogre3D material: %2\n\n"
-                    "IMPORTANT: Output ONLY a valid Ogre3D material script with proper numeric values (0.0 to 1.0 for colors).\n"
-                    "Do not include any words in the color values, only numbers.")
-                    .arg(errorMessage)
-                    .arg(m_pendingPrompt);
-            }
+            // Build a correction prompt with the error information
+            QString basePrompt = buildUserPrompt(m_pendingPrompt, m_pendingCurrentMaterial, m_pendingAvailableTextures);
+            QString correctionPrompt = QString(
+                "The previous output was invalid: %1\n\n"
+                "IMPORTANT: Output ONLY a valid Ogre3D material script with:\n"
+                "- Proper numeric values (0.0 to 1.0 for colors)\n"
+                "- Balanced braces (every { must have a matching })\n"
+                "- No markdown or explanations\n\n%2")
+                .arg(errorMessage)
+                .arg(basePrompt);
 
             QMetaObject::invokeMethod(m_worker, [this, correctionPrompt]() {
                 m_worker->generate(getOgre3DSystemPrompt(), correctionPrompt);

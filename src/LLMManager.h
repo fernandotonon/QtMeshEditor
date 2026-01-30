@@ -97,7 +97,7 @@ public slots:
     Q_INVOKABLE void tryAutoLoadModel();
 
     // Generation
-    Q_INVOKABLE void generateMaterial(const QString &prompt, const QString &currentMaterial = QString());
+    Q_INVOKABLE void generateMaterial(const QString &prompt, const QString &currentMaterial = QString(), const QStringList &availableTextures = QStringList());
     Q_INVOKABLE void stopGeneration();
 
     // Settings
@@ -146,6 +146,7 @@ private:
     void shutdownWorkerThread();
     QString getDefaultModelsDirectory() const;
     void populateRecommendedModels();
+    QString buildUserPrompt(const QString &prompt, const QString &currentMaterial, const QStringList &availableTextures) const;
 
 private slots:
     void onWorkerModelLoaded(const QString &modelPath);
@@ -175,6 +176,7 @@ private:
     // Retry logic for invalid scripts
     QString m_pendingPrompt;
     QString m_pendingCurrentMaterial;
+    QStringList m_pendingAvailableTextures;
     int m_retryCount = 0;
     static const int MAX_RETRIES = 2;
 };
