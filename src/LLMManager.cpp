@@ -230,113 +230,61 @@ bool LLMManager::isGenerating() const
 
 QString LLMManager::getOgre3DSystemPrompt()
 {
-    return R"(You are an expert Ogre3D material script generator. Output ONLY valid material scripts.
-
-STRUCTURE:
-material NAME { technique { pass { texture_unit { } } } }
-
-PASS ATTRIBUTES (all colors are R G B values 0.0-1.0):
-- ambient R G B [A]          : Ambient color (default: 1.0 1.0 1.0)
-- diffuse R G B [A]          : Diffuse color (default: 1.0 1.0 1.0)
-- specular R G B [A] SHINE   : Specular color + shininess 1-128 (default: 0 0 0 0)
-- emissive R G B [A]         : Self-illumination (default: 0 0 0)
-- lighting on|off            : Enable dynamic lighting (default: on)
-- shading flat|gouraud|phong : Shading mode (default: gouraud)
-- scene_blend <mode>         : Blending: add, modulate, alpha_blend, colour_blend
-- scene_blend <src> <dest>   : Custom blend: one, zero, src_alpha, one_minus_src_alpha, dest_colour, etc.
-- depth_check on|off         : Depth buffer check (default: on)
-- depth_write on|off         : Write to depth buffer (default: on)
-- depth_func <func>          : always_fail, always_pass, less, less_equal, equal, not_equal, greater_equal, greater
-- cull_hardware clockwise|anticlockwise|none : Back-face culling (default: clockwise)
-- polygon_mode solid|wireframe|points
-
-TEXTURE_UNIT ATTRIBUTES:
-- texture <filename> [2d|cubic]     : Texture file to use
-- filtering none|bilinear|trilinear|anisotropic
-- tex_address_mode wrap|clamp|mirror|border
-- scroll <u> <v>                    : Static UV offset
-- scroll_anim <u_speed> <v_speed>   : Animated scrolling
-- rotate <degrees>                  : Static rotation
-- rotate_anim <revs_per_sec>        : Animated rotation
-- scale <u_scale> <v_scale>         : UV scaling
-- colour_op replace|add|modulate|alpha_blend
-- colour_op_ex <op> <src1> <src2> [manual_factor] [manual_color]
-- env_map off|spherical|planar|cubic_reflection|cubic_normal
-- alpha_rejection greater_equal 128 : Alpha testing
-
-COLOUR_OP_EX operations: add, subtract, modulate, modulate_x2, modulate_x4, add_signed, add_smooth, blend_diffuse_alpha, blend_texture_alpha, blend_current_alpha, blend_manual
-COLOUR_OP_EX sources: src_current, src_texture, src_diffuse, src_specular, src_manual
+    return R"(You generate Ogre3D material scripts. Output ONLY the material script, nothing else.
 
 RULES:
 1. Output ONLY the material script - no markdown, no explanations
 2. Keep the same material name if modifying an existing material
-3. All color/numeric values must be NUMBERS (0.0 to 1.0 for colors)
-4. If textures are needed, ONLY use textures from the provided available list
-5. Ensure balanced braces - every { must have a matching }
+3. All color values must be NUMBERS between 0.0 and 1.0
+4. Do NOT add texture_unit unless specifically asked for textures
+5. For simple color changes, only modify ambient/diffuse/specular/emissive values
 
-EXAMPLE - Textured material with glow:
-material Example/GlowingTextured
+BASIC STRUCTURE:
+material NAME
 {
     technique
     {
         pass
         {
-            ambient 0.3 0.3 0.3
-            diffuse 0.8 0.8 0.8
-            specular 1.0 1.0 1.0 64
-            emissive 0.2 0.1 0.0
-
-            texture_unit
-            {
-                texture myTexture.png
-                filtering trilinear
-            }
+            ambient R G B
+            diffuse R G B
+            specular R G B SHININESS
+            emissive R G B
         }
     }
 }
 
-EXAMPLE - Transparent material:
-material Example/Transparent
+COMMON COLORS (R G B values):
+- red: 1.0 0.0 0.0
+- green: 0.0 1.0 0.0
+- blue: 0.0 0.0 1.0
+- yellow: 1.0 1.0 0.0
+- white: 1.0 1.0 1.0
+- black: 0.0 0.0 0.0
+- orange: 1.0 0.5 0.0
+- purple: 0.5 0.0 1.0
+- cyan: 0.0 1.0 1.0
+
+EXAMPLE - Green shiny material:
+material MyMaterial
 {
     technique
     {
         pass
         {
-            scene_blend alpha_blend
-            depth_write off
-
-            diffuse 1.0 1.0 1.0 0.5
-
-            texture_unit
-            {
-                texture glass.png
-            }
+            ambient 0.0 0.2 0.0
+            diffuse 0.0 0.8 0.0
+            specular 0.5 1.0 0.5 64
+            emissive 0.0 0.0 0.0
         }
     }
 }
 
-EXAMPLE - Animated water:
-material Example/Water
-{
-    technique
-    {
-        pass
-        {
-            ambient 0.1 0.2 0.4
-            diffuse 0.3 0.5 0.8
-            specular 1.0 1.0 1.0 128
-            scene_blend alpha_blend
-            depth_write off
-
-            texture_unit
-            {
-                texture water.png
-                scroll_anim 0.05 0.02
-                wave_xform scale_x sine 1.0 0.1 0.0 0.5
-            }
-        }
-    }
-})";
+ADVANCED (only use when requested):
+- scene_blend add|alpha_blend : For transparency/glow
+- depth_write off : For transparent materials
+- lighting off : Disable dynamic lighting
+- texture_unit { texture <file> } : Only if textures requested)";
 }
 
 void LLMManager::loadModel(const QString &modelName)
@@ -479,10 +427,20 @@ void LLMManager::generateMaterial(const QString &prompt, const QString &currentM
 QString LLMManager::buildUserPrompt(const QString &prompt, const QString &currentMaterial, const QStringList &availableTextures) const
 {
     QString userPrompt;
+    QString lowerPrompt = prompt.toLower();
 
-    // Add available textures section if any exist
+    // Only include textures if the user's prompt mentions texture-related keywords
+    bool needsTextures = lowerPrompt.contains("texture") ||
+                         lowerPrompt.contains("image") ||
+                         lowerPrompt.contains("picture") ||
+                         lowerPrompt.contains("map") ||
+                         lowerPrompt.contains("bitmap") ||
+                         lowerPrompt.contains(".png") ||
+                         lowerPrompt.contains(".jpg") ||
+                         lowerPrompt.contains(".dds");
+
     QString texturesSection;
-    if (!availableTextures.isEmpty()) {
+    if (needsTextures && !availableTextures.isEmpty()) {
         // Filter to only include image-like textures (exclude internal Ogre textures)
         QStringList filteredTextures;
         for (const QString &tex : availableTextures) {
@@ -496,35 +454,28 @@ QString LLMManager::buildUserPrompt(const QString &prompt, const QString &curren
                  tex.endsWith(".jpeg", Qt::CaseInsensitive) ||
                  tex.endsWith(".dds", Qt::CaseInsensitive) ||
                  tex.endsWith(".tga", Qt::CaseInsensitive) ||
-                 tex.endsWith(".bmp", Qt::CaseInsensitive) ||
-                 // Also include textures without extensions (might be valid)
-                 !tex.contains("."))) {
+                 tex.endsWith(".bmp", Qt::CaseInsensitive))) {
                 filteredTextures.append(tex);
             }
         }
 
         if (!filteredTextures.isEmpty()) {
             // Limit to reasonable number to avoid prompt bloat
-            int maxTextures = qMin(filteredTextures.size(), 50);
+            int maxTextures = qMin(filteredTextures.size(), 30);
             QStringList limitedTextures = filteredTextures.mid(0, maxTextures);
 
-            texturesSection = QString("\nAVAILABLE TEXTURES (use ONLY these if you need textures):\n%1\n")
+            texturesSection = QString("\nAVAILABLE TEXTURES (use ONLY from this list):\n%1\n")
                                   .arg(limitedTextures.join(", "));
-
-            if (filteredTextures.size() > maxTextures) {
-                texturesSection += QString("... and %1 more textures available.\n")
-                                       .arg(filteredTextures.size() - maxTextures);
-            }
         }
     }
 
     if (!currentMaterial.isEmpty()) {
-        userPrompt = QString("Here is the current material script (keep the same material name):\n%1\n%2\nModify it to: %3\n\nOutput only the modified material script:")
+        userPrompt = QString("Current material (keep the same name):\n%1\n%2\nRequest: %3")
                          .arg(currentMaterial)
                          .arg(texturesSection)
                          .arg(prompt);
     } else {
-        userPrompt = QString("%1Create a new Ogre3D material: %2\n\nOutput only the material script:")
+        userPrompt = QString("%1Create: %2")
                          .arg(texturesSection)
                          .arg(prompt);
     }
