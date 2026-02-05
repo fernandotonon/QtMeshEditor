@@ -31,6 +31,7 @@ public:
     explicit LLMWorker(QObject *parent = nullptr);
     ~LLMWorker();
 
+    void initBackend();  // Must be called after moving to worker thread
     bool loadModel(const QString &modelPath);
     void unloadModel();
     bool isModelLoaded() const;
@@ -62,6 +63,7 @@ private:
     std::atomic<bool> m_stopRequested{false};
     std::atomic<bool> m_isGenerating{false};
     std::atomic<bool> m_isModelLoaded{false};  // Atomic flag for lock-free checking
+    bool m_backendInitialized{false};
     mutable QMutex m_mutex;
 
     // Internal unload that doesn't acquire mutex (for use when mutex is already held)

@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 2.1.2 LANGUAGES CXX)
+project(QtMeshEditor VERSION 2.1.3 LANGUAGES CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -177,6 +177,18 @@ if(ENABLE_LOCAL_LLM)
 
     # Disable native optimizations for cross-platform compatibility
     set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
+    
+    # Enable CUDA for NVIDIA GPUs (much faster and avoids CPU compatibility issues)
+    find_package(CUDAToolkit QUIET)
+    if(CUDAToolkit_FOUND)
+        set(GGML_CUDA ON CACHE BOOL "" FORCE)
+        message(STATUS "CUDA found - enabling GPU acceleration for llama.cpp")
+    endif()
+    
+    # For CPU fallback: disable AVX2/FMA for older CPUs (pre-Haswell compatibility)
+    set(GGML_AVX2 OFF CACHE BOOL "" FORCE)
+    set(GGML_FMA OFF CACHE BOOL "" FORCE)
+    set(GGML_BMI2 OFF CACHE BOOL "" FORCE)
 
     # On Windows with MinGW, disable CPU backend to avoid SDK compatibility issues
     if(WIN32 AND MINGW)

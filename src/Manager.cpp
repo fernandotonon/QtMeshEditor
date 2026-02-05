@@ -28,6 +28,8 @@ THE SOFTWARE.
 
 #include <QCoreApplication>
 #include <QMessageBox>
+#include <QStandardPaths>
+#include <QDir>
 
 #include "GlobalDefinitions.h"
 
@@ -440,10 +442,30 @@ void Manager::initRoot()
 {
     try
     {
-        QString file = QCoreApplication::applicationDirPath();
-        mRoot = new Ogre::Root(QString(file + "/cfg/" + mPluginsCfg ).toStdString().data()
-                               , QString(file +"/cfg/Video.cfg").toStdString().data()
-                                         , QString(file+"/cfg/Graphics.log").toStdString().data());
+        QString appDir = QCoreApplication::applicationDirPath();
+        
+        // Use user-writable directory for config files (Video.cfg, Graphics.log)
+        QString userConfigDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        QDir configDir(userConfigDir);
+        if (!configDir.exists()) {
+            configDir.mkpath(".");
+        }
+        
+        // Plugins config is read from installation directory (read-only is fine)
+        QString pluginsCfgPath = appDir + "/cfg/" + mPluginsCfg;
+        
+        // User-specific config files go to writable location
+        QString videoCfgPath = userConfigDir + "/Video.cfg";
+        QString logPath = userConfigDir + "/Graphics.log";
+        
+        qDebug() << "OGRE config paths:";
+        qDebug() << "  Plugins:" << pluginsCfgPath;
+        qDebug() << "  Video config:" << videoCfgPath;
+        qDebug() << "  Log:" << logPath;
+        
+        mRoot = new Ogre::Root(pluginsCfgPath.toStdString().data(),
+                               videoCfgPath.toStdString().data(),
+                               logPath.toStdString().data());
         if (!mRoot)
         {
             throw std::logic_error("Erro: Iniciando Root\nFILE: "+std::string(__FILE__)+"\nLINE: "+QString::number(__LINE__).toStdString());

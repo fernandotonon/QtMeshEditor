@@ -36,6 +36,8 @@
 #include "MaterialEditorQML.h"
 #include "LLMSettingsWidget.h"
 #include "LLMManager.h"
+#include "QMLMaterialHighlighter.h"
+#include "ModelDownloader.h"
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
@@ -481,13 +483,32 @@ void MainWindow::on_actionMaterial_Editor_triggered()
         // Force software rendering on the engine
         engine->setProperty("_q_sg_renderloop", "basic");
         
-        // Register QML types
+        // Register QML types - must match registrations in main.cpp
         qmlRegisterSingletonType<MaterialEditorQML>("MaterialEditorQML", 1, 0, "MaterialEditorQML", 
             [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject * {
                 Q_UNUSED(engine)
                 Q_UNUSED(scriptEngine)
                 return MaterialEditorQML::qmlInstance(engine, scriptEngine);
             });
+        
+        // Register LLMManager singleton for QML
+        qmlRegisterSingletonType<LLMManager>("MaterialEditorQML", 1, 0, "LLMManager",
+            [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+                Q_UNUSED(engine)
+                Q_UNUSED(scriptEngine)
+                return LLMManager::qmlInstance(engine, scriptEngine);
+            });
+
+        // Register ModelDownloader singleton for QML
+        qmlRegisterSingletonType<ModelDownloader>("MaterialEditorQML", 1, 0, "ModelDownloader",
+            [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+                Q_UNUSED(engine)
+                Q_UNUSED(scriptEngine)
+                return ModelDownloader::qmlInstance(engine, scriptEngine);
+            });
+
+        // Register QMLMaterialHighlighter for QML use
+        qmlRegisterType<QMLMaterialHighlighter>("MaterialEditorQML", 1, 0, "MaterialHighlighter");
         
         // Load the QML material list modal
         QUrl qmlUrl("qrc:/MaterialEditorQML/MaterialListModal.qml");
