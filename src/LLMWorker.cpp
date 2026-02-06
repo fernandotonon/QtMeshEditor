@@ -5,25 +5,42 @@
 LLMWorker::LLMWorker(QObject *parent)
     : QObject(parent)
 {
-#ifdef ENABLE_LOCAL_LLM
-    // Initialize llama backend
-    llama_backend_init();
-    qDebug() << "LLMWorker: llama.cpp backend initialized";
-#endif
+    // Backend initialization is deferred to initBackend() which should be called
+    // after the worker is moved to its thread
 }
 
 LLMWorker::~LLMWorker()
 {
     unloadModel();
 #ifdef ENABLE_LOCAL_LLM
-    llama_backend_free();
-    qDebug() << "LLMWorker: llama.cpp backend freed";
+    if (m_backendInitialized) {
+        llama_backend_free();
+        qDebug() << "LLMWorker: llama.cpp backend freed";
+    }
+#endif
+}
+
+void LLMWorker::initBackend()
+{
+#ifdef ENABLE_LOCAL_LLM
+    if (!m_backendInitialized) {
+        qDebug() << "LLMWorker: Initializing llama.cpp backend on thread" << QThread::currentThreadId();
+        llama_backend_init();
+        m_backendInitialized = true;
+        qDebug() << "LLMWorker: llama.cpp backend initialized successfully";
+    }
 #endif
 }
 
 bool LLMWorker::loadModel(const QString &modelPath)
 {
 #ifdef ENABLE_LOCAL_LLM
+    // Ensure backend is initialized
+    if (!m_backendInitialized) {
+        qDebug() << "LLMWorker: Backend not initialized, initializing now...";
+        initBackend();
+    }
+
     // Stop any ongoing generation first
     if (m_isGenerating.load()) {
         m_stopRequested.store(true);
@@ -53,15 +70,31 @@ bool LLMWorker::loadModel(const QString &modelPath)
         }
 
         qDebug() << "LLMWorker: Loading model from" << modelPath;
+        qDebug() << "LLMWorker: GPU layers:" << m_settings.gpuLayers
+                 << "Context size:" << m_settings.contextSize
+                 << "Threads:" << m_settings.threads;
 
         // Model parameters
         llama_model_params model_params = llama_model_default_params();
         model_params.n_gpu_layers = m_settings.gpuLayers;
 
-        // Load the model
-        m_model = llama_model_load_from_file(modelPath.toUtf8().constData(), model_params);
+        // Load the model with error handling
+        try {
+            m_model = llama_model_load_from_file(modelPath.toUtf8().constData(), model_params);
+        } catch (const std::exception &e) {
+            error = QString("Exception loading model: %1").arg(e.what());
+            qWarning() << "LLMWorker:" << error;
+            m_model = nullptr;
+        } catch (...) {
+            error = QString("Unknown exception loading model from: %1").arg(modelPath);
+            qWarning() << "LLMWorker:" << error;
+            m_model = nullptr;
+        }
+
         if (!m_model) {
-            error = QString("Failed to load model from: %1").arg(modelPath);
+            if (error.isEmpty()) {
+                error = QString("Failed to load model from: %1").arg(modelPath);
+            }
             qWarning() << "LLMWorker:" << error;
         } else {
             // Get the vocabulary
@@ -72,17 +105,31 @@ bool LLMWorker::loadModel(const QString &modelPath)
                 llama_model_free(m_model);
                 m_model = nullptr;
             } else {
-                // Initialize context
-                if (!initializeContext()) {
+                // Initialize context with error handling
+                try {
+                    if (!initializeContext()) {
+                        llama_model_free(m_model);
+                        m_model = nullptr;
+                        m_vocab = nullptr;
+                        error = "Failed to initialize context";
+                    } else {
+                        m_modelPath = modelPath;
+                        m_isModelLoaded.store(true);
+                        success = true;
+                        qDebug() << "LLMWorker: Model loaded successfully";
+                    }
+                } catch (const std::exception &e) {
+                    error = QString("Exception initializing context: %1").arg(e.what());
+                    qWarning() << "LLMWorker:" << error;
                     llama_model_free(m_model);
                     m_model = nullptr;
                     m_vocab = nullptr;
-                    error = "Failed to initialize context";
-                } else {
-                    m_modelPath = modelPath;
-                    m_isModelLoaded.store(true);
-                    success = true;
-                    qDebug() << "LLMWorker: Model loaded successfully";
+                } catch (...) {
+                    error = "Unknown exception initializing context";
+                    qWarning() << "LLMWorker:" << error;
+                    llama_model_free(m_model);
+                    m_model = nullptr;
+                    m_vocab = nullptr;
                 }
             }
         }
@@ -332,24 +379,43 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
 bool LLMWorker::initializeContext()
 {
     if (!m_model) {
+        qWarning() << "LLMWorker: Cannot initialize context - no model loaded";
         return false;
     }
 
+    // Get model's maximum context size
+    int modelMaxCtx = llama_model_n_ctx_train(m_model);
+    int requestedCtx = m_settings.contextSize;
+    
+    // Clamp context size to model's limit
+    if (requestedCtx > modelMaxCtx) {
+        qWarning() << "LLMWorker: Requested context size" << requestedCtx 
+                   << "exceeds model max" << modelMaxCtx << "- clamping";
+        requestedCtx = modelMaxCtx;
+    }
+
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx = m_settings.contextSize;
+    ctx_params.n_ctx = requestedCtx;
     ctx_params.n_batch = 512;
     ctx_params.n_threads = m_settings.threads > 0 ? m_settings.threads : QThread::idealThreadCount();
     ctx_params.n_threads_batch = ctx_params.n_threads;
+    
+    // Limit threads to reasonable number
+    if (ctx_params.n_threads > 16) {
+        ctx_params.n_threads = 16;
+        ctx_params.n_threads_batch = 16;
+    }
+
+    qDebug() << "LLMWorker: Creating context with" << requestedCtx << "tokens,"
+             << ctx_params.n_threads << "threads";
 
     m_ctx = llama_init_from_model(m_model, ctx_params);
     if (!m_ctx) {
         qWarning() << "LLMWorker: Failed to create context";
-        emit modelLoadError("Failed to create context");
         return false;
     }
 
-    qDebug() << "LLMWorker: Context initialized with" << m_settings.contextSize << "tokens,"
-             << ctx_params.n_threads << "threads";
+    qDebug() << "LLMWorker: Context initialized successfully";
     return true;
 }
 

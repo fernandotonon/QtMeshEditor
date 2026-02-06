@@ -28,6 +28,8 @@ THE SOFTWARE.
 
 #include <QCoreApplication>
 #include <QMessageBox>
+#include <QStandardPaths>
+#include <QDir>
 
 #include "GlobalDefinitions.h"
 
@@ -440,10 +442,30 @@ void Manager::initRoot()
 {
     try
     {
-        QString file = QCoreApplication::applicationDirPath();
-        mRoot = new Ogre::Root(QString(file + "/cfg/" + mPluginsCfg ).toStdString().data()
-                               , QString(file +"/cfg/Video.cfg").toStdString().data()
-                                         , QString(file+"/cfg/Graphics.log").toStdString().data());
+        QString appDir = QCoreApplication::applicationDirPath();
+        
+        // Use user-writable directory for config files (Video.cfg, Graphics.log)
+        QString userConfigDir = QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        QDir configDir(userConfigDir);
+        if (!configDir.exists()) {
+            configDir.mkpath(".");
+        }
+        
+        // Plugins config is read from installation directory (read-only is fine)
+        QString pluginsCfgPath = appDir + "/cfg/" + mPluginsCfg;
+        
+        // User-specific config files go to writable location
+        QString videoCfgPath = userConfigDir + "/Video.cfg";
+        QString logPath = userConfigDir + "/Graphics.log";
+        
+        qDebug() << "OGRE config paths:";
+        qDebug() << "  Plugins:" << pluginsCfgPath;
+        qDebug() << "  Video config:" << videoCfgPath;
+        qDebug() << "  Log:" << logPath;
+        
+        mRoot = new Ogre::Root(pluginsCfgPath.toStdString().data(),
+                               videoCfgPath.toStdString().data(),
+                               logPath.toStdString().data());
         if (!mRoot)
         {
             throw std::logic_error("Erro: Iniciando Root\nFILE: "+std::string(__FILE__)+"\nLINE: "+QString::number(__LINE__).toStdString());
@@ -529,16 +551,19 @@ void Manager::loadResources()
         {
             typeName = i->first;
             archName = i->second;
+            // Resolve relative paths against the application directory so that
+            // resources are found regardless of the current working directory
+            // (e.g., when launched from an installed .deb package).
+            QString archPath = QString::fromStdString(archName);
+            if (!QDir::isAbsolutePath(archPath)) {
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
-            // OS X does not set the working directory relative to the app,
-            // In order to make things portable on OS X we need to provide
-            // the loading with it's own bundle path location
-            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
-                Ogre::String(macBundlePath() + "/" + archName), typeName, secName);
+                archPath = QString::fromStdString(macBundlePath()) + "/" + archPath;
 #else
-            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
-                archName, typeName, secName);
+                archPath = file + "/" + archPath;
 #endif
+            }
+            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+                archPath.toStdString(), typeName, secName);
         }
     }
 

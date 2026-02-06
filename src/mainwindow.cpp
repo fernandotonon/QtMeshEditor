@@ -1,6 +1,7 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QApplication>
+#include <QLibraryInfo>
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -36,6 +37,8 @@
 #include "MaterialEditorQML.h"
 #include "LLMSettingsWidget.h"
 #include "LLMManager.h"
+#include "QMLMaterialHighlighter.h"
+#include "ModelDownloader.h"
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
@@ -301,7 +304,7 @@ void MainWindow::initToolBar()
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     QAction* aiSettingsAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Model Settings..."));
-    connect(aiSettingsAction, &QAction::triggered, this, &MainWindow::on_actionAI_Model_Settings_triggered);
+    connect(aiSettingsAction, &QAction::triggered, this, &MainWindow::showAIModelSettings);
 
     // Initialize LLMManager
     LLMManager::instance();
@@ -478,16 +481,41 @@ void MainWindow::on_actionMaterial_Editor_triggered()
         // Create QML Application Engine for material list modal
         QQmlApplicationEngine* engine = new QQmlApplicationEngine(this);
         
+        // Add QML import paths so the engine can find QtQuick.Controls etc.
+        // This is needed when Qt libraries are bundled with the app.
+        QString appDir = QCoreApplication::applicationDirPath();
+        engine->addImportPath(appDir + "/qml");
+        engine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+        
         // Force software rendering on the engine
         engine->setProperty("_q_sg_renderloop", "basic");
         
-        // Register QML types
+        // Register QML types - must match registrations in main.cpp
         qmlRegisterSingletonType<MaterialEditorQML>("MaterialEditorQML", 1, 0, "MaterialEditorQML", 
             [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject * {
                 Q_UNUSED(engine)
                 Q_UNUSED(scriptEngine)
                 return MaterialEditorQML::qmlInstance(engine, scriptEngine);
             });
+        
+        // Register LLMManager singleton for QML
+        qmlRegisterSingletonType<LLMManager>("MaterialEditorQML", 1, 0, "LLMManager",
+            [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+                Q_UNUSED(engine)
+                Q_UNUSED(scriptEngine)
+                return LLMManager::qmlInstance(engine, scriptEngine);
+            });
+
+        // Register ModelDownloader singleton for QML
+        qmlRegisterSingletonType<ModelDownloader>("MaterialEditorQML", 1, 0, "ModelDownloader",
+            [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+                Q_UNUSED(engine)
+                Q_UNUSED(scriptEngine)
+                return ModelDownloader::qmlInstance(engine, scriptEngine);
+            });
+
+        // Register QMLMaterialHighlighter for QML use
+        qmlRegisterType<QMLMaterialHighlighter>("MaterialEditorQML", 1, 0, "MaterialHighlighter");
         
         // Load the QML material list modal
         QUrl qmlUrl("qrc:/MaterialEditorQML/MaterialListModal.qml");
@@ -869,7 +897,7 @@ void MainWindow::on_actionVerify_Update_triggered()
     });
 }
 
-void MainWindow::on_actionAI_Model_Settings_triggered()
+void MainWindow::showAIModelSettings()
 {
     LLMSettingsWidget* settingsWidget = new LLMSettingsWidget(this);
     settingsWidget->setAttribute(Qt::WA_DeleteOnClose);

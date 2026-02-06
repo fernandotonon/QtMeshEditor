@@ -57,6 +57,9 @@ void LLMManager::initializeWorkerThread()
     connect(m_worker, &LLMWorker::generationError, this, &LLMManager::onWorkerGenerationError);
     connect(m_worker, &LLMWorker::generationStopped, this, &LLMManager::onWorkerGenerationStopped);
 
+    // Initialize backend on the worker thread after it starts
+    connect(m_workerThread, &QThread::started, m_worker, &LLMWorker::initBackend);
+
     // Cleanup on thread finished
     connect(m_workerThread, &QThread::finished, m_worker, &QObject::deleteLater);
 
