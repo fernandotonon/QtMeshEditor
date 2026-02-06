@@ -1,6 +1,7 @@
 #include <QMessageBox>
 #include <QSettings>
 #include <QApplication>
+#include <QLibraryInfo>
 #include <QNetworkRequest>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -303,7 +304,7 @@ void MainWindow::initToolBar()
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     QAction* aiSettingsAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Model Settings..."));
-    connect(aiSettingsAction, &QAction::triggered, this, &MainWindow::on_actionAI_Model_Settings_triggered);
+    connect(aiSettingsAction, &QAction::triggered, this, &MainWindow::showAIModelSettings);
 
     // Initialize LLMManager
     LLMManager::instance();
@@ -479,6 +480,12 @@ void MainWindow::on_actionMaterial_Editor_triggered()
         
         // Create QML Application Engine for material list modal
         QQmlApplicationEngine* engine = new QQmlApplicationEngine(this);
+        
+        // Add QML import paths so the engine can find QtQuick.Controls etc.
+        // This is needed when Qt libraries are bundled with the app.
+        QString appDir = QCoreApplication::applicationDirPath();
+        engine->addImportPath(appDir + "/qml");
+        engine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
         
         // Force software rendering on the engine
         engine->setProperty("_q_sg_renderloop", "basic");
@@ -890,7 +897,7 @@ void MainWindow::on_actionVerify_Update_triggered()
     });
 }
 
-void MainWindow::on_actionAI_Model_Settings_triggered()
+void MainWindow::showAIModelSettings()
 {
     LLMSettingsWidget* settingsWidget = new LLMSettingsWidget(this);
     settingsWidget->setAttribute(Qt::WA_DeleteOnClose);

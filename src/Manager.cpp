@@ -551,16 +551,19 @@ void Manager::loadResources()
         {
             typeName = i->first;
             archName = i->second;
+            // Resolve relative paths against the application directory so that
+            // resources are found regardless of the current working directory
+            // (e.g., when launched from an installed .deb package).
+            QString archPath = QString::fromStdString(archName);
+            if (!QDir::isAbsolutePath(archPath)) {
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
-            // OS X does not set the working directory relative to the app,
-            // In order to make things portable on OS X we need to provide
-            // the loading with it's own bundle path location
-            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
-                Ogre::String(macBundlePath() + "/" + archName), typeName, secName);
+                archPath = QString::fromStdString(macBundlePath()) + "/" + archPath;
 #else
-            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
-                archName, typeName, secName);
+                archPath = file + "/" + archPath;
 #endif
+            }
+            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+                archPath.toStdString(), typeName, secName);
         }
     }
 

@@ -309,6 +309,46 @@ ELSEIF(UNIX)
         FOREACH(platform ${QTPLATFORMSLIST})
                 INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/lib${platform}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
         ENDFOREACH(platform)
+
+        # Install Qt QML modules required for Material Editor
+        # When Qt libraries are bundled, Qt can't find system QML modules automatically
+        get_filename_component(QT_BASE_DIR "${QT_DIR}/../../.." ABSOLUTE)
+        set(QT_QML_DIR "")
+        foreach(_qml_candidate
+            "${QT_BASE_DIR}/qml"
+            "${QT_BASE_DIR}/lib/qt6/qml"
+            "${QT_BASE_DIR}/lib/x86_64-linux-gnu/qt6/qml"
+            "${QT_BASE_DIR}/share/qt6/qml")
+            if(EXISTS "${_qml_candidate}/QtQuick")
+                set(QT_QML_DIR "${_qml_candidate}")
+                break()
+            endif()
+        endforeach()
+
+        if(QT_QML_DIR)
+            message(STATUS "Found Qt QML modules at: ${QT_QML_DIR}")
+            set(QML_MODULES_TO_INSTALL
+                QtQuick
+                QtQuick/Controls
+                QtQuick/Controls/Basic
+                QtQuick/Layouts
+                QtQuick/Templates
+                QtQuick/Dialogs
+                QtQml
+                QtQml/Models
+                QtQml/WorkerScript)
+            foreach(module ${QML_MODULES_TO_INSTALL})
+                if(EXISTS "${QT_QML_DIR}/${module}")
+                    # Get the parent directory of the module for correct installation structure
+                    get_filename_component(_module_parent "${module}" DIRECTORY)
+                    install(DIRECTORY "${QT_QML_DIR}/${module}"
+                        DESTINATION "${CMAKE_INSTALL_PREFIX}/qml/${_module_parent}"
+                        COMPONENT Runtime)
+                endif()
+            endforeach()
+        else()
+            message(WARNING "Could not find Qt QML modules directory - QML features may not work in installed version")
+        endif()
 ENDIF()
 
 # This is a test for deploying using qt script, still needs more investigation.
