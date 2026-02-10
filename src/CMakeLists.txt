@@ -38,6 +38,7 @@ LLMWorker.cpp
 LLMManager.cpp
 ModelDownloader.cpp
 LLMSettingsWidget.cpp
+MCPServer.cpp
 )
 
 set(HEADER_FILES
@@ -79,6 +80,7 @@ LLMWorker.h
 LLMManager.h
 ModelDownloader.h
 LLMSettingsWidget.h
+MCPServer.h
 )
 
 set(TEST_SOURCES "")

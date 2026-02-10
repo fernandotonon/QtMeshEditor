@@ -1,10 +1,12 @@
 #include <QApplication>
+#include <QCoreApplication>
 #include <QPalette>
 #include <QDebug>
 #include <QTimer>
 #include <QStyleFactory>
 #include <QSettings>
 #include <QLibraryInfo>
+#include <QCommandLineParser>
 #include <QtQml/qqmlengine.h>
 #include <QtQml/qjsengine.h>
 #include <QtQuickControls2/QQuickStyle>
@@ -13,9 +15,37 @@
 #include "QMLMaterialHighlighter.h"
 #include "LLMManager.h"
 #include "ModelDownloader.h"
+#include "MCPServer.h"
 
 int main(int argc, char *argv[])
 {
+    // Check for MCP server mode before creating QApplication
+    // MCP mode runs as a console application without GUI
+    bool mcpMode = false;
+    for (int i = 1; i < argc; ++i) {
+        if (QString(argv[i]) == "--mcp" || QString(argv[i]) == "-mcp") {
+            mcpMode = true;
+            break;
+        }
+    }
+
+    if (mcpMode) {
+        // MCP Server mode - runs as console application
+        QCoreApplication a(argc, argv);
+        QCoreApplication::setOrganizationName("QtMeshEditor");
+        QCoreApplication::setOrganizationDomain("none");
+        QCoreApplication::setApplicationName("QtMeshEditor");
+        QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
+
+        MCPServer server;
+        // Note: In MCP mode, we don't have a MainWindow, so tools that require
+        // GUI interaction will return appropriate error messages
+        server.start();
+
+        return a.exec();
+    }
+
+    // Normal GUI mode
     // Set Qt Quick Controls style before creating QApplication
     // This prevents issues with native macOS style not supporting customization
     QQuickStyle::setStyle("Basic");
