@@ -1,6 +1,9 @@
 #include "MCPServer.h"
 #include "mainwindow.h"
 #include "Manager.h"
+#include "MaterialEditorQML.h"
+#include "PrimitivesWidget.h"
+#include "SelectionSet.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -8,6 +11,12 @@
 #include <QImage>
 #include <QBuffer>
 #include <QTimer>
+#include <QMetaObject>
+#include <OgreMaterialManager.h>
+#include <OgreMaterial.h>
+#include <OgreTechnique.h>
+#include <OgrePass.h>
+#include <OgreMaterialSerializer.h>
 
 #ifdef Q_OS_WIN
 #include <io.h>
@@ -267,6 +276,8 @@ QJsonObject MCPServer::handleToolsCall(const QJsonObject &params)
         toolResult = toolGetSceneInfo(args);
     } else if (toolName == "take_screenshot") {
         toolResult = toolTakeScreenshot(args);
+    } else if (toolName == "create_primitive") {
+        toolResult = toolCreatePrimitive(args);
     } else {
         QJsonObject result;
         result["isError"] = true;
@@ -404,42 +415,89 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
         return result;
     }
 
-    // Build modification description
-    QStringList modifications;
+    // Try to get the material from Ogre
+    try {
+        Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
+        if (!material) {
+            textContent["text"] = QString("Error: Material '%1' not found").arg(name);
+            content.append(textContent);
+            QJsonObject result;
+            result["isError"] = true;
+            result["content"] = content;
+            return result;
+        }
 
-    if (args.contains("ambient")) {
-        QJsonArray a = args["ambient"].toArray();
-        modifications << QString("ambient: %1 %2 %3")
-            .arg(a[0].toDouble()).arg(a[1].toDouble()).arg(a[2].toDouble());
-    }
-    if (args.contains("diffuse")) {
-        QJsonArray d = args["diffuse"].toArray();
-        modifications << QString("diffuse: %1 %2 %3")
-            .arg(d[0].toDouble()).arg(d[1].toDouble()).arg(d[2].toDouble());
-    }
-    if (args.contains("specular")) {
-        QJsonArray s = args["specular"].toArray();
-        double shininess = args.value("shininess").toDouble(32);
-        modifications << QString("specular: %1 %2 %3 %4")
-            .arg(s[0].toDouble()).arg(s[1].toDouble()).arg(s[2].toDouble()).arg(shininess);
-    }
-    if (args.contains("emissive")) {
-        QJsonArray e = args["emissive"].toArray();
-        modifications << QString("emissive: %1 %2 %3")
-            .arg(e[0].toDouble()).arg(e[1].toDouble()).arg(e[2].toDouble());
-    }
-    if (args.contains("texture")) {
-        modifications << QString("texture: %1").arg(args["texture"].toString());
-    }
+        // Get the first technique and pass
+        if (material->getNumTechniques() == 0) {
+            textContent["text"] = QString("Error: Material '%1' has no techniques").arg(name);
+            content.append(textContent);
+            QJsonObject result;
+            result["isError"] = true;
+            result["content"] = content;
+            return result;
+        }
 
-    // TODO: Actually modify the material in Ogre via MainWindow
+        Ogre::Technique* technique = material->getTechnique(0);
+        if (technique->getNumPasses() == 0) {
+            textContent["text"] = QString("Error: Material '%1' technique has no passes").arg(name);
+            content.append(textContent);
+            QJsonObject result;
+            result["isError"] = true;
+            result["content"] = content;
+            return result;
+        }
 
-    textContent["text"] = QString("Modified material '%1':\n%2").arg(name).arg(modifications.join("\n"));
-    content.append(textContent);
+        Ogre::Pass* pass = technique->getPass(0);
 
-    QJsonObject result;
-    result["content"] = content;
-    return result;
+        QStringList modifications;
+
+        // Apply modifications
+        if (args.contains("ambient")) {
+            QJsonArray a = args["ambient"].toArray();
+            Ogre::ColourValue ambient(a[0].toDouble(), a[1].toDouble(), a[2].toDouble());
+            pass->setAmbient(ambient);
+            modifications << QString("ambient: %1 %2 %3")
+                .arg(a[0].toDouble()).arg(a[1].toDouble()).arg(a[2].toDouble());
+        }
+        if (args.contains("diffuse")) {
+            QJsonArray d = args["diffuse"].toArray();
+            Ogre::ColourValue diffuse(d[0].toDouble(), d[1].toDouble(), d[2].toDouble());
+            pass->setDiffuse(diffuse);
+            modifications << QString("diffuse: %1 %2 %3")
+                .arg(d[0].toDouble()).arg(d[1].toDouble()).arg(d[2].toDouble());
+        }
+        if (args.contains("specular")) {
+            QJsonArray s = args["specular"].toArray();
+            double shininess = args.value("shininess").toDouble(pass->getShininess());
+            Ogre::ColourValue specular(s[0].toDouble(), s[1].toDouble(), s[2].toDouble());
+            pass->setSpecular(specular);
+            pass->setShininess(shininess);
+            modifications << QString("specular: %1 %2 %3 (shininess: %4)")
+                .arg(s[0].toDouble()).arg(s[1].toDouble()).arg(s[2].toDouble()).arg(shininess);
+        }
+        if (args.contains("emissive")) {
+            QJsonArray e = args["emissive"].toArray();
+            Ogre::ColourValue emissive(e[0].toDouble(), e[1].toDouble(), e[2].toDouble());
+            pass->setSelfIllumination(emissive);
+            modifications << QString("emissive: %1 %2 %3")
+                .arg(e[0].toDouble()).arg(e[1].toDouble()).arg(e[2].toDouble());
+        }
+
+        textContent["text"] = QString("Modified material '%1':\n%2").arg(name).arg(modifications.join("\n"));
+        content.append(textContent);
+
+        QJsonObject result;
+        result["content"] = content;
+        return result;
+
+    } catch (Ogre::Exception& e) {
+        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
+        content.append(textContent);
+        QJsonObject result;
+        result["isError"] = true;
+        result["content"] = content;
+        return result;
+    }
 }
 
 QJsonObject MCPServer::toolGetMaterial(const QJsonObject &args)
@@ -467,16 +525,30 @@ QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
     QJsonObject textContent;
     textContent["type"] = "text";
 
-    // TODO: Get actual materials from Ogre MaterialManager
-    QStringList materials;
-    materials << "BaseWhite" << "BaseWhiteNoLighting";
+    try {
+        QStringList materials;
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        auto it = matMgr.getResourceIterator();
+        while (it.hasMoreElements()) {
+            Ogre::ResourcePtr res = it.getNext();
+            materials << QString::fromStdString(res->getName());
+        }
 
-    textContent["text"] = QString("Available materials:\n%1").arg(materials.join("\n"));
-    content.append(textContent);
+        materials.sort();
+        textContent["text"] = QString("Available materials (%1):\n%2").arg(materials.size()).arg(materials.join("\n"));
+        content.append(textContent);
 
-    QJsonObject result;
-    result["content"] = content;
-    return result;
+        QJsonObject result;
+        result["content"] = content;
+        return result;
+    } catch (Ogre::Exception& e) {
+        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
+        content.append(textContent);
+        QJsonObject result;
+        result["isError"] = true;
+        result["content"] = content;
+        return result;
+    }
 }
 
 QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
@@ -652,14 +724,80 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
     QJsonObject textContent;
     textContent["type"] = "text";
 
-    // TODO: Get actual scene info
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) {
+            textContent["text"] = "Error: Manager not available";
+            content.append(textContent);
+            QJsonObject result;
+            result["isError"] = true;
+            result["content"] = content;
+            return result;
+        }
 
-    textContent["text"] = "Scene info:\n- Objects: N/A\n- Materials: N/A\n- Lights: N/A";
-    content.append(textContent);
+        // Get scene nodes
+        QList<Ogre::SceneNode*>& nodes = mgr->getSceneNodes();
+        QList<Ogre::Entity*>& entities = mgr->getEntities();
 
-    QJsonObject result;
-    result["content"] = content;
-    return result;
+        // Count materials
+        int materialCount = 0;
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        auto it = matMgr.getResourceIterator();
+        while (it.hasMoreElements()) {
+            it.getNext();
+            materialCount++;
+        }
+
+        // Build scene node list
+        QStringList nodeNames;
+        for (Ogre::SceneNode* node : nodes) {
+            if (node) {
+                nodeNames << QString::fromStdString(node->getName());
+            }
+        }
+
+        // Build entity list with their materials
+        QStringList entityInfo;
+        for (Ogre::Entity* entity : entities) {
+            if (entity) {
+                QString info = QString("  - %1").arg(QString::fromStdString(entity->getName()));
+                if (entity->getNumSubEntities() > 0) {
+                    Ogre::SubEntity* subEnt = entity->getSubEntity(0);
+                    if (subEnt && subEnt->getMaterial()) {
+                        info += QString(" (material: %1)").arg(QString::fromStdString(subEnt->getMaterial()->getName()));
+                    }
+                }
+                entityInfo << info;
+            }
+        }
+
+        QString sceneInfo = QString(
+            "Scene Information:\n"
+            "- Scene Nodes: %1\n"
+            "- Entities: %2\n"
+            "- Materials loaded: %3\n\n"
+            "Nodes:\n%4\n\n"
+            "Entities:\n%5"
+        ).arg(nodes.size())
+         .arg(entities.size())
+         .arg(materialCount)
+         .arg(nodeNames.isEmpty() ? "  (none)" : "  " + nodeNames.join("\n  "))
+         .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"));
+
+        textContent["text"] = sceneInfo;
+        content.append(textContent);
+
+        QJsonObject result;
+        result["content"] = content;
+        return result;
+    } catch (Ogre::Exception& e) {
+        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
+        content.append(textContent);
+        QJsonObject result;
+        result["isError"] = true;
+        result["content"] = content;
+        return result;
+    }
 }
 
 QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
@@ -681,6 +819,168 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
     content.append(textContent);
 
     QJsonObject result;
+    result["content"] = content;
+    return result;
+}
+
+QJsonObject MCPServer::toolCreatePrimitive(const QJsonObject &args)
+{
+    QString type = args["type"].toString().toLower();
+
+    QJsonArray content;
+    QJsonObject textContent;
+    textContent["type"] = "text";
+
+    if (type.isEmpty()) {
+        textContent["text"] = "Error: Primitive type is required (sphere, cube, plane, cylinder, cone, torus)";
+        content.append(textContent);
+        QJsonObject result;
+        result["isError"] = true;
+        result["content"] = content;
+        return result;
+    }
+
+    if (!m_mainWindow) {
+        textContent["text"] = "Error: MainWindow not available. Run with --with-mcp flag for full functionality.";
+        content.append(textContent);
+        QJsonObject result;
+        result["isError"] = true;
+        result["content"] = content;
+        return result;
+    }
+
+    // Use QMetaObject::invokeMethod to call the slot on the main thread
+    bool success = false;
+    QString resultMessage;
+
+    // Map type to PrimitivesWidget method
+    if (type == "sphere") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            // Access PrimitivesWidget through MainWindow - we need to find it
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createSphere();
+                success = true;
+                resultMessage = "Created sphere primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else if (type == "cube" || type == "box") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createCube();
+                success = true;
+                resultMessage = "Created cube primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else if (type == "plane") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createPlane();
+                success = true;
+                resultMessage = "Created plane primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else if (type == "cylinder") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createCylinder();
+                success = true;
+                resultMessage = "Created cylinder primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else if (type == "cone") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createCone();
+                success = true;
+                resultMessage = "Created cone primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else if (type == "torus") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createTorus();
+                success = true;
+                resultMessage = "Created torus primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else if (type == "tube") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createTube();
+                success = true;
+                resultMessage = "Created tube primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else if (type == "capsule") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createCapsule();
+                success = true;
+                resultMessage = "Created capsule primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else if (type == "icosphere") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createIcoSphere();
+                success = true;
+                resultMessage = "Created icosphere primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else if (type == "spring") {
+        QMetaObject::invokeMethod(m_mainWindow, [this, &success, &resultMessage]() {
+            PrimitivesWidget* primWidget = m_mainWindow->findChild<PrimitivesWidget*>();
+            if (primWidget) {
+                primWidget->createSpring();
+                success = true;
+                resultMessage = "Created spring primitive";
+            } else {
+                resultMessage = "PrimitivesWidget not found";
+            }
+        }, Qt::BlockingQueuedConnection);
+    } else {
+        textContent["text"] = QString("Unknown primitive type: %1. Valid types: sphere, cube, plane, cylinder, cone, torus, tube, capsule, icosphere, spring").arg(type);
+        content.append(textContent);
+        QJsonObject result;
+        result["isError"] = true;
+        result["content"] = content;
+        return result;
+    }
+
+    textContent["text"] = resultMessage;
+    content.append(textContent);
+
+    QJsonObject result;
+    if (!success) {
+        result["isError"] = true;
+    }
     result["content"] = content;
     return result;
 }
@@ -898,6 +1198,22 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "take_screenshot",
             "Take a screenshot of the current viewport",
+            inputSchema
+        ));
+    }
+
+    // create_primitive
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["type"] = QJsonObject{{"type", "string"}, {"description", "Type of primitive: sphere, cube, plane, cylinder, cone, torus, tube, capsule, icosphere, spring"}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"type"};
+
+        tools.append(buildToolDefinition(
+            "create_primitive",
+            "Create a 3D primitive object in the scene",
             inputSchema
         ));
     }

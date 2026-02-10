@@ -86,6 +86,7 @@ private:
     QJsonObject toolExportMesh(const QJsonObject &args);
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
+    QJsonObject toolCreatePrimitive(const QJsonObject &args);
 
     // Helper methods
     QJsonArray buildToolsList();

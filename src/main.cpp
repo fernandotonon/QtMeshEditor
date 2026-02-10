@@ -20,17 +20,19 @@
 int main(int argc, char *argv[])
 {
     // Check for MCP server mode before creating QApplication
-    // MCP mode runs as a console application without GUI
-    bool mcpMode = false;
+    bool mcpOnlyMode = false;
+    bool mcpWithGuiMode = false;
     for (int i = 1; i < argc; ++i) {
-        if (QString(argv[i]) == "--mcp" || QString(argv[i]) == "-mcp") {
-            mcpMode = true;
-            break;
+        QString arg = QString(argv[i]);
+        if (arg == "--mcp" || arg == "-mcp") {
+            mcpOnlyMode = true;
+        } else if (arg == "--with-mcp") {
+            mcpWithGuiMode = true;
         }
     }
 
-    if (mcpMode) {
-        // MCP Server mode - runs as console application
+    if (mcpOnlyMode) {
+        // MCP Server mode - runs as console application without GUI
         QCoreApplication a(argc, argv);
         QCoreApplication::setOrganizationName("QtMeshEditor");
         QCoreApplication::setOrganizationDomain("none");
@@ -38,14 +40,13 @@ int main(int argc, char *argv[])
         QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
 
         MCPServer server;
-        // Note: In MCP mode, we don't have a MainWindow, so tools that require
-        // GUI interaction will return appropriate error messages
+        // Note: In standalone MCP mode, we don't have a MainWindow
         server.start();
 
         return a.exec();
     }
 
-    // Normal GUI mode
+    // Normal GUI mode (optionally with MCP server)
     // Set Qt Quick Controls style before creating QApplication
     // This prevents issues with native macOS style not supporting customization
     QQuickStyle::setStyle("Basic");
@@ -101,5 +102,22 @@ int main(int argc, char *argv[])
     MainWindow w;
     w.show();
 
-    return a.exec();
+    // Start MCP server alongside GUI if requested
+    MCPServer *mcpServer = nullptr;
+    if (mcpWithGuiMode) {
+        mcpServer = new MCPServer(&w);
+        mcpServer->setMainWindow(&w);
+        mcpServer->start();
+        qDebug() << "MCP Server started alongside GUI";
+    }
+
+    int result = a.exec();
+
+    // Cleanup
+    if (mcpServer) {
+        mcpServer->stop();
+        delete mcpServer;
+    }
+
+    return result;
 }
