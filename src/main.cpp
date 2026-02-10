@@ -17,18 +17,36 @@
 #include "ModelDownloader.h"
 #include "MCPServer.h"
 
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
+
 int main(int argc, char *argv[])
 {
     // Check for MCP server mode before creating QApplication
     bool mcpOnlyMode = false;
     bool mcpWithGuiMode = false;
+    int httpPort = 8080;
     for (int i = 1; i < argc; ++i) {
         QString arg = QString(argv[i]);
         if (arg == "--mcp" || arg == "-mcp") {
             mcpOnlyMode = true;
         } else if (arg == "--with-mcp") {
             mcpWithGuiMode = true;
+        } else if (arg == "--http-port" && i + 1 < argc) {
+            httpPort = QString(argv[++i]).toInt();
         }
+    }
+
+    // When running in MCP mode, redirect stdout to stderr so that
+    // Ogre/Qt debug output doesn't interfere with MCP JSON-RPC protocol.
+    // The original stdout fd is saved and passed to MCPServer for responses.
+    int savedStdoutFd = -1;
+    if (mcpOnlyMode || mcpWithGuiMode) {
+#ifndef Q_OS_WIN
+        savedStdoutFd = dup(STDOUT_FILENO);
+        dup2(STDERR_FILENO, STDOUT_FILENO);
+#endif
     }
 
     if (mcpOnlyMode) {
@@ -41,7 +59,9 @@ int main(int argc, char *argv[])
 
         MCPServer server;
         // Note: In standalone MCP mode, we don't have a MainWindow
+        server.setOutputFd(savedStdoutFd);
         server.start();
+        server.startHttp(httpPort);
 
         return a.exec();
     }
@@ -107,7 +127,9 @@ int main(int argc, char *argv[])
     if (mcpWithGuiMode) {
         mcpServer = new MCPServer(&w);
         mcpServer->setMainWindow(&w);
+        mcpServer->setOutputFd(savedStdoutFd);
         mcpServer->start();
+        mcpServer->startHttp(httpPort);
         qDebug() << "MCP Server started alongside GUI";
     }
 

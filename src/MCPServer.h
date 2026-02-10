@@ -5,10 +5,12 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonDocument>
-#include <QTextStream>
 #include <QFile>
 #include <QSocketNotifier>
 #include <QCoreApplication>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QMap>
 #include <functional>
 #include <memory>
 
@@ -42,9 +44,26 @@ public:
     void stop();
 
     /**
+     * @brief Start the HTTP REST API server
+     * @param port TCP port to listen on (default 8080)
+     */
+    void startHttp(int port = 8080);
+
+    /**
+     * @brief Call a tool by name with arguments (public API for HTTP)
+     */
+    QJsonObject callTool(const QString &name, const QJsonObject &args);
+
+    /**
      * @brief Set the main window reference for accessing editor functionality
      */
     void setMainWindow(MainWindow *mainWindow);
+
+    /**
+     * @brief Set the file descriptor for MCP output (instead of stdout)
+     * Used when stdout is redirected to stderr to avoid mixing with Ogre output
+     */
+    void setOutputFd(int fd);
 
     /**
      * @brief Check if server is running
@@ -57,6 +76,7 @@ signals:
 
 private slots:
     void onReadyRead();
+    void onHttpConnection();
 
 private:
     // Message handling
@@ -93,11 +113,17 @@ private:
     QJsonObject buildToolDefinition(const QString &name, const QString &description,
                                      const QJsonObject &inputSchema);
 
+    // HTTP server
+    void handleHttpRequest(QTcpSocket *socket);
+    QTcpServer *m_httpServer = nullptr;
+    int m_httpPort = 8080;
+    QMap<QTcpSocket*, QByteArray> m_httpBuffers;
+
     // Member variables
     MainWindow *m_mainWindow = nullptr;
     QSocketNotifier *m_stdinNotifier = nullptr;
-    QFile m_stdin;
-    QTextStream m_stdout;
+    int m_stdinFd = -1;
+    int m_stdoutFd = -1;
     bool m_running = false;
     bool m_initialized = false;
     QByteArray m_buffer;
