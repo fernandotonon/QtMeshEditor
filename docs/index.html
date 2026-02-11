@@ -475,7 +475,7 @@
                 <div class="feature-card">
                     <div class="feature-icon">🤖</div>
                     <h3 class="feature-title">AI-Powered Generation</h3>
-                    <p class="feature-desc">OpenAI GPT integration for intelligent material script generation. Auto-validation and auto-apply with context-aware suggestions.</p>
+                    <p class="feature-desc">Generate materials using AI with OpenAI GPT or local LLM models. Run completely offline with GPU-accelerated local inference — no API keys needed.</p>
                 </div>
                 
                 <div class="feature-card">
@@ -512,6 +512,18 @@
                     <div class="feature-icon">🎯</div>
                     <h3 class="feature-title">Primitive Creation</h3>
                     <p class="feature-desc">Built-in primitive generation using Ogre-Procedural. Create boxes, spheres, planes, and more with customizable parameters.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">🔌</div>
+                    <h3 class="feature-title">MCP Server (AI Agent Control)</h3>
+                    <p class="feature-desc">Built-in Model Context Protocol server lets AI agents (Claude, Cursor, etc.) control the editor programmatically. 15 tools for materials, meshes, transforms, textures, and animations.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">🧠</div>
+                    <h3 class="feature-title">Local LLM Support</h3>
+                    <p class="feature-desc">Run AI material generation entirely offline using bundled llama.cpp with Metal/CUDA GPU acceleration. Download and manage GGUF models directly from the app.</p>
                 </div>
             </div>
         </section>
@@ -597,22 +609,120 @@ make -j$(nproc)</div>
                     <h3 class="feature-title">AI Material Generation</h3>
                     <p class="feature-desc">
                         • Describe your desired material<br>
-                        • AI generates Ogre material script<br>
+                        • Use OpenAI GPT or local LLM models<br>
+                        • GPU-accelerated offline inference<br>
                         • Automatic validation and application<br>
-                        • Edit AI suggestions as needed<br>
-                        • Save successful materials
+                        • Download GGUF models from the app
                     </p>
                 </div>
-                
+
                 <div class="feature-card">
-                    <h3 class="feature-title">Integrated Ogre3D Workflow</h3>
+                    <h3 class="feature-title">MCP Agent Integration</h3>
                     <p class="feature-desc">
-                        • Complete mesh and material pipeline<br>
-                        • Create primitives with procedural tools<br>
-                        • Manage entire Ogre3D asset libraries<br>
-                        • Export scenes with version compatibility<br>
-                        • Seamless Qt-based interface
+                        • AI agents control the editor via MCP<br>
+                        • 15 tools: materials, meshes, transforms<br>
+                        • HTTP REST API on port 8080<br>
+                        • Works with Claude, Cursor, and more<br>
+                        • Create scenes with natural language
                     </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- MCP Server Section -->
+        <section class="section">
+            <h2 class="section-title">🔌 MCP Server — AI Agent Integration</h2>
+            <p style="text-align: center; color: #cccccc; margin-bottom: 40px; max-width: 800px; margin-left: auto; margin-right: auto;">
+                QtMeshEditor includes a built-in <strong style="color: var(--neon-cyan);">Model Context Protocol (MCP)</strong> server that lets AI agents control the 3D editor programmatically. Create scenes, apply materials, and transform objects using natural language through Claude, Cursor, or any MCP-compatible agent.
+            </p>
+
+            <div class="install-steps">
+                <div class="install-step">
+                    <h3>Launch with MCP Server</h3>
+                    <p>Start QtMeshEditor with the MCP server enabled alongside the GUI:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+# GUI + MCP server (stdio + HTTP on port 8080)
+./bin/QtMeshEditor --with-mcp
+
+# Headless MCP mode (no GUI, for scripting)
+./bin/QtMeshEditor --mcp
+
+# Custom HTTP port
+./bin/QtMeshEditor --with-mcp --http-port 9090</div>
+                    </div>
+                </div>
+
+                <div class="install-step">
+                    <h3>Configure Your AI Agent</h3>
+                    <p>Add QtMeshEditor as an MCP server in your agent's configuration:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+# Claude Code
+claude mcp add --transport stdio qtmeshEditor -- /path/to/QtMeshEditor --with-mcp
+
+# Or create .mcp.json in your project root:
+{
+  "mcpServers": {
+    "qtmeshEditor": {
+      "type": "stdio",
+      "command": "/path/to/QtMeshEditor",
+      "args": ["--with-mcp"]
+    }
+  }
+}</div>
+                    </div>
+                </div>
+
+                <div class="install-step">
+                    <h3>Use the HTTP REST API</h3>
+                    <p>Or call tools directly via HTTP from any terminal or script:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+# Create a sphere
+curl -X POST localhost:8080/api/tools/create_primitive \
+  -d '{"type":"sphere","name":"MySphere"}'
+
+# Create and apply a material with texture
+curl -X POST localhost:8080/api/tools/create_material \
+  -d '{"name":"RedMat","colors":{"diffuse":[1,0,0]}}'
+curl -X POST localhost:8080/api/tools/apply_material \
+  -d '{"material":"RedMat","mesh":"MySphere"}'
+
+# Transform objects
+curl -X POST localhost:8080/api/tools/transform_mesh \
+  -d '{"name":"MySphere","position":{"x":3,"y":0,"z":0}}'
+
+# Animate rotation
+curl -X POST localhost:8080/api/tools/animate \
+  -d '{"name":"MySphere","yaw":60,"pitch":20}'
+
+# List all available tools
+curl localhost:8080/api/tools</div>
+                    </div>
+                </div>
+
+                <div class="install-step">
+                    <h3>Available MCP Tools</h3>
+                    <p>15 tools for complete scene control:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+create_material    — Create materials with colors or full scripts
+modify_material    — Modify material properties (colors, textures)
+get_material       — Get the full material script
+list_materials     — List all materials in the scene
+apply_material     — Apply a material to a mesh
+set_texture        — Set a texture on a material
+load_mesh          — Load a 3D mesh file
+get_mesh_info      — Get mesh information
+export_mesh        — Export mesh to file
+transform_mesh     — Position, rotate, and scale objects by name
+create_primitive   — Create spheres, cubes, cylinders, cones, etc.
+get_scene_info     — Get full scene information
+list_textures      — List loaded textures
+take_screenshot    — Capture the viewport
+animate            — Start/stop rotation animations</div>
+                    </div>
                 </div>
             </div>
         </section>
@@ -642,7 +752,7 @@ make -j$(nproc)</div>
                     <h3 class="feature-title">Requirements</h3>
                     <p class="feature-desc">
                         • Qt 6.x framework<br>
-                        • Ogre3D 1.12+ engine<br>
+                        • Ogre3D 14.x engine<br>
                         • ASSIMP library<br>
                         • CMake 3.24+<br>
                         • C++17 compiler
@@ -689,7 +799,7 @@ make -j$(nproc)</div>
     <footer class="footer">
         <div class="container">
             <p class="footer-text">
-                QtMeshEditor 2.0.0 © 2013-2024 Fernando Tonon | 
+                QtMeshEditor 2.0.0 © 2013-2025 Fernando Tonon |
                 <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> | 
                 <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--ogre-orange);">Ogre3D Forum</a>
             </p>
