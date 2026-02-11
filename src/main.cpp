@@ -19,10 +19,26 @@
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
+#include <signal.h>
+#include <execinfo.h>
 #endif
+
+static void crashHandler(int sig) {
+    fprintf(stderr, "\n=== CRASH: signal %d ===\n", sig);
+    void *frames[64];
+    int count = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, count, STDERR_FILENO);
+    fflush(stderr);
+    _exit(1);
+}
 
 int main(int argc, char *argv[])
 {
+#ifndef Q_OS_WIN
+    signal(SIGSEGV, crashHandler);
+    signal(SIGABRT, crashHandler);
+    signal(SIGBUS, crashHandler);
+#endif
     // Check for MCP server mode before creating QApplication
     bool mcpOnlyMode = false;
     bool mcpWithGuiMode = false;

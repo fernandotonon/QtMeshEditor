@@ -126,6 +126,7 @@ private:
     int m_stdoutFd = -1;
     bool m_running = false;
     bool m_initialized = false;
+    bool m_httpBusy = false;  // Guard against re-entrant tool execution
     QByteArray m_buffer;
 
     // MCP Protocol version

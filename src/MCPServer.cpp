@@ -93,7 +93,12 @@ void MCPServer::onReadyRead()
     // Read available data directly from file descriptor (not C FILE*)
     char buf[4096];
     ssize_t bytesRead = read(m_stdinFd, buf, sizeof(buf));
-    if (bytesRead <= 0) return;
+    if (bytesRead <= 0) {
+        // EOF or error - disable notifier to prevent busy loop
+        if (m_stdinNotifier)
+            m_stdinNotifier->setEnabled(false);
+        return;
+    }
     QByteArray data(buf, bytesRead);
 
     m_buffer.append(data);
@@ -926,34 +931,29 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
     }
 }
 
+// Helper: parse a vector from JSON (supports both array [x,y,z] and object {x,y,z})
+static Ogre::Vector3 parseVector3(const QJsonValue &val) {
+    if (val.isArray()) {
+        QJsonArray a = val.toArray();
+        return Ogre::Vector3(a[0].toDouble(), a[1].toDouble(), a[2].toDouble());
+    }
+    if (val.isObject()) {
+        QJsonObject o = val.toObject();
+        return Ogre::Vector3(o["x"].toDouble(), o["y"].toDouble(), o["z"].toDouble());
+    }
+    return Ogre::Vector3::ZERO;
+}
+
 QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
 {
     QJsonArray content;
     QJsonObject textContent;
     textContent["type"] = "text";
 
-    QStringList transforms;
-
-    if (args.contains("position")) {
-        QJsonArray p = args["position"].toArray();
-        transforms << QString("position: %1, %2, %3")
-            .arg(p[0].toDouble()).arg(p[1].toDouble()).arg(p[2].toDouble());
-    }
-    if (args.contains("rotation")) {
-        QJsonArray r = args["rotation"].toArray();
-        transforms << QString("rotation: %1, %2, %3")
-            .arg(r[0].toDouble()).arg(r[1].toDouble()).arg(r[2].toDouble());
-    }
-    if (args.contains("scale")) {
-        QJsonArray s = args["scale"].toArray();
-        transforms << QString("scale: %1, %2, %3")
-            .arg(s[0].toDouble()).arg(s[1].toDouble()).arg(s[2].toDouble());
-    }
-
     try {
-        SelectionSet* sel = SelectionSet::getSingleton();
-        if (!sel || sel->getNodesCount() == 0) {
-            textContent["text"] = "Error: No scene nodes selected. Select an object first.";
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) {
+            textContent["text"] = "Error: Manager not available";
             content.append(textContent);
             QJsonObject result;
             result["isError"] = true;
@@ -961,34 +961,62 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
             return result;
         }
 
-        TransformOperator* transformOp = TransformOperator::getSingleton();
-        if (!transformOp) {
-            textContent["text"] = "Error: TransformOperator not available";
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+        // If a name is provided, find and select that node first
+        QString name = args["name"].toString();
+        Ogre::SceneNode* targetNode = nullptr;
+        if (!name.isEmpty()) {
+            QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+            for (Ogre::SceneNode* node : nodes) {
+                if (node && QString::fromStdString(node->getName()) == name) {
+                    targetNode = node;
+                    break;
+                }
+            }
+            if (!targetNode) {
+                textContent["text"] = QString("Error: Node '%1' not found").arg(name);
+                content.append(textContent);
+                QJsonObject result;
+                result["isError"] = true;
+                result["content"] = content;
+                return result;
+            }
+        } else {
+            // No name given - require something selected
+            SelectionSet* sel = SelectionSet::getSingleton();
+            if (!sel || sel->getNodesCount() == 0) {
+                textContent["text"] = "Error: No name provided and no scene nodes selected.";
+                content.append(textContent);
+                QJsonObject result;
+                result["isError"] = true;
+                result["content"] = content;
+                return result;
+            }
+            targetNode = sel->getNodesSelectionList().first();
         }
 
+        QStringList transforms;
         if (args.contains("position")) {
-            QJsonArray p = args["position"].toArray();
-            Ogre::Vector3 pos(p[0].toDouble(), p[1].toDouble(), p[2].toDouble());
-            transformOp->setSelectedPosition(pos);
+            Ogre::Vector3 pos = parseVector3(args["position"]);
+            targetNode->setPosition(pos);
+            transforms << QString("position: %1, %2, %3").arg(pos.x).arg(pos.y).arg(pos.z);
         }
         if (args.contains("rotation")) {
-            QJsonArray r = args["rotation"].toArray();
-            Ogre::Vector3 rot(r[0].toDouble(), r[1].toDouble(), r[2].toDouble());
-            transformOp->setSelectedOrientation(rot);
+            Ogre::Vector3 rot = parseVector3(args["rotation"]);
+            Ogre::Quaternion q;
+            q.FromAngleAxis(Ogre::Degree(rot.x), Ogre::Vector3::UNIT_X);
+            Ogre::Quaternion qy; qy.FromAngleAxis(Ogre::Degree(rot.y), Ogre::Vector3::UNIT_Y);
+            Ogre::Quaternion qz; qz.FromAngleAxis(Ogre::Degree(rot.z), Ogre::Vector3::UNIT_Z);
+            targetNode->setOrientation(qz * qy * q);
+            transforms << QString("rotation: %1, %2, %3").arg(rot.x).arg(rot.y).arg(rot.z);
         }
         if (args.contains("scale")) {
-            QJsonArray s = args["scale"].toArray();
-            Ogre::Vector3 scale(s[0].toDouble(), s[1].toDouble(), s[2].toDouble());
-            transformOp->setSelectedScale(scale);
+            Ogre::Vector3 scale = parseVector3(args["scale"]);
+            targetNode->setScale(scale);
+            transforms << QString("scale: %1, %2, %3").arg(scale.x).arg(scale.y).arg(scale.z);
         }
 
-        textContent["text"] = QString("Applied transforms to %1 selected node(s):\n%2")
-            .arg(sel->getNodesCount())
+        textContent["text"] = QString("Applied transforms to '%1':\n%2")
+            .arg(QString::fromStdString(targetNode->getName()))
             .arg(transforms.join("\n"));
         content.append(textContent);
 
@@ -1189,9 +1217,8 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
             return result;
         }
 
-        // Get scene nodes
-        QList<Ogre::SceneNode*>& nodes = mgr->getSceneNodes();
-        QList<Ogre::Entity*>& entities = mgr->getEntities();
+        // Copy lists to avoid reference invalidation
+        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
 
         // Count materials
         int materialCount = 0;
@@ -1202,23 +1229,28 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
             materialCount++;
         }
 
-        // Build scene node list
+        // Build scene node list and entity list by iterating nodes directly.
+        // Manager::getEntities() uses static_cast<Entity*> on all attached objects,
+        // which crashes on ManualObjects. Check movable type explicitly.
         QStringList nodeNames;
-        for (Ogre::SceneNode* node : nodes) {
-            if (node) {
-                nodeNames << QString::fromStdString(node->getName());
-            }
-        }
-
-        // Build entity list with their materials
         QStringList entityInfo;
-        for (Ogre::Entity* entity : entities) {
-            if (entity) {
+        int entityCount = 0;
+        for (Ogre::SceneNode* node : nodes) {
+            if (!node) continue;
+            nodeNames << QString::fromStdString(node->getName());
+
+            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (!obj || obj->getMovableType() != "Entity") continue;
+
+                Ogre::Entity* entity = static_cast<Ogre::Entity*>(obj);
+                entityCount++;
                 QString info = QString("  - %1").arg(QString::fromStdString(entity->getName()));
                 if (entity->getNumSubEntities() > 0) {
                     Ogre::SubEntity* subEnt = entity->getSubEntity(0);
                     if (subEnt && subEnt->getMaterial()) {
-                        info += QString(" (material: %1)").arg(QString::fromStdString(subEnt->getMaterial()->getName()));
+                        info += QString(" (material: %1)").arg(
+                            QString::fromStdString(subEnt->getMaterial()->getName()));
                     }
                 }
                 entityInfo << info;
@@ -1233,7 +1265,7 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
             "Nodes:\n%4\n\n"
             "Entities:\n%5"
         ).arg(nodes.size())
-         .arg(entities.size())
+         .arg(entityCount)
          .arg(materialCount)
          .arg(nodeNames.isEmpty() ? "  (none)" : "  " + nodeNames.join("\n  "))
          .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"));
@@ -1692,7 +1724,8 @@ void MCPServer::handleHttpRequest(QTcpSocket *socket)
     QStringList parts = requestLine.split(' ');
     if (parts.size() < 3) {
         socket->write("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
-        socket->disconnectFromHost();
+        socket->flush();
+        socket->deleteLater();
         return;
     }
 
@@ -1713,12 +1746,12 @@ void MCPServer::handleHttpRequest(QTcpSocket *socket)
         return; // wait for full body
 
     QByteArray body = buf.mid(bodyStart, contentLength);
-    // Consume the processed request from the buffer
-    buf.remove(0, bodyStart + contentLength);
+    buf.clear();
 
-    // Build response
-    QJsonObject responseJson;
-    int httpStatus = 200;
+    // Disconnect all signals from socket to prevent re-entrant calls.
+    // Tool calls (e.g. create_primitive) trigger Ogre signals that spin the
+    // Qt event loop, which can re-deliver socket events and crash.
+    disconnect(socket, nullptr, this, nullptr);
 
     // Handle CORS preflight
     if (method == "OPTIONS") {
@@ -1728,9 +1761,17 @@ void MCPServer::handleHttpRequest(QTcpSocket *socket)
                           "Access-Control-Allow-Headers: Content-Type\r\n"
                           "Connection: close\r\n\r\n";
         socket->write(resp);
-        socket->disconnectFromHost();
+        socket->flush();
+        socket->deleteLater();
         return;
     }
+
+    // Parse route and arguments, then defer execution via QTimer::singleShot
+    // so the socket event is fully processed before any tool runs.
+    QString toolName;
+    QJsonObject args;
+    int httpStatus = 200;
+    QJsonObject responseJson;
 
     // Route: GET /api/tools - list tools
     if (method == "GET" && path == "/api/tools") {
@@ -1739,12 +1780,10 @@ void MCPServer::handleHttpRequest(QTcpSocket *socket)
     }
     // Route: POST /api/tools/:name - call a tool
     else if (method == "POST" && path.startsWith("/api/tools/")) {
-        QString toolName = path.mid(11); // after "/api/tools/"
-        // Remove query string if any
+        toolName = path.mid(11);
         int qmark = toolName.indexOf('?');
         if (qmark >= 0) toolName = toolName.left(qmark);
 
-        QJsonObject args;
         if (!body.isEmpty()) {
             QJsonParseError parseError;
             QJsonDocument doc = QJsonDocument::fromJson(body, &parseError);
@@ -1755,24 +1794,60 @@ void MCPServer::handleHttpRequest(QTcpSocket *socket)
                 args = doc.object();
             }
         }
-
-        if (httpStatus == 200) {
-            responseJson = callTool(toolName, args);
-        }
     }
     // Route: GET /api/tools/:name - call tool with no args
     else if (method == "GET" && path.startsWith("/api/tools/")) {
-        QString toolName = path.mid(11);
+        toolName = path.mid(11);
         int qmark = toolName.indexOf('?');
         if (qmark >= 0) toolName = toolName.left(qmark);
-        responseJson = callTool(toolName, QJsonObject());
     }
     else {
         httpStatus = 404;
         responseJson["error"] = "Not found. Use GET /api/tools or POST /api/tools/<name>";
     }
 
-    // Send HTTP response
+    // If we need to call a tool, defer it so socket events are fully drained first
+    if (!toolName.isEmpty() && httpStatus == 200) {
+        // Reject if another tool is already running (re-entrant call from Ogre event processing)
+        if (m_httpBusy) {
+            QByteArray errJson = R"({"error":"Server busy - another tool is executing"})";
+            QByteArray resp;
+            resp.append("HTTP/1.1 503 Service Unavailable\r\n");
+            resp.append("Content-Type: application/json\r\n");
+            resp.append("Access-Control-Allow-Origin: *\r\n");
+            resp.append("Connection: close\r\n");
+            resp.append(QString("Content-Length: %1\r\n").arg(errJson.size()).toUtf8());
+            resp.append("\r\n");
+            resp.append(errJson);
+            socket->write(resp);
+            socket->flush();
+            socket->deleteLater();
+            return;
+        }
+
+        QTimer::singleShot(0, this, [this, socket, toolName, args]() {
+            m_httpBusy = true;
+            QJsonObject result = callTool(toolName, args);
+            m_httpBusy = false;
+
+            QByteArray jsonData = QJsonDocument(result).toJson(QJsonDocument::Compact);
+            QByteArray httpResponse;
+            httpResponse.append("HTTP/1.1 200 OK\r\n");
+            httpResponse.append("Content-Type: application/json\r\n");
+            httpResponse.append("Access-Control-Allow-Origin: *\r\n");
+            httpResponse.append("Connection: close\r\n");
+            httpResponse.append(QString("Content-Length: %1\r\n").arg(jsonData.size()).toUtf8());
+            httpResponse.append("\r\n");
+            httpResponse.append(jsonData);
+
+            socket->write(httpResponse);
+            socket->flush();
+            socket->deleteLater();
+        });
+        return;
+    }
+
+    // Send HTTP response immediately for non-tool requests
     QByteArray jsonData = QJsonDocument(responseJson).toJson(QJsonDocument::Compact);
     QByteArray httpResponse;
     httpResponse.append(QString("HTTP/1.1 %1 %2\r\n")
@@ -1787,5 +1862,6 @@ void MCPServer::handleHttpRequest(QTcpSocket *socket)
     httpResponse.append(jsonData);
 
     socket->write(httpResponse);
-    socket->disconnectFromHost();
+    socket->flush();
+    socket->deleteLater();
 }
