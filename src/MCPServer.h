@@ -11,8 +11,11 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QMap>
+#include <QTimer>
 #include <functional>
 #include <memory>
+
+namespace Ogre { class SceneNode; }
 
 class MainWindow;
 
@@ -107,6 +110,18 @@ private:
     QJsonObject toolGetSceneInfo(const QJsonObject &args);
     QJsonObject toolTakeScreenshot(const QJsonObject &args);
     QJsonObject toolCreatePrimitive(const QJsonObject &args);
+    QJsonObject toolAnimate(const QJsonObject &args);
+
+    // Animation
+    struct NodeAnimation {
+        Ogre::SceneNode* node;
+        float yawSpeed;   // degrees per second
+        float pitchSpeed;
+        float rollSpeed;
+    };
+    QMap<QString, NodeAnimation> m_animations;
+    QTimer *m_animationTimer = nullptr;
+    void onAnimationTick();
 
     // Helper methods
     QJsonArray buildToolsList();
