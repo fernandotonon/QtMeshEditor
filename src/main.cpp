@@ -1,10 +1,12 @@
 #include <QApplication>
+#include <QCoreApplication>
 #include <QPalette>
 #include <QDebug>
 #include <QTimer>
 #include <QStyleFactory>
 #include <QSettings>
 #include <QLibraryInfo>
+#include <QCommandLineParser>
 #include <QtQml/qqmlengine.h>
 #include <QtQml/qjsengine.h>
 #include <QtQuickControls2/QQuickStyle>
@@ -13,9 +15,76 @@
 #include "QMLMaterialHighlighter.h"
 #include "LLMManager.h"
 #include "ModelDownloader.h"
+#include "MCPServer.h"
+
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#include <signal.h>
+#include <execinfo.h>
+#endif
+
+#ifndef Q_OS_WIN
+static void crashHandler(int sig) {
+    fprintf(stderr, "\n=== CRASH: signal %d ===\n", sig);
+    void *frames[64];
+    int count = backtrace(frames, 64);
+    backtrace_symbols_fd(frames, count, STDERR_FILENO);
+    fflush(stderr);
+    _exit(1);
+}
+#endif
 
 int main(int argc, char *argv[])
 {
+#ifndef Q_OS_WIN
+    signal(SIGSEGV, crashHandler);
+    signal(SIGABRT, crashHandler);
+    signal(SIGBUS, crashHandler);
+#endif
+    // Check for MCP server mode before creating QApplication
+    bool mcpOnlyMode = false;
+    bool mcpWithGuiMode = false;
+    int httpPort = 8080;
+    for (int i = 1; i < argc; ++i) {
+        QString arg = QString(argv[i]);
+        if (arg == "--mcp" || arg == "-mcp") {
+            mcpOnlyMode = true;
+        } else if (arg == "--with-mcp") {
+            mcpWithGuiMode = true;
+        } else if (arg == "--http-port" && i + 1 < argc) {
+            httpPort = QString(argv[++i]).toInt();
+        }
+    }
+
+    // When running in MCP mode, redirect stdout to stderr so that
+    // Ogre/Qt debug output doesn't interfere with MCP JSON-RPC protocol.
+    // The original stdout fd is saved and passed to MCPServer for responses.
+    int savedStdoutFd = -1;
+    if (mcpOnlyMode || mcpWithGuiMode) {
+#ifndef Q_OS_WIN
+        savedStdoutFd = dup(STDOUT_FILENO);
+        dup2(STDERR_FILENO, STDOUT_FILENO);
+#endif
+    }
+
+    if (mcpOnlyMode) {
+        // MCP Server mode - runs as console application without GUI
+        QCoreApplication a(argc, argv);
+        QCoreApplication::setOrganizationName("QtMeshEditor");
+        QCoreApplication::setOrganizationDomain("none");
+        QCoreApplication::setApplicationName("QtMeshEditor");
+        QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
+
+        MCPServer server;
+        // Note: In standalone MCP mode, we don't have a MainWindow
+        server.setOutputFd(savedStdoutFd);
+        server.start();
+        server.startHttp(httpPort);
+
+        return a.exec();
+    }
+
+    // Normal GUI mode (optionally with MCP server)
     // Set Qt Quick Controls style before creating QApplication
     // This prevents issues with native macOS style not supporting customization
     QQuickStyle::setStyle("Basic");
@@ -71,5 +140,24 @@ int main(int argc, char *argv[])
     MainWindow w;
     w.show();
 
-    return a.exec();
+    // Start MCP server alongside GUI if requested
+    MCPServer *mcpServer = nullptr;
+    if (mcpWithGuiMode) {
+        mcpServer = new MCPServer(&w);
+        mcpServer->setMainWindow(&w);
+        mcpServer->setOutputFd(savedStdoutFd);
+        mcpServer->start();
+        mcpServer->startHttp(httpPort);
+        qDebug() << "MCP Server started alongside GUI";
+    }
+
+    int result = a.exec();
+
+    // Cleanup
+    if (mcpServer) {
+        mcpServer->stop();
+        delete mcpServer;
+    }
+
+    return result;
 }
