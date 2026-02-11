@@ -97,6 +97,11 @@ void MCPServer::onReadyRead()
         // EOF or error - disable notifier to prevent busy loop
         if (m_stdinNotifier)
             m_stdinNotifier->setEnabled(false);
+        // In headless MCP mode (no GUI), quit when the client disconnects
+        if (!m_mainWindow) {
+            qDebug() << "MCP: stdin closed, shutting down";
+            QCoreApplication::quit();
+        }
         return;
     }
     QByteArray data(buf, bytesRead);
@@ -161,14 +166,29 @@ void MCPServer::processMessage(const QByteArray &data)
 
     qDebug() << "MCP Request:" << method;
 
+    // MCP notifications (no "id" field) must not receive a response.
+    bool isNotification = !request.contains("id");
+
+    // Handle MCP notifications (no response sent)
+    if (method == "initialized" || method == "notifications/initialized") {
+        // Post-handshake notification — nothing to do
+        return;
+    }
+    if (method == "notifications/cancelled") {
+        return;
+    }
+
+    // All other notifications are silently ignored per MCP spec
+    if (isNotification) {
+        qDebug() << "MCP: ignoring unknown notification:" << method;
+        return;
+    }
+
     QJsonObject result;
 
-    // Handle different MCP methods
+    // Handle MCP request methods
     if (method == "initialize") {
         result = handleInitialize(params);
-    } else if (method == "initialized") {
-        // Notification, no response needed
-        return;
     } else if (method == "tools/list") {
         result = handleToolsList();
     } else if (method == "tools/call") {
@@ -184,7 +204,7 @@ void MCPServer::processMessage(const QByteArray &data)
         return;
     }
 
-    // Send response
+    // Send response (only for requests with an id)
     QJsonObject response;
     response["jsonrpc"] = "2.0";
     response["id"] = id;
@@ -307,6 +327,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolTakeScreenshot(args);
     } else if (name == "create_primitive") {
         toolResult = toolCreatePrimitive(args);
+    } else if (name == "animate") {
+        toolResult = toolAnimate(args);
     } else {
         QJsonObject result;
         result["isError"] = true;
@@ -1430,6 +1452,122 @@ QJsonObject MCPServer::toolCreatePrimitive(const QJsonObject &args)
     return result;
 }
 
+QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
+{
+    QString name = args["name"].toString();
+    bool stop = args["stop"].toBool(false);
+
+    QJsonArray content;
+    QJsonObject textContent;
+    textContent["type"] = "text";
+
+    if (name.isEmpty()) {
+        textContent["text"] = "Error: Node name is required";
+        content.append(textContent);
+        QJsonObject result;
+        result["isError"] = true;
+        result["content"] = content;
+        return result;
+    }
+
+    if (stop) {
+        m_animations.remove(name);
+        if (m_animations.isEmpty() && m_animationTimer) {
+            m_animationTimer->stop();
+        }
+        textContent["text"] = QString("Stopped animation on '%1'").arg(name);
+        content.append(textContent);
+        QJsonObject result;
+        result["content"] = content;
+        return result;
+    }
+
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) {
+            textContent["text"] = "Error: Manager not available";
+            content.append(textContent);
+            QJsonObject result;
+            result["isError"] = true;
+            result["content"] = content;
+            return result;
+        }
+
+        Ogre::SceneNode* targetNode = nullptr;
+        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+        for (Ogre::SceneNode* node : nodes) {
+            if (node && QString::fromStdString(node->getName()) == name) {
+                targetNode = node;
+                break;
+            }
+        }
+
+        if (!targetNode) {
+            textContent["text"] = QString("Error: Node '%1' not found").arg(name);
+            content.append(textContent);
+            QJsonObject result;
+            result["isError"] = true;
+            result["content"] = content;
+            return result;
+        }
+
+        float yaw = static_cast<float>(args["yaw"].toDouble(0));
+        float pitch = static_cast<float>(args["pitch"].toDouble(0));
+        float roll = static_cast<float>(args["roll"].toDouble(0));
+
+        if (yaw == 0 && pitch == 0 && roll == 0) {
+            yaw = 45; // default: 45 degrees/sec around Y
+        }
+
+        NodeAnimation anim;
+        anim.node = targetNode;
+        anim.yawSpeed = yaw;
+        anim.pitchSpeed = pitch;
+        anim.rollSpeed = roll;
+        m_animations[name] = anim;
+
+        // Create and start the animation timer if needed
+        if (!m_animationTimer) {
+            m_animationTimer = new QTimer(this);
+            connect(m_animationTimer, &QTimer::timeout, this, &MCPServer::onAnimationTick);
+        }
+        if (!m_animationTimer->isActive()) {
+            m_animationTimer->start(16); // ~60fps
+        }
+
+        textContent["text"] = QString("Started animation on '%1' (yaw: %2, pitch: %3, roll: %4 deg/sec)")
+            .arg(name).arg(yaw).arg(pitch).arg(roll);
+        content.append(textContent);
+
+        QJsonObject result;
+        result["content"] = content;
+        return result;
+
+    } catch (Ogre::Exception& e) {
+        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
+        content.append(textContent);
+        QJsonObject result;
+        result["isError"] = true;
+        result["content"] = content;
+        return result;
+    }
+}
+
+void MCPServer::onAnimationTick()
+{
+    const float dt = 0.016f; // ~16ms per tick
+    for (auto it = m_animations.begin(); it != m_animations.end(); ++it) {
+        NodeAnimation &anim = it.value();
+        if (!anim.node) continue;
+        if (anim.yawSpeed != 0)
+            anim.node->yaw(Ogre::Degree(anim.yawSpeed * dt));
+        if (anim.pitchSpeed != 0)
+            anim.node->pitch(Ogre::Degree(anim.pitchSpeed * dt));
+        if (anim.rollSpeed != 0)
+            anim.node->roll(Ogre::Degree(anim.rollSpeed * dt));
+    }
+}
+
 // Helper methods
 
 QJsonArray MCPServer::buildToolsList()
@@ -1660,6 +1798,26 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "create_primitive",
             "Create a 3D primitive object in the scene",
+            inputSchema
+        ));
+    }
+
+    // animate
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the scene node to animate"}};
+        props["yaw"] = QJsonObject{{"type", "number"}, {"description", "Rotation speed around Y axis (degrees/sec)"}};
+        props["pitch"] = QJsonObject{{"type", "number"}, {"description", "Rotation speed around X axis (degrees/sec)"}};
+        props["roll"] = QJsonObject{{"type", "number"}, {"description", "Rotation speed around Z axis (degrees/sec)"}};
+        props["stop"] = QJsonObject{{"type", "boolean"}, {"description", "Set true to stop animation on this node"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"name"};
+
+        tools.append(buildToolDefinition(
+            "animate",
+            "Start or stop continuous rotation animation on a scene node",
             inputSchema
         ));
     }
