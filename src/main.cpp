@@ -23,6 +23,7 @@
 #include <execinfo.h>
 #endif
 
+#ifndef Q_OS_WIN
 static void crashHandler(int sig) {
     fprintf(stderr, "\n=== CRASH: signal %d ===\n", sig);
     void *frames[64];
@@ -31,6 +32,7 @@ static void crashHandler(int sig) {
     fflush(stderr);
     _exit(1);
 }
+#endif
 
 int main(int argc, char *argv[])
 {
