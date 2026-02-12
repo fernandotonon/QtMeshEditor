@@ -7,12 +7,12 @@
 #include "TransformOperator.h"
 #include "Manager.h"
 #include "GlobalDefinitions.h"
-#include <OgreMaterialManager.h>
-#include <OgreResourceGroupManager.h>
+#include "TestHelpers.h"
 
 // Helper function to create required OGRE materials for tests
 static void createOGREMaterials()
 {
+    ensureMaterialManagerInitialised();
     Ogre::MaterialPtr guiMat = Ogre::MaterialManager::getSingleton().getByName(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     if (!guiMat)
     {

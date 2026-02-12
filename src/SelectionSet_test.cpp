@@ -4,34 +4,7 @@
 #include "SelectionSet.h"
 #include "PrimitiveObject.h"
 #include <OgreException.h>
-#include <OgreMaterialManager.h>
-#include <OgreResourceGroupManager.h>
-
-// Helper function to create required OGRE materials for entity tests
-static void createOGREMaterials()
-{
-    Ogre::MaterialPtr baseWhiteMat = Ogre::MaterialManager::getSingleton().getByName(
-        "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    if (!baseWhiteMat)
-    {
-        baseWhiteMat = Ogre::MaterialManager::getSingleton().create(
-            "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-        baseWhiteMat->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
-        baseWhiteMat->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
-        baseWhiteMat->getTechnique(0)->getPass(0)->setSelfIllumination(1, 1, 1);
-        baseWhiteMat->getTechnique(0)->setLightingEnabled(false);
-    }
-
-    Ogre::MaterialPtr baseWhiteMat2 = Ogre::MaterialManager::getSingleton().getByName(
-        "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    if (!baseWhiteMat2)
-    {
-        baseWhiteMat2 = Ogre::MaterialManager::getSingleton().create(
-            "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-        baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
-        baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
-    }
-}
+#include "TestHelpers.h"
 
 TEST(SelectionSetTests, AppendSceneNode)
 {
@@ -221,7 +194,7 @@ TEST(SelectionSetTests, GetCount)
     EXPECT_EQ(selectionSet->getSubEntitiesCount(), 0);
 
     // Add an entity to verify count sums across types
-    createOGREMaterials();
+    createStandardOgreMaterials();
     auto cubeNode = PrimitiveObject::createCube("testGetCountCube");
     ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
     Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
@@ -268,7 +241,7 @@ TEST(SelectionSetTests, EntitySelection)
     }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
-    createOGREMaterials();
+    createStandardOgreMaterials();
 
     // Create a cube primitive to get an entity
     auto cubeNode = PrimitiveObject::createCube("testEntitySelCube");
@@ -316,7 +289,7 @@ TEST(SelectionSetTests, EntityScaleRotationFactors)
     }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
-    createOGREMaterials();
+    createStandardOgreMaterials();
 
     auto cubeNode = PrimitiveObject::createCube("testScaleRotCube");
     ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
