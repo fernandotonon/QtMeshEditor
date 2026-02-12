@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <memory>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QSignalSpy>
@@ -44,7 +45,7 @@ static QApplication* ensureQApplication()
         static int argc = 1;
         static char appName[] = "MaterialEditorQML_test";
         static char* argv[] = {appName, nullptr};
-        app = new QApplication(argc, argv);
+        app = new QApplication(argc, argv); // NOSONAR - intentional: QApplication must outlive all tests
     }
     return app;
 }
@@ -57,16 +58,15 @@ protected:
     void SetUp() override {
         app = ensureQApplication();
         ASSERT_NE(app, nullptr);
-        editor = new MaterialEditorQML();
+        editor = std::make_unique<MaterialEditorQML>();
     }
 
     void TearDown() override {
-        delete editor;
-        editor = nullptr;
+        editor.reset();
     }
 
     QApplication* app = nullptr;
-    MaterialEditorQML* editor = nullptr;
+    std::unique_ptr<MaterialEditorQML> editor;
 };
 
 // ---------------------------------------------------------------------------
@@ -88,12 +88,11 @@ protected:
         }
         createOGREMaterials();
 
-        editor = new MaterialEditorQML();
+        editor = std::make_unique<MaterialEditorQML>();
     }
 
     void TearDown() override {
-        delete editor;
-        editor = nullptr;
+        editor.reset();
 
         Manager::kill();
 
@@ -105,7 +104,7 @@ protected:
     }
 
     QApplication* app = nullptr;
-    MaterialEditorQML* editor = nullptr;
+    std::unique_ptr<MaterialEditorQML> editor;
 };
 
 // ===========================================================================
@@ -255,8 +254,8 @@ TEST_F(MaterialEditorQMLTest, GetEnvironmentMappingNames) {
 // ===========================================================================
 
 TEST_F(MaterialEditorQMLTest, CreateNewMaterial_DefaultName) {
-    QSignalSpy nameSpy(editor, &MaterialEditorQML::materialNameChanged);
-    QSignalSpy textSpy(editor, &MaterialEditorQML::materialTextChanged);
+    QSignalSpy nameSpy(editor.get(), &MaterialEditorQML::materialNameChanged);
+    QSignalSpy textSpy(editor.get(), &MaterialEditorQML::materialTextChanged);
 
     editor->createNewMaterial();
 
@@ -292,13 +291,13 @@ TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_Valid) {
 }
 
 TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_Empty) {
-    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
     EXPECT_FALSE(editor->validateMaterialScript(""));
     EXPECT_GE(errorSpy.count(), 1);
 }
 
 TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MissingTechnique) {
-    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
     QString script =
         "material TestMaterial\n"
         "{\n"
@@ -308,7 +307,7 @@ TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MissingTechnique) {
 }
 
 TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MismatchedBraces) {
-    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
     QString script =
         "material TestMaterial\n"
         "{\n"
@@ -370,21 +369,21 @@ TEST_F(MaterialEditorQMLTest, UndoRedo_ClearHistory) {
 // ===========================================================================
 
 TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_Lighting) {
-    QSignalSpy spy(editor, &MaterialEditorQML::lightingEnabledChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::lightingEnabledChanged);
     editor->setLightingEnabled(false);
     EXPECT_GE(spy.count(), 1);
     EXPECT_FALSE(editor->lightingEnabled());
 }
 
 TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_DepthWrite) {
-    QSignalSpy spy(editor, &MaterialEditorQML::depthWriteEnabledChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::depthWriteEnabledChanged);
     editor->setDepthWriteEnabled(false);
     EXPECT_GE(spy.count(), 1);
     EXPECT_FALSE(editor->depthWriteEnabled());
 }
 
 TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_AmbientColor) {
-    QSignalSpy spy(editor, &MaterialEditorQML::ambientColorChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::ambientColorChanged);
     QColor newColor(255, 0, 0);
     editor->setAmbientColor(newColor);
     EXPECT_GE(spy.count(), 1);
@@ -392,7 +391,7 @@ TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_AmbientColor) {
 }
 
 TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_DiffuseColor) {
-    QSignalSpy spy(editor, &MaterialEditorQML::diffuseColorChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::diffuseColorChanged);
     QColor newColor(0, 255, 0);
     editor->setDiffuseColor(newColor);
     EXPECT_GE(spy.count(), 1);
@@ -400,14 +399,14 @@ TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_DiffuseColor) {
 }
 
 TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_Shininess) {
-    QSignalSpy spy(editor, &MaterialEditorQML::shininessChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::shininessChanged);
     editor->setShininess(42.0f);
     EXPECT_GE(spy.count(), 1);
     EXPECT_FLOAT_EQ(editor->shininess(), 42.0f);
 }
 
 TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_PolygonMode) {
-    QSignalSpy spy(editor, &MaterialEditorQML::polygonModeChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::polygonModeChanged);
     editor->setPolygonMode(0); // Points
     EXPECT_GE(spy.count(), 1);
     EXPECT_EQ(editor->polygonMode(), 0);
@@ -415,20 +414,20 @@ TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_PolygonMode) {
 
 TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_NoSignalOnSameValue) {
     // Setting the same default value should not emit a signal
-    QSignalSpy spy(editor, &MaterialEditorQML::lightingEnabledChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::lightingEnabledChanged);
     editor->setLightingEnabled(true); // default is true
     EXPECT_EQ(spy.count(), 0);
 }
 
 TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_FogOverride) {
-    QSignalSpy spy(editor, &MaterialEditorQML::fogOverrideChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::fogOverrideChanged);
     editor->setFogOverride(true);
     EXPECT_GE(spy.count(), 1);
     EXPECT_TRUE(editor->fogOverride());
 }
 
 TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_PointSize) {
-    QSignalSpy spy(editor, &MaterialEditorQML::pointSizeChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::pointSizeChanged);
     editor->setPointSize(5.0f);
     EXPECT_GE(spy.count(), 1);
     EXPECT_FLOAT_EQ(editor->pointSize(), 5.0f);
@@ -464,7 +463,7 @@ TEST_F(MaterialEditorQMLTest, TestConnection) {
 // ===========================================================================
 
 TEST_F(MaterialEditorQMLWithOgreTest, CreateNewMaterial) {
-    QSignalSpy nameSpy(editor, &MaterialEditorQML::materialNameChanged);
+    QSignalSpy nameSpy(editor.get(), &MaterialEditorQML::materialNameChanged);
 
     editor->createNewMaterial("OgreTestMat");
     EXPECT_EQ(editor->materialName(), "OgreTestMat");
@@ -473,7 +472,7 @@ TEST_F(MaterialEditorQMLWithOgreTest, CreateNewMaterial) {
 }
 
 TEST_F(MaterialEditorQMLWithOgreTest, LoadMaterial_BaseWhite) {
-    QSignalSpy nameSpy(editor, &MaterialEditorQML::materialNameChanged);
+    QSignalSpy nameSpy(editor.get(), &MaterialEditorQML::materialNameChanged);
 
     editor->loadMaterial("BaseWhite");
 
@@ -486,7 +485,7 @@ TEST_F(MaterialEditorQMLWithOgreTest, LoadMaterial_BaseWhite) {
 }
 
 TEST_F(MaterialEditorQMLWithOgreTest, LoadMaterial_NonExistent) {
-    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
 
     editor->loadMaterial("NonExistentMaterial_XYZ_12345");
 
@@ -516,7 +515,7 @@ TEST_F(MaterialEditorQMLWithOgreTest, ValidateMaterialScript_ValidWithOgre) {
 }
 
 TEST_F(MaterialEditorQMLWithOgreTest, ValidateMaterialScript_InvalidWithOgre) {
-    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
     EXPECT_FALSE(editor->validateMaterialScript("not a valid material script at all"));
     EXPECT_GE(errorSpy.count(), 1);
 }
@@ -568,20 +567,20 @@ TEST_F(MaterialEditorQMLWithOgreTest, PropertySettersWithOgrePass) {
     ASSERT_FALSE(editor->passList().isEmpty());
 
     // Set various properties and verify they take effect
-    QSignalSpy lightingSpy(editor, &MaterialEditorQML::lightingEnabledChanged);
+    QSignalSpy lightingSpy(editor.get(), &MaterialEditorQML::lightingEnabledChanged);
     editor->setLightingEnabled(false);
     EXPECT_GE(lightingSpy.count(), 1);
     EXPECT_FALSE(editor->lightingEnabled());
 
-    QSignalSpy depthWriteSpy(editor, &MaterialEditorQML::depthWriteEnabledChanged);
+    QSignalSpy depthWriteSpy(editor.get(), &MaterialEditorQML::depthWriteEnabledChanged);
     editor->setDepthWriteEnabled(false);
     EXPECT_GE(depthWriteSpy.count(), 1);
 
-    QSignalSpy depthCheckSpy(editor, &MaterialEditorQML::depthCheckEnabledChanged);
+    QSignalSpy depthCheckSpy(editor.get(), &MaterialEditorQML::depthCheckEnabledChanged);
     editor->setDepthCheckEnabled(false);
     EXPECT_GE(depthCheckSpy.count(), 1);
 
-    QSignalSpy shininessSpy(editor, &MaterialEditorQML::shininessChanged);
+    QSignalSpy shininessSpy(editor.get(), &MaterialEditorQML::shininessChanged);
     editor->setShininess(64.0f);
     EXPECT_GE(shininessSpy.count(), 1);
     EXPECT_FLOAT_EQ(editor->shininess(), 64.0f);
@@ -599,19 +598,19 @@ TEST_F(MaterialEditorQMLWithOgreTest, ColorSettersWithOgrePass) {
     QColor green(0, 255, 0);
     QColor blue(0, 0, 255);
 
-    QSignalSpy ambientSpy(editor, &MaterialEditorQML::ambientColorChanged);
+    QSignalSpy ambientSpy(editor.get(), &MaterialEditorQML::ambientColorChanged);
     editor->setAmbientColor(red);
     EXPECT_GE(ambientSpy.count(), 1);
 
-    QSignalSpy diffuseSpy(editor, &MaterialEditorQML::diffuseColorChanged);
+    QSignalSpy diffuseSpy(editor.get(), &MaterialEditorQML::diffuseColorChanged);
     editor->setDiffuseColor(green);
     EXPECT_GE(diffuseSpy.count(), 1);
 
-    QSignalSpy specularSpy(editor, &MaterialEditorQML::specularColorChanged);
+    QSignalSpy specularSpy(editor.get(), &MaterialEditorQML::specularColorChanged);
     editor->setSpecularColor(blue);
     EXPECT_GE(specularSpy.count(), 1);
 
-    QSignalSpy emissiveSpy(editor, &MaterialEditorQML::emissiveColorChanged);
+    QSignalSpy emissiveSpy(editor.get(), &MaterialEditorQML::emissiveColorChanged);
     editor->setEmissiveColor(red);
     EXPECT_GE(emissiveSpy.count(), 1);
 }
@@ -621,20 +620,20 @@ TEST_F(MaterialEditorQMLWithOgreTest, AdvancedPassProperties) {
     ASSERT_FALSE(editor->techniqueList().isEmpty());
     ASSERT_FALSE(editor->passList().isEmpty());
 
-    QSignalSpy shadingSpy(editor, &MaterialEditorQML::shadingModeChanged);
+    QSignalSpy shadingSpy(editor.get(), &MaterialEditorQML::shadingModeChanged);
     editor->setShadingMode(2); // Phong
     EXPECT_GE(shadingSpy.count(), 1);
     EXPECT_EQ(editor->shadingMode(), 2);
 
-    QSignalSpy cullHwSpy(editor, &MaterialEditorQML::cullHardwareChanged);
+    QSignalSpy cullHwSpy(editor.get(), &MaterialEditorQML::cullHardwareChanged);
     editor->setCullHardware(0); // None
     EXPECT_GE(cullHwSpy.count(), 1);
 
-    QSignalSpy cullSwSpy(editor, &MaterialEditorQML::cullSoftwareChanged);
+    QSignalSpy cullSwSpy(editor.get(), &MaterialEditorQML::cullSoftwareChanged);
     editor->setCullSoftware(2); // Front
     EXPECT_GE(cullSwSpy.count(), 1);
 
-    QSignalSpy blendOpSpy(editor, &MaterialEditorQML::sceneBlendOperationChanged);
+    QSignalSpy blendOpSpy(editor.get(), &MaterialEditorQML::sceneBlendOperationChanged);
     editor->setSceneBlendOperation(1); // Subtract
     EXPECT_GE(blendOpSpy.count(), 1);
 }
@@ -679,7 +678,7 @@ TEST_F(MaterialEditorQMLWithOgreTest, SelectedIndices_Update) {
 
 TEST_F(MaterialEditorQMLWithOgreTest, ApplyMaterial_Valid) {
     editor->loadMaterial("BaseWhite");
-    QSignalSpy appliedSpy(editor, &MaterialEditorQML::materialApplied);
+    QSignalSpy appliedSpy(editor.get(), &MaterialEditorQML::materialApplied);
 
     // Apply the current (valid) material text
     bool result = editor->applyMaterial();
@@ -691,7 +690,7 @@ TEST_F(MaterialEditorQMLWithOgreTest, VertexColorTracking) {
     editor->loadMaterial("BaseWhite");
     ASSERT_FALSE(editor->passList().isEmpty());
 
-    QSignalSpy spy(editor, &MaterialEditorQML::useVertexColorToAmbientChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::useVertexColorToAmbientChanged);
     editor->setUseVertexColorToAmbient(true);
     EXPECT_GE(spy.count(), 1);
     EXPECT_TRUE(editor->useVertexColorToAmbient());
@@ -710,11 +709,11 @@ TEST_F(MaterialEditorQMLWithOgreTest, BlendFactors) {
     editor->loadMaterial("BaseWhite");
     ASSERT_FALSE(editor->passList().isEmpty());
 
-    QSignalSpy srcSpy(editor, &MaterialEditorQML::sourceBlendFactorChanged);
+    QSignalSpy srcSpy(editor.get(), &MaterialEditorQML::sourceBlendFactorChanged);
     editor->setSourceBlendFactor(7); // One
     EXPECT_GE(srcSpy.count(), 1);
 
-    QSignalSpy dstSpy(editor, &MaterialEditorQML::destBlendFactorChanged);
+    QSignalSpy dstSpy(editor.get(), &MaterialEditorQML::destBlendFactorChanged);
     editor->setDestBlendFactor(2); // Zero + 1
     EXPECT_GE(dstSpy.count(), 1);
 }
@@ -726,7 +725,7 @@ TEST_F(MaterialEditorQMLWithOgreTest, FogProperties) {
     editor->setFogOverride(true);
     EXPECT_TRUE(editor->fogOverride());
 
-    QSignalSpy fogModeSpy(editor, &MaterialEditorQML::fogModeChanged);
+    QSignalSpy fogModeSpy(editor.get(), &MaterialEditorQML::fogModeChanged);
     editor->setFogMode(3); // Linear
     EXPECT_GE(fogModeSpy.count(), 1);
 
@@ -748,12 +747,12 @@ TEST_F(MaterialEditorQMLWithOgreTest, DiffuseAlphaAndSpecularAlpha) {
     editor->loadMaterial("BaseWhite");
     ASSERT_FALSE(editor->passList().isEmpty());
 
-    QSignalSpy diffAlphaSpy(editor, &MaterialEditorQML::diffuseAlphaChanged);
+    QSignalSpy diffAlphaSpy(editor.get(), &MaterialEditorQML::diffuseAlphaChanged);
     editor->setDiffuseAlpha(0.5f);
     EXPECT_GE(diffAlphaSpy.count(), 1);
     EXPECT_FLOAT_EQ(editor->diffuseAlpha(), 0.5f);
 
-    QSignalSpy specAlphaSpy(editor, &MaterialEditorQML::specularAlphaChanged);
+    QSignalSpy specAlphaSpy(editor.get(), &MaterialEditorQML::specularAlphaChanged);
     editor->setSpecularAlpha(0.3f);
     EXPECT_GE(specAlphaSpy.count(), 1);
     EXPECT_FLOAT_EQ(editor->specularAlpha(), 0.3f);
@@ -780,12 +779,12 @@ TEST_F(MaterialEditorQMLWithOgreTest, DepthBias) {
     editor->loadMaterial("BaseWhite");
     ASSERT_FALSE(editor->passList().isEmpty());
 
-    QSignalSpy constSpy(editor, &MaterialEditorQML::depthBiasConstantChanged);
+    QSignalSpy constSpy(editor.get(), &MaterialEditorQML::depthBiasConstantChanged);
     editor->setDepthBiasConstant(1.5f);
     EXPECT_GE(constSpy.count(), 1);
     EXPECT_FLOAT_EQ(editor->depthBiasConstant(), 1.5f);
 
-    QSignalSpy slopeSpy(editor, &MaterialEditorQML::depthBiasSlopeScaleChanged);
+    QSignalSpy slopeSpy(editor.get(), &MaterialEditorQML::depthBiasSlopeScaleChanged);
     editor->setDepthBiasSlopeScale(2.0f);
     EXPECT_GE(slopeSpy.count(), 1);
     EXPECT_FLOAT_EQ(editor->depthBiasSlopeScale(), 2.0f);
@@ -851,7 +850,7 @@ TEST_F(MaterialEditorQMLWithOgreTest, DepthFunction) {
     editor->loadMaterial("BaseWhite");
     ASSERT_FALSE(editor->passList().isEmpty());
 
-    QSignalSpy spy(editor, &MaterialEditorQML::depthFunctionChanged);
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::depthFunctionChanged);
     editor->setDepthFunction(2); // Less
     EXPECT_GE(spy.count(), 1);
     EXPECT_EQ(editor->depthFunction(), 2);

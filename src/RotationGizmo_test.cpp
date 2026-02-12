@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <memory>
 #include <GlobalDefinitions.h>
 #include "RotationGizmo.h"
 #include "Manager.h"
@@ -28,7 +29,7 @@ protected:
     QApplication* app = nullptr;
     Ogre::SceneManager* mSceneMgr = nullptr;
     Ogre::SceneNode* mLinkNode = nullptr;
-    RotationGizmo* mRotationGizmo = nullptr;
+    std::unique_ptr<RotationGizmo> mRotationGizmo;
 
     void SetUp() override {
         Manager::kill();
@@ -51,16 +52,12 @@ protected:
         mLinkNode = mSceneMgr->createSceneNode();
         ASSERT_NE(mLinkNode, nullptr);
 
-        mRotationGizmo = new RotationGizmo(mLinkNode, "TestRotationGizmo");
+        mRotationGizmo = std::make_unique<RotationGizmo>(mLinkNode, "TestRotationGizmo");
         ASSERT_NE(mRotationGizmo, nullptr);
     }
 
     void TearDown() override {
-        if (mRotationGizmo)
-        {
-            delete mRotationGizmo;
-            mRotationGizmo = nullptr;
-        }
+        mRotationGizmo.reset();
 
         if (mLinkNode && mSceneMgr)
         {

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <memory>
 #include <GlobalDefinitions.h>
 #include "TranslationGizmo.h"
 #include "Manager.h"
@@ -28,7 +29,7 @@ protected:
     QApplication* app = nullptr;
     Ogre::SceneManager* mSceneMgr = nullptr;
     Ogre::SceneNode* mLinkNode = nullptr;
-    TranslationGizmo* mTranslationGizmo = nullptr;
+    std::unique_ptr<TranslationGizmo> mTranslationGizmo;
 
     void SetUp() override {
         Manager::kill();
@@ -51,15 +52,11 @@ protected:
         mLinkNode = mSceneMgr->createSceneNode();
         ASSERT_NE(mLinkNode, nullptr);
 
-        mTranslationGizmo = new TranslationGizmo(mLinkNode, "TestTranslationGizmo");
+        mTranslationGizmo = std::make_unique<TranslationGizmo>(mLinkNode, "TestTranslationGizmo");
     }
 
     void TearDown() override {
-        if (mTranslationGizmo)
-        {
-            delete mTranslationGizmo;
-            mTranslationGizmo = nullptr;
-        }
+        mTranslationGizmo.reset();
 
         if (mLinkNode && mSceneMgr)
         {

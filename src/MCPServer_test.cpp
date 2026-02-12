@@ -4,6 +4,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonDocument>
+#include <memory>
 #include "MCPServer.h"
 #include "Manager.h"
 #include "PrimitiveObject.h"
@@ -69,14 +70,13 @@ protected:
         }
         createOGREMaterials();
 
-        server = new MCPServer();
+        server = std::make_unique<MCPServer>();
         // No mainWindow set — tests that need it will test the error path
     }
 
     void TearDown() override
     {
-        delete server;
-        server = nullptr;
+        server.reset();
 
         Manager::kill();
 
@@ -89,7 +89,7 @@ protected:
     }
 
     QApplication* app = nullptr;
-    MCPServer* server = nullptr;
+    std::unique_ptr<MCPServer> server;
 };
 
 // --- Material tools ---
