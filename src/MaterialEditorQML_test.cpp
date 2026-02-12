@@ -1,64 +1,866 @@
 #include <gtest/gtest.h>
-#include <gmock/gmock.h>
 #include <QApplication>
 #include <QCoreApplication>
-#include <QQmlEngine>
-#include <QJSEngine>
+#include <QSignalSpy>
+#include <QThread>
+#include "MaterialEditorQML.h"
+#include "Manager.h"
+#include <OgreException.h>
+#include <OgreMaterialManager.h>
+#include <OgreResourceGroupManager.h>
 
-// Simple test for MaterialEditorQML functionality
+// Helper function to create required OGRE materials for tests
+static void createOGREMaterials()
+{
+    Ogre::MaterialPtr baseWhiteMat = Ogre::MaterialManager::getSingleton().getByName(
+        "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat)
+    {
+        baseWhiteMat = Ogre::MaterialManager::getSingleton().create(
+            "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setSelfIllumination(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->setLightingEnabled(false);
+    }
+
+    Ogre::MaterialPtr baseWhiteMat2 = Ogre::MaterialManager::getSingleton().getByName(
+        "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat2)
+    {
+        baseWhiteMat2 = Ogre::MaterialManager::getSingleton().create(
+            "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+    }
+}
+
+// Ensure a QApplication exists for the process lifetime.
+// gtest_main does not create one, so we lazily create it here.
+static QApplication* ensureQApplication()
+{
+    QApplication* app = qobject_cast<QApplication*>(QCoreApplication::instance());
+    if (!app) {
+        static int argc = 1;
+        static char appName[] = "MaterialEditorQML_test";
+        static char* argv[] = {appName, nullptr};
+        app = new QApplication(argc, argv);
+    }
+    return app;
+}
+
+// ---------------------------------------------------------------------------
+// Basic fixture (no Ogre needed)
+// ---------------------------------------------------------------------------
 class MaterialEditorQMLTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Ensure QApplication exists - create if it doesn't
-        app = qobject_cast<QApplication*>(QCoreApplication::instance());
-        if (!app) {
-            // QApplication doesn't exist yet, create it
-            static int argc = 1;
-            static char appName[] = "MaterialEditorQML_test";
-            static char* argv[] = {appName, nullptr};
-            app = new QApplication(argc, argv);
-        }
+        app = ensureQApplication();
         ASSERT_NE(app, nullptr);
+        editor = new MaterialEditorQML();
     }
 
     void TearDown() override {
-        // Cleanup if needed
-        // Note: We don't delete app here as it may be used by other tests
+        delete editor;
+        editor = nullptr;
     }
 
     QApplication* app = nullptr;
+    MaterialEditorQML* editor = nullptr;
 };
 
-// Basic functionality tests
-TEST_F(MaterialEditorQMLTest, QmlEngineTest) {
-    QQmlEngine engine;
-    ASSERT_TRUE(engine.importPathList().size() > 0);
-}
+// ---------------------------------------------------------------------------
+// Ogre fixture
+// ---------------------------------------------------------------------------
+class MaterialEditorQMLWithOgreTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        Manager::kill();
+        QThread::msleep(50);
 
-TEST_F(MaterialEditorQMLTest, BasicQmlTest) {
-    QQmlEngine engine;
-    QJSValue result = engine.evaluate("1 + 1");
-    EXPECT_EQ(result.toNumber(), 2.0);
-}
+        app = ensureQApplication();
+        ASSERT_NE(app, nullptr);
 
-TEST_F(MaterialEditorQMLTest, StringManipulationTest) {
-    QString testString = "MaterialEditor";
-    EXPECT_FALSE(testString.isEmpty());
-    EXPECT_TRUE(testString.contains("Material"));
-}
+        try {
+            Manager::getSingleton();  // headless
+        } catch (const Ogre::Exception& e) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+        }
+        createOGREMaterials();
 
-int main(int argc, char** argv) {
-    // Create QApplication before running tests (required for Qt tests)
-    // Use static to ensure it persists for the lifetime of the program
-    static QApplication* app = nullptr;
-    if (!QCoreApplication::instance()) {
-        app = new QApplication(argc, argv);
+        editor = new MaterialEditorQML();
     }
-    
-    ::testing::InitGoogleTest(&argc, argv);
-    int result = RUN_ALL_TESTS();
-    
-    // Note: We don't delete app here as it may be needed during test teardown
-    // The OS will clean it up when the process exits
-    return result;
-} 
+
+    void TearDown() override {
+        delete editor;
+        editor = nullptr;
+
+        Manager::kill();
+
+        if (app) {
+            app->processEvents();
+        }
+
+        QThread::msleep(50);
+    }
+
+    QApplication* app = nullptr;
+    MaterialEditorQML* editor = nullptr;
+};
+
+// ===========================================================================
+// Basic fixture tests -- file system helpers
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, FileSystem_IsDirectory) {
+    // A known directory should return true
+    EXPECT_TRUE(editor->isDirectory("/tmp"));
+    // A non-existent or file path should return false
+    EXPECT_FALSE(editor->isDirectory("/tmp/nonexistent_path_xyz_12345"));
+}
+
+TEST_F(MaterialEditorQMLTest, FileSystem_GetParentDirectory) {
+    QString parent = editor->getParentDirectory("/tmp/somefile.txt");
+    EXPECT_EQ(parent, "/tmp");
+
+    QString parent2 = editor->getParentDirectory("/usr/local/bin");
+    EXPECT_EQ(parent2, "/usr/local");
+}
+
+TEST_F(MaterialEditorQMLTest, FileSystem_GetFileName) {
+    QString name = editor->getFileName("/some/path/texture.png");
+    EXPECT_EQ(name, "texture.png");
+
+    QString name2 = editor->getFileName("/another/directory/file.material");
+    EXPECT_EQ(name2, "file.material");
+}
+
+TEST_F(MaterialEditorQMLTest, FileSystem_PathExists) {
+    EXPECT_TRUE(editor->pathExists("/tmp"));
+    EXPECT_FALSE(editor->pathExists("/nonexistent_path_xyz_99999"));
+}
+
+TEST_F(MaterialEditorQMLTest, FileSystem_GetFileSize) {
+    // /tmp always exists as a directory; its size is platform-dependent
+    // but should be non-negative
+    qint64 size = editor->getFileSize("/tmp");
+    EXPECT_GE(size, 0);
+}
+
+TEST_F(MaterialEditorQMLTest, FileSystem_GetFileSizeString) {
+    // The format should contain B, KB, or MB
+    QString sizeStr = editor->getFileSizeString("/tmp");
+    EXPECT_TRUE(sizeStr.contains("B") || sizeStr.contains("KB") || sizeStr.contains("MB"));
+}
+
+TEST_F(MaterialEditorQMLTest, FileSystem_ListDirectory) {
+    // /tmp should have some entries (or at least be a valid call)
+    QVariantList entries = editor->listDirectory("/tmp");
+    // We simply verify the call succeeds. /tmp might have image files or not,
+    // but the result type should be a list.
+    // listDirectory filters for image files + dirs, so we just check it doesn't crash.
+    EXPECT_GE(entries.size(), 0);
+
+    // Non-existent directory should return empty list
+    QVariantList empty = editor->listDirectory("/nonexistent_path_xyz_99999");
+    EXPECT_EQ(empty.size(), 0);
+}
+
+// ===========================================================================
+// Basic fixture tests -- enum name getters
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, GetPolygonModeNames) {
+    QStringList names = editor->getPolygonModeNames();
+    EXPECT_EQ(names.size(), 3);
+    EXPECT_EQ(names[0], "Points");
+    EXPECT_EQ(names[1], "Wireframe");
+    EXPECT_EQ(names[2], "Solid");
+}
+
+TEST_F(MaterialEditorQMLTest, GetBlendFactorNames) {
+    QStringList names = editor->getBlendFactorNames();
+    EXPECT_FALSE(names.isEmpty());
+    // Should contain known entries
+    EXPECT_TRUE(names.contains("One"));
+    EXPECT_TRUE(names.contains("Zero"));
+}
+
+TEST_F(MaterialEditorQMLTest, GetShadingModeNames) {
+    QStringList names = editor->getShadingModeNames();
+    EXPECT_EQ(names.size(), 3);
+    EXPECT_EQ(names[0], "Flat");
+    EXPECT_EQ(names[1], "Gouraud");
+    EXPECT_EQ(names[2], "Phong");
+}
+
+TEST_F(MaterialEditorQMLTest, GetCullModeNames) {
+    QStringList names = editor->getCullModeNames();
+    EXPECT_EQ(names.size(), 3);
+    EXPECT_TRUE(names.contains("None"));
+    EXPECT_TRUE(names.contains("Clockwise"));
+    EXPECT_TRUE(names.contains("Counter-Clockwise"));
+}
+
+TEST_F(MaterialEditorQMLTest, GetDepthFunctionNames) {
+    QStringList names = editor->getDepthFunctionNames();
+    EXPECT_EQ(names.size(), 8);
+    EXPECT_TRUE(names.contains("Less"));
+    EXPECT_TRUE(names.contains("Greater"));
+}
+
+TEST_F(MaterialEditorQMLTest, GetAlphaRejectionFunctionNames) {
+    QStringList names = editor->getAlphaRejectionFunctionNames();
+    EXPECT_EQ(names.size(), 8);
+    EXPECT_TRUE(names.contains("Always Pass"));
+}
+
+TEST_F(MaterialEditorQMLTest, GetSceneBlendOperationNames) {
+    QStringList names = editor->getSceneBlendOperationNames();
+    EXPECT_EQ(names.size(), 5);
+    EXPECT_TRUE(names.contains("Add"));
+    EXPECT_TRUE(names.contains("Max"));
+}
+
+TEST_F(MaterialEditorQMLTest, GetFogModeNames) {
+    QStringList names = editor->getFogModeNames();
+    EXPECT_EQ(names.size(), 4);
+    EXPECT_TRUE(names.contains("None"));
+    EXPECT_TRUE(names.contains("Linear"));
+}
+
+TEST_F(MaterialEditorQMLTest, GetTextureAddressModeNames) {
+    QStringList names = editor->getTextureAddressModeNames();
+    EXPECT_EQ(names.size(), 4);
+    EXPECT_TRUE(names.contains("Wrap"));
+    EXPECT_TRUE(names.contains("Border"));
+}
+
+TEST_F(MaterialEditorQMLTest, GetTextureFilteringNames) {
+    QStringList names = editor->getTextureFilteringNames();
+    EXPECT_EQ(names.size(), 4);
+    EXPECT_TRUE(names.contains("Bilinear"));
+    EXPECT_TRUE(names.contains("Anisotropic"));
+}
+
+TEST_F(MaterialEditorQMLTest, GetEnvironmentMappingNames) {
+    QStringList names = editor->getEnvironmentMappingNames();
+    EXPECT_EQ(names.size(), 2);
+    EXPECT_TRUE(names.contains("None"));
+    EXPECT_TRUE(names.contains("Enabled"));
+}
+
+// ===========================================================================
+// Basic fixture tests -- createNewMaterial (no Ogre)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, CreateNewMaterial_DefaultName) {
+    QSignalSpy nameSpy(editor, &MaterialEditorQML::materialNameChanged);
+    QSignalSpy textSpy(editor, &MaterialEditorQML::materialTextChanged);
+
+    editor->createNewMaterial();
+
+    EXPECT_EQ(editor->materialName(), "new_material");
+    EXPECT_TRUE(editor->materialText().contains("material new_material"));
+    EXPECT_GE(nameSpy.count(), 1);
+    EXPECT_GE(textSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, CreateNewMaterial_CustomName) {
+    editor->createNewMaterial("MyTestMat");
+
+    EXPECT_EQ(editor->materialName(), "MyTestMat");
+    EXPECT_TRUE(editor->materialText().contains("material MyTestMat"));
+}
+
+// ===========================================================================
+// Basic fixture tests -- validate material script (no Ogre)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_Valid) {
+    QString validScript =
+        "material TestMaterial\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_TRUE(editor->validateMaterialScript(validScript));
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_Empty) {
+    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+    EXPECT_FALSE(editor->validateMaterialScript(""));
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MissingTechnique) {
+    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+    QString script =
+        "material TestMaterial\n"
+        "{\n"
+        "}";
+    EXPECT_FALSE(editor->validateMaterialScript(script));
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MismatchedBraces) {
+    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+    QString script =
+        "material TestMaterial\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t}\n"
+        "}";
+    EXPECT_FALSE(editor->validateMaterialScript(script));
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+// ===========================================================================
+// Basic fixture tests -- undo/redo (no Ogre)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, UndoRedo_InitialState) {
+    EXPECT_FALSE(editor->canUndo());
+    EXPECT_FALSE(editor->canRedo());
+}
+
+TEST_F(MaterialEditorQMLTest, UndoRedo_AfterChanges) {
+    // Set initial text
+    editor->setMaterialText("first text");
+    // After first set, undo stack should be empty (no previous text)
+    EXPECT_FALSE(editor->canUndo());
+
+    // Change text -- now "first text" goes to undo stack
+    editor->setMaterialText("second text");
+    EXPECT_TRUE(editor->canUndo());
+    EXPECT_FALSE(editor->canRedo());
+
+    // Undo should restore "first text"
+    editor->undo();
+    EXPECT_EQ(editor->materialText(), "first text");
+    EXPECT_FALSE(editor->canUndo());
+    EXPECT_TRUE(editor->canRedo());
+
+    // Redo should restore "second text"
+    editor->redo();
+    EXPECT_EQ(editor->materialText(), "second text");
+    EXPECT_TRUE(editor->canUndo());
+    EXPECT_FALSE(editor->canRedo());
+}
+
+TEST_F(MaterialEditorQMLTest, UndoRedo_ClearHistory) {
+    editor->setMaterialText("first");
+    editor->setMaterialText("second");
+    EXPECT_TRUE(editor->canUndo());
+
+    editor->clearUndoHistory();
+    EXPECT_FALSE(editor->canUndo());
+    EXPECT_FALSE(editor->canRedo());
+}
+
+// ===========================================================================
+// Basic fixture tests -- property setters emit signals (no Ogre pass)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_Lighting) {
+    QSignalSpy spy(editor, &MaterialEditorQML::lightingEnabledChanged);
+    editor->setLightingEnabled(false);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FALSE(editor->lightingEnabled());
+}
+
+TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_DepthWrite) {
+    QSignalSpy spy(editor, &MaterialEditorQML::depthWriteEnabledChanged);
+    editor->setDepthWriteEnabled(false);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FALSE(editor->depthWriteEnabled());
+}
+
+TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_AmbientColor) {
+    QSignalSpy spy(editor, &MaterialEditorQML::ambientColorChanged);
+    QColor newColor(255, 0, 0);
+    editor->setAmbientColor(newColor);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->ambientColor(), newColor);
+}
+
+TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_DiffuseColor) {
+    QSignalSpy spy(editor, &MaterialEditorQML::diffuseColorChanged);
+    QColor newColor(0, 255, 0);
+    editor->setDiffuseColor(newColor);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->diffuseColor(), newColor);
+}
+
+TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_Shininess) {
+    QSignalSpy spy(editor, &MaterialEditorQML::shininessChanged);
+    editor->setShininess(42.0f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->shininess(), 42.0f);
+}
+
+TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_PolygonMode) {
+    QSignalSpy spy(editor, &MaterialEditorQML::polygonModeChanged);
+    editor->setPolygonMode(0); // Points
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->polygonMode(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_NoSignalOnSameValue) {
+    // Setting the same default value should not emit a signal
+    QSignalSpy spy(editor, &MaterialEditorQML::lightingEnabledChanged);
+    editor->setLightingEnabled(true); // default is true
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_FogOverride) {
+    QSignalSpy spy(editor, &MaterialEditorQML::fogOverrideChanged);
+    editor->setFogOverride(true);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_TRUE(editor->fogOverride());
+}
+
+TEST_F(MaterialEditorQMLTest, PropertySettersAndSignals_PointSize) {
+    QSignalSpy spy(editor, &MaterialEditorQML::pointSizeChanged);
+    editor->setPointSize(5.0f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->pointSize(), 5.0f);
+}
+
+// ===========================================================================
+// Basic fixture tests -- theme colors (constants)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_AreValid) {
+    EXPECT_TRUE(editor->backgroundColor().isValid());
+    EXPECT_TRUE(editor->panelColor().isValid());
+    EXPECT_TRUE(editor->textColor().isValid());
+    EXPECT_TRUE(editor->borderColor().isValid());
+    EXPECT_TRUE(editor->highlightColor().isValid());
+    EXPECT_TRUE(editor->buttonColor().isValid());
+    EXPECT_TRUE(editor->buttonTextColor().isValid());
+    EXPECT_TRUE(editor->accentColor().isValid());
+}
+
+// ===========================================================================
+// Basic fixture tests -- testConnection
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, TestConnection) {
+    QString result = editor->testConnection();
+    EXPECT_FALSE(result.isEmpty());
+    EXPECT_TRUE(result.contains("successfully"));
+}
+
+// ===========================================================================
+// Ogre fixture tests
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, CreateNewMaterial) {
+    QSignalSpy nameSpy(editor, &MaterialEditorQML::materialNameChanged);
+
+    editor->createNewMaterial("OgreTestMat");
+    EXPECT_EQ(editor->materialName(), "OgreTestMat");
+    EXPECT_TRUE(editor->materialText().contains("material OgreTestMat"));
+    EXPECT_GE(nameSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, LoadMaterial_BaseWhite) {
+    QSignalSpy nameSpy(editor, &MaterialEditorQML::materialNameChanged);
+
+    editor->loadMaterial("BaseWhite");
+
+    EXPECT_EQ(editor->materialName(), "BaseWhite");
+    EXPECT_GE(nameSpy.count(), 1);
+    // The material text should contain the material name
+    EXPECT_TRUE(editor->materialText().contains("BaseWhite"));
+    // After loading, technique list should be populated
+    EXPECT_FALSE(editor->techniqueList().isEmpty());
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, LoadMaterial_NonExistent) {
+    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+
+    editor->loadMaterial("NonExistentMaterial_XYZ_12345");
+
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, LoadMaterial_Empty) {
+    // Loading empty name should create a new material
+    editor->loadMaterial("");
+
+    EXPECT_EQ(editor->materialName(), "new_material");
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ValidateMaterialScript_ValidWithOgre) {
+    editor->setMaterialName("TestValidation");
+    QString validScript =
+        "material TestValidation\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_TRUE(editor->validateMaterialScript(validScript));
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ValidateMaterialScript_InvalidWithOgre) {
+    QSignalSpy errorSpy(editor, &MaterialEditorQML::errorOccurred);
+    EXPECT_FALSE(editor->validateMaterialScript("not a valid material script at all"));
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, MaterialList_NonEmpty) {
+    QStringList materials = editor->getMaterialList();
+    EXPECT_FALSE(materials.isEmpty());
+    // Should at least contain BaseWhite and BaseWhiteNoLighting
+    EXPECT_TRUE(materials.contains("BaseWhite"));
+    EXPECT_TRUE(materials.contains("BaseWhiteNoLighting"));
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, CreateTechniquePassTextureUnit) {
+    // Load BaseWhite so we have a valid Ogre material
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->techniqueList().isEmpty());
+
+    int originalTechCount = editor->techniqueList().size();
+
+    // Create a new technique
+    editor->createNewTechnique("TestTechnique");
+    EXPECT_EQ(editor->techniqueList().size(), originalTechCount + 1);
+
+    // Select the new technique
+    editor->setSelectedTechniqueIndex(editor->techniqueList().size() - 1);
+
+    // The new technique should have no passes initially
+    // (createNewTechnique does NOT auto-create a pass)
+    // Actually, after selecting technique the passList updates
+    int passCount = editor->passList().size();
+
+    // Create a new pass
+    editor->createNewPass("TestPass");
+    EXPECT_GT(editor->passList().size(), passCount);
+
+    // Select the pass
+    editor->setSelectedPassIndex(editor->passList().size() - 1);
+
+    // Create a texture unit
+    int texUnitCount = editor->textureUnitList().size();
+    editor->createNewTextureUnit("TestTexUnit");
+    EXPECT_GT(editor->textureUnitList().size(), texUnitCount);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, PropertySettersWithOgrePass) {
+    // Load a material so we have a valid pass
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->techniqueList().isEmpty());
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Set various properties and verify they take effect
+    QSignalSpy lightingSpy(editor, &MaterialEditorQML::lightingEnabledChanged);
+    editor->setLightingEnabled(false);
+    EXPECT_GE(lightingSpy.count(), 1);
+    EXPECT_FALSE(editor->lightingEnabled());
+
+    QSignalSpy depthWriteSpy(editor, &MaterialEditorQML::depthWriteEnabledChanged);
+    editor->setDepthWriteEnabled(false);
+    EXPECT_GE(depthWriteSpy.count(), 1);
+
+    QSignalSpy depthCheckSpy(editor, &MaterialEditorQML::depthCheckEnabledChanged);
+    editor->setDepthCheckEnabled(false);
+    EXPECT_GE(depthCheckSpy.count(), 1);
+
+    QSignalSpy shininessSpy(editor, &MaterialEditorQML::shininessChanged);
+    editor->setShininess(64.0f);
+    EXPECT_GE(shininessSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->shininess(), 64.0f);
+
+    // Material text should update after property changes
+    EXPECT_FALSE(editor->materialText().isEmpty());
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ColorSettersWithOgrePass) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->techniqueList().isEmpty());
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    QColor red(255, 0, 0);
+    QColor green(0, 255, 0);
+    QColor blue(0, 0, 255);
+
+    QSignalSpy ambientSpy(editor, &MaterialEditorQML::ambientColorChanged);
+    editor->setAmbientColor(red);
+    EXPECT_GE(ambientSpy.count(), 1);
+
+    QSignalSpy diffuseSpy(editor, &MaterialEditorQML::diffuseColorChanged);
+    editor->setDiffuseColor(green);
+    EXPECT_GE(diffuseSpy.count(), 1);
+
+    QSignalSpy specularSpy(editor, &MaterialEditorQML::specularColorChanged);
+    editor->setSpecularColor(blue);
+    EXPECT_GE(specularSpy.count(), 1);
+
+    QSignalSpy emissiveSpy(editor, &MaterialEditorQML::emissiveColorChanged);
+    editor->setEmissiveColor(red);
+    EXPECT_GE(emissiveSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, AdvancedPassProperties) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->techniqueList().isEmpty());
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    QSignalSpy shadingSpy(editor, &MaterialEditorQML::shadingModeChanged);
+    editor->setShadingMode(2); // Phong
+    EXPECT_GE(shadingSpy.count(), 1);
+    EXPECT_EQ(editor->shadingMode(), 2);
+
+    QSignalSpy cullHwSpy(editor, &MaterialEditorQML::cullHardwareChanged);
+    editor->setCullHardware(0); // None
+    EXPECT_GE(cullHwSpy.count(), 1);
+
+    QSignalSpy cullSwSpy(editor, &MaterialEditorQML::cullSoftwareChanged);
+    editor->setCullSoftware(2); // Front
+    EXPECT_GE(cullSwSpy.count(), 1);
+
+    QSignalSpy blendOpSpy(editor, &MaterialEditorQML::sceneBlendOperationChanged);
+    editor->setSceneBlendOperation(1); // Subtract
+    EXPECT_GE(blendOpSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, UndoRedo_WithOgreMaterial) {
+    editor->loadMaterial("BaseWhite");
+    QString originalText = editor->materialText();
+
+    // Change a property which updates material text
+    editor->setLightingEnabled(false);
+    QString modifiedText = editor->materialText();
+    EXPECT_NE(originalText, modifiedText);
+
+    // Undo should restore the previous material text
+    EXPECT_TRUE(editor->canUndo());
+    editor->undo();
+    EXPECT_EQ(editor->materialText(), originalText);
+
+    // Redo should restore the modified text
+    EXPECT_TRUE(editor->canRedo());
+    editor->redo();
+    EXPECT_EQ(editor->materialText(), modifiedText);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, SelectedIndices_Update) {
+    editor->loadMaterial("BaseWhite");
+
+    // After loading, technique 0 and pass 0 should be auto-selected
+    EXPECT_EQ(editor->selectedTechniqueIndex(), 0);
+    EXPECT_EQ(editor->selectedPassIndex(), 0);
+
+    // Setting invalid indices should still work without crashing
+    editor->setSelectedTechniqueIndex(-1);
+    EXPECT_EQ(editor->selectedTechniqueIndex(), -1);
+
+    editor->setSelectedPassIndex(-1);
+    EXPECT_EQ(editor->selectedPassIndex(), -1);
+
+    editor->setSelectedTextureUnitIndex(-1);
+    EXPECT_EQ(editor->selectedTextureUnitIndex(), -1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ApplyMaterial_Valid) {
+    editor->loadMaterial("BaseWhite");
+    QSignalSpy appliedSpy(editor, &MaterialEditorQML::materialApplied);
+
+    // Apply the current (valid) material text
+    bool result = editor->applyMaterial();
+    EXPECT_TRUE(result);
+    EXPECT_GE(appliedSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, VertexColorTracking) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    QSignalSpy spy(editor, &MaterialEditorQML::useVertexColorToAmbientChanged);
+    editor->setUseVertexColorToAmbient(true);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_TRUE(editor->useVertexColorToAmbient());
+
+    editor->setUseVertexColorToDiffuse(true);
+    EXPECT_TRUE(editor->useVertexColorToDiffuse());
+
+    editor->setUseVertexColorToSpecular(true);
+    EXPECT_TRUE(editor->useVertexColorToSpecular());
+
+    editor->setUseVertexColorToEmissive(true);
+    EXPECT_TRUE(editor->useVertexColorToEmissive());
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, BlendFactors) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    QSignalSpy srcSpy(editor, &MaterialEditorQML::sourceBlendFactorChanged);
+    editor->setSourceBlendFactor(7); // One
+    EXPECT_GE(srcSpy.count(), 1);
+
+    QSignalSpy dstSpy(editor, &MaterialEditorQML::destBlendFactorChanged);
+    editor->setDestBlendFactor(2); // Zero + 1
+    EXPECT_GE(dstSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, FogProperties) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    editor->setFogOverride(true);
+    EXPECT_TRUE(editor->fogOverride());
+
+    QSignalSpy fogModeSpy(editor, &MaterialEditorQML::fogModeChanged);
+    editor->setFogMode(3); // Linear
+    EXPECT_GE(fogModeSpy.count(), 1);
+
+    editor->setFogDensity(0.5f);
+    EXPECT_FLOAT_EQ(editor->fogDensity(), 0.5f);
+
+    editor->setFogStart(10.0f);
+    EXPECT_FLOAT_EQ(editor->fogStart(), 10.0f);
+
+    editor->setFogEnd(100.0f);
+    EXPECT_FLOAT_EQ(editor->fogEnd(), 100.0f);
+
+    QColor fogCol(128, 64, 32);
+    editor->setFogColor(fogCol);
+    EXPECT_EQ(editor->fogColor(), fogCol);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, DiffuseAlphaAndSpecularAlpha) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    QSignalSpy diffAlphaSpy(editor, &MaterialEditorQML::diffuseAlphaChanged);
+    editor->setDiffuseAlpha(0.5f);
+    EXPECT_GE(diffAlphaSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->diffuseAlpha(), 0.5f);
+
+    QSignalSpy specAlphaSpy(editor, &MaterialEditorQML::specularAlphaChanged);
+    editor->setSpecularAlpha(0.3f);
+    EXPECT_GE(specAlphaSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->specularAlpha(), 0.3f);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureUnitOperations) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Create a texture unit
+    editor->createNewTextureUnit("TestTU");
+    EXPECT_FALSE(editor->textureUnitList().isEmpty());
+
+    // Select the texture unit
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+    EXPECT_GE(editor->selectedTextureUnitIndex(), 0);
+
+    // Remove texture should reset texture name
+    editor->removeTexture();
+    EXPECT_EQ(editor->textureName(), "*Select a texture*");
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, DepthBias) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    QSignalSpy constSpy(editor, &MaterialEditorQML::depthBiasConstantChanged);
+    editor->setDepthBiasConstant(1.5f);
+    EXPECT_GE(constSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->depthBiasConstant(), 1.5f);
+
+    QSignalSpy slopeSpy(editor, &MaterialEditorQML::depthBiasSlopeScaleChanged);
+    editor->setDepthBiasSlopeScale(2.0f);
+    EXPECT_GE(slopeSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->depthBiasSlopeScale(), 2.0f);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, AlphaRejection) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    editor->setAlphaRejectionEnabled(true);
+    EXPECT_TRUE(editor->alphaRejectionEnabled());
+
+    editor->setAlphaRejectionFunction(2); // Less
+    EXPECT_EQ(editor->alphaRejectionFunction(), 2);
+
+    editor->setAlphaRejectionValue(128);
+    EXPECT_EQ(editor->alphaRejectionValue(), 128);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ColourWriteChannels) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    editor->setColourWriteRed(false);
+    EXPECT_FALSE(editor->colourWriteRed());
+
+    editor->setColourWriteGreen(false);
+    EXPECT_FALSE(editor->colourWriteGreen());
+
+    editor->setColourWriteBlue(false);
+    EXPECT_FALSE(editor->colourWriteBlue());
+
+    editor->setColourWriteAlpha(false);
+    EXPECT_FALSE(editor->colourWriteAlpha());
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, PointAndLineProperties) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    editor->setPointSize(3.0f);
+    EXPECT_FLOAT_EQ(editor->pointSize(), 3.0f);
+
+    editor->setLineWidth(2.0f);
+    EXPECT_FLOAT_EQ(editor->lineWidth(), 2.0f);
+
+    editor->setPointSpritesEnabled(true);
+    EXPECT_TRUE(editor->pointSpritesEnabled());
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, LightLimits) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    editor->setMaxLights(4);
+    EXPECT_EQ(editor->maxLights(), 4);
+
+    editor->setStartLight(1);
+    EXPECT_EQ(editor->startLight(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, DepthFunction) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    QSignalSpy spy(editor, &MaterialEditorQML::depthFunctionChanged);
+    editor->setDepthFunction(2); // Less
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->depthFunction(), 2);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, AlphaToCoverage) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    editor->setAlphaToCoverageEnabled(true);
+    EXPECT_TRUE(editor->alphaToCoverageEnabled());
+}

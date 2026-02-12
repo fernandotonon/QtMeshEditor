@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QMainWindow>
+#include <OgreException.h>
 #include "TransformWidget.h"
 #include "SelectionSet.h"
 #include "Manager.h"
@@ -30,7 +31,11 @@ protected:
         ASSERT_NE(app, nullptr);
 
         // Create a main window to hold the widget
-        mainWindow = Manager::getSingleton()->getMainWindow();
+        try {
+            mainWindow = Manager::getSingleton()->getMainWindow();
+        } catch (const Ogre::Exception& e) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+        }
 
         // Create the transform widget
         transformWidget = new TransformWidget(mainWindow);

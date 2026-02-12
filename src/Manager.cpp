@@ -83,7 +83,6 @@ Manager* Manager::getSingleton(MainWindow* parent)
 {
   if (m_pSingleton == nullptr)
   {
-      assert(parent);
       m_pSingleton =  new Manager(parent);
   }
 
@@ -484,19 +483,20 @@ void Manager::initRenderSystem()
     // setup a renderer
     Ogre::RenderSystem *renderSystem = mRoot->getRenderSystemByName("OpenGL Rendering Subsystem"); //TODO: Add OpenGL 3+, and allow the user to select the render system.
 
-    assert( renderSystem ); // user might pass back a null renderer, which would be bad!
+    if (!renderSystem)
+    {
+        // Try GL3Plus as fallback
+        renderSystem = mRoot->getRenderSystemByName("OpenGL 3+ Rendering Subsystem");
+    }
+
+    if (!renderSystem)
+    {
+        OGRE_EXCEPT(Ogre::Exception::ERR_RENDERINGAPI_ERROR,
+            "No OpenGL rendering subsystem found. Check that Ogre plugins are installed correctly.",
+            "Manager::initRenderSystem");
+    }
 
     mRoot->setRenderSystem( renderSystem );
-
-  /*
-    Ogre::ConfigOptionMap::iterator it = mOgreRoot->getRenderSystem()->getConfigOptions().begin();
-
-    while(it != mOgreRoot->getRenderSystem()->getConfigOptions().end())
-    {
-        Ogre::ConfigOption p = (*it).second;
-        qDebug()<<p.name.data()<<p.currentValue.data();
-        ++it;
-    }*/
 
     mRoot->saveConfig();
     mRoot->initialise(false); // don't create a window

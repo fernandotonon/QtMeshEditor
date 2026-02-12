@@ -66,9 +66,17 @@ PrimitiveObject::~PrimitiveObject()
 {
    //We don't destroy this scene node as it will be destroy by the Manager
 
-    Manager::getSingleton()->getSceneMgr()->destroyManualObject(mName.toStdString());
-    if(Ogre::MeshManager::getSingleton().getByName(mName.toStdString()))
-        Ogre::MeshManager::getSingleton().remove(mName.toStdString());
+    Manager* mgr = Manager::getSingletonPtr();
+    if (mgr && mgr->getSceneMgr() && !mName.isEmpty())
+    {
+        try {
+            mgr->getSceneMgr()->destroyManualObject(mName.toStdString());
+            if(Ogre::MeshManager::getSingleton().getByName(mName.toStdString()))
+                Ogre::MeshManager::getSingleton().remove(mName.toStdString());
+        } catch (...) {
+            // Ignore exceptions during cleanup
+        }
+    }
 }
 
 void PrimitiveObject::setDefaultParams()

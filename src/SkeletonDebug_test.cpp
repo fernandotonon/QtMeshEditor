@@ -3,17 +3,44 @@
 #include <QCoreApplication>
 #include <QThread>
 #include "Manager.h"
-#include "mainwindow.h"
 #include "SkeletonDebug.h"
+#include "MeshImporterExporter.h"
+#include <OgreException.h>
+#include <OgreMaterialManager.h>
+#include <OgreResourceGroupManager.h>
+
+// Helper function to create required OGRE materials for tests
+static void createOGREMaterials()
+{
+    Ogre::MaterialPtr baseWhiteMat = Ogre::MaterialManager::getSingleton().getByName(
+        "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat)
+    {
+        baseWhiteMat = Ogre::MaterialManager::getSingleton().create(
+            "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setSelfIllumination(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->setLightingEnabled(false);
+    }
+
+    Ogre::MaterialPtr baseWhiteMat2 = Ogre::MaterialManager::getSingleton().getByName(
+        "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat2)
+    {
+        baseWhiteMat2 = Ogre::MaterialManager::getSingleton().create(
+            "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+    }
+}
 
 class SkeletonDebugTests : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
-    MainWindow* mainWindow = nullptr;
     std::unique_ptr<SkeletonDebug> skeletonDebug;
 
     void SetUp() override {
-        // Ensure fresh OGRE state
         Manager::kill();
         QThread::msleep(50);
 
@@ -21,18 +48,16 @@ protected:
         ASSERT_NE(app, nullptr);
 
         try {
-            mainWindow = new MainWindow();
-            Manager::getSingleton(mainWindow);
-        } catch (const Ogre::RenderingAPIException& e) {
-            GTEST_SKIP() << "Skipping SkeletonDebug tests: unable to create OGRE render window ("
-                         << e.getFullDescription() << ")";
-        } catch (const std::exception& e) {
-            GTEST_SKIP() << "Skipping SkeletonDebug tests: " << e.what();
+            Manager::getSingleton();  // headless — no render window needed
+        } catch (const Ogre::Exception& e) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
         }
+        createOGREMaterials();
 
+        // Import a mesh with skeleton
         QStringList validUri{"./media/models/robot.mesh"};
         try {
-            Manager::getSingleton()->getMainWindow()->importMeshs(validUri);
+            MeshImporterExporter::importer(validUri);
         } catch (const Ogre::Exception& e) {
             GTEST_SKIP() << "Skipping SkeletonDebug tests: failed to import mesh ("
                          << e.getFullDescription() << ")";
@@ -52,9 +77,6 @@ protected:
     void TearDown() override {
         skeletonDebug.reset();
 
-        delete mainWindow;
-        mainWindow = nullptr;
-
         Manager::kill();
 
         if (app) {
@@ -66,53 +88,42 @@ protected:
 
 TEST_F(SkeletonDebugTests, ShowAxesTest)
 {
-    // Initially, axes should not be shown
     EXPECT_FALSE(skeletonDebug->axesShown());
 
-    // Show axes
     skeletonDebug->showAxes(true);
     EXPECT_TRUE(skeletonDebug->axesShown());
 
-    // Hide axes
     skeletonDebug->showAxes(false);
     EXPECT_FALSE(skeletonDebug->axesShown());
 }
 
 TEST_F(SkeletonDebugTests, ShowNamesTest)
 {
-    // Initially, names should not be shown
     EXPECT_FALSE(skeletonDebug->namesShown());
 
-    // Show names
     skeletonDebug->showNames(true);
     EXPECT_TRUE(skeletonDebug->namesShown());
 
-    // Hide names
     skeletonDebug->showNames(false);
     EXPECT_FALSE(skeletonDebug->namesShown());
 }
 
 TEST_F(SkeletonDebugTests, ShowBonesTest)
 {
-    // Initially, bones should not be shown
     EXPECT_FALSE(skeletonDebug->bonesShown());
 
-    // Show bones
     skeletonDebug->showBones(true);
     EXPECT_TRUE(skeletonDebug->bonesShown());
 
-    // Hide bones
     skeletonDebug->showBones(false);
     EXPECT_FALSE(skeletonDebug->bonesShown());
 }
 
 TEST_F(SkeletonDebugTests, SetAndGetAxesScaleTest)
 {
-    // Set axes scale
     skeletonDebug->setAxesScale(0.5f);
     EXPECT_FLOAT_EQ(skeletonDebug->getAxesScale(), 0.5f);
 
-    // Set axes scale to a different value
     skeletonDebug->setAxesScale(1.0f);
     EXPECT_FLOAT_EQ(skeletonDebug->getAxesScale(), 1.0f);
 }
