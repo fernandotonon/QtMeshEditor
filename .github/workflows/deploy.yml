@@ -813,7 +813,6 @@ jobs:
             -Dsonar.c.file.suffixes=.c \
             -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h \
             -Dsonar.objc.file.suffixes=.m,.mm \
-            -Dsonar.cfamily.compile-commands=compile_commands.json \
             -Dsonar.cfamily.build-wrapper-output=$BW_DIR \
             -Dsonar.cfamily.gcov.reportsPath=build \
             -Dsonar.cfamily.cache.enabled=true \
