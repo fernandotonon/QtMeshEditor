@@ -905,15 +905,13 @@ jobs:
             echo "WARNING: Skipping build-wrapper output (not found). Analysis will proceed without compilation database."
           fi
           
-          # Only add coverage if file exists and is not empty
-          if [ -f coverage.lcov ] && [ -s coverage.lcov ]; then
-            echo "Using LCOV format for coverage"
-            SCANNER_CMD="$SCANNER_CMD -Dsonar.coverageReportPaths=coverage.lcov"
-          elif [ -f coverage.xml ] && [ -s coverage.xml ]; then
-            echo "Using XML format for coverage (LCOV not available)"
-            SCANNER_CMD="$SCANNER_CMD -Dsonar.coverageReportPaths=coverage.xml"
+          # Add gcov coverage reports path for C/C++ (native cfamily analyzer)
+          GCOV_COUNT=$(find build -name "*.gcov" -type f 2>/dev/null | wc -l)
+          if [ "$GCOV_COUNT" -gt 0 ]; then
+            echo "Found $GCOV_COUNT .gcov files in build directory"
+            SCANNER_CMD="$SCANNER_CMD -Dsonar.cfamily.gcov.reportsPath=build"
           else
-            echo "WARNING: No coverage file found! Skipping coverage reporting."
+            echo "WARNING: No .gcov files found in build directory! Skipping coverage reporting."
           fi
           
           # Execute scanner
