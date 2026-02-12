@@ -1,5 +1,5 @@
 #Copy required file in the exe directory
-set(OGRE_PLUGIN_DIR ${OGRE_PLUGIN_DIR_REL})
+# OGRE_PLUGIN_DIR is set by find_package(OGRE) in the parent CMakeLists.txt
 
 IF(WIN32)
     set(PLUGIN_DEBUG_POSTFIX "_d")

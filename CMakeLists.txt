@@ -19,8 +19,6 @@ message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
 if(WIN32 OR APPLE)
 set(PLUGIN_DIR "../")
-elseif(UNIX)
-set(PLUGIN_DIR "/lib/x86_64-linux-gnu/")
 endif()
 
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
@@ -218,6 +216,15 @@ endif()
 #  Find Ogre
 ##############################################################
 find_package(OGRE REQUIRED)
+
+# On Linux, use the OGRE-detected plugin directory instead of a hardcoded path
+if(UNIX AND NOT APPLE AND NOT PLUGIN_DIR)
+    if(OGRE_PLUGIN_DIR)
+        set(PLUGIN_DIR "${OGRE_PLUGIN_DIR}")
+    else()
+        set(PLUGIN_DIR "/usr/local/lib/OGRE/")
+    endif()
+endif()
 
 message("OGRE_INCLUDE_DIRS: ")
 message(${OGRE_INCLUDE_DIRS})

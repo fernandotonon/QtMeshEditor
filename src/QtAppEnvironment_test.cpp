@@ -17,7 +17,7 @@ public:
         static char* argv[] = {appName, nullptr};
 
         // Leak intentionally so that Qt stays alive for the duration of the test process.
-        static QApplication* app = new QApplication(argc, argv);
+        static QApplication* app = new QApplication(argc, argv); // NOSONAR - intentional leak for test lifetime
         (void)app;
     }
 
@@ -29,7 +29,7 @@ public:
 };
 
 ::testing::Environment* const qtAppEnv =
-    ::testing::AddGlobalTestEnvironment(new QtAppEnvironment());
+    ::testing::AddGlobalTestEnvironment(new QtAppEnvironment()); // NOSONAR - gtest takes ownership
 
 } // namespace
 

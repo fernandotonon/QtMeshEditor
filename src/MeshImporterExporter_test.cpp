@@ -6,12 +6,39 @@
 #include <QThread>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
-#include "mainwindow.h"
+#include <OgreException.h>
+#include <OgreMaterialManager.h>
+#include <OgreResourceGroupManager.h>
+
+// Helper function to create required OGRE materials for tests
+static void createOGREMaterials()
+{
+    Ogre::MaterialPtr baseWhiteMat = Ogre::MaterialManager::getSingleton().getByName(
+        "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat)
+    {
+        baseWhiteMat = Ogre::MaterialManager::getSingleton().create(
+            "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->getPass(0)->setSelfIllumination(1, 1, 1);
+        baseWhiteMat->getTechnique(0)->setLightingEnabled(false);
+    }
+
+    Ogre::MaterialPtr baseWhiteMat2 = Ogre::MaterialManager::getSingleton().getByName(
+        "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!baseWhiteMat2)
+    {
+        baseWhiteMat2 = Ogre::MaterialManager::getSingleton().create(
+            "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
+        baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+    }
+}
 
 class MeshImporterExporterTest : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
-    MainWindow* mainWindow = nullptr;
 
     void SetUp() override {
         Manager::kill();
@@ -21,20 +48,14 @@ protected:
         ASSERT_NE(app, nullptr);
 
         try {
-            mainWindow = new MainWindow();
-            Manager::getSingleton(mainWindow);
-        } catch (const Ogre::RenderingAPIException& e) {
-            GTEST_SKIP() << "Skipping MeshImporterExporter tests: unable to create OGRE render window ("
-                         << e.getFullDescription() << ")";
-        } catch (const std::exception& e) {
-            GTEST_SKIP() << "Skipping MeshImporterExporter tests: " << e.what();
+            Manager::getSingleton();  // headless — no render window needed
+        } catch (const Ogre::Exception& e) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
         }
+        createOGREMaterials();
     }
 
     void TearDown() override {
-        delete mainWindow;
-        mainWindow = nullptr;
-
         Manager::kill();
 
         if (app) {
@@ -131,35 +152,27 @@ TEST(MeshImporterExporterStandaloneTest, Exporter_NullSceneNode_ReturnMinusOne) 
 }
 
 TEST_F(MeshImporterExporterTest, Exporter_EmptyUri_ReturnMinusOne) {
-    // Arrange
     QString uri = "";
     auto sceneNodeName = "MeshImporterExporterTestSceneNode";
     auto sn = Manager::getSingleton()->addSceneNode(sceneNodeName);
 
-    // Assert
     EXPECT_EQ(MeshImporterExporter::exporter(sn, uri, "Ogre Mesh (*.mesh)"), -1);
 }
 
 TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndUri_ReturnMinusOne) {
-    // Arrange
     QString uri = "/path/to/exported.mesh";
     QString format = "Ogre Mesh (*.mesh)";
     auto sceneNodeName = "MeshImporterExporterTestSceneNode";
     auto sn = Manager::getSingleton()->addSceneNode(sceneNodeName);
 
-    // Assert
     EXPECT_EQ(MeshImporterExporter::exporter(sn, uri, format), -1);
 }
 
-TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndEntityAndUri_ReturnZero) {
-    // Arrange
-    // Add an empty url just for test the continue statement
+TEST_F(MeshImporterExporterTest, Importer_ValidMesh) {
     QStringList validUri{"", "./media/models/Twist Dance.fbx"};
     MeshImporterExporter::importer(validUri);
-    Manager::getSingleton()->getRoot()->renderOneFrame();
     auto sn = Manager::getSingleton()->getSceneNodes().last();
 
-    // Assert
     EXPECT_EQ(MeshImporterExporter::exporter(sn, "./exported.mesh", "Ogre Mesh (*.mesh)"), 0);
     EXPECT_EQ(MeshImporterExporter::exporter(sn, "./exported.mesh.xml", "Ogre XML (*.mesh.xml)"), 0);
     EXPECT_EQ(MeshImporterExporter::exporter(sn, "./exported.x", "X (*.x)"), 0);

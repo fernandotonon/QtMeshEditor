@@ -6,45 +6,48 @@
 #include <QThread>
 #include "TransformOperator.h"
 #include "Manager.h"
-#include "mainwindow.h"
+#include "GlobalDefinitions.h"
+#include <OgreMaterialManager.h>
+#include <OgreResourceGroupManager.h>
+
+// Helper function to create required OGRE materials for tests
+static void createOGREMaterials()
+{
+    Ogre::MaterialPtr guiMat = Ogre::MaterialManager::getSingleton().getByName(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!guiMat)
+    {
+        guiMat = Ogre::MaterialManager::getSingleton().create(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        guiMat->getTechnique(0)->setLightingEnabled(false);
+        guiMat->getTechnique(0)->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        guiMat->getTechnique(0)->setDepthCheckEnabled(false);
+    }
+}
 
 // Test fixture for TransformOperator tests that require Manager
 class TransformOperatorTestFixture : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
-    MainWindow* mainWindow = nullptr;
 
     void SetUp() override {
-        // Ensure Manager is completely destroyed from previous test
         Manager::kill();
         TransformOperator::kill();
-        QThread::msleep(50); // Small delay to ensure cleanup is complete
-        
+        QThread::msleep(50);
+
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
-        
-        // Create MainWindow to initialize Manager
+
         try {
-            mainWindow = new MainWindow();
-            ASSERT_NE(mainWindow, nullptr);
-            Manager::getSingleton(mainWindow);
-        } catch (const Ogre::RenderingAPIException& e) {
-            GTEST_SKIP() << "Skipping TransformOperator tests: unable to create OGRE render window ("
-                         << e.getFullDescription() << ")";
-        } catch (const std::exception& e) {
-            GTEST_SKIP() << "Skipping TransformOperator tests: " << e.what();
+            Manager::getSingleton();  // headless — no render window needed
+        } catch (const Ogre::Exception& e) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
         }
+        createOGREMaterials();
     }
 
     void TearDown() override {
-        // Clean up in reverse order
         TransformOperator::kill();
-        if (mainWindow) {
-            delete mainWindow;
-            mainWindow = nullptr;
-        }
         Manager::kill();
-        
+
         if (app) {
             app->processEvents();
         }

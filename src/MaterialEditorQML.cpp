@@ -2593,9 +2593,12 @@ QString MaterialEditorQML::testConnection()
 bool MaterialEditorQML::isOgreAvailable() const
 {
     try {
-        // Test if Ogre is initialized by trying to access a singleton
-        Ogre::MaterialManager::getSingletonPtr();
-        return true;
+        // Check if Ogre Root exists and has been initialized
+        Ogre::Root* root = Ogre::Root::getSingletonPtr();
+        if (!root) return false;
+        if (!root->getRenderSystem()) return false;
+        // Also verify MaterialManager is available
+        return Ogre::MaterialManager::getSingletonPtr() != nullptr;
     } catch (...) {
         return false;
     }

@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <memory>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QToolBar>
@@ -23,8 +24,8 @@
 class MainWindowTest : public ::testing::Test {
     protected:
         QApplication* app = nullptr;
-        MainWindow* mainWindow = nullptr;
-    
+        std::unique_ptr<MainWindow> mainWindow;
+
         void SetUp() override {
             // Ensure QApplication exists - create if it doesn't
             app = qobject_cast<QApplication*>(QCoreApplication::instance());
@@ -33,22 +34,22 @@ class MainWindowTest : public ::testing::Test {
                 static int argc = 1;
                 static char appName[] = "QtMeshEditor_test";
                 static char* argv[] = {appName, nullptr};
-                app = new QApplication(argc, argv);
+                app = new QApplication(argc, argv); // NOSONAR - intentional: QApplication must outlive all tests
             }
             ASSERT_NE(app, nullptr);
-    
+
             QCoreApplication::setOrganizationName("QtMeshEditor");
             QCoreApplication::setOrganizationDomain("none");
             QCoreApplication::setApplicationName("QtMeshEditor_test");
-    
+
             app->setStyle(QStyleFactory::create("Fusion"));
-    
+
             // Ensure Manager is destroyed from previous tests
             Manager::kill();
             QThread::msleep(50);
-    
+
             try {
-                mainWindow = new MainWindow();
+                mainWindow = std::make_unique<MainWindow>();
                 ASSERT_NE(mainWindow, nullptr);
             } catch (const Ogre::RenderingAPIException& e) {
                 GTEST_SKIP() << "Skipping MainWindow tests: unable to create OGRE render window ("
@@ -57,17 +58,13 @@ class MainWindowTest : public ::testing::Test {
                 GTEST_SKIP() << "Skipping MainWindow tests: " << e.what();
             }
         }
-    
+
         void TearDown() override {
-            // Clean up MainWindow first
-            if (mainWindow) {
-                delete mainWindow;
-                mainWindow = nullptr;
-            }
-            
+            mainWindow.reset();
+
             // Clean up Manager
             Manager::kill();
-            
+
             // Small delay to ensure cleanup is complete
             // Don't call processEvents() here as it can cause segfaults during cleanup
             QThread::msleep(50);
@@ -262,44 +259,44 @@ TEST_F(MainWindowTest, SelectTranslateRotateShortcut) {
 
     // ROTATE
     // mock pressing R key in mainwindow
-    auto event = new QKeyEvent(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier);
-    mainWindow->keyPressEvent(event);
+    auto event = std::make_unique<QKeyEvent>(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier);
+    mainWindow->keyPressEvent(event.get());
 
     ASSERT_FALSE(actionSelect_Object->isChecked());
     ASSERT_FALSE(actionTranslate_Object->isChecked());
     ASSERT_TRUE(actionRotate_Object->isChecked());
 
     // There's no unchecking
-    mainWindow->keyPressEvent(event);
+    mainWindow->keyPressEvent(event.get());
     ASSERT_TRUE(actionRotate_Object->isChecked());
 
     // SELECT
-    event = new QKeyEvent(QEvent::KeyPress, Qt::Key_Y, Qt::NoModifier);
-    mainWindow->keyPressEvent(event);
+    event = std::make_unique<QKeyEvent>(QEvent::KeyPress, Qt::Key_Y, Qt::NoModifier);
+    mainWindow->keyPressEvent(event.get());
 
     ASSERT_TRUE(actionSelect_Object->isChecked());
     ASSERT_FALSE(actionTranslate_Object->isChecked());
     ASSERT_FALSE(actionRotate_Object->isChecked());
 
     // There's no unchecking
-    mainWindow->keyPressEvent(event);
+    mainWindow->keyPressEvent(event.get());
     ASSERT_TRUE(actionSelect_Object->isChecked());
 
     // TRANSLATE
-    event = new QKeyEvent(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier);
-    mainWindow->keyPressEvent(event);
+    event = std::make_unique<QKeyEvent>(QEvent::KeyPress, Qt::Key_T, Qt::NoModifier);
+    mainWindow->keyPressEvent(event.get());
 
     ASSERT_FALSE(actionSelect_Object->isChecked());
     ASSERT_TRUE(actionTranslate_Object->isChecked());
     ASSERT_FALSE(actionRotate_Object->isChecked());
 
     // There's no unchecking
-    mainWindow->keyPressEvent(event);
+    mainWindow->keyPressEvent(event.get());
     ASSERT_TRUE(actionTranslate_Object->isChecked());
 
     // Other key
-    event = new QKeyEvent(QEvent::KeyPress, Qt::Key_P, Qt::NoModifier);
-    mainWindow->keyPressEvent(event);
+    event = std::make_unique<QKeyEvent>(QEvent::KeyPress, Qt::Key_P, Qt::NoModifier);
+    mainWindow->keyPressEvent(event.get());
 
     // Keeps the previous status
     ASSERT_FALSE(actionSelect_Object->isChecked());
@@ -327,8 +324,8 @@ TEST_F(MainWindowTest, RemoveEmptySelectionShortcut) {
 
     auto countBefore = Manager::getSingleton()->getEntities().count();
 
-    auto event = new QKeyEvent(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
-    mainWindow->keyPressEvent(event);
+    auto event = std::make_unique<QKeyEvent>(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    mainWindow->keyPressEvent(event.get());
 
     auto countAfter = Manager::getSingleton()->getEntities().count();
 
@@ -343,8 +340,8 @@ TEST_F(MainWindowTest, RemoveSelectedSceneNodeShortcut) {
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(sceneNode);
 
-    auto event = new QKeyEvent(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
-    mainWindow->keyPressEvent(event);
+    auto event = std::make_unique<QKeyEvent>(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    mainWindow->keyPressEvent(event.get());
 
     auto countAfter = Manager::getSingleton()->getSceneNodes().count();
 
@@ -500,15 +497,15 @@ TEST_F(MainWindowTest, DropEvent) {
     auto entities = Manager::getSingleton()->getEntities();
     int countBefore = entities.count();
     // Create a QDropEvent instance for testing
-    QMimeData* mimeData = new QMimeData();
-    QDropEvent* event = new QDropEvent(QPoint(), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+    auto mimeData = std::make_unique<QMimeData>();
+    auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
 
     // Set the mime data with a valid URI
     QString validUri = "file:///./media/models/ninja.mesh\nfile:///./media/models/robot.mesh\nfile:///./media/models/Rumba%20Dancing.fbx";
     mimeData->setData("text/uri-list", validUri.toUtf8());
 
     // Call the dropEvent method
-    mainWindow->dropEvent(event);
+    mainWindow->dropEvent(event.get());
 
     Manager::getSingleton()->getRoot()->renderOneFrame();
 
@@ -521,7 +518,7 @@ TEST_F(MainWindowTest, DropEvent) {
     mimeData->setData("text/uri-list", invalidUri.toUtf8());
 
     // Call the dropEvent method again
-    mainWindow->dropEvent(event);
+    mainWindow->dropEvent(event.get());
 
     Manager::getSingleton()->getRoot()->renderOneFrame();
 
@@ -534,7 +531,7 @@ TEST_F(MainWindowTest, DropEvent) {
     mimeData->setData("text", other.toUtf8());
 
     // Call the dropEvent method again
-    mainWindow->dropEvent(event);
+    mainWindow->dropEvent(event.get());
 
     Manager::getSingleton()->getRoot()->renderOneFrame();
 
@@ -546,7 +543,7 @@ TEST_F(MainWindowTest, DropEvent) {
 TEST_F(MainWindowTest, SelectAnimatedEntity)
 {
     try {
-        auto widget = std::make_unique<AnimationWidget>(mainWindow);
+        auto widget = std::make_unique<AnimationWidget>(mainWindow.get());
         auto animControl = std::make_unique<AnimationControlWidget>();
         // import a mesh
         QStringList validUri{"./media/models/ninja.mesh"};

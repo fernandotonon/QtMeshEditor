@@ -4,11 +4,12 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonDocument>
+#include <memory>
 #include "MCPServer.h"
 #include "Manager.h"
-#include "mainwindow.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
+#include <OgreException.h>
 #include <OgreMaterialManager.h>
 #include <OgreResourceGroupManager.h>
 
@@ -63,28 +64,19 @@ protected:
         ASSERT_NE(app, nullptr);
 
         try {
-            mainWindow = new MainWindow();
-            Manager::getSingleton(mainWindow);
-        } catch (const Ogre::RenderingAPIException& e) {
-            GTEST_SKIP() << "Skipping MCPServer tests: unable to create OGRE render window ("
-                         << e.getFullDescription() << ")";
-        } catch (const std::exception& e) {
-            GTEST_SKIP() << "Skipping MCPServer tests: " << e.what();
+            Manager::getSingleton();  // headless — no render window needed
+        } catch (const Ogre::Exception& e) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
         }
-
         createOGREMaterials();
 
-        server = new MCPServer();
-        server->setMainWindow(mainWindow);
+        server = std::make_unique<MCPServer>();
+        // No mainWindow set — tests that need it will test the error path
     }
 
     void TearDown() override
     {
-        delete server;
-        server = nullptr;
-
-        delete mainWindow;
-        mainWindow = nullptr;
+        server.reset();
 
         Manager::kill();
 
@@ -97,8 +89,7 @@ protected:
     }
 
     QApplication* app = nullptr;
-    MainWindow* mainWindow = nullptr;
-    MCPServer* server = nullptr;
+    std::unique_ptr<MCPServer> server;
 };
 
 // --- Material tools ---
@@ -415,15 +406,25 @@ TEST_F(MCPServerTest, ExportMeshNoSelection)
     EXPECT_TRUE(getResultText(result).contains("No scene nodes selected"));
 }
 
-// --- Take screenshot ---
+// --- Take screenshot (no MainWindow — test error path) ---
 
-TEST_F(MCPServerTest, TakeScreenshot)
+TEST_F(MCPServerTest, TakeScreenshotNoMainWindow)
 {
     QJsonObject args;
     args["path"] = "/tmp/mcp_test_screenshot.png";
     QJsonObject result = server->callTool("take_screenshot", args);
-    // Screenshot may succeed or fail depending on render window state;
-    // just ensure it returns a result without crashing
+    // Without MainWindow, screenshot should return an error or handle gracefully
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+// --- Load mesh (no MainWindow — test error path) ---
+
+TEST_F(MCPServerTest, LoadMeshNoMainWindow)
+{
+    QJsonObject args;
+    args["path"] = "/tmp/nonexistent.mesh";
+    QJsonObject result = server->callTool("load_mesh", args);
+    // Without MainWindow, load_mesh should return an error
     EXPECT_FALSE(getResultText(result).isEmpty());
 }
 
@@ -431,13 +432,6 @@ TEST_F(MCPServerTest, TakeScreenshot)
 
 TEST_F(MCPServerTest, HandleToolsList)
 {
-    // Use callTool indirectly by testing buildToolsList via handleToolsCall pattern.
-    // Since handleToolsList is private, we test via the public callTool of an unknown
-    // tool name to verify the dispatch works, and separately verify tool count by
-    // creating the server and checking it doesn't crash.
-    // We can't call handleToolsList directly, but we can verify via the HTTP path
-    // or by checking the tool count expectation through create_material etc.
-
     // Verify at least 15 tools are defined by checking that known tools work
     QStringList knownTools = {
         "create_material", "modify_material", "get_material", "list_materials",
