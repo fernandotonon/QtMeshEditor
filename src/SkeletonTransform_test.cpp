@@ -3,37 +3,10 @@
 #include <QCoreApplication>
 #include <QThread>
 #include <OgreException.h>
-#include <OgreMaterialManager.h>
-#include <OgreResourceGroupManager.h>
 #include "Manager.h"
 #include "SkeletonTransform.h"
 #include "MeshImporterExporter.h"
-
-// Helper function to create required OGRE materials for tests
-static void createOGREMaterials()
-{
-    Ogre::MaterialPtr baseWhiteMat = Ogre::MaterialManager::getSingleton().getByName(
-        "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    if (!baseWhiteMat)
-    {
-        baseWhiteMat = Ogre::MaterialManager::getSingleton().create(
-            "BaseWhiteNoLighting", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-        baseWhiteMat->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
-        baseWhiteMat->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
-        baseWhiteMat->getTechnique(0)->getPass(0)->setSelfIllumination(1, 1, 1);
-        baseWhiteMat->getTechnique(0)->setLightingEnabled(false);
-    }
-
-    Ogre::MaterialPtr baseWhiteMat2 = Ogre::MaterialManager::getSingleton().getByName(
-        "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    if (!baseWhiteMat2)
-    {
-        baseWhiteMat2 = Ogre::MaterialManager::getSingleton().create(
-            "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-        baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
-        baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
-    }
-}
+#include "TestHelpers.h"
 
 class SkeletonTransformTest : public ::testing::Test {
 protected:
@@ -52,7 +25,7 @@ protected:
         } catch (const Ogre::Exception& e) {
             GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
         }
-        createOGREMaterials();
+        createStandardOgreMaterials();
 
         // Import robot.mesh which has a skeleton with animations
         QStringList validUri{"./media/models/robot.mesh"};
@@ -548,7 +521,7 @@ protected:
         } catch (const Ogre::Exception& e) {
             GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
         }
-        createOGREMaterials();
+        createStandardOgreMaterials();
     }
 
     void TearDown() override {

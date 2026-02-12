@@ -3,6 +3,7 @@
 #include <QTextDocument>
 #include <QTextEdit>
 #include <QApplication>
+#include <QPalette>
 #include <QRegularExpression>
 #include "MaterialHighlighter.h"
 
@@ -44,9 +45,13 @@ TEST(MaterialHighlighterTest, HighlightKeywordsDarkModeTest) {
 
     QString testText = "material MyMaterial { technique MyTechnique { pass MyPass { } } }";
 
+    // Determine expected color based on current palette (same logic as MaterialHighlighter)
+    QColor palette = QApplication::palette().color(QPalette::Text);
+    bool dark = qGray(palette.red(), palette.green(), palette.blue()) > 100;
+
     QTextCharFormat expectedFormat;
     expectedFormat.setFontWeight(QFont::Bold);
-    expectedFormat.setForeground(Qt::darkBlue);
+    expectedFormat.setForeground(dark ? QColor("mediumorchid") : Qt::darkBlue);
 
     std::vector<QTextCharFormat> capturedFormats;
 

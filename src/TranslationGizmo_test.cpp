@@ -4,15 +4,15 @@
 #include "TranslationGizmo.h"
 #include "Manager.h"
 #include <OgreException.h>
-#include <OgreMaterialManager.h>
-#include <OgreResourceGroupManager.h>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QThread>
+#include "TestHelpers.h"
 
 // Helper function to create required OGRE materials for tests
 static void createOGREMaterials()
 {
+    ensureMaterialManagerInitialised();
     Ogre::MaterialPtr guiMat = Ogre::MaterialManager::getSingleton().getByName(GUI_MATERIAL_NAME, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     if (!guiMat)
     {
