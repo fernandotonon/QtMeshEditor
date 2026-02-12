@@ -883,13 +883,13 @@ jobs:
             -Dsonar.projectKey=fernandotonon_QtMeshEditor \
             -Dsonar.organization=fernandotonon \
             -Dsonar.host.url=https://sonarcloud.io \
-            -Dsonar.login=\"\$SONAR_TOKEN\" \
+            -Dsonar.token=\"\$SONAR_TOKEN\" \
             -Dsonar.sources=src/ \
             -Dsonar.tests=src/,tests/ \
             -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
             -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
             -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/** \
-            -Dsonar.c.file.suffixes=.c,.h \
+            -Dsonar.c.file.suffixes=.c \
             -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h \
             -Dsonar.objc.file.suffixes=.m,.mm \
             -Dsonar.cfamily.compile-commands=compile_commands.json \
@@ -917,7 +917,7 @@ jobs:
           fi
           
           # Execute scanner
-          eval $SCANNER_CMD || echo "SonarCloud analysis completed with warnings"
+          eval $SCANNER_CMD
           
 
             

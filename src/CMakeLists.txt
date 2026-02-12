@@ -348,7 +348,7 @@ if(BUILD_TESTS)
     gtest_main
     gmock
     gmock_main
-    ${OGRE_Codec_Assimp_LIBRARY_REL} #TODO: find a better way to link ogreassimp
+    ${CODEC_ASSIMP_LINK_LIB}
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}
     Qt::Widgets Qt::Core Qt::Gui Qt::Test Qt::Network Qt::Qml Qt::Quick Qt::QuickWidgets Qt::QuickControls2)
