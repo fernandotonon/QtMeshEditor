@@ -883,13 +883,13 @@ jobs:
             -Dsonar.projectKey=fernandotonon_QtMeshEditor \
             -Dsonar.organization=fernandotonon \
             -Dsonar.host.url=https://sonarcloud.io \
-            -Dsonar.login=\"\$SONAR_TOKEN\" \
+            -Dsonar.token=\"\$SONAR_TOKEN\" \
             -Dsonar.sources=src/ \
             -Dsonar.tests=src/,tests/ \
             -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
             -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
             -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/** \
-            -Dsonar.c.file.suffixes=.c,.h \
+            -Dsonar.c.file.suffixes=.c \
             -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h \
             -Dsonar.objc.file.suffixes=.m,.mm \
             -Dsonar.cfamily.compile-commands=compile_commands.json \
@@ -905,19 +905,17 @@ jobs:
             echo "WARNING: Skipping build-wrapper output (not found). Analysis will proceed without compilation database."
           fi
           
-          # Only add coverage if file exists and is not empty
-          if [ -f coverage.lcov ] && [ -s coverage.lcov ]; then
-            echo "Using LCOV format for coverage"
-            SCANNER_CMD="$SCANNER_CMD -Dsonar.coverageReportPaths=coverage.lcov"
-          elif [ -f coverage.xml ] && [ -s coverage.xml ]; then
-            echo "Using XML format for coverage (LCOV not available)"
-            SCANNER_CMD="$SCANNER_CMD -Dsonar.coverageReportPaths=coverage.xml"
+          # Add gcov coverage reports path for C/C++ (native cfamily analyzer)
+          GCOV_COUNT=$(find build -name "*.gcov" -type f 2>/dev/null | wc -l)
+          if [ "$GCOV_COUNT" -gt 0 ]; then
+            echo "Found $GCOV_COUNT .gcov files in build directory"
+            SCANNER_CMD="$SCANNER_CMD -Dsonar.cfamily.gcov.reportsPath=build"
           else
-            echo "WARNING: No coverage file found! Skipping coverage reporting."
+            echo "WARNING: No .gcov files found in build directory! Skipping coverage reporting."
           fi
           
           # Execute scanner
-          eval $SCANNER_CMD || echo "SonarCloud analysis completed with warnings"
+          eval $SCANNER_CMD
           
 
             
