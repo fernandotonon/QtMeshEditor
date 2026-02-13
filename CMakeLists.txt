@@ -104,6 +104,7 @@ SET (QTLIBLIST
     Qt${QT_VERSION_MAJOR}Quick
     Qt${QT_VERSION_MAJOR}Qml
     Qt${QT_VERSION_MAJOR}QmlModels
+    Qt${QT_VERSION_MAJOR}QmlWorkerScript
     Qt${QT_VERSION_MAJOR}Network
     Qt${QT_VERSION_MAJOR}OpenGL
     Qt${QT_VERSION_MAJOR}QmlMeta
