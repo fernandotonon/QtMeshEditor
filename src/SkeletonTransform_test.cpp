@@ -662,3 +662,286 @@ TEST_F(SkeletonTransformNoSkeletonTest, RenameAnimationNullEntityAndEmptyName)
 // because the code does _ent->getSkeleton()->hasAnimation() without a null
 // check on the skeleton pointer. This is a known limitation -- do not call
 // renameAnimation on entities without skeletons.
+
+// --------------------------------------------------------------------------
+// Programmatic skeleton tests (no file I/O -- runs on CI headless)
+// --------------------------------------------------------------------------
+
+class SkeletonTransformProgrammaticTest : public ::testing::Test {
+protected:
+    QApplication* app = nullptr;
+    Ogre::Entity* entity = nullptr;
+    std::string meshName;
+    std::string skeletonName;
+    QString nodeName;
+
+    void SetUp() override {
+        Manager::kill();
+        QThread::msleep(50);
+
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+
+        try {
+            Manager::getSingleton();
+        } catch (const Ogre::Exception& e) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed ("
+                         << e.getFullDescription() << ")";
+        }
+        createStandardOgreMaterials();
+
+        // Use unique names per test to avoid resource conflicts
+        static int counter = 0;
+        counter++;
+        meshName = "ProgSkMesh_" + std::to_string(counter);
+        skeletonName = "ProgSk_" + std::to_string(counter);
+        nodeName = QString("ProgSkNode_%1").arg(counter);
+
+        entity = createEntityWithSkeleton();
+        if (!entity) {
+            GTEST_SKIP() << "Skipping: failed to create programmatic skeleton entity";
+        }
+    }
+
+    void TearDown() override {
+        entity = nullptr;
+        Manager::kill();
+        if (app) app->processEvents();
+        QThread::msleep(50);
+    }
+
+    Ogre::Entity* createEntityWithSkeleton()
+    {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr) return nullptr;
+
+        try {
+            // Create skeleton with a root bone at (0, 5, 0) and child at relative (0, 3, 0)
+            auto skeleton = Ogre::SkeletonManager::getSingleton().create(
+                skeletonName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+            auto* rootBone = skeleton->createBone("Root", 0);
+            rootBone->setPosition(Ogre::Vector3(0, 5, 0));
+
+            auto* childBone = skeleton->createBone("Child", 1);
+            childBone->setPosition(Ogre::Vector3(0, 3, 0));
+            rootBone->addChild(childBone);
+
+            skeleton->setBindingPose();
+
+            // Create an animation
+            auto* anim = skeleton->createAnimation("TestWalk", 1.0f);
+            auto* track = anim->createNodeTrack(0);
+            track->setAssociatedNode(rootBone);
+            auto* kf0 = track->createNodeKeyFrame(0.0f);
+            kf0->setTranslate(Ogre::Vector3::ZERO);
+            auto* kf1 = track->createNodeKeyFrame(1.0f);
+            kf1->setTranslate(Ogre::Vector3(1, 0, 0));
+
+            // Create mesh with vertex positions
+            auto mesh = Ogre::MeshManager::getSingleton().createManual(
+                meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+            auto* sub = mesh->createSubMesh();
+            sub->vertexData = new Ogre::VertexData();
+            sub->vertexData->vertexCount = 4;
+
+            auto* decl = sub->vertexData->vertexDeclaration;
+            decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+
+            auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+                decl->getVertexSize(0), 4, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+
+            float vertices[] = {
+                -1.0f, 0.0f, -1.0f,
+                 1.0f, 0.0f, -1.0f,
+                 1.0f, 0.0f,  1.0f,
+                -1.0f, 0.0f,  1.0f,
+            };
+            vbuf->writeData(0, sizeof(vertices), vertices, true);
+            sub->vertexData->vertexBufferBinding->setBinding(0, vbuf);
+
+            mesh->setSkeletonName(skeletonName);
+            mesh->_setBounds(Ogre::AxisAlignedBox(-1, 0, -1, 1, 5, 1));
+            mesh->_setBoundingSphereRadius(6.0f);
+            mesh->load();
+
+            auto* node = mgr->addSceneNode(nodeName);
+            return mgr->createEntity(node, mesh);
+        } catch (const Ogre::Exception& e) {
+            qWarning() << "Failed to create programmatic skeleton:"
+                       << e.getFullDescription().c_str();
+            return nullptr;
+        }
+    }
+};
+
+TEST_F(SkeletonTransformProgrammaticTest, EntityHasSkeletonAndBones)
+{
+    ASSERT_TRUE(entity->hasSkeleton());
+    auto* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+    EXPECT_GE(sk->getNumBones(), 2u);
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, RotateQuaternionRotatesBonePositions)
+{
+    auto* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    Ogre::Vector3 meshCenter = entity->getMesh()->getBounds().getCenter();
+
+    // Collect initial root bone positions
+    std::vector<Ogre::Vector3> initialPositions;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr)
+            initialPositions.push_back(bone->getPosition());
+    }
+    ASSERT_FALSE(initialPositions.empty());
+
+    // Rotate 90 degrees around Y axis
+    Ogre::Quaternion quat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
+    SkeletonTransform::rotateSkeleton(entity, quat);
+
+    size_t idx = 0;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr) {
+            ASSERT_LT(idx, initialPositions.size());
+            Ogre::Vector3 expected = quat * (initialPositions[idx] - meshCenter) + meshCenter;
+            Ogre::Vector3 actual = bone->getPosition();
+            EXPECT_NEAR(actual.x, expected.x, 0.01f) << "Root bone " << idx << " x";
+            EXPECT_NEAR(actual.y, expected.y, 0.01f) << "Root bone " << idx << " y";
+            EXPECT_NEAR(actual.z, expected.z, 0.01f) << "Root bone " << idx << " z";
+            idx++;
+        }
+    }
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, RotateQuaternionMatchesVector3)
+{
+    // The Vector3 overload with x=90 should produce the same result as
+    // Quaternion(Degree(90), UNIT_Y) since that's how buildRotationQuat works
+    auto* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    // Record initial bone positions and orientations
+    std::vector<Ogre::Vector3> initialPositions;
+    std::vector<Ogre::Quaternion> initialOrientations;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr) {
+            initialPositions.push_back(bone->getPosition());
+            initialOrientations.push_back(bone->getOrientation());
+        }
+    }
+
+    // Apply Vector3 rotation
+    SkeletonTransform::rotateSkeleton(entity, Ogre::Vector3(90.0f, 0.0f, 0.0f));
+
+    // Record Vector3 result
+    std::vector<Ogre::Vector3> vec3Positions;
+    std::vector<Ogre::Quaternion> vec3Orientations;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr) {
+            vec3Positions.push_back(bone->getPosition());
+            vec3Orientations.push_back(bone->getOrientation());
+        }
+    }
+
+    // Reset bones back to initial state by applying inverse rotation
+    Ogre::Quaternion quat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
+    Ogre::Quaternion invQuat = quat.Inverse();
+    SkeletonTransform::rotateSkeleton(entity, invQuat);
+
+    // Now apply Quaternion rotation from initial
+    SkeletonTransform::rotateSkeleton(entity, quat);
+
+    size_t idx = 0;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr) {
+            ASSERT_LT(idx, vec3Positions.size());
+            EXPECT_NEAR(bone->getPosition().x, vec3Positions[idx].x, 0.01f);
+            EXPECT_NEAR(bone->getPosition().y, vec3Positions[idx].y, 0.01f);
+            EXPECT_NEAR(bone->getPosition().z, vec3Positions[idx].z, 0.01f);
+            idx++;
+        }
+    }
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, RotateQuaternionIdentityPreservesBones)
+{
+    auto* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    std::vector<Ogre::Vector3> initialPositions;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr)
+            initialPositions.push_back(bone->getPosition());
+    }
+
+    SkeletonTransform::rotateSkeleton(entity, Ogre::Quaternion::IDENTITY);
+
+    size_t idx = 0;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr) {
+            ASSERT_LT(idx, initialPositions.size());
+            EXPECT_NEAR(bone->getPosition().x, initialPositions[idx].x, 0.001f);
+            EXPECT_NEAR(bone->getPosition().y, initialPositions[idx].y, 0.001f);
+            EXPECT_NEAR(bone->getPosition().z, initialPositions[idx].z, 0.001f);
+            idx++;
+        }
+    }
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, RotateQuaternionArbitraryAxis)
+{
+    auto* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    Ogre::Vector3 meshCenter = entity->getMesh()->getBounds().getCenter();
+
+    std::vector<Ogre::Vector3> initialPositions;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr)
+            initialPositions.push_back(bone->getPosition());
+    }
+
+    // Rotate 60 degrees around an arbitrary axis -- impossible with Vector3 overload
+    Ogre::Quaternion quat(Ogre::Degree(60.0f), Ogre::Vector3(1, 1, 0).normalisedCopy());
+    SkeletonTransform::rotateSkeleton(entity, quat);
+
+    size_t idx = 0;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr) {
+            ASSERT_LT(idx, initialPositions.size());
+            Ogre::Vector3 expected = quat * (initialPositions[idx] - meshCenter) + meshCenter;
+            EXPECT_NEAR(bone->getPosition().x, expected.x, 0.01f);
+            EXPECT_NEAR(bone->getPosition().y, expected.y, 0.01f);
+            EXPECT_NEAR(bone->getPosition().z, expected.z, 0.01f);
+            idx++;
+        }
+    }
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, RotatePreservesAnimationData)
+{
+    auto* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    if (sk->getNumAnimations() == 0) {
+        GTEST_SKIP() << "Skipping: no animations on skeleton";
+    }
+
+    auto* anim = sk->getAnimation(static_cast<unsigned short>(0));
+    Ogre::Real originalLength = anim->getLength();
+    unsigned short originalNumTracks = anim->getNumNodeTracks();
+
+    // Rotate the skeleton
+    Ogre::Quaternion quat(Ogre::Degree(45.0f), Ogre::Vector3::UNIT_Z);
+    SkeletonTransform::rotateSkeleton(entity, quat);
+
+    // Animation metadata should be preserved
+    ASSERT_TRUE(sk->hasAnimation(anim->getName()));
+    auto* afterAnim = sk->getAnimation(anim->getName());
+    EXPECT_FLOAT_EQ(afterAnim->getLength(), originalLength);
+    EXPECT_EQ(afterAnim->getNumNodeTracks(), originalNumTracks);
+}
