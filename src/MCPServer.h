@@ -124,9 +124,13 @@ private:
     void onAnimationTick();
 
     // Helper methods
+    bool ensureOgreInitialized();
     QJsonArray buildToolsList();
     QJsonObject buildToolDefinition(const QString &name, const QString &description,
                                      const QJsonObject &inputSchema);
+
+    bool m_ogreInitialized = false;
+    bool m_ogreInitFailed = false;
 
     // HTTP server
     void handleHttpRequest(QTcpSocket *socket);

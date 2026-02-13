@@ -89,8 +89,8 @@ public:
 
     bool                hasAnimationName(Ogre::Entity *entity, const QString &_name);
 
-    bool                isValidFileExtention(QString &_uri);
-    QString             getValidFileExtention();
+    bool                isValidFileExtention(const QString &_uri) const;
+    QString             getValidFileExtention() const;
 
     void loadResources();
 signals:
@@ -99,8 +99,8 @@ signals:
     void entityCreated(Ogre::Entity* const& newEntity);
 
 private:
-    Manager(MainWindow *parent);
-    ~Manager();
+    explicit Manager(MainWindow *parent);
+    ~Manager() override;
     void initRoot();         // Init Ogre Root
     void initRenderSystem(); // Init Ogre Render System
     void initSceneMgr();     // Init Ogre SceneManager

@@ -17,6 +17,7 @@
 #include <QDateTime>
 #include <QMetaObject>
 #include <QPixmap>
+#include <OgreException.h>
 #include <OgreMaterialManager.h>
 #include <OgreMaterial.h>
 #include <OgreTechnique.h>
@@ -292,9 +293,40 @@ QJsonObject MCPServer::handleToolsCall(const QJsonObject &params)
     return callTool(toolName, args);
 }
 
+bool MCPServer::ensureOgreInitialized()
+{
+    if (m_ogreInitialized) return true;
+    if (m_ogreInitFailed) return false;
+
+    try {
+        if (!Manager::getSingletonPtr()) {
+            Manager::getSingleton();
+        }
+        m_ogreInitialized = true;
+        return true;
+    } catch (const Ogre::Exception &e) {
+        qWarning() << "MCP: Ogre init failed:" << e.getFullDescription().c_str();
+    }
+    m_ogreInitFailed = true;
+    return false;
+}
+
 QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 {
     qDebug() << "MCP Tool Call:" << name << args;
+
+    // Lazily initialize Ogre/Manager on first tool call
+    if (!ensureOgreInitialized()) {
+        QJsonArray content;
+        QJsonObject textContent;
+        textContent["type"] = "text";
+        textContent["text"] = "Error: Ogre 3D engine could not be initialized (no OpenGL available)";
+        content.append(textContent);
+        QJsonObject result;
+        result["isError"] = true;
+        result["content"] = content;
+        return result;
+    }
 
     QJsonObject toolResult;
 
