@@ -554,7 +554,13 @@ jobs:
       with:
          submodules: true
          fetch-depth: 0  # Shallow clones should be disabled for a better relevancy of analysis
-           
+
+    - name: Fix broken apt repositories
+      run: |
+            # Remove Microsoft repos that frequently return 403/signature errors on GitHub runners
+            sudo rm -f /etc/apt/sources.list.d/microsoft-prod.list /etc/apt/sources.list.d/azure-cli.list || true
+            sudo apt-get update || true
+
     - name: Install Qt
       uses: jurplel/install-qt-action@v3
       with:
@@ -669,7 +675,7 @@ jobs:
       run: |
             sudo apt-get update
             sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libx11-dev xvfb \
-                mesa-utils libgl1-mesa-dri libegl1-mesa libgbm1 libgl1-mesa-glx libglx-mesa0 || true
+                mesa-utils libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0
             # Start Xvfb with GLX support for Ogre GL initialization
             Xvfb :99 -screen 0 1024x768x24 +extension GLX > /dev/null 2>&1 &
             sleep 3
