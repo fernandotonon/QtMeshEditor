@@ -737,7 +737,6 @@ jobs:
 
         echo "=== Generating SonarQube coverage XML via gcovr ==="
         gcovr --root . \
-              --search-path build \
               --filter 'src/' \
               --exclude 'src/OgreXML/' \
               --exclude 'src/dependencies/' \
@@ -749,7 +748,9 @@ jobs:
               --exclude '.*/moc_' \
               --sonarqube=coverage.xml \
               --gcov-executable gcov \
-              --verbose 2>&1 | tail -40 || echo "gcovr completed with warnings"
+              --verbose \
+              build \
+              2>&1 | tail -40
 
         echo "=== Validating coverage files ==="
         if [ -f coverage.xml ] && [ -s coverage.xml ]; then
@@ -760,6 +761,7 @@ jobs:
             grep -c '<file' coverage.xml || echo "0 files"
         else
             echo "ERROR: coverage.xml is missing or empty!"
+            exit 1
         fi
 
     - name: Run sonar-scanner
