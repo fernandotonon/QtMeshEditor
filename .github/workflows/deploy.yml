@@ -622,8 +622,7 @@ jobs:
             -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6GuiTools \
             -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage -O0 -DCOVERAGE_BUILD" \
             -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage -O0 -DCOVERAGE_BUILD" \
-            -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
-            -DBUILD_QT_MESH_EDITOR=OFF
+            -DCMAKE_EXE_LINKER_FLAGS="--coverage"
       
     - name: Run build-wrapper
       run: |
@@ -669,9 +668,10 @@ jobs:
     - name: Setup headless environment for Qt tests
       run: |
             sudo apt-get update
-            sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libx11-dev xvfb
-            # Start Xvfb for tests that might need a display
-            Xvfb :99 -screen 0 1024x768x24 > /dev/null 2>&1 &
+            sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libx11-dev xvfb \
+                mesa-utils libgl1-mesa-dri libegl1-mesa libgbm1 libgl1-mesa-glx libglx-mesa0 || true
+            # Start Xvfb with GLX support for Ogre GL initialization
+            Xvfb :99 -screen 0 1024x768x24 +extension GLX > /dev/null 2>&1 &
             sleep 3
             echo "DISPLAY=:99" >> $GITHUB_ENV
             echo "QT_QPA_PLATFORM=offscreen" >> $GITHUB_ENV
@@ -773,6 +773,139 @@ jobs:
             if [ "$CRASHED_SUITES" -gt 0 ]; then
                 echo "WARNING: $CRASHED_SUITES test suite(s) crashed, but coverage data was preserved"
             fi
+
+    - name: Run MCP Integration Tests
+      if: always()
+      env:
+         DISPLAY: :99
+         QT_QPA_PLATFORM: offscreen
+         QT_DEBUG_PLUGINS: 0
+         LD_LIBRARY_PATH: /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib:/usr/local/lib:/usr/local/lib/OGRE
+      run: |
+            echo "=== MCP Integration Tests ==="
+
+            # Find QtMeshEditor binary
+            APP=""
+            for p in ./build/debug/QtMeshEditor ./build/bin/QtMeshEditor ./build/debug/bin/QtMeshEditor; do
+                if [ -f "$p" ]; then APP="$p"; break; fi
+            done
+            if [ -z "$APP" ]; then
+                APP=$(find build -name "QtMeshEditor" -type f -executable 2>/dev/null | head -1)
+            fi
+            if [ -z "$APP" ]; then
+                echo "WARNING: QtMeshEditor binary not found, skipping MCP integration tests"
+                exit 0
+            fi
+            echo "Found QtMeshEditor at: $APP"
+
+            # Copy OGRE plugins config next to the binary if needed
+            APP_DIR=$(dirname "$APP")
+            if [ ! -d "$APP_DIR/cfg" ]; then
+                PLUGINS_CFG=$(find build -name "plugins_d.cfg" -o -name "plugins.cfg" 2>/dev/null | head -1)
+                if [ -n "$PLUGINS_CFG" ]; then
+                    mkdir -p "$APP_DIR/cfg"
+                    cp "$PLUGINS_CFG" "$APP_DIR/cfg/"
+                    echo "Copied OGRE plugins config to $APP_DIR/cfg/"
+                fi
+            fi
+
+            # Copy OGRE plugins next to the binary so Ogre can find them
+            cp /usr/local/lib/OGRE/*.so* "$APP_DIR/" 2>/dev/null || true
+
+            # Helper: send an MCP JSON-RPC message via Content-Length framing
+            send_mcp() {
+                local json="$1"
+                local len=${#json}
+                printf "Content-Length: %d\r\n\r\n%s" "$len" "$json"
+            }
+
+            # Build a sequence of MCP messages to exercise various tools
+            {
+                # 1. Initialize
+                send_mcp '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci-test","version":"1.0"}}}'
+                sleep 0.5
+
+                # 2. List tools
+                send_mcp '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+                sleep 0.5
+
+                # 3. Create a material
+                send_mcp '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"create_material","arguments":{"name":"CITestMaterial","colors":{"diffuse":[1,0,0],"ambient":[0.1,0.1,0.1],"specular":[1,1,1],"shininess":32}}}}'
+                sleep 0.5
+
+                # 4. List materials
+                send_mcp '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_materials","arguments":{}}}'
+                sleep 0.5
+
+                # 5. Get material
+                send_mcp '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_material","arguments":{"name":"CITestMaterial"}}}'
+                sleep 0.5
+
+                # 6. Modify material
+                send_mcp '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"modify_material","arguments":{"name":"CITestMaterial","colors":{"diffuse":[0,1,0]}}}}'
+                sleep 0.5
+
+                # 7. List textures
+                send_mcp '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"list_textures","arguments":{}}}'
+                sleep 0.5
+
+                # 8. Get scene info
+                send_mcp '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"get_scene_info","arguments":{}}}'
+                sleep 0.5
+
+                # 9. Create a primitive
+                send_mcp '{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"create_primitive","arguments":{"type":"cube","size":1.0}}}'
+                sleep 0.5
+
+                # 10. Get mesh info
+                send_mcp '{"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_mesh_info","arguments":{}}}'
+                sleep 0.5
+
+                # 11. Transform mesh
+                send_mcp '{"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"transform_mesh","arguments":{"position":[1,2,3]}}}'
+                sleep 0.5
+
+                # 12. Get scene info again (after changes)
+                send_mcp '{"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"get_scene_info","arguments":{}}}'
+                sleep 0.5
+
+                # 13. Create another primitive
+                send_mcp '{"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"create_primitive","arguments":{"type":"sphere","radius":0.5}}}'
+                sleep 0.5
+
+                # 14. List resources
+                send_mcp '{"jsonrpc":"2.0","id":14,"method":"resources/list","params":{}}'
+                sleep 0.5
+
+                # 15. Ping
+                send_mcp '{"jsonrpc":"2.0","id":15,"method":"ping","params":{}}'
+                sleep 0.5
+
+                # 16. Export mesh
+                send_mcp '{"jsonrpc":"2.0","id":16,"method":"tools/call","params":{"name":"export_mesh","arguments":{"filename":"/tmp/test_export.obj"}}}'
+                sleep 0.5
+
+                # 17. Load mesh
+                send_mcp '{"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"load_mesh","arguments":{"filename":"./media/models/robot.mesh"}}}'
+                sleep 0.5
+
+                # 18. Take screenshot (exercises error path - no MainWindow in --mcp mode)
+                send_mcp '{"jsonrpc":"2.0","id":18,"method":"tools/call","params":{"name":"take_screenshot","arguments":{"filename":"/tmp/screenshot.png"}}}'
+                sleep 0.5
+
+                # 19. Animate
+                send_mcp '{"jsonrpc":"2.0","id":19,"method":"tools/call","params":{"name":"animate","arguments":{"action":"start","speed":1.0}}}'
+                sleep 0.5
+
+                # 20. Set texture on material
+                send_mcp '{"jsonrpc":"2.0","id":20,"method":"tools/call","params":{"name":"set_texture","arguments":{"material":"CITestMaterial","texture":"missing_texture.png"}}}'
+                sleep 0.5
+
+                # Close stdin to signal end — MCPServer will call QCoreApplication::quit()
+                sleep 1
+            } | timeout 60 "$APP" --mcp 2>&1 | head -200 || true
+
+            echo "=== MCP Integration Tests completed ==="
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
