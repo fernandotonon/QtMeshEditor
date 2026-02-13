@@ -744,16 +744,6 @@ jobs:
             exit 1
         fi
 
-        echo "=== Generating gcov files for CFamily sensor ==="
-        cd build
-        find . -path "./_deps" -prune -o -name "*.gcda" -print | while read gcda; do
-            dir=$(dirname "$gcda")
-            (cd "$dir" && gcov -p *.gcda 2>/dev/null || true)
-        done
-        cd ..
-        GCOV_COUNT=$(find build -name "*.gcov" -type f 2>/dev/null | wc -l)
-        echo "Generated $GCOV_COUNT .gcov files"
-
         echo "=== Generating SonarQube coverage XML via gcovr ==="
         gcovr --root . \
               --filter 'src/' \
@@ -772,11 +762,12 @@ jobs:
 
         echo "=== Validating coverage files ==="
         if [ -f coverage.xml ] && [ -s coverage.xml ]; then
-            echo "coverage.xml exists and has content ($(wc -l < coverage.xml) lines)"
+            echo "coverage.xml exists and has content ($(wc -c < coverage.xml) bytes)"
             echo "Files with coverage data:"
             grep -c '<file' coverage.xml || echo "0 files"
         else
-            echo "WARNING: coverage.xml is missing or empty - relying on cfamily gcov sensor"
+            echo "ERROR: coverage.xml is missing or empty!"
+            exit 1
         fi
 
     - name: Run sonar-scanner
@@ -806,9 +797,6 @@ jobs:
           echo "=== Coverage files ==="
           ls -la coverage.xml 2>/dev/null || echo "coverage.xml not found"
 
-          GCOV_COUNT=$(find build -name "*.gcov" -type f 2>/dev/null | wc -l)
-          echo "Found $GCOV_COUNT .gcov files in build directory"
-
           echo "=== Running SonarCloud analysis ==="
           sonar-scanner \
             -Dsonar.projectKey=fernandotonon_QtMeshEditor \
@@ -825,7 +813,6 @@ jobs:
             -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h \
             -Dsonar.objc.file.suffixes=.m,.mm \
             -Dsonar.cfamily.build-wrapper-output=$BW_DIR \
-            -Dsonar.cfamily.gcov.reportsPath=build \
             -Dsonar.cfamily.cache.enabled=true \
             -Dsonar.cfamily.threads=4 \
             -Dsonar.verbose=true
