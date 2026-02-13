@@ -681,15 +681,22 @@ jobs:
             sleep 3
             echo "DISPLAY=:99" >> $GITHUB_ENV
             echo "QT_QPA_PLATFORM=offscreen" >> $GITHUB_ENV
+            # Force Mesa software rendering (llvmpipe) - avoids DRI3 hardware errors in CI
+            echo "LIBGL_ALWAYS_SOFTWARE=1" >> $GITHUB_ENV
+            echo "MESA_GL_VERSION_OVERRIDE=3.3" >> $GITHUB_ENV
 
     - name: Run Comprehensive Test Suite
       env:
          QT_QPA_PLATFORM: offscreen
          QT_DEBUG_PLUGINS: 0
          DISPLAY: :99
+         LIBGL_ALWAYS_SOFTWARE: 1
+         MESA_GL_VERSION_OVERRIDE: "3.3"
       run: |
             export QT_QPA_PLATFORM="offscreen"
             export QT_DEBUG_PLUGINS=0
+            export LIBGL_ALWAYS_SOFTWARE=1
+            export MESA_GL_VERSION_OVERRIDE=3.3
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/ /lib/x86_64-linux-gnu/
             export DISPLAY=:99
             
@@ -786,6 +793,8 @@ jobs:
          DISPLAY: :99
          QT_QPA_PLATFORM: offscreen
          QT_DEBUG_PLUGINS: 0
+         LIBGL_ALWAYS_SOFTWARE: 1
+         MESA_GL_VERSION_OVERRIDE: "3.3"
          LD_LIBRARY_PATH: /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib:/usr/local/lib:/usr/local/lib/OGRE
       run: |
             echo "=== MCP Integration Tests ==="
