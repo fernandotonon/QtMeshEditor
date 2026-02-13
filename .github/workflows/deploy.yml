@@ -641,26 +641,31 @@ jobs:
 
     - name: Add missing libraries
       run: |
-            # Create the bin directory since cmake builds to build/bin but we need ./bin for the tests
+            # Debug build puts executables in build/debug/, Release in build/bin/
             mkdir -p ./bin
             mkdir -p ./build/bin
-            
-            # Copy Qt ICU libraries to both locations
+            mkdir -p ./build/debug
+
+            # Copy Qt ICU libraries
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./bin
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./bin
-            
-            # Also copy to build/bin where cmake actually puts the executables
+
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./build/debug/ || true
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./build/debug/ || true
+            sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./build/debug/ || true
+
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicui18n.* ./build/bin/ || true
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicuuc.* ./build/bin/ || true
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/libicudata.* ./build/bin/ || true
-            
+
             # Copy libraries to system locations
             sudo cp -R ./bin/*.so* /lib/x86_64-linux-gnu || true
             sudo cp -R /usr/local/lib/OGRE/* /lib/x86_64-linux-gnu || true
             sudo cp -R /usr/local/lib/OGRE/* ./bin || true
             sudo cp -R /usr/local/lib/OGRE/* ./build/bin/ || true
-    
+            sudo cp -R /usr/local/lib/OGRE/* ./build/debug/ || true
+
     - name: Setup headless environment for Qt tests
       run: |
             sudo apt-get update
@@ -686,21 +691,25 @@ jobs:
             run_test() {
                 local test_name=$1
                 local output_file=$2
-                
-                if [ -f "./build/bin/$test_name" ]; then
+
+                if [ -f "./build/debug/$test_name" ]; then
+                    echo "Found $test_name in ./build/debug/"
+                    sudo -E ./build/debug/$test_name --gtest_output=xml:$output_file
+                elif [ -f "./build/bin/$test_name" ]; then
                     echo "Found $test_name in ./build/bin/"
                     sudo -E ./build/bin/$test_name --gtest_output=xml:$output_file
                 elif [ -f "./bin/$test_name" ]; then
                     echo "Found $test_name in ./bin/"
                     sudo -E ./bin/$test_name --gtest_output=xml:$output_file
                 else
-                    echo "$test_name not found in ./build/bin/ or ./bin/"
+                    echo "ERROR: $test_name not found in ./build/debug/, ./build/bin/, or ./bin/"
+                    find build -name "$test_name" -type f 2>/dev/null || true
                     return 1
                 fi
             }
             
             echo "Running UnitTests (Google Tests - includes Assimp and other unit tests)..."
-            run_test "UnitTests" "test-results-unittests.xml" || echo "UnitTests not found"
+            run_test "UnitTests" "test-results-unittests.xml"
             
             echo "Running MaterialEditorQML Unit Tests..."
             run_test "MaterialEditorQML_test" "test-results-materialeditor.xml" || echo "MaterialEditorQML_test not found"
