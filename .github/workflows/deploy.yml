@@ -730,9 +730,9 @@ jobs:
 
                 echo "Found $test_name at $test_path"
                 if [ -n "$filter" ]; then
-                    sudo -E $test_path --gtest_output=xml:$output_file --gtest_filter="$filter"
+                    $test_path --gtest_output=xml:$output_file --gtest_filter="$filter"
                 else
-                    sudo -E $test_path --gtest_output=xml:$output_file
+                    $test_path --gtest_output=xml:$output_file
                 fi
             }
 
@@ -747,12 +747,12 @@ jobs:
             if [ -n "$UNIT_TEST_PATH" ]; then
                 echo "=== Running UnitTests suites in isolation ==="
                 # Get list of test suites
-                SUITES=$(sudo -E $UNIT_TEST_PATH --gtest_list_tests 2>/dev/null | grep -E '^\w' | sed 's/\.$//' | sort -u)
+                SUITES=$($UNIT_TEST_PATH --gtest_list_tests 2>/dev/null | grep -E '^\w' | sed 's/\.$//' | sort -u)
 
                 for suite in $SUITES; do
                     TOTAL_SUITES=$((TOTAL_SUITES + 1))
                     echo "--- Running suite: $suite ---"
-                    if sudo -E $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:test-results-${suite}.xml 2>&1; then
+                    if $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:test-results-${suite}.xml 2>&1; then
                         PASSED_SUITES=$((PASSED_SUITES + 1))
                     else
                         exit_code=$?
@@ -798,6 +798,9 @@ jobs:
          LD_LIBRARY_PATH: /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib:/usr/local/lib:/usr/local/lib/OGRE
       run: |
             echo "=== MCP Integration Tests ==="
+
+            # Ensure Ogre config directory exists for Root::saveConfig
+            mkdir -p "$HOME/.config/QtMeshEditor/QtMeshEditor"
 
             # Find QtMeshEditor binary
             APP=""

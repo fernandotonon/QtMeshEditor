@@ -498,7 +498,11 @@ void Manager::initRenderSystem()
 
     mRoot->setRenderSystem( renderSystem );
 
-    mRoot->saveConfig();
+    try {
+        mRoot->saveConfig();
+    } catch (const Ogre::Exception&) {
+        // Config save can fail in headless/CI environments - not critical
+    }
     mRoot->initialise(false); // don't create a window
 
     // All objects will be build on this flag
