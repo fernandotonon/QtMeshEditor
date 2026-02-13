@@ -20,6 +20,7 @@
 #include "mainwindow.h"
 #include "AnimationWidget.h"
 #include "animationcontrolwidget.h"
+#include "TestHelpers.h"
 
 class MainWindowTest : public ::testing::Test {
     protected:
@@ -494,6 +495,10 @@ TEST_F(MainWindowTest, OpenAbout) {
 }
 
 TEST_F(MainWindowTest, DropEvent) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
     auto entities = Manager::getSingleton()->getEntities();
     int countBefore = entities.count();
     // Create a QDropEvent instance for testing
@@ -542,6 +547,10 @@ TEST_F(MainWindowTest, DropEvent) {
 
 TEST_F(MainWindowTest, SelectAnimatedEntity)
 {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
     try {
         auto widget = std::make_unique<AnimationWidget>(mainWindow.get());
         auto animControl = std::make_unique<AnimationControlWidget>();

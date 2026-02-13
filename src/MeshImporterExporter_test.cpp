@@ -142,6 +142,10 @@ TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndUri_ReturnMinusOne) {
 }
 
 TEST_F(MeshImporterExporterTest, Importer_ValidMesh) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
     QStringList validUri{"", "./media/models/Twist Dance.fbx"};
     MeshImporterExporter::importer(validUri);
     auto sn = Manager::getSingleton()->getSceneNodes().last();

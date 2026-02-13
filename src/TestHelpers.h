@@ -3,6 +3,8 @@
 
 #include <OgreMaterialManager.h>
 #include <OgreResourceGroupManager.h>
+#include <OgreRoot.h>
+#include <QGuiApplication>
 
 /**
  * Ensures that Ogre's MaterialManager has been initialised.
@@ -58,6 +60,25 @@ static inline void createStandardOgreMaterials()
         baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
         baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
     }
+}
+
+/**
+ * Returns true if the environment supports loading mesh files.
+ *
+ * Loading .mesh files via MeshImporterExporter requires Ogre to compile
+ * materials/shaders and allocate GPU resources. In headless CI (offscreen
+ * platform, software GL), this can segfault. Tests that import meshes
+ * should call this and GTEST_SKIP() if false.
+ */
+static inline bool canLoadMeshFiles()
+{
+    // Offscreen Qt platform typically has no real GPU context
+    if (QGuiApplication::platformName() == "offscreen")
+        return false;
+    // No render system means Ogre can't load materials
+    if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingleton().getRenderSystem())
+        return false;
+    return true;
 }
 
 #endif // TEST_HELPERS_H

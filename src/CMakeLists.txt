@@ -335,19 +335,18 @@ if(BUILD_TESTS)
         list(APPEND TEST_SOURCES ${TestFile})
     endforeach()    
 
-    # Create the test executable
+    # Create the test executable (uses custom main for gcov signal handlers)
     add_executable(UnitTests
     ${HEADER_FILES}
     ${TEST_SOURCES}
     ${RESOURCE_SRCS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp
     )
 
-    # Link against Google Test libraries
+    # Link against Google Test libraries (no gtest_main - we provide our own main)
     target_link_libraries(UnitTests
     gtest
-    gtest_main
     gmock
-    gmock_main
     ${CODEC_ASSIMP_LINK_LIB}
     ${OGRE_LIBRARIES}
     ${ASSIMP_LIBRARIES}

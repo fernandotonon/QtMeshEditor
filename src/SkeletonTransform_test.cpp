@@ -27,6 +27,10 @@ protected:
         }
         createStandardOgreMaterials();
 
+        if (!canLoadMeshFiles()) {
+            GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+        }
+
         // Import robot.mesh which has a skeleton with animations
         QStringList validUri{"./media/models/robot.mesh"};
         try {
