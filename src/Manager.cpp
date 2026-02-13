@@ -540,10 +540,8 @@ void Manager::loadResources()
 
     for (const auto& [secName, settings] : seci)
     {
-        for (auto it = settings.begin(); it != settings.end(); ++it)
+        for (const auto& [typeName, archName] : settings)
         {
-            const auto& typeName = it->first;
-            const auto& archName = it->second;
             // Resolve relative paths against the application directory so that
             // resources are found regardless of the current working directory
             // (e.g., when launched from an installed .deb package).

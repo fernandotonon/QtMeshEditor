@@ -99,8 +99,8 @@ signals:
     void entityCreated(Ogre::Entity* const& newEntity);
 
 private:
-    Manager(MainWindow *parent);
-    ~Manager();
+    explicit Manager(MainWindow *parent);
+    ~Manager() override;
     void initRoot();         // Init Ogre Root
     void initRenderSystem(); // Init Ogre Render System
     void initSceneMgr();     // Init Ogre SceneManager
