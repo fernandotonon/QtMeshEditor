@@ -605,14 +605,14 @@ jobs:
     - name: Configure CMake for Tests
       run: |
             mkdir build
-            cmake -S . -B build -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
+            cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
             -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6GuiTools \
-            -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
-            -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage" \
+            -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage -O0" \
+            -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage -O0" \
             -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
             -DBUILD_QT_MESH_EDITOR=OFF
       
@@ -726,10 +726,6 @@ jobs:
       run: |
         echo "=== Coverage Generation Debug Info ==="
         echo "Current directory: $(pwd)"
-        echo "Looking for .gcda files:"
-        find build -name "*.gcda" -type f | head -10 || echo "No .gcda files found"
-        echo "Looking for .gcno files:"
-        find build -name "*.gcno" -type f | head -10 || echo "No .gcno files found"
 
         GCDA_COUNT=$(find build -name "*.gcda" -type f 2>/dev/null | wc -l)
         echo "Found $GCDA_COUNT .gcda files"
@@ -740,33 +736,33 @@ jobs:
         fi
 
         echo "=== Generating SonarQube coverage XML via gcovr ==="
-        gcovr --root . --filter 'src/' \
+        gcovr --root . \
+              --filter 'src/' \
               --exclude 'src/OgreXML/' \
               --exclude 'src/dependencies/' \
               --exclude '.*_test\.cpp' \
+              --exclude '.*TestHelpers\.h' \
+              --exclude '.*QtAppEnvironment_test\.cpp' \
               --exclude '.*_autogen' \
               --exclude '.*/ui_files/' \
               --exclude '.*/moc_' \
               --sonarqube=coverage.xml \
               --gcov-executable gcov \
-              --verbose 2>&1 | tail -20 || echo "gcovr completed with warnings"
-
-        echo "=== Generating gcov files for cfamily sensor ==="
-        cd build
-        find . -name "*.o" -exec gcov {} \; 2>/dev/null || echo "gcov generation completed"
-        cd ..
+              --verbose \
+              build \
+              2>&1 | tail -40
 
         echo "=== Validating coverage files ==="
         if [ -f coverage.xml ] && [ -s coverage.xml ]; then
             echo "coverage.xml exists and has content ($(wc -l < coverage.xml) lines)"
             head -5 coverage.xml
+            echo "..."
+            echo "Files with coverage data:"
+            grep -c '<file' coverage.xml || echo "0 files"
         else
             echo "ERROR: coverage.xml is missing or empty!"
+            exit 1
         fi
-
-        GCOV_COUNT=$(find build -name "*.gcov" -type f 2>/dev/null | wc -l)
-        echo "Found $GCOV_COUNT .gcov files in build directory"
-        ls -la coverage.* 2>/dev/null || echo "No coverage files found"
 
     - name: Run sonar-scanner
       env:
@@ -808,13 +804,12 @@ jobs:
             -Dsonar.tests=src/,tests/ \
             -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
             -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
-            -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/** \
+            -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/**,**/TestHelpers.h \
             -Dsonar.coverageReportPaths=coverage.xml \
             -Dsonar.c.file.suffixes=.c \
             -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h \
             -Dsonar.objc.file.suffixes=.m,.mm \
             -Dsonar.cfamily.build-wrapper-output=$BW_DIR \
-            -Dsonar.cfamily.gcov.reportsPath=build \
             -Dsonar.cfamily.cache.enabled=true \
             -Dsonar.cfamily.threads=4 \
             -Dsonar.verbose=true
