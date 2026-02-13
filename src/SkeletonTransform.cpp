@@ -105,10 +105,9 @@ void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::
                     continue;
 
                 bone->translate(_translate);
-
-                sk->setBindingPose();
             }
         }
+        sk->setBindingPose();
     }
 }
 
@@ -132,23 +131,33 @@ void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vec
 
         Manager::getSingleton()->getRoot()->renderOneFrame();
 
+        // Build rotation quaternion (same axis mapping as MeshTransform::rotateMesh)
+        Ogre::Quaternion quat;
+        if(_rotate.x!=0)
+            quat = Ogre::Quaternion(Ogre::Degree(_rotate.x), Ogre::Vector3::UNIT_Y);
+        else if(_rotate.y!=0)
+            quat = Ogre::Quaternion(Ogre::Degree(_rotate.y), Ogre::Vector3::UNIT_Z);
+        else if(_rotate.z!=0)
+            quat = Ogre::Quaternion(Ogre::Degree(_rotate.z), Ogre::Vector3::UNIT_X);
+        else
+            return;
+
+        // Use the same pivot as MeshTransform::rotateMesh (mesh bounding box center)
+        Ogre::Vector3 meshCenter = _ent->getMesh()->getBounds().getCenter();
+
         auto bones = sk->getBones();
         for(const auto &bone : bones)
         {
             if(bone->getParent()==nullptr)
             {
-                if(_rotate.x!=0)
-                    bone->rotate(Ogre::Quaternion(Ogre::Degree(_rotate.x), Ogre::Vector3::UNIT_Y),Ogre::Node::TS_WORLD);
-                else if(_rotate.y!=0)
-                    bone->rotate(Ogre::Quaternion(Ogre::Degree(_rotate.y), Ogre::Vector3::UNIT_Z),Ogre::Node::TS_WORLD);
-                else if(_rotate.z!=0)
-                    bone->rotate(Ogre::Quaternion(Ogre::Degree(_rotate.z), Ogre::Vector3::UNIT_X),Ogre::Node::TS_WORLD);
-                else
-                    continue;
-
-                sk->setBindingPose();
+                // Rotate position around mesh center (matches vertex rotation pivot)
+                Ogre::Vector3 newPos = quat * (bone->getPosition() - meshCenter) + meshCenter;
+                bone->setPosition(newPos);
+                // Rotate orientation
+                bone->rotate(quat, Ogre::Node::TS_WORLD);
             }
         }
+        sk->setBindingPose();
     }
 }
 

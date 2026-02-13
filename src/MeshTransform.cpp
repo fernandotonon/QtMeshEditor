@@ -166,6 +166,17 @@ void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_r
     Ogre::Vector3 Maximum = mesh->getBounds().getMinimum();
     Ogre::Vector3 Center = mesh->getBounds().getCenter();
 
+    // Build rotation quaternion once
+    Ogre::Quaternion quat;
+    if(_rotate.x!=0)
+        quat = Ogre::Quaternion(Ogre::Degree(_rotate.x), Ogre::Vector3::UNIT_Y);
+    else if(_rotate.y!=0)
+        quat = Ogre::Quaternion(Ogre::Degree(_rotate.y), Ogre::Vector3::UNIT_Z);
+    else if(_rotate.z!=0)
+        quat = Ogre::Quaternion(Ogre::Degree(_rotate.z), Ogre::Vector3::UNIT_X);
+    else
+        quat = Ogre::Quaternion::IDENTITY;
+
     // Run through the submeshes, modifying the data
     for(int i = 0;i < mesh->getNumSubMeshes();i++)
     {
@@ -198,16 +209,7 @@ void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_r
                 pos.z =(*pReal);
                 pReal-=2;
 
-                if(_rotate.x!=0)
-                    rpos = (Ogre::Quaternion(Ogre::Degree(_rotate.x), Ogre::Vector3::UNIT_Y)*(pos-Center));
-                else if(_rotate.y!=0)
-                    rpos = (Ogre::Quaternion(Ogre::Degree(_rotate.y), Ogre::Vector3::UNIT_Z)*(pos-Center));
-                else if(_rotate.z!=0)
-                    rpos = (Ogre::Quaternion(Ogre::Degree(_rotate.z), Ogre::Vector3::UNIT_X)*(pos-Center));
-                else
-                    rpos = pos-Center;
-
-                rpos += Center;
+                rpos = quat * (pos - Center) + Center;
 
                 // modify x coord
                 (*pReal) = rpos.x;
@@ -228,6 +230,28 @@ void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_r
                 Maximum.z=Maximum.z>rpos.z?Maximum.z:rpos.z;
             }
             vbuf->unlock();
+
+            // Rotate normals in the same submesh vertex data
+            const Ogre::VertexElement* normElem = vertex_data->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
+            if(normElem)
+            {
+                Ogre::HardwareVertexBufferSharedPtr nbuf = vertex_data->vertexBufferBinding->getBuffer(normElem->getSource());
+                unsigned char* nVertex = static_cast<unsigned char*>(nbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
+                Ogre::Real* nReal;
+
+                for(size_t j = 0; j < vertex_data->vertexCount; ++j, nVertex += nbuf->getVertexSize())
+                {
+                    normElem->baseVertexPointerToElement(nVertex, &nReal);
+
+                    Ogre::Vector3 norm(nReal[0], nReal[1], nReal[2]);
+                    Ogre::Vector3 rnorm = quat * norm;
+
+                    nReal[0] = rnorm.x;
+                    nReal[1] = rnorm.y;
+                    nReal[2] = rnorm.z;
+                }
+                nbuf->unlock();
+            }
         }
     }
     mesh->_setBounds(Ogre::AxisAlignedBox(Minimum,Maximum),false);

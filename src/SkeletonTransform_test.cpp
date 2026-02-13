@@ -506,6 +506,88 @@ TEST_F(SkeletonTransformTest, RotateSkeletonZAxis)
 }
 
 // --------------------------------------------------------------------------
+// rotateSkeleton: verify bone positions are rotated around mesh center
+// --------------------------------------------------------------------------
+
+TEST_F(SkeletonTransformTest, RotateSkeletonRotatesBonePositionsAroundMeshCenter)
+{
+    Ogre::Skeleton* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    auto bones = sk->getBones();
+    if (bones.empty()) {
+        GTEST_SKIP() << "Skipping: skeleton has no bones";
+    }
+
+    Ogre::Vector3 meshCenter = entity->getMesh()->getBounds().getCenter();
+
+    // Record root bone positions before rotation
+    std::vector<Ogre::Vector3> initialPositions;
+    for (const auto& bone : bones) {
+        if (bone->getParent() == nullptr) {
+            initialPositions.push_back(bone->getPosition());
+        }
+    }
+
+    // Rotate 90 degrees (maps to UNIT_Y axis)
+    Ogre::Quaternion expectedQuat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
+    SkeletonTransform::rotateSkeleton(entity, Ogre::Vector3(90.0f, 0.0f, 0.0f));
+
+    // Root bone positions should be rotated around meshCenter
+    size_t idx = 0;
+    for (const auto& bone : bones) {
+        if (bone->getParent() == nullptr) {
+            ASSERT_LT(idx, initialPositions.size());
+            Ogre::Vector3 expectedPos = expectedQuat * (initialPositions[idx] - meshCenter) + meshCenter;
+            Ogre::Vector3 actualPos = bone->getPosition();
+            EXPECT_NEAR(actualPos.x, expectedPos.x, 0.01f)
+                << "Root bone " << idx << " x position mismatch";
+            EXPECT_NEAR(actualPos.y, expectedPos.y, 0.01f)
+                << "Root bone " << idx << " y position mismatch";
+            EXPECT_NEAR(actualPos.z, expectedPos.z, 0.01f)
+                << "Root bone " << idx << " z position mismatch";
+            idx++;
+        }
+    }
+}
+
+TEST_F(SkeletonTransformTest, RotateSkeletonYAxisRotatesBonePositions)
+{
+    Ogre::Skeleton* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    auto bones = sk->getBones();
+    if (bones.empty()) {
+        GTEST_SKIP() << "Skipping: skeleton has no bones";
+    }
+
+    Ogre::Vector3 meshCenter = entity->getMesh()->getBounds().getCenter();
+
+    std::vector<Ogre::Vector3> initialPositions;
+    for (const auto& bone : bones) {
+        if (bone->getParent() == nullptr) {
+            initialPositions.push_back(bone->getPosition());
+        }
+    }
+
+    Ogre::Quaternion expectedQuat(Ogre::Degree(45.0f), Ogre::Vector3::UNIT_Z);
+    SkeletonTransform::rotateSkeleton(entity, Ogre::Vector3(0.0f, 45.0f, 0.0f));
+
+    size_t idx = 0;
+    for (const auto& bone : bones) {
+        if (bone->getParent() == nullptr) {
+            ASSERT_LT(idx, initialPositions.size());
+            Ogre::Vector3 expectedPos = expectedQuat * (initialPositions[idx] - meshCenter) + meshCenter;
+            Ogre::Vector3 actualPos = bone->getPosition();
+            EXPECT_NEAR(actualPos.x, expectedPos.x, 0.01f);
+            EXPECT_NEAR(actualPos.y, expectedPos.y, 0.01f);
+            EXPECT_NEAR(actualPos.z, expectedPos.z, 0.01f);
+            idx++;
+        }
+    }
+}
+
+// --------------------------------------------------------------------------
 // Edge case: entity without skeleton (using a primitive mesh)
 // --------------------------------------------------------------------------
 
