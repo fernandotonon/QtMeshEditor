@@ -687,35 +687,77 @@ jobs:
             sudo cp -R /home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/ /lib/x86_64-linux-gnu/
             export DISPLAY=:99
             
-            # Function to find and run test executable
+            # Function to find test executable path
+            find_test() {
+                local test_name=$1
+                if [ -f "./build/debug/$test_name" ]; then
+                    echo "./build/debug/$test_name"
+                elif [ -f "./build/bin/$test_name" ]; then
+                    echo "./build/bin/$test_name"
+                elif [ -f "./bin/$test_name" ]; then
+                    echo "./bin/$test_name"
+                else
+                    echo ""
+                fi
+            }
+
+            # Function to run a test executable (optionally with gtest_filter)
             run_test() {
                 local test_name=$1
                 local output_file=$2
+                local filter=${3:-}
+                local test_path
+                test_path=$(find_test "$test_name")
 
-                if [ -f "./build/debug/$test_name" ]; then
-                    echo "Found $test_name in ./build/debug/"
-                    sudo -E ./build/debug/$test_name --gtest_output=xml:$output_file
-                elif [ -f "./build/bin/$test_name" ]; then
-                    echo "Found $test_name in ./build/bin/"
-                    sudo -E ./build/bin/$test_name --gtest_output=xml:$output_file
-                elif [ -f "./bin/$test_name" ]; then
-                    echo "Found $test_name in ./bin/"
-                    sudo -E ./bin/$test_name --gtest_output=xml:$output_file
-                else
+                if [ -z "$test_path" ]; then
                     echo "ERROR: $test_name not found in ./build/debug/, ./build/bin/, or ./bin/"
                     find build -name "$test_name" -type f 2>/dev/null || true
                     return 1
                 fi
-            }
-            
-            TEST_FAILED=0
 
-            echo "Running UnitTests (Google Tests - includes Assimp and other unit tests)..."
-            if ! run_test "UnitTests" "test-results-unittests.xml"; then
-                echo "WARNING: UnitTests failed or crashed (exit code $?)"
-                TEST_FAILED=1
+                echo "Found $test_name at $test_path"
+                if [ -n "$filter" ]; then
+                    sudo -E $test_path --gtest_output=xml:$output_file --gtest_filter="$filter"
+                else
+                    sudo -E $test_path --gtest_output=xml:$output_file
+                fi
+            }
+
+            TOTAL_SUITES=0
+            PASSED_SUITES=0
+            CRASHED_SUITES=0
+
+            # === Run UnitTests: each test suite in its own process ===
+            # This prevents a crash in one suite (e.g. Ogre GL init segfault)
+            # from killing all subsequent suites and losing their coverage data.
+            UNIT_TEST_PATH=$(find_test "UnitTests")
+            if [ -n "$UNIT_TEST_PATH" ]; then
+                echo "=== Running UnitTests suites in isolation ==="
+                # Get list of test suites
+                SUITES=$(sudo -E $UNIT_TEST_PATH --gtest_list_tests 2>/dev/null | grep -E '^\w' | sed 's/\.$//' | sort -u)
+
+                for suite in $SUITES; do
+                    TOTAL_SUITES=$((TOTAL_SUITES + 1))
+                    echo "--- Running suite: $suite ---"
+                    if sudo -E $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:test-results-${suite}.xml 2>&1; then
+                        PASSED_SUITES=$((PASSED_SUITES + 1))
+                    else
+                        exit_code=$?
+                        if [ $exit_code -eq 139 ] || [ $exit_code -eq 134 ]; then
+                            echo "WARNING: Suite $suite CRASHED (signal $(($exit_code - 128))). Coverage data saved by signal handler."
+                            CRASHED_SUITES=$((CRASHED_SUITES + 1))
+                        else
+                            echo "WARNING: Suite $suite failed (exit code $exit_code)"
+                        fi
+                    fi
+                done
+
+                echo "=== UnitTests summary: $PASSED_SUITES/$TOTAL_SUITES suites passed, $CRASHED_SUITES crashed ==="
+            else
+                echo "ERROR: UnitTests not found!"
             fi
 
+            # === Run other test executables ===
             echo "Running MaterialEditorQML Unit Tests..."
             run_test "MaterialEditorQML_test" "test-results-materialeditor.xml" || true
 
@@ -728,8 +770,8 @@ jobs:
             echo "Running QML Component Tests..."
             run_test "MaterialEditorQML_qml_test_runner" "test-results-qml-component.xml" || true
 
-            if [ "$TEST_FAILED" -eq 1 ]; then
-                echo "WARNING: Some tests failed, but continuing to generate coverage data"
+            if [ "$CRASHED_SUITES" -gt 0 ]; then
+                echo "WARNING: $CRASHED_SUITES test suite(s) crashed, but coverage data was preserved"
             fi
 
     - name: Upload Test Results
@@ -783,6 +825,19 @@ jobs:
             echo "coverage.xml exists and has content ($(wc -c < coverage.xml) bytes)"
             echo "Files with coverage data:"
             grep -c '<file' coverage.xml || echo "0 files"
+            echo "=== Coverage summary ==="
+            python3 -c "
+import xml.etree.ElementTree as ET
+tree = ET.parse('coverage.xml')
+root = tree.getroot()
+files = root.findall('file')
+total_covered = sum(1 for f in files for l in f.findall('lineToCover') if l.get('covered') == 'true')
+total_uncovered = sum(1 for f in files for l in f.findall('lineToCover') if l.get('covered') == 'false')
+total = total_covered + total_uncovered
+pct = (total_covered/total*100) if total > 0 else 0
+print(f'Lines: {total_covered}/{total} covered ({pct:.1f}%)')
+print(f'Files: {len(files)} total, {sum(1 for f in files if any(l.get(\"covered\")==\"true\" for l in f.findall(\"lineToCover\")))} with coverage')
+" || echo "Could not parse coverage summary"
         else
             echo "ERROR: coverage.xml is missing or empty!"
             exit 1
