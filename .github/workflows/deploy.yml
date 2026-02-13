@@ -826,18 +826,13 @@ jobs:
             echo "Files with coverage data:"
             grep -c '<file' coverage.xml || echo "0 files"
             echo "=== Coverage summary ==="
-            python3 -c "
-import xml.etree.ElementTree as ET
-tree = ET.parse('coverage.xml')
-root = tree.getroot()
-files = root.findall('file')
-total_covered = sum(1 for f in files for l in f.findall('lineToCover') if l.get('covered') == 'true')
-total_uncovered = sum(1 for f in files for l in f.findall('lineToCover') if l.get('covered') == 'false')
-total = total_covered + total_uncovered
-pct = (total_covered/total*100) if total > 0 else 0
-print(f'Lines: {total_covered}/{total} covered ({pct:.1f}%)')
-print(f'Files: {len(files)} total, {sum(1 for f in files if any(l.get(\"covered\")==\"true\" for l in f.findall(\"lineToCover\")))} with coverage')
-" || echo "Could not parse coverage summary"
+            COVERED=$(grep -o 'covered="true"' coverage.xml | wc -l)
+            UNCOVERED=$(grep -o 'covered="false"' coverage.xml | wc -l)
+            TOTAL=$((COVERED + UNCOVERED))
+            if [ "$TOTAL" -gt 0 ]; then
+                PCT=$((COVERED * 100 / TOTAL))
+                echo "Lines: $COVERED/$TOTAL covered (~${PCT}%)"
+            fi
         else
             echo "ERROR: coverage.xml is missing or empty!"
             exit 1
