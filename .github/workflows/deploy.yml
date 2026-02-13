@@ -38,19 +38,24 @@ jobs:
       id: cache-assimp-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-windows
+        cache-name: cache-assimp-windows-mingw1310
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
         path: |
                C:/PROGRA~2/Assimp
         key: ${{ runner.os }}-build-${{ env.cache-name }}
-        
+
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
-      name: Set up MinGW
-      uses: e-t-l/setup-mingw@patch-1 #egor-tensin/setup-mingw@v2
+      name: Install Qt (for MinGW compiler)
+      uses: jurplel/install-qt-action@v3
       with:
-          platform: x64            
-    
+        aqtversion: ${{ env.AQT_VERSION }}
+        version: ${{ env.QT_VERSION }}
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_mingw'
+        tools: 'tools_cmake tools_mingw1310'
+
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
       name: Check out Assimp repo
       uses: actions/checkout@master
@@ -58,17 +63,21 @@ jobs:
           repository: assimp/assimp
           ref: v${{ env.ASSIMP_VERSION }}
           path: ${{github.workspace}}/assimp
-      
+
     - if: steps.cache-assimp-windows.outputs.cache-hit != 'true'
       name: Build Assimp repo
       env:
          CMAKE_GENERATOR: "MinGW Makefiles"
+         PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
       run: |
-            cd ${{github.workspace}}/assimp
-            cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DASSIMP_WARNINGS_AS_ERRORS=OFF
-            mingw32-make install -j8
-            xcopy  /I  "C:/PROGRA~2/Assimp"  "${{github.workspace}}/assimp-build"
-      shell: cmd
+        Write-Host "Building Assimp with Qt MinGW 13.1.0"
+        Write-Host "gcc version: $(gcc.exe --version | Select-Object -First 1)"
+        Write-Host "cmake version: $(cmake --version | Select-Object -First 1)"
+        Set-Location "${{github.workspace}}/assimp"
+        cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} -DCMAKE_GENERATOR="MinGW Makefiles" -DCMAKE_C_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/gcc.exe" -DCMAKE_CXX_COMPILER="D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/g++.exe" -DASSIMP_WARNINGS_AS_ERRORS=OFF
+        D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/mingw32-make.exe install -j8
+        Copy-Item -Recurse -Force "C:/PROGRA~2/Assimp" "${{github.workspace}}/assimp-build"
+      shell: powershell
             
  build-n-cache-ogre-windows:
     needs: build-n-cache-assimp-windows
@@ -78,7 +87,7 @@ jobs:
       id: cache-assimp-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-windows
+        cache-name: cache-assimp-windows-mingw1310
       with:
         path: |
                C:/PROGRA~2/Assimp
@@ -162,7 +171,7 @@ jobs:
       id: cache-assimp-windows
       uses: actions/cache@v3
       env:
-        cache-name: cache-assimp-windows
+        cache-name: cache-assimp-windows-mingw1310
       with:
         # It is caching the folder that also contains source and building files, maybe in the future it would be nice cache only the includes and dll
         path: |
