@@ -300,23 +300,17 @@ bool MCPServer::ensureOgreInitialized()
 
     try {
         if (!Manager::getSingletonPtr()) {
-            Manager::getSingleton();  // Creates Ogre Root, render system, scene manager
+            Manager::getSingleton();
         }
         m_ogreInitialized = true;
         return true;
     } catch (const Ogre::Exception &e) {
-        qWarning() << "MCP: Ogre initialization failed:" << e.getFullDescription().c_str();
-        m_ogreInitFailed = true;
-        return false;
+        qWarning() << "MCP: Ogre init failed:" << e.getFullDescription().c_str();
     } catch (const std::exception &e) {
-        qWarning() << "MCP: Ogre initialization failed:" << e.what();
-        m_ogreInitFailed = true;
-        return false;
-    } catch (...) {
-        qWarning() << "MCP: Ogre initialization failed (unknown error)";
-        m_ogreInitFailed = true;
-        return false;
+        qWarning() << "MCP: Ogre init failed:" << e.what();
     }
+    m_ogreInitFailed = true;
+    return false;
 }
 
 QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)

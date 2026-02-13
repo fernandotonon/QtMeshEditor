@@ -500,8 +500,8 @@ void Manager::initRenderSystem()
 
     try {
         mRoot->saveConfig();
-    } catch (const Ogre::Exception&) {
-        // Config save can fail in headless/CI environments - not critical
+    } catch (const Ogre::Exception& e) {
+        qWarning() << "saveConfig failed (non-critical):" << e.getFullDescription().c_str();
     }
     mRoot->initialise(false); // don't create a window
 
