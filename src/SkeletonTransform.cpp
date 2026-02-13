@@ -107,10 +107,13 @@ void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::
 
 void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate)
 {
-    if(!_ent->hasSkeleton()) return;
+    rotateSkeleton(_ent, buildRotationQuat(_rotate));
+}
 
-    auto quat = buildRotationQuat(_rotate);
-    if(quat == Ogre::Quaternion::IDENTITY) return;
+void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Quaternion &_quat)
+{
+    if(!_ent->hasSkeleton()) return;
+    if(_quat == Ogre::Quaternion::IDENTITY) return;
 
     auto *sk = _ent->getSkeleton();
     disableAnimationsAndRender(_ent);
@@ -124,9 +127,9 @@ void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vec
         if(bone->getParent() != nullptr) continue;
 
         // Rotate position around mesh center (matches vertex rotation pivot)
-        bone->setPosition(quat * (bone->getPosition() - meshCenter) + meshCenter);
+        bone->setPosition(_quat * (bone->getPosition() - meshCenter) + meshCenter);
         // Rotate orientation
-        bone->rotate(quat, Ogre::Node::TS_WORLD);
+        bone->rotate(_quat, Ogre::Node::TS_WORLD);
     }
     sk->setBindingPose();
 }

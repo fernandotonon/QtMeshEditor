@@ -142,14 +142,18 @@ void MeshTransform::translateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 
 
 void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate)
 {
+    rotateMesh(_ent, buildRotationQuat(_rotate));
+}
+
+void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Quaternion &_quat)
+{
     auto *mesh = _ent->getMesh().get();
     auto center = mesh->getBounds().getCenter();
-    auto quat = buildRotationQuat(_rotate);
 
     transformPositions(mesh, [&](const Ogre::Vector3 &pos) {
-        return quat * (pos - center) + center;
+        return _quat * (pos - center) + center;
     });
 
-    rotateNormals(mesh, quat);
-    SkeletonTransform::rotateSkeleton(_ent, _rotate);
+    rotateNormals(mesh, _quat);
+    SkeletonTransform::rotateSkeleton(_ent, _quat);
 }
