@@ -7,6 +7,7 @@
 #include "SelectionSet.h"
 #include "Manager.h"
 #include "mainwindow.h"
+#include "TestHelpers.h"
 
 // Test fixture for TransformWidget class
 class TransformWidgetTests : public ::testing::Test {
@@ -68,6 +69,10 @@ TEST_F(TransformWidgetTests, Constructor)
 // TODO: Fix Ogre render system initialization before mesh loading
 TEST_F(TransformWidgetTests, DISABLED_UpdateTreeViewFromSelection)
 {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
     // Verify that the tree view is updated
     auto treeView = transformWidget->findChild<QTreeView*>("treeView");
     ASSERT_NE(nullptr, treeView);
@@ -137,6 +142,10 @@ TEST_F(TransformWidgetTests, DISABLED_UpdateTreeViewFromSelection)
 // DISABLED: This test causes segfault in Ogre mesh loading (hardware buffer manager not initialized)
 // TODO: Fix Ogre render system initialization before mesh loading
 TEST_F(TransformWidgetTests, DISABLED_UpdateSceneNodePositionScaleOrientation) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
     // import a mesh
     QStringList validUri{"./media/models/ninja.mesh"};
     Manager::getSingleton()->getMainWindow()->importMeshs(validUri);

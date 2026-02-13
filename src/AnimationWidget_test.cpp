@@ -53,13 +53,19 @@ protected:
         AnimationWidgetTest::SetUp();
         if (::testing::Test::IsSkipped()) return;
 
+        // Loading .mesh files can crash in headless/offscreen mode (no GPU context)
+        if (!canLoadMeshFiles()) {
+            GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+        }
+
         // Import a mesh with skeleton/animations (robot.mesh ships in media/)
         QStringList uris{"./media/models/robot.mesh"};
         try {
             MeshImporterExporter::importer(uris);
-        } catch (const Ogre::Exception& e) {
-            GTEST_SKIP() << "Skipping: failed to import robot.mesh ("
-                         << e.getFullDescription() << ")";
+        } catch (const std::exception& e) {
+            GTEST_SKIP() << "Skipping: failed to import robot.mesh (" << e.what() << ")";
+        } catch (...) {
+            GTEST_SKIP() << "Skipping: failed to import robot.mesh (unknown error)";
         }
 
         if (Manager::getSingleton()->getEntities().isEmpty()) {

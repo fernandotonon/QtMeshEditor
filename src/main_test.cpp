@@ -10,6 +10,7 @@
 #include <QThread>
 #include "mainwindow.h"
 #include "Manager.h"
+#include "TestHelpers.h"
 
 using ::testing::Mock;
 
@@ -56,6 +57,10 @@ TEST(MainTest, QApplicationAndMainWindowMock)
 // DISABLED: This test causes segfault during mesh import/cleanup (Ogre hardware buffer manager issues)
 // TODO: Fix Ogre render system initialization before mesh loading
 TEST(MainTest, DISABLED_ImportMeshs) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
     // Ensure Manager is destroyed from previous tests
     Manager::kill();
     QThread::msleep(50);
