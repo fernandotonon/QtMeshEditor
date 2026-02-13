@@ -31,231 +31,125 @@ THE SOFTWARE.
 #include "Manager.h"
 #include "SkeletonTransform.h"
 
+namespace {
+
+Ogre::Quaternion buildRotationQuat(const Ogre::Vector3 &rotate)
+{
+    if(rotate.x != 0)
+        return {Ogre::Degree(rotate.x), Ogre::Vector3::UNIT_Y};
+    if(rotate.y != 0)
+        return {Ogre::Degree(rotate.y), Ogre::Vector3::UNIT_Z};
+    if(rotate.z != 0)
+        return {Ogre::Degree(rotate.z), Ogre::Vector3::UNIT_X};
+    return Ogre::Quaternion::IDENTITY;
+}
+
+// Iterates all unique vertex data blocks in a mesh, calling transformFn(pos) for each
+// vertex position. Writes back the transformed position and updates mesh bounds.
+template<typename TransformFn>
+void transformPositions(Ogre::Mesh *mesh, TransformFn transformFn)
+{
+    bool addedShared = false;
+    auto minimum = mesh->getBounds().getMaximum();
+    auto maximum = mesh->getBounds().getMinimum();
+
+    for(int i = 0; i < mesh->getNumSubMeshes(); i++)
+    {
+        auto *submesh = mesh->getSubMesh(i);
+        if(submesh->useSharedVertices && addedShared) continue;
+        if(submesh->useSharedVertices) addedShared = true;
+
+        auto *vertexData = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+        const auto *posElem = vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+        auto vbuf = vertexData->vertexBufferBinding->getBuffer(posElem->getSource());
+        auto *vertex = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
+
+        for(size_t j = 0; j < vertexData->vertexCount; ++j, vertex += vbuf->getVertexSize())
+        {
+            Ogre::Real *pReal;
+            posElem->baseVertexPointerToElement(vertex, &pReal);
+
+            Ogre::Vector3 result = transformFn(Ogre::Vector3(pReal[0], pReal[1], pReal[2]));
+            pReal[0] = result.x;
+            pReal[1] = result.y;
+            pReal[2] = result.z;
+
+            minimum.makeFloor(result);
+            maximum.makeCeil(result);
+        }
+        vbuf->unlock();
+    }
+    mesh->_setBounds(Ogre::AxisAlignedBox(minimum, maximum), false);
+}
+
+void rotateNormals(Ogre::Mesh *mesh, const Ogre::Quaternion &quat)
+{
+    bool addedShared = false;
+
+    for(int i = 0; i < mesh->getNumSubMeshes(); i++)
+    {
+        auto *submesh = mesh->getSubMesh(i);
+        if(submesh->useSharedVertices && addedShared) continue;
+        if(submesh->useSharedVertices) addedShared = true;
+
+        auto *vertexData = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+        const auto *normElem = vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
+        if(!normElem) continue;
+
+        // Only write float3 normals; packed formats (e.g. VET_UBYTE4_NORM) have
+        // different storage layouts and writing 3 floats would corrupt the buffer.
+        if(normElem->getType() != Ogre::VET_FLOAT3) continue;
+
+        auto nbuf = vertexData->vertexBufferBinding->getBuffer(normElem->getSource());
+        auto *nVertex = static_cast<unsigned char*>(nbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
+
+        for(size_t j = 0; j < vertexData->vertexCount; ++j, nVertex += nbuf->getVertexSize())
+        {
+            Ogre::Real *nReal;
+            normElem->baseVertexPointerToElement(nVertex, &nReal);
+
+            Ogre::Vector3 rnorm = quat * Ogre::Vector3(nReal[0], nReal[1], nReal[2]);
+            nReal[0] = rnorm.x;
+            nReal[1] = rnorm.y;
+            nReal[2] = rnorm.z;
+        }
+        nbuf->unlock();
+    }
+}
+
+} // anonymous namespace
+
 void MeshTransform::scaleMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_scale)
 {
-    Ogre::Mesh* mesh = _ent->getMesh().get();
-    scaleMesh(mesh,_scale);
-
-    //Process Skeleton
-    SkeletonTransform::scaleSkeleton(_ent,_scale);
+    scaleMesh(_ent->getMesh().get(), _scale);
+    SkeletonTransform::scaleSkeleton(_ent, _scale);
 }
 
 void MeshTransform::scaleMesh(Ogre::Mesh *_mesh, const Ogre::Vector3 &_scale)
 {
-    bool added_shared = false;
-
-    Ogre::Vector3 Minimum=_mesh->getBounds().getMaximum();
-    Ogre::Vector3 Maximum=_mesh->getBounds().getMinimum();
-
-    // Process Mesh
-    // Run through the submeshes, modifying the data
-    for(int i = 0;i < _mesh->getNumSubMeshes();i++)
-    {
-        Ogre::SubMesh* submesh = _mesh->getSubMesh(i);
-
-        Ogre::VertexData* vertex_data = submesh->useSharedVertices ? _mesh->sharedVertexData : submesh->vertexData;
-        if((!submesh->useSharedVertices)||(submesh->useSharedVertices && !added_shared))
-        {
-            if(submesh->useSharedVertices)
-            {
-                added_shared = true;
-            }
-
-            const Ogre::VertexElement* posElem = vertex_data->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-            Ogre::HardwareVertexBufferSharedPtr vbuf = vertex_data->vertexBufferBinding->getBuffer(posElem->getSource());
-            // lock buffer for read and write access
-            unsigned char* vertex = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
-            Ogre::Real* pReal;
-
-            for(size_t j = 0; j < vertex_data->vertexCount; ++j, vertex += vbuf->getVertexSize())
-            {
-                posElem->baseVertexPointerToElement(vertex, &pReal);
-
-                // modify x coord
-                (*pReal) *= _scale.x;
-                ++pReal;
-
-                // modify y coord
-                (*pReal) *= _scale.y;
-                ++pReal;
-
-                // modify z coord
-                (*pReal) *= _scale.z;
-                pReal-=2;
-
-                Minimum.x=Minimum.x<(*pReal)?Minimum.x:(*pReal);
-                Maximum.x=Maximum.x>(*pReal)?Maximum.x:(*pReal);
-                ++pReal;
-                Minimum.y=Minimum.y<(*pReal)?Minimum.y:(*pReal);
-                Maximum.y=Maximum.y>(*pReal)?Maximum.y:(*pReal);
-                ++pReal;
-                Minimum.z=Minimum.z<(*pReal)?Minimum.z:(*pReal);
-                Maximum.z=Maximum.z>(*pReal)?Maximum.z:(*pReal);
-            }
-            vbuf->unlock();
-        }
-    }
-    _mesh->_setBounds(Ogre::AxisAlignedBox(Minimum,Maximum),false);
+    transformPositions(_mesh, [&](const Ogre::Vector3 &pos) {
+        return pos * _scale;
+    });
 }
 
 void MeshTransform::translateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_translate)
 {
-    bool added_shared = false;
-    Ogre::Mesh* mesh = _ent->getMesh().get();
-    Ogre::Vector3 Minimum=mesh->getBounds().getMaximum();
-    Ogre::Vector3 Maximum=mesh->getBounds().getMinimum();
-
-    // Run through the submeshes, modifying the data
-    for(int i = 0;i < mesh->getNumSubMeshes();i++)
-    {
-        Ogre::SubMesh* submesh = mesh->getSubMesh(i);
-
-        Ogre::VertexData* vertex_data = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
-        if((!submesh->useSharedVertices)||(submesh->useSharedVertices && !added_shared))
-        {
-            if(submesh->useSharedVertices)
-            {
-                added_shared = true;
-            }
-
-            const Ogre::VertexElement* posElem = vertex_data->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-            Ogre::HardwareVertexBufferSharedPtr vbuf = vertex_data->vertexBufferBinding->getBuffer(posElem->getSource());
-            // lock buffer for read and write access
-            unsigned char* vertex = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
-            Ogre::Real* pReal;
-
-            for(size_t j = 0; j < vertex_data->vertexCount; ++j, vertex += vbuf->getVertexSize())
-            {
-                posElem->baseVertexPointerToElement(vertex, &pReal);
-
-                // modify x coord
-                (*pReal) += _translate.x;
-                ++pReal;
-
-                // modify y coord
-                (*pReal) += _translate.y;
-                ++pReal;
-
-                // modify z coord
-                (*pReal) += _translate.z;
-                pReal-=2;
-
-                Minimum.x=Minimum.x<(*pReal)?Minimum.x:(*pReal);
-                Maximum.x=Maximum.x>(*pReal)?Maximum.x:(*pReal);
-                ++pReal;
-                Minimum.y=Minimum.y<(*pReal)?Minimum.y:(*pReal);
-                Maximum.y=Maximum.y>(*pReal)?Maximum.y:(*pReal);
-                ++pReal;
-                Minimum.z=Minimum.z<(*pReal)?Minimum.z:(*pReal);
-                Maximum.z=Maximum.z>(*pReal)?Maximum.z:(*pReal);
-            }
-            vbuf->unlock();
-        }
-    }
-    mesh->_setBounds(Ogre::AxisAlignedBox(Minimum,Maximum),false);
-
-    //Process Skeleton
-    SkeletonTransform::translateSkeleton(_ent,_translate);
+    transformPositions(_ent->getMesh().get(), [&](const Ogre::Vector3 &pos) {
+        return pos + _translate;
+    });
+    SkeletonTransform::translateSkeleton(_ent, _translate);
 }
 
 void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate)
 {
-    bool added_shared = false;
-    Ogre::Mesh* mesh = _ent->getMesh().get();
-    Ogre::Vector3 Minimum = mesh->getBounds().getMaximum();
-    Ogre::Vector3 Maximum = mesh->getBounds().getMinimum();
-    Ogre::Vector3 Center = mesh->getBounds().getCenter();
+    auto *mesh = _ent->getMesh().get();
+    auto center = mesh->getBounds().getCenter();
+    auto quat = buildRotationQuat(_rotate);
 
-    // Build rotation quaternion once
-    Ogre::Quaternion quat;
-    if(_rotate.x!=0)
-        quat = Ogre::Quaternion(Ogre::Degree(_rotate.x), Ogre::Vector3::UNIT_Y);
-    else if(_rotate.y!=0)
-        quat = Ogre::Quaternion(Ogre::Degree(_rotate.y), Ogre::Vector3::UNIT_Z);
-    else if(_rotate.z!=0)
-        quat = Ogre::Quaternion(Ogre::Degree(_rotate.z), Ogre::Vector3::UNIT_X);
-    else
-        quat = Ogre::Quaternion::IDENTITY;
+    transformPositions(mesh, [&](const Ogre::Vector3 &pos) {
+        return quat * (pos - center) + center;
+    });
 
-    // Run through the submeshes, modifying the data
-    for(int i = 0;i < mesh->getNumSubMeshes();i++)
-    {
-        Ogre::SubMesh* submesh = mesh->getSubMesh(i);
-
-        Ogre::VertexData* vertex_data = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
-        if((!submesh->useSharedVertices)||(submesh->useSharedVertices && !added_shared))
-        {
-            if(submesh->useSharedVertices)
-            {
-                added_shared = true;
-            }
-
-            const Ogre::VertexElement* posElem = vertex_data->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-            Ogre::HardwareVertexBufferSharedPtr vbuf = vertex_data->vertexBufferBinding->getBuffer(posElem->getSource());
-            // lock buffer for read and write access
-            unsigned char* vertex = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
-            Ogre::Real* pReal;
-
-            for(size_t j = 0; j < vertex_data->vertexCount; ++j, vertex += vbuf->getVertexSize())
-            {
-                posElem->baseVertexPointerToElement(vertex, &pReal);
-
-                Ogre::Vector3 pos;
-                Ogre::Vector3 rpos;
-                pos.x =(*pReal);
-                ++pReal;
-                pos.y =(*pReal);
-                ++pReal;
-                pos.z =(*pReal);
-                pReal-=2;
-
-                rpos = quat * (pos - Center) + Center;
-
-                // modify x coord
-                (*pReal) = rpos.x;
-                ++pReal;
-
-                // modify y coord
-                (*pReal) = rpos.y;
-                ++pReal;
-
-                // modify z coord
-                (*pReal) = rpos.z;
-
-                Minimum.x=Minimum.x<rpos.x?Minimum.x:rpos.x;
-                Minimum.y=Minimum.y<rpos.y?Minimum.y:rpos.y;
-                Minimum.z=Minimum.z<rpos.z?Minimum.z:rpos.z;
-                Maximum.x=Maximum.x>rpos.x?Maximum.x:rpos.x;
-                Maximum.y=Maximum.y>rpos.y?Maximum.y:rpos.y;
-                Maximum.z=Maximum.z>rpos.z?Maximum.z:rpos.z;
-            }
-            vbuf->unlock();
-
-            // Rotate normals in the same submesh vertex data
-            const Ogre::VertexElement* normElem = vertex_data->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
-            if(normElem)
-            {
-                Ogre::HardwareVertexBufferSharedPtr nbuf = vertex_data->vertexBufferBinding->getBuffer(normElem->getSource());
-                unsigned char* nVertex = static_cast<unsigned char*>(nbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
-                Ogre::Real* nReal;
-
-                for(size_t j = 0; j < vertex_data->vertexCount; ++j, nVertex += nbuf->getVertexSize())
-                {
-                    normElem->baseVertexPointerToElement(nVertex, &nReal);
-
-                    Ogre::Vector3 norm(nReal[0], nReal[1], nReal[2]);
-                    Ogre::Vector3 rnorm = quat * norm;
-
-                    nReal[0] = rnorm.x;
-                    nReal[1] = rnorm.y;
-                    nReal[2] = rnorm.z;
-                }
-                nbuf->unlock();
-            }
-        }
-    }
-    mesh->_setBounds(Ogre::AxisAlignedBox(Minimum,Maximum),false);
-
-    //Process Skeleton
-    SkeletonTransform::rotateSkeleton(_ent,_rotate);
+    rotateNormals(mesh, quat);
+    SkeletonTransform::rotateSkeleton(_ent, _rotate);
 }

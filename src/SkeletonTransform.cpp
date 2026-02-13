@@ -37,198 +37,149 @@ THE SOFTWARE.
 
 #include "Manager.h"
 
+namespace {
+
+void disableAnimationsAndRender(const Ogre::Entity *ent)
+{
+    auto *set = ent->getAllAnimationStates();
+    if(set)
+    {
+        for(const auto &[name, state] : set->getAnimationStates())
+        {
+            state->setEnabled(false);
+        }
+    }
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+}
+
+Ogre::Quaternion buildRotationQuat(const Ogre::Vector3 &rotate)
+{
+    if(rotate.x != 0)
+        return {Ogre::Degree(rotate.x), Ogre::Vector3::UNIT_Y};
+    if(rotate.y != 0)
+        return {Ogre::Degree(rotate.y), Ogre::Vector3::UNIT_Z};
+    if(rotate.z != 0)
+        return {Ogre::Degree(rotate.z), Ogre::Vector3::UNIT_X};
+    return Ogre::Quaternion::IDENTITY;
+}
+
+} // anonymous namespace
+
 void SkeletonTransform::scaleSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_scale)
 {
-    if(_ent->hasSkeleton())
+    if(!_ent->hasSkeleton()) return;
+
+    auto *sk = _ent->getSkeleton();
+    disableAnimationsAndRender(_ent);
+
+    const auto &bones = sk->getBones();
+    for(const auto &bone : bones)
     {
-        Ogre::Skeleton* sk = _ent->getSkeleton();
-
-        ///Process Bone
-        //Disable all animations
-        Ogre::AnimationStateSet *set=_ent->getAllAnimationStates();
-        if(set)
-        {
-            for (const auto &animState: set->getAnimationStates())
-            {
-                animState.second->setEnabled(false);
-            }
-        }
-
-        Manager::getSingleton()->getRoot()->renderOneFrame();
-
-        auto bones = sk->getBones();
-        for(const auto &bone : bones)
-        {
-            if(bone->getParent()==nullptr)
-            {
-                bone->setPosition(bone->getPosition()*_scale);
-            }
-        }
-        for(const auto &bone : bones)
-        {
-            if(bone->getParent()!=nullptr)
-            {
-                bone->_setDerivedPosition(bone->_getDerivedPosition()*_scale);
-            }
-        }
-
-        sk->setBindingPose();
+        if(bone->getParent() == nullptr)
+            bone->setPosition(bone->getPosition() * _scale);
     }
+    for(const auto &bone : bones)
+    {
+        if(bone->getParent() != nullptr)
+            bone->_setDerivedPosition(bone->_getDerivedPosition() * _scale);
+    }
+
+    sk->setBindingPose();
 }
 
 void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_translate)
 {
-    if(_ent->hasSkeleton())
+    if(!_ent->hasSkeleton()) return;
+
+    auto *sk = _ent->getSkeleton();
+    disableAnimationsAndRender(_ent);
+
+    const auto &bones = sk->getBones();
+    for(const auto &bone : bones)
     {
-        Ogre::Skeleton* sk = _ent->getSkeleton();
+        if(bone->getParent() != nullptr) continue;
+        if(_translate.isZeroLength()) continue;
 
-        ///Process Bone
-
-        //Disable all animations
-        Ogre::AnimationStateSet *set=_ent->getAllAnimationStates();
-        if(set)
-        {
-            for (const auto &animState: set->getAnimationStates())
-            {
-                animState.second->setEnabled(false);
-            }
-        }
-
-        Manager::getSingleton()->getRoot()->renderOneFrame();
-
-        auto bones = sk->getBones();
-        for(const auto &bone : bones)
-        {
-            if(bone->getParent()==nullptr)
-            {
-                if(_translate.isZeroLength())
-                    continue;
-
-                bone->translate(_translate);
-            }
-        }
-        sk->setBindingPose();
+        bone->translate(_translate);
     }
+    sk->setBindingPose();
 }
 
 void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate)
 {
-    if(_ent->hasSkeleton())
+    if(!_ent->hasSkeleton()) return;
+
+    auto quat = buildRotationQuat(_rotate);
+    if(quat == Ogre::Quaternion::IDENTITY) return;
+
+    auto *sk = _ent->getSkeleton();
+    disableAnimationsAndRender(_ent);
+
+    // Use the same pivot as MeshTransform::rotateMesh (mesh bounding box center)
+    auto meshCenter = _ent->getMesh()->getBounds().getCenter();
+
+    const auto &bones = sk->getBones();
+    for(const auto &bone : bones)
     {
-        Ogre::Skeleton* sk = _ent->getSkeleton();
+        if(bone->getParent() != nullptr) continue;
 
-        ///Process Bone
-
-        //Disable all animations
-        Ogre::AnimationStateSet *set=_ent->getAllAnimationStates();
-        if(set)
-        {
-            for (const auto &animState: set->getAnimationStates())
-            {
-                animState.second->setEnabled(false);
-            }
-        }
-
-        Manager::getSingleton()->getRoot()->renderOneFrame();
-
-        // Build rotation quaternion (same axis mapping as MeshTransform::rotateMesh)
-        Ogre::Quaternion quat;
-        if(_rotate.x!=0)
-            quat = Ogre::Quaternion(Ogre::Degree(_rotate.x), Ogre::Vector3::UNIT_Y);
-        else if(_rotate.y!=0)
-            quat = Ogre::Quaternion(Ogre::Degree(_rotate.y), Ogre::Vector3::UNIT_Z);
-        else if(_rotate.z!=0)
-            quat = Ogre::Quaternion(Ogre::Degree(_rotate.z), Ogre::Vector3::UNIT_X);
-        else
-            return;
-
-        // Use the same pivot as MeshTransform::rotateMesh (mesh bounding box center)
-        Ogre::Vector3 meshCenter = _ent->getMesh()->getBounds().getCenter();
-
-        auto bones = sk->getBones();
-        for(const auto &bone : bones)
-        {
-            if(bone->getParent()==nullptr)
-            {
-                // Rotate position around mesh center (matches vertex rotation pivot)
-                Ogre::Vector3 newPos = quat * (bone->getPosition() - meshCenter) + meshCenter;
-                bone->setPosition(newPos);
-                // Rotate orientation
-                bone->rotate(quat, Ogre::Node::TS_WORLD);
-            }
-        }
-        sk->setBindingPose();
+        // Rotate position around mesh center (matches vertex rotation pivot)
+        bone->setPosition(quat * (bone->getPosition() - meshCenter) + meshCenter);
+        // Rotate orientation
+        bone->rotate(quat, Ogre::Node::TS_WORLD);
     }
+    sk->setBindingPose();
 }
 
 bool SkeletonTransform::renameAnimation(Ogre::Entity *_ent, const QString &_oldName, const QString &_newName)
 {
-    if(!_newName.size())
+    if(_newName.isEmpty())
         return false;
 
-    if(_ent && _ent->getSkeleton()->hasAnimation(_oldName.toStdString().data()))
+    if(!_ent || !_ent->getSkeleton()->hasAnimation(_oldName.toStdString().data()))
+        return false;
+
+    disableAnimationsAndRender(_ent);
+    QCoreApplication::processEvents();
+
+    // Clone the current animation
+    auto *currentAnim = _ent->getSkeleton()->getAnimation(_oldName.toStdString());
+    auto *newAnim = _ent->getSkeleton()->createAnimation(_newName.toStdString(), currentAnim->getLength());
+    const int trackSearchLimit = static_cast<int>(currentAnim->getNumNodeTracks()) + 1000;
+    for(int j = 0; j < trackSearchLimit; j++)
     {
-        //Disable all animations
-        Ogre::AnimationStateSet *set = _ent->getAllAnimationStates();
-        if(set)
+        if(!currentAnim->hasNodeTrack(j)) continue;
+
+        auto *track = currentAnim->getNodeTrack(j);
+        if(!track) continue;
+
+        auto *newTrack = newAnim->createNodeTrack(track->getHandle());
+        newTrack->setAssociatedNode(track->getAssociatedNode());
+
+        const auto numKeyFrames = track->getNumKeyFrames();
+        for(unsigned short k = 0; k < numKeyFrames; k++)
         {
-            for(const auto &animState: set->getAnimationStates())
-                animState.second->setEnabled(false);
+            const auto *keyFrame = track->getNodeKeyFrame(k);
+            if(!keyFrame) continue;
+
+            auto *newKeyFrame = newTrack->createNodeKeyFrame(keyFrame->getTime());
+            newKeyFrame->setTranslate(keyFrame->getTranslate());
+            newKeyFrame->setRotation(keyFrame->getRotation());
+            newKeyFrame->setScale(keyFrame->getScale());
         }
-
-        //Update the screen
-        Manager::getSingleton()->getRoot()->renderOneFrame();
-        QCoreApplication::processEvents();
-
-        // Clone the current animation
-        auto currentAnim = _ent->getSkeleton()->getAnimation(_oldName.toStdString());
-        auto newAnim = _ent->getSkeleton()->createAnimation(_newName.toStdString(),currentAnim->getLength());
-        unsigned short numTracks = currentAnim->getNumNodeTracks();
-        for(unsigned short j=0; j<numTracks+1000; j++)
-        {
-            if(!currentAnim->hasNodeTrack(j)) continue;
-
-            Ogre::NodeAnimationTrack* track = currentAnim->getNodeTrack(j);
-            if(!track)
-                continue;
-
-            Ogre::NodeAnimationTrack* newTrack = newAnim->createNodeTrack(track->getHandle());
-            newTrack->setAssociatedNode(track->getAssociatedNode());
-
-            unsigned short numKeyFrames = track->getNumKeyFrames();
-            for(unsigned short k=0; k<numKeyFrames; k++)
-            {
-                Ogre::TransformKeyFrame* keyFrame = track->getNodeKeyFrame(k);
-                if(!keyFrame)
-                    continue;
-
-                Ogre::TransformKeyFrame* newKeyFrame = newTrack->createNodeKeyFrame(keyFrame->getTime());
-                newKeyFrame->setTranslate(keyFrame->getTranslate());
-                newKeyFrame->setRotation(keyFrame->getRotation());
-                newKeyFrame->setScale(keyFrame->getScale());
-
-                // print the keyframe
-               /* Ogre::LogManager::getSingleton().logMessage("Animation: " + newAnim->getName());
-                Ogre::LogManager::getSingleton().logMessage("Keyframe: " + Ogre::StringConverter::toString(keyFrame->getTime()));
-                Ogre::LogManager::getSingleton().logMessage("Translate: " + Ogre::StringConverter::toString(keyFrame->getTranslate()));
-                Ogre::LogManager::getSingleton().logMessage("Rotation: " + Ogre::StringConverter::toString(keyFrame->getRotation()));
-                Ogre::LogManager::getSingleton().logMessage("Scale: " + Ogre::StringConverter::toString(keyFrame->getScale()));*/
-            }
-        }
-
-        //Remove the old animation
-        _ent->getSkeleton()->removeAnimation(_oldName.toStdString());
-
-        // Update the animations
-        _ent->refreshAvailableAnimationState();
-        _ent->_updateAnimation();
-        _ent->getMesh().get()->_dirtyState();
-
-        //Update the screen
-        Manager::getSingleton()->getRoot()->renderOneFrame();
-        QCoreApplication::processEvents();
-
-        return true;
     }
-    return false;
+
+    //Remove the old animation
+    _ent->getSkeleton()->removeAnimation(_oldName.toStdString());
+
+    // Update the animations
+    _ent->refreshAvailableAnimationState();
+    _ent->_updateAnimation();
+    _ent->getMesh().get()->_dirtyState();
+
+    //Update the screen
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+    QCoreApplication::processEvents();
+
+    return true;
 }
