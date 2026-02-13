@@ -306,8 +306,6 @@ bool MCPServer::ensureOgreInitialized()
         return true;
     } catch (const Ogre::Exception &e) {
         qWarning() << "MCP: Ogre init failed:" << e.getFullDescription().c_str();
-    } catch (const std::exception &e) {
-        qWarning() << "MCP: Ogre init failed:" << e.what();
     }
     m_ogreInitFailed = true;
     return false;

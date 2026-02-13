@@ -517,19 +517,12 @@ void Manager::initSceneMgr()
     I notice that if not, issue with infinite Bounding boxes (I don't know why...)
     */
 
-    try
-    {
-        mSceneMgr = mRoot->createSceneManager(/*"OctreeSceneManager"*/); //TODO: Creating with the default scene manager, verify if it would be good to change. Before it was using ST_EXTERIOR_CLOSE
+    mSceneMgr = mRoot->createSceneManager();
 
-        if (!mSceneMgr)
-        {
-            throw std::logic_error("Erro: Iniciando SceneManager\nFILE: "+std::string(__FILE__)+"\nLINE: "+QString::number(__LINE__).toStdString());
-        }
-    }
-    catch (std::logic_error const& le)
+    if (!mSceneMgr)
     {
         QMessageBox mBox;
-        mBox.setText(QString("Logic error - ")+le.what());
+        mBox.setText(QStringLiteral("Error: Failed to create SceneManager"));
         mBox.exec();
     }
 }
@@ -540,21 +533,17 @@ void Manager::loadResources()
 
     // Load resource paths from config file
     Ogre::ConfigFile cf;
-    cf.load(QString(file+"/cfg/"+mResourcesCfg).toStdString().data());
+    cf.load(QString(file+"/cfg/"+mResourcesCfg).toStdString());
 
     // Go through all sections & settings in the file
-    auto seci = cf.getSettingsBySection();
+    const auto& seci = cf.getSettingsBySection();
 
-    Ogre::String secName, typeName, archName;
-    for(const auto &settingsPair : seci)
+    for (const auto& [secName, settings] : seci)
     {
-        secName = settingsPair.first;
-        Ogre::ConfigFile::SettingsMultiMap settings = static_cast<Ogre::ConfigFile::SettingsMultiMap>(settingsPair.second);
-        Ogre::ConfigFile::SettingsMultiMap::iterator i;
-        for (i = settings.begin(); i != settings.end(); ++i)
+        for (auto it = settings.begin(); it != settings.end(); ++it)
         {
-            typeName = i->first;
-            archName = i->second;
+            const auto& typeName = it->first;
+            const auto& archName = it->second;
             // Resolve relative paths against the application directory so that
             // resources are found regardless of the current working directory
             // (e.g., when launched from an installed .deb package).
@@ -582,24 +571,18 @@ void Manager::loadResources()
     matptr->getTechnique(0)->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
     matptr->getTechnique(0)->setDepthCheckEnabled( false );  //IMPORTANT when setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
 }
-/*
-Ogre::Plane &Manager::getGroundPlane()
+
+bool Manager::isValidFileExtention(const QString &_uri) const
 {
-    if(!mPlane)
-        mPlane = new Ogre::Plane(Ogre::Vector3::UNIT_Y, 0);
-    return *mPlane;
-}
-*/
-bool Manager::isValidFileExtention(QString &_uri)
-{
-    for(int i = mValidFileExtention.split(" ").count()-1; i >= 0; --i)
-        if(_uri.endsWith(mValidFileExtention.split(" ").at(i),Qt::CaseInsensitive))
+    const auto extensions = mValidFileExtention.split(" ");
+    for (const auto &ext : extensions)
+        if (_uri.endsWith(ext, Qt::CaseInsensitive))
             return true;
 
     return false;
 }
 
-QString Manager::getValidFileExtention()
+QString Manager::getValidFileExtention() const
 {
     return mValidFileExtention;
 }

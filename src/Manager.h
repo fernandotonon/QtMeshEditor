@@ -89,8 +89,8 @@ public:
 
     bool                hasAnimationName(Ogre::Entity *entity, const QString &_name);
 
-    bool                isValidFileExtention(QString &_uri);
-    QString             getValidFileExtention();
+    bool                isValidFileExtention(const QString &_uri) const;
+    QString             getValidFileExtention() const;
 
     void loadResources();
 signals:
