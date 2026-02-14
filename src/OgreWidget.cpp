@@ -30,6 +30,7 @@ THE SOFTWARE.
 #include <QTimer>
 #include <QCoreApplication>
 #include <QTimer>
+#include <QNativeGestureEvent>
 
 #include <Ogre.h>
 
@@ -260,6 +261,20 @@ void OgreWidget::wheelEvent(QWheelEvent *e)
 {
     QtInputManager::getInstance().wheelEvent(e);
     mCamera->wheelEvent(e);
+}
+
+bool OgreWidget::event(QEvent *e)
+{
+    if (e->type() == QEvent::NativeGesture) {
+        auto *gestureEvent = static_cast<QNativeGestureEvent*>(e);
+        if (gestureEvent->gestureType() == Qt::ZoomNativeGesture) {
+            int delta = static_cast<int>(gestureEvent->value() * 200 * mCamera->getCameraSpeed());
+            mCamera->zoomByDelta(delta);
+            e->accept();
+            return true;
+        }
+    }
+    return QWidget::event(e);
 }
 
 void OgreWidget::mousePressEvent(QMouseEvent *e)

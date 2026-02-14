@@ -92,10 +92,10 @@ void SpaceCamera::setKeyMapping()
     // Key Mapping initialisation
     // TODO push this static or at app level
 
-    mKeyRotationMapping[Qt::Key_Up]     = Ogre::Vector2 ( 0.0,  getCameraSpeed()  );
-    mKeyRotationMapping[Qt::Key_Down] 	= Ogre::Vector2 ( 0.0, -getCameraSpeed()  );
-    mKeyRotationMapping[Qt::Key_Right] 	= Ogre::Vector2 ( getCameraSpeed() , 0.0  );
-    mKeyRotationMapping[Qt::Key_Left]   = Ogre::Vector2 (-getCameraSpeed() , 0.0  );
+    mKeyRotationMapping[Qt::Key_Up]     = Ogre::Vector2 ( 0.0,  getCameraSpeed() * 0.1f );
+    mKeyRotationMapping[Qt::Key_Down] 	= Ogre::Vector2 ( 0.0, -getCameraSpeed() * 0.1f );
+    mKeyRotationMapping[Qt::Key_Right] 	= Ogre::Vector2 ( getCameraSpeed() * 0.1f, 0.0  );
+    mKeyRotationMapping[Qt::Key_Left]   = Ogre::Vector2 (-getCameraSpeed() * 0.1f, 0.0  );
 
     mKeyTranslationMapping[Qt::Key_W]   = Ogre::Vector2 ( 0.0,  getCameraSpeed()  );
     mKeyTranslationMapping[Qt::Key_S] 	= Ogre::Vector2 ( 0.0, -getCameraSpeed()  );
@@ -298,6 +298,11 @@ void SpaceCamera::keyReleaseEvent(QKeyEvent *event)
 
 //////////////////////////////////////////////////////////////////////////////////
 //Private Methods
+
+void SpaceCamera::zoomByDelta(int delta)
+{
+    zoom(delta);
+}
 
 void SpaceCamera::zoom(const int delta)
 {

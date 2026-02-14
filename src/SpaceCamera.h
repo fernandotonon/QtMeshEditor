@@ -70,6 +70,8 @@ class SpaceCamera : Ogre::FrameListener
         virtual void mouseMoveEvent(QMouseEvent *event);
         virtual void wheelEvent(QWheelEvent *event);
 
+        void zoomByDelta(int delta);
+
     protected:
         SpaceCamera(){} // for testing purposes
 

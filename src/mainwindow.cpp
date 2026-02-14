@@ -662,12 +662,15 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     ui->actionSingle->blockSignals(true);
     ui->action1x1_Side_by_Side->blockSignals(true);
     ui->action1x1_Upper_and_Lower->blockSignals(true);
+    ui->action2x2_Grid->blockSignals(true);
     ui->actionSingle->setChecked(false);
     ui->action1x1_Side_by_Side->setChecked(false);
     ui->action1x1_Upper_and_Lower->setChecked(false);
+    ui->action2x2_Grid->setChecked(false);
     ui->actionSingle->blockSignals(false);
     ui->action1x1_Side_by_Side->blockSignals(false);
     ui->action1x1_Upper_and_Lower->blockSignals(false);
+    ui->action2x2_Grid->blockSignals(false);
 }
 
 void MainWindow::onWidgetClosing(EditorViewport* const& widget)
@@ -704,9 +707,11 @@ void MainWindow::on_actionSingle_toggled(bool arg1)
         ui->actionSingle->setChecked(true);
         ui->action1x1_Side_by_Side->setChecked(false);
         ui->action1x1_Upper_and_Lower->setChecked(false);
+        ui->action2x2_Grid->setChecked(false);
     } else { //Doesn't allow unchecking
         ui->actionSingle->setChecked(   !ui->action1x1_Side_by_Side->isChecked() &&
-                                        !ui->action1x1_Upper_and_Lower->isChecked());
+                                        !ui->action1x1_Upper_and_Lower->isChecked() &&
+                                        !ui->action2x2_Grid->isChecked());
     }
 }
 
@@ -723,14 +728,31 @@ void MainWindow::on_action1x1_Side_by_Side_toggled(bool arg1)
             mDockWidgetList.last()->close();
         }
 
+        // Remove and re-add to fully reset the internal splitter layout
+        removeDockWidget(mDockWidgetList.first());
+        removeDockWidget(mDockWidgetList.last());
+        addDockWidget(Qt::LeftDockWidgetArea, mDockWidgetList.first());
+        addDockWidget(Qt::LeftDockWidgetArea, mDockWidgetList.last());
+        mDockWidgetList.first()->show();
+        mDockWidgetList.last()->show();
         splitDockWidget(mDockWidgetList.first(),mDockWidgetList.last(),Qt::Horizontal);
+
+        // Defer resize to equalize after layout is processed
+        QTimer::singleShot(0, this, [this]() {
+            if (mDockWidgetList.size() >= 2) {
+                int halfWidth = width() / 2;
+                resizeDocks({mDockWidgetList.first(), mDockWidgetList.last()}, {halfWidth, halfWidth}, Qt::Horizontal);
+            }
+        });
 
         ui->actionSingle->setChecked(false);
         ui->action1x1_Side_by_Side->setChecked(true);
         ui->action1x1_Upper_and_Lower->setChecked(false);
+        ui->action2x2_Grid->setChecked(false);
     } else { //Doesn't allow unchecking
         ui->action1x1_Side_by_Side->setChecked( !ui->actionSingle->isChecked() &&
-                                                !ui->action1x1_Upper_and_Lower->isChecked());
+                                                !ui->action1x1_Upper_and_Lower->isChecked() &&
+                                                !ui->action2x2_Grid->isChecked());
     }
 }
 
@@ -747,15 +769,72 @@ void MainWindow::on_action1x1_Upper_and_Lower_toggled(bool arg1)
             mDockWidgetList.last()->close();
         }
 
-        splitDockWidget(mDockWidgetList.first(),mDockWidgetList.last(),Qt::Horizontal);
+        // Remove and re-add to fully reset the internal splitter layout
+        removeDockWidget(mDockWidgetList.first());
+        removeDockWidget(mDockWidgetList.last());
+        addDockWidget(Qt::LeftDockWidgetArea, mDockWidgetList.first());
+        addDockWidget(Qt::LeftDockWidgetArea, mDockWidgetList.last());
+        mDockWidgetList.first()->show();
+        mDockWidgetList.last()->show();
         splitDockWidget(mDockWidgetList.first(),mDockWidgetList.last(),Qt::Vertical);
+
+        // Defer resize to equalize after layout is processed
+        QTimer::singleShot(0, this, [this]() {
+            if (mDockWidgetList.size() >= 2) {
+                int halfHeight = height() / 2;
+                resizeDocks({mDockWidgetList.first(), mDockWidgetList.last()}, {halfHeight, halfHeight}, Qt::Vertical);
+            }
+        });
 
         ui->actionSingle->setChecked(false);
         ui->action1x1_Side_by_Side->setChecked(false);
         ui->action1x1_Upper_and_Lower->setChecked(true);
+        ui->action2x2_Grid->setChecked(false);
     } else { //Doesn't allow unchecking
         ui->action1x1_Upper_and_Lower->setChecked(  !ui->actionSingle->isChecked() &&
-                                                    !ui->action1x1_Upper_and_Lower->isChecked());
+                                                    !ui->action1x1_Side_by_Side->isChecked() &&
+                                                    !ui->action2x2_Grid->isChecked());
+    }
+}
+
+void MainWindow::on_action2x2_Grid_toggled(bool arg1)
+{
+    if(arg1)
+    {
+        while(mDockWidgetList.size()<4)
+        {
+            createEditorViewport();
+        }
+        while(mDockWidgetList.size()>4)
+        {
+            mDockWidgetList.last()->close();
+        }
+
+        // Arrange as 2x2 grid:
+        // Top row: viewport[0] | viewport[1]
+        splitDockWidget(mDockWidgetList[0], mDockWidgetList[1], Qt::Horizontal);
+        // Bottom-left under viewport[0]
+        splitDockWidget(mDockWidgetList[0], mDockWidgetList[2], Qt::Vertical);
+        // Bottom-right under viewport[1]
+        splitDockWidget(mDockWidgetList[1], mDockWidgetList[3], Qt::Vertical);
+
+        // Defer resize to after Qt processes the split layout
+        QTimer::singleShot(0, this, [this]() {
+            int halfWidth = width() / 2;
+            int halfHeight = height() / 2;
+            resizeDocks({mDockWidgetList[0], mDockWidgetList[1]}, {halfWidth, halfWidth}, Qt::Horizontal);
+            resizeDocks({mDockWidgetList[0], mDockWidgetList[2]}, {halfHeight, halfHeight}, Qt::Vertical);
+            resizeDocks({mDockWidgetList[1], mDockWidgetList[3]}, {halfHeight, halfHeight}, Qt::Vertical);
+        });
+
+        ui->actionSingle->setChecked(false);
+        ui->action1x1_Side_by_Side->setChecked(false);
+        ui->action1x1_Upper_and_Lower->setChecked(false);
+        ui->action2x2_Grid->setChecked(true);
+    } else { //Doesn't allow unchecking
+        ui->action2x2_Grid->setChecked( !ui->actionSingle->isChecked() &&
+                                        !ui->action1x1_Side_by_Side->isChecked() &&
+                                        !ui->action1x1_Upper_and_Lower->isChecked());
     }
 }
 
