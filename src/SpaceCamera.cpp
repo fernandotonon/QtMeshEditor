@@ -299,6 +299,11 @@ void SpaceCamera::keyReleaseEvent(QKeyEvent *event)
 //////////////////////////////////////////////////////////////////////////////////
 //Private Methods
 
+void SpaceCamera::zoomByDelta(int delta)
+{
+    zoom(delta);
+}
+
 void SpaceCamera::zoom(const int delta)
 {
     Ogre::Vector3 zTranslation(0, 0, delta);

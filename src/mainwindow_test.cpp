@@ -195,10 +195,12 @@ TEST_F(MainWindowTest, AddViewport) {
     auto actionSingle = mainWindow->findChild<QAction*>("actionSingle");
     auto actionSideBySide = mainWindow->findChild<QAction*>("action1x1_Side_by_Side");
     auto actionUpperLower = mainWindow->findChild<QAction*>("action1x1_Upper_and_Lower");
+    auto action2x2Grid = mainWindow->findChild<QAction*>("action2x2_Grid");
     ASSERT_TRUE(actionAddViewport != nullptr);
     ASSERT_TRUE(actionSingle != nullptr);
     ASSERT_TRUE(actionSideBySide != nullptr);
     ASSERT_TRUE(actionUpperLower != nullptr);
+    ASSERT_TRUE(action2x2Grid != nullptr);
 
     actionAddViewport->toggle();
 
@@ -206,6 +208,64 @@ TEST_F(MainWindowTest, AddViewport) {
     ASSERT_FALSE(actionSingle->isChecked());
     ASSERT_FALSE(actionSideBySide->isChecked());
     ASSERT_FALSE(actionUpperLower->isChecked());
+    ASSERT_FALSE(action2x2Grid->isChecked());
+}
+
+TEST_F(MainWindowTest, Action2x2GridExists) {
+    auto action2x2Grid = mainWindow->findChild<QAction*>("action2x2_Grid");
+    ASSERT_TRUE(action2x2Grid != nullptr);
+    ASSERT_TRUE(action2x2Grid->isCheckable());
+    ASSERT_FALSE(action2x2Grid->isChecked());
+}
+
+TEST_F(MainWindowTest, Action2x2GridNoUncheck) {
+    auto action2x2Grid = mainWindow->findChild<QAction*>("action2x2_Grid");
+    ASSERT_TRUE(action2x2Grid != nullptr);
+
+    // Check it
+    action2x2Grid->toggle();
+    ASSERT_TRUE(action2x2Grid->isChecked());
+
+    // Try to uncheck — should stay checked (no-uncheck behavior)
+    action2x2Grid->toggle();
+    ASSERT_TRUE(action2x2Grid->isChecked());
+}
+
+TEST_F(MainWindowTest, Action2x2GridMutualExclusion) {
+    auto actionSingle = mainWindow->findChild<QAction*>("actionSingle");
+    auto actionSideBySide = mainWindow->findChild<QAction*>("action1x1_Side_by_Side");
+    auto actionUpperLower = mainWindow->findChild<QAction*>("action1x1_Upper_and_Lower");
+    auto action2x2Grid = mainWindow->findChild<QAction*>("action2x2_Grid");
+    ASSERT_TRUE(actionSingle != nullptr);
+    ASSERT_TRUE(actionSideBySide != nullptr);
+    ASSERT_TRUE(actionUpperLower != nullptr);
+    ASSERT_TRUE(action2x2Grid != nullptr);
+
+    // Activate 2x2 Grid
+    action2x2Grid->toggle();
+    ASSERT_TRUE(action2x2Grid->isChecked());
+    ASSERT_FALSE(actionSingle->isChecked());
+    ASSERT_FALSE(actionSideBySide->isChecked());
+    ASSERT_FALSE(actionUpperLower->isChecked());
+
+    // Switch to Single — 2x2 should uncheck
+    actionSingle->toggle();
+    ASSERT_TRUE(actionSingle->isChecked());
+    ASSERT_FALSE(action2x2Grid->isChecked());
+
+    // Switch to 2x2 again then to Side by Side
+    action2x2Grid->toggle();
+    ASSERT_TRUE(action2x2Grid->isChecked());
+    actionSideBySide->toggle();
+    ASSERT_TRUE(actionSideBySide->isChecked());
+    ASSERT_FALSE(action2x2Grid->isChecked());
+
+    // Switch to 2x2 again then to Upper and Lower
+    action2x2Grid->toggle();
+    ASSERT_TRUE(action2x2Grid->isChecked());
+    actionUpperLower->toggle();
+    ASSERT_TRUE(actionUpperLower->isChecked());
+    ASSERT_FALSE(action2x2Grid->isChecked());
 }
 
 TEST_F(MainWindowTest, SelectTranslateRotate) {

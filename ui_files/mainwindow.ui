@@ -71,6 +71,7 @@
      <addaction name="actionSingle"/>
      <addaction name="action1x1_Side_by_Side"/>
      <addaction name="action1x1_Upper_and_Lower"/>
+     <addaction name="action2x2_Grid"/>
     </widget>
     <widget class="QMenu" name="menuEditor_Palette">
      <property name="title">
@@ -377,6 +378,14 @@
    </property>
    <property name="text">
     <string>1x1 Upper and Lower</string>
+   </property>
+  </action>
+  <action name="action2x2_Grid">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>2x2 Grid</string>
    </property>
   </action>
   <action name="actionAdd_Resource_location">

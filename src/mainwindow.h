@@ -63,6 +63,8 @@ private slots:
 
     void on_action1x1_Upper_and_Lower_toggled(bool arg1);
 
+    void on_action2x2_Grid_toggled(bool arg1);
+
     void on_actionAdd_Resource_location_triggered();
 
     void on_actionChange_Ambient_Light_triggered();

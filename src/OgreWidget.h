@@ -68,6 +68,8 @@ protected:
   void mouseMoveEvent(QMouseEvent *e) override;
   void wheelEvent(QWheelEvent *e) override;
 
+  bool event(QEvent *e) override;
+
   void focusInEvent(QFocusEvent* e) override;
   void focusOutEvent(QFocusEvent* e) override;
 
