@@ -8,6 +8,7 @@
 #include <QDockWidget>
 #include <QTreeWidget>
 #include <QListWidget>
+#include <QMenu>
 #include <QMimeData>
 #include <QDropEvent>
 #include <QMouseEvent>
@@ -765,4 +766,123 @@ TEST_F(MainWindowTest, AnimationStateChange)
     ASSERT_EQ(spy.count(), 2);
     arguments = spy.takeFirst();
     ASSERT_EQ(arguments.at(0).toBool(), false);
+}
+
+TEST_F(MainWindowTest, RecentFilesMenuExists) {
+    auto recentFilesMenu = mainWindow->findChild<QMenu*>("recentFilesMenu");
+    ASSERT_TRUE(recentFilesMenu != nullptr);
+    ASSERT_EQ(recentFilesMenu->title(), "Recent Files");
+}
+
+TEST_F(MainWindowTest, AddToRecentFiles) {
+    // Clear any existing recent files first
+    QSettings settings;
+    settings.remove("RecentFiles/files");
+
+    auto recentFilesMenu = mainWindow->findChild<QMenu*>("recentFilesMenu");
+    ASSERT_TRUE(recentFilesMenu != nullptr);
+
+    // Simulate importing via drop to add to recent files
+    auto mimeData = std::make_unique<QMimeData>();
+    QString validUri = "file:///tmp/test_model.mesh\n";
+    mimeData->setData("text/uri-list", validUri.toUtf8());
+    auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
+    mainWindow->dropEvent(event.get());
+
+    // Verify QSettings has the file
+    QStringList files = settings.value("RecentFiles/files").toStringList();
+    ASSERT_EQ(files.size(), 1);
+    EXPECT_EQ(files.first(), "/tmp/test_model.mesh");
+
+    // Verify menu has the file action (plus separator + Clear action)
+    auto actions = recentFilesMenu->actions();
+    ASSERT_GE(actions.size(), 3); // 1 file + separator + Clear
+    EXPECT_EQ(actions.first()->data().toString(), "/tmp/test_model.mesh");
+
+    // Clean up
+    settings.remove("RecentFiles/files");
+}
+
+TEST_F(MainWindowTest, RecentFilesMaxLimit) {
+    QSettings settings;
+    settings.remove("RecentFiles/files");
+
+    // Add 12 files via drop events
+    for (int i = 0; i < 12; ++i) {
+        auto mimeData = std::make_unique<QMimeData>();
+        QString uri = QString("file:///tmp/model_%1.mesh\n").arg(i);
+        mimeData->setData("text/uri-list", uri.toUtf8());
+        auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
+        mainWindow->dropEvent(event.get());
+    }
+
+    // Verify only 10 are stored
+    QStringList files = settings.value("RecentFiles/files").toStringList();
+    ASSERT_EQ(files.size(), 10);
+    // Most recent should be first
+    EXPECT_EQ(files.first(), "/tmp/model_11.mesh");
+    // Oldest two (0, 1) should have been dropped
+    EXPECT_FALSE(files.contains("/tmp/model_0.mesh"));
+    EXPECT_FALSE(files.contains("/tmp/model_1.mesh"));
+
+    // Clean up
+    settings.remove("RecentFiles/files");
+}
+
+TEST_F(MainWindowTest, RecentFilesDeduplicate) {
+    QSettings settings;
+    settings.remove("RecentFiles/files");
+
+    // Add the same file twice via drop
+    for (int i = 0; i < 2; ++i) {
+        auto mimeData = std::make_unique<QMimeData>();
+        QString uri = "file:///tmp/duplicate.mesh\n";
+        mimeData->setData("text/uri-list", uri.toUtf8());
+        auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
+        mainWindow->dropEvent(event.get());
+    }
+
+    // Verify only one entry exists
+    QStringList files = settings.value("RecentFiles/files").toStringList();
+    ASSERT_EQ(files.size(), 1);
+    EXPECT_EQ(files.first(), "/tmp/duplicate.mesh");
+
+    // Clean up
+    settings.remove("RecentFiles/files");
+}
+
+TEST_F(MainWindowTest, ClearRecentFiles) {
+    QSettings settings;
+    settings.remove("RecentFiles/files");
+
+    // Add a file
+    auto mimeData = std::make_unique<QMimeData>();
+    QString uri = "file:///tmp/to_clear.mesh\n";
+    mimeData->setData("text/uri-list", uri.toUtf8());
+    auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
+    mainWindow->dropEvent(event.get());
+
+    QStringList files = settings.value("RecentFiles/files").toStringList();
+    ASSERT_EQ(files.size(), 1);
+
+    // Find and trigger the "Clear Recent Files" action
+    auto recentFilesMenu = mainWindow->findChild<QMenu*>("recentFilesMenu");
+    ASSERT_TRUE(recentFilesMenu != nullptr);
+    auto actions = recentFilesMenu->actions();
+    QAction* clearAction = actions.last();
+    ASSERT_EQ(clearAction->text(), "Clear Recent Files");
+    clearAction->trigger();
+
+    // Verify QSettings is empty
+    files = settings.value("RecentFiles/files").toStringList();
+    ASSERT_TRUE(files.isEmpty());
+
+    // Verify menu shows "(No Recent Files)" placeholder
+    actions = recentFilesMenu->actions();
+    ASSERT_GE(actions.size(), 3); // placeholder + separator + Clear
+    EXPECT_EQ(actions.first()->text(), "(No Recent Files)");
+    EXPECT_FALSE(actions.first()->isEnabled());
+
+    // Clean up
+    settings.remove("RecentFiles/files");
 }
