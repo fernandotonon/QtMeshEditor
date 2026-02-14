@@ -48,6 +48,48 @@ static std::vector<Ogre::Vector3> getVertexPositions(Ogre::Mesh* mesh)
     return positions;
 }
 
+// Helper to read vertex normals from a mesh for verification
+static std::vector<Ogre::Vector3> getVertexNormals(Ogre::Mesh* mesh)
+{
+    std::vector<Ogre::Vector3> normals;
+    bool added_shared = false;
+
+    for (int i = 0; i < mesh->getNumSubMeshes(); ++i)
+    {
+        Ogre::SubMesh* submesh = mesh->getSubMesh(i);
+        Ogre::VertexData* vertex_data = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+
+        if ((!submesh->useSharedVertices) || (submesh->useSharedVertices && !added_shared))
+        {
+            if (submesh->useSharedVertices)
+                added_shared = true;
+
+            const Ogre::VertexElement* normElem =
+                vertex_data->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
+            if (!normElem) continue;
+
+            Ogre::HardwareVertexBufferSharedPtr nbuf =
+                vertex_data->vertexBufferBinding->getBuffer(normElem->getSource());
+
+            unsigned char* vertex = static_cast<unsigned char*>(
+                nbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            Ogre::Real* pReal;
+
+            for (size_t j = 0; j < vertex_data->vertexCount; ++j, vertex += nbuf->getVertexSize())
+            {
+                normElem->baseVertexPointerToElement(vertex, &pReal);
+                Ogre::Vector3 norm;
+                norm.x = pReal[0];
+                norm.y = pReal[1];
+                norm.z = pReal[2];
+                normals.push_back(norm);
+            }
+            nbuf->unlock();
+        }
+    }
+    return normals;
+}
+
 class MeshTransformTest : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
@@ -819,4 +861,205 @@ TEST_F(MeshTransformTest, RotatePreservesVertexCount)
     EXPECT_EQ(originalCount, afterCount);
 
     Manager::getSingleton()->destroySceneNode("CountRotCube");
+}
+
+// ------------------------------------------------------------------
+// Normal rotation tests
+// ------------------------------------------------------------------
+
+TEST_F(MeshTransformTest, RotateMeshAlsoRotatesNormals)
+{
+    Ogre::SceneNode* node = PrimitiveObject::createCube("RotateNormCube");
+    ASSERT_NE(node, nullptr);
+    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::Mesh* mesh = entity->getMesh().get();
+
+    std::vector<Ogre::Vector3> originalNormals = getVertexNormals(mesh);
+    if (originalNormals.empty()) {
+        Manager::getSingleton()->destroySceneNode("RotateNormCube");
+        GTEST_SKIP() << "Skipping: mesh has no normals";
+    }
+
+    // Rotate 90 degrees around UNIT_Y (via _rotate.x)
+    Ogre::Quaternion expectedQuat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
+    MeshTransform::rotateMesh(entity, Ogre::Vector3(90.0f, 0.0f, 0.0f));
+
+    std::vector<Ogre::Vector3> rotatedNormals = getVertexNormals(mesh);
+    ASSERT_EQ(originalNormals.size(), rotatedNormals.size());
+
+    for (size_t i = 0; i < originalNormals.size(); ++i)
+    {
+        Ogre::Vector3 expected = expectedQuat * originalNormals[i];
+        EXPECT_NEAR(rotatedNormals[i].x, expected.x, 1e-4f)
+            << "Normal " << i << " x mismatch";
+        EXPECT_NEAR(rotatedNormals[i].y, expected.y, 1e-4f)
+            << "Normal " << i << " y mismatch";
+        EXPECT_NEAR(rotatedNormals[i].z, expected.z, 1e-4f)
+            << "Normal " << i << " z mismatch";
+    }
+
+    Manager::getSingleton()->destroySceneNode("RotateNormCube");
+}
+
+TEST_F(MeshTransformTest, RotateMeshNormalsPreserveLength)
+{
+    Ogre::SceneNode* node = PrimitiveObject::createSphere("RotateNormSphere");
+    ASSERT_NE(node, nullptr);
+    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::Mesh* mesh = entity->getMesh().get();
+
+    std::vector<Ogre::Vector3> originalNormals = getVertexNormals(mesh);
+    if (originalNormals.empty()) {
+        Manager::getSingleton()->destroySceneNode("RotateNormSphere");
+        GTEST_SKIP() << "Skipping: mesh has no normals";
+    }
+
+    // Rotate 45 degrees
+    MeshTransform::rotateMesh(entity, Ogre::Vector3(0.0f, 45.0f, 0.0f));
+
+    std::vector<Ogre::Vector3> rotatedNormals = getVertexNormals(mesh);
+    ASSERT_EQ(originalNormals.size(), rotatedNormals.size());
+
+    // Normal lengths should be preserved after rotation
+    for (size_t i = 0; i < originalNormals.size(); ++i)
+    {
+        EXPECT_NEAR(rotatedNormals[i].length(), originalNormals[i].length(), 1e-4f)
+            << "Normal " << i << " length changed after rotation";
+    }
+
+    Manager::getSingleton()->destroySceneNode("RotateNormSphere");
+}
+
+// ------------------------------------------------------------------
+// Quaternion overload tests
+// ------------------------------------------------------------------
+
+TEST_F(MeshTransformTest, RotateMeshQuaternionOverloadMatchesVector3)
+{
+    // Create two identical cubes, rotate one with Vector3 and one with Quaternion
+    Ogre::SceneNode* nodeA = PrimitiveObject::createCube("RotateQuatCubeA");
+    ASSERT_NE(nodeA, nullptr);
+    Ogre::Entity* entityA = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entityA, nullptr);
+
+    Ogre::SceneNode* nodeB = PrimitiveObject::createCube("RotateQuatCubeB");
+    ASSERT_NE(nodeB, nullptr);
+    Ogre::Entity* entityB = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entityB, nullptr);
+
+    // Rotate A with Vector3 (90 degrees around UNIT_Y via _rotate.x)
+    MeshTransform::rotateMesh(entityA, Ogre::Vector3(90.0f, 0.0f, 0.0f));
+
+    // Rotate B with equivalent Quaternion
+    Ogre::Quaternion quat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
+    MeshTransform::rotateMesh(entityB, quat);
+
+    auto posA = getVertexPositions(entityA->getMesh().get());
+    auto posB = getVertexPositions(entityB->getMesh().get());
+    ASSERT_EQ(posA.size(), posB.size());
+    ASSERT_FALSE(posA.empty());
+
+    for (size_t i = 0; i < posA.size(); ++i)
+    {
+        EXPECT_NEAR(posA[i].x, posB[i].x, 1e-4f) << "Vertex " << i << " x mismatch";
+        EXPECT_NEAR(posA[i].y, posB[i].y, 1e-4f) << "Vertex " << i << " y mismatch";
+        EXPECT_NEAR(posA[i].z, posB[i].z, 1e-4f) << "Vertex " << i << " z mismatch";
+    }
+
+    Manager::getSingleton()->destroySceneNode("RotateQuatCubeA");
+    Manager::getSingleton()->destroySceneNode("RotateQuatCubeB");
+}
+
+TEST_F(MeshTransformTest, RotateMeshQuaternionArbitraryAxis)
+{
+    Ogre::SceneNode* node = PrimitiveObject::createCube("RotateQuatArbCube");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    auto center = mesh->getBounds().getCenter();
+    auto originalPositions = getVertexPositions(mesh);
+    ASSERT_FALSE(originalPositions.empty());
+
+    // Rotate 60 degrees around an arbitrary axis (1,1,0 normalized)
+    Ogre::Quaternion quat(Ogre::Degree(60.0f), Ogre::Vector3(1, 1, 0).normalisedCopy());
+    MeshTransform::rotateMesh(entity, quat);
+
+    auto rotatedPositions = getVertexPositions(mesh);
+    ASSERT_EQ(originalPositions.size(), rotatedPositions.size());
+
+    // Verify each vertex matches quaternion rotation around mesh center
+    for (size_t i = 0; i < originalPositions.size(); ++i)
+    {
+        Ogre::Vector3 expected = quat * (originalPositions[i] - center) + center;
+        EXPECT_NEAR(rotatedPositions[i].x, expected.x, 1e-4f) << "Vertex " << i;
+        EXPECT_NEAR(rotatedPositions[i].y, expected.y, 1e-4f) << "Vertex " << i;
+        EXPECT_NEAR(rotatedPositions[i].z, expected.z, 1e-4f) << "Vertex " << i;
+    }
+
+    Manager::getSingleton()->destroySceneNode("RotateQuatArbCube");
+}
+
+TEST_F(MeshTransformTest, RotateMeshQuaternionAlsoRotatesNormals)
+{
+    Ogre::SceneNode* node = PrimitiveObject::createCube("RotateQuatNormCube");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    auto originalNormals = getVertexNormals(mesh);
+    if (originalNormals.empty()) {
+        Manager::getSingleton()->destroySceneNode("RotateQuatNormCube");
+        GTEST_SKIP() << "Skipping: mesh has no normals";
+    }
+
+    Ogre::Quaternion quat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
+    MeshTransform::rotateMesh(entity, quat);
+
+    auto rotatedNormals = getVertexNormals(mesh);
+    ASSERT_EQ(originalNormals.size(), rotatedNormals.size());
+
+    for (size_t i = 0; i < originalNormals.size(); ++i)
+    {
+        Ogre::Vector3 expected = quat * originalNormals[i];
+        EXPECT_NEAR(rotatedNormals[i].x, expected.x, 1e-4f) << "Normal " << i;
+        EXPECT_NEAR(rotatedNormals[i].y, expected.y, 1e-4f) << "Normal " << i;
+        EXPECT_NEAR(rotatedNormals[i].z, expected.z, 1e-4f) << "Normal " << i;
+    }
+
+    Manager::getSingleton()->destroySceneNode("RotateQuatNormCube");
+}
+
+TEST_F(MeshTransformTest, RotateMeshQuaternionIdentityPreservesVertices)
+{
+    Ogre::SceneNode* node = PrimitiveObject::createCube("RotateQuatIdCube");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    auto originalPositions = getVertexPositions(mesh);
+    ASSERT_FALSE(originalPositions.empty());
+
+    MeshTransform::rotateMesh(entity, Ogre::Quaternion::IDENTITY);
+
+    auto afterPositions = getVertexPositions(mesh);
+    ASSERT_EQ(originalPositions.size(), afterPositions.size());
+
+    for (size_t i = 0; i < originalPositions.size(); ++i)
+    {
+        EXPECT_NEAR(afterPositions[i].x, originalPositions[i].x, 1e-4f);
+        EXPECT_NEAR(afterPositions[i].y, originalPositions[i].y, 1e-4f);
+        EXPECT_NEAR(afterPositions[i].z, originalPositions[i].z, 1e-4f);
+    }
+
+    Manager::getSingleton()->destroySceneNode("RotateQuatIdCube");
 }

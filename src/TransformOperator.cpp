@@ -515,8 +515,7 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                 rotation.z = rotation.z * mTransformVector.z;
                 rotation.normalise();
 
-                rotateSelected(rotation); //Rotate the Node
-                rotateSelected(Ogre::Vector3(rotation.y,rotation.z,rotation.x)*100+SelectionSet::getSingleton()->getSelectionOrientation()); //Rotate the Mesh
+                rotateSelected(rotation);
                 mStartPoint = point;
 
                 emit selectedOrientationChanged(SelectionSet::getSingleton()->getSelectionOrientation()); //TODO connect this signal
@@ -639,7 +638,6 @@ void TransformOperator::setSelectedOrientation(const Ogre::Vector3& newOrientati
 }
 
 void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
-
 {
     if(SelectionSet::getSingleton()->hasNodes())
     {
@@ -654,18 +652,23 @@ void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
 
        updateGizmoPosition();
     }
-    /* Code to rotate each object on it's own local CS
-    if(!SelectionSet::getSingleton()->isEmpty())
+    else if(SelectionSet::getSingleton()->hasEntities())
     {
+        // Convert quaternion to Euler for rotation tracking (used by spinboxes)
+        Ogre::Euler euler;
+        euler.fromQuaternion(rotation);
+        Ogre::Vector3 eulerDelta(euler.pitch().valueDegrees(),
+                                 euler.yaw().valueDegrees(),
+                                 euler.roll().valueDegrees());
 
-        foreach(Ogre::SceneNode* node,SelectionSet::getSingleton()->getSelectionList())
+        foreach(Ogre::Entity* obj,SelectionSet::getSingleton()->getEntitiesSelectionList())
         {
-            node->rotate(rotation,Ogre::Node::TS_WORLD);
+            MeshTransform::rotateMesh(obj, rotation);
+            obj->getParentSceneNode()->needUpdate(true);
+            SelectionSet::getSingleton()->setEntityRotation(
+                obj, SelectionSet::getSingleton()->getEntityRotation(obj) + eulerDelta);
         }
-
-       //updateGizmoPosition();  //required in case of Local mode
     }
-    */
 }
 
 void TransformOperator::rotateSelected(const Ogre::Vector3 &rotation)

@@ -39,6 +39,7 @@ public:
     static void scaleMesh(Ogre::Mesh *_mesh, const Ogre::Vector3 &_scale);
     static void translateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_translate);
     static void rotateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate);
+    static void rotateMesh(const Ogre::Entity *_ent, const Ogre::Quaternion &_quat);
 };
 
 #endif // MESHTRANSFORM_H
