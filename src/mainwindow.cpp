@@ -728,7 +728,22 @@ void MainWindow::on_action1x1_Side_by_Side_toggled(bool arg1)
             mDockWidgetList.last()->close();
         }
 
+        // Remove and re-add to fully reset the internal splitter layout
+        removeDockWidget(mDockWidgetList.first());
+        removeDockWidget(mDockWidgetList.last());
+        addDockWidget(Qt::LeftDockWidgetArea, mDockWidgetList.first());
+        addDockWidget(Qt::LeftDockWidgetArea, mDockWidgetList.last());
+        mDockWidgetList.first()->show();
+        mDockWidgetList.last()->show();
         splitDockWidget(mDockWidgetList.first(),mDockWidgetList.last(),Qt::Horizontal);
+
+        // Defer resize to equalize after layout is processed
+        QTimer::singleShot(0, this, [this]() {
+            if (mDockWidgetList.size() >= 2) {
+                int halfWidth = width() / 2;
+                resizeDocks({mDockWidgetList.first(), mDockWidgetList.last()}, {halfWidth, halfWidth}, Qt::Horizontal);
+            }
+        });
 
         ui->actionSingle->setChecked(false);
         ui->action1x1_Side_by_Side->setChecked(true);
@@ -754,8 +769,22 @@ void MainWindow::on_action1x1_Upper_and_Lower_toggled(bool arg1)
             mDockWidgetList.last()->close();
         }
 
-        splitDockWidget(mDockWidgetList.first(),mDockWidgetList.last(),Qt::Horizontal);
+        // Remove and re-add to fully reset the internal splitter layout
+        removeDockWidget(mDockWidgetList.first());
+        removeDockWidget(mDockWidgetList.last());
+        addDockWidget(Qt::LeftDockWidgetArea, mDockWidgetList.first());
+        addDockWidget(Qt::LeftDockWidgetArea, mDockWidgetList.last());
+        mDockWidgetList.first()->show();
+        mDockWidgetList.last()->show();
         splitDockWidget(mDockWidgetList.first(),mDockWidgetList.last(),Qt::Vertical);
+
+        // Defer resize to equalize after layout is processed
+        QTimer::singleShot(0, this, [this]() {
+            if (mDockWidgetList.size() >= 2) {
+                int halfHeight = height() / 2;
+                resizeDocks({mDockWidgetList.first(), mDockWidgetList.last()}, {halfHeight, halfHeight}, Qt::Vertical);
+            }
+        });
 
         ui->actionSingle->setChecked(false);
         ui->action1x1_Side_by_Side->setChecked(false);
@@ -763,7 +792,7 @@ void MainWindow::on_action1x1_Upper_and_Lower_toggled(bool arg1)
         ui->action2x2_Grid->setChecked(false);
     } else { //Doesn't allow unchecking
         ui->action1x1_Upper_and_Lower->setChecked(  !ui->actionSingle->isChecked() &&
-                                                    !ui->action1x1_Upper_and_Lower->isChecked() &&
+                                                    !ui->action1x1_Side_by_Side->isChecked() &&
                                                     !ui->action2x2_Grid->isChecked());
     }
 }
