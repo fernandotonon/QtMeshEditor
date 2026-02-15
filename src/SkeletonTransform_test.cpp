@@ -1085,3 +1085,84 @@ TEST_F(SkeletonTransformProgrammaticTest, RotateUsesSamePivotAsVertices)
         }
     }
 }
+
+// --- Tests for renameAnimation ---
+
+TEST_F(SkeletonTransformProgrammaticTest, RenamePreservesEnabledAnimationStates)
+{
+    auto *animSet = entity->getAllAnimationStates();
+    ASSERT_NE(animSet, nullptr);
+    ASSERT_TRUE(animSet->hasAnimationState("TestWalk"));
+
+    // Enable the animation and set a time position
+    auto *state = animSet->getAnimationState("TestWalk");
+    state->setEnabled(true);
+    state->setTimePosition(0.5f);
+    state->setLoop(true);
+
+    bool result = SkeletonTransform::renameAnimation(entity, "TestWalk", "TestRun");
+    ASSERT_TRUE(result);
+
+    animSet = entity->getAllAnimationStates();
+    ASSERT_TRUE(animSet->hasAnimationState("TestRun"));
+
+    auto *newState = animSet->getAnimationState("TestRun");
+    EXPECT_TRUE(newState->getEnabled()) << "Renamed animation should still be enabled";
+    EXPECT_NEAR(newState->getTimePosition(), 0.5f, 0.01f) << "Time position should be preserved";
+    EXPECT_TRUE(newState->getLoop()) << "Loop state should be preserved";
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, RenameRemovesOldAnimationState)
+{
+    auto *animSet = entity->getAllAnimationStates();
+    ASSERT_NE(animSet, nullptr);
+    ASSERT_TRUE(animSet->hasAnimationState("TestWalk"));
+
+    bool result = SkeletonTransform::renameAnimation(entity, "TestWalk", "TestRun");
+    ASSERT_TRUE(result);
+
+    animSet = entity->getAllAnimationStates();
+    EXPECT_FALSE(animSet->hasAnimationState("TestWalk")) << "Old animation state should be removed";
+    EXPECT_TRUE(animSet->hasAnimationState("TestRun")) << "New animation state should exist";
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, RenamePreservesAnimationKeyframes)
+{
+    auto *sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+    ASSERT_TRUE(sk->hasAnimation("TestWalk"));
+
+    auto *origAnim = sk->getAnimation("TestWalk");
+    Ogre::Real origLength = origAnim->getLength();
+    unsigned short origNumTracks = origAnim->getNumNodeTracks();
+
+    bool result = SkeletonTransform::renameAnimation(entity, "TestWalk", "TestRun");
+    ASSERT_TRUE(result);
+
+    ASSERT_TRUE(sk->hasAnimation("TestRun"));
+    auto *newAnim = sk->getAnimation("TestRun");
+    EXPECT_FLOAT_EQ(newAnim->getLength(), origLength);
+    EXPECT_EQ(newAnim->getNumNodeTracks(), origNumTracks);
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, RenameDoesNotResetBonePositions)
+{
+    auto *sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    // Record bone positions before rename
+    std::map<std::string, Ogre::Vector3> beforePositions;
+    for (const auto& bone : sk->getBones())
+        beforePositions[bone->getName()] = bone->getPosition();
+
+    SkeletonTransform::renameAnimation(entity, "TestWalk", "TestRun");
+
+    // Bone positions should be unchanged — rename is metadata only
+    for (const auto& bone : sk->getBones()) {
+        auto it = beforePositions.find(bone->getName());
+        ASSERT_NE(it, beforePositions.end());
+        EXPECT_NEAR(bone->getPosition().x, it->second.x, 0.001f) << "Bone '" << bone->getName() << "' x";
+        EXPECT_NEAR(bone->getPosition().y, it->second.y, 0.001f) << "Bone '" << bone->getName() << "' y";
+        EXPECT_NEAR(bone->getPosition().z, it->second.z, 0.001f) << "Bone '" << bone->getName() << "' z";
+    }
+}

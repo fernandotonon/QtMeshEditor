@@ -35,22 +35,12 @@ THE SOFTWARE.
 
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 
+#include <string>
+#include <vector>
+
 #include "Manager.h"
 
 namespace {
-
-void disableAnimationsAndRender(const Ogre::Entity *ent)
-{
-    auto *set = ent->getAllAnimationStates();
-    if(set)
-    {
-        for(const auto &[name, state] : set->getAnimationStates())
-        {
-            state->setEnabled(false);
-        }
-    }
-    Manager::getSingleton()->getRoot()->renderOneFrame();
-}
 
 Ogre::Quaternion buildRotationQuat(const Ogre::Vector3 &rotate)
 {
@@ -143,12 +133,20 @@ bool SkeletonTransform::renameAnimation(Ogre::Entity *_ent, const QString &_oldN
     if(!_ent || !_ent->getSkeleton()->hasAnimation(_oldName.toStdString().data()))
         return false;
 
-    disableAnimationsAndRender(_ent);
-    QCoreApplication::processEvents();
+    auto *sk = _ent->getSkeleton();
 
-    // Clone the current animation
-    auto *currentAnim = _ent->getSkeleton()->getAnimation(_oldName.toStdString());
-    auto *newAnim = _ent->getSkeleton()->createAnimation(_newName.toStdString(), currentAnim->getLength());
+    // Save full animation state (enabled, time, loop) before the rename
+    struct AnimStateInfo { bool enabled; Ogre::Real timePos; bool loop; };
+    std::map<std::string, AnimStateInfo> savedStates;
+    if(auto *animSet = _ent->getAllAnimationStates())
+    {
+        for(const auto &[name, state] : animSet->getAnimationStates())
+            savedStates[name] = {state->getEnabled(), state->getTimePosition(), state->getLoop()};
+    }
+
+    // Clone the current animation with the new name
+    auto *currentAnim = sk->getAnimation(_oldName.toStdString());
+    auto *newAnim = sk->createAnimation(_newName.toStdString(), currentAnim->getLength());
     const int trackSearchLimit = static_cast<int>(currentAnim->getNumNodeTracks()) + 1000;
     for(int j = 0; j < trackSearchLimit; j++)
     {
@@ -174,16 +172,31 @@ bool SkeletonTransform::renameAnimation(Ogre::Entity *_ent, const QString &_oldN
     }
 
     //Remove the old animation
-    _ent->getSkeleton()->removeAnimation(_oldName.toStdString());
+    sk->removeAnimation(_oldName.toStdString());
 
-    // Update the animations
+    // Rebuild animation states from the skeleton
     _ent->refreshAvailableAnimationState();
-    _ent->_updateAnimation();
-    _ent->getMesh().get()->_dirtyState();
 
-    //Update the screen
-    Manager::getSingleton()->getRoot()->renderOneFrame();
-    QCoreApplication::processEvents();
+    // Remove stale animation state if the master skeleton re-created it
+    auto *animSet = _ent->getAllAnimationStates();
+    if(animSet && animSet->hasAnimationState(_oldName.toStdString()))
+        animSet->removeAnimationState(_oldName.toStdString());
+
+    // Restore animation states (mapping old name to new name)
+    if(animSet)
+    {
+        for(const auto &[name, info] : savedStates)
+        {
+            auto stateName = (name == _oldName.toStdString()) ? _newName.toStdString() : name;
+            if(animSet->hasAnimationState(stateName))
+            {
+                auto *state = animSet->getAnimationState(stateName);
+                state->setEnabled(info.enabled);
+                state->setTimePosition(info.timePos);
+                state->setLoop(info.loop);
+            }
+        }
+    }
 
     return true;
 }
