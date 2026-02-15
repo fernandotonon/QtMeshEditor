@@ -67,7 +67,7 @@ MainWindow::MainWindow(QWidget *parent) :
     initToolBar();
 
     // Recent Files submenu in File menu
-    m_recentFilesMenu = new QMenu(tr("Recent Files"), this);
+    m_recentFilesMenu = new QMenu(tr("Recent Files"), this); // NOSONAR — Qt parent manages lifetime
     m_recentFilesMenu->setObjectName("recentFilesMenu");
     ui->menuFile->insertMenu(ui->actionExport_Selected, m_recentFilesMenu);
     ui->menuFile->insertSeparator(ui->actionExport_Selected);
@@ -1016,15 +1016,13 @@ void MainWindow::updateRecentFilesMenu()
     m_recentFilesMenu->clear();
 
     QSettings settings;
-    QStringList files = settings.value("RecentFiles/files").toStringList();
-
-    if (files.isEmpty()) {
-        QAction* noFilesAction = m_recentFilesMenu->addAction(tr("(No Recent Files)"));
+    if (QStringList files = settings.value("RecentFiles/files").toStringList(); files.isEmpty()) {
+        auto* noFilesAction = m_recentFilesMenu->addAction(tr("(No Recent Files)"));
         noFilesAction->setEnabled(false);
     } else {
         for (const QString& filePath : files) {
             QFileInfo fi(filePath);
-            QAction* action = m_recentFilesMenu->addAction(fi.fileName());
+            auto* action = m_recentFilesMenu->addAction(fi.fileName());
             action->setData(filePath);
             action->setToolTip(filePath);
             connect(action, &QAction::triggered, this, &MainWindow::openRecentFile);
@@ -1032,7 +1030,7 @@ void MainWindow::updateRecentFilesMenu()
     }
 
     m_recentFilesMenu->addSeparator();
-    QAction* clearAction = m_recentFilesMenu->addAction(tr("Clear Recent Files"));
+    const auto* clearAction = m_recentFilesMenu->addAction(tr("Clear Recent Files"));
     connect(clearAction, &QAction::triggered, this, [this]() {
         QSettings settings;
         settings.remove("RecentFiles/files");
@@ -1042,7 +1040,7 @@ void MainWindow::updateRecentFilesMenu()
 
 void MainWindow::openRecentFile()
 {
-    QAction* action = qobject_cast<QAction*>(sender());
+    const auto* action = qobject_cast<QAction*>(sender());
     if (!action)
         return;
 
