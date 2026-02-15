@@ -3,6 +3,7 @@
 
 #include <QMainWindow>
 #include <QComboBox>
+#include <QMenu>
 #include <QTableWidget>
 #include <QColorDialog>
 #include <OgreFrameListener.h>
@@ -112,6 +113,11 @@ protected:
 private:
     void initToolBar();
     const QPalette& darkPalette();
+
+    QMenu* m_recentFilesMenu = nullptr;
+    void addToRecentFiles(const QString& filePath);
+    void updateRecentFilesMenu();
+    void openRecentFile();
 };
 
 #endif // MAINWINDOW_H

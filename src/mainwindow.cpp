@@ -12,6 +12,7 @@
 #include <QQmlEngine>
 #include <QJSEngine>
 #include <QQuickWindow>
+#include <QFileInfo>
 #include <QDialog>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -64,6 +65,13 @@ MainWindow::MainWindow(QWidget *parent) :
     manager->CreateEmptyScene();
 
     initToolBar();
+
+    // Recent Files submenu in File menu
+    m_recentFilesMenu = new QMenu(tr("Recent Files"), this); // NOSONAR — Qt parent manages lifetime
+    m_recentFilesMenu->setObjectName("recentFilesMenu");
+    ui->menuFile->insertMenu(ui->actionExport_Selected, m_recentFilesMenu);
+    ui->menuFile->insertSeparator(ui->actionExport_Selected);
+    updateRecentFilesMenu();
 
     QSettings settings;
     mCurrentPalette = settings.value("palette","dark").toString();
@@ -437,6 +445,8 @@ void MainWindow::dropEvent(QDropEvent *event)
             uris.removeAt(c);
         }
     }
+    for (const QString& f : uris)
+        addToRecentFiles(f);
     mUriList.append(uris);
 }
 
@@ -453,6 +463,8 @@ void MainWindow::on_actionImport_triggered()
                                                      QString("Model ( "+ Manager::getSingleton()->getValidFileExtention().replace(".","*.") + " )"),
                                                      nullptr, QFileDialog::DontUseNativeDialog|QFileDialog::HideNameFilterDetails);
 
+    for (const QString& f : fileNames)
+        addToRecentFiles(f);
     mUriList.append(fileNames);
 }
 
@@ -466,7 +478,11 @@ void MainWindow::on_actionExport_Selected_triggered()
     if(SelectionSet::getSingleton()->hasNodes())
     {
         foreach(Ogre::SceneNode* node, SelectionSet::getSingleton()->getNodesSelectionList())
-            MeshImporterExporter::exporter(node);
+        {
+            QString exportedPath = MeshImporterExporter::exporter(node);
+            if (!exportedPath.isEmpty())
+                addToRecentFiles(exportedPath);
+        }
     }
 }
 
@@ -981,5 +997,64 @@ void MainWindow::showAIModelSettings()
     LLMSettingsWidget* settingsWidget = new LLMSettingsWidget(this);
     settingsWidget->setAttribute(Qt::WA_DeleteOnClose);
     settingsWidget->exec();
+}
+
+void MainWindow::addToRecentFiles(const QString& filePath)
+{
+    QSettings settings;
+    QStringList files = settings.value("RecentFiles/files").toStringList();
+    files.removeAll(filePath);
+    files.prepend(filePath);
+    while (files.size() > 10)
+        files.removeLast();
+    settings.setValue("RecentFiles/files", files);
+    updateRecentFilesMenu();
+}
+
+void MainWindow::updateRecentFilesMenu()
+{
+    m_recentFilesMenu->clear();
+
+    QSettings settings;
+    if (QStringList files = settings.value("RecentFiles/files").toStringList(); files.isEmpty()) {
+        auto* noFilesAction = m_recentFilesMenu->addAction(tr("(No Recent Files)"));
+        noFilesAction->setEnabled(false);
+    } else {
+        for (const QString& filePath : files) {
+            QFileInfo fi(filePath);
+            auto* action = m_recentFilesMenu->addAction(fi.fileName());
+            action->setData(filePath);
+            action->setToolTip(filePath);
+            connect(action, &QAction::triggered, this, &MainWindow::openRecentFile);
+        }
+    }
+
+    m_recentFilesMenu->addSeparator();
+    const auto* clearAction = m_recentFilesMenu->addAction(tr("Clear Recent Files"));
+    connect(clearAction, &QAction::triggered, this, [this]() {
+        QSettings settings;
+        settings.remove("RecentFiles/files");
+        updateRecentFilesMenu();
+    });
+}
+
+void MainWindow::openRecentFile()
+{
+    const auto* action = qobject_cast<QAction*>(sender());
+    if (!action)
+        return;
+
+    QString filePath = action->data().toString();
+    if (QFileInfo::exists(filePath)) {
+        mUriList.append(filePath);
+    } else {
+        QMessageBox::warning(this, tr("File Not Found"),
+            tr("The file \"%1\" no longer exists.").arg(filePath));
+        QSettings settings;
+        QStringList files = settings.value("RecentFiles/files").toStringList();
+        files.removeAll(filePath);
+        settings.setValue("RecentFiles/files", files);
+        updateRecentFilesMenu();
+    }
 }
 

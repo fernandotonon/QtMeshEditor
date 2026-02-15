@@ -212,12 +212,12 @@ QString MeshImporterExporter::exportFileDialogFilter()
     return filter;
 }
 
-int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
+QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
 {
     if(!_sn)
     {
         QMessageBox::warning(nullptr,"No object","Which object are you trying to export?",QMessageBox::Ok);
-        return -1;
+        return QString();
     }
 
     QString filter = "Ogre Mesh (*.mesh)";
@@ -225,12 +225,12 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
                                                      _sn->getName().data(),
                                                      exportFileDialogFilter(),&filter,
                                                     QFileDialog::DontUseNativeDialog);
-    if(fileName.isEmpty()) return -1;
+    if(fileName.isEmpty()) return QString();
 
     QString uri = formatFileURI(fileName, filter);
 
     exporter(_sn, uri, filter);
-    return 0;
+    return uri;
 }
 
 int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format)
