@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <QSignalSpy>
 #include "Manager.h"
 #include <QMap>
 #include "SelectionSet.h"
@@ -363,4 +364,317 @@ TEST(SelectionSetTests, GetSelectionScaleEmpty)
     EXPECT_EQ(scale.x, 0.0f);
     EXPECT_EQ(scale.y, 0.0f);
     EXPECT_EQ(scale.z, 0.0f);
+}
+
+TEST(SelectionSetTests, SubEntitySelection)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testSubEntitySel");
+    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_GT(entity->getNumSubEntities(), 0u);
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+
+    // Append sub-entity
+    selectionSet->append(subEntity);
+    EXPECT_EQ(selectionSet->getSubEntitiesCount(), 1);
+    EXPECT_TRUE(selectionSet->contains(subEntity));
+    EXPECT_TRUE(selectionSet->hasSubEntities());
+
+    // Append same sub-entity again should not duplicate
+    selectionSet->append(subEntity);
+    EXPECT_EQ(selectionSet->getSubEntitiesCount(), 1);
+
+    // Remove sub-entity
+    bool removed = selectionSet->removeOne(subEntity);
+    EXPECT_TRUE(removed);
+    EXPECT_EQ(selectionSet->getSubEntitiesCount(), 0);
+    EXPECT_FALSE(selectionSet->contains(subEntity));
+    EXPECT_FALSE(selectionSet->hasSubEntities());
+
+    // selectOne sub-entity clears everything
+    auto node = Manager::getSingleton()->addSceneNode("testSubEntitySelNode");
+    selectionSet->append(node);
+    selectionSet->append(entity);
+    EXPECT_EQ(selectionSet->getNodesCount(), 1);
+    EXPECT_EQ(selectionSet->getEntitiesCount(), 1);
+
+    selectionSet->selectOne(subEntity);
+    EXPECT_EQ(selectionSet->getSubEntitiesCount(), 1);
+    EXPECT_EQ(selectionSet->getNodesCount(), 0);
+    EXPECT_EQ(selectionSet->getEntitiesCount(), 0);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, IndexedAccessors)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto node1 = Manager::getSingleton()->addSceneNode("testIdx1");
+    auto node2 = Manager::getSingleton()->addSceneNode("testIdx2");
+    selectionSet->append(node1);
+    selectionSet->append(node2);
+
+    EXPECT_EQ(selectionSet->getSceneNode(0), node1);
+    EXPECT_EQ(selectionSet->getSceneNode(1), node2);
+
+    auto cubeNode = PrimitiveObject::createCube("testIdxCube");
+    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    selectionSet->append(entity);
+    EXPECT_EQ(selectionSet->getEntity(0), entity);
+
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+    selectionSet->append(subEntity);
+    EXPECT_EQ(selectionSet->getSubEntity(0), subEntity);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node1);
+    Manager::getSingleton()->destroySceneNode(node2);
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, SelectionListGetters)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto node = Manager::getSingleton()->addSceneNode("testListNode");
+    selectionSet->append(node);
+    EXPECT_EQ(selectionSet->getNodesSelectionList().size(), 1);
+    EXPECT_EQ(selectionSet->getNodesSelectionList().first(), node);
+
+    auto cubeNode = PrimitiveObject::createCube("testListCube");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    selectionSet->append(entity);
+    EXPECT_EQ(selectionSet->getEntitiesSelectionList().size(), 1);
+    EXPECT_EQ(selectionSet->getEntitiesSelectionList().first(), entity);
+
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+    selectionSet->append(subEntity);
+    EXPECT_EQ(selectionSet->getSubEntitiesSelectionList().size(), 1);
+    EXPECT_EQ(selectionSet->getSubEntitiesSelectionList().first(), subEntity);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, GetSelectionOrientationWithNode)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    auto node = Manager::getSingleton()->addSceneNode("testOrientNode");
+    node->setOrientation(Ogre::Quaternion::IDENTITY);
+    selectionSet->append(node);
+
+    auto orientation = selectionSet->getSelectionOrientation();
+    // Identity quaternion should give (0,0,0) Euler angles
+    EXPECT_NEAR(orientation.x, 0.0f, 0.01f);
+    EXPECT_NEAR(orientation.y, 0.0f, 0.01f);
+    EXPECT_NEAR(orientation.z, 0.0f, 0.01f);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+TEST(SelectionSetTests, GetSelectionOrientationWithEntity)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testOrientEntity");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    Ogre::Vector3 rotation(45.0f, 90.0f, 0.0f);
+    selectionSet->setEntityRotation(entity, rotation);
+    selectionSet->append(entity);
+
+    auto orientation = selectionSet->getSelectionOrientation();
+    EXPECT_NEAR(orientation.x, 45.0f, 0.01f);
+    EXPECT_NEAR(orientation.y, 90.0f, 0.01f);
+    EXPECT_NEAR(orientation.z, 0.0f, 0.01f);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, GetSelectionScaleWithNode)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    auto node = Manager::getSingleton()->addSceneNode("testScaleNode");
+    node->setScale(2.0f, 3.0f, 4.0f);
+    selectionSet->append(node);
+
+    auto scale = selectionSet->getSelectionScale();
+    EXPECT_EQ(scale.x, 2.0f);
+    EXPECT_EQ(scale.y, 3.0f);
+    EXPECT_EQ(scale.z, 4.0f);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+TEST(SelectionSetTests, GetSelectionScaleWithEntity)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testScaleEntity");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    Ogre::Vector3 scaleFactor(2.0f, 3.0f, 4.0f);
+    selectionSet->setEntityScaleFactor(entity, scaleFactor);
+    selectionSet->append(entity);
+
+    auto scale = selectionSet->getSelectionScale();
+    EXPECT_EQ(scale.x, 2.0f);
+    EXPECT_EQ(scale.y, 3.0f);
+    EXPECT_EQ(scale.z, 4.0f);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, GetSelectionCenterWithEntity)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testCenterEntity");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    selectionSet->append(entity);
+
+    // Should return a non-zero center based on the entity's world bounding box
+    auto center = selectionSet->getSelectionCenter();
+    // Just verify it doesn't crash and returns some value
+    EXPECT_TRUE(std::isfinite(center.x));
+    EXPECT_TRUE(std::isfinite(center.y));
+    EXPECT_TRUE(std::isfinite(center.z));
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, GetSelectionNodesCenterWithEntity)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testNodesCenterEntity");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    cubeNode->setPosition(10.0f, 20.0f, 30.0f);
+    selectionSet->append(entity);
+
+    auto center = selectionSet->getSelectionNodesCenter();
+    EXPECT_EQ(center.x, 10.0f);
+    EXPECT_EQ(center.y, 20.0f);
+    EXPECT_EQ(center.z, 30.0f);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, SignalEmission)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    QSignalSpy selectionSpy(selectionSet, &SelectionSet::selectionChanged);
+    QSignalSpy nodeSpy(selectionSet, &SelectionSet::nodeSelectionChanged);
+
+    auto node = Manager::getSingleton()->addSceneNode("testSignalNode");
+    selectionSet->append(node);
+
+    EXPECT_GE(selectionSpy.count(), 1);
+    EXPECT_GE(nodeSpy.count(), 1);
+
+    int prevCount = selectionSpy.count();
+    selectionSet->removeOne(node);
+    EXPECT_GT(selectionSpy.count(), prevCount);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+TEST(SelectionSetTests, RemoveNonExistent)
+{
+    try {
+        Manager::getSingleton();
+    } catch (const Ogre::Exception& e) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    auto node = Manager::getSingleton()->addSceneNode("testRemoveNonExist");
+    bool removed = selectionSet->removeOne(node);
+    EXPECT_FALSE(removed);
+    EXPECT_EQ(selectionSet->getNodesCount(), 0);
+
+    Manager::getSingleton()->destroySceneNode(node);
 }

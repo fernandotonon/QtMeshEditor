@@ -298,7 +298,7 @@ public slots:
     void setStartLight(int startLight);
     
     // Fog property setters
-    void setFogOverride(bool override);
+    void setFogOverride(bool enabled);
     void setFogMode(int mode);
     void setFogColor(const QColor &color);
     void setFogDensity(float density);

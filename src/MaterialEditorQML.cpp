@@ -1199,15 +1199,15 @@ void MaterialEditorQML::updatePassProperties()
     m_maxLights = pass->getMaxSimultaneousLights();
     m_startLight = pass->getStartLight();
     
-    // Fog properties - simplified approach
+    // Fog properties
     m_fogOverride = pass->getFogOverride();
     if (m_fogOverride) {
-        // Get fog settings if available
-        m_fogMode = 0;           // Default to None
-        m_fogColor = QColor(0, 0, 0);
-        m_fogDensity = 0.0f;
-        m_fogStart = 0.0f;
-        m_fogEnd = 1.0f;
+        m_fogMode = static_cast<int>(pass->getFogMode());
+        const Ogre::ColourValue& fc = pass->getFogColour();
+        m_fogColor = QColor::fromRgbF(fc.r, fc.g, fc.b);
+        m_fogDensity = pass->getFogDensity();
+        m_fogStart = pass->getFogStart();
+        m_fogEnd = pass->getFogEnd();
     } else {
         m_fogMode = 0;
         m_fogColor = QColor(0, 0, 0);
@@ -1953,14 +1953,14 @@ void MaterialEditorQML::setStartLight(int startLight)
 }
 
 // Fog property setters
-void MaterialEditorQML::setFogOverride(bool override)
+void MaterialEditorQML::setFogOverride(bool enabled)
 {
-    if (m_fogOverride != override) {
-        m_fogOverride = override;
+    if (m_fogOverride != enabled) {
+        m_fogOverride = enabled;
         Ogre::Pass* pass = getCurrentPass();
         if (pass) {
-            if (override) {
-                pass->setFog(override, static_cast<Ogre::FogMode>(m_fogMode), 
+            if (enabled) {
+                pass->setFog(enabled, static_cast<Ogre::FogMode>(m_fogMode),
                            Ogre::ColourValue(m_fogColor.redF(), m_fogColor.greenF(), m_fogColor.blueF()),
                            m_fogDensity, m_fogStart, m_fogEnd);
             } else {
