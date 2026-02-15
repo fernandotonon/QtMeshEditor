@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <csignal>
 #include <cstdlib>
+#include "Manager.h"
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -41,5 +42,15 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
 
     testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    int result = RUN_ALL_TESTS();
+
+    // Clean up Ogre before QApplication destruction to avoid
+    // SIGSEGV during static destructor teardown (Ogre::Root vs QApp race).
+    Manager::kill();
+
+#ifdef COVERAGE_BUILD
+    __gcov_dump();   // Flush all coverage data before exit
+    _exit(result);   // Skip static destructors that crash under Mesa/Xvfb
+#endif
+    return result;
 }

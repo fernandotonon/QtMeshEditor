@@ -6,6 +6,7 @@
 #include <QThread>
 #include "TransformOperator.h"
 #include "Manager.h"
+#include "SelectionSet.h"
 #include "GlobalDefinitions.h"
 #include "TestHelpers.h"
 
@@ -89,4 +90,100 @@ TEST_F(TransformOperatorTestFixture, RayFromScreenPoint) {
     Ogre::Ray ray = instance->rayFromScreenPoint(QPoint(0, 0));
     EXPECT_EQ(ray.getOrigin(), Ogre::Vector3::ZERO);
     EXPECT_EQ(ray.getDirection(), Ogre::Vector3::UNIT_Z);
+}
+
+// ---------- New tests ----------
+
+// Test onTransformStateChange with TS_SELECT: gizmos should be hidden, no crash
+TEST_F(TransformOperatorTestFixture, OnTransformStateChange_Select) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
+}
+
+// Test onTransformStateChange with TS_TRANSLATE: no crash without selection
+TEST_F(TransformOperatorTestFixture, OnTransformStateChange_Translate) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_TRANSLATE));
+}
+
+// Test onTransformStateChange with TS_ROTATE: no crash without selection
+TEST_F(TransformOperatorTestFixture, OnTransformStateChange_Rotate) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_ROTATE));
+}
+
+// Test onTransformStateChange with TS_NONE: default/reset state, no crash
+TEST_F(TransformOperatorTestFixture, OnTransformStateChange_None) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_NONE));
+}
+
+// Test removeSelected when nothing is selected: should not crash
+TEST_F(TransformOperatorTestFixture, RemoveSelectedEmpty) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_NO_THROW(instance->removeSelected());
+}
+
+// Test setSelectedPosition when nothing is selected: should not crash or modify anything
+TEST_F(TransformOperatorTestFixture, SetSelectedPositionNoSelection) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_NO_THROW(instance->setSelectedPosition(Ogre::Vector3(10.0f, 20.0f, 30.0f)));
+}
+
+// Test translateSelected when nothing is selected: should not crash
+TEST_F(TransformOperatorTestFixture, TranslateSelectedNoSelection) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_NO_THROW(instance->translateSelected(Ogre::Vector3(5.0f, 5.0f, 5.0f)));
+}
+
+// Test setSelectedScale when nothing is selected: should not crash
+TEST_F(TransformOperatorTestFixture, SetSelectedScaleNoSelection) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_NO_THROW(instance->setSelectedScale(Ogre::Vector3(2.0f, 2.0f, 2.0f)));
+}
+
+// Test setSelectedOrientation when nothing is selected: should not crash
+TEST_F(TransformOperatorTestFixture, SetSelectedOrientationNoSelection) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_NO_THROW(instance->setSelectedOrientation(Ogre::Vector3(45.0f, 90.0f, 0.0f)));
+}
+
+// Test scaleSelected when nothing is selected: should not crash
+TEST_F(TransformOperatorTestFixture, ScaleSelectedNoSelection) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_NO_THROW(instance->scaleSelected(Ogre::Vector3(1.5f, 1.5f, 1.5f)));
+}
+
+// Test rotateSelected(Quaternion) when nothing is selected: should not crash
+TEST_F(TransformOperatorTestFixture, RotateSelectedNoSelection) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    Ogre::Quaternion rotation(Ogre::Degree(45), Ogre::Vector3::UNIT_Y);
+    EXPECT_NO_THROW(instance->rotateSelected(rotation));
+}
+
+// Test rotateSelected(Vector3) when nothing is selected: should not crash
+TEST_F(TransformOperatorTestFixture, RotateSelectedVectorNoSelection) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_NO_THROW(instance->rotateSelected(Ogre::Vector3(15.0f, 30.0f, 45.0f)));
+}
+
+// Test setActiveWidget with nullptr: should not crash
+TEST_F(TransformOperatorTestFixture, SetActiveWidgetNull) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->setActiveWidget(nullptr));
+}
+
+// Test onSelectionChanged when nothing is selected: should reset grid position and hide gizmos
+TEST_F(TransformOperatorTestFixture, OnSelectionChangedEmpty) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_NO_THROW(instance->onSelectionChanged());
 }
