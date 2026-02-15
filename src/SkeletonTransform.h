@@ -39,7 +39,8 @@ public:
     static void scaleSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_scale);
     static void translateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_translate);
     static void rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate);
-    static void rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Quaternion &_quat);
+    static void rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Quaternion &_quat,
+                               const Ogre::Vector3 &_pivot);
     static bool renameAnimation(Ogre::Entity *_ent, const QString &_oldName, const QString &_newName);
 };
 

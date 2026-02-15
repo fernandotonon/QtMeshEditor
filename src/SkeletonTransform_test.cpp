@@ -801,7 +801,7 @@ TEST_F(SkeletonTransformProgrammaticTest, RotateQuaternionRotatesBonePositions)
 
     // Rotate 90 degrees around Y axis
     Ogre::Quaternion quat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
-    SkeletonTransform::rotateSkeleton(entity, quat);
+    SkeletonTransform::rotateSkeleton(entity, quat, meshCenter);
 
     size_t idx = 0;
     for (const auto& bone : sk->getBones()) {
@@ -850,10 +850,11 @@ TEST_F(SkeletonTransformProgrammaticTest, RotateQuaternionMatchesVector3)
     // Reset bones back to initial state by applying inverse rotation
     Ogre::Quaternion quat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
     Ogre::Quaternion invQuat = quat.Inverse();
-    SkeletonTransform::rotateSkeleton(entity, invQuat);
+    Ogre::Vector3 meshCenter = entity->getMesh()->getBounds().getCenter();
+    SkeletonTransform::rotateSkeleton(entity, invQuat, meshCenter);
 
     // Now apply Quaternion rotation from initial
-    SkeletonTransform::rotateSkeleton(entity, quat);
+    SkeletonTransform::rotateSkeleton(entity, quat, meshCenter);
 
     size_t idx = 0;
     for (const auto& bone : sk->getBones()) {
@@ -878,7 +879,8 @@ TEST_F(SkeletonTransformProgrammaticTest, RotateQuaternionIdentityPreservesBones
             initialPositions.push_back(bone->getPosition());
     }
 
-    SkeletonTransform::rotateSkeleton(entity, Ogre::Quaternion::IDENTITY);
+    SkeletonTransform::rotateSkeleton(entity, Ogre::Quaternion::IDENTITY,
+                                      entity->getMesh()->getBounds().getCenter());
 
     size_t idx = 0;
     for (const auto& bone : sk->getBones()) {
@@ -907,7 +909,7 @@ TEST_F(SkeletonTransformProgrammaticTest, RotateQuaternionArbitraryAxis)
 
     // Rotate 60 degrees around an arbitrary axis -- impossible with Vector3 overload
     Ogre::Quaternion quat(Ogre::Degree(60.0f), Ogre::Vector3(1, 1, 0).normalisedCopy());
-    SkeletonTransform::rotateSkeleton(entity, quat);
+    SkeletonTransform::rotateSkeleton(entity, quat, meshCenter);
 
     size_t idx = 0;
     for (const auto& bone : sk->getBones()) {
@@ -937,11 +939,149 @@ TEST_F(SkeletonTransformProgrammaticTest, RotatePreservesAnimationData)
 
     // Rotate the skeleton
     Ogre::Quaternion quat(Ogre::Degree(45.0f), Ogre::Vector3::UNIT_Z);
-    SkeletonTransform::rotateSkeleton(entity, quat);
+    SkeletonTransform::rotateSkeleton(entity, quat,
+                                      entity->getMesh()->getBounds().getCenter());
 
     // Animation metadata should be preserved
     ASSERT_TRUE(sk->hasAnimation(anim->getName()));
     auto* afterAnim = sk->getAnimation(anim->getName());
     EXPECT_FLOAT_EQ(afterAnim->getLength(), originalLength);
     EXPECT_EQ(afterAnim->getNumNodeTracks(), originalNumTracks);
+}
+
+// --- Tests for animation-safe skeleton transforms (no disableAnimationsAndRender) ---
+
+TEST_F(SkeletonTransformProgrammaticTest, RotatePreservesEnabledAnimationStates)
+{
+    // Verify that rotating the skeleton does not disable animation states
+    auto *animSet = entity->getAllAnimationStates();
+    ASSERT_NE(animSet, nullptr);
+
+    // Enable all animation states
+    for (const auto &[name, state] : animSet->getAnimationStates())
+        state->setEnabled(true);
+
+    Ogre::Vector3 meshCenter = entity->getMesh()->getBounds().getCenter();
+    Ogre::Quaternion quat(Ogre::Degree(45.0f), Ogre::Vector3::UNIT_Y);
+    SkeletonTransform::rotateSkeleton(entity, quat, meshCenter);
+
+    // All states should still be enabled
+    for (const auto &[name, state] : animSet->getAnimationStates())
+        EXPECT_TRUE(state->getEnabled()) << "Animation state '" << name << "' was disabled by rotation";
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, ScalePreservesEnabledAnimationStates)
+{
+    auto *animSet = entity->getAllAnimationStates();
+    ASSERT_NE(animSet, nullptr);
+
+    for (const auto &[name, state] : animSet->getAnimationStates())
+        state->setEnabled(true);
+
+    SkeletonTransform::scaleSkeleton(entity, Ogre::Vector3(2.0f, 2.0f, 2.0f));
+
+    for (const auto &[name, state] : animSet->getAnimationStates())
+        EXPECT_TRUE(state->getEnabled()) << "Animation state '" << name << "' was disabled by scaling";
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, TranslatePreservesEnabledAnimationStates)
+{
+    auto *animSet = entity->getAllAnimationStates();
+    ASSERT_NE(animSet, nullptr);
+
+    for (const auto &[name, state] : animSet->getAnimationStates())
+        state->setEnabled(true);
+
+    SkeletonTransform::translateSkeleton(entity, Ogre::Vector3(1.0f, 2.0f, 3.0f));
+
+    for (const auto &[name, state] : animSet->getAnimationStates())
+        EXPECT_TRUE(state->getEnabled()) << "Animation state '" << name << "' was disabled by translation";
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, ScaleLocalPositionsNoDoubleScaling)
+{
+    // Verify that scaling applies uniformly: child world position = old_world * scale
+    auto* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    // Record initial world positions of all bones
+    sk->reset(true);
+    std::map<std::string, Ogre::Vector3> initialDerived;
+    for (const auto& bone : sk->getBones())
+        initialDerived[bone->getName()] = bone->_getDerivedPosition();
+
+    Ogre::Vector3 scale(2.0f, 2.0f, 2.0f);
+    SkeletonTransform::scaleSkeleton(entity, scale);
+
+    // After scaling, reset to binding pose and verify world positions
+    sk->reset(true);
+    for (const auto& bone : sk->getBones()) {
+        Ogre::Vector3 expected = initialDerived[bone->getName()] * scale;
+        Ogre::Vector3 actual = bone->_getDerivedPosition();
+        EXPECT_NEAR(actual.x, expected.x, 0.01f) << "Bone '" << bone->getName() << "' x";
+        EXPECT_NEAR(actual.y, expected.y, 0.01f) << "Bone '" << bone->getName() << "' y";
+        EXPECT_NEAR(actual.z, expected.z, 0.01f) << "Bone '" << bone->getName() << "' z";
+    }
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, ScalePreservesAnimationData)
+{
+    auto* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    if (sk->getNumAnimations() == 0)
+        GTEST_SKIP() << "Skipping: no animations on skeleton";
+
+    auto* anim = sk->getAnimation(static_cast<unsigned short>(0));
+    Ogre::Real originalLength = anim->getLength();
+    unsigned short originalNumTracks = anim->getNumNodeTracks();
+
+    SkeletonTransform::scaleSkeleton(entity, Ogre::Vector3(3.0f, 3.0f, 3.0f));
+
+    ASSERT_TRUE(sk->hasAnimation(anim->getName()));
+    auto* afterAnim = sk->getAnimation(anim->getName());
+    EXPECT_FLOAT_EQ(afterAnim->getLength(), originalLength);
+    EXPECT_EQ(afterAnim->getNumNodeTracks(), originalNumTracks);
+}
+
+TEST_F(SkeletonTransformProgrammaticTest, RotateUsesSamePivotAsVertices)
+{
+    // Verify bones are rotated around the provided pivot, not a stale mesh center
+    auto* sk = entity->getSkeleton();
+    ASSERT_NE(sk, nullptr);
+
+    Ogre::Vector3 pivot = entity->getMesh()->getBounds().getCenter();
+
+    // Record root bone binding positions
+    sk->reset(true);
+    std::vector<Ogre::Vector3> initialPositions;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr)
+            initialPositions.push_back(bone->getPosition());
+    }
+
+    // Apply two small incremental rotations (simulates gizmo drag)
+    Ogre::Quaternion q1(Ogre::Degree(15.0f), Ogre::Vector3::UNIT_Y);
+    SkeletonTransform::rotateSkeleton(entity, q1, pivot);
+
+    // Capture the pivot that would be used for the second rotation
+    // (mesh bounds may have changed, but we pass the SAME pivot)
+    Ogre::Quaternion q2(Ogre::Degree(15.0f), Ogre::Vector3::UNIT_Y);
+    Ogre::Vector3 pivot2 = pivot; // same pivot, not re-read from mesh
+    SkeletonTransform::rotateSkeleton(entity, q2, pivot2);
+
+    // The combined rotation should equal q2 * q1 applied once from the original positions
+    Ogre::Quaternion combined = q2 * q1;
+    sk->reset(true);
+    size_t idx = 0;
+    for (const auto& bone : sk->getBones()) {
+        if (bone->getParent() == nullptr) {
+            Ogre::Vector3 expected = combined * (initialPositions[idx] - pivot) + pivot;
+            Ogre::Vector3 actual = bone->getPosition();
+            EXPECT_NEAR(actual.x, expected.x, 0.05f) << "Root bone " << idx << " x after incremental rotation";
+            EXPECT_NEAR(actual.y, expected.y, 0.05f) << "Root bone " << idx << " y after incremental rotation";
+            EXPECT_NEAR(actual.z, expected.z, 0.05f) << "Root bone " << idx << " z after incremental rotation";
+            idx++;
+        }
+    }
 }

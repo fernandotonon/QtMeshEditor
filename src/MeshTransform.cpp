@@ -155,5 +155,6 @@ void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Quaternion 
     });
 
     rotateNormals(mesh, _quat);
-    SkeletonTransform::rotateSkeleton(_ent, _quat);
+    // Pass the pre-rotation center so bones use the same pivot as vertices
+    SkeletonTransform::rotateSkeleton(_ent, _quat, center);
 }
