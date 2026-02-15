@@ -70,21 +70,17 @@ void SkeletonTransform::scaleSkeleton(const Ogre::Entity *_ent, const Ogre::Vect
     if(!_ent->hasSkeleton()) return;
 
     auto *sk = _ent->getSkeleton();
-    disableAnimationsAndRender(_ent);
+    sk->reset(true);
 
-    const auto &bones = sk->getBones();
-    for(const auto &bone : bones)
-    {
-        if(bone->getParent() == nullptr)
-            bone->setPosition(bone->getPosition() * _scale);
-    }
-    for(const auto &bone : bones)
-    {
-        if(bone->getParent() != nullptr)
-            bone->_setDerivedPosition(bone->_getDerivedPosition() * _scale);
-    }
+    // Scale every bone's local position so the hierarchy propagates correctly
+    for(const auto &bone : sk->getBones())
+        bone->setPosition(bone->getPosition() * _scale);
 
     sk->setBindingPose();
+
+    // Mark animation state dirty so Ogre refreshes its skinning buffers
+    if(auto *animSet = _ent->getAllAnimationStates())
+        animSet->_notifyDirty();
 }
 
 void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_translate)
@@ -92,7 +88,7 @@ void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::
     if(!_ent->hasSkeleton()) return;
 
     auto *sk = _ent->getSkeleton();
-    disableAnimationsAndRender(_ent);
+    sk->reset(true);
 
     const auto &bones = sk->getBones();
     for(const auto &bone : bones)
@@ -103,35 +99,40 @@ void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::
         bone->translate(_translate);
     }
     sk->setBindingPose();
+
+    if(auto *animSet = _ent->getAllAnimationStates())
+        animSet->_notifyDirty();
 }
 
 void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate)
 {
-    rotateSkeleton(_ent, buildRotationQuat(_rotate));
+    auto pivot = _ent->getMesh()->getBounds().getCenter();
+    rotateSkeleton(_ent, buildRotationQuat(_rotate), pivot);
 }
 
-void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Quaternion &_quat)
+void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Quaternion &_quat,
+                                       const Ogre::Vector3 &_pivot)
 {
     if(!_ent->hasSkeleton()) return;
     if(_quat == Ogre::Quaternion::IDENTITY) return;
 
     auto *sk = _ent->getSkeleton();
-    disableAnimationsAndRender(_ent);
-
-    // Use the same pivot as MeshTransform::rotateMesh (mesh bounding box center)
-    auto meshCenter = _ent->getMesh()->getBounds().getCenter();
+    sk->reset(true);
 
     const auto &bones = sk->getBones();
     for(const auto &bone : bones)
     {
         if(bone->getParent() != nullptr) continue;
 
-        // Rotate position around mesh center (matches vertex rotation pivot)
-        bone->setPosition(_quat * (bone->getPosition() - meshCenter) + meshCenter);
+        // Rotate position around the same pivot used for mesh vertices
+        bone->setPosition(_quat * (bone->getPosition() - _pivot) + _pivot);
         // Rotate orientation
         bone->rotate(_quat, Ogre::Node::TS_WORLD);
     }
     sk->setBindingPose();
+
+    if(auto *animSet = _ent->getAllAnimationStates())
+        animSet->_notifyDirty();
 }
 
 bool SkeletonTransform::renameAnimation(Ogre::Entity *_ent, const QString &_oldName, const QString &_newName)
