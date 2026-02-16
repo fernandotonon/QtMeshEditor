@@ -504,6 +504,9 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
             pass->setSelfIllumination(e[0].toDouble(), e[1].toDouble(), e[2].toDouble());
         }
 
+        try { mat->load(); } catch (...) { /* headless — no GPU context */ }
+
+
         // Serialize the created material for display
         Ogre::MaterialSerializer serializer;
         serializer.queueForExport(mat);
