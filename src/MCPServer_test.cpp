@@ -413,7 +413,9 @@ TEST_F(MCPServerTest, HandleToolsList)
         "create_material", "modify_material", "get_material", "list_materials",
         "apply_material", "load_mesh", "get_mesh_info", "transform_mesh",
         "list_textures", "set_texture", "export_mesh", "get_scene_info",
-        "take_screenshot", "create_primitive", "animate"
+        "take_screenshot", "create_primitive", "animate",
+        "list_skeletal_animations", "get_animation_info", "set_animation_length",
+        "set_animation_time", "add_keyframe", "remove_keyframe"
     };
 
     for (const QString &tool : knownTools) {
@@ -1130,4 +1132,364 @@ TEST_F(MCPServerTest, SetMainWindowNullptr)
     QJsonObject result = server->callTool("take_screenshot", args);
     EXPECT_TRUE(isError(result));
     EXPECT_TRUE(getResultText(result).contains("MainWindow not available"));
+}
+
+// ==========================================================================
+// NEW TESTS: list_skeletal_animations
+// ==========================================================================
+
+TEST_F(MCPServerTest, ListSkeletalAnimationsEmptyScene)
+{
+    QJsonObject result = server->callTool("list_skeletal_animations", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No skeletal animations found"));
+}
+
+TEST_F(MCPServerTest, ListSkeletalAnimationsNoSkeletonEntities)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    // Primitives have no skeleton
+    QJsonObject primArgs;
+    primArgs["type"] = "sphere";
+    primArgs["name"] = "SkeletalListSphere";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject result = server->callTool("list_skeletal_animations", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No skeletal animations found"));
+}
+
+// ==========================================================================
+// NEW TESTS: get_animation_info
+// ==========================================================================
+
+TEST_F(MCPServerTest, GetAnimationInfoMissingParams)
+{
+    // Both missing
+    QJsonObject result = server->callTool("get_animation_info", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, GetAnimationInfoEmptyParams)
+{
+    QJsonObject args;
+    args["entity"] = "";
+    args["animation"] = "";
+    QJsonObject result = server->callTool("get_animation_info", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, GetAnimationInfoMissingAnimation)
+{
+    QJsonObject args;
+    args["entity"] = "SomeEntity";
+    QJsonObject result = server->callTool("get_animation_info", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, GetAnimationInfoEntityNotFound)
+{
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    args["animation"] = "Walk";
+    QJsonObject result = server->callTool("get_animation_info", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, GetAnimationInfoNoSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "AnimInfoCube";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "AnimInfoCube";
+    args["animation"] = "Walk";
+    QJsonObject result = server->callTool("get_animation_info", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("no skeleton"));
+}
+
+// ==========================================================================
+// NEW TESTS: set_animation_length
+// ==========================================================================
+
+TEST_F(MCPServerTest, SetAnimationLengthMissingParams)
+{
+    QJsonObject result = server->callTool("set_animation_length", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, SetAnimationLengthEmptyParams)
+{
+    QJsonObject args;
+    args["entity"] = "";
+    args["animation"] = "";
+    args["length"] = 1.0;
+    QJsonObject result = server->callTool("set_animation_length", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, SetAnimationLengthInvalidLength)
+{
+    QJsonObject args;
+    args["entity"] = "SomeEntity";
+    args["animation"] = "Walk";
+    args["length"] = -1.0;
+    QJsonObject result = server->callTool("set_animation_length", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("positive"));
+}
+
+TEST_F(MCPServerTest, SetAnimationLengthZeroLength)
+{
+    QJsonObject args;
+    args["entity"] = "SomeEntity";
+    args["animation"] = "Walk";
+    args["length"] = 0.0;
+    QJsonObject result = server->callTool("set_animation_length", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("positive"));
+}
+
+TEST_F(MCPServerTest, SetAnimationLengthEntityNotFound)
+{
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    args["animation"] = "Walk";
+    args["length"] = 2.0;
+    QJsonObject result = server->callTool("set_animation_length", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, SetAnimationLengthNoSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject primArgs;
+    primArgs["type"] = "sphere";
+    primArgs["name"] = "AnimLenSphere";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "AnimLenSphere";
+    args["animation"] = "Walk";
+    args["length"] = 2.0;
+    QJsonObject result = server->callTool("set_animation_length", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("no skeleton"));
+}
+
+// ==========================================================================
+// NEW TESTS: set_animation_time
+// ==========================================================================
+
+TEST_F(MCPServerTest, SetAnimationTimeMissingParams)
+{
+    QJsonObject result = server->callTool("set_animation_time", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, SetAnimationTimeEmptyParams)
+{
+    QJsonObject args;
+    args["entity"] = "";
+    args["animation"] = "";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, SetAnimationTimeEntityNotFound)
+{
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    args["animation"] = "Walk";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, SetAnimationTimeMissingTimeAndNavigate)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    // Create a primitive — it won't have the animation, but we test the param validation path
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "AnimTimeCube";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "AnimTimeCube";
+    args["animation"] = "Walk";
+    // Neither "time" nor "navigate" provided
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_TRUE(isError(result));
+    // Should fail because animation not found on non-skeletal entity
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, SetAnimationTimeNavigateInvalidValue)
+{
+    // Use a non-existent entity to test the entity-not-found path
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    args["animation"] = "Walk";
+    args["navigate"] = "invalid_direction";
+    args["track"] = "SomeBone";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, SetAnimationTimeNavigateMissingTrack)
+{
+    // Navigate requires a track param — but entity not found comes first
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    args["animation"] = "Walk";
+    args["navigate"] = "next";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+// ==========================================================================
+// NEW TESTS: add_keyframe
+// ==========================================================================
+
+TEST_F(MCPServerTest, AddKeyframeMissingParams)
+{
+    QJsonObject result = server->callTool("add_keyframe", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, AddKeyframeEmptyParams)
+{
+    QJsonObject args;
+    args["entity"] = "";
+    args["animation"] = "";
+    args["track"] = "";
+    args["time"] = 0.0;
+    QJsonObject result = server->callTool("add_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, AddKeyframeNegativeTime)
+{
+    QJsonObject args;
+    args["entity"] = "SomeEntity";
+    args["animation"] = "Walk";
+    args["track"] = "Bone1";
+    args["time"] = -1.0;
+    QJsonObject result = server->callTool("add_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("non-negative"));
+}
+
+TEST_F(MCPServerTest, AddKeyframeEntityNotFound)
+{
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    args["animation"] = "Walk";
+    args["track"] = "Bone1";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("add_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, AddKeyframeNoSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "AddKfCube";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "AddKfCube";
+    args["animation"] = "Walk";
+    args["track"] = "Bone1";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("add_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("no skeleton"));
+}
+
+// ==========================================================================
+// NEW TESTS: remove_keyframe
+// ==========================================================================
+
+TEST_F(MCPServerTest, RemoveKeyframeMissingParams)
+{
+    QJsonObject result = server->callTool("remove_keyframe", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, RemoveKeyframeEmptyParams)
+{
+    QJsonObject args;
+    args["entity"] = "";
+    args["animation"] = "";
+    args["track"] = "";
+    args["time"] = 0.0;
+    QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, RemoveKeyframeNegativeTime)
+{
+    QJsonObject args;
+    args["entity"] = "SomeEntity";
+    args["animation"] = "Walk";
+    args["track"] = "Bone1";
+    args["time"] = -1.0;
+    QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("non-negative"));
+}
+
+TEST_F(MCPServerTest, RemoveKeyframeEntityNotFound)
+{
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    args["animation"] = "Walk";
+    args["track"] = "Bone1";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, RemoveKeyframeNoSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject primArgs;
+    primArgs["type"] = "sphere";
+    primArgs["name"] = "RemoveKfSphere";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "RemoveKfSphere";
+    args["animation"] = "Walk";
+    args["track"] = "Bone1";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("no skeleton"));
 }
