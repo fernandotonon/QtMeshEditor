@@ -311,21 +311,38 @@ bool MCPServer::ensureOgreInitialized()
     return false;
 }
 
+QJsonObject MCPServer::makeErrorResult(const QString &message)
+{
+    QJsonObject textContent;
+    textContent["type"] = "text";
+    textContent["text"] = message;
+    QJsonArray content;
+    content.append(textContent);
+    QJsonObject result;
+    result["isError"] = true;
+    result["content"] = content;
+    return result;
+}
+
+QJsonObject MCPServer::makeSuccessResult(const QString &message)
+{
+    QJsonObject textContent;
+    textContent["type"] = "text";
+    textContent["text"] = message;
+    QJsonArray content;
+    content.append(textContent);
+    QJsonObject result;
+    result["content"] = content;
+    return result;
+}
+
 QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 {
     qDebug() << "MCP Tool Call:" << name << args;
 
     // Lazily initialize Ogre/Manager on first tool call
     if (!ensureOgreInitialized()) {
-        QJsonArray content;
-        QJsonObject textContent;
-        textContent["type"] = "text";
-        textContent["text"] = "Error: Ogre 3D engine could not be initialized (no OpenGL available)";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Ogre 3D engine could not be initialized (no OpenGL available)");
     }
 
     QJsonObject toolResult;
@@ -362,15 +379,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     } else if (name == "animate") {
         toolResult = toolAnimate(args);
     } else {
-        QJsonObject result;
-        result["isError"] = true;
-        QJsonArray content;
-        QJsonObject textContent;
-        textContent["type"] = "text";
-        textContent["text"] = QString("Unknown tool: %1").arg(name);
-        content.append(textContent);
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Unknown tool: %1").arg(name));
     }
 
     return toolResult;
@@ -449,29 +458,15 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
 {
     QString name = args["name"].toString();
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (name.isEmpty()) {
-        textContent["text"] = "Error: Material name is required";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Material name is required");
     }
 
     try {
         // Check if material already exists
         Ogre::MaterialPtr existing = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (existing) {
-            textContent["text"] = QString("Error: Material '%1' already exists").arg(name);
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult(QString("Error: Material '%1' already exists").arg(name));
         }
 
         // Create the material programmatically
@@ -516,20 +511,10 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
         serializer.queueForExport(mat);
         QString materialScript = QString::fromStdString(serializer.getQueuedAsString());
 
-        textContent["text"] = QString("Created material '%1':\n%2").arg(name).arg(materialScript);
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(QString("Created material '%1':\n%2").arg(name).arg(materialScript));
 
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error creating material: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error creating material: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -537,49 +522,25 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
 {
     QString name = args["name"].toString();
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (name.isEmpty()) {
-        textContent["text"] = "Error: Material name is required";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Material name is required");
     }
 
     // Try to get the material from Ogre
     try {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (!material) {
-            textContent["text"] = QString("Error: Material '%1' not found").arg(name);
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult(QString("Error: Material '%1' not found").arg(name));
         }
 
         // Get the first technique and pass
         if (material->getNumTechniques() == 0) {
-            textContent["text"] = QString("Error: Material '%1' has no techniques").arg(name);
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult(QString("Error: Material '%1' has no techniques").arg(name));
         }
 
         Ogre::Technique* technique = material->getTechnique(0);
         if (technique->getNumPasses() == 0) {
-            textContent["text"] = QString("Error: Material '%1' technique has no passes").arg(name);
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult(QString("Error: Material '%1' technique has no passes").arg(name));
         }
 
         Ogre::Pass* pass = technique->getPass(0);
@@ -618,20 +579,10 @@ QJsonObject MCPServer::toolModifyMaterial(const QJsonObject &args)
                 .arg(e[0].toDouble()).arg(e[1].toDouble()).arg(e[2].toDouble());
         }
 
-        textContent["text"] = QString("Modified material '%1':\n%2").arg(name).arg(modifications.join("\n"));
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(QString("Modified material '%1':\n%2").arg(name).arg(modifications.join("\n")));
 
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -639,28 +590,14 @@ QJsonObject MCPServer::toolGetMaterial(const QJsonObject &args)
 {
     QString name = args["name"].toString();
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (name.isEmpty()) {
-        textContent["text"] = "Error: Material name is required";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Material name is required");
     }
 
     try {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(name.toStdString());
         if (!material) {
-            textContent["text"] = QString("Error: Material '%1' not found").arg(name);
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult(QString("Error: Material '%1' not found").arg(name));
         }
 
         // Serialize the material to script text
@@ -668,30 +605,16 @@ QJsonObject MCPServer::toolGetMaterial(const QJsonObject &args)
         serializer.queueForExport(material);
         QString script = QString::fromStdString(serializer.getQueuedAsString());
 
-        textContent["text"] = QString("Material '%1' script:\n%2").arg(name).arg(script);
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(QString("Material '%1' script:\n%2").arg(name).arg(script));
 
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
 
     try {
         QStringList materials;
@@ -703,19 +626,9 @@ QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
         }
 
         materials.sort();
-        textContent["text"] = QString("Available materials (%1):\n%2").arg(materials.size()).arg(materials.join("\n"));
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(QString("Available materials (%1):\n%2").arg(materials.size()).arg(materials.join("\n")));
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -724,39 +637,20 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
     QString materialName = args["material"].toString();
     QString meshName = args["mesh"].toString();
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (materialName.isEmpty()) {
-        textContent["text"] = "Error: Material name is required";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Material name is required");
     }
 
     try {
         // Verify material exists
         Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString());
         if (!mat) {
-            textContent["text"] = QString("Error: Material '%1' not found").arg(materialName);
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult(QString("Error: Material '%1' not found").arg(materialName));
         }
 
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
-            textContent["text"] = "Error: Manager not available";
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult("Error: Manager not available");
         }
 
         QStringList appliedTo;
@@ -774,23 +668,13 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
                 }
             }
             if (!found) {
-                textContent["text"] = QString("Error: Entity '%1' not found").arg(meshName);
-                content.append(textContent);
-                QJsonObject result;
-                result["isError"] = true;
-                result["content"] = content;
-                return result;
+                return makeErrorResult(QString("Error: Entity '%1' not found").arg(meshName));
             }
         } else {
             // Apply to selected entities
             SelectionSet* sel = SelectionSet::getSingleton();
             if (!sel || sel->getEntitiesCount() == 0) {
-                textContent["text"] = "Error: No entity specified and no entities selected";
-                content.append(textContent);
-                QJsonObject result;
-                result["isError"] = true;
-                result["content"] = content;
-                return result;
+                return makeErrorResult("Error: No entity specified and no entities selected");
             }
             for (int i = 0; i < sel->getEntitiesCount(); ++i) {
                 Ogre::Entity* entity = sel->getEntity(i);
@@ -801,20 +685,10 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
             }
         }
 
-        textContent["text"] = QString("Applied material '%1' to: %2").arg(materialName).arg(appliedTo.join(", "));
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(QString("Applied material '%1' to: %2").arg(materialName).arg(appliedTo.join(", ")));
 
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -822,53 +696,24 @@ QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
 {
     QString path = args["path"].toString();
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (path.isEmpty()) {
-        textContent["text"] = "Error: File path is required";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: File path is required");
     }
 
     if (!m_mainWindow) {
-        textContent["text"] = "Error: MainWindow not available. Run with --with-mcp flag for full functionality.";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag for full functionality.");
     }
 
     if (!QFile::exists(path)) {
-        textContent["text"] = QString("Error: File not found: %1").arg(path);
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Error: File not found: %1").arg(path));
     }
 
     try {
         m_mainWindow->importMeshs(QStringList{path});
-        textContent["text"] = QString("Loaded mesh from: %1").arg(path);
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
 
     } catch (std::exception& e) {
-        textContent["text"] = QString("Error loading mesh: %1").arg(e.what());
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Error loading mesh: %1").arg(e.what()));
     }
 }
 
@@ -876,19 +721,10 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
-            textContent["text"] = "Error: Manager not available";
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult("Error: Manager not available");
         }
 
         // Check if there's a selection first, otherwise report all entities
@@ -904,11 +740,7 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
         }
 
         if (entitiesToReport.isEmpty()) {
-            textContent["text"] = "No entities in scene";
-            content.append(textContent);
-            QJsonObject result;
-            result["content"] = content;
-            return result;
+            return makeSuccessResult("No entities in scene");
         }
 
         QStringList infoLines;
@@ -966,22 +798,12 @@ QJsonObject MCPServer::toolGetMeshInfo(const QJsonObject &args)
              .arg(scale.x).arg(scale.y).arg(scale.z);
         }
 
-        textContent["text"] = QString("Mesh Information (%1 entities):\n\n%2")
+        return makeSuccessResult(QString("Mesh Information (%1 entities):\n\n%2")
             .arg(entitiesToReport.size())
-            .arg(infoLines.join("\n\n"));
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+            .arg(infoLines.join("\n\n")));
 
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -1000,19 +822,10 @@ static Ogre::Vector3 parseVector3(const QJsonValue &val) {
 
 QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
 {
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
-            textContent["text"] = "Error: Manager not available";
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult("Error: Manager not available");
         }
 
         // If a name is provided, find and select that node first
@@ -1027,23 +840,13 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
                 }
             }
             if (!targetNode) {
-                textContent["text"] = QString("Error: Node '%1' not found").arg(name);
-                content.append(textContent);
-                QJsonObject result;
-                result["isError"] = true;
-                result["content"] = content;
-                return result;
+                return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
             }
         } else {
             // No name given - require something selected
             SelectionSet* sel = SelectionSet::getSingleton();
             if (!sel || sel->getNodesCount() == 0) {
-                textContent["text"] = "Error: No name provided and no scene nodes selected.";
-                content.append(textContent);
-                QJsonObject result;
-                result["isError"] = true;
-                result["content"] = content;
-                return result;
+                return makeErrorResult("Error: No name provided and no scene nodes selected.");
             }
             targetNode = sel->getNodesSelectionList().first();
         }
@@ -1069,32 +872,18 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
             transforms << QString("scale: %1, %2, %3").arg(scale.x).arg(scale.y).arg(scale.z);
         }
 
-        textContent["text"] = QString("Applied transforms to '%1':\n%2")
+        return makeSuccessResult(QString("Applied transforms to '%1':\n%2")
             .arg(QString::fromStdString(targetNode->getName()))
-            .arg(transforms.join("\n"));
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+            .arg(transforms.join("\n")));
 
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
 QJsonObject MCPServer::toolListTextures(const QJsonObject &args)
 {
     Q_UNUSED(args);
-
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
 
     try {
         QStringList textures;
@@ -1106,22 +895,12 @@ QJsonObject MCPServer::toolListTextures(const QJsonObject &args)
         }
 
         textures.sort();
-        textContent["text"] = QString("Available textures (%1):\n%2")
+        return makeSuccessResult(QString("Available textures (%1):\n%2")
             .arg(textures.size())
-            .arg(textures.isEmpty() ? "(none)" : textures.join("\n"));
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+            .arg(textures.isEmpty() ? "(none)" : textures.join("\n")));
 
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -1131,38 +910,19 @@ QJsonObject MCPServer::toolSetTexture(const QJsonObject &args)
     QString texturePath = args["texture"].toString();
     int textureUnit = args["unit"].toInt(0);
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (materialName.isEmpty() || texturePath.isEmpty()) {
-        textContent["text"] = "Error: Both material and texture names are required";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Both material and texture names are required");
     }
 
     try {
         Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().getByName(materialName.toStdString());
         if (!material) {
-            textContent["text"] = QString("Error: Material '%1' not found").arg(materialName);
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult(QString("Error: Material '%1' not found").arg(materialName));
         }
 
         if (material->getNumTechniques() == 0 ||
             material->getTechnique(0)->getNumPasses() == 0) {
-            textContent["text"] = QString("Error: Material '%1' has no technique/pass").arg(materialName);
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult(QString("Error: Material '%1' has no technique/pass").arg(materialName));
         }
 
         Ogre::Pass* pass = material->getTechnique(0)->getPass(0);
@@ -1173,21 +933,11 @@ QJsonObject MCPServer::toolSetTexture(const QJsonObject &args)
             pass->createTextureUnitState(texturePath.toStdString());
         }
 
-        textContent["text"] = QString("Set texture '%1' on material '%2' (unit %3)")
-            .arg(texturePath).arg(materialName).arg(textureUnit);
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(QString("Set texture '%1' on material '%2' (unit %3)")
+            .arg(texturePath).arg(materialName).arg(textureUnit));
 
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -1196,59 +946,30 @@ QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
     QString path = args["path"].toString();
     QString format = args["format"].toString("mesh");
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (path.isEmpty()) {
-        textContent["text"] = "Error: Export path is required";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Export path is required");
     }
 
     try {
         SelectionSet* sel = SelectionSet::getSingleton();
         if (!sel || sel->getNodesCount() == 0) {
-            textContent["text"] = "Error: No scene nodes selected. Select an object to export.";
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult("Error: No scene nodes selected. Select an object to export.");
         }
 
         Ogre::SceneNode* node = sel->getSceneNode(0);
         if (!node) {
-            textContent["text"] = "Error: Selected scene node is null";
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult("Error: Selected scene node is null");
         }
 
         int exportResult = MeshImporterExporter::exporter(node, path, format);
         if (exportResult == 0) {
-            textContent["text"] = QString("Exported mesh to: %1 (format: %2)").arg(path).arg(format);
+            return makeSuccessResult(QString("Exported mesh to: %1 (format: %2)").arg(path).arg(format));
         } else {
-            textContent["text"] = QString("Export completed to: %1 (format: %2), result code: %3").arg(path).arg(format).arg(exportResult);
+            return makeSuccessResult(QString("Export completed to: %1 (format: %2), result code: %3").arg(path).arg(format).arg(exportResult));
         }
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
 
     } catch (std::exception& e) {
-        textContent["text"] = QString("Error exporting mesh: %1").arg(e.what());
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Error exporting mesh: %1").arg(e.what()));
     }
 }
 
@@ -1256,19 +977,10 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
-            textContent["text"] = "Error: Manager not available";
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult("Error: Manager not available");
         }
 
         // Copy lists to avoid reference invalidation
@@ -1324,19 +1036,9 @@ QJsonObject MCPServer::toolGetSceneInfo(const QJsonObject &args)
          .arg(nodeNames.isEmpty() ? "  (none)" : "  " + nodeNames.join("\n  "))
          .arg(entityInfo.isEmpty() ? "  (none)" : entityInfo.join("\n"));
 
-        textContent["text"] = sceneInfo;
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(sceneInfo);
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 
@@ -1344,77 +1046,59 @@ QJsonObject MCPServer::toolTakeScreenshot(const QJsonObject &args)
 {
     QString path = args["path"].toString();
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (path.isEmpty()) {
         // Generate temp path
         path = QDir::temp().filePath("qtmesheditor_screenshot.png");
     }
 
     if (!m_mainWindow) {
-        textContent["text"] = "Error: MainWindow not available. Run with --with-mcp flag for full functionality.";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag for full functionality.");
     }
 
     OgreWidget* ogreWidget = m_mainWindow->findChild<OgreWidget*>();
     if (!ogreWidget) {
-        textContent["text"] = "Error: OgreWidget not found";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: OgreWidget not found");
     }
 
     QPixmap pixmap = ogreWidget->grab();
     if (pixmap.isNull()) {
-        textContent["text"] = "Error: Failed to capture screenshot";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Failed to capture screenshot");
     }
 
     if (!pixmap.save(path)) {
-        textContent["text"] = QString("Error: Failed to save screenshot to: %1").arg(path);
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Error: Failed to save screenshot to: %1").arg(path));
     }
 
-    textContent["text"] = QString("Screenshot saved to: %1 (%2x%3)")
-        .arg(path).arg(pixmap.width()).arg(pixmap.height());
-    content.append(textContent);
-
-    QJsonObject result;
-    result["content"] = content;
-    return result;
+    return makeSuccessResult(QString("Screenshot saved to: %1 (%2x%3)")
+        .arg(path).arg(pixmap.width()).arg(pixmap.height()));
 }
 
 QJsonObject MCPServer::toolCreatePrimitive(const QJsonObject &args)
 {
     QString type = args["type"].toString().toLower();
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (type.isEmpty()) {
-        textContent["text"] = "Error: Primitive type is required (sphere, cube, plane, cylinder, cone, torus)";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Primitive type is required (sphere, cube, plane, cylinder, cone, torus, tube, capsule, icosphere, roundedbox, spring)");
+    }
+
+    // Map type strings to PrimitiveType enum values
+    static const QMap<QString, PrimitiveObject::PrimitiveType> typeMap = {
+        {"cube",      PrimitiveObject::AP_CUBE},
+        {"box",       PrimitiveObject::AP_CUBE},
+        {"sphere",    PrimitiveObject::AP_SPHERE},
+        {"plane",     PrimitiveObject::AP_PLANE},
+        {"cylinder",  PrimitiveObject::AP_CYLINDER},
+        {"cone",      PrimitiveObject::AP_CONE},
+        {"torus",     PrimitiveObject::AP_TORUS},
+        {"tube",      PrimitiveObject::AP_TUBE},
+        {"capsule",   PrimitiveObject::AP_CAPSULE},
+        {"icosphere", PrimitiveObject::AP_ICOSPHERE},
+        {"roundedbox",PrimitiveObject::AP_ROUNDEDBOX},
+        {"spring",    PrimitiveObject::AP_SPRING},
+    };
+
+    if (!typeMap.contains(type)) {
+        return makeErrorResult(QString("Unknown primitive type: %1. Valid types: sphere, cube, plane, cylinder, cone, torus, tube, capsule, icosphere, roundedbox, spring").arg(type));
     }
 
     // Generate a name if not provided
@@ -1424,82 +1108,21 @@ QJsonObject MCPServer::toolCreatePrimitive(const QJsonObject &args)
         name = type + "_" + QString::number(QDateTime::currentMSecsSinceEpoch());
     }
 
-    Ogre::SceneNode* node = nullptr;
-    QString resultMessage;
-
-    // Use PrimitiveObject static methods directly to bypass the name dialog
-    if (type == "sphere") {
-        node = PrimitiveObject::createSphere(name);
-        resultMessage = QString("Created sphere primitive '%1'").arg(name);
-    } else if (type == "cube" || type == "box") {
-        node = PrimitiveObject::createCube(name);
-        resultMessage = QString("Created cube primitive '%1'").arg(name);
-    } else if (type == "plane") {
-        node = PrimitiveObject::createPlane(name);
-        resultMessage = QString("Created plane primitive '%1'").arg(name);
-    } else if (type == "cylinder") {
-        node = PrimitiveObject::createCylinder(name);
-        resultMessage = QString("Created cylinder primitive '%1'").arg(name);
-    } else if (type == "cone") {
-        node = PrimitiveObject::createCone(name);
-        resultMessage = QString("Created cone primitive '%1'").arg(name);
-    } else if (type == "torus") {
-        node = PrimitiveObject::createTorus(name);
-        resultMessage = QString("Created torus primitive '%1'").arg(name);
-    } else if (type == "tube") {
-        node = PrimitiveObject::createTube(name);
-        resultMessage = QString("Created tube primitive '%1'").arg(name);
-    } else if (type == "capsule") {
-        node = PrimitiveObject::createCapsule(name);
-        resultMessage = QString("Created capsule primitive '%1'").arg(name);
-    } else if (type == "icosphere") {
-        node = PrimitiveObject::createIcoSphere(name);
-        resultMessage = QString("Created icosphere primitive '%1'").arg(name);
-    } else if (type == "spring") {
-        node = PrimitiveObject::createSpring(name);
-        resultMessage = QString("Created spring primitive '%1'").arg(name);
-    } else {
-        textContent["text"] = QString("Unknown primitive type: %1. Valid types: sphere, cube, plane, cylinder, cone, torus, tube, capsule, icosphere, spring").arg(type);
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
-    }
+    Ogre::SceneNode* node = PrimitiveObject::createPrimitive(typeMap[type], name);
 
     if (!node) {
-        textContent["text"] = QString("Failed to create %1 primitive").arg(type);
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Failed to create %1 primitive").arg(type));
     }
 
-    textContent["text"] = resultMessage;
-    content.append(textContent);
-
-    QJsonObject result;
-    result["content"] = content;
-    return result;
+    return makeSuccessResult(QString("Created %1 primitive '%2'").arg(type).arg(name));
 }
-
 QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
 {
     QString name = args["name"].toString();
     bool stop = args["stop"].toBool(false);
 
-    QJsonArray content;
-    QJsonObject textContent;
-    textContent["type"] = "text";
-
     if (name.isEmpty()) {
-        textContent["text"] = "Error: Node name is required";
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult("Error: Node name is required");
     }
 
     if (stop) {
@@ -1507,22 +1130,13 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
         if (m_animations.isEmpty() && m_animationTimer) {
             m_animationTimer->stop();
         }
-        textContent["text"] = QString("Stopped animation on '%1'").arg(name);
-        content.append(textContent);
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(QString("Stopped animation on '%1'").arg(name));
     }
 
     try {
         Manager* mgr = Manager::getSingletonPtr();
         if (!mgr) {
-            textContent["text"] = "Error: Manager not available";
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult("Error: Manager not available");
         }
 
         Ogre::SceneNode* targetNode = nullptr;
@@ -1535,12 +1149,7 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
         }
 
         if (!targetNode) {
-            textContent["text"] = QString("Error: Node '%1' not found").arg(name);
-            content.append(textContent);
-            QJsonObject result;
-            result["isError"] = true;
-            result["content"] = content;
-            return result;
+            return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
         }
 
         float yaw = static_cast<float>(args["yaw"].toDouble(0));
@@ -1567,21 +1176,11 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
             m_animationTimer->start(16); // ~60fps
         }
 
-        textContent["text"] = QString("Started animation on '%1' (yaw: %2, pitch: %3, roll: %4 deg/sec)")
-            .arg(name).arg(yaw).arg(pitch).arg(roll);
-        content.append(textContent);
-
-        QJsonObject result;
-        result["content"] = content;
-        return result;
+        return makeSuccessResult(QString("Started animation on '%1' (yaw: %2, pitch: %3, roll: %4 deg/sec)")
+            .arg(name).arg(yaw).arg(pitch).arg(roll));
 
     } catch (Ogre::Exception& e) {
-        textContent["text"] = QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription()));
-        content.append(textContent);
-        QJsonObject result;
-        result["isError"] = true;
-        result["content"] = content;
-        return result;
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
     }
 }
 

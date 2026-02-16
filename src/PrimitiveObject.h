@@ -70,6 +70,8 @@ public:
 
     Ogre::SceneNode* createPrimitive();
 
+    static Ogre::SceneNode* createPrimitive(PrimitiveType type, const QString& name);
+
     static bool isPrimitive(const Ogre::SceneNode* node);
     static PrimitiveObject* getPrimitiveFromSceneNode(const Ogre::SceneNode* node);
 
