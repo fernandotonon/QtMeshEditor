@@ -57,21 +57,12 @@ protected:
 
     void TearDown() override {
         mTranslationGizmo.reset();
-
-        if (mLinkNode && mSceneMgr)
-        {
-            mLinkNode->detachAllObjects();
-            mSceneMgr->destroySceneNode(mLinkNode);
-            mLinkNode = nullptr;
-        }
-
-        Manager::kill();
+        mLinkNode = nullptr;
 
         if (app)
         {
             app->processEvents();
         }
-        QThread::msleep(50);
     }
 };
 

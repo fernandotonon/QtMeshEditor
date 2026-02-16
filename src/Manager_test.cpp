@@ -48,8 +48,6 @@ protected:
     }
 
     void TearDown() override {
-        Manager::kill();
-
         if (app)
         {
             app->processEvents();

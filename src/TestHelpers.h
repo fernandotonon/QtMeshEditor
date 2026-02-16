@@ -29,11 +29,15 @@ static inline void ensureMaterialManagerInitialised()
 }
 
 /**
- * Creates the BaseWhiteNoLighting and BaseWhite materials that many parts
- * of QtMeshEditor expect to exist.
+ * Creates the BaseWhiteNoLighting, BaseWhite, and GUI_Material materials
+ * that many parts of QtMeshEditor expect to exist.
  *
  * Automatically calls ensureMaterialManagerInitialised() first so that
  * newly created materials receive the default technique/pass.
+ *
+ * In normal app startup, GUI_Material is created by Manager::loadResources()
+ * which is called from MainWindow.  Tests never create a MainWindow, so
+ * we create it here.
  */
 static inline void createStandardOgreMaterials()
 {
@@ -59,6 +63,18 @@ static inline void createStandardOgreMaterials()
             "BaseWhite", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
         baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
         baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
+    }
+
+    // GUI_Material — used by ViewportGrid, gizmos, and SelectionBoxObject
+    Ogre::MaterialPtr guiMat = Ogre::MaterialManager::getSingleton().getByName(
+        "GUI_Material", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!guiMat)
+    {
+        guiMat = Ogre::MaterialManager::getSingleton().create(
+            "GUI_Material", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        guiMat->getTechnique(0)->setLightingEnabled(false);
+        guiMat->getTechnique(0)->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        guiMat->getTechnique(0)->setDepthCheckEnabled(false);
     }
 }
 

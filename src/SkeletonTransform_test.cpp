@@ -53,11 +53,9 @@ protected:
 
     void TearDown() override {
         entity = nullptr;
-        Manager::kill();
         if (app) {
             app->processEvents();
         }
-        QThread::msleep(50);
     }
 };
 
@@ -611,11 +609,9 @@ protected:
     }
 
     void TearDown() override {
-        Manager::kill();
         if (app) {
             app->processEvents();
         }
-        QThread::msleep(50);
     }
 };
 
@@ -705,9 +701,7 @@ protected:
 
     void TearDown() override {
         entity = nullptr;
-        Manager::kill();
         if (app) app->processEvents();
-        QThread::msleep(50);
     }
 
     Ogre::Entity* createEntityWithSkeleton()

@@ -30,8 +30,8 @@ protected:
     QApplication* app = nullptr;
 
     void SetUp() override {
-        Manager::kill();
         TransformOperator::kill();
+        Manager::kill();
         QThread::msleep(50);
 
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
@@ -46,13 +46,9 @@ protected:
     }
 
     void TearDown() override {
-        TransformOperator::kill();
-        Manager::kill();
-
         if (app) {
             app->processEvents();
         }
-        QThread::msleep(50);
     }
 };
 

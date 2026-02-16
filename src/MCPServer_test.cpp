@@ -30,6 +30,7 @@ class MCPServerTest : public ::testing::Test
 protected:
     void SetUp() override
     {
+        server.reset();
         Manager::kill();
         QThread::msleep(50);
 
@@ -49,16 +50,10 @@ protected:
 
     void TearDown() override
     {
-        server.reset();
-
-        Manager::kill();
-
         if (app)
         {
             app->processEvents();
         }
-
-        QThread::msleep(50);
     }
 
     QApplication* app = nullptr;

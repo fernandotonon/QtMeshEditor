@@ -254,9 +254,7 @@ protected:
         createStandardOgreMaterials();
     }
     void TearDown() override {
-        Manager::kill();
         if (app) app->processEvents();
-        QThread::msleep(50);
     }
     QApplication* app = nullptr;
 };
