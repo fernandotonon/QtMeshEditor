@@ -26,9 +26,15 @@ static void crashHandler(int sig)
 {
 #ifdef COVERAGE_BUILD
     __gcov_dump();
-#endif
+    // Exit immediately — the crash is typically in Ogre/Mesa teardown
+    // after tests have passed. Re-raising would produce exit code 139,
+    // which the CI counts as a crash and loses the suite's pass status.
+    // Use gtest's failure count so real test failures still produce non-zero exit.
+    _exit(testing::UnitTest::GetInstance()->failed_test_count() > 0 ? 1 : 0);
+#else
     signal(sig, SIG_DFL);
     raise(sig);
+#endif
 }
 
 int main(int argc, char **argv)
