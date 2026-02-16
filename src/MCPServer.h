@@ -124,6 +124,8 @@ private:
     void onAnimationTick();
 
     // Helper methods
+    static QJsonObject makeErrorResult(const QString &message);
+    static QJsonObject makeSuccessResult(const QString &message);
     bool ensureOgreInitialized();
     QJsonArray buildToolsList();
     QJsonObject buildToolDefinition(const QString &name, const QString &description,

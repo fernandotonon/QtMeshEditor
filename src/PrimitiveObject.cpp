@@ -182,64 +182,44 @@ PrimitiveObject* PrimitiveObject::getPrimitiveFromSceneNode(const Ogre::SceneNod
     return Ogre::any_cast<PrimitiveObject*>(node->getUserObjectBindings().getUserAny());
 }
 
-Ogre::SceneNode*  PrimitiveObject::createCube(const QString& name)
+Ogre::SceneNode* PrimitiveObject::createPrimitive(PrimitiveType type, const QString& name)
 {
-    auto newPrimitive = new PrimitiveObject(name, AP_CUBE);
+    auto newPrimitive = new PrimitiveObject(name, type);
     return newPrimitive->createPrimitive();
 }
+
+Ogre::SceneNode* PrimitiveObject::createCube(const QString& name)
+{ return createPrimitive(AP_CUBE, name); }
 
 Ogre::SceneNode* PrimitiveObject::createSphere(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_SPHERE);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_SPHERE, name); }
 
 Ogre::SceneNode* PrimitiveObject::createPlane(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_PLANE);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_PLANE, name); }
 
 Ogre::SceneNode* PrimitiveObject::createCylinder(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_CYLINDER);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_CYLINDER, name); }
+
 Ogre::SceneNode* PrimitiveObject::createCone(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_CONE);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_CONE, name); }
+
 Ogre::SceneNode* PrimitiveObject::createTorus(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_TORUS);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_TORUS, name); }
+
 Ogre::SceneNode* PrimitiveObject::createTube(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_TUBE);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_TUBE, name); }
+
 Ogre::SceneNode* PrimitiveObject::createCapsule(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_CAPSULE);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_CAPSULE, name); }
+
 Ogre::SceneNode* PrimitiveObject::createIcoSphere(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_ICOSPHERE);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_ICOSPHERE, name); }
+
 Ogre::SceneNode* PrimitiveObject::createRoundedBox(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_ROUNDEDBOX);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_ROUNDEDBOX, name); }
+
 Ogre::SceneNode* PrimitiveObject::createSpring(const QString& name)
-{
-    auto newPrimitive = new PrimitiveObject(name, AP_SPRING);
-    return newPrimitive->createPrimitive();
-}
+{ return createPrimitive(AP_SPRING, name); }
 
 ////////////////////////////////////////
 /// Accessors

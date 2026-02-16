@@ -53,11 +53,9 @@ protected:
 
     void TearDown() override {
         entity = nullptr;
-        Manager::kill();
         if (app) {
             app->processEvents();
         }
-        QThread::msleep(50);
     }
 };
 
@@ -611,16 +609,15 @@ protected:
     }
 
     void TearDown() override {
-        Manager::kill();
         if (app) {
             app->processEvents();
         }
-        QThread::msleep(50);
     }
 };
 
 TEST_F(SkeletonTransformNoSkeletonTest, ScaleSkeletonNoSkeletonDoesNotCrash)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     // Create a simple mesh without a skeleton
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
@@ -690,6 +687,10 @@ protected:
         }
         createStandardOgreMaterials();
 
+        if (!canLoadMeshFiles()) {
+            GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+        }
+
         // Use unique names per test to avoid resource conflicts
         static int counter = 0;
         counter++;
@@ -705,9 +706,7 @@ protected:
 
     void TearDown() override {
         entity = nullptr;
-        Manager::kill();
         if (app) app->processEvents();
-        QThread::msleep(50);
     }
 
     Ogre::Entity* createEntityWithSkeleton()

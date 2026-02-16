@@ -29,11 +29,15 @@ static inline void ensureMaterialManagerInitialised()
 }
 
 /**
- * Creates the BaseWhiteNoLighting and BaseWhite materials that many parts
- * of QtMeshEditor expect to exist.
+ * Creates the BaseWhiteNoLighting, BaseWhite, and GUI_Material materials
+ * that many parts of QtMeshEditor expect to exist.
  *
  * Automatically calls ensureMaterialManagerInitialised() first so that
  * newly created materials receive the default technique/pass.
+ *
+ * In normal app startup, GUI_Material is created by Manager::loadResources()
+ * which is called from MainWindow.  Tests never create a MainWindow, so
+ * we create it here.
  */
 static inline void createStandardOgreMaterials()
 {
@@ -60,15 +64,31 @@ static inline void createStandardOgreMaterials()
         baseWhiteMat2->getTechnique(0)->getPass(0)->setDiffuse(1, 1, 1, 1);
         baseWhiteMat2->getTechnique(0)->getPass(0)->setAmbient(1, 1, 1);
     }
+
+    // GUI_Material — used by ViewportGrid, gizmos, and SelectionBoxObject
+    Ogre::MaterialPtr guiMat = Ogre::MaterialManager::getSingleton().getByName(
+        "GUI_Material", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!guiMat)
+    {
+        guiMat = Ogre::MaterialManager::getSingleton().create(
+            "GUI_Material", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        guiMat->getTechnique(0)->setLightingEnabled(false);
+        guiMat->getTechnique(0)->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        guiMat->getTechnique(0)->setDepthCheckEnabled(false);
+    }
 }
 
 /**
- * Returns true if the environment supports loading mesh files.
+ * Returns true if the environment supports creating entities from meshes.
  *
- * Loading .mesh files via MeshImporterExporter requires Ogre to compile
- * materials/shaders and allocate GPU resources. In headless CI (offscreen
- * platform, software GL), this can segfault. Tests that import meshes
- * should call this and GTEST_SKIP() if false.
+ * Creating entities requires Ogre hardware buffers which need a GL context.
+ * In headless CI (Xvfb + Mesa), Manager::getSingleton() initialises Ogre
+ * with `mRoot->initialise(false)` — no RenderWindow is created, so no GL
+ * context exists.  Any attempt to create an Entity, ManualObject, or
+ * realize a procedural mesh will SIGSEGV (not a C++ exception).
+ *
+ * Tests that create entities or meshes should call this and GTEST_SKIP()
+ * if false.
  */
 static inline bool canLoadMeshFiles()
 {
@@ -78,6 +98,17 @@ static inline bool canLoadMeshFiles()
     // No render system means Ogre can't load materials
     if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingleton().getRenderSystem())
         return false;
+    // Without a RenderWindow there is no GL context — entity creation
+    // will crash with SIGSEGV (can't be caught by try/catch).
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    if (!Ogre::Root::getSingleton().getAutoCreatedWindow())
+        return false;
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
     return true;
 }
 

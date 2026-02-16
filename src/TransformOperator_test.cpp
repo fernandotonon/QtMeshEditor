@@ -30,8 +30,8 @@ protected:
     QApplication* app = nullptr;
 
     void SetUp() override {
-        Manager::kill();
         TransformOperator::kill();
+        Manager::kill();
         QThread::msleep(50);
 
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
@@ -46,13 +46,9 @@ protected:
     }
 
     void TearDown() override {
-        TransformOperator::kill();
-        Manager::kill();
-
         if (app) {
             app->processEvents();
         }
-        QThread::msleep(50);
     }
 };
 
@@ -183,6 +179,7 @@ TEST_F(TransformOperatorTestFixture, SetActiveWidgetNull) {
 
 // Test onSelectionChanged when nothing is selected: should reset grid position and hide gizmos
 TEST_F(TransformOperatorTestFixture, OnSelectionChangedEmpty) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     TransformOperator* instance = TransformOperator::getSingleton();
     ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
     EXPECT_NO_THROW(instance->onSelectionChanged());

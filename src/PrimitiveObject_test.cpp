@@ -252,11 +252,10 @@ protected:
             GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
         }
         createStandardOgreMaterials();
+        if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     }
     void TearDown() override {
-        Manager::kill();
         if (app) app->processEvents();
-        QThread::msleep(50);
     }
     QApplication* app = nullptr;
 };

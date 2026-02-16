@@ -894,7 +894,7 @@ jobs:
             -Dsonar.tests=src/,tests/ \
             -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
             -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
-            -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/**,**/TestHelpers.h \
+            -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/**,**/TestHelpers.h,**/test_main.cpp \
             -Dsonar.coverageReportPaths=coverage.xml \
             -Dsonar.c.file.suffixes=.c \
             -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h \

@@ -44,6 +44,7 @@ protected:
             GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
         }
         createOGREMaterials();
+        if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
 
         Manager* manager = Manager::getSingleton();
         ASSERT_NE(manager, nullptr);
@@ -57,21 +58,12 @@ protected:
 
     void TearDown() override {
         mTranslationGizmo.reset();
-
-        if (mLinkNode && mSceneMgr)
-        {
-            mLinkNode->detachAllObjects();
-            mSceneMgr->destroySceneNode(mLinkNode);
-            mLinkNode = nullptr;
-        }
-
-        Manager::kill();
+        mLinkNode = nullptr;
 
         if (app)
         {
             app->processEvents();
         }
-        QThread::msleep(50);
     }
 };
 

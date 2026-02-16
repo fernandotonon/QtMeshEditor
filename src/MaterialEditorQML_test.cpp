@@ -67,13 +67,9 @@ protected:
     void TearDown() override {
         editor.reset();
 
-        Manager::kill();
-
         if (app) {
             app->processEvents();
         }
-
-        QThread::msleep(50);
     }
 
     QApplication* app = nullptr;
