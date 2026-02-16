@@ -79,12 +79,16 @@ static inline void createStandardOgreMaterials()
 }
 
 /**
- * Returns true if the environment supports loading mesh files.
+ * Returns true if the environment supports creating entities from meshes.
  *
- * Loading .mesh files via MeshImporterExporter requires Ogre to compile
- * materials/shaders and allocate GPU resources. In headless CI (offscreen
- * platform, software GL), this can segfault. Tests that import meshes
- * should call this and GTEST_SKIP() if false.
+ * Creating entities requires Ogre hardware buffers which need a GL context.
+ * In headless CI (Xvfb + Mesa), Manager::getSingleton() initialises Ogre
+ * with `mRoot->initialise(false)` — no RenderWindow is created, so no GL
+ * context exists.  Any attempt to create an Entity, ManualObject, or
+ * realize a procedural mesh will SIGSEGV (not a C++ exception).
+ *
+ * Tests that create entities or meshes should call this and GTEST_SKIP()
+ * if false.
  */
 static inline bool canLoadMeshFiles()
 {
@@ -94,6 +98,17 @@ static inline bool canLoadMeshFiles()
     // No render system means Ogre can't load materials
     if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingleton().getRenderSystem())
         return false;
+    // Without a RenderWindow there is no GL context — entity creation
+    // will crash with SIGSEGV (can't be caught by try/catch).
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+#endif
+    if (!Ogre::Root::getSingleton().getAutoCreatedWindow())
+        return false;
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
     return true;
 }
 

@@ -151,6 +151,7 @@ TEST_F(MCPServerTest, ListMaterials)
 
 TEST_F(MCPServerTest, CreatePrimitive)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject args;
     args["type"] = "sphere";
     args["name"] = "TestSphere";
@@ -161,6 +162,7 @@ TEST_F(MCPServerTest, CreatePrimitive)
 
 TEST_F(MCPServerTest, CreatePrimitiveTypes)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QStringList types = {"box", "cylinder", "cone"};
     for (const QString &type : types) {
         QJsonObject args;
@@ -184,6 +186,7 @@ TEST_F(MCPServerTest, CreatePrimitiveInvalidType)
 
 TEST_F(MCPServerTest, GetSceneInfo)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "SceneInfoCube";
@@ -200,6 +203,7 @@ TEST_F(MCPServerTest, GetSceneInfo)
 
 TEST_F(MCPServerTest, GetMeshInfo)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "MeshInfoSphere";
@@ -216,6 +220,7 @@ TEST_F(MCPServerTest, GetMeshInfo)
 
 TEST_F(MCPServerTest, TransformMesh)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "TransformCube";
@@ -243,6 +248,7 @@ TEST_F(MCPServerTest, TransformMeshNotFound)
 
 TEST_F(MCPServerTest, ApplyMaterial)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     // Create a material
     QJsonObject matArgs;
     matArgs["name"] = "ApplyTestMat";
@@ -310,6 +316,7 @@ TEST_F(MCPServerTest, SetTextureMaterialNotFound)
 
 TEST_F(MCPServerTest, Animate)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "AnimSphere";
@@ -325,6 +332,7 @@ TEST_F(MCPServerTest, Animate)
 
 TEST_F(MCPServerTest, AnimateStop)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "AnimStopSphere";
@@ -586,6 +594,7 @@ TEST_F(MCPServerTest, ModifyMaterialEmptyName)
 
 TEST_F(MCPServerTest, TransformMeshRotation)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "RotateCube";
@@ -601,6 +610,7 @@ TEST_F(MCPServerTest, TransformMeshRotation)
 
 TEST_F(MCPServerTest, TransformMeshScale)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "ScaleCube";
@@ -616,6 +626,7 @@ TEST_F(MCPServerTest, TransformMeshScale)
 
 TEST_F(MCPServerTest, TransformMeshAllThreeTransforms)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "FullTransformSphere";
@@ -651,6 +662,7 @@ TEST_F(MCPServerTest, TransformMeshNoNameNoSelection)
 
 TEST_F(MCPServerTest, GetSceneInfoMultipleObjects)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     // Create several primitives
     QJsonObject args1;
     args1["type"] = "sphere";
@@ -809,6 +821,7 @@ TEST_F(MCPServerTest, CreatePrimitiveEmptyType)
 
 TEST_F(MCPServerTest, CreatePrimitivePlane)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject args;
     args["type"] = "plane";
     args["name"] = "TestPlane";
@@ -819,6 +832,7 @@ TEST_F(MCPServerTest, CreatePrimitivePlane)
 
 TEST_F(MCPServerTest, CreatePrimitiveTorus)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject args;
     args["type"] = "torus";
     args["name"] = "TestTorus";
@@ -829,6 +843,7 @@ TEST_F(MCPServerTest, CreatePrimitiveTorus)
 
 TEST_F(MCPServerTest, CreatePrimitiveTube)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject args;
     args["type"] = "tube";
     args["name"] = "TestTube";
@@ -839,6 +854,7 @@ TEST_F(MCPServerTest, CreatePrimitiveTube)
 
 TEST_F(MCPServerTest, CreatePrimitiveCapsule)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject args;
     args["type"] = "capsule";
     args["name"] = "TestCapsule";
@@ -849,6 +865,7 @@ TEST_F(MCPServerTest, CreatePrimitiveCapsule)
 
 TEST_F(MCPServerTest, CreatePrimitiveIcoSphere)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject args;
     args["type"] = "icosphere";
     args["name"] = "TestIcoSphere";
@@ -859,6 +876,7 @@ TEST_F(MCPServerTest, CreatePrimitiveIcoSphere)
 
 TEST_F(MCPServerTest, CreatePrimitiveSpring)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject args;
     args["type"] = "spring";
     args["name"] = "TestSpring";
@@ -869,6 +887,7 @@ TEST_F(MCPServerTest, CreatePrimitiveSpring)
 
 TEST_F(MCPServerTest, CreatePrimitiveAutoGeneratedName)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     // When no name is provided, create_primitive auto-generates one
     QJsonObject args;
     args["type"] = "sphere";
@@ -884,6 +903,7 @@ TEST_F(MCPServerTest, CreatePrimitiveAutoGeneratedName)
 
 TEST_F(MCPServerTest, AnimateWithPitchAndRoll)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "PitchRollCube";
@@ -903,6 +923,7 @@ TEST_F(MCPServerTest, AnimateWithPitchAndRoll)
 
 TEST_F(MCPServerTest, AnimateZeroSpeedsDefaultsToYaw45)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "DefaultAnimSphere";
@@ -923,6 +944,7 @@ TEST_F(MCPServerTest, AnimateZeroSpeedsDefaultsToYaw45)
 
 TEST_F(MCPServerTest, AnimateNoSpeedsDefaultsToYaw45)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "NoSpeedAnimSphere";
@@ -949,6 +971,7 @@ TEST_F(MCPServerTest, AnimateEmptyName)
 
 TEST_F(MCPServerTest, AnimateTimerIsRunningAfterStart)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "TimerTestCube";
@@ -1062,6 +1085,7 @@ TEST_F(MCPServerTest, CreateMaterialWithAllColors)
 
 TEST_F(MCPServerTest, GetMeshInfoMultipleEntities)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     QJsonObject args1;
     args1["type"] = "sphere";
     args1["name"] = "MeshInfoSphere1";

@@ -617,6 +617,7 @@ protected:
 
 TEST_F(SkeletonTransformNoSkeletonTest, ScaleSkeletonNoSkeletonDoesNotCrash)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     // Create a simple mesh without a skeleton
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
@@ -685,6 +686,10 @@ protected:
                          << e.getFullDescription() << ")";
         }
         createStandardOgreMaterials();
+
+        if (!canLoadMeshFiles()) {
+            GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+        }
 
         // Use unique names per test to avoid resource conflicts
         static int counter = 0;

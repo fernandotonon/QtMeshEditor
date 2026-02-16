@@ -194,6 +194,8 @@ TEST(SelectionSetTests, GetCount)
     EXPECT_EQ(selectionSet->getEntitiesCount(), 0);
     EXPECT_EQ(selectionSet->getSubEntitiesCount(), 0);
 
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
     // Add an entity to verify count sums across types
     createStandardOgreMaterials();
     auto cubeNode = PrimitiveObject::createCube("testGetCountCube");
@@ -240,6 +242,7 @@ TEST(SelectionSetTests, EntitySelection)
     } catch (const Ogre::Exception& e) {
         GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
     }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -288,6 +291,7 @@ TEST(SelectionSetTests, EntityScaleRotationFactors)
     } catch (const Ogre::Exception& e) {
         GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
     }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -373,6 +377,7 @@ TEST(SelectionSetTests, SubEntitySelection)
     } catch (const Ogre::Exception& e) {
         GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
     }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -424,6 +429,7 @@ TEST(SelectionSetTests, IndexedAccessors)
     } catch (const Ogre::Exception& e) {
         GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
     }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -459,6 +465,7 @@ TEST(SelectionSetTests, SelectionListGetters)
     } catch (const Ogre::Exception& e) {
         GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
     }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -515,6 +522,7 @@ TEST(SelectionSetTests, GetSelectionOrientationWithEntity)
     } catch (const Ogre::Exception& e) {
         GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
     }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -564,6 +572,7 @@ TEST(SelectionSetTests, GetSelectionScaleWithEntity)
     } catch (const Ogre::Exception& e) {
         GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
     }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -590,6 +599,7 @@ TEST(SelectionSetTests, GetSelectionCenterWithEntity)
     } catch (const Ogre::Exception& e) {
         GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
     }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -616,6 +626,7 @@ TEST(SelectionSetTests, GetSelectionNodesCenterWithEntity)
     } catch (const Ogre::Exception& e) {
         GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
     }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();

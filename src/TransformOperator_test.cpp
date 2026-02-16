@@ -179,6 +179,7 @@ TEST_F(TransformOperatorTestFixture, SetActiveWidgetNull) {
 
 // Test onSelectionChanged when nothing is selected: should reset grid position and hide gizmos
 TEST_F(TransformOperatorTestFixture, OnSelectionChangedEmpty) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     TransformOperator* instance = TransformOperator::getSingleton();
     ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
     EXPECT_NO_THROW(instance->onSelectionChanged());

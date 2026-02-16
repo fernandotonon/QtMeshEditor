@@ -285,6 +285,7 @@ TEST_F(ManagerHeadlessTest, IsValidFileExtention)
 
 TEST_F(ManagerHeadlessTest, CreateEmptyScene)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -314,6 +315,7 @@ TEST_F(ManagerHeadlessTest, GetEntities)
 
 TEST_F(ManagerHeadlessTest, CreateEntity)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
