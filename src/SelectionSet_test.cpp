@@ -683,6 +683,9 @@ TEST(SelectionSetTests, RemoveNonExistent)
     selectionSet->clear();
 
     auto node = Manager::getSingleton()->addSceneNode("testRemoveNonExist");
+    // addSceneNode auto-selects the node, so clear first
+    selectionSet->clear();
+    // Now removing a node that is NOT in the selection should return false
     bool removed = selectionSet->removeOne(node);
     EXPECT_FALSE(removed);
     EXPECT_EQ(selectionSet->getNodesCount(), 0);
