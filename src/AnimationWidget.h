@@ -4,6 +4,7 @@
 #include <QWidget>
 #include <QMap>
 #include <QScopedPointer>
+#include <QTimer>
 #include "SkeletonDebug.h"
 #include "ui_animationwidget.h"
 
@@ -35,6 +36,7 @@ private slots:
     void on_skeletonTable_clicked(const QModelIndex &index);
 
     void on_mergeButton_clicked();
+    void pollAnimationState();
 
 signals:
     void changeAnimationState(bool playing);
@@ -43,6 +45,8 @@ signals:
 private:
     QScopedPointer<Ui::AnimationWidget> ui { new Ui::AnimationWidget };
     QMap<Ogre::Entity*,SkeletonDebug*> mShowSkeleton;
+    QTimer* m_pollTimer = nullptr;
+    bool m_lastPollAnimEnabled = false;
 };
 
 #endif // ANIMATIONWIDGET_H

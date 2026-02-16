@@ -29,6 +29,10 @@ AnimationWidget::AnimationWidget(QWidget *parent) :
         updateAnimationTable();
         updateSkeletonTable();
     });
+
+    m_pollTimer = new QTimer(this);
+    connect(m_pollTimer, &QTimer::timeout, this, &AnimationWidget::pollAnimationState);
+    m_pollTimer->start(200);
 }
 
 AnimationWidget::~AnimationWidget()
@@ -134,6 +138,64 @@ void AnimationWidget::setAnimationState(bool playing)
     ui->PlayPauseButton->setIcon(icon);
 
     emit changeAnimationState(playing);
+}
+
+void AnimationWidget::pollAnimationState()
+{
+    if(!SelectionSet::getSingleton()->hasEntities())
+        return;
+
+    bool hasAnimationEnabled = false;
+    for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
+    {
+        const Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
+        if(!set) continue;
+
+        for(const auto &[key, state] : set->getAnimationStates())
+        {
+            if(state->getEnabled())
+            {
+                hasAnimationEnabled = true;
+                break;
+            }
+        }
+        if(hasAnimationEnabled) break;
+    }
+
+    // Only react when the Ogre animation state actually transitions,
+    // not when it merely differs from the button. This avoids fighting
+    // with user clicks on the Play/Pause button.
+    if(hasAnimationEnabled != m_lastPollAnimEnabled)
+    {
+        m_lastPollAnimEnabled = hasAnimationEnabled;
+
+        // Update button and emit signal so MainWindow stays in sync
+        ui->PlayPauseButton->blockSignals(true);
+        ui->PlayPauseButton->setChecked(hasAnimationEnabled);
+        ui->PlayPauseButton->blockSignals(false);
+        setAnimationState(hasAnimationEnabled);
+
+        // Refresh the table checkboxes to match actual Ogre state
+        for(int row = 0; row < ui->animTable->rowCount(); ++row)
+        {
+            auto* entityItem = ui->animTable->item(row, 0);
+            auto* enabledItem = ui->animTable->item(row, 2);
+            if(!entityItem || !enabledItem) continue;
+
+            auto* entity = static_cast<Ogre::Entity*>(entityItem->data(ENTITY_DATA).value<void*>());
+            if(!entity) continue;
+
+            auto* animNameItem = ui->animTable->item(row, 1);
+            if(!animNameItem) continue;
+
+            Ogre::AnimationState* animState = entity->getAnimationState(animNameItem->text().toStdString());
+            if(!animState) continue;
+
+            Qt::CheckState expected = animState->getEnabled() ? Qt::Checked : Qt::Unchecked;
+            if(enabledItem->checkState() != expected)
+                enabledItem->setCheckState(expected);
+        }
+    }
 }
 
 void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)

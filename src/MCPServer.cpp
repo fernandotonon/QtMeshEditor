@@ -28,6 +28,12 @@
 #include <OgreSubEntity.h>
 #include <OgreSubMesh.h>
 #include <OgreMesh.h>
+#include <cmath>
+#include <OgreSkeleton.h>
+#include <OgreAnimation.h>
+#include <OgreAnimationState.h>
+#include <OgreKeyFrame.h>
+#include <OgreBone.h>
 
 #ifdef Q_OS_WIN
 #include <io.h>
@@ -378,6 +384,18 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolCreatePrimitive(args);
     } else if (name == "animate") {
         toolResult = toolAnimate(args);
+    } else if (name == "list_skeletal_animations") {
+        toolResult = toolListSkeletalAnimations(args);
+    } else if (name == "get_animation_info") {
+        toolResult = toolGetAnimationInfo(args);
+    } else if (name == "set_animation_length") {
+        toolResult = toolSetAnimationLength(args);
+    } else if (name == "set_animation_time") {
+        toolResult = toolSetAnimationTime(args);
+    } else if (name == "add_keyframe") {
+        toolResult = toolAddKeyframe(args);
+    } else if (name == "remove_keyframe") {
+        toolResult = toolRemoveKeyframe(args);
     } else {
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
     }
@@ -503,6 +521,9 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
             QJsonArray e = colors["emissive"].toArray();
             pass->setSelfIllumination(e[0].toDouble(), e[1].toDouble(), e[2].toDouble());
         }
+
+        try { mat->load(); } catch (...) { /* headless — no GPU context */ }
+
 
         // Serialize the created material for display
         Ogre::MaterialSerializer serializer;
@@ -1182,6 +1203,450 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolListSkeletalAnimations(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        QStringList infoLines;
+        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+        for (Ogre::SceneNode* node : nodes) {
+            if (!node) continue;
+            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (!obj || obj->getMovableType() != "Entity") continue;
+
+                Ogre::Entity* entity = static_cast<Ogre::Entity*>(obj);
+                if (!entity->hasSkeleton()) continue;
+
+                Ogre::AnimationStateSet* stateSet = entity->getAllAnimationStates();
+                if (!stateSet) continue;
+
+                for (const auto &pair : stateSet->getAnimationStates()) {
+                    Ogre::AnimationState* state = pair.second;
+                    infoLines << QString("Entity: %1 | Animation: %2 | Length: %3s | Enabled: %4 | Loop: %5")
+                        .arg(QString::fromStdString(entity->getName()))
+                        .arg(QString::fromStdString(pair.first))
+                        .arg(state->getLength())
+                        .arg(state->getEnabled() ? "yes" : "no")
+                        .arg(state->getLoop() ? "yes" : "no");
+                }
+            }
+        }
+
+        if (infoLines.isEmpty())
+            return makeSuccessResult("No skeletal animations found in scene");
+
+        return makeSuccessResult(QString("Skeletal animations (%1):\n%2")
+            .arg(infoLines.size()).arg(infoLines.join("\n")));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolGetAnimationInfo(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    QString animName = args["animation"].toString();
+
+    if (entityName.isEmpty() || animName.isEmpty())
+        return makeErrorResult("Error: 'entity' and 'animation' are required");
+
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        // Find entity
+        Ogre::Entity* entity = nullptr;
+        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+        for (Ogre::SceneNode* node : nodes) {
+            if (!node) continue;
+            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (!obj || obj->getMovableType() != "Entity") continue;
+                if (QString::fromStdString(obj->getName()) == entityName) {
+                    entity = static_cast<Ogre::Entity*>(obj);
+                    break;
+                }
+            }
+            if (entity) break;
+        }
+
+        if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        if (!entity->hasSkeleton()) return makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
+
+        Ogre::SkeletonInstance* skeleton = entity->getSkeleton();
+        if (!skeleton->hasAnimation(animName.toStdString()))
+            return makeErrorResult(QString("Error: Animation '%1' not found on entity '%2'").arg(animName, entityName));
+
+        Ogre::Animation* anim = skeleton->getAnimation(animName.toStdString());
+
+        QStringList lines;
+        lines << QString("Animation: %1").arg(animName);
+        lines << QString("Length: %1s").arg(anim->getLength());
+
+        auto trackList = anim->_getNodeTrackList();
+        lines << QString("Tracks: %1").arg(trackList.size());
+
+        for (const auto &trackPair : trackList) {
+            Ogre::NodeAnimationTrack* track = trackPair.second;
+            QString boneName = QString::fromStdString(track->getAssociatedNode()->getName());
+            lines << QString("\n  Track: %1 (bone: %2)").arg(trackPair.first).arg(boneName);
+            lines << QString("  Keyframes: %1").arg(track->getNumKeyFrames());
+
+            for (unsigned short k = 0; k < track->getNumKeyFrames(); k++) {
+                Ogre::TransformKeyFrame* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(k));
+                Ogre::Vector3 t = kf->getTranslate();
+                Ogre::Vector3 s = kf->getScale();
+                Ogre::Quaternion r = kf->getRotation();
+                lines << QString("    [%1] time=%2s  pos=(%3,%4,%5)  rot=(%6,%7,%8,%9)  scale=(%10,%11,%12)")
+                    .arg(k).arg(kf->getTime())
+                    .arg(t.x).arg(t.y).arg(t.z)
+                    .arg(r.w).arg(r.x).arg(r.y).arg(r.z)
+                    .arg(s.x).arg(s.y).arg(s.z);
+            }
+        }
+
+        return makeSuccessResult(lines.join("\n"));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolSetAnimationLength(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    QString animName = args["animation"].toString();
+    double length = args["length"].toDouble(-1);
+
+    if (entityName.isEmpty() || animName.isEmpty())
+        return makeErrorResult("Error: 'entity' and 'animation' are required");
+    if (length <= 0)
+        return makeErrorResult("Error: 'length' must be a positive number");
+
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        Ogre::Entity* entity = nullptr;
+        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+        for (Ogre::SceneNode* node : nodes) {
+            if (!node) continue;
+            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (!obj || obj->getMovableType() != "Entity") continue;
+                if (QString::fromStdString(obj->getName()) == entityName) {
+                    entity = static_cast<Ogre::Entity*>(obj);
+                    break;
+                }
+            }
+            if (entity) break;
+        }
+
+        if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        if (!entity->hasSkeleton()) return makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
+
+        Ogre::SkeletonInstance* skeleton = entity->getSkeleton();
+        if (!skeleton->hasAnimation(animName.toStdString()))
+            return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+
+        Ogre::Animation* anim = skeleton->getAnimation(animName.toStdString());
+        float oldLength = anim->getLength();
+        anim->setLength(static_cast<float>(length));
+
+        // Update animation state length and clamp time
+        entity->getAllAnimationStates()->_notifyDirty();
+        if (entity->hasAnimationState(animName.toStdString())) {
+            Ogre::AnimationState* state = entity->getAnimationState(animName.toStdString());
+            state->setLength(static_cast<float>(length));
+            if (state->getTimePosition() > static_cast<float>(length))
+                state->setTimePosition(static_cast<float>(length));
+        }
+
+        return makeSuccessResult(QString("Changed animation '%1' length from %2s to %3s")
+            .arg(animName).arg(oldLength).arg(length));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolSetAnimationTime(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    QString animName = args["animation"].toString();
+
+    if (entityName.isEmpty() || animName.isEmpty())
+        return makeErrorResult("Error: 'entity' and 'animation' are required");
+
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        Ogre::Entity* entity = nullptr;
+        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+        for (Ogre::SceneNode* node : nodes) {
+            if (!node) continue;
+            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if (!obj || obj->getMovableType() != "Entity") continue;
+                if (QString::fromStdString(obj->getName()) == entityName) {
+                    entity = static_cast<Ogre::Entity*>(obj);
+                    break;
+                }
+            }
+            if (entity) break;
+        }
+
+        if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        if (!entity->hasAnimationState(animName.toStdString()))
+            return makeErrorResult(QString("Error: Animation '%1' not found on entity '%2'").arg(animName, entityName));
+
+        Ogre::AnimationState* state = entity->getAnimationState(animName.toStdString());
+
+        // Handle keyframe navigation
+        QString navigate = args["navigate"].toString();
+        if (!navigate.isEmpty()) {
+            QString trackName = args["track"].toString();
+            if (trackName.isEmpty())
+                return makeErrorResult("Error: 'track' (bone name) is required for keyframe navigation");
+
+            if (!entity->hasSkeleton())
+                return makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
+
+            Ogre::SkeletonInstance* skeleton = entity->getSkeleton();
+            Ogre::Animation* anim = skeleton->getAnimation(animName.toStdString());
+
+            // Find the track for the given bone
+            Ogre::NodeAnimationTrack* track = nullptr;
+            auto trackList = anim->_getNodeTrackList();
+            for (const auto &pair : trackList) {
+                if (QString::fromStdString(pair.second->getAssociatedNode()->getName()) == trackName) {
+                    track = pair.second;
+                    break;
+                }
+            }
+
+            if (!track)
+                return makeErrorResult(QString("Error: Track for bone '%1' not found").arg(trackName));
+
+            if (track->getNumKeyFrames() == 0)
+                return makeErrorResult("Error: Track has no keyframes");
+
+            float currentTime = state->getTimePosition();
+            Ogre::TransformKeyFrame* target = nullptr;
+
+            if (navigate == "next") {
+                for (unsigned short i = 0; i < track->getNumKeyFrames(); i++) {
+                    Ogre::TransformKeyFrame* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+                    if (kf->getTime() > currentTime + 0.001f) {
+                        target = kf;
+                        break;
+                    }
+                }
+                if (!target)
+                    target = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(track->getNumKeyFrames() - 1));
+            } else if (navigate == "prev") {
+                for (int i = static_cast<int>(track->getNumKeyFrames()) - 1; i >= 0; i--) {
+                    Ogre::TransformKeyFrame* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+                    if (kf->getTime() < currentTime - 0.001f) {
+                        target = kf;
+                        break;
+                    }
+                }
+                if (!target)
+                    target = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(0));
+            } else if (navigate == "first") {
+                target = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(0));
+            } else if (navigate == "last") {
+                target = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(track->getNumKeyFrames() - 1));
+            } else {
+                return makeErrorResult("Error: 'navigate' must be 'next', 'prev', 'first', or 'last'");
+            }
+
+            state->setEnabled(true);
+            state->setTimePosition(target->getTime());
+
+            Ogre::Vector3 t = target->getTranslate();
+            Ogre::Quaternion r = target->getRotation();
+            return makeSuccessResult(QString("Navigated to keyframe at %1s  pos=(%2,%3,%4)  rot=(%5,%6,%7,%8)")
+                .arg(target->getTime())
+                .arg(t.x).arg(t.y).arg(t.z)
+                .arg(r.w).arg(r.x).arg(r.y).arg(r.z));
+        }
+
+        // Set absolute time
+        if (!args.contains("time"))
+            return makeErrorResult("Error: Either 'time' or 'navigate' is required");
+
+        float time = static_cast<float>(args["time"].toDouble());
+        bool enable = args["enabled"].toBool(true);
+        bool loop = args.contains("loop") ? args["loop"].toBool() : state->getLoop();
+
+        state->setEnabled(enable);
+        state->setLoop(loop);
+        state->setTimePosition(time);
+
+        return makeSuccessResult(QString("Set animation '%1' time to %2s (enabled: %3, loop: %4)")
+            .arg(animName).arg(time)
+            .arg(enable ? "yes" : "no")
+            .arg(loop ? "yes" : "no"));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+// Helper: find entity by name across all scene nodes (checks movable type)
+static Ogre::Entity* findEntityByName(const QString &entityName)
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return nullptr;
+    QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+    for (Ogre::SceneNode* node : nodes) {
+        if (!node) continue;
+        for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
+            Ogre::MovableObject* obj = node->getAttachedObject(i);
+            if (!obj || obj->getMovableType() != "Entity") continue;
+            if (QString::fromStdString(obj->getName()) == entityName)
+                return static_cast<Ogre::Entity*>(obj);
+        }
+    }
+    return nullptr;
+}
+
+// Helper: find track by bone name in an animation
+static Ogre::NodeAnimationTrack* findTrackByBoneName(Ogre::Animation* anim, const QString &boneName)
+{
+    auto trackList = anim->_getNodeTrackList();
+    for (const auto &pair : trackList) {
+        if (QString::fromStdString(pair.second->getAssociatedNode()->getName()) == boneName)
+            return pair.second;
+    }
+    return nullptr;
+}
+
+QJsonObject MCPServer::toolAddKeyframe(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    QString animName = args["animation"].toString();
+    QString trackName = args["track"].toString();
+    double time = args["time"].toDouble(-1);
+
+    if (entityName.isEmpty() || animName.isEmpty() || trackName.isEmpty())
+        return makeErrorResult("Error: 'entity', 'animation', and 'track' are required");
+    if (time < 0)
+        return makeErrorResult("Error: 'time' must be a non-negative number");
+
+    try {
+        Ogre::Entity* entity = findEntityByName(entityName);
+        if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        if (!entity->hasSkeleton()) return makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
+
+        Ogre::SkeletonInstance* skeleton = entity->getSkeleton();
+        if (!skeleton->hasAnimation(animName.toStdString()))
+            return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+
+        Ogre::Animation* anim = skeleton->getAnimation(animName.toStdString());
+        Ogre::NodeAnimationTrack* track = findTrackByBoneName(anim, trackName);
+        if (!track)
+            return makeErrorResult(QString("Error: Track for bone '%1' not found").arg(trackName));
+
+        Ogre::TransformKeyFrame* kf = track->createNodeKeyFrame(static_cast<float>(time));
+
+        // If no explicit transforms given, use interpolated values at this time
+        if (!args.contains("translate") && !args.contains("rotate") && !args.contains("scale")) {
+            if (entity->hasAnimationState(animName.toStdString())) {
+                Ogre::TransformKeyFrame interp(nullptr, static_cast<float>(time));
+                track->getInterpolatedKeyFrame(static_cast<float>(time), &interp);
+                kf->setTranslate(interp.getTranslate());
+                kf->setRotation(interp.getRotation());
+                kf->setScale(interp.getScale());
+            }
+        } else {
+            if (args.contains("translate")) {
+                QJsonArray t = args["translate"].toArray();
+                kf->setTranslate(Ogre::Vector3(t[0].toDouble(), t[1].toDouble(), t[2].toDouble()));
+            }
+            if (args.contains("rotate")) {
+                QJsonArray r = args["rotate"].toArray();
+                kf->setRotation(Ogre::Quaternion(r[0].toDouble(), r[1].toDouble(), r[2].toDouble(), r[3].toDouble()));
+            }
+            if (args.contains("scale")) {
+                QJsonArray s = args["scale"].toArray();
+                kf->setScale(Ogre::Vector3(s[0].toDouble(), s[1].toDouble(), s[2].toDouble()));
+            }
+        }
+
+        entity->getAllAnimationStates()->_notifyDirty();
+
+        Ogre::Vector3 t = kf->getTranslate();
+        Ogre::Quaternion r = kf->getRotation();
+        Ogre::Vector3 s = kf->getScale();
+        return makeSuccessResult(QString("Added keyframe at %1s on track '%2': pos=(%3,%4,%5) rot=(%6,%7,%8,%9) scale=(%10,%11,%12)")
+            .arg(time).arg(trackName)
+            .arg(t.x).arg(t.y).arg(t.z)
+            .arg(r.w).arg(r.x).arg(r.y).arg(r.z)
+            .arg(s.x).arg(s.y).arg(s.z));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolRemoveKeyframe(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    QString animName = args["animation"].toString();
+    QString trackName = args["track"].toString();
+    double time = args["time"].toDouble(-1);
+
+    if (entityName.isEmpty() || animName.isEmpty() || trackName.isEmpty())
+        return makeErrorResult("Error: 'entity', 'animation', and 'track' are required");
+    if (time < 0)
+        return makeErrorResult("Error: 'time' must be a non-negative number");
+
+    try {
+        Ogre::Entity* entity = findEntityByName(entityName);
+        if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        if (!entity->hasSkeleton()) return makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
+
+        Ogre::SkeletonInstance* skeleton = entity->getSkeleton();
+        if (!skeleton->hasAnimation(animName.toStdString()))
+            return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+
+        Ogre::Animation* anim = skeleton->getAnimation(animName.toStdString());
+        Ogre::NodeAnimationTrack* track = findTrackByBoneName(anim, trackName);
+        if (!track)
+            return makeErrorResult(QString("Error: Track for bone '%1' not found").arg(trackName));
+
+        // Find keyframe at the given time
+        bool found = false;
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); i++) {
+            if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(time)) < 0.001f) {
+                track->removeKeyFrame(i);
+                found = true;
+                break;
+            }
+        }
+
+        if (!found)
+            return makeErrorResult(QString("Error: No keyframe found at time %1s on track '%2'").arg(time).arg(trackName));
+
+        entity->getAllAnimationStates()->_notifyDirty();
+
+        return makeSuccessResult(QString("Removed keyframe at %1s from track '%2'").arg(time).arg(trackName));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
 void MCPServer::onAnimationTick()
 {
     const float dt = 0.016f; // ~16ms per tick
@@ -1447,6 +1912,117 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "animate",
             "Start or stop continuous rotation animation on a scene node",
+            inputSchema
+        ));
+    }
+
+    // list_skeletal_animations
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        inputSchema["properties"] = QJsonObject();
+
+        tools.append(buildToolDefinition(
+            "list_skeletal_animations",
+            "List all skeletal animations across all entities in the scene",
+            inputSchema
+        ));
+    }
+
+    // get_animation_info
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"entity", "animation"};
+
+        tools.append(buildToolDefinition(
+            "get_animation_info",
+            "Get detailed animation info: length, tracks (bones), and all keyframes with transform data",
+            inputSchema
+        ));
+    }
+
+    // set_animation_length
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
+        props["length"] = QJsonObject{{"type", "number"}, {"description", "New animation length in seconds"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"entity", "animation", "length"};
+
+        tools.append(buildToolDefinition(
+            "set_animation_length",
+            "Change the duration of a skeletal animation",
+            inputSchema
+        ));
+    }
+
+    // set_animation_time
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
+        props["time"] = QJsonObject{{"type", "number"}, {"description", "Time position in seconds (use this OR navigate)"}};
+        props["navigate"] = QJsonObject{{"type", "string"}, {"description", "Jump to keyframe: 'next', 'prev', 'first', or 'last' (requires 'track')"}};
+        props["track"] = QJsonObject{{"type", "string"}, {"description", "Bone name for keyframe navigation"}};
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Enable/disable the animation state (default: true)"}};
+        props["loop"] = QJsonObject{{"type", "boolean"}, {"description", "Set loop mode"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"entity", "animation"};
+
+        tools.append(buildToolDefinition(
+            "set_animation_time",
+            "Set animation time position or navigate to prev/next/first/last keyframe",
+            inputSchema
+        ));
+    }
+
+    // add_keyframe
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
+        props["track"] = QJsonObject{{"type", "string"}, {"description", "Bone name for the track"}};
+        props["time"] = QJsonObject{{"type", "number"}, {"description", "Keyframe time in seconds"}};
+        props["translate"] = QJsonObject{{"type", "array"}, {"description", "Translation [x, y, z]"}};
+        props["rotate"] = QJsonObject{{"type", "array"}, {"description", "Rotation quaternion [w, x, y, z]"}};
+        props["scale"] = QJsonObject{{"type", "array"}, {"description", "Scale [x, y, z]"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"entity", "animation", "track", "time"};
+
+        tools.append(buildToolDefinition(
+            "add_keyframe",
+            "Add or update a keyframe on an animation track at a specific time with optional transform values",
+            inputSchema
+        ));
+    }
+
+    // remove_keyframe
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
+        props["track"] = QJsonObject{{"type", "string"}, {"description", "Bone name for the track"}};
+        props["time"] = QJsonObject{{"type", "number"}, {"description", "Keyframe time in seconds to remove"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"entity", "animation", "track", "time"};
+
+        tools.append(buildToolDefinition(
+            "remove_keyframe",
+            "Remove a keyframe from an animation track at the specified time",
             inputSchema
         ));
     }
