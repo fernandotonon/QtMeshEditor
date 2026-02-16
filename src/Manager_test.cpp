@@ -264,8 +264,8 @@ TEST_F(ManagerHeadlessTest, IsValidFileExtention)
     EXPECT_TRUE(mgr->isValidFileExtention(stlFile));
 
     // Invalid extensions
-    QString txtFile = "readme.txt";
-    EXPECT_FALSE(mgr->isValidFileExtention(txtFile));
+    QString docFile = "readme.doc";
+    EXPECT_FALSE(mgr->isValidFileExtention(docFile));
 
     QString pngFile = "texture.png";
     EXPECT_FALSE(mgr->isValidFileExtention(pngFile));
