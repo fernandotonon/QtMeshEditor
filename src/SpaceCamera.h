@@ -76,9 +76,9 @@ class SpaceCamera : Ogre::FrameListener
         SpaceCamera(){} // for testing purposes
 
     private:
-        Ogre::SceneNode*        mCameraNode; // Node da camera
-        Ogre::SceneNode*        mTarget;
-        Ogre::Camera*           mCamera; // Ogre camera
+        Ogre::SceneNode*        mCameraNode = nullptr; // Node da camera
+        Ogre::SceneNode*        mTarget = nullptr;
+        Ogre::Camera*           mCamera = nullptr; // Ogre camera
         Ogre::Real              mCameraSpeed = 0.0f;
         Ogre::SceneManager*     mSceneMgr=nullptr; //SceneManager
 

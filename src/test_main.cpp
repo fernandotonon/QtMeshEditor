@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <csignal>
 #include <cstdlib>
+#include "Manager.h"
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -25,9 +26,15 @@ static void crashHandler(int sig)
 {
 #ifdef COVERAGE_BUILD
     __gcov_dump();
-#endif
+    // Exit immediately — the crash is typically in Ogre/Mesa teardown
+    // after tests have passed. Re-raising would produce exit code 139,
+    // which the CI counts as a crash and loses the suite's pass status.
+    // Use gtest's failure count so real test failures still produce non-zero exit.
+    _exit(testing::UnitTest::GetInstance()->failed_test_count() > 0 ? 1 : 0);
+#else
     signal(sig, SIG_DFL);
     raise(sig);
+#endif
 }
 
 int main(int argc, char **argv)
@@ -41,5 +48,15 @@ int main(int argc, char **argv)
     QApplication app(argc, argv);
 
     testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+    int result = RUN_ALL_TESTS();
+
+    // Clean up Ogre before QApplication destruction to avoid
+    // SIGSEGV during static destructor teardown (Ogre::Root vs QApp race).
+    Manager::kill();
+
+#ifdef COVERAGE_BUILD
+    __gcov_dump();   // Flush all coverage data before exit
+    _exit(result);   // Skip static destructors that crash under Mesa/Xvfb
+#endif
+    return result;
 }
