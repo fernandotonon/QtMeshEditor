@@ -7,6 +7,7 @@
 #include <QSettings>
 #include <QLibraryInfo>
 #include <QCommandLineParser>
+#include <QScopeGuard>
 #include <QtQml/qqmlengine.h>
 #include <QtQml/qjsengine.h>
 #include <QtQuickControls2/QQuickStyle>
@@ -16,31 +17,14 @@
 #include "LLMManager.h"
 #include "ModelDownloader.h"
 #include "MCPServer.h"
+#include "SentryReporter.h"
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
-#include <signal.h>
-#include <execinfo.h>
-#endif
-
-#ifndef Q_OS_WIN
-static void crashHandler(int sig) {
-    fprintf(stderr, "\n=== CRASH: signal %d ===\n", sig);
-    void *frames[64];
-    int count = backtrace(frames, 64);
-    backtrace_symbols_fd(frames, count, STDERR_FILENO);
-    fflush(stderr);
-    _exit(1);
-}
 #endif
 
 int main(int argc, char *argv[])
 {
-#ifndef Q_OS_WIN
-    signal(SIGSEGV, crashHandler);
-    signal(SIGABRT, crashHandler);
-    signal(SIGBUS, crashHandler);
-#endif
     // Check for MCP server mode before creating QApplication
     bool mcpOnlyMode = false;
     bool mcpWithGuiMode = false;
@@ -74,6 +58,10 @@ int main(int argc, char *argv[])
         QCoreApplication::setOrganizationDomain("none");
         QCoreApplication::setApplicationName("QtMeshEditor");
         QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
+
+        // Initialize Sentry using stored consent (no dialog in headless mode)
+        SentryReporter::initialize();
+        auto sentryClose = qScopeGuard([] { SentryReporter::shutdown(); });
 
         MCPServer server;
         // Note: In standalone MCP mode, we don't have a MainWindow
@@ -115,6 +103,16 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationVersion(QTMESHEDITOR_VERSION);
 
     a.setStyle(QStyleFactory::create("Fusion"));
+
+    // Sentry crash reporting: show consent dialog on first launch
+    // (requires QApplication to exist for QMessageBox)
+    if (SentryReporter::isFirstLaunch()) {
+        SentryReporter::showConsentDialog();
+    }
+
+    // Initialize Sentry and ensure sentry_close() is called on exit
+    SentryReporter::initialize();
+    auto sentryClose = qScopeGuard([] { SentryReporter::shutdown(); });
 
     // Register QML types
     qmlRegisterSingletonType<MaterialEditorQML>("MaterialEditorQML", 1, 0, "MaterialEditorQML",
@@ -158,6 +156,8 @@ int main(int argc, char *argv[])
         mcpServer->stop();
         delete mcpServer;
     }
+
+    // SentryReporter::shutdown() is called automatically via qScopeGuard
 
     return result;
 }

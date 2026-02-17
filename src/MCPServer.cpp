@@ -13,6 +13,7 @@
 #include <QTemporaryFile>
 #include <QImage>
 #include <QBuffer>
+#include "SentryReporter.h"
 #include <QTimer>
 #include <QDateTime>
 #include <QMetaObject>
@@ -346,8 +347,20 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 {
     qDebug() << "MCP Tool Call:" << name << args;
 
+    SentryReporter::addBreadcrumb("mcp.tool", QStringLiteral("Tool call: %1").arg(name));
+
+    // Start a performance transaction for heavy tools
+    static const QStringList heavyTools = {
+        "load_mesh", "export_mesh", "take_screenshot", "create_primitive", "create_material"
+    };
+    uintptr_t txn = 0;
+    if (heavyTools.contains(name)) {
+        txn = SentryReporter::startTransaction(QStringLiteral("mcp.%1").arg(name), "mcp.tool");
+    }
+
     // Lazily initialize Ogre/Manager on first tool call
     if (!ensureOgreInitialized()) {
+        if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult("Error: Ogre 3D engine could not be initialized (no OpenGL available)");
     }
 
@@ -397,8 +410,17 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     } else if (name == "remove_keyframe") {
         toolResult = toolRemoveKeyframe(args);
     } else {
+        if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
     }
+
+    // Track errors as breadcrumbs
+    if (toolResult.contains("isError") && toolResult["isError"].toBool()) {
+        SentryReporter::addBreadcrumb("mcp.tool",
+            QStringLiteral("Tool error: %1").arg(name), "error");
+    }
+
+    if (txn) SentryReporter::finishTransaction(txn);
 
     return toolResult;
 }

@@ -39,6 +39,7 @@ LLMManager.cpp
 ModelDownloader.cpp
 LLMSettingsWidget.cpp
 MCPServer.cpp
+SentryReporter.cpp
 )
 
 set(HEADER_FILES
@@ -81,6 +82,7 @@ LLMManager.h
 ModelDownloader.h
 LLMSettingsWidget.h
 MCPServer.h
+SentryReporter.h
 )
 
 set(TEST_SOURCES "")
@@ -314,6 +316,11 @@ if(ENABLE_LOCAL_LLM)
         )
     endif()
 endif()
+
+# Link Sentry if enabled
+if(ENABLE_SENTRY)
+    target_link_libraries(${CMAKE_PROJECT_NAME} sentry)
+endif()
 ENDIF()
 
 ##############################################################
@@ -355,6 +362,11 @@ if(BUILD_TESTS)
     # Link llama.cpp for tests if enabled
     if(ENABLE_LOCAL_LLM)
         target_link_libraries(UnitTests llama ggml)
+    endif()
+
+    # Link Sentry for tests if enabled
+    if(ENABLE_SENTRY)
+        target_link_libraries(UnitTests sentry)
     endif()
 
     ADD_DEPENDENCIES(UnitTests ui)

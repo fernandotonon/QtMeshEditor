@@ -214,6 +214,26 @@ if(ENABLE_LOCAL_LLM)
     message(STATUS "Local LLM support enabled with llama.cpp")
 endif()
 ##############################################################
+#  Sentry crash reporting and analytics
+##############################################################
+option(ENABLE_SENTRY "Enable Sentry crash reporting and analytics" ON)
+
+if(ENABLE_SENTRY)
+    include(FetchContent)
+    set(SENTRY_BACKEND "inproc" CACHE STRING "" FORCE)
+    set(SENTRY_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+    set(SENTRY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(SENTRY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(SENTRY_INTEGRATION_QT ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(sentry
+        GIT_REPOSITORY https://github.com/getsentry/sentry-native.git
+        GIT_TAG 0.7.17
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(sentry)
+    include_directories(${sentry_SOURCE_DIR}/include)
+    add_definitions(-DENABLE_SENTRY)
+endif()
+##############################################################
 #  Find Ogre
 ##############################################################
 find_package(OGRE REQUIRED)

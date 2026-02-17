@@ -460,6 +460,9 @@ jobs:
                /usr/local/lib/pkgconfig/
         key: ${{ runner.os }}-build-${{ env.cache-name }}
 
+    - name: Install Sentry dependencies
+      run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+
     - name: Configure CMake
       run: |
             sudo cmake -S . -DCMAKE_BUILD_TYPE=${{env.BUILD_TYPE}} \
@@ -467,7 +470,7 @@ jobs:
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
             -DQT_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
-            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6GuiTools 
+            -DQt6GuiTools_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6GuiTools
 
     - name: Build
       run: sudo make install -j8
@@ -629,7 +632,8 @@ jobs:
             -DBUILD_TESTS=ON -DCMAKE_CXX_FLAGS="--coverage -fprofile-arcs -ftest-coverage -O0 -DCOVERAGE_BUILD" \
             -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage -O0 -DCOVERAGE_BUILD" \
             -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
-            -DBUILD_QT_MESH_EDITOR=OFF
+            -DBUILD_QT_MESH_EDITOR=OFF \
+            -DENABLE_SENTRY=OFF
       
     - name: Run build-wrapper
       run: |
@@ -1325,6 +1329,36 @@ jobs:
           update_latest_release: true
           overwrite: false
           verbose: true
+
+####################################################################
+# Notify Sentry of new release (associate commits for source context)
+####################################################################
+
+ notify-sentry:
+    needs: [build-windows, build-linux, build-macos]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'published'
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0
+
+    - name: Install sentry-cli
+      run: |
+        curl -sL https://sentry.io/get-cli/ | bash
+
+    - name: Create Sentry release and associate commits
+      env:
+        SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+        SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+        SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+      run: |
+        VERSION="qtmesheditor@${{ github.ref_name }}"
+        echo "Creating Sentry release: $VERSION"
+        sentry-cli releases new "$VERSION"
+        sentry-cli releases set-commits "$VERSION" --auto
+        sentry-cli releases finalize "$VERSION"
+        echo "Sentry release $VERSION created and finalized"
 
 ####################################################################
 # Update Homebrew Cask after macOS release
