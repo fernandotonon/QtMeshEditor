@@ -49,6 +49,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMWorker.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.cpp
     )
     
     set(TEST_HEADER_FILES
@@ -90,6 +91,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMWorker.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)

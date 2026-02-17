@@ -13,6 +13,7 @@
 #include <QJSEngine>
 #include <QQuickWindow>
 #include <QFileInfo>
+#include "SentryReporter.h"
 #include <QDialog>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -313,6 +314,19 @@ void MainWindow::initToolBar()
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     QAction* aiSettingsAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Model Settings..."));
     connect(aiSettingsAction, &QAction::triggered, this, &MainWindow::showAIModelSettings);
+
+    // Crash reporting toggle in Help menu
+    ui->menuHelp->addSeparator();
+    QAction* crashReportAction = ui->menuHelp->addAction(tr("Send Crash Reports"));
+    crashReportAction->setCheckable(true);
+    crashReportAction->setChecked(SentryReporter::isEnabled());
+    connect(crashReportAction, &QAction::toggled, this, [](bool checked) {
+        SentryReporter::setEnabled(checked);
+        if (checked) {
+            QMessageBox::information(nullptr, QObject::tr("Crash Reporting"),
+                QObject::tr("Crash reporting will be enabled on next launch."));
+        }
+    });
 
     // Initialize LLMManager
     LLMManager::instance();
