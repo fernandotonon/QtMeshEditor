@@ -1,6 +1,7 @@
 #include "SkeletonDebug.h"
 
-#include <QTimer>
+#include <array>
+#include <cassert>
 
 #include "Manager.h"
 
@@ -9,84 +10,19 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
     , mEntity(entity)
     , mSceneMan(man)
     , mScaleAxes(scaleAxes)
-    , mShowAxes(true)
-    , mShowBones(true)
-    , mShowNames(true)
 {
     createAxesMaterial();
     createBoneMaterial();
     createAxesMesh();
     createBoneMesh();
 
-    std::map<std::string, Ogre::Entity*> mapEntities;
-
-    int numBones = mEntity->getSkeleton()->getNumBones();
-
-    for(unsigned short int iBone = 0; iBone < numBones; ++iBone)
-    {
-        Ogre::Bone* pBone = mEntity->getSkeleton()->getBone(iBone);
-        if ( !pBone )
-        {
-            assert(false);
-            continue;
-        }
-
-        Ogre::Entity *ent;
-        Ogre::TagPoint *tp;
-
-        // Absolutely HAVE to create bone representations first. Otherwise we would get the wrong child count
-        // because an attached object counts as a child
-        // Would be nice to have a function that only gets the children that are bones...
-        unsigned short numChildren = pBone->numChildren();
-        if(numChildren == 0)
-        {
-            // There are no children, but we should still represent the bone
-            // Creates a bone of length 1 for leaf bones (bones without children)
-            ent = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
-            tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
-            mBoneEntities.push_back(ent);
-
-            Ogre::Vector3 v = pBone->getPosition();
-            // If the length is zero, no point in creating the bone representation
-            float length = v.length();
-            if(length < 0.00001f)
-                continue;
-            tp->setScale(length, length, length);
-        }
-        else
-        {
-            for(int i = 0; i < numChildren; ++i)
-            {
-                Ogre::Vector3 v = pBone->getChild(i)->getPosition();
-                // If the length is zero, no point in creating the bone representation
-                float length = v.length();
-                if(length < 0.00001f)
-                    continue;
-
-                ent = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
-                tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
-                mBoneEntities.push_back(ent);
-
-                tp->setScale(length, length, length);
-            }
-        }
-
-        mapEntities[pBone->getName().data()] = ent;
-
-        ent = mSceneMan->createEntity("SkeletonDebug/AxesMesh");
-        tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
-        // Make sure we don't wind up with tiny/giant axes and that one axis doesnt get squashed
-        tp->setScale((mScaleAxes/mEntity->getParentSceneNode()->getScale().x), (mScaleAxes/mEntity->getParentSceneNode()->getScale().y), (mScaleAxes/mEntity->getParentSceneNode()->getScale().z));
-        mAxisEntities.push_back(ent);
-    }
+    auto mapEntities = createBoneVisuals();
 
     showAxes(false);
     showBones(false);
     showNames(false);
 
-    mTimer = new QTimer(this);
-    connect(mTimer, &QTimer::timeout, this, [this, mapEntities](){
-        // Set Selected Bone to Red from user data info
+    connect(&mTimer, &QTimer::timeout, this, [this, mapEntities](){
         for(auto* ent: mBoneEntities){
             ent->setMaterial(mBoneMatPtr);
             ent->setVisible(mShowBones);
@@ -108,12 +44,12 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
         }
 
     });
-    mTimer->start(0);
+    mTimer.start(0);
 }
 
 SkeletonDebug::~SkeletonDebug()
 {
-    mTimer->stop();
+    mTimer.stop();
 
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
 
@@ -132,8 +68,66 @@ SkeletonDebug::~SkeletonDebug()
     mAxisEntities.clear();
 }
 
+void SkeletonDebug::createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre::Entity*& lastEnt)
+{
+    for(unsigned short i = 0; i < pBone->numChildren(); ++i)
+    {
+        float length = pBone->getChild(i)->getPosition().length();
+        if(length < 0.00001f)
+            continue;
+
+        lastEnt = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
+        auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)lastEnt);
+        mBoneEntities.push_back(lastEnt);
+        tp->setScale(length, length, length);
+    }
+}
+
+std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisuals()
+{
+    std::map<std::string, Ogre::Entity*, std::less<>> mapEntities;
+    int numBones = mEntity->getSkeleton()->getNumBones();
+
+    for(unsigned short int iBone = 0; iBone < numBones; ++iBone)
+    {
+        const Ogre::Bone* pBone = mEntity->getSkeleton()->getBone(iBone);
+        if(!pBone)
+        {
+            assert(false);
+            continue;
+        }
+
+        Ogre::Entity *ent = nullptr;
+
+        if(unsigned short numChildren = pBone->numChildren(); numChildren == 0)
+        {
+            ent = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
+            auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
+            mBoneEntities.push_back(ent);
+
+            float length = pBone->getPosition().length();
+            if(length >= 0.00001f)
+                tp->setScale(length, length, length);
+        }
+        else
+        {
+            createChildBoneRepresentations(pBone, ent);
+        }
+
+        mapEntities[pBone->getName().data()] = ent;
+
+        ent = mSceneMan->createEntity("SkeletonDebug/AxesMesh");
+        auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
+        tp->setScale((mScaleAxes/mEntity->getParentSceneNode()->getScale().x), (mScaleAxes/mEntity->getParentSceneNode()->getScale().y), (mScaleAxes/mEntity->getParentSceneNode()->getScale().z));
+        mAxisEntities.push_back(ent);
+    }
+
+    return mapEntities;
+}
+
 void SkeletonDebug::update() const
 {
+    // Intentionally empty — bone updates are handled by the QTimer callback
 }
 
 void SkeletonDebug::showAxes(bool show)
@@ -255,7 +249,7 @@ void SkeletonDebug::createBoneMesh()
         Ogre::ManualObject mo("tmp");
         mo.begin(mBoneMatPtr->getName());
 
-        Ogre::Vector3 basepos[6] =
+        std::array<Ogre::Vector3, 6> basepos =
         {
             Ogre::Vector3(0,0,0),
             Ogre::Vector3(mBoneSize, mBoneSize*2, mBoneSize),
@@ -356,8 +350,8 @@ void SkeletonDebug::createAxesMesh()
         */
         mo.estimateVertexCount(7 * 2 * 3);
         mo.estimateIndexCount(3 * 2 * 3);
-        Ogre::Quaternion quat[6];
-        Ogre::ColourValue col[3];
+        std::array<Ogre::Quaternion, 6> quat;
+        std::array<Ogre::ColourValue, 3> col;
 
         // x-axis
         quat[0] = Ogre::Quaternion::IDENTITY;
@@ -375,7 +369,7 @@ void SkeletonDebug::createAxesMesh()
         col[2] = Ogre::ColourValue::Blue;
         col[2].a = 0.3f;
 
-        Ogre::Vector3 basepos[7] =
+        std::array<Ogre::Vector3, 7> basepos =
         {
             // stalk
             Ogre::Vector3(0.0f, 0.05f, 0.0f),
@@ -388,25 +382,20 @@ void SkeletonDebug::createAxesMesh()
             Ogre::Vector3(0.7f, 0.15f, 0.0f)
         };
 
-
-        // vertices
-        // 6 arrows
+        // vertices — 6 arrows, 7 points each
         for (size_t i = 0; i < 6; ++i)
         {
-            // 7 points
-            for (size_t p = 0; p < 7; ++p)
+            for (const auto& bp : basepos)
             {
-                Ogre::Vector3 pos = quat[i] * basepos[p];
-                mo.position(pos);
+                mo.position(quat[i] * bp);
                 mo.colour(col[i / 2]);
             }
         }
 
-        // indices
-        // 6 arrows
-        for (size_t i = 0; i < 6; ++i)
+        // indices — 6 arrows
+        for (unsigned int i = 0; i < 6; ++i)
         {
-            size_t base = i * 7;
+            unsigned int base = i * 7;
             mo.triangle(base + 0, base + 1, base + 2);
             mo.triangle(base + 0, base + 2, base + 3);
             mo.triangle(base + 4, base + 5, base + 6);

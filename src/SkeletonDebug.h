@@ -4,26 +4,27 @@
 #include <Ogre.h>
 #include <OgreTagPoint.h>
 #include <vector>
+#include <map>
+#include <string>
 #include <QObject>
-
-class QTimer;
+#include <QTimer>
 
 class SkeletonDebug: public QObject
 {
     Q_OBJECT
 public:
-    SkeletonDebug(Ogre::Entity *entity, Ogre::SceneManager *man, float boneSize = 0.1f, float scaleAxes =0.1f);
-    ~SkeletonDebug();
+    SkeletonDebug(Ogre::Entity *entity, Ogre::SceneManager *man, float boneSize = 0.1f, float scaleAxes = 0.1f);
+    ~SkeletonDebug() override;
 
     void setAxesScale(Ogre::Real scale){mScaleAxes = scale;}
-    Ogre::Real getAxesScale(){return mScaleAxes;}
+    Ogre::Real getAxesScale() const {return mScaleAxes;}
 
     void showAxes(bool show);
     void showNames(bool show);
     void showBones(bool show);
-    bool axesShown(){return mShowAxes;}
-    bool namesShown(){return mShowNames;}
-    bool bonesShown(){return mShowBones;}
+    bool axesShown() const {return mShowAxes;}
+    bool namesShown() const {return mShowNames;}
+    bool bonesShown() const {return mShowBones;}
 
     void update() const;
 
@@ -43,16 +44,18 @@ private:
 
     Ogre::Real mScaleAxes;
 
-    bool mShowAxes;
-    bool mShowBones;
-    bool mShowNames;
+    bool mShowAxes = true;
+    bool mShowBones = true;
+    bool mShowNames = true;
 
     void createAxesMaterial();
     void createBoneMaterial();
     void createAxesMesh();
     void createBoneMesh();
+    std::map<std::string, Ogre::Entity*, std::less<>> createBoneVisuals();
+    void createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre::Entity*& lastEnt);
 
-    QTimer *mTimer = nullptr;
+    QTimer mTimer;
 };
 
 #endif // SKELETONDEBUG_H_INCLUDED
