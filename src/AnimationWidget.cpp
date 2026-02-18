@@ -33,7 +33,7 @@ AnimationWidget::AnimationWidget(QWidget *parent) :
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, [this](Ogre::SceneNode* const& node) {
         // Clean up any SkeletonDebug instances for entities attached to this node
         // Signal fires before entities are destroyed, so we can safely access them
-        auto attachedObjects = node->getAttachedObjects();
+        const auto& attachedObjects = node->getAttachedObjects();
         for(auto* obj : attachedObjects)
         {
             if(obj->getMovableType() != "Entity")
@@ -41,7 +41,7 @@ AnimationWidget::AnimationWidget(QWidget *parent) :
             auto* entity = static_cast<Ogre::Entity*>(obj);
             if(mShowSkeleton.contains(entity))
             {
-                delete mShowSkeleton.value(entity);
+                mShowSkeleton.value(entity)->deleteLater();
                 mShowSkeleton.remove(entity);
             }
         }

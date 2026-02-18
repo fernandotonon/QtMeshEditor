@@ -5,7 +5,6 @@
 #include <OgreTagPoint.h>
 #include <vector>
 #include <QObject>
-//#include "ObjectTextDisplay.h"
 
 class QTimer;
 
@@ -13,7 +12,7 @@ class SkeletonDebug: public QObject
 {
     Q_OBJECT
 public:
-    SkeletonDebug(Ogre::Entity *entity, Ogre::SceneManager *man,/* Ogre::Camera *cam,*/ float boneSize = 0.1f, float scaleAxes =0.1f);
+    SkeletonDebug(Ogre::Entity *entity, Ogre::SceneManager *man, float boneSize = 0.1f, float scaleAxes =0.1f);
     ~SkeletonDebug();
 
     void setAxesScale(Ogre::Real scale){mScaleAxes = scale;}
@@ -25,13 +24,12 @@ public:
     bool axesShown(){return mShowAxes;}
     bool namesShown(){return mShowNames;}
     bool bonesShown(){return mShowBones;}
-    
-    void update();
+
+    void update() const;
 
 private:
     std::vector<Ogre::Entity*> mAxisEntities;
     std::vector<Ogre::Entity*> mBoneEntities;
-    //std::vector<ObjectTextDisplay*> mTextOverlays;
 
     float mBoneSize;
 
@@ -42,7 +40,6 @@ private:
     Ogre::MeshPtr mBoneMeshPtr;
     Ogre::MeshPtr mAxesMeshPtr;
     Ogre::SceneManager *mSceneMan;
-    //Ogre::Camera *mCamera;
 
     Ogre::Real mScaleAxes;
 
@@ -55,7 +52,7 @@ private:
     void createAxesMesh();
     void createBoneMesh();
 
-    QTimer *mTimer;
+    QTimer *mTimer = nullptr;
 };
 
 #endif // SKELETONDEBUG_H_INCLUDED

@@ -3,25 +3,20 @@
 #include <QTimer>
 
 #include "Manager.h"
-// TODO Remove defenitively this cam (for overlay purpose, but this has to be driven app level)
-SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Ogre::Camera *cam,*/ float boneSize, float scaleAxes)
+
+SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, float boneSize, float scaleAxes)
+    : mBoneSize(boneSize)
+    , mEntity(entity)
+    , mSceneMan(man)
+    , mScaleAxes(scaleAxes)
+    , mShowAxes(true)
+    , mShowBones(true)
+    , mShowNames(true)
 {
-    mEntity = entity;
-    mSceneMan = man;
-    //mCamera = cam;
-
-    mScaleAxes = scaleAxes;
-
-    mBoneSize = boneSize;
-
     createAxesMaterial();
     createBoneMaterial();
     createAxesMesh();
     createBoneMesh();
-
-    mShowAxes = true;
-    mShowBones = true;
-    mShowNames = true;
 
     std::map<std::string, Ogre::Entity*> mapEntities;
 
@@ -83,27 +78,20 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Og
         // Make sure we don't wind up with tiny/giant axes and that one axis doesnt get squashed
         tp->setScale((mScaleAxes/mEntity->getParentSceneNode()->getScale().x), (mScaleAxes/mEntity->getParentSceneNode()->getScale().y), (mScaleAxes/mEntity->getParentSceneNode()->getScale().z));
         mAxisEntities.push_back(ent);
-
-       /* Ogre::String name = mEntity->getName() + "SkeletonDebug/BoneText/Bone_";
-        name += iBone;
-        ObjectTextDisplay *overlay = new ObjectTextDisplay(name, pBone, mCamera, mEntity);
-        overlay->enable(true);
-        overlay->setText(pBone->getName());
-        mTextOverlays.push_back(overlay);*/
     }
 
     showAxes(false);
     showBones(false);
     showNames(false);
 
-    mTimer = new QTimer();
-    connect(mTimer, &QTimer::timeout, this, [=](){
+    mTimer = new QTimer(this);
+    connect(mTimer, &QTimer::timeout, this, [this, mapEntities](){
         // Set Selected Bone to Red from user data info
-        for(auto ent: mBoneEntities){
+        for(auto* ent: mBoneEntities){
             ent->setMaterial(mBoneMatPtr);
             ent->setVisible(mShowBones);
         }
-        for(auto bone : mEntity->getSkeleton()->getBones())
+        for(auto* bone : mEntity->getSkeleton()->getBones())
         {
             if(!bone->getUserObjectBindings().getUserAny("selected").has_value())
                 continue;
@@ -126,7 +114,6 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Og
 SkeletonDebug::~SkeletonDebug()
 {
     mTimer->stop();
-    delete mTimer;
 
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
 
@@ -145,13 +132,8 @@ SkeletonDebug::~SkeletonDebug()
     mAxisEntities.clear();
 }
 
-void SkeletonDebug::update()
+void SkeletonDebug::update() const
 {
-    /*std::vector<ObjectTextDisplay*>::iterator it;
-    for(it = mTextOverlays.begin(); it < mTextOverlays.end(); it++)
-    {
-        ((ObjectTextDisplay*)*it)->update();
-    }*/
 }
 
 void SkeletonDebug::showAxes(bool show)
@@ -162,10 +144,9 @@ void SkeletonDebug::showAxes(bool show)
 
     mShowAxes = show;
 
-    std::vector<Ogre::Entity*>::iterator it;
-    for(it = mAxisEntities.begin(); it < mAxisEntities.end(); ++it)
+    for(auto* ent : mAxisEntities)
     {
-        ((Ogre::Entity*)*it)->setVisible(show);
+        ent->setVisible(show);
     }
 }
 
@@ -177,12 +158,10 @@ void SkeletonDebug::showBones(bool show)
 
     mShowBones = show;
 
-    std::vector<Ogre::Entity*>::iterator it;
-    for(it = mBoneEntities.begin(); it < mBoneEntities.end(); ++it)
+    for(auto* ent : mBoneEntities)
     {
-        ((Ogre::Entity*)*it)->setVisible(show);
+        ent->setVisible(show);
     }
-
 }
 
 void SkeletonDebug::showNames(bool show)
@@ -192,12 +171,6 @@ void SkeletonDebug::showNames(bool show)
         return;
 
     mShowNames = show;
-
-    /*std::vector<ObjectTextDisplay*>::iterator it;
-    for(it = mTextOverlays.begin(); it < mTextOverlays.end(); it++)
-    {
-        ((ObjectTextDisplay*)*it)->enable(show);
-    }*/
 }
 
 void SkeletonDebug::createAxesMaterial()
@@ -293,8 +266,8 @@ void SkeletonDebug::createBoneMesh()
         };
 
         // Two colours so that we can distinguish the sides of the bones (we don't use any lighting on the material)
-        Ogre::ColourValue col = Ogre::ColourValue(0.5f, 0.5f, 0.5f, 1.0f);
-        Ogre::ColourValue col1 = Ogre::ColourValue(0.6f, 0.6f, 0.6f, 1.0f);
+        auto col = Ogre::ColourValue(0.5f, 0.5f, 0.5f, 1.0f);
+        auto col1 = Ogre::ColourValue(0.6f, 0.6f, 0.6f, 1.0f);
 
         mo.position(basepos[0]);
         mo.colour(col);
