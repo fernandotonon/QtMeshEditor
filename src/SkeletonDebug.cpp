@@ -125,16 +125,24 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Og
 
 SkeletonDebug::~SkeletonDebug()
 {
-    auto attachedObjects = mEntity->getAttachedObjects();
-    for(auto object : attachedObjects)
+    mTimer->stop();
+    delete mTimer;
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+
+    for(auto* ent : mBoneEntities)
     {
-        Ogre::Entity* e = (Ogre::Entity*)object;
-        if(e->getMesh().get()->getName().compare("SkeletonDebug/AxesMesh") ||
-                e->getMesh().get()->getName().compare("SkeletonDebug/BoneMesh"))
-        {
-            Manager::getSingleton()->getSceneMgr()->destroyEntity(e);
-        }
+        mEntity->detachObjectFromBone(ent);
+        sceneMgr->destroyEntity(ent);
     }
+    mBoneEntities.clear();
+
+    for(auto* ent : mAxisEntities)
+    {
+        mEntity->detachObjectFromBone(ent);
+        sceneMgr->destroyEntity(ent);
+    }
+    mAxisEntities.clear();
 }
 
 void SkeletonDebug::update()
