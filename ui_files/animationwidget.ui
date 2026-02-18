@@ -79,6 +79,11 @@
         <string>Display Skeleton</string>
        </property>
       </column>
+      <column>
+       <property name="text">
+        <string>Show Weights</string>
+       </property>
+      </column>
      </widget>
     </widget>
    </item>

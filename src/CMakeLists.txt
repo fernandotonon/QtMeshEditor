@@ -40,6 +40,7 @@ ModelDownloader.cpp
 LLMSettingsWidget.cpp
 MCPServer.cpp
 SentryReporter.cpp
+BoneWeightOverlay.cpp
 )
 
 set(HEADER_FILES
@@ -83,6 +84,7 @@ ModelDownloader.h
 LLMSettingsWidget.h
 MCPServer.h
 SentryReporter.h
+BoneWeightOverlay.h
 )
 
 set(TEST_SOURCES "")

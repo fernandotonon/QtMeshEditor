@@ -23,6 +23,7 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
     showNames(false);
 
     connect(&mTimer, &QTimer::timeout, this, [this, mapEntities](){
+        short currentSelected = -1;
         for(auto* ent: mBoneEntities){
             ent->setMaterial(mBoneMatPtr);
             ent->setVisible(mShowBones);
@@ -35,6 +36,8 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
             if(!Ogre::any_cast<bool>(bone->getUserObjectBindings().getUserAny("selected")))
                 continue;
 
+            currentSelected = bone->getHandle();
+
             if(mapEntities.find(bone->getName()) == mapEntities.end())
                 continue;
 
@@ -43,6 +46,12 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
             ent->setVisible(mShowBones);
         }
 
+        if (currentSelected != mLastSelectedBone)
+        {
+            mLastSelectedBone = currentSelected;
+            if (currentSelected >= 0)
+                emit boneSelected(static_cast<unsigned short>(currentSelected));
+        }
     });
     mTimer.start(0);
 }

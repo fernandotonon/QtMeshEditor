@@ -27,6 +27,10 @@ public:
     bool bonesShown() const {return mShowBones;}
 
     void update() const;
+    short selectedBoneIndex() const { return mLastSelectedBone; }
+
+signals:
+    void boneSelected(unsigned short boneIndex);
 
 private:
     std::vector<Ogre::Entity*> mAxisEntities;
@@ -56,6 +60,7 @@ private:
     void createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre::Entity*& lastEnt);
 
     QTimer mTimer;
+    short mLastSelectedBone = -1;
 };
 
 #endif // SKELETONDEBUG_H_INCLUDED
