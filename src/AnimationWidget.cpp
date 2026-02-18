@@ -31,7 +31,7 @@ AnimationWidget::AnimationWidget(QWidget *parent) :
     });
 
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, [this](Ogre::SceneNode* const& node) {
-        // Clean up any SkeletonDebug instances for entities attached to this node
+        // Clean up any SkeletonDebug and BoneWeightOverlay instances for entities attached to this node
         // Signal fires before entities are destroyed, so we can safely access them
         const auto& attachedObjects = node->getAttachedObjects();
         for(auto* obj : attachedObjects)
@@ -39,6 +39,11 @@ AnimationWidget::AnimationWidget(QWidget *parent) :
             if(obj->getMovableType() != "Entity")
                 continue;
             auto* entity = static_cast<Ogre::Entity*>(obj);
+            if(mWeightOverlays.contains(entity))
+            {
+                mWeightOverlays.value(entity)->deleteLater();
+                mWeightOverlays.remove(entity);
+            }
             if(mShowSkeleton.contains(entity))
             {
                 mShowSkeleton.value(entity)->deleteLater();
@@ -137,9 +142,16 @@ void AnimationWidget::updateSkeletonTable()
         showSkeletonCB->setCheckState(mShowSkeleton.contains(entity)?Qt::Checked:Qt::Unchecked);
         showSkeletonCB->setFlags(showSkeletonCB->flags() & ~Qt::ItemIsEditable);
 
+        auto showWeightsCB = new QTableWidgetItem(0);
+        showWeightsCB->setCheckState(mWeightOverlays.contains(entity)?Qt::Checked:Qt::Unchecked);
+        showWeightsCB->setFlags(showWeightsCB->flags() & ~Qt::ItemIsEditable);
+        if (!entity->hasSkeleton())
+            showWeightsCB->setFlags(showWeightsCB->flags() & ~Qt::ItemIsEnabled);
+
         ui->skeletonTable->insertRow(0);
         ui->skeletonTable->setItem(0,0,entityItem);
         ui->skeletonTable->setItem(0,1,showSkeletonCB);
+        ui->skeletonTable->setItem(0,2,showWeightsCB);
     }
 }
 
@@ -217,21 +229,23 @@ void AnimationWidget::pollAnimationState()
 
 void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
 {
-    if(index.column()!=1)
+    if(index.column() != 1 && index.column() != 2)
         return;
 
     auto entity = (Ogre::Entity*)ui->skeletonTable->model()->data(ui->skeletonTable->model()->index(index.row(),0), ENTITY_DATA).value<void *>();
 
-    if(entity && entity->hasSkeleton())
+    if(!entity || !entity->hasSkeleton())
+        return;
+
+    if(index.column() == 1)
     {
-        bool checked =(index.data(Qt::CheckStateRole) == Qt::Checked);
+        bool checked = (index.data(Qt::CheckStateRole) == Qt::Checked);
 
         SkeletonDebug* sd;
         if(mShowSkeleton.contains(entity))
             sd = mShowSkeleton.find(entity).value();
         else
-        {   // TODO go further in skeletonDebug to clean this cam (for overlay purpose at the get-go but remove before)
-            // TODO improve that : we don't need to create a sd if it is not checked
+        {
             sd = new SkeletonDebug(entity, Manager::getSingleton()->getSceneMgr(), 0.1f, 0.01f);
             mShowSkeleton.insert(entity, sd);
         }
@@ -244,7 +258,36 @@ void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
             mShowSkeleton.remove(entity);
         }
     }
+    else if(index.column() == 2)
+    {
+        bool checked = (index.data(Qt::CheckStateRole) == Qt::Checked);
 
+        if(checked)
+        {
+            auto* overlay = new BoneWeightOverlay(entity, Manager::getSingleton()->getSceneMgr());
+            mWeightOverlays.insert(entity, overlay);
+
+            // Connect to bone selection from SkeletonDebug if available
+            if(mShowSkeleton.contains(entity))
+            {
+                auto* sd = mShowSkeleton.value(entity);
+                connect(sd, &SkeletonDebug::boneSelected, overlay, &BoneWeightOverlay::setSelectedBone);
+                // Show weights for the currently selected bone
+                if(sd->selectedBoneIndex() >= 0)
+                    overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
+            }
+
+            overlay->setVisible(true);
+        }
+        else
+        {
+            if(mWeightOverlays.contains(entity))
+            {
+                delete mWeightOverlays.value(entity);
+                mWeightOverlays.remove(entity);
+            }
+        }
+    }
 }
 
 void AnimationWidget::on_animTable_cellDoubleClicked(int row, int column)
@@ -325,6 +368,12 @@ void AnimationWidget::disableAllSelectedAnimations()
 
 void AnimationWidget::disableAllSkeletonDebug()
 {
+    for(BoneWeightOverlay *overlay : mWeightOverlays.values())
+    {
+        delete overlay;
+    }
+    mWeightOverlays.clear();
+
     for(SkeletonDebug *sd : mShowSkeleton.values())
     {
         sd->showAxes(false);

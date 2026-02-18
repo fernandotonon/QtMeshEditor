@@ -50,6 +50,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
     )
     
     set(TEST_HEADER_FILES
@@ -92,6 +93,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/LLMSettingsWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)

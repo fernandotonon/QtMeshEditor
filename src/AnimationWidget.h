@@ -6,6 +6,7 @@
 #include <QScopedPointer>
 #include <QTimer>
 #include "SkeletonDebug.h"
+#include "BoneWeightOverlay.h"
 #include "ui_animationwidget.h"
 
 namespace Ogre{
@@ -45,6 +46,7 @@ signals:
 private:
     QScopedPointer<Ui::AnimationWidget> ui { new Ui::AnimationWidget };
     QMap<Ogre::Entity*,SkeletonDebug*> mShowSkeleton;
+    QMap<Ogre::Entity*, BoneWeightOverlay*> mWeightOverlays;
     QTimer* m_pollTimer = nullptr;
     bool m_lastPollAnimEnabled = false;
 };
