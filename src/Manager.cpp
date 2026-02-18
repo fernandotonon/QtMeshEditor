@@ -287,9 +287,9 @@ void Manager::destroySceneNode(Ogre::SceneNode* node)
     }
     //TODO if custom class has to be provided for object, userany object should be inside so that this delete is not required...
 
+    emit sceneNodeDestroyed(node);  // emitted before destruction so listeners can clean up while entities are still valid
     destroyAllAttachedMovableObjects(node);
     node->removeAndDestroyAllChildren();
-    emit sceneNodeDestroyed(node);  //emitted just before destroying
     
     // Safely destroy the scene node
     try {

@@ -30,6 +30,23 @@ AnimationWidget::AnimationWidget(QWidget *parent) :
         updateSkeletonTable();
     });
 
+    connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, [this](Ogre::SceneNode* const& node) {
+        // Clean up any SkeletonDebug instances for entities attached to this node
+        // Signal fires before entities are destroyed, so we can safely access them
+        const auto& attachedObjects = node->getAttachedObjects();
+        for(auto* obj : attachedObjects)
+        {
+            if(obj->getMovableType() != "Entity")
+                continue;
+            auto* entity = static_cast<Ogre::Entity*>(obj);
+            if(mShowSkeleton.contains(entity))
+            {
+                mShowSkeleton.value(entity)->deleteLater();
+                mShowSkeleton.remove(entity);
+            }
+        }
+    });
+
     m_pollTimer = new QTimer(this);
     connect(m_pollTimer, &QTimer::timeout, this, &AnimationWidget::pollAnimationState);
     m_pollTimer->start(200);

@@ -1,109 +1,33 @@
 #include "SkeletonDebug.h"
 
-#include <QTimer>
+#include <array>
+#include <cassert>
 
 #include "Manager.h"
-// TODO Remove defenitively this cam (for overlay purpose, but this has to be driven app level)
-SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Ogre::Camera *cam,*/ float boneSize, float scaleAxes)
+
+SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, float boneSize, float scaleAxes)
+    : mBoneSize(boneSize)
+    , mEntity(entity)
+    , mSceneMan(man)
+    , mScaleAxes(scaleAxes)
 {
-    mEntity = entity;
-    mSceneMan = man;
-    //mCamera = cam;
-
-    mScaleAxes = scaleAxes;
-
-    mBoneSize = boneSize;
-
     createAxesMaterial();
     createBoneMaterial();
     createAxesMesh();
     createBoneMesh();
 
-    mShowAxes = true;
-    mShowBones = true;
-    mShowNames = true;
-
-    std::map<std::string, Ogre::Entity*> mapEntities;
-
-    int numBones = mEntity->getSkeleton()->getNumBones();
-
-    for(unsigned short int iBone = 0; iBone < numBones; ++iBone)
-    {
-        Ogre::Bone* pBone = mEntity->getSkeleton()->getBone(iBone);
-        if ( !pBone )
-        {
-            assert(false);
-            continue;
-        }
-
-        Ogre::Entity *ent;
-        Ogre::TagPoint *tp;
-
-        // Absolutely HAVE to create bone representations first. Otherwise we would get the wrong child count
-        // because an attached object counts as a child
-        // Would be nice to have a function that only gets the children that are bones...
-        unsigned short numChildren = pBone->numChildren();
-        if(numChildren == 0)
-        {
-            // There are no children, but we should still represent the bone
-            // Creates a bone of length 1 for leaf bones (bones without children)
-            ent = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
-            tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
-            mBoneEntities.push_back(ent);
-
-            Ogre::Vector3 v = pBone->getPosition();
-            // If the length is zero, no point in creating the bone representation
-            float length = v.length();
-            if(length < 0.00001f)
-                continue;
-            tp->setScale(length, length, length);
-        }
-        else
-        {
-            for(int i = 0; i < numChildren; ++i)
-            {
-                Ogre::Vector3 v = pBone->getChild(i)->getPosition();
-                // If the length is zero, no point in creating the bone representation
-                float length = v.length();
-                if(length < 0.00001f)
-                    continue;
-
-                ent = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
-                tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
-                mBoneEntities.push_back(ent);
-
-                tp->setScale(length, length, length);
-            }
-        }
-
-        mapEntities[pBone->getName().data()] = ent;
-
-        ent = mSceneMan->createEntity("SkeletonDebug/AxesMesh");
-        tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
-        // Make sure we don't wind up with tiny/giant axes and that one axis doesnt get squashed
-        tp->setScale((mScaleAxes/mEntity->getParentSceneNode()->getScale().x), (mScaleAxes/mEntity->getParentSceneNode()->getScale().y), (mScaleAxes/mEntity->getParentSceneNode()->getScale().z));
-        mAxisEntities.push_back(ent);
-
-       /* Ogre::String name = mEntity->getName() + "SkeletonDebug/BoneText/Bone_";
-        name += iBone;
-        ObjectTextDisplay *overlay = new ObjectTextDisplay(name, pBone, mCamera, mEntity);
-        overlay->enable(true);
-        overlay->setText(pBone->getName());
-        mTextOverlays.push_back(overlay);*/
-    }
+    auto mapEntities = createBoneVisuals();
 
     showAxes(false);
     showBones(false);
     showNames(false);
 
-    mTimer = new QTimer();
-    connect(mTimer, &QTimer::timeout, this, [=](){
-        // Set Selected Bone to Red from user data info
-        for(auto ent: mBoneEntities){
+    connect(&mTimer, &QTimer::timeout, this, [this, mapEntities](){
+        for(auto* ent: mBoneEntities){
             ent->setMaterial(mBoneMatPtr);
             ent->setVisible(mShowBones);
         }
-        for(auto bone : mEntity->getSkeleton()->getBones())
+        for(auto* bone : mEntity->getSkeleton()->getBones())
         {
             if(!bone->getUserObjectBindings().getUserAny("selected").has_value())
                 continue;
@@ -120,30 +44,90 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, /*Og
         }
 
     });
-    mTimer->start(0);
+    mTimer.start(0);
 }
 
 SkeletonDebug::~SkeletonDebug()
 {
-    auto attachedObjects = mEntity->getAttachedObjects();
-    for(auto object : attachedObjects)
+    mTimer.stop();
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+
+    for(auto* ent : mBoneEntities)
     {
-        Ogre::Entity* e = (Ogre::Entity*)object;
-        if(e->getMesh().get()->getName().compare("SkeletonDebug/AxesMesh") ||
-                e->getMesh().get()->getName().compare("SkeletonDebug/BoneMesh"))
-        {
-            Manager::getSingleton()->getSceneMgr()->destroyEntity(e);
-        }
+        mEntity->detachObjectFromBone(ent);
+        sceneMgr->destroyEntity(ent);
+    }
+    mBoneEntities.clear();
+
+    for(auto* ent : mAxisEntities)
+    {
+        mEntity->detachObjectFromBone(ent);
+        sceneMgr->destroyEntity(ent);
+    }
+    mAxisEntities.clear();
+}
+
+void SkeletonDebug::createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre::Entity*& lastEnt)
+{
+    for(unsigned short i = 0; i < pBone->numChildren(); ++i)
+    {
+        float length = pBone->getChild(i)->getPosition().length();
+        if(length < 0.00001f)
+            continue;
+
+        lastEnt = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
+        auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)lastEnt);
+        mBoneEntities.push_back(lastEnt);
+        tp->setScale(length, length, length);
     }
 }
 
-void SkeletonDebug::update()
+std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisuals()
 {
-    /*std::vector<ObjectTextDisplay*>::iterator it;
-    for(it = mTextOverlays.begin(); it < mTextOverlays.end(); it++)
+    std::map<std::string, Ogre::Entity*, std::less<>> mapEntities;
+    int numBones = mEntity->getSkeleton()->getNumBones();
+
+    for(unsigned short int iBone = 0; iBone < numBones; ++iBone)
     {
-        ((ObjectTextDisplay*)*it)->update();
-    }*/
+        const Ogre::Bone* pBone = mEntity->getSkeleton()->getBone(iBone);
+        if(!pBone)
+        {
+            assert(false);
+            continue;
+        }
+
+        Ogre::Entity *ent = nullptr;
+
+        if(unsigned short numChildren = pBone->numChildren(); numChildren == 0)
+        {
+            ent = mSceneMan->createEntity("SkeletonDebug/BoneMesh");
+            auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
+            mBoneEntities.push_back(ent);
+
+            float length = pBone->getPosition().length();
+            if(length >= 0.00001f)
+                tp->setScale(length, length, length);
+        }
+        else
+        {
+            createChildBoneRepresentations(pBone, ent);
+        }
+
+        mapEntities[pBone->getName().data()] = ent;
+
+        ent = mSceneMan->createEntity("SkeletonDebug/AxesMesh");
+        auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
+        tp->setScale((mScaleAxes/mEntity->getParentSceneNode()->getScale().x), (mScaleAxes/mEntity->getParentSceneNode()->getScale().y), (mScaleAxes/mEntity->getParentSceneNode()->getScale().z));
+        mAxisEntities.push_back(ent);
+    }
+
+    return mapEntities;
+}
+
+void SkeletonDebug::update() const
+{
+    // Intentionally empty — bone updates are handled by the QTimer callback
 }
 
 void SkeletonDebug::showAxes(bool show)
@@ -154,10 +138,9 @@ void SkeletonDebug::showAxes(bool show)
 
     mShowAxes = show;
 
-    std::vector<Ogre::Entity*>::iterator it;
-    for(it = mAxisEntities.begin(); it < mAxisEntities.end(); ++it)
+    for(auto* ent : mAxisEntities)
     {
-        ((Ogre::Entity*)*it)->setVisible(show);
+        ent->setVisible(show);
     }
 }
 
@@ -169,12 +152,10 @@ void SkeletonDebug::showBones(bool show)
 
     mShowBones = show;
 
-    std::vector<Ogre::Entity*>::iterator it;
-    for(it = mBoneEntities.begin(); it < mBoneEntities.end(); ++it)
+    for(auto* ent : mBoneEntities)
     {
-        ((Ogre::Entity*)*it)->setVisible(show);
+        ent->setVisible(show);
     }
-
 }
 
 void SkeletonDebug::showNames(bool show)
@@ -184,12 +165,6 @@ void SkeletonDebug::showNames(bool show)
         return;
 
     mShowNames = show;
-
-    /*std::vector<ObjectTextDisplay*>::iterator it;
-    for(it = mTextOverlays.begin(); it < mTextOverlays.end(); it++)
-    {
-        ((ObjectTextDisplay*)*it)->enable(show);
-    }*/
 }
 
 void SkeletonDebug::createAxesMaterial()
@@ -274,7 +249,7 @@ void SkeletonDebug::createBoneMesh()
         Ogre::ManualObject mo("tmp");
         mo.begin(mBoneMatPtr->getName());
 
-        Ogre::Vector3 basepos[6] =
+        std::array<Ogre::Vector3, 6> basepos =
         {
             Ogre::Vector3(0,0,0),
             Ogre::Vector3(mBoneSize, mBoneSize*2, mBoneSize),
@@ -285,8 +260,8 @@ void SkeletonDebug::createBoneMesh()
         };
 
         // Two colours so that we can distinguish the sides of the bones (we don't use any lighting on the material)
-        Ogre::ColourValue col = Ogre::ColourValue(0.5f, 0.5f, 0.5f, 1.0f);
-        Ogre::ColourValue col1 = Ogre::ColourValue(0.6f, 0.6f, 0.6f, 1.0f);
+        auto col = Ogre::ColourValue(0.5f, 0.5f, 0.5f, 1.0f);
+        auto col1 = Ogre::ColourValue(0.6f, 0.6f, 0.6f, 1.0f);
 
         mo.position(basepos[0]);
         mo.colour(col);
@@ -375,8 +350,8 @@ void SkeletonDebug::createAxesMesh()
         */
         mo.estimateVertexCount(7 * 2 * 3);
         mo.estimateIndexCount(3 * 2 * 3);
-        Ogre::Quaternion quat[6];
-        Ogre::ColourValue col[3];
+        std::array<Ogre::Quaternion, 6> quat;
+        std::array<Ogre::ColourValue, 3> col;
 
         // x-axis
         quat[0] = Ogre::Quaternion::IDENTITY;
@@ -394,7 +369,7 @@ void SkeletonDebug::createAxesMesh()
         col[2] = Ogre::ColourValue::Blue;
         col[2].a = 0.3f;
 
-        Ogre::Vector3 basepos[7] =
+        std::array<Ogre::Vector3, 7> basepos =
         {
             // stalk
             Ogre::Vector3(0.0f, 0.05f, 0.0f),
@@ -407,25 +382,20 @@ void SkeletonDebug::createAxesMesh()
             Ogre::Vector3(0.7f, 0.15f, 0.0f)
         };
 
-
-        // vertices
-        // 6 arrows
+        // vertices — 6 arrows, 7 points each
         for (size_t i = 0; i < 6; ++i)
         {
-            // 7 points
-            for (size_t p = 0; p < 7; ++p)
+            for (const auto& bp : basepos)
             {
-                Ogre::Vector3 pos = quat[i] * basepos[p];
-                mo.position(pos);
+                mo.position(quat[i] * bp);
                 mo.colour(col[i / 2]);
             }
         }
 
-        // indices
-        // 6 arrows
-        for (size_t i = 0; i < 6; ++i)
+        // indices — 6 arrows
+        for (unsigned int i = 0; i < 6; ++i)
         {
-            size_t base = i * 7;
+            unsigned int base = i * 7;
             mo.triangle(base + 0, base + 1, base + 2);
             mo.triangle(base + 0, base + 2, base + 3);
             mo.triangle(base + 4, base + 5, base + 6);
