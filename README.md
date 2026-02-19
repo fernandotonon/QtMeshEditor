@@ -17,7 +17,7 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 Split View|Skeleton Animation Controls
 ---|---
 ![QtMeshEditor1 5 0](https://user-images.githubusercontent.com/996529/210196572-7b49da4c-c5db-406d-9ab4-7fa20bacb6ae.gif)|![QtMeshEditor1 6 0](https://user-images.githubusercontent.com/996529/218779819-0a61156d-c014-4ad1-aa8b-cee900c9da56.gif)
-MCP tools|Show Bone Weights
+**MCP tools**|**Show Bone Weights**
 ![Gravação de Tela 2026-02-18 às 20 57 42 (1)](https://github.com/user-attachments/assets/ed3b7e9d-22ba-4e6e-a06c-868570db7a07)|![Gravação de Tela 2026-02-18 às 21 20 55](https://github.com/user-attachments/assets/289403ac-8952-488c-bc65-0a768ab278e1)
 
 
