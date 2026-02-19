@@ -129,37 +129,48 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
         vbuf->unlock();
         vertexData->vertexBufferBinding->setBinding(0, vbuf);
 
-        // Create the tangent buffer and set the tangent data
-        Ogre::HardwareVertexBufferSharedPtr tangentBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-        float* pTangent = static_cast<float*>(tangentBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for(const Ogre::Vector3& tangent : subMeshData->tangents) {
-            *pTangent++ = tangent.x;
-            *pTangent++ = tangent.y;
-            *pTangent++ = tangent.z;
+        // Create the tangent buffer if tangent data exists
+        unsigned short nextSource = 1;
+        if(!subMeshData->tangents.empty()) {
+            vertexDecl->addElement(nextSource, 0, Ogre::VET_FLOAT3, Ogre::VES_TANGENT);
+            Ogre::HardwareVertexBufferSharedPtr tangentBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+            float* pTangent = static_cast<float*>(tangentBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for(const Ogre::Vector3& tangent : subMeshData->tangents) {
+                *pTangent++ = tangent.x;
+                *pTangent++ = tangent.y;
+                *pTangent++ = tangent.z;
+            }
+            tangentBuf->unlock();
+            vertexData->vertexBufferBinding->setBinding(nextSource, tangentBuf);
+            ++nextSource;
         }
-        tangentBuf->unlock();
-        vertexData->vertexBufferBinding->setBinding(1, tangentBuf);
 
-        // Create the bitangent buffer and set the bitangent data
-        Ogre::HardwareVertexBufferSharedPtr bitangentBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-        float* pBitangent = static_cast<float*>(bitangentBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for(const Ogre::Vector3& bitangent : subMeshData->bitangents) {
-            *pBitangent++ = bitangent.x;
-            *pBitangent++ = bitangent.y;
-            *pBitangent++ = bitangent.z;
+        // Create the bitangent buffer if bitangent data exists
+        if(!subMeshData->bitangents.empty()) {
+            vertexDecl->addElement(nextSource, 0, Ogre::VET_FLOAT3, Ogre::VES_BINORMAL);
+            Ogre::HardwareVertexBufferSharedPtr bitangentBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+            float* pBitangent = static_cast<float*>(bitangentBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for(const Ogre::Vector3& bitangent : subMeshData->bitangents) {
+                *pBitangent++ = bitangent.x;
+                *pBitangent++ = bitangent.y;
+                *pBitangent++ = bitangent.z;
+            }
+            bitangentBuf->unlock();
+            vertexData->vertexBufferBinding->setBinding(nextSource, bitangentBuf);
+            ++nextSource;
         }
-        bitangentBuf->unlock();
-        vertexData->vertexBufferBinding->setBinding(2, bitangentBuf);
 
-        // Create the color buffer and set the color data
-        Ogre::HardwareVertexBufferSharedPtr colorBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(Ogre::VertexElement::getTypeSize(Ogre::VET_COLOUR), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-        Ogre::RGBA* pColor = static_cast<Ogre::RGBA*>(colorBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for(const Ogre::ColourValue& color : subMeshData->colors) {
-            Ogre::ColourValue finalColor(color.r, color.g, color.b, color.a);
-            *pColor++ = finalColor.getAsARGB();
+        // Create the color buffer if color data exists
+        if(!subMeshData->colors.empty()) {
+            vertexDecl->addElement(nextSource, 0, Ogre::VET_COLOUR, Ogre::VES_DIFFUSE);
+            Ogre::HardwareVertexBufferSharedPtr colorBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(Ogre::VertexElement::getTypeSize(Ogre::VET_COLOUR), vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+            Ogre::RGBA* pColor = static_cast<Ogre::RGBA*>(colorBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for(const Ogre::ColourValue& color : subMeshData->colors) {
+                *pColor++ = color.getAsARGB();
+            }
+            colorBuf->unlock();
+            vertexData->vertexBufferBinding->setBinding(nextSource, colorBuf);
         }
-        colorBuf->unlock();
-        vertexData->vertexBufferBinding->setBinding(3, colorBuf);
 
         // Create the index data and set it to the submesh
         Ogre::IndexData* indexData = subMesh->indexData;

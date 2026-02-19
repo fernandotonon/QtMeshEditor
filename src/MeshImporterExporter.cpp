@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QDebug>
+#include <set>
 
 #include "OgreXML/OgreXMLMeshSerializer.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
@@ -84,10 +85,15 @@ void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
 void MeshImporterExporter::exportMaterial(const Ogre::Entity* e, const QFileInfo& file)
 {
     Ogre::MaterialSerializer ms;
+    std::set<std::string> queued;
     for (const auto &subEntity : e->getSubEntities())
     {
-        ms.queueForExport(subEntity->getMaterial());
-        exportTextures(subEntity->getMaterial(), file);
+        auto mat = subEntity->getMaterial();
+        if (queued.insert(mat->getName()).second)
+        {
+            ms.queueForExport(mat);
+            exportTextures(mat, file);
+        }
     }
     ms.exportQueued((file.path() + "/" + file.baseName() + ".material").toStdString());
 }
@@ -128,7 +134,11 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
             if(!Ogre::ResourceGroupManager::getSingleton().resourceLocationExists(file.path().toStdString().data(),file.path().toStdString().data()))
             {
                 Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
-                Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+                try {
+                    Ogre::ResourceGroupManager::getSingleton().initialiseResourceGroup(file.path().toStdString().data());
+                } catch (Ogre::Exception &e) {
+                    Ogre::LogManager::getSingleton().logMessage("Warning during resource group init: " + e.getFullDescription());
+                }
             }
 
             Ogre::SceneNode *sn;

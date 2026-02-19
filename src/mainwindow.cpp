@@ -489,10 +489,23 @@ void MainWindow::importMeshs(const QStringList &_uriList)
 
 void MainWindow::on_actionExport_Selected_triggered()
 {
-    if(SelectionSet::getSingleton()->hasNodes())
+    auto* sel = SelectionSet::getSingleton();
+
+    if(sel->hasNodes())
     {
-        foreach(Ogre::SceneNode* node, SelectionSet::getSingleton()->getNodesSelectionList())
+        foreach(Ogre::SceneNode* node, sel->getNodesSelectionList())
         {
+            QString exportedPath = MeshImporterExporter::exporter(node);
+            if (!exportedPath.isEmpty())
+                addToRecentFiles(exportedPath);
+        }
+    }
+    else if(sel->hasEntities())
+    {
+        foreach(Ogre::Entity* entity, sel->getEntitiesSelectionList())
+        {
+            Ogre::SceneNode* node = entity->getParentSceneNode();
+            if (!node) continue;
             QString exportedPath = MeshImporterExporter::exporter(node);
             if (!exportedPath.isEmpty())
                 addToRecentFiles(exportedPath);
