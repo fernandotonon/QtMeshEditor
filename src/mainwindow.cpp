@@ -36,12 +36,17 @@
 #include "AnimationWidget.h"
 #include "SelectionSet.h"
 #include "animationcontrolwidget.h"
+#include "MaterialEditorQML.h"
+#include "LLMSettingsWidget.h"
+#include "LLMManager.h"
+#include "QMLMaterialHighlighter.h"
+#include "ModelDownloader.h"
 
 // Returns entities from the current selection. If entities are directly selected,
 // returns those. Otherwise resolves selected nodes to their attached entities.
 static QList<Ogre::Entity*> getSelectedEntities()
 {
-    auto* sel = SelectionSet::getSingleton();
+    const auto* sel = SelectionSet::getSingleton();
     if (sel->hasEntities())
         return sel->getEntitiesSelectionList();
 
@@ -49,19 +54,14 @@ static QList<Ogre::Entity*> getSelectedEntities()
     if (!sel->hasNodes())
         return entities;
 
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    for (Ogre::SceneNode* node : sel->getNodesSelectionList())
+    const auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    for (const auto* node : sel->getNodesSelectionList())
     {
         if (sceneMgr->hasEntity(node->getName()))
             entities.append(sceneMgr->getEntity(node->getName()));
     }
     return entities;
 }
-#include "MaterialEditorQML.h"
-#include "LLMSettingsWidget.h"
-#include "LLMManager.h"
-#include "QMLMaterialHighlighter.h"
-#include "ModelDownloader.h"
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
@@ -511,7 +511,7 @@ void MainWindow::importMeshs(const QStringList &_uriList)
 
 void MainWindow::on_actionExport_Selected_triggered()
 {
-    auto* sel = SelectionSet::getSingleton();
+    const auto* sel = SelectionSet::getSingleton();
 
     if(sel->hasNodes())
     {
@@ -526,7 +526,7 @@ void MainWindow::on_actionExport_Selected_triggered()
     {
         foreach(Ogre::Entity* entity, sel->getEntitiesSelectionList())
         {
-            Ogre::SceneNode* node = entity->getParentSceneNode();
+            auto* node = entity->getParentSceneNode();
             if (!node) continue;
             QString exportedPath = MeshImporterExporter::exporter(node);
             if (!exportedPath.isEmpty())

@@ -18,7 +18,7 @@
 // returns those. Otherwise resolves selected nodes to their attached entities.
 static QList<Ogre::Entity*> getSelectedEntities()
 {
-    auto* sel = SelectionSet::getSingleton();
+    const auto* sel = SelectionSet::getSingleton();
     if (sel->hasEntities())
         return sel->getEntitiesSelectionList();
 
@@ -26,8 +26,8 @@ static QList<Ogre::Entity*> getSelectedEntities()
     if (!sel->hasNodes())
         return entities;
 
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    for (Ogre::SceneNode* node : sel->getNodesSelectionList())
+    const auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    for (const auto* node : sel->getNodesSelectionList())
     {
         if (sceneMgr->hasEntity(node->getName()))
             entities.append(sceneMgr->getEntity(node->getName()));
@@ -200,7 +200,7 @@ void AnimationWidget::pollAnimationState()
         return;
 
     bool hasAnimationEnabled = false;
-    for(Ogre::Entity* entity : entities)
+    for(const Ogre::Entity* entity : entities)
     {
         const Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
         if(!set) continue;
