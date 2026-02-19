@@ -3,8 +3,6 @@
 #include <array>
 #include <cassert>
 
-#include "Manager.h"
-
 SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, float boneSize, float scaleAxes)
     : mBoneSize(boneSize)
     , mEntity(entity)
@@ -59,20 +57,19 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
 SkeletonDebug::~SkeletonDebug()
 {
     mTimer.stop();
-
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    mTimer.disconnect();
 
     for(auto* ent : mBoneEntities)
     {
         mEntity->detachObjectFromBone(ent);
-        sceneMgr->destroyEntity(ent);
+        mSceneMan->destroyEntity(ent);
     }
     mBoneEntities.clear();
 
     for(auto* ent : mAxisEntities)
     {
         mEntity->detachObjectFromBone(ent);
-        sceneMgr->destroyEntity(ent);
+        mSceneMan->destroyEntity(ent);
     }
     mAxisEntities.clear();
 }
