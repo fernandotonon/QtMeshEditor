@@ -8,6 +8,27 @@
 #include <QDoubleSpinBox>
 #include <cmath>
 
+// Returns entities from the current selection. If entities are directly selected,
+// returns those. Otherwise resolves selected nodes to their attached entities.
+static QList<Ogre::Entity*> getSelectedEntities()
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (sel->hasEntities())
+        return sel->getEntitiesSelectionList();
+
+    QList<Ogre::Entity*> entities;
+    if (!sel->hasNodes())
+        return entities;
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    for (Ogre::SceneNode* node : sel->getNodesSelectionList())
+    {
+        if (sceneMgr->hasEntity(node->getName()))
+            entities.append(sceneMgr->getEntity(node->getName()));
+    }
+    return entities;
+}
+
 AnimationControlWidget::AnimationControlWidget(QWidget *parent) :
     QDockWidget(parent),
     ui(new Ui::AnimationControlWidget)
@@ -16,6 +37,7 @@ AnimationControlWidget::AnimationControlWidget(QWidget *parent) :
     updateAnimationTree();
 
     connect(SelectionSet::getSingleton(),SIGNAL(entitySelectionChanged()),this,SLOT(updateAnimationTree()));
+    connect(SelectionSet::getSingleton(),SIGNAL(nodeSelectionChanged()),this,SLOT(updateAnimationTree()));
     connect(ui->treeWidget, &QTreeWidget::itemSelectionChanged, this, [=](){
         ui->horizontalSlider->setValue(0);
         ui->horizontalSlider->setEnabled(true);
@@ -115,7 +137,7 @@ AnimationControlWidget::~AnimationControlWidget()
 void AnimationControlWidget::updateAnimationTree()
 {
     ui->treeWidget->clear();
-    for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
+    for(Ogre::Entity* entity : getSelectedEntities())
     {
         // get skeleton
         Ogre::SkeletonInstance* skeleton = entity->getSkeleton();
