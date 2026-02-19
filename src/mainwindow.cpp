@@ -42,6 +42,27 @@
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 
+// Returns entities from the current selection. If entities are directly selected,
+// returns those. Otherwise resolves selected nodes to their attached entities.
+static QList<Ogre::Entity*> getSelectedEntities()
+{
+    const auto* sel = SelectionSet::getSingleton();
+    if (sel->hasEntities())
+        return sel->getEntitiesSelectionList();
+
+    QList<Ogre::Entity*> entities;
+    if (!sel->hasNodes())
+        return entities;
+
+    const auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    for (const auto* node : sel->getNodesSelectionList())
+    {
+        if (sceneMgr->hasEntity(node->getName()))
+            entities.append(sceneMgr->getEntity(node->getName()));
+    }
+    return entities;
+}
+
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
     customPaletteColorDialog(new QColorDialog(this)),
@@ -372,11 +393,12 @@ bool MainWindow::frameStarted(const Ogre::FrameEvent &evt)
 bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
 {
     // Set animation
-    if(isPlaying && SelectionSet::getSingleton()->hasEntities())
+    if(isPlaying)
     {
-        for(Ogre::Entity const* ent : SelectionSet::getSingleton()->getEntitiesSelectionList())
+        for(Ogre::Entity const* ent : getSelectedEntities())
         {
             Ogre::AnimationStateSet const *set = ent->getAllAnimationStates();
+            if(!set) continue;
             for(const auto& [key, value] : set->getAnimationStates())
             {
                 value->addTime(evt.timeSinceLastFrame);
@@ -489,10 +511,23 @@ void MainWindow::importMeshs(const QStringList &_uriList)
 
 void MainWindow::on_actionExport_Selected_triggered()
 {
-    if(SelectionSet::getSingleton()->hasNodes())
+    const auto* sel = SelectionSet::getSingleton();
+
+    if(sel->hasNodes())
     {
-        foreach(Ogre::SceneNode* node, SelectionSet::getSingleton()->getNodesSelectionList())
+        foreach(Ogre::SceneNode* node, sel->getNodesSelectionList())
         {
+            QString exportedPath = MeshImporterExporter::exporter(node);
+            if (!exportedPath.isEmpty())
+                addToRecentFiles(exportedPath);
+        }
+    }
+    else if(sel->hasEntities())
+    {
+        foreach(Ogre::Entity* entity, sel->getEntitiesSelectionList())
+        {
+            auto* node = entity->getParentSceneNode();
+            if (!node) continue;
             QString exportedPath = MeshImporterExporter::exporter(node);
             if (!exportedPath.isEmpty())
                 addToRecentFiles(exportedPath);

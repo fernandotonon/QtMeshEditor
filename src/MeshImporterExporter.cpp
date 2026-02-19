@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include <QMessageBox>
 #include <QFileDialog>
 #include <QDebug>
+#include <set>
 
 #include "OgreXML/OgreXMLMeshSerializer.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
@@ -84,10 +85,15 @@ void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
 void MeshImporterExporter::exportMaterial(const Ogre::Entity* e, const QFileInfo& file)
 {
     Ogre::MaterialSerializer ms;
+    std::set<std::string, std::less<>> queued;
     for (const auto &subEntity : e->getSubEntities())
     {
-        ms.queueForExport(subEntity->getMaterial());
-        exportTextures(subEntity->getMaterial(), file);
+        auto mat = subEntity->getMaterial();
+        if (queued.insert(mat->getName()).second)
+        {
+            ms.queueForExport(mat);
+            exportTextures(mat, file);
+        }
     }
     ms.exportQueued((file.path() + "/" + file.baseName() + ".material").toStdString());
 }
@@ -115,6 +121,22 @@ void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, con
     }
 }
 
+static void ensureResourceGroup(const QString &path)
+{
+    auto group = path.toStdString();
+    auto &rgm = Ogre::ResourceGroupManager::getSingleton();
+    if (!rgm.resourceLocationExists(group, group))
+    {
+        rgm.addResourceLocation(group, "FileSystem", group);
+        try {
+            rgm.initialiseResourceGroup(group);
+        } catch (Ogre::Exception &e) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "Warning during resource group init: " + e.getFullDescription());
+        }
+    }
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList)
 {
     try{
@@ -125,11 +147,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
             QFileInfo file;
             file.setFile(fileName);
 
-            if(!Ogre::ResourceGroupManager::getSingleton().resourceLocationExists(file.path().toStdString().data(),file.path().toStdString().data()))
-            {
-                Ogre::ResourceGroupManager::getSingleton().addResourceLocation(file.path().toStdString().data(),"FileSystem",file.path().toStdString().data());
-                Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
-            }
+            ensureResourceGroup(file.path());
 
             Ogre::SceneNode *sn;
             const Ogre::Entity *en;

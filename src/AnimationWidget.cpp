@@ -14,6 +14,27 @@
 #include "Manager.h"
 #include "AnimationWidget.h"
 
+// Returns entities from the current selection. If entities are directly selected,
+// returns those. Otherwise resolves selected nodes to their attached entities.
+static QList<Ogre::Entity*> getSelectedEntities()
+{
+    const auto* sel = SelectionSet::getSingleton();
+    if (sel->hasEntities())
+        return sel->getEntitiesSelectionList();
+
+    QList<Ogre::Entity*> entities;
+    if (!sel->hasNodes())
+        return entities;
+
+    const auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    for (const auto* node : sel->getNodesSelectionList())
+    {
+        if (sceneMgr->hasEntity(node->getName()))
+            entities.append(sceneMgr->getEntity(node->getName()));
+    }
+    return entities;
+}
+
 AnimationWidget::AnimationWidget(QWidget *parent) :
     QWidget(parent)
 {
@@ -24,11 +45,12 @@ AnimationWidget::AnimationWidget(QWidget *parent) :
 
     ui->skeletonTable->verticalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     ui->skeletonTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    connect(SelectionSet::getSingleton(),&SelectionSet::entitySelectionChanged,this,[this]()
-    {
+    auto updateTables = [this]() {
         updateAnimationTable();
         updateSkeletonTable();
-    });
+    };
+    connect(SelectionSet::getSingleton(),&SelectionSet::entitySelectionChanged,this,updateTables);
+    connect(SelectionSet::getSingleton(),&SelectionSet::nodeSelectionChanged,this,updateTables);
 
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, [this](Ogre::SceneNode* const& node) {
         // Clean up any SkeletonDebug and BoneWeightOverlay instances for entities attached to this node
@@ -74,12 +96,13 @@ void AnimationWidget::updateAnimationTable()
         ui->animTable->removeRow(0);
     }
 
-    if(!SelectionSet::getSingleton()->hasEntities())
+    auto entities = getSelectedEntities();
+    if (entities.isEmpty())
         return;
 
     bool hasAnimationEnable = false;
 
-    for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
+    for(Ogre::Entity* entity : entities)
     {
         //Animation
         const Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
@@ -127,10 +150,11 @@ void AnimationWidget::updateSkeletonTable()
         ui->skeletonTable->removeRow(0);
     }
 
-    if(!SelectionSet::getSingleton()->hasEntities())
+    auto entities = getSelectedEntities();
+    if (entities.isEmpty())
         return;
 
-    for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
+    for(Ogre::Entity* entity : entities)
     {
         QString str = entity->getName().data();
         auto entityItem = new QTableWidgetItem;
@@ -171,11 +195,12 @@ void AnimationWidget::setAnimationState(bool playing)
 
 void AnimationWidget::pollAnimationState()
 {
-    if(!SelectionSet::getSingleton()->hasEntities())
+    auto entities = getSelectedEntities();
+    if (entities.isEmpty())
         return;
 
     bool hasAnimationEnabled = false;
-    for(Ogre::Entity* entity : SelectionSet::getSingleton()->getEntitiesSelectionList())
+    for(const Ogre::Entity* entity : entities)
     {
         const Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
         if(!set) continue;
