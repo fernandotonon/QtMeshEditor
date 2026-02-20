@@ -21,6 +21,7 @@ BoneWeightOverlay::BoneWeightOverlay(Ogre::Entity* entity, Ogre::SceneManager* s
 BoneWeightOverlay::~BoneWeightOverlay()
 {
     mUpdateTimer.stop();
+    mUpdateTimer.disconnect();
     destroyOverlay();
 
     if (mSoftwareAnimRequested && mEntity)
