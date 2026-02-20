@@ -314,13 +314,27 @@ void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
        return;
    }
 
-   // Destroy all the attached objects
+   // Collect mesh/skeleton resource names before destroying entities
+   std::vector<Ogre::String> meshNames;
+   std::vector<Ogre::String> skeletonNames;
+
    try {
        auto attachedObjects = node->getAttachedObjects();
 
        for(auto attachedObject : attachedObjects)
        {
            try {
+               if (attachedObject->getMovableType() == "Entity")
+               {
+                   auto* entity = static_cast<Ogre::Entity*>(attachedObject);
+                   auto mesh = entity->getMesh();
+                   if (mesh)
+                   {
+                       meshNames.push_back(mesh->getName());
+                       if (!mesh->getSkeletonName().empty())
+                           skeletonNames.push_back(mesh->getSkeletonName());
+                   }
+               }
                node->getCreator()->destroyMovableObject(attachedObject);
            } catch (...) {
                // Ignore exceptions during cleanup
@@ -330,12 +344,24 @@ void Manager::destroyAllAttachedMovableObjects(Ogre::SceneNode* node)
        // Ignore exceptions during cleanup
    }
 
-   /* TODO check to free up the meshmanager
-   if(ent->getMesh().getPointer()->isManuallyLoaded())
+   // Remove mesh/skeleton resources no longer in use by any entity
+   for (const auto& name : meshNames)
    {
-       pSceneMgr->destroyManualObject(currentName);
-       Ogre::MeshManager::getSingleton().remove(currentName);
-   }*/
+       try {
+           auto mesh = Ogre::MeshManager::getSingleton().getByName(name);
+           // use_count == 2 means only MeshManager + this local variable hold it
+           if (mesh && mesh.use_count() <= 2)
+               Ogre::MeshManager::getSingleton().remove(mesh);
+       } catch (...) {}
+   }
+   for (const auto& name : skeletonNames)
+   {
+       try {
+           auto skel = Ogre::SkeletonManager::getSingleton().getByName(name);
+           if (skel && skel.use_count() <= 2)
+               Ogre::SkeletonManager::getSingleton().remove(skel);
+       } catch (...) {}
+   }
 
    // Recurse to child SceneNodes
    try {

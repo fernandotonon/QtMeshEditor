@@ -64,6 +64,12 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
     modelName = scene->mName.C_Str();
     if(modelName.empty()) modelName = path.substr(path.find_last_of("/\\") + 1);
 
+    // Remove stale resources from a previous import of the same file
+    if (auto oldMesh = Ogre::MeshManager::getSingleton().getByName(modelName))
+        Ogre::MeshManager::getSingleton().remove(oldMesh);
+    if (auto oldSkel = Ogre::SkeletonManager::getSingleton().getByName(modelName + ".skeleton"))
+        Ogre::SkeletonManager::getSingleton().remove(oldSkel);
+
     // Process materials
     materialProcessor.loadScene(scene);
 
