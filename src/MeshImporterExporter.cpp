@@ -371,8 +371,11 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
         // Bone weights for this submesh
         if (hasSkeleton)
         {
-            // Group bone assignments by bone handle
-            const auto& boneAssignments = subMesh->getBoneAssignments();
+            // Group bone assignments by bone handle.
+            // Use submesh-level assignments first; fall back to mesh-level
+            // assignments for submeshes that use shared vertices.
+            const auto& boneAssignments = subMesh->useSharedVertices
+                ? mesh->getBoneAssignments() : subMesh->getBoneAssignments();
             std::map<unsigned short, std::vector<aiVertexWeight>> boneWeightsMap;
             for (const auto& [vertIdx, vba] : boneAssignments)
             {
@@ -676,6 +679,21 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
         }
     };
 
+    // Parse shared bone assignments into a list — we'll apply them to submeshes
+    // that used shared vertices (since buildSubMeshBuffers converts all submeshes
+    // to per-submesh vertex data, mesh-level bone assignments would be orphaned).
+    std::vector<Ogre::VertexBoneAssignment> sharedBoneAssignList;
+    auto sharedBoneAssigns = root.child("boneassignments");
+    if (sharedBoneAssigns) {
+        for (auto& ba : sharedBoneAssigns.children("vertexboneassignment")) {
+            Ogre::VertexBoneAssignment vba;
+            vba.vertexIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("vertexindex").value());
+            vba.boneIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("boneindex").value());
+            vba.weight = Ogre::StringConverter::parseReal(ba.attribute("weight").value());
+            sharedBoneAssignList.push_back(vba);
+        }
+    }
+
     // Parse submeshes
     for (auto& smElem : root.child("submeshes").children("submesh"))
     {
@@ -709,7 +727,7 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
 
         buildSubMeshBuffers(subMesh, geom, indices);
 
-        // Bone assignments
+        // Bone assignments: per-submesh first, then shared if this submesh used shared geometry
         auto boneAssigns = smElem.child("boneassignments");
         if (boneAssigns) {
             for (auto& ba : boneAssigns.children("vertexboneassignment")) {
@@ -719,18 +737,11 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
                 vba.weight = Ogre::StringConverter::parseReal(ba.attribute("weight").value());
                 subMesh->addBoneAssignment(vba);
             }
-        }
-    }
-
-    // Shared bone assignments
-    auto sharedBoneAssigns = root.child("boneassignments");
-    if (sharedBoneAssigns) {
-        for (auto& ba : sharedBoneAssigns.children("vertexboneassignment")) {
-            Ogre::VertexBoneAssignment vba;
-            vba.vertexIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("vertexindex").value());
-            vba.boneIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("boneindex").value());
-            vba.weight = Ogre::StringConverter::parseReal(ba.attribute("weight").value());
-            mesh->addBoneAssignment(vba);
+        } else if (useShared) {
+            // Apply shared bone assignments directly to this submesh since
+            // buildSubMeshBuffers converted shared vertices to per-submesh data.
+            for (const auto& vba : sharedBoneAssignList)
+                subMesh->addBoneAssignment(vba);
         }
     }
 
@@ -742,7 +753,6 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
         for (unsigned i = 0; i < mesh->getNumSubMeshes(); ++i)
         {
             auto* sm = mesh->getSubMesh(i);
-            if (sm->useSharedVertices) continue; // handled by shared bone assigns
             if (!sm->getBoneAssignments().empty()) continue;
 
             for (size_t v = 0; v < sm->vertexData->vertexCount; ++v)
