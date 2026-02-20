@@ -129,12 +129,15 @@ MainWindow::MainWindow(QWidget *parent) :
         {
             try {
                 m_pRoot->renderOneFrame();
+            } catch (Ogre::Exception& e) {
+                fprintf(stderr, "RENDER ERROR (Ogre): %s\n", e.getFullDescription().c_str());
+                if(m_pTimer) m_pTimer->stop();
+            } catch (std::exception& e) {
+                fprintf(stderr, "RENDER ERROR (std): %s\n", e.what());
+                if(m_pTimer) m_pTimer->stop();
             } catch (...) {
-                // Stop timer if rendering fails (e.g., during shutdown)
-                if(m_pTimer)
-                {
-                    m_pTimer->stop();
-                }
+                fprintf(stderr, "RENDER ERROR (unknown)\n");
+                if(m_pTimer) m_pTimer->stop();
             }
         }
     });
@@ -412,6 +415,9 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
 {
     if(mUriList.size())
     {
+        fprintf(stderr, "frameEnded: importing %d files\n", mUriList.size());
+        for (const auto& f : mUriList)
+            fprintf(stderr, "  -> '%s'\n", f.toStdString().c_str());
         importMeshs(mUriList);
         mUriList.clear();
     }
@@ -1095,6 +1101,7 @@ void MainWindow::openRecentFile()
 
     QString filePath = action->data().toString();
     if (QFileInfo::exists(filePath)) {
+        addToRecentFiles(filePath);
         mUriList.append(filePath);
     } else {
         QMessageBox::warning(this, tr("File Not Found"),
