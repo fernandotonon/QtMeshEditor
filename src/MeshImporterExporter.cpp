@@ -57,18 +57,13 @@ const QMap<QString, QString> MeshImporterExporter::exportFormats = {
     {"Ogre XML (*.mesh.xml)", ".mesh.xml"},
     {"Collada (*.dae)", ".dae"},
     {"X (*.x)", ".x"},
-    {"STP (*.stp)", ".stp"},
     {"OBJ (*.obj)", ".obj"},
     {"OBJ without MTL (*.objnomtl)", ".obj"},
     {"STL (*.stl)", ".stl"},
-    {"STL Binary (*.stlb)", ".stlb"},
     {"PLY (*.ply)", ".ply"},
-    {"PLY Binary (*.plyb)", ".plyb"},
     {"3DS (*.3ds)", ".3ds"},
     {"glTF 2.0 (*.gltf2)", ".gltf2"},
     {"glTF 2.0 Binary (*.glb2)", ".glb2"},
-    {"glTF 1.0 (*.gltf)", ".gltf"},
-    {"glTF 1.0 Binary (*.glb)", ".glb"},
     {"Assimp Binary (*.assbin)", ".assbin"}
 };
 
@@ -839,7 +834,10 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
             else
             {
                 AssimpToOgreImporter importer;
-                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString());
+                // DirectX .x is natively left-handed — skip ConvertToLeftHanded
+                // to avoid double-flipping geometry and UVs.
+                bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
+                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString(), convertLH);
                 if (!mesh) return;
 
                 auto meshName = file.baseName();
@@ -984,18 +982,13 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             static const QMap<QString, QString> assimpFormatIds = {
                 {"Collada (*.dae)", "collada"},
                 {"X (*.x)", "x"},
-                {"STP (*.stp)", "stp"},
                 {"OBJ (*.obj)", "obj"},
                 {"OBJ without MTL (*.objnomtl)", "objnomtl"},
                 {"STL (*.stl)", "stl"},
-                {"STL Binary (*.stlb)", "stlb"},
                 {"PLY (*.ply)", "ply"},
-                {"PLY Binary (*.plyb)", "plyb"},
                 {"3DS (*.3ds)", "3ds"},
                 {"glTF 2.0 (*.gltf2)", "gltf2"},
                 {"glTF 2.0 Binary (*.glb2)", "glb2"},
-                {"glTF 1.0 (*.gltf)", "gltf"},
-                {"glTF 1.0 Binary (*.glb)", "glb"},
                 {"Assimp Binary (*.assbin)", "assbin"},
             };
 
@@ -1003,7 +996,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
 
             // Formats that do NOT support skeletal data — strip bones & animations
             static const QSet<QString> noSkeletonFormats = {
-                "3ds", "obj", "objnomtl", "stl", "stlb", "ply", "plyb", "stp"
+                "3ds", "obj", "objnomtl", "stl", "ply"
             };
             if (noSkeletonFormats.contains(formatId))
             {
@@ -1024,11 +1017,14 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             }
 
             Assimp::Exporter exporter;
-            // Undo the ConvertToLeftHanded applied during import (negates Z, flips
-            // face winding, flips UVs) so the exported file is in standard RH convention
+            // DirectX .x is natively left-handed — Assimp's exporter
+            // handles the RH→LH conversion internally, so we must NOT
+            // apply ConvertToLeftHanded or the geometry gets double-flipped.
+            unsigned int exportFlags = (formatId == "x")
+                ? 0 : aiProcess_ConvertToLeftHanded;
             aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
                                              file.filePath().toStdString().c_str(),
-                                             aiProcess_ConvertToLeftHanded);
+                                             exportFlags);
             if (result != AI_SUCCESS)
             {
                 Ogre::LogManager::getSingleton().logError(
