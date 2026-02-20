@@ -130,13 +130,15 @@ MainWindow::MainWindow(QWidget *parent) :
             try {
                 m_pRoot->renderOneFrame();
             } catch (Ogre::Exception& e) {
-                fprintf(stderr, "RENDER ERROR (Ogre): %s\n", e.getFullDescription().c_str());
+                SentryReporter::captureMessage(
+                    QString("Render error (Ogre): %1").arg(e.getFullDescription().c_str()), "error");
                 if(m_pTimer) m_pTimer->stop();
             } catch (std::exception& e) {
-                fprintf(stderr, "RENDER ERROR (std): %s\n", e.what());
+                SentryReporter::captureMessage(
+                    QString("Render error (std): %1").arg(e.what()), "error");
                 if(m_pTimer) m_pTimer->stop();
             } catch (...) {
-                fprintf(stderr, "RENDER ERROR (unknown)\n");
+                SentryReporter::captureMessage("Render error (unknown)", "error");
                 if(m_pTimer) m_pTimer->stop();
             }
         }
@@ -415,9 +417,6 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
 {
     if(mUriList.size())
     {
-        fprintf(stderr, "frameEnded: importing %d files\n", mUriList.size());
-        for (const auto& f : mUriList)
-            fprintf(stderr, "  -> '%s'\n", f.toStdString().c_str());
         importMeshs(mUriList);
         mUriList.clear();
     }

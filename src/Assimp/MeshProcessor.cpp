@@ -198,10 +198,6 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
             subMesh->addBoneAssignment(vba);
         }
 
-        fprintf(stderr, "MeshProcessor: submesh boneAssigns=%lu vertices=%lu\n",
-                (unsigned long)subMeshData->boneAssignments.size(),
-                (unsigned long)subMeshData->vertices.size());
-
         // Assign the material
         if(subMeshData->materialIndex < materialProcessor.size())
             subMesh->setMaterialName(materialProcessor[subMeshData->materialIndex]->getName());
@@ -218,8 +214,6 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
     // skeleton pointer is properly resolved (not just the name stored).
     if(skeleton) {
         ogreMesh->setSkeletonName(skeleton->getName());
-        fprintf(stderr, "MeshProcessor: skeleton linked, name='%s' hasSkeleton=%d\n",
-                ogreMesh->getSkeletonName().c_str(), ogreMesh->hasSkeleton());
     }
 
     // clean up to avoid memory leaks.

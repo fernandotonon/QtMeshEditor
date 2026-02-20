@@ -41,6 +41,7 @@ THE SOFTWARE.
 #include "OgreXML/pugixml.hpp"
 
 #include "Manager.h"
+#include "SentryReporter.h"
 #include "Assimp/Importer.h"
 
 #ifndef WIN32
@@ -543,12 +544,10 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
             skelPtr->load();
             // Store name — setSkeletonName is called after mesh->load() below
             // so that isLoaded()==true and the skeleton pointer is properly resolved.
-            fprintf(stderr, "XML import: skeleton loaded OK, bones=%d anims=%d\n",
-                    skelPtr->getNumBones(), skelPtr->getNumAnimations());
         } catch (Ogre::Exception& e) {
             skelName.clear(); // don't link a failed skeleton
-            fprintf(stderr, "XML import: skeleton FAILED: %s\n",
-                    e.getFullDescription().c_str());
+            SentryReporter::addBreadcrumb("import",
+                QString("XML skeleton load failed: %1").arg(e.getFullDescription().c_str()), "error");
         }
     }
 
@@ -770,13 +769,7 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
         // Compile bone assignments into blend indices/weights in vertex buffers.
         // Without this, software vertex blending asserts on missing blend data.
         mesh->_updateCompiledBoneAssignments();
-        fprintf(stderr, "XML import: setSkeletonName done, hasSkeleton=%d getSkeleton=%p\n",
-                mesh->hasSkeleton(), mesh->getSkeleton().get());
     }
-
-    fprintf(stderr, "XML import: mesh ready, submeshes=%d bounds=%s\n",
-            mesh->getNumSubMeshes(),
-            mesh->getBounds().isFinite() ? "finite" : "infinite/null");
 
     return mesh;
 }
@@ -806,10 +799,6 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
 
             QFileInfo file;
             file.setFile(fileName);
-            fprintf(stderr, "IMPORT: file='%s' suffix='%s' baseName='%s'\n",
-                    fileName.toStdString().c_str(), file.suffix().toStdString().c_str(),
-                    file.baseName().toStdString().c_str());
-
             ensureResourceGroup(file.path());
 
             Ogre::SceneNode *sn;
@@ -828,8 +817,6 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
 
                 sn = Manager::getSingleton()->addSceneNode(meshName);
                 en = Manager::getSingleton()->createEntity(sn, mesh);
-                fprintf(stderr, "XML import: entity created, hasSkeleton=%d\n",
-                        en->hasSkeleton());
             }
             else
             {
@@ -1027,9 +1014,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                                              exportFlags);
             if (result != AI_SUCCESS)
             {
-                Ogre::LogManager::getSingleton().logError(
-                    "Assimp export to " + formatId.toStdString() + " failed (code " +
-                    std::to_string(result) + "): " + std::string(exporter.GetErrorString()));
+                auto msg = QString("Assimp export to %1 failed (code %2): %3")
+                    .arg(formatId).arg(result).arg(exporter.GetErrorString());
+                Ogre::LogManager::getSingleton().logError(msg.toStdString());
+                SentryReporter::captureMessage(msg, "error");
             }
             else
             {
@@ -1039,10 +1027,12 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
 
             delete scene;
         } catch (std::exception& ex) {
-            Ogre::LogManager::getSingleton().logError(
-                "Assimp export failed with exception: " + std::string(ex.what()));
+            auto msg = QString("Assimp export failed: %1").arg(ex.what());
+            Ogre::LogManager::getSingleton().logError(msg.toStdString());
+            SentryReporter::captureMessage(msg, "error");
         } catch (...) {
             Ogre::LogManager::getSingleton().logError("Assimp export failed with unknown exception");
+            SentryReporter::captureMessage("Assimp export failed with unknown exception", "error");
         }
     }
 
