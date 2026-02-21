@@ -129,12 +129,17 @@ MainWindow::MainWindow(QWidget *parent) :
         {
             try {
                 m_pRoot->renderOneFrame();
+            } catch (Ogre::Exception& e) {
+                SentryReporter::captureMessage(
+                    QString("Render error (Ogre): %1").arg(e.getFullDescription().c_str()), "error");
+                if(m_pTimer) m_pTimer->stop();
+            } catch (std::exception& e) {
+                SentryReporter::captureMessage(
+                    QString("Render error (std): %1").arg(e.what()), "error");
+                if(m_pTimer) m_pTimer->stop();
             } catch (...) {
-                // Stop timer if rendering fails (e.g., during shutdown)
-                if(m_pTimer)
-                {
-                    m_pTimer->stop();
-                }
+                SentryReporter::captureMessage("Render error (unknown)", "error");
+                if(m_pTimer) m_pTimer->stop();
             }
         }
     });
@@ -1095,6 +1100,7 @@ void MainWindow::openRecentFile()
 
     QString filePath = action->data().toString();
     if (QFileInfo::exists(filePath)) {
+        addToRecentFiles(filePath);
         mUriList.append(filePath);
     } else {
         QMessageBox::warning(this, tr("File Not Found"),

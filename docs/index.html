@@ -411,7 +411,7 @@
             const footerText = document.querySelector('.footer-text');
             if (footerText) {
                 footerText.innerHTML = `
-                    QtMeshEditor ${version} © 2013-${currentYear} Fernando Tonon | 
+                    QtMeshEditor ${version} © 2012-${currentYear} Fernando Tonon |
                     <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> | 
                     <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--ogre-orange);">Ogre3D Forum</a>
                 `;
@@ -759,15 +759,34 @@ animate            — Start/stop rotation animations</div>
                     </p>
                 </div>
                 
-                <div class="feature-card">
+                <div class="feature-card" style="grid-column: 1 / -1;">
                     <h3 class="feature-title">Supported Formats</h3>
-                    <p class="feature-desc">
-                        • Ogre .mesh/.skeleton/.material<br>
-                        • FBX, OBJ, 3DS, DAE<br>
-                        • X, PLY, STL files<br>
-                        • Various texture formats<br>
-                        • Legacy Ogre versions
-                    </p>
+                    <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-family: 'Source Code Pro', monospace; font-size: 0.85rem;">
+                        <thead>
+                            <tr style="border-bottom: 2px solid var(--primary-green);">
+                                <th style="text-align: left; padding: 8px; color: var(--neon-cyan);">Format</th>
+                                <th style="text-align: left; padding: 8px; color: var(--neon-cyan);">Extension</th>
+                                <th style="text-align: center; padding: 8px; color: var(--neon-cyan);">Import</th>
+                                <th style="text-align: center; padding: 8px; color: var(--neon-cyan);">Export</th>
+                                <th style="text-align: center; padding: 8px; color: var(--neon-cyan);">Skeleton</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">Ogre Mesh</td><td style="padding: 6px 8px;">.mesh</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">Ogre XML</td><td style="padding: 6px 8px;">.mesh.xml</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">FBX</td><td style="padding: 6px 8px;">.fbx</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">Collada</td><td style="padding: 6px 8px;">.dae</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">DirectX X</td><td style="padding: 6px 8px;">.x</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">glTF 2.0</td><td style="padding: 6px 8px;">.gltf2</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">glTF 2.0 Binary</td><td style="padding: 6px 8px;">.glb2</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">OBJ</td><td style="padding: 6px 8px;">.obj</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">STL</td><td style="padding: 6px 8px;">.stl</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">PLY</td><td style="padding: 6px 8px;">.ply</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">3DS</td><td style="padding: 6px 8px;">.3ds</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td></tr>
+                            <tr><td style="padding: 6px 8px;">Assimp Binary</td><td style="padding: 6px 8px;">.assbin</td><td style="text-align: center;">&#8212;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                        </tbody>
+                    </table>
+                    <p class="feature-desc" style="margin-top: 10px; font-size: 0.85rem;">Import supports all formats provided by Assimp (40+).</p>
                 </div>
                 
                 <div class="feature-card">
@@ -799,7 +818,7 @@ animate            — Start/stop rotation animations</div>
     <footer class="footer">
         <div class="container">
             <p class="footer-text">
-                QtMeshEditor 2.0.0 © 2013-2025 Fernando Tonon |
+                QtMeshEditor 2.0.0 © 2012-2025 Fernando Tonon |
                 <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> | 
                 <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--ogre-orange);">Ogre3D Forum</a>
             </p>

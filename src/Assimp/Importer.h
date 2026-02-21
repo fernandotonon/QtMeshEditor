@@ -37,7 +37,7 @@ class AssimpToOgreImporter {
 public:
     AssimpToOgreImporter() : importer() {}
 
-    Ogre::MeshPtr loadModel(const std::string& path);
+    Ogre::MeshPtr loadModel(const std::string& path, bool convertToLeftHanded = true);
 
 private:
     Assimp::Importer importer;
