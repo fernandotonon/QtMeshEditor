@@ -1,11 +1,15 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <OgreSceneNode.h>
+#include <OgreSkeleton.h>
+#include <OgreAnimation.h>
+#include <OgreBone.h>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QThread>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include <OgreException.h>
 #include "TestHelpers.h"
 
@@ -309,4 +313,51 @@ TEST_F(MeshImporterExporterTest, ExportImport_glTF2_RoundTrip) {
     // Clean up
     QFile::remove("./roundtrip.gltf2");
     QFile::remove("./roundtrip.material");
+}
+
+// ── Regression: XML skeleton animation track-to-bone mapping ─────
+// Verifies that XMLSkeletonSerializer creates animation tracks keyed
+// by bone handle (not sequential index).  A mismatch causes
+// Animation::apply(Skeleton*,...) to animate the wrong bones.
+
+TEST_F(MeshImporterExporterTest, XMLSkeletonSerializer_TrackHandlesMatchBoneHandles) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    // Import FBX with skeleton
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+
+    // Export to Ogre XML (produces .skeleton.xml)
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./tracktest.mesh.xml", "Ogre XML (*.mesh.xml)"), 0);
+
+    // Re-import the skeleton XML into a fresh skeleton
+    auto skelPtr = Ogre::SkeletonManager::getSingleton().create(
+        "tracktest_verify.skeleton.xml", "General");
+    Ogre::XMLSkeletonSerializer xmlSS;
+    xmlSS.importSkeleton("./tracktest.skeleton.xml", skelPtr.get());
+
+    ASSERT_GT(skelPtr->getNumAnimations(), 0u);
+
+    auto* anim = skelPtr->getAnimation(static_cast<unsigned short>(0));
+    for (const auto& [trackHandle, track] : anim->_getNodeTrackList())
+    {
+        // The track handle must match the associated bone's handle.
+        // If they differ, Animation::apply(Skeleton*,...) will apply
+        // keyframes to the wrong bone.
+        auto* bone = dynamic_cast<Ogre::Bone*>(track->getAssociatedNode());
+        ASSERT_NE(bone, nullptr) << "Track " << trackHandle << " has no associated bone";
+        EXPECT_EQ(trackHandle, bone->getHandle())
+            << "Track handle " << trackHandle
+            << " does not match bone '" << bone->getName()
+            << "' handle " << bone->getHandle();
+    }
+
+    // Clean up
+    Ogre::SkeletonManager::getSingleton().remove(skelPtr);
+    QFile::remove("./tracktest.mesh.xml");
+    QFile::remove("./tracktest.skeleton.xml");
+    QFile::remove("./tracktest.material");
 }
