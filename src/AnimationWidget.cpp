@@ -14,27 +14,6 @@
 #include "Manager.h"
 #include "AnimationWidget.h"
 
-// Returns entities from the current selection. If entities are directly selected,
-// returns those. Otherwise resolves selected nodes to their attached entities.
-static QList<Ogre::Entity*> getSelectedEntities()
-{
-    const auto* sel = SelectionSet::getSingleton();
-    if (sel->hasEntities())
-        return sel->getEntitiesSelectionList();
-
-    QList<Ogre::Entity*> entities;
-    if (!sel->hasNodes())
-        return entities;
-
-    const auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    for (const auto* node : sel->getNodesSelectionList())
-    {
-        if (sceneMgr->hasEntity(node->getName()))
-            entities.append(sceneMgr->getEntity(node->getName()));
-    }
-    return entities;
-}
-
 AnimationWidget::AnimationWidget(QWidget *parent) :
     QWidget(parent)
 {
@@ -87,6 +66,11 @@ AnimationWidget::~AnimationWidget()
 bool AnimationWidget::isSkeletonShown(Ogre::Entity * entity) const
 {
     return mShowSkeleton.contains(entity) && mShowSkeleton.find(entity).value()->bonesShown();
+}
+
+bool AnimationWidget::isSkeletonDebugActive(Ogre::Entity* entity) const
+{
+    return mShowSkeleton.contains(entity);
 }
 
 bool AnimationWidget::isBoneWeightsShown(Ogre::Entity* entity) const
@@ -178,7 +162,7 @@ void AnimationWidget::updateAnimationTable()
         ui->animTable->removeRow(0);
     }
 
-    auto entities = getSelectedEntities();
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
     if (entities.isEmpty())
         return;
 
@@ -220,9 +204,6 @@ void AnimationWidget::updateAnimationTable()
         }
     }
 
-    // update the ui animation state
-    if(!hasAnimationEnable)
-        setAnimationState(false);
 }
 
 void AnimationWidget::updateSkeletonTable()
@@ -232,7 +213,7 @@ void AnimationWidget::updateSkeletonTable()
         ui->skeletonTable->removeRow(0);
     }
 
-    auto entities = getSelectedEntities();
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
     if (entities.isEmpty())
         return;
 
@@ -277,60 +258,26 @@ void AnimationWidget::setAnimationState(bool playing)
 
 void AnimationWidget::pollAnimationState()
 {
-    auto entities = getSelectedEntities();
-    if (entities.isEmpty())
-        return;
-
-    bool hasAnimationEnabled = false;
-    for(const Ogre::Entity* entity : entities)
+    // Refresh table checkboxes to match actual Ogre animation state
+    // (e.g. changed externally via MCP), but do NOT touch Play/Pause button
+    for(int row = 0; row < ui->animTable->rowCount(); ++row)
     {
-        const Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
-        if(!set) continue;
+        auto* entityItem = ui->animTable->item(row, 0);
+        auto* enabledItem = ui->animTable->item(row, 2);
+        if(!entityItem || !enabledItem) continue;
 
-        for(const auto &[key, state] : set->getAnimationStates())
-        {
-            if(state->getEnabled())
-            {
-                hasAnimationEnabled = true;
-                break;
-            }
-        }
-        if(hasAnimationEnabled) break;
-    }
+        auto* entity = static_cast<Ogre::Entity*>(entityItem->data(ENTITY_DATA).value<void*>());
+        if(!entity) continue;
 
-    // Only react when the Ogre animation state actually transitions,
-    // not when it merely differs from the button. This avoids fighting
-    // with user clicks on the Play/Pause button.
-    if(hasAnimationEnabled != m_lastPollAnimEnabled)
-    {
-        m_lastPollAnimEnabled = hasAnimationEnabled;
+        auto* animNameItem = ui->animTable->item(row, 1);
+        if(!animNameItem) continue;
 
-        // Update button and emit signal so MainWindow stays in sync
-        ui->PlayPauseButton->blockSignals(true);
-        ui->PlayPauseButton->setChecked(hasAnimationEnabled);
-        ui->PlayPauseButton->blockSignals(false);
-        setAnimationState(hasAnimationEnabled);
+        Ogre::AnimationState* animState = entity->getAnimationState(animNameItem->text().toStdString());
+        if(!animState) continue;
 
-        // Refresh the table checkboxes to match actual Ogre state
-        for(int row = 0; row < ui->animTable->rowCount(); ++row)
-        {
-            auto* entityItem = ui->animTable->item(row, 0);
-            auto* enabledItem = ui->animTable->item(row, 2);
-            if(!entityItem || !enabledItem) continue;
-
-            auto* entity = static_cast<Ogre::Entity*>(entityItem->data(ENTITY_DATA).value<void*>());
-            if(!entity) continue;
-
-            auto* animNameItem = ui->animTable->item(row, 1);
-            if(!animNameItem) continue;
-
-            Ogre::AnimationState* animState = entity->getAnimationState(animNameItem->text().toStdString());
-            if(!animState) continue;
-
-            Qt::CheckState expected = animState->getEnabled() ? Qt::Checked : Qt::Unchecked;
-            if(enabledItem->checkState() != expected)
-                enabledItem->setCheckState(expected);
-        }
+        Qt::CheckState expected = animState->getEnabled() ? Qt::Checked : Qt::Unchecked;
+        if(enabledItem->checkState() != expected)
+            enabledItem->setCheckState(expected);
     }
 }
 
