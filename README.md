@@ -42,9 +42,23 @@ Split View|Skeleton Animation Controls
   - Renaming Animation
   - View keyframe positions and values
 * Import/Export
-  - Export mesh in older versions 
-  - Other 3D Format Importer - Can convert any 3D format provided by ASSIMP to Ogre Mesh, Material, and Skeleton
-  - Other 3D Format Exporter - Can export the mesh to any other format supported by ASSIMP.
+
+  | Format | Extension | Import | Export | Skeleton/Animation |
+  |--------|-----------|--------|--------|--------------------|
+  | Ogre Mesh | .mesh | Yes | Yes | Yes |
+  | Ogre XML | .mesh.xml | Yes | Yes | Yes |
+  | FBX | .fbx | Yes | No | Yes |
+  | Collada | .dae | Yes | Yes | Yes |
+  | DirectX X | .x | Yes | Yes | Yes |
+  | glTF 2.0 | .gltf2 | Yes | Yes | Yes |
+  | glTF 2.0 Binary | .glb2 | Yes | Yes | Yes |
+  | Assimp Binary | .assbin | No | Yes | Yes |
+  | OBJ | .obj | Yes | Yes | No |
+  | STL | .stl | Yes | Yes | No |
+  | PLY | .ply | Yes | Yes | No |
+  | 3DS | .3ds | Yes | Yes | No |
+
+  Import supports all formats provided by Assimp (40+). Export to older Ogre Mesh versions (v1.0–v1.10) is also available.
 
 ### :computer: Install from release binaries
 #### :apple: macOS

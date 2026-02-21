@@ -59,18 +59,16 @@ SkeletonDebug::~SkeletonDebug()
     mTimer.stop();
     mTimer.disconnect();
 
+    // Detach all bone-attached objects at once — this clears mChildObjectList
+    // and frees TagPoints without leaving stale parent references.
+    mEntity->detachAllObjectsFromBone();
+
     for(auto* ent : mBoneEntities)
-    {
-        mEntity->detachObjectFromBone(ent);
         mSceneMan->destroyEntity(ent);
-    }
     mBoneEntities.clear();
 
     for(auto* ent : mAxisEntities)
-    {
-        mEntity->detachObjectFromBone(ent);
         mSceneMan->destroyEntity(ent);
-    }
     mAxisEntities.clear();
 }
 

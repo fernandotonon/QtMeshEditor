@@ -1,11 +1,15 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
 #include <OgreSceneNode.h>
+#include <OgreSkeleton.h>
+#include <OgreAnimation.h>
+#include <OgreBone.h>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QThread>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include <OgreException.h>
 #include "TestHelpers.h"
 
@@ -113,7 +117,7 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_UnknownFormat_ReturnsURIW
 }
 
 TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ReturnsFilterString) {
-    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;PLY Binary (*.plyb);;STL (*.stl);;STL Binary (*.stlb);;STP (*.stp);;X (*.x);;glTF 1.0 (*.gltf);;glTF 1.0 Binary (*.glb);;glTF 2.0 (*.gltf2);;glTF 2.0 Binary (*.glb2)";
+    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;STL (*.stl);;X (*.x);;glTF 2.0 (*.gltf2);;glTF 2.0 Binary (*.glb2)";
 
     QString result = MeshImporterExporter::exportFileDialogFilter();
 
@@ -164,4 +168,196 @@ TEST_F(MeshImporterExporterTest, Importer_ValidMesh) {
     QFile::remove("./exported.mesh.xml");
     QFile::remove("./exported.skeleton.xml");
     QFile::remove("./exported.x");
+}
+
+// ── Round-trip tests using Rumba Dancing.fbx ──────────────────────
+
+TEST_F(MeshImporterExporterTest, Importer_RumbaDancingFBX) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+
+    auto nodes = Manager::getSingleton()->getSceneNodes();
+    ASSERT_FALSE(nodes.isEmpty());
+
+    auto* sn = nodes.last();
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity(sn->getName()));
+    auto* entity = sceneMgr->getEntity(sn->getName());
+    EXPECT_TRUE(entity->hasSkeleton());
+}
+
+TEST_F(MeshImporterExporterTest, ExportImport_OgreMesh_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    // Import FBX
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    // Export to .mesh
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip.mesh", "Ogre Mesh (*.mesh)"), 0);
+
+    // Reimport
+    QStringList reimport{"./roundtrip.mesh"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    // Clean up
+    QFile::remove("./roundtrip.mesh");
+    QFile::remove("./roundtrip.material");
+    QFile::remove("./roundtrip.skeleton");
+}
+
+TEST_F(MeshImporterExporterTest, ExportImport_OgreXML_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    // Export to .mesh.xml
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip.mesh.xml", "Ogre XML (*.mesh.xml)"), 0);
+
+    // Reimport — should preserve skeleton
+    QStringList reimport{"./roundtrip.mesh.xml"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    auto* reimportedSn = Manager::getSingleton()->getSceneNodes().last();
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    if (sceneMgr->hasEntity(reimportedSn->getName())) {
+        auto* entity = sceneMgr->getEntity(reimportedSn->getName());
+        EXPECT_TRUE(entity->hasSkeleton());
+    }
+
+    // Clean up
+    QFile::remove("./roundtrip.mesh.xml");
+    QFile::remove("./roundtrip.skeleton.xml");
+    QFile::remove("./roundtrip.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportImport_Collada_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    // Export to .dae
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip.dae", "Collada (*.dae)"), 0);
+
+    // Reimport
+    QStringList reimport{"./roundtrip.dae"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    // Clean up
+    QFile::remove("./roundtrip.dae");
+    QFile::remove("./roundtrip.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportImport_X_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    // Export to .x
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip.x", "X (*.x)"), 0);
+
+    // Reimport
+    QStringList reimport{"./roundtrip.x"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    // Clean up
+    QFile::remove("./roundtrip.x");
+    QFile::remove("./roundtrip.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportImport_glTF2_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    // Export to .gltf2
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip.gltf2", "glTF 2.0 (*.gltf2)"), 0);
+
+    // Reimport
+    QStringList reimport{"./roundtrip.gltf2"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    // Clean up
+    QFile::remove("./roundtrip.gltf2");
+    QFile::remove("./roundtrip.material");
+}
+
+// ── Regression: XML skeleton animation track-to-bone mapping ─────
+// Verifies that XMLSkeletonSerializer creates animation tracks keyed
+// by bone handle (not sequential index).  A mismatch causes
+// Animation::apply(Skeleton*,...) to animate the wrong bones.
+
+TEST_F(MeshImporterExporterTest, XMLSkeletonSerializer_TrackHandlesMatchBoneHandles) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    // Import FBX with skeleton
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+
+    // Export to Ogre XML (produces .skeleton.xml)
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./tracktest.mesh.xml", "Ogre XML (*.mesh.xml)"), 0);
+
+    // Re-import the skeleton XML into a fresh skeleton
+    auto skelPtr = Ogre::SkeletonManager::getSingleton().create(
+        "tracktest_verify.skeleton.xml", "General");
+    Ogre::XMLSkeletonSerializer xmlSS;
+    xmlSS.importSkeleton("./tracktest.skeleton.xml", skelPtr.get());
+
+    ASSERT_GT(skelPtr->getNumAnimations(), 0u);
+
+    auto* anim = skelPtr->getAnimation(static_cast<unsigned short>(0));
+    for (const auto& [trackHandle, track] : anim->_getNodeTrackList())
+    {
+        // The track handle must match the associated bone's handle.
+        // If they differ, Animation::apply(Skeleton*,...) will apply
+        // keyframes to the wrong bone.
+        auto* bone = dynamic_cast<Ogre::Bone*>(track->getAssociatedNode());
+        ASSERT_NE(bone, nullptr) << "Track " << trackHandle << " has no associated bone";
+        EXPECT_EQ(trackHandle, bone->getHandle())
+            << "Track handle " << trackHandle
+            << " does not match bone '" << bone->getName()
+            << "' handle " << bone->getHandle();
+    }
+
+    // Clean up
+    Ogre::SkeletonManager::getSingleton().remove(skelPtr);
+    QFile::remove("./tracktest.mesh.xml");
+    QFile::remove("./tracktest.skeleton.xml");
+    QFile::remove("./tracktest.material");
 }
