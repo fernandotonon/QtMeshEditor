@@ -26,6 +26,9 @@ Split View|Skeleton Animation Controls
 ![Screencast From 2025-06-26 23-35-53](https://github.com/user-attachments/assets/c58978d7-7564-41f2-8c95-527ddf7ae78e)
 
 
+#### :scroll: How it looked like back in the days up to 2014
+
+![Old version](https://camo.githubusercontent.com/58b2de95aedb5e4ce768a6f03f51bac7e8a1bd59aea5c3ceac33540224f60f4f/68747470733a2f2f64726976652e676f6f676c652e636f6d2f75633f69643d3150644e7a396135485f4157625a764948693139725368506e2d6e6a4b466a4e45)
 
 
 ### :sparkles: Features
