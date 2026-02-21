@@ -170,7 +170,10 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
     const Ogre::MeshPtr mesh = entity->getMesh();
     const unsigned int numSub = mesh->getNumSubMeshes();
     const bool hasSkeleton = entity->hasSkeleton();
-    Ogre::Skeleton* skeleton = hasSkeleton ? entity->getSkeleton() : nullptr;
+    // Use the master skeleton (from the Mesh) rather than the SkeletonInstance
+    // (from the Entity) so bone positions are always the original bind pose,
+    // unaffected by animation playback.
+    Ogre::Skeleton* skeleton = hasSkeleton ? mesh->getSkeleton().get() : nullptr;
 
     // --- Materials with texture references ---
     std::vector<Ogre::MaterialPtr> materials;
@@ -489,9 +492,10 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
 }
 
 // ─── Custom Ogre XML mesh importer ───────────────────────────────
-// Reads .mesh.xml using pugixml and builds the Ogre mesh using the same
-// HardwareBufferManager calls that MeshProcessor uses (which work reliably).
-// This avoids XMLMeshSerializer::readGeometry() whose GL buffer lock fails.
+// Reads .mesh.xml using pugixml and builds the Ogre mesh manually.
+// Ogre's XMLMeshSerializer::readGeometry() fails with a GL buffer
+// lock error in this context, so we build buffers via
+// HardwareBufferManager directly (the same way MeshProcessor does).
 static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::string& meshName)
 {
     pugi::xml_document doc;
@@ -531,6 +535,7 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
         }
     }
 
+    Ogre::SkeletonPtr skelPtr;
     if (!skelName.empty() && QFileInfo::exists(skelPath))
     {
         // Remove stale skeleton
@@ -538,23 +543,28 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
             Ogre::SkeletonManager::getSingleton().remove(oldSkel);
 
         try {
-            // Create as manual resource so Ogre won't try to auto-load from disk
-            auto skelPtr = Ogre::SkeletonManager::getSingleton().create(
-                skelName, "General", true);
+            // Create as non-manual so SkeletonInstance can reference it normally
+            skelPtr = Ogre::SkeletonManager::getSingleton().create(skelName, "General");
             Ogre::XMLSkeletonSerializer xmlSS;
             xmlSS.importSkeleton(skelPath.toStdString().c_str(), skelPtr.get());
-            // Mark as loaded so the mesh finds it ready
-            skelPtr->load();
-            // Store name — setSkeletonName is called after mesh->load() below
-            // so that isLoaded()==true and the skeleton pointer is properly resolved.
+            // setBindingPose() saves initial bone transforms and computes the
+            // derived-inverse matrices needed by _getOffsetTransform() for
+            // animation.  The binary SkeletonSerializer calls this automatically
+            // after import but the XML serializer does not.
+            skelPtr->setBindingPose();
+            // Prevent any subsequent SkeletonManager::load() call from trying to
+            // re-load (and clearing) our already-populated skeleton data.
+            skelPtr->setBackgroundLoaded(true);
         } catch (Ogre::Exception& e) {
             skelName.clear(); // don't link a failed skeleton
+            skelPtr.reset();
             SentryReporter::addBreadcrumb("import",
                 QString("XML skeleton load failed: %1").arg(e.getFullDescription().c_str()), "error");
         }
     }
 
-    // Helper lambda: parse a <geometry>/<vertexbuffer> into vectors
+    // Helper: parse a <geometry>/<vertexbuffer> and build an Ogre VertexData
+    // with hardware buffers.  Returns the VertexData and updates bounds.
     struct GeomData {
         std::vector<Ogre::Vector3> positions;
         std::vector<Ogre::Vector3> normals;
@@ -596,25 +606,14 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
         return data;
     };
 
-    // Parse shared geometry (if any)
-    GeomData sharedGeom;
-    auto sharedGeomNode = root.child("sharedgeometry");
-    if (sharedGeomNode)
-        sharedGeom = parseGeometry(sharedGeomNode);
-
     Ogre::Vector3 minCoords(Ogre::Vector3::ZERO), maxCoords(Ogre::Vector3::ZERO);
     bool firstVertex = true;
 
-    // Helper: build vertex/index hardware buffers from parsed data (MeshProcessor style)
-    auto buildSubMeshBuffers = [&](Ogre::SubMesh* subMesh, const GeomData& geom,
-                                    const std::vector<unsigned int>& indices)
+    // Helper: build hardware vertex/index buffers from parsed geometry data
+    auto buildVertexData = [&](const GeomData& geom) -> Ogre::VertexData*
     {
-        Ogre::VertexData* vertexData = new Ogre::VertexData();
-        subMesh->useSharedVertices = false;
-        subMesh->vertexData = vertexData;
-
-        // Vertex declaration
-        Ogre::VertexDeclaration* decl = vertexData->vertexDeclaration;
+        auto* vertexData = new Ogre::VertexData();
+        auto* decl = vertexData->vertexDeclaration;
         size_t offset = decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION).getSize();
         if (!geom.normals.empty())
             offset += decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL).getSize();
@@ -623,7 +622,6 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
 
         vertexData->vertexCount = geom.positions.size();
 
-        // Create vertex buffer
         auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
             decl->getVertexSize(0), vertexData->vertexCount,
             Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
@@ -634,7 +632,6 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
             *pVertex++ = geom.positions[i].x;
             *pVertex++ = geom.positions[i].y;
             *pVertex++ = geom.positions[i].z;
-
             if (!geom.normals.empty()) {
                 *pVertex++ = geom.normals[i].x;
                 *pVertex++ = geom.normals[i].y;
@@ -644,57 +641,45 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
                 *pVertex++ = geom.texCoords[i].x;
                 *pVertex++ = geom.texCoords[i].y;
             }
-
-            // Update bounds
             const auto& pos = geom.positions[i];
-            if (firstVertex) {
-                minCoords = maxCoords = pos;
-                firstVertex = false;
-            } else {
-                minCoords.makeFloor(pos);
-                maxCoords.makeCeil(pos);
-            }
+            if (firstVertex) { minCoords = maxCoords = pos; firstVertex = false; }
+            else { minCoords.makeFloor(pos); maxCoords.makeCeil(pos); }
         }
         vbuf->unlock();
         vertexData->vertexBufferBinding->setBinding(0, vbuf);
-
-        // Create index buffer
-        if (!indices.empty())
-        {
-            bool use32bit = vertexData->vertexCount > 65535;
-            auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
-                use32bit ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT,
-                indices.size(), Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-
-            if (use32bit) {
-                auto* pIdx = static_cast<unsigned int*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-                for (auto idx : indices) *pIdx++ = idx;
-            } else {
-                auto* pIdx = static_cast<unsigned short*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-                for (auto idx : indices) *pIdx++ = static_cast<unsigned short>(idx);
-            }
-            ibuf->unlock();
-            subMesh->indexData->indexCount = indices.size();
-            subMesh->indexData->indexBuffer = ibuf;
-        }
+        return vertexData;
     };
 
-    // Parse shared bone assignments into a list — we'll apply them to submeshes
-    // that used shared vertices (since buildSubMeshBuffers converts all submeshes
-    // to per-submesh vertex data, mesh-level bone assignments would be orphaned).
-    std::vector<Ogre::VertexBoneAssignment> sharedBoneAssignList;
-    auto sharedBoneAssigns = root.child("boneassignments");
-    if (sharedBoneAssigns) {
-        for (auto& ba : sharedBoneAssigns.children("vertexboneassignment")) {
-            Ogre::VertexBoneAssignment vba;
-            vba.vertexIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("vertexindex").value());
-            vba.boneIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("boneindex").value());
-            vba.weight = Ogre::StringConverter::parseReal(ba.attribute("weight").value());
-            sharedBoneAssignList.push_back(vba);
+    auto buildIndexBuffer = [](Ogre::SubMesh* subMesh, const std::vector<unsigned int>& indices,
+                               size_t vertexCount)
+    {
+        if (indices.empty()) return;
+        bool use32bit = vertexCount > 65535;
+        auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+            use32bit ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT,
+            indices.size(), Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+        if (use32bit) {
+            auto* p = static_cast<unsigned int*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for (auto idx : indices) *p++ = idx;
+        } else {
+            auto* p = static_cast<unsigned short*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for (auto idx : indices) *p++ = static_cast<unsigned short>(idx);
         }
+        ibuf->unlock();
+        subMesh->indexData->indexCount = indices.size();
+        subMesh->indexData->indexBuffer = ibuf;
+    };
+
+    // Build shared vertex data on the mesh (if the XML has <sharedgeometry>)
+    auto sharedGeomNode = root.child("sharedgeometry");
+    if (sharedGeomNode)
+    {
+        auto geom = parseGeometry(sharedGeomNode);
+        if (!geom.positions.empty())
+            mesh->sharedVertexData = buildVertexData(geom);
     }
 
-    // Parse submeshes
+    // Parse submeshes — preserve shared-vertex flag
     for (auto& smElem : root.child("submeshes").children("submesh"))
     {
         Ogre::SubMesh* subMesh = mesh->createSubMesh();
@@ -719,67 +704,57 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
             }
         }
 
-        // Geometry: per-submesh or shared
         bool useShared = Ogre::StringConverter::parseBool(smElem.attribute("usesharedvertices").value());
-        GeomData geom = useShared ? sharedGeom : parseGeometry(smElem.child("geometry"));
-
-        if (geom.positions.empty()) continue;
-
-        buildSubMeshBuffers(subMesh, geom, indices);
-
-        // Bone assignments: per-submesh first, then shared if this submesh used shared geometry
-        auto boneAssigns = smElem.child("boneassignments");
-        if (boneAssigns) {
-            for (auto& ba : boneAssigns.children("vertexboneassignment")) {
-                Ogre::VertexBoneAssignment vba;
-                vba.vertexIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("vertexindex").value());
-                vba.boneIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("boneindex").value());
-                vba.weight = Ogre::StringConverter::parseReal(ba.attribute("weight").value());
-                subMesh->addBoneAssignment(vba);
-            }
-        } else if (useShared) {
-            // Apply shared bone assignments directly to this submesh since
-            // buildSubMeshBuffers converted shared vertices to per-submesh data.
-            for (const auto& vba : sharedBoneAssignList)
-                subMesh->addBoneAssignment(vba);
-        }
-    }
-
-    // If a skeleton is present, ensure every submesh has bone assignments.
-    // Submeshes without them cause softwareVertexBlend to assert on missing
-    // blend indices/weights.  Assign all vertices to bone 0 as a fallback.
-    if (!skelName.empty())
-    {
-        for (unsigned i = 0; i < mesh->getNumSubMeshes(); ++i)
+        if (useShared && mesh->sharedVertexData)
         {
-            auto* sm = mesh->getSubMesh(i);
-            if (!sm->getBoneAssignments().empty()) continue;
+            // Reference the mesh-level shared vertex data
+            subMesh->useSharedVertices = true;
+            buildIndexBuffer(subMesh, indices, mesh->sharedVertexData->vertexCount);
+        }
+        else
+        {
+            // Per-submesh geometry
+            auto geom = parseGeometry(smElem.child("geometry"));
+            if (geom.positions.empty()) continue;
+            subMesh->useSharedVertices = false;
+            subMesh->vertexData = buildVertexData(geom);
+            buildIndexBuffer(subMesh, indices, geom.positions.size());
 
-            for (size_t v = 0; v < sm->vertexData->vertexCount; ++v)
-            {
-                Ogre::VertexBoneAssignment vba;
-                vba.vertexIndex = v;
-                vba.boneIndex = 0;
-                vba.weight = 1.0f;
-                sm->addBoneAssignment(vba);
+            // Per-submesh bone assignments
+            auto boneAssigns = smElem.child("boneassignments");
+            if (boneAssigns) {
+                for (auto& ba : boneAssigns.children("vertexboneassignment")) {
+                    Ogre::VertexBoneAssignment vba;
+                    vba.vertexIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("vertexindex").value());
+                    vba.boneIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("boneindex").value());
+                    vba.weight = Ogre::StringConverter::parseReal(ba.attribute("weight").value());
+                    subMesh->addBoneAssignment(vba);
+                }
             }
         }
     }
 
-    // Set bounds
+    // Mesh-level (shared) bone assignments — stored on the mesh, not submeshes
+    auto sharedBoneAssigns = root.child("boneassignments");
+    if (sharedBoneAssigns) {
+        for (auto& ba : sharedBoneAssigns.children("vertexboneassignment")) {
+            Ogre::VertexBoneAssignment vba;
+            vba.vertexIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("vertexindex").value());
+            vba.boneIndex = Ogre::StringConverter::parseUnsignedInt(ba.attribute("boneindex").value());
+            vba.weight = Ogre::StringConverter::parseReal(ba.attribute("weight").value());
+            mesh->addBoneAssignment(vba);
+        }
+    }
+
+    // Link skeleton
+    if (skelPtr) {
+        mesh->_notifySkeleton(skelPtr);
+    }
+
+    // Set bounds and finalize
     mesh->_setBounds(Ogre::AxisAlignedBox(minCoords, maxCoords));
     mesh->_setBoundingSphereRadius((maxCoords - minCoords).length() / 2.0f);
     mesh->load();
-
-    // Link skeleton AFTER load() so that isLoaded()==true and the
-    // skeleton pointer is resolved (not just the name stored).
-    if (!skelName.empty())
-    {
-        mesh->setSkeletonName(skelName);
-        // Compile bone assignments into blend indices/weights in vertex buffers.
-        // Without this, software vertex blending asserts on missing blend data.
-        mesh->_updateCompiledBoneAssignments();
-    }
 
     return mesh;
 }
@@ -911,8 +886,12 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
 
         if(e->hasSkeleton())
         {
+            // Use the master skeleton (from the Mesh) rather than the
+            // SkeletonInstance (from the Entity).  The master skeleton always
+            // holds the original bind pose and animation deltas, unaffected
+            // by animation playback.
             Ogre::XMLSkeletonSerializer xmlSS;
-            xmlSS.exportSkeleton(e->getSkeleton(),(_uri.left(_uri.length()-8)+"skeleton.xml").toStdString().data());
+            xmlSS.exportSkeleton(e->getMesh()->getSkeleton().get(),(_uri.left(_uri.length()-8)+"skeleton.xml").toStdString().data());
         }
 
         // Export mesh XML with the current skeleton name intact.
@@ -957,8 +936,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
 
         if(e->hasSkeleton())
         {
+            // Use the master skeleton — always has original bind pose
             Ogre::SkeletonSerializer ss;
-            ss.exportSkeleton(e->getSkeleton(),QString(file.path()+"/"+e->getMesh().get()->getSkeletonName().c_str()).toStdString().data());
+            ss.exportSkeleton(e->getMesh()->getSkeleton().get(),QString(file.path()+"/"+e->getMesh().get()->getSkeletonName().c_str()).toStdString().data());
         }
 
         m.exportMesh(e->getMesh().get(),_uri.toStdString().data(),(Ogre::MeshVersion)version);
