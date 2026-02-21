@@ -89,6 +89,88 @@ bool AnimationWidget::isSkeletonShown(Ogre::Entity * entity) const
     return mShowSkeleton.contains(entity) && mShowSkeleton.find(entity).value()->bonesShown();
 }
 
+bool AnimationWidget::isBoneWeightsShown(Ogre::Entity* entity) const
+{
+    return mWeightOverlays.contains(entity);
+}
+
+bool AnimationWidget::toggleSkeletonDebug(Ogre::Entity* entity, bool show)
+{
+    if (!entity || !entity->hasSkeleton())
+        return false;
+
+    SkeletonDebug* sd;
+    if (mShowSkeleton.contains(entity))
+        sd = mShowSkeleton.value(entity);
+    else
+    {
+        sd = new SkeletonDebug(entity, Manager::getSingleton()->getSceneMgr(), 0.1f, 0.01f);
+        mShowSkeleton.insert(entity, sd);
+    }
+
+    sd->showBones(show);
+
+    if (!show && mShowSkeleton.contains(entity))
+    {
+        sd->showAxes(false);
+        sd->showNames(false);
+        mShowSkeleton.remove(entity);
+    }
+
+    updateSkeletonTable();
+    return true;
+}
+
+bool AnimationWidget::toggleBoneWeights(Ogre::Entity* entity, bool show)
+{
+    if (!entity || !entity->hasSkeleton())
+        return false;
+
+    if (show)
+    {
+        if (mWeightOverlays.contains(entity))
+            return true; // already shown
+
+        auto* overlay = new BoneWeightOverlay(entity, Manager::getSingleton()->getSceneMgr());
+        mWeightOverlays.insert(entity, overlay);
+
+        if (mShowSkeleton.contains(entity))
+        {
+            auto* sd = mShowSkeleton.value(entity);
+            connect(sd, &SkeletonDebug::boneSelected, overlay, &BoneWeightOverlay::setSelectedBone);
+            if (sd->selectedBoneIndex() >= 0)
+                overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
+        }
+
+        overlay->setVisible(true);
+    }
+    else
+    {
+        if (mWeightOverlays.contains(entity))
+        {
+            delete mWeightOverlays.value(entity);
+            mWeightOverlays.remove(entity);
+        }
+    }
+
+    updateSkeletonTable();
+    return true;
+}
+
+SkeletonDebug* AnimationWidget::getSkeletonDebug(Ogre::Entity* entity) const
+{
+    if (mShowSkeleton.contains(entity))
+        return mShowSkeleton.value(entity);
+    return nullptr;
+}
+
+BoneWeightOverlay* AnimationWidget::getBoneWeightOverlay(Ogre::Entity* entity) const
+{
+    if (mWeightOverlays.contains(entity))
+        return mWeightOverlays.value(entity);
+    return nullptr;
+}
+
 void AnimationWidget::updateAnimationTable()
 {
     while(ui->animTable->rowCount())
@@ -265,53 +347,18 @@ void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
     if(index.column() == 1)
     {
         bool checked = (index.data(Qt::CheckStateRole) == Qt::Checked);
-
-        SkeletonDebug* sd;
-        if(mShowSkeleton.contains(entity))
-            sd = mShowSkeleton.find(entity).value();
-        else
+        toggleSkeletonDebug(entity, checked);
+        // Also toggle axes when using GUI (original behavior)
+        if(checked)
         {
-            sd = new SkeletonDebug(entity, Manager::getSingleton()->getSceneMgr(), 0.1f, 0.01f);
-            mShowSkeleton.insert(entity, sd);
-        }
-
-        sd->showAxes(checked);
-        sd->showBones(checked);
-
-        if(!checked && mShowSkeleton.contains(entity))
-        {
-            mShowSkeleton.remove(entity);
+            auto* sd = getSkeletonDebug(entity);
+            if(sd) sd->showAxes(true);
         }
     }
     else if(index.column() == 2)
     {
         bool checked = (index.data(Qt::CheckStateRole) == Qt::Checked);
-
-        if(checked)
-        {
-            auto* overlay = new BoneWeightOverlay(entity, Manager::getSingleton()->getSceneMgr());
-            mWeightOverlays.insert(entity, overlay);
-
-            // Connect to bone selection from SkeletonDebug if available
-            if(mShowSkeleton.contains(entity))
-            {
-                auto* sd = mShowSkeleton.value(entity);
-                connect(sd, &SkeletonDebug::boneSelected, overlay, &BoneWeightOverlay::setSelectedBone);
-                // Show weights for the currently selected bone
-                if(sd->selectedBoneIndex() >= 0)
-                    overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
-            }
-
-            overlay->setVisible(true);
-        }
-        else
-        {
-            if(mWeightOverlays.contains(entity))
-            {
-                delete mWeightOverlays.value(entity);
-                mWeightOverlays.remove(entity);
-            }
-        }
+        toggleBoneWeights(entity, checked);
     }
 }
 

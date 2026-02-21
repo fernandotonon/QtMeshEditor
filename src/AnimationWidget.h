@@ -21,6 +21,11 @@ public:
     explicit AnimationWidget(QWidget *parent = nullptr);
     ~AnimationWidget() override;
     bool isSkeletonShown(Ogre::Entity*entity) const;
+    bool isBoneWeightsShown(Ogre::Entity* entity) const;
+    bool toggleSkeletonDebug(Ogre::Entity* entity, bool show);
+    bool toggleBoneWeights(Ogre::Entity* entity, bool show);
+    SkeletonDebug* getSkeletonDebug(Ogre::Entity* entity) const;
+    BoneWeightOverlay* getBoneWeightOverlay(Ogre::Entity* entity) const;
 
 private:
     void setAnimationState(bool playing);

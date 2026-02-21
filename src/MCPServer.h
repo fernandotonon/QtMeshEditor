@@ -117,6 +117,9 @@ private:
     QJsonObject toolSetAnimationTime(const QJsonObject &args);
     QJsonObject toolAddKeyframe(const QJsonObject &args);
     QJsonObject toolRemoveKeyframe(const QJsonObject &args);
+    QJsonObject toolPlayAnimation(const QJsonObject &args);
+    QJsonObject toolToggleSkeletonDebug(const QJsonObject &args);
+    QJsonObject toolToggleBoneWeights(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {
