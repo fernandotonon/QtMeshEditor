@@ -1698,13 +1698,28 @@ QJsonObject MCPServer::toolPlayAnimation(const QJsonObject &args)
         state->setLoop(loop);
 
         if (m_mainWindow) {
-            m_mainWindow->setPlaying(play);
-            // Ensure entity is selected so frameRenderingQueued advances time
-            auto* sel = SelectionSet::getSingleton();
-            if (sel && !sel->getEntitiesSelectionList().contains(entity)) {
-                Ogre::SceneNode* node = entity->getParentSceneNode();
-                if (node)
-                    sel->append(node);
+            if (play) {
+                m_mainWindow->setPlaying(true);
+            } else {
+                // Only stop global playback if no entity has enabled animations
+                bool anyEnabled = false;
+                for (Ogre::SceneNode* node : Manager::getSingletonPtr()->getSceneNodes()) {
+                    if (!node) continue;
+                    for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
+                        Ogre::MovableObject* obj = node->getAttachedObject(i);
+                        if (!obj || obj->getMovableType() != "Entity") continue;
+                        auto* ent = static_cast<Ogre::Entity*>(obj);
+                        Ogre::AnimationStateSet* stateSet = ent->getAllAnimationStates();
+                        if (!stateSet) continue;
+                        for (const auto& [k, s] : stateSet->getAnimationStates()) {
+                            if (s->getEnabled()) { anyEnabled = true; break; }
+                        }
+                        if (anyEnabled) break;
+                    }
+                    if (anyEnabled) break;
+                }
+                if (!anyEnabled)
+                    m_mainWindow->setPlaying(false);
             }
         }
 
@@ -1720,6 +1735,31 @@ QJsonObject MCPServer::toolPlayAnimation(const QJsonObject &args)
     }
 }
 
+MCPServer::SkeletonEntityResult MCPServer::resolveSkeletonEntity(const QString &entityName)
+{
+    SkeletonEntityResult result;
+
+    result.entity = findEntityByName(entityName);
+    if (!result.entity) {
+        result.error = makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        return result;
+    }
+    if (!result.entity->hasSkeleton()) {
+        result.error = makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
+        return result;
+    }
+    if (!m_mainWindow) {
+        result.error = makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag.");
+        return result;
+    }
+    result.animWidget = m_mainWindow->findChild<AnimationWidget*>();
+    if (!result.animWidget) {
+        result.error = makeErrorResult("Error: AnimationWidget not found");
+        return result;
+    }
+    return result;
+}
+
 QJsonObject MCPServer::toolToggleSkeletonDebug(const QJsonObject &args)
 {
     QString entityName = args["entity"].toString();
@@ -1731,26 +1771,20 @@ QJsonObject MCPServer::toolToggleSkeletonDebug(const QJsonObject &args)
     bool names = args.contains("names") ? args["names"].toBool() : false;
 
     try {
-        Ogre::Entity* entity = findEntityByName(entityName);
-        if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
-        if (!entity->hasSkeleton()) return makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
+        auto resolved = resolveSkeletonEntity(entityName);
+        if (!resolved.error.isEmpty()) return resolved.error;
 
-        if (!m_mainWindow)
-            return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag.");
+        // Use isSkeletonDebugActive (checks object existence) rather than
+        // isSkeletonShown (checks bones visibility) so that toggling works
+        // even when only axes or names are shown.
+        bool currentlyActive = resolved.animWidget->isSkeletonDebugActive(resolved.entity);
+        bool show = args.contains("show") ? args["show"].toBool() : !currentlyActive;
 
-        auto* animWidget = m_mainWindow->findChild<AnimationWidget*>();
-        if (!animWidget)
-            return makeErrorResult("Error: AnimationWidget not found");
-
-        // Determine show state: if 'show' provided, use it; otherwise toggle
-        bool currentlyShown = animWidget->isSkeletonShown(entity);
-        bool show = args.contains("show") ? args["show"].toBool() : !currentlyShown;
-
-        if (!animWidget->toggleSkeletonDebug(entity, show))
+        if (!resolved.animWidget->toggleSkeletonDebug(resolved.entity, show))
             return makeErrorResult(QString("Error: Failed to toggle skeleton debug on entity '%1'").arg(entityName));
 
         if (show) {
-            SkeletonDebug* sd = animWidget->getSkeletonDebug(entity);
+            SkeletonDebug* sd = resolved.animWidget->getSkeletonDebug(resolved.entity);
             if (sd) {
                 sd->showBones(bones);
                 sd->showAxes(axes);
@@ -1774,32 +1808,24 @@ QJsonObject MCPServer::toolToggleBoneWeights(const QJsonObject &args)
         return makeErrorResult("Error: 'entity' is required");
 
     try {
-        Ogre::Entity* entity = findEntityByName(entityName);
-        if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
-        if (!entity->hasSkeleton()) return makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
-
-        if (!m_mainWindow)
-            return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag.");
-
-        auto* animWidget = m_mainWindow->findChild<AnimationWidget*>();
-        if (!animWidget)
-            return makeErrorResult("Error: AnimationWidget not found");
+        auto resolved = resolveSkeletonEntity(entityName);
+        if (!resolved.error.isEmpty()) return resolved.error;
 
         // Determine show state: if 'show' provided, use it; otherwise toggle
-        bool currentlyShown = animWidget->isBoneWeightsShown(entity);
+        bool currentlyShown = resolved.animWidget->isBoneWeightsShown(resolved.entity);
         bool show = args.contains("show") ? args["show"].toBool() : !currentlyShown;
 
-        if (!animWidget->toggleBoneWeights(entity, show))
+        if (!resolved.animWidget->toggleBoneWeights(resolved.entity, show))
             return makeErrorResult(QString("Error: Failed to toggle bone weights on entity '%1'").arg(entityName));
 
         // Optionally select a specific bone
         QString boneName = args["bone"].toString();
         if (show && !boneName.isEmpty()) {
-            Ogre::SkeletonInstance* skeleton = entity->getSkeleton();
+            Ogre::SkeletonInstance* skeleton = resolved.entity->getSkeleton();
             if (skeleton->hasBone(boneName.toStdString())) {
                 Ogre::Bone* bone = skeleton->getBone(boneName.toStdString());
                 unsigned short boneIndex = bone->getHandle();
-                BoneWeightOverlay* overlay = animWidget->getBoneWeightOverlay(entity);
+                BoneWeightOverlay* overlay = resolved.animWidget->getBoneWeightOverlay(resolved.entity);
                 if (overlay)
                     overlay->setSelectedBone(boneIndex);
             } else {
