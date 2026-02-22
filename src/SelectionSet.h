@@ -71,6 +71,11 @@ public :
     const QList<Ogre::SceneNode*>   getNodesSelectionList()          const;
     const QList<Ogre::Entity*>      getEntitiesSelectionList()      const;
     const QList<Ogre::SubEntity*>   getSubEntitiesSelectionList()   const;
+
+    /// Returns entities from the current selection. If entities are directly
+    /// selected, returns those. Otherwise resolves selected nodes to their
+    /// attached entities.
+    QList<Ogre::Entity*> getResolvedEntities() const;
 private:
     void hideBoundingBox(Ogre::SceneNode* node)  const;
     void hideAllBoundingBox()  const;

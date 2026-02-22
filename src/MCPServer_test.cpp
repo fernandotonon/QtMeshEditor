@@ -415,7 +415,8 @@ TEST_F(MCPServerTest, HandleToolsList)
         "list_textures", "set_texture", "export_mesh", "get_scene_info",
         "take_screenshot", "create_primitive", "animate",
         "list_skeletal_animations", "get_animation_info", "set_animation_length",
-        "set_animation_time", "add_keyframe", "remove_keyframe"
+        "set_animation_time", "add_keyframe", "remove_keyframe",
+        "play_animation", "toggle_skeleton_debug", "toggle_bone_weights"
     };
 
     for (const QString &tool : knownTools) {
@@ -1490,6 +1491,163 @@ TEST_F(MCPServerTest, RemoveKeyframeNoSkeleton)
     args["track"] = "Bone1";
     args["time"] = 0.5;
     QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("no skeleton"));
+}
+
+// ==========================================================================
+// NEW TESTS: play_animation
+// ==========================================================================
+
+TEST_F(MCPServerTest, PlayAnimationMissingParams)
+{
+    QJsonObject result = server->callTool("play_animation", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, PlayAnimationEmptyParams)
+{
+    QJsonObject args;
+    args["entity"] = "";
+    args["animation"] = "";
+    QJsonObject result = server->callTool("play_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, PlayAnimationEntityNotFound)
+{
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    args["animation"] = "Walk";
+    QJsonObject result = server->callTool("play_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, PlayAnimationNoAnimation)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "PlayAnimCube";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "PlayAnimCube";
+    args["animation"] = "NonExistentAnim";
+    QJsonObject result = server->callTool("play_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+// ==========================================================================
+// NEW TESTS: toggle_skeleton_debug
+// ==========================================================================
+
+TEST_F(MCPServerTest, ToggleSkeletonDebugMissingEntity)
+{
+    QJsonObject args;
+    QJsonObject result = server->callTool("toggle_skeleton_debug", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, ToggleSkeletonDebugEmptyEntity)
+{
+    QJsonObject args;
+    args["entity"] = "";
+    QJsonObject result = server->callTool("toggle_skeleton_debug", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, ToggleSkeletonDebugEntityNotFound)
+{
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    QJsonObject result = server->callTool("toggle_skeleton_debug", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, ToggleSkeletonDebugNoSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject primArgs;
+    primArgs["type"] = "sphere";
+    primArgs["name"] = "SkelDebugSphere";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "SkelDebugSphere";
+    args["show"] = true;
+    QJsonObject result = server->callTool("toggle_skeleton_debug", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("no skeleton"));
+}
+
+TEST_F(MCPServerTest, ToggleSkeletonDebugNoMainWindow)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    // Server has no MainWindow set — should fail for entities with skeleton
+    // But primitives have no skeleton, so test the no-skeleton path
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "SkelDebugCube";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "SkelDebugCube";
+    QJsonObject result = server->callTool("toggle_skeleton_debug", args);
+    EXPECT_TRUE(isError(result));
+    // Should fail because cube has no skeleton
+    EXPECT_TRUE(getResultText(result).contains("no skeleton"));
+}
+
+// ==========================================================================
+// NEW TESTS: toggle_bone_weights
+// ==========================================================================
+
+TEST_F(MCPServerTest, ToggleBoneWeightsMissingEntity)
+{
+    QJsonObject args;
+    QJsonObject result = server->callTool("toggle_bone_weights", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, ToggleBoneWeightsEmptyEntity)
+{
+    QJsonObject args;
+    args["entity"] = "";
+    QJsonObject result = server->callTool("toggle_bone_weights", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, ToggleBoneWeightsEntityNotFound)
+{
+    QJsonObject args;
+    args["entity"] = "NonExistentEntity_XYZ";
+    QJsonObject result = server->callTool("toggle_bone_weights", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, ToggleBoneWeightsNoSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "BoneWeightCube";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "BoneWeightCube";
+    args["show"] = true;
+    QJsonObject result = server->callTool("toggle_bone_weights", args);
     EXPECT_TRUE(isError(result));
     EXPECT_TRUE(getResultText(result).contains("no skeleton"));
 }

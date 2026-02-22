@@ -14,27 +14,6 @@
 #include "Manager.h"
 #include "AnimationWidget.h"
 
-// Returns entities from the current selection. If entities are directly selected,
-// returns those. Otherwise resolves selected nodes to their attached entities.
-static QList<Ogre::Entity*> getSelectedEntities()
-{
-    const auto* sel = SelectionSet::getSingleton();
-    if (sel->hasEntities())
-        return sel->getEntitiesSelectionList();
-
-    QList<Ogre::Entity*> entities;
-    if (!sel->hasNodes())
-        return entities;
-
-    const auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    for (const auto* node : sel->getNodesSelectionList())
-    {
-        if (sceneMgr->hasEntity(node->getName()))
-            entities.append(sceneMgr->getEntity(node->getName()));
-    }
-    return entities;
-}
-
 AnimationWidget::AnimationWidget(QWidget *parent) :
     QWidget(parent)
 {
@@ -89,6 +68,93 @@ bool AnimationWidget::isSkeletonShown(Ogre::Entity * entity) const
     return mShowSkeleton.contains(entity) && mShowSkeleton.find(entity).value()->bonesShown();
 }
 
+bool AnimationWidget::isSkeletonDebugActive(Ogre::Entity* entity) const
+{
+    return mShowSkeleton.contains(entity);
+}
+
+bool AnimationWidget::isBoneWeightsShown(Ogre::Entity* entity) const
+{
+    return mWeightOverlays.contains(entity);
+}
+
+bool AnimationWidget::toggleSkeletonDebug(Ogre::Entity* entity, bool show)
+{
+    if (!entity || !entity->hasSkeleton())
+        return false;
+
+    SkeletonDebug* sd;
+    if (mShowSkeleton.contains(entity))
+        sd = mShowSkeleton.value(entity);
+    else
+    {
+        sd = new SkeletonDebug(entity, Manager::getSingleton()->getSceneMgr(), 0.1f, 0.01f);
+        mShowSkeleton.insert(entity, sd);
+    }
+
+    sd->showBones(show);
+
+    if (!show && mShowSkeleton.contains(entity))
+    {
+        sd->showAxes(false);
+        sd->showNames(false);
+        mShowSkeleton.remove(entity);
+    }
+
+    updateSkeletonTable();
+    return true;
+}
+
+bool AnimationWidget::toggleBoneWeights(Ogre::Entity* entity, bool show)
+{
+    if (!entity || !entity->hasSkeleton())
+        return false;
+
+    if (show)
+    {
+        if (mWeightOverlays.contains(entity))
+            return true; // already shown
+
+        auto* overlay = new BoneWeightOverlay(entity, Manager::getSingleton()->getSceneMgr());
+        mWeightOverlays.insert(entity, overlay);
+
+        if (mShowSkeleton.contains(entity))
+        {
+            auto* sd = mShowSkeleton.value(entity);
+            connect(sd, &SkeletonDebug::boneSelected, overlay, &BoneWeightOverlay::setSelectedBone);
+            if (sd->selectedBoneIndex() >= 0)
+                overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
+        }
+
+        overlay->setVisible(true);
+    }
+    else
+    {
+        if (mWeightOverlays.contains(entity))
+        {
+            delete mWeightOverlays.value(entity);
+            mWeightOverlays.remove(entity);
+        }
+    }
+
+    updateSkeletonTable();
+    return true;
+}
+
+SkeletonDebug* AnimationWidget::getSkeletonDebug(Ogre::Entity* entity) const
+{
+    if (mShowSkeleton.contains(entity))
+        return mShowSkeleton.value(entity);
+    return nullptr;
+}
+
+BoneWeightOverlay* AnimationWidget::getBoneWeightOverlay(Ogre::Entity* entity) const
+{
+    if (mWeightOverlays.contains(entity))
+        return mWeightOverlays.value(entity);
+    return nullptr;
+}
+
 void AnimationWidget::updateAnimationTable()
 {
     while(ui->animTable->rowCount())
@@ -96,7 +162,7 @@ void AnimationWidget::updateAnimationTable()
         ui->animTable->removeRow(0);
     }
 
-    auto entities = getSelectedEntities();
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
     if (entities.isEmpty())
         return;
 
@@ -138,9 +204,6 @@ void AnimationWidget::updateAnimationTable()
         }
     }
 
-    // update the ui animation state
-    if(!hasAnimationEnable)
-        setAnimationState(false);
 }
 
 void AnimationWidget::updateSkeletonTable()
@@ -150,7 +213,7 @@ void AnimationWidget::updateSkeletonTable()
         ui->skeletonTable->removeRow(0);
     }
 
-    auto entities = getSelectedEntities();
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
     if (entities.isEmpty())
         return;
 
@@ -195,60 +258,26 @@ void AnimationWidget::setAnimationState(bool playing)
 
 void AnimationWidget::pollAnimationState()
 {
-    auto entities = getSelectedEntities();
-    if (entities.isEmpty())
-        return;
-
-    bool hasAnimationEnabled = false;
-    for(const Ogre::Entity* entity : entities)
+    // Refresh table checkboxes to match actual Ogre animation state
+    // (e.g. changed externally via MCP), but do NOT touch Play/Pause button
+    for(int row = 0; row < ui->animTable->rowCount(); ++row)
     {
-        const Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
-        if(!set) continue;
+        auto* entityItem = ui->animTable->item(row, 0);
+        auto* enabledItem = ui->animTable->item(row, 2);
+        if(!entityItem || !enabledItem) continue;
 
-        for(const auto &[key, state] : set->getAnimationStates())
-        {
-            if(state->getEnabled())
-            {
-                hasAnimationEnabled = true;
-                break;
-            }
-        }
-        if(hasAnimationEnabled) break;
-    }
+        auto* entity = static_cast<Ogre::Entity*>(entityItem->data(ENTITY_DATA).value<void*>());
+        if(!entity) continue;
 
-    // Only react when the Ogre animation state actually transitions,
-    // not when it merely differs from the button. This avoids fighting
-    // with user clicks on the Play/Pause button.
-    if(hasAnimationEnabled != m_lastPollAnimEnabled)
-    {
-        m_lastPollAnimEnabled = hasAnimationEnabled;
+        auto* animNameItem = ui->animTable->item(row, 1);
+        if(!animNameItem) continue;
 
-        // Update button and emit signal so MainWindow stays in sync
-        ui->PlayPauseButton->blockSignals(true);
-        ui->PlayPauseButton->setChecked(hasAnimationEnabled);
-        ui->PlayPauseButton->blockSignals(false);
-        setAnimationState(hasAnimationEnabled);
+        Ogre::AnimationState* animState = entity->getAnimationState(animNameItem->text().toStdString());
+        if(!animState) continue;
 
-        // Refresh the table checkboxes to match actual Ogre state
-        for(int row = 0; row < ui->animTable->rowCount(); ++row)
-        {
-            auto* entityItem = ui->animTable->item(row, 0);
-            auto* enabledItem = ui->animTable->item(row, 2);
-            if(!entityItem || !enabledItem) continue;
-
-            auto* entity = static_cast<Ogre::Entity*>(entityItem->data(ENTITY_DATA).value<void*>());
-            if(!entity) continue;
-
-            auto* animNameItem = ui->animTable->item(row, 1);
-            if(!animNameItem) continue;
-
-            Ogre::AnimationState* animState = entity->getAnimationState(animNameItem->text().toStdString());
-            if(!animState) continue;
-
-            Qt::CheckState expected = animState->getEnabled() ? Qt::Checked : Qt::Unchecked;
-            if(enabledItem->checkState() != expected)
-                enabledItem->setCheckState(expected);
-        }
+        Qt::CheckState expected = animState->getEnabled() ? Qt::Checked : Qt::Unchecked;
+        if(enabledItem->checkState() != expected)
+            enabledItem->setCheckState(expected);
     }
 }
 
@@ -265,53 +294,18 @@ void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
     if(index.column() == 1)
     {
         bool checked = (index.data(Qt::CheckStateRole) == Qt::Checked);
-
-        SkeletonDebug* sd;
-        if(mShowSkeleton.contains(entity))
-            sd = mShowSkeleton.find(entity).value();
-        else
+        toggleSkeletonDebug(entity, checked);
+        // Also toggle axes when using GUI (original behavior)
+        if(checked)
         {
-            sd = new SkeletonDebug(entity, Manager::getSingleton()->getSceneMgr(), 0.1f, 0.01f);
-            mShowSkeleton.insert(entity, sd);
-        }
-
-        sd->showAxes(checked);
-        sd->showBones(checked);
-
-        if(!checked && mShowSkeleton.contains(entity))
-        {
-            mShowSkeleton.remove(entity);
+            auto* sd = getSkeletonDebug(entity);
+            if(sd) sd->showAxes(true);
         }
     }
     else if(index.column() == 2)
     {
         bool checked = (index.data(Qt::CheckStateRole) == Qt::Checked);
-
-        if(checked)
-        {
-            auto* overlay = new BoneWeightOverlay(entity, Manager::getSingleton()->getSceneMgr());
-            mWeightOverlays.insert(entity, overlay);
-
-            // Connect to bone selection from SkeletonDebug if available
-            if(mShowSkeleton.contains(entity))
-            {
-                auto* sd = mShowSkeleton.value(entity);
-                connect(sd, &SkeletonDebug::boneSelected, overlay, &BoneWeightOverlay::setSelectedBone);
-                // Show weights for the currently selected bone
-                if(sd->selectedBoneIndex() >= 0)
-                    overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
-            }
-
-            overlay->setVisible(true);
-        }
-        else
-        {
-            if(mWeightOverlays.contains(entity))
-            {
-                delete mWeightOverlays.value(entity);
-                mWeightOverlays.remove(entity);
-            }
-        }
+        toggleBoneWeights(entity, checked);
     }
 }
 
