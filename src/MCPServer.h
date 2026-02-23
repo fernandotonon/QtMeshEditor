@@ -15,7 +15,7 @@
 #include <functional>
 #include <memory>
 
-namespace Ogre { class SceneNode; }
+namespace Ogre { class SceneNode; class Entity; }
 
 class MainWindow;
 
@@ -117,6 +117,9 @@ private:
     QJsonObject toolSetAnimationTime(const QJsonObject &args);
     QJsonObject toolAddKeyframe(const QJsonObject &args);
     QJsonObject toolRemoveKeyframe(const QJsonObject &args);
+    QJsonObject toolPlayAnimation(const QJsonObject &args);
+    QJsonObject toolToggleSkeletonDebug(const QJsonObject &args);
+    QJsonObject toolToggleBoneWeights(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {
@@ -128,6 +131,14 @@ private:
     QMap<QString, NodeAnimation> m_animations;
     QTimer *m_animationTimer = nullptr;
     void onAnimationTick();
+
+    // Skeleton entity resolution helper (shared by toggle_skeleton_debug / toggle_bone_weights)
+    struct SkeletonEntityResult {
+        Ogre::Entity* entity = nullptr;
+        class AnimationWidget* animWidget = nullptr;
+        QJsonObject error; // populated if validation failed
+    };
+    SkeletonEntityResult resolveSkeletonEntity(const QString &entityName);
 
     // Helper methods
     static QJsonObject makeErrorResult(const QString &message);

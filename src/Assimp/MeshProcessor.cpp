@@ -207,12 +207,14 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
     ogreMesh->_setBounds(Ogre::AxisAlignedBox(minCoords, maxCoords));
     ogreMesh->_setBoundingSphereRadius((maxCoords - minCoords).length() / 2.0f);
 
-    // Set the skeleton
-    if(skeleton)
-        ogreMesh->setSkeletonName(skeleton->getName());
-
     // Compile the mesh
     ogreMesh->load();
+
+    // Link skeleton AFTER load() so that isLoaded()==true and the
+    // skeleton pointer is properly resolved (not just the name stored).
+    if(skeleton) {
+        ogreMesh->setSkeletonName(skeleton->getName());
+    }
 
     // clean up to avoid memory leaks.
     subMeshesData.clear();

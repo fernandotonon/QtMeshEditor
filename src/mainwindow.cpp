@@ -42,27 +42,6 @@
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 
-// Returns entities from the current selection. If entities are directly selected,
-// returns those. Otherwise resolves selected nodes to their attached entities.
-static QList<Ogre::Entity*> getSelectedEntities()
-{
-    const auto* sel = SelectionSet::getSingleton();
-    if (sel->hasEntities())
-        return sel->getEntitiesSelectionList();
-
-    QList<Ogre::Entity*> entities;
-    if (!sel->hasNodes())
-        return entities;
-
-    const auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    for (const auto* node : sel->getNodesSelectionList())
-    {
-        if (sceneMgr->hasEntity(node->getName()))
-            entities.append(sceneMgr->getEntity(node->getName()));
-    }
-    return entities;
-}
-
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
     customPaletteColorDialog(new QColorDialog(this)),
@@ -129,12 +108,17 @@ MainWindow::MainWindow(QWidget *parent) :
         {
             try {
                 m_pRoot->renderOneFrame();
+            } catch (Ogre::Exception& e) {
+                SentryReporter::captureMessage(
+                    QString("Render error (Ogre): %1").arg(e.getFullDescription().c_str()), "error");
+                if(m_pTimer) m_pTimer->stop();
+            } catch (std::exception& e) {
+                SentryReporter::captureMessage(
+                    QString("Render error (std): %1").arg(e.what()), "error");
+                if(m_pTimer) m_pTimer->stop();
             } catch (...) {
-                // Stop timer if rendering fails (e.g., during shutdown)
-                if(m_pTimer)
-                {
-                    m_pTimer->stop();
-                }
+                SentryReporter::captureMessage("Render error (unknown)", "error");
+                if(m_pTimer) m_pTimer->stop();
             }
         }
     });
@@ -392,16 +376,25 @@ bool MainWindow::frameStarted(const Ogre::FrameEvent &evt)
 
 bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
 {
-    // Set animation
+    // Advance time for every entity that has enabled animation states
     if(isPlaying)
     {
-        for(Ogre::Entity const* ent : getSelectedEntities())
+        for(Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes())
         {
-            Ogre::AnimationStateSet const *set = ent->getAllAnimationStates();
-            if(!set) continue;
-            for(const auto& [key, value] : set->getAnimationStates())
+            if(!node) continue;
+            for(int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i)
             {
-                value->addTime(evt.timeSinceLastFrame);
+                Ogre::MovableObject* obj = node->getAttachedObject(i);
+                if(!obj || obj->getMovableType() != "Entity") continue;
+
+                auto* ent = static_cast<Ogre::Entity*>(obj);
+                Ogre::AnimationStateSet const* set = ent->getAllAnimationStates();
+                if(!set) continue;
+                for(const auto& [key, value] : set->getAnimationStates())
+                {
+                    if(value->getEnabled())
+                        value->addTime(evt.timeSinceLastFrame);
+                }
             }
         }
     }
@@ -1095,6 +1088,7 @@ void MainWindow::openRecentFile()
 
     QString filePath = action->data().toString();
     if (QFileInfo::exists(filePath)) {
+        addToRecentFiles(filePath);
         mUriList.append(filePath);
     } else {
         QMessageBox::warning(this, tr("File Not Found"),

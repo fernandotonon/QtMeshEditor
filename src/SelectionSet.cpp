@@ -3,6 +3,7 @@
 #include <Ogre.h>
 
 #include "Euler.h"
+#include "Manager.h"
 #include "SelectionSet.h"
 
 ////////////////////////////////////////
@@ -392,6 +393,24 @@ const QList<Ogre::Entity*>      SelectionSet::getEntitiesSelectionList()      co
 
 const QList<Ogre::SubEntity*>   SelectionSet::getSubEntitiesSelectionList()   const
 {   return mSubEntitiesSelected;   }
+
+QList<Ogre::Entity*> SelectionSet::getResolvedEntities() const
+{
+    if (hasEntities())
+        return getEntitiesSelectionList();
+
+    QList<Ogre::Entity*> entities;
+    if (!hasNodes())
+        return entities;
+
+    const auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    for (const auto* node : getNodesSelectionList())
+    {
+        if (sceneMgr->hasEntity(node->getName()))
+            entities.append(sceneMgr->getEntity(node->getName()));
+    }
+    return entities;
+}
 
 void SelectionSet::hideBoundingBox(Ogre::SceneNode* node)  const
 {

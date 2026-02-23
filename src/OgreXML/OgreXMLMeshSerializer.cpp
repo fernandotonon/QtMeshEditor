@@ -652,8 +652,11 @@ namespace Ogre {
             const char* mat = smElem.attribute("material").as_string(NULL);
             if (mat && mat[0] != '\0')
             {
-                // we do not load any materials - so create a dummy here to just store the name
-                sm->setMaterial(MaterialManager::getSingleton().create(mat, RGN_DEFAULT));
+                // Use existing material if already loaded, otherwise create a placeholder
+                auto existing = MaterialManager::getSingleton().getByName(mat, RGN_DEFAULT);
+                if (!existing)
+                    existing = MaterialManager::getSingleton().getByName(mat);
+                sm->setMaterial(existing ? existing : MaterialManager::getSingleton().create(mat, RGN_DEFAULT));
             }
             else
             {

@@ -35,26 +35,27 @@ THE SOFTWARE.
 
 #include <algorithm>
 
-Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path) {
+Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded) {
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
-    const aiScene* scene = importer.ReadFile(path,
-                                             aiProcess_CalcTangentSpace |
-                                                 aiProcess_JoinIdenticalVertices |
-                                                 aiProcess_Triangulate |
-                                                 aiProcess_RemoveComponent |
-                                                 aiProcess_GenSmoothNormals |
-                                                 aiProcess_ValidateDataStructure |
-                                                 aiProcess_OptimizeGraph |
-                                                 aiProcess_LimitBoneWeights |
-                                                 aiProcess_SortByPType |
-                                                 aiProcess_ImproveCacheLocality |
-                                                 aiProcess_FixInfacingNormals |
-                                                 aiProcess_PopulateArmatureData | // necessary to load bone node information
-                                                 aiProcess_ConvertToLeftHanded |
-                                                 aiProcess_OptimizeMeshes |
-                                                 aiProcess_GlobalScale
-                                             );
+    unsigned int flags = aiProcess_CalcTangentSpace |
+                         aiProcess_JoinIdenticalVertices |
+                         aiProcess_Triangulate |
+                         aiProcess_RemoveComponent |
+                         aiProcess_GenSmoothNormals |
+                         aiProcess_ValidateDataStructure |
+                         aiProcess_OptimizeGraph |
+                         aiProcess_LimitBoneWeights |
+                         aiProcess_SortByPType |
+                         aiProcess_ImproveCacheLocality |
+                         aiProcess_FixInfacingNormals |
+                         aiProcess_PopulateArmatureData | // necessary to load bone node information
+                         aiProcess_OptimizeMeshes |
+                         aiProcess_GlobalScale;
+    if (convertToLeftHanded)
+        flags |= aiProcess_ConvertToLeftHanded;
+
+    const aiScene* scene = importer.ReadFile(path, flags);
 
     if(!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));

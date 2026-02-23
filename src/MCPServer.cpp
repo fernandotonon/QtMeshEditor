@@ -7,6 +7,7 @@
 #include "TransformOperator.h"
 #include "MeshImporterExporter.h"
 #include "OgreWidget.h"
+#include "AnimationWidget.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -409,6 +410,12 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolAddKeyframe(args);
     } else if (name == "remove_keyframe") {
         toolResult = toolRemoveKeyframe(args);
+    } else if (name == "play_animation") {
+        toolResult = toolPlayAnimation(args);
+    } else if (name == "toggle_skeleton_debug") {
+        toolResult = toolToggleSkeletonDebug(args);
+    } else if (name == "toggle_bone_weights") {
+        toolResult = toolToggleBoneWeights(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -985,7 +992,7 @@ QJsonObject MCPServer::toolSetTexture(const QJsonObject &args)
 QJsonObject MCPServer::toolExportMesh(const QJsonObject &args)
 {
     QString path = args["path"].toString();
-    QString format = args["format"].toString("mesh");
+    QString format = args["format"].toString("Ogre Mesh (*.mesh)");
 
     if (path.isEmpty()) {
         return makeErrorResult("Error: Export path is required");
@@ -1669,6 +1676,172 @@ QJsonObject MCPServer::toolRemoveKeyframe(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolPlayAnimation(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    QString animName = args["animation"].toString();
+
+    if (entityName.isEmpty() || animName.isEmpty())
+        return makeErrorResult("Error: 'entity' and 'animation' are required");
+
+    bool play = args.contains("play") ? args["play"].toBool() : true;
+    bool loop = args.contains("loop") ? args["loop"].toBool() : true;
+
+    try {
+        Ogre::Entity* entity = findEntityByName(entityName);
+        if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        if (!entity->hasAnimationState(animName.toStdString()))
+            return makeErrorResult(QString("Error: Animation '%1' not found on entity '%2'").arg(animName, entityName));
+
+        Ogre::AnimationState* state = entity->getAnimationState(animName.toStdString());
+        state->setEnabled(play);
+        state->setLoop(loop);
+
+        if (m_mainWindow) {
+            if (play) {
+                m_mainWindow->setPlaying(true);
+            } else {
+                // Only stop global playback if no entity has enabled animations
+                bool anyEnabled = false;
+                for (Ogre::SceneNode* node : Manager::getSingletonPtr()->getSceneNodes()) {
+                    if (!node) continue;
+                    for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
+                        Ogre::MovableObject* obj = node->getAttachedObject(i);
+                        if (!obj || obj->getMovableType() != "Entity") continue;
+                        auto* ent = static_cast<Ogre::Entity*>(obj);
+                        Ogre::AnimationStateSet* stateSet = ent->getAllAnimationStates();
+                        if (!stateSet) continue;
+                        for (const auto& [k, s] : stateSet->getAnimationStates()) {
+                            if (s->getEnabled()) { anyEnabled = true; break; }
+                        }
+                        if (anyEnabled) break;
+                    }
+                    if (anyEnabled) break;
+                }
+                if (!anyEnabled)
+                    m_mainWindow->setPlaying(false);
+            }
+        }
+
+        if (play)
+            return makeSuccessResult(QString("Playing animation '%1' on entity '%2' (loop=%3)")
+                .arg(animName, entityName, loop ? "true" : "false"));
+        else
+            return makeSuccessResult(QString("Stopped animation '%1' on entity '%2'")
+                .arg(animName, entityName));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+MCPServer::SkeletonEntityResult MCPServer::resolveSkeletonEntity(const QString &entityName)
+{
+    SkeletonEntityResult result;
+
+    result.entity = findEntityByName(entityName);
+    if (!result.entity) {
+        result.error = makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        return result;
+    }
+    if (!result.entity->hasSkeleton()) {
+        result.error = makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
+        return result;
+    }
+    if (!m_mainWindow) {
+        result.error = makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag.");
+        return result;
+    }
+    result.animWidget = m_mainWindow->findChild<AnimationWidget*>();
+    if (!result.animWidget) {
+        result.error = makeErrorResult("Error: AnimationWidget not found");
+        return result;
+    }
+    return result;
+}
+
+QJsonObject MCPServer::toolToggleSkeletonDebug(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    if (entityName.isEmpty())
+        return makeErrorResult("Error: 'entity' is required");
+
+    bool bones = args.contains("bones") ? args["bones"].toBool() : true;
+    bool axes = args.contains("axes") ? args["axes"].toBool() : false;
+    bool names = args.contains("names") ? args["names"].toBool() : false;
+
+    try {
+        auto resolved = resolveSkeletonEntity(entityName);
+        if (!resolved.error.isEmpty()) return resolved.error;
+
+        // Use isSkeletonDebugActive (checks object existence) rather than
+        // isSkeletonShown (checks bones visibility) so that toggling works
+        // even when only axes or names are shown.
+        bool currentlyActive = resolved.animWidget->isSkeletonDebugActive(resolved.entity);
+        bool show = args.contains("show") ? args["show"].toBool() : !currentlyActive;
+
+        if (!resolved.animWidget->toggleSkeletonDebug(resolved.entity, show))
+            return makeErrorResult(QString("Error: Failed to toggle skeleton debug on entity '%1'").arg(entityName));
+
+        if (show) {
+            SkeletonDebug* sd = resolved.animWidget->getSkeletonDebug(resolved.entity);
+            if (sd) {
+                sd->showBones(bones);
+                sd->showAxes(axes);
+                sd->showNames(names);
+            }
+        }
+
+        return makeSuccessResult(QString("Skeleton debug %1 on entity '%2' (bones=%3, axes=%4, names=%5)")
+            .arg(show ? "shown" : "hidden", entityName,
+                 bones ? "true" : "false", axes ? "true" : "false", names ? "true" : "false"));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolToggleBoneWeights(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    if (entityName.isEmpty())
+        return makeErrorResult("Error: 'entity' is required");
+
+    try {
+        auto resolved = resolveSkeletonEntity(entityName);
+        if (!resolved.error.isEmpty()) return resolved.error;
+
+        // Determine show state: if 'show' provided, use it; otherwise toggle
+        bool currentlyShown = resolved.animWidget->isBoneWeightsShown(resolved.entity);
+        bool show = args.contains("show") ? args["show"].toBool() : !currentlyShown;
+
+        if (!resolved.animWidget->toggleBoneWeights(resolved.entity, show))
+            return makeErrorResult(QString("Error: Failed to toggle bone weights on entity '%1'").arg(entityName));
+
+        // Optionally select a specific bone
+        QString boneName = args["bone"].toString();
+        if (show && !boneName.isEmpty()) {
+            Ogre::SkeletonInstance* skeleton = resolved.entity->getSkeleton();
+            if (skeleton->hasBone(boneName.toStdString())) {
+                Ogre::Bone* bone = skeleton->getBone(boneName.toStdString());
+                unsigned short boneIndex = bone->getHandle();
+                BoneWeightOverlay* overlay = resolved.animWidget->getBoneWeightOverlay(resolved.entity);
+                if (overlay)
+                    overlay->setSelectedBone(boneIndex);
+            } else {
+                return makeSuccessResult(QString("Bone weight overlay shown on entity '%1', but bone '%2' not found in skeleton")
+                    .arg(entityName, boneName));
+            }
+        }
+
+        return makeSuccessResult(QString("Bone weight overlay %1 on entity '%2'")
+            .arg(show ? "shown" : "hidden", entityName));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
 void MCPServer::onAnimationTick()
 {
     const float dt = 0.016f; // ~16ms per tick
@@ -1706,7 +1879,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "create_material",
-            "Create a new Ogre3D material with specified properties",
+            "Create a new Ogre3D material. Provide either a full Ogre material script via 'script', or set individual colors (ambient, diffuse, specular, emissive) via 'colors'. The material can then be applied to a mesh with apply_material.",
             inputSchema
         ));
     }
@@ -1728,7 +1901,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "modify_material",
-            "Modify an existing material's properties (colors, texture, etc.)",
+            "Modify an existing material's properties. Can change ambient, diffuse, specular, emissive colors (as [R,G,B] arrays with 0.0-1.0 values), shininess (1-128), and texture. Use list_materials to find material names.",
             inputSchema
         ));
     }
@@ -1744,7 +1917,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "get_material",
-            "Get the full material script for a specific material",
+            "Get the full Ogre3D material script for a specific material. Returns the serialized material definition including all techniques, passes, and texture units.",
             inputSchema
         ));
     }
@@ -1757,7 +1930,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "list_materials",
-            "List all available materials in the scene",
+            "List all materials currently loaded in the Ogre3D resource system, including their names and resource groups.",
             inputSchema
         ));
     }
@@ -1774,7 +1947,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "apply_material",
-            "Apply a material to a mesh in the scene",
+            "Apply a material to a mesh entity in the scene. Use list_materials to find available material names and get_scene_info to find mesh/entity names.",
             inputSchema
         ));
     }
@@ -1784,13 +1957,13 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject inputSchema;
         inputSchema["type"] = "object";
         QJsonObject properties;
-        properties["path"] = QJsonObject{{"type", "string"}, {"description", "Path to the mesh file to load"}};
+        properties["path"] = QJsonObject{{"type", "string"}, {"description", "Absolute or relative path to the 3D file to import"}};
         inputSchema["properties"] = properties;
         inputSchema["required"] = QJsonArray{"path"};
 
         tools.append(buildToolDefinition(
             "load_mesh",
-            "Load a 3D mesh file into the editor",
+            "Import a 3D mesh file into the scene. Supports Ogre (.mesh, .mesh.xml), FBX, Collada (.dae), OBJ, glTF, STL, PLY, 3DS, DirectX (.x), and 40+ other formats via Assimp. Skeleton and animation data is preserved when available.",
             inputSchema
         ));
     }
@@ -1803,7 +1976,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "get_mesh_info",
-            "Get information about the currently loaded mesh",
+            "Get detailed information about loaded meshes: vertex/index counts, submeshes, materials, bounding box, and skeleton data. Reports selected entities if any, otherwise all entities in the scene.",
             inputSchema
         ));
     }
@@ -1820,7 +1993,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "transform_mesh",
-            "Transform the mesh (position, rotation, scale)",
+            "Set the position, rotation, and/or scale of a scene node. Position and scale are [X, Y, Z] arrays. Rotation is in degrees [X, Y, Z]. All parameters are optional — only provided values are applied. Use get_scene_info to find node names.",
             inputSchema
         ));
     }
@@ -1833,7 +2006,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "list_textures",
-            "List all available textures",
+            "List all textures currently loaded in the Ogre3D texture manager, including their names. Use these names with set_texture to apply textures to materials.",
             inputSchema
         ));
     }
@@ -1851,7 +2024,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "set_texture",
-            "Set a texture on a material",
+            "Set a texture on a material's texture unit. The texture must be loaded (use list_textures to check). Optionally specify the texture unit index (default: 0).",
             inputSchema
         ));
     }
@@ -1861,14 +2034,21 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject inputSchema;
         inputSchema["type"] = "object";
         QJsonObject properties;
-        properties["path"] = QJsonObject{{"type", "string"}, {"description", "Output file path"}};
-        properties["format"] = QJsonObject{{"type", "string"}, {"description", "Export format (mesh, obj, fbx, etc.)"}};
+        properties["path"] = QJsonObject{{"type", "string"}, {"description", "Output file path for the exported mesh"}};
+        properties["format"] = QJsonObject{{"type", "string"}, {"description",
+            "Export format filter string. Valid values: "
+            "'Ogre Mesh (*.mesh)', 'Ogre Mesh v1.10+(*.mesh)', 'Ogre Mesh v1.8+(*.mesh)', "
+            "'Ogre Mesh v1.7+(*.mesh)', 'Ogre Mesh v1.4+(*.mesh)', 'Ogre Mesh v1.0+(*.mesh)', "
+            "'Ogre XML (*.mesh.xml)', 'Collada (*.dae)', 'X (*.x)', 'OBJ (*.obj)', "
+            "'OBJ without MTL (*.objnomtl)', 'STL (*.stl)', 'PLY (*.ply)', '3DS (*.3ds)', "
+            "'glTF 2.0 (*.gltf2)', 'glTF 2.0 Binary (*.glb2)', 'Assimp Binary (*.assbin)'. "
+            "Default: 'Ogre Mesh (*.mesh)'"}};
         inputSchema["properties"] = properties;
         inputSchema["required"] = QJsonArray{"path"};
 
         tools.append(buildToolDefinition(
             "export_mesh",
-            "Export the current mesh to a file",
+            "Export the selected scene node's mesh to a file. A node must be selected first (use get_scene_info to list nodes). Skeleton and animation data is included automatically when present.",
             inputSchema
         ));
     }
@@ -1881,7 +2061,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "get_scene_info",
-            "Get information about the current scene",
+            "Get a summary of the current scene: all scene nodes (with names), entities (with materials), and material count. Use this to discover node/entity names for other tools.",
             inputSchema
         ));
     }
@@ -1896,7 +2076,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "take_screenshot",
-            "Take a screenshot of the current viewport",
+            "Capture a screenshot of the current 3D viewport. Optionally provide an output file path (PNG format). If no path is given, a temporary file is used. Returns the file path of the saved screenshot.",
             inputSchema
         ));
     }
@@ -1913,7 +2093,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "create_primitive",
-            "Create a 3D primitive object in the scene",
+            "Create a procedural 3D primitive and add it to the scene. Supported types: sphere, cube, plane, cylinder, cone, torus, tube, capsule, icosphere, spring. Optionally provide a name (auto-generated if omitted).",
             inputSchema
         ));
     }
@@ -1946,7 +2126,7 @@ QJsonArray MCPServer::buildToolsList()
 
         tools.append(buildToolDefinition(
             "list_skeletal_animations",
-            "List all skeletal animations across all entities in the scene",
+            "List all skeletal animations across all entities in the scene. Returns entity names, animation names, durations, and number of tracks (bones). Use these names with get_animation_info, set_animation_time, and other animation tools.",
             inputSchema
         ));
     }
@@ -2045,6 +2225,63 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "remove_keyframe",
             "Remove a keyframe from an animation track at the specified time",
+            inputSchema
+        ));
+    }
+
+    // play_animation
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to play"}};
+        props["play"] = QJsonObject{{"type", "boolean"}, {"description", "True to play, false to stop (default: true)"}};
+        props["loop"] = QJsonObject{{"type", "boolean"}, {"description", "Loop the animation (default: true)"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"entity", "animation"};
+
+        tools.append(buildToolDefinition(
+            "play_animation",
+            "Play or pause a skeletal animation on an entity. When playing, the animation advances in real-time in the viewport. Use list_skeletal_animations to find entity and animation names.",
+            inputSchema
+        ));
+    }
+
+    // toggle_skeleton_debug
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
+        props["show"] = QJsonObject{{"type", "boolean"}, {"description", "True to show, false to hide (toggles if omitted)"}};
+        props["bones"] = QJsonObject{{"type", "boolean"}, {"description", "Show bone shapes (default: true)"}};
+        props["axes"] = QJsonObject{{"type", "boolean"}, {"description", "Show bone axes (default: false)"}};
+        props["names"] = QJsonObject{{"type", "boolean"}, {"description", "Show bone name labels (default: false)"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"entity"};
+
+        tools.append(buildToolDefinition(
+            "toggle_skeleton_debug",
+            "Show or hide skeleton bone visualization on an entity. Requires an entity with a skeleton. Optionally control bones, axes, and bone name labels independently.",
+            inputSchema
+        ));
+    }
+
+    // toggle_bone_weights
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
+        props["show"] = QJsonObject{{"type", "boolean"}, {"description", "True to show, false to hide (toggles if omitted)"}};
+        props["bone"] = QJsonObject{{"type", "string"}, {"description", "Bone name to highlight its weight influence"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"entity"};
+
+        tools.append(buildToolDefinition(
+            "toggle_bone_weights",
+            "Show or hide bone weight heat-map overlay on an entity. Colors range from blue (0) to red (1). Optionally select a specific bone to highlight its weight influence.",
             inputSchema
         ));
     }

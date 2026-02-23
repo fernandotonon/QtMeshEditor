@@ -26,6 +26,9 @@ Split View|Skeleton Animation Controls
 ![Screencast From 2025-06-26 23-35-53](https://github.com/user-attachments/assets/c58978d7-7564-41f2-8c95-527ddf7ae78e)
 
 
+#### :scroll: How it looked like back in the days up to 2014
+
+![Old version](https://camo.githubusercontent.com/58b2de95aedb5e4ce768a6f03f51bac7e8a1bd59aea5c3ceac33540224f60f4f/68747470733a2f2f64726976652e676f6f676c652e636f6d2f75633f69643d3150644e7a396135485f4157625a764948693139725368506e2d6e6a4b466a4e45)
 
 
 ### :sparkles: Features
@@ -42,9 +45,23 @@ Split View|Skeleton Animation Controls
   - Renaming Animation
   - View keyframe positions and values
 * Import/Export
-  - Export mesh in older versions 
-  - Other 3D Format Importer - Can convert any 3D format provided by ASSIMP to Ogre Mesh, Material, and Skeleton
-  - Other 3D Format Exporter - Can export the mesh to any other format supported by ASSIMP.
+
+  | Format | Extension | Import | Export | Skeleton/Animation |
+  |--------|-----------|--------|--------|--------------------|
+  | Ogre Mesh | .mesh | Yes | Yes | Yes |
+  | Ogre XML | .mesh.xml | Yes | Yes | Yes |
+  | FBX | .fbx | Yes | No | Yes |
+  | Collada | .dae | Yes | Yes | Yes |
+  | DirectX X | .x | Yes | Yes | Yes |
+  | glTF 2.0 | .gltf2 | Yes | Yes | Yes |
+  | glTF 2.0 Binary | .glb2 | Yes | Yes | Yes |
+  | Assimp Binary | .assbin | No | Yes | Yes |
+  | OBJ | .obj | Yes | Yes | No |
+  | STL | .stl | Yes | Yes | No |
+  | PLY | .ply | Yes | Yes | No |
+  | 3DS | .3ds | Yes | Yes | No |
+
+  Import supports all formats provided by Assimp (40+). Export to older Ogre Mesh versions (v1.0–v1.10) is also available.
 
 ### :computer: Install from release binaries
 #### :apple: macOS
