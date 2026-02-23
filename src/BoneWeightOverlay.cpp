@@ -82,7 +82,7 @@ void BoneWeightOverlay::createMaterial()
 
         Ogre::Pass* p = mMaterial->getTechnique(0)->getPass(0);
         p->setLightingEnabled(false);
-        p->setVertexColourTracking(Ogre::TVC_AMBIENT);
+        p->setVertexColourTracking(Ogre::TVC_DIFFUSE);
         p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
         p->setCullingMode(Ogre::CULL_NONE);
         p->setDepthCheckEnabled(false);

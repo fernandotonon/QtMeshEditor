@@ -282,6 +282,14 @@ void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
         {
             mShowSkeleton.remove(entity);
         }
+        else if(checked && mWeightOverlays.contains(entity))
+        {
+            // Reconnect to existing bone weight overlay so bone clicks update it
+            auto* overlay = mWeightOverlays.value(entity);
+            connect(sd, &SkeletonDebug::boneSelected, overlay, &BoneWeightOverlay::setSelectedBone);
+            if(sd->selectedBoneIndex() >= 0)
+                overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
+        }
     }
     else if(index.column() == 2)
     {
