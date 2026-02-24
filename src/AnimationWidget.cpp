@@ -100,6 +100,14 @@ bool AnimationWidget::toggleSkeletonDebug(Ogre::Entity* entity, bool show)
         sd->showNames(false);
         mShowSkeleton.remove(entity);
     }
+    else if (show && mWeightOverlays.contains(entity))
+    {
+        // Reconnect to existing bone weight overlay so bone clicks update it
+        auto* overlay = mWeightOverlays.value(entity);
+        connect(sd, &SkeletonDebug::boneSelected, overlay, &BoneWeightOverlay::setSelectedBone);
+        if (sd->selectedBoneIndex() >= 0)
+            overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
+    }
 
     updateSkeletonTable();
     return true;
@@ -300,14 +308,6 @@ void AnimationWidget::on_skeletonTable_clicked(const QModelIndex &index)
         {
             auto* sd = getSkeletonDebug(entity);
             if(sd) sd->showAxes(true);
-        }
-        else if(checked && mWeightOverlays.contains(entity))
-        {
-            // Reconnect to existing bone weight overlay so bone clicks update it
-            auto* overlay = mWeightOverlays.value(entity);
-            connect(sd, &SkeletonDebug::boneSelected, overlay, &BoneWeightOverlay::setSelectedBone);
-            if(sd->selectedBoneIndex() >= 0)
-                overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
         }
     }
     else if(index.column() == 2)
