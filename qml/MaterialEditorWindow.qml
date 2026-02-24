@@ -1,8 +1,6 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
-import QtQuick.Dialogs
-import Qt.labs.platform 1.1 as Labs
 import MaterialEditorQML 1.0
 
 ApplicationWindow {
@@ -1144,27 +1142,6 @@ ApplicationWindow {
                     }
                 }
             }
-        }
-    }
-
-    // Dialog components
-    FileDialog {
-        id: openMaterialDialog
-        title: "Open Material File"
-        nameFilters: ["Material files (*.material)", "All files (*)"]
-        onAccepted: {
-            console.log("Opening material file:", selectedFile)
-            // Handle material file opening
-        }
-    }
-
-    FileDialog {
-        id: exportMaterialDialog
-        title: "Export Material"
-        fileMode: FileDialog.SaveFile
-        nameFilters: ["Material files (*.material)", "All files (*)"]
-        onAccepted: {
-            MaterialEditorQML.exportMaterial(selectedFile.toString())
         }
     }
 

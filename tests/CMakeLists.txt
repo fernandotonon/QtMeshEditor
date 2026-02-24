@@ -51,6 +51,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
     )
     
     set(TEST_HEADER_FILES

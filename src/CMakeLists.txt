@@ -349,6 +349,7 @@ if(BUILD_TESTS)
     ${HEADER_FILES}
     ${TEST_SOURCES}
     ${RESOURCE_SRCS}
+    ${QML_RESOURCE_SRCS}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp
     )
 

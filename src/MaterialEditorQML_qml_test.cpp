@@ -13,6 +13,9 @@
 #include <QTemporaryDir>
 #include <QDir>
 #include "MaterialEditorQML.h"
+#include "LLMManager.h"
+#include "ModelDownloader.h"
+#include "QMLMaterialHighlighter.h"
 
 class MaterialEditorQMLIntegrationTest : public ::testing::Test {
 protected:
@@ -158,7 +161,97 @@ TEST_F(QMLPropertyBindingTest, BasicPropertyBinding) {
     // QML object will be cleaned up automatically by engine destruction
 }
 
-// Note: Additional color binding tests are disabled due to MaterialEditorQML singleton 
+// --- QML Component Loading Tests ---
+// Verifies that QML files load without import errors (e.g. no stale QtQuick.Dialogs).
+// These tests only parse/compile the component; they do not instantiate it,
+// so the MaterialEditorQML singleton lifecycle issue does not apply.
+
+class QMLComponentLoadingTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!QApplication::instance()) {
+            int argc = 0;
+            char* argv[] = { nullptr };
+            app = std::make_unique<QApplication>(argc, argv);
+        }
+
+        engine = std::make_unique<QQmlEngine>();
+
+        // Register all types that the MaterialEditorQML QML module expects
+        qmlRegisterSingletonType<MaterialEditorQML>("MaterialEditorQML", 1, 0, "MaterialEditorQML",
+            [](QQmlEngine *eng, QJSEngine *js) -> QObject * {
+                return MaterialEditorQML::qmlInstance(eng, js);
+            }
+        );
+        qmlRegisterSingletonType<LLMManager>("MaterialEditorQML", 1, 0, "LLMManager",
+            [](QQmlEngine *eng, QJSEngine *js) -> QObject * {
+                return LLMManager::qmlInstance(eng, js);
+            }
+        );
+        qmlRegisterSingletonType<ModelDownloader>("MaterialEditorQML", 1, 0, "ModelDownloader",
+            [](QQmlEngine *eng, QJSEngine *js) -> QObject * {
+                return ModelDownloader::qmlInstance(eng, js);
+            }
+        );
+        qmlRegisterType<QMLMaterialHighlighter>("MaterialEditorQML", 1, 0, "MaterialHighlighter");
+
+        // Let the engine find sub-components via the compiled-in qmldir
+        engine->addImportPath("qrc:/");
+    }
+
+    void TearDown() override {
+        engine.reset();
+        QCoreApplication::processEvents();
+    }
+
+    // Load a QML file from resources. Returns empty string on success,
+    // or a description of all QML errors on failure.
+    QString loadComponent(const QString &qrcPath) {
+        QQmlComponent component(engine.get(), QUrl(qrcPath));
+        if (component.isLoading()) {
+            QSignalSpy spy(&component, &QQmlComponent::statusChanged);
+            spy.wait(5000);
+        }
+        if (component.isError()) {
+            QStringList msgs;
+            for (const QQmlError &err : component.errors())
+                msgs << err.toString();
+            return msgs.join("\n");
+        }
+        return {};
+    }
+
+private:
+    std::unique_ptr<QApplication> app;
+    std::unique_ptr<QQmlEngine> engine;
+};
+
+TEST_F(QMLComponentLoadingTest, MaterialEditorWindowLoadsWithoutErrors) {
+    QString err = loadComponent("qrc:/MaterialEditorQML/MaterialEditorWindow.qml");
+    EXPECT_TRUE(err.isEmpty()) << err.toStdString();
+}
+
+TEST_F(QMLComponentLoadingTest, MaterialListModalLoadsWithoutErrors) {
+    QString err = loadComponent("qrc:/MaterialEditorQML/MaterialListModal.qml");
+    EXPECT_TRUE(err.isEmpty()) << err.toStdString();
+}
+
+TEST_F(QMLComponentLoadingTest, PassPropertiesPanelLoadsWithoutErrors) {
+    QString err = loadComponent("qrc:/MaterialEditorQML/PassPropertiesPanel.qml");
+    EXPECT_TRUE(err.isEmpty()) << err.toStdString();
+}
+
+TEST_F(QMLComponentLoadingTest, TexturePropertiesPanelLoadsWithoutErrors) {
+    QString err = loadComponent("qrc:/MaterialEditorQML/TexturePropertiesPanel.qml");
+    EXPECT_TRUE(err.isEmpty()) << err.toStdString();
+}
+
+TEST_F(QMLComponentLoadingTest, AISettingsDialogLoadsWithoutErrors) {
+    QString err = loadComponent("qrc:/MaterialEditorQML/AISettingsDialog.qml");
+    EXPECT_TRUE(err.isEmpty()) << err.toStdString();
+}
+
+// Note: Additional color binding tests are disabled due to MaterialEditorQML singleton
 // lifecycle issues in test environment. Direct C++ API testing covers color functionality.
 
 /*
