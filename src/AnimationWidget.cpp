@@ -100,6 +100,14 @@ bool AnimationWidget::toggleSkeletonDebug(Ogre::Entity* entity, bool show)
         sd->showNames(false);
         mShowSkeleton.remove(entity);
     }
+    else if (show && mWeightOverlays.contains(entity))
+    {
+        // Reconnect to existing bone weight overlay so bone clicks update it
+        auto* overlay = mWeightOverlays.value(entity);
+        connect(sd, &SkeletonDebug::boneSelected, overlay, &BoneWeightOverlay::setSelectedBone);
+        if (sd->selectedBoneIndex() >= 0)
+            overlay->setSelectedBone(static_cast<unsigned short>(sd->selectedBoneIndex()));
+    }
 
     updateSkeletonTable();
     return true;

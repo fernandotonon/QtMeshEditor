@@ -1,7 +1,93 @@
 #include <gtest/gtest.h>
+#include <QApplication>
+#include <QCoreApplication>
+#include <QThread>
+#include <OgreMaterialManager.h>
+#include <OgreException.h>
 #include "BoneWeightOverlay.h"
+#include "MeshImporterExporter.h"
+#include "SelectionSet.h"
+#include "Manager.h"
+#include "TestHelpers.h"
 
-// Test the weightToColor function which doesn't require Ogre initialization
+// ===========================================================================
+// Integration test: verify BoneWeightOverlay material (requires mesh loading)
+// ===========================================================================
+
+class BoneWeightOverlayIntegrationTest : public ::testing::Test {
+protected:
+    QApplication* app = nullptr;
+    Ogre::Entity* entity = nullptr;
+
+    void SetUp() override {
+        Manager::kill();
+        QThread::msleep(50);
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+        try {
+            Manager::getSingleton();
+        } catch (const Ogre::Exception& e) {
+            GTEST_SKIP() << "Skipping: Ogre init failed (" << e.getFullDescription() << ")";
+        }
+        createStandardOgreMaterials();
+
+        if (!canLoadMeshFiles())
+            GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+        // Remove leftover material so createMaterial() runs fresh
+        auto existing = Ogre::MaterialManager::getSingleton().getByName(
+            "BoneWeightOverlay/Material");
+        if (existing)
+            Ogre::MaterialManager::getSingleton().remove(existing);
+
+        QStringList uris{"./media/models/robot.mesh"};
+        try { MeshImporterExporter::importer(uris); }
+        catch (...) { GTEST_SKIP() << "Skipping: failed to import robot.mesh"; }
+
+        if (Manager::getSingleton()->getEntities().isEmpty())
+            GTEST_SKIP() << "Skipping: no entity after import";
+
+        entity = Manager::getSingleton()->getEntities().last();
+        ASSERT_NE(entity, nullptr);
+    }
+
+    void TearDown() override {
+        if (!Manager::getSingletonPtr())
+            return;
+        auto existing = Ogre::MaterialManager::getSingleton().getByName(
+            "BoneWeightOverlay/Material");
+        if (existing)
+            Ogre::MaterialManager::getSingleton().remove(existing);
+        SelectionSet::getSingleton()->clear();
+        Manager::kill();
+        if (app) app->processEvents();
+        QThread::msleep(50);
+    }
+};
+
+// Verify that BoneWeightOverlay creates its material with TVC_DIFFUSE.
+// TVC_AMBIENT does NOT work with lighting disabled on RTSS (macOS Metal/GL3+),
+// causing the overlay to display a solid colour instead of vertex-coloured heat map.
+TEST_F(BoneWeightOverlayIntegrationTest, MaterialUsesDiffuseVertexColourTracking)
+{
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+
+    auto mat = Ogre::MaterialManager::getSingleton().getByName(
+        "BoneWeightOverlay/Material");
+    ASSERT_TRUE(mat) << "BoneWeightOverlay should create its material on construction";
+
+    Ogre::Pass* p = mat->getTechnique(0)->getPass(0);
+    ASSERT_NE(p, nullptr);
+
+    EXPECT_FALSE(p->getLightingEnabled());
+    EXPECT_TRUE(p->getVertexColourTracking() & Ogre::TVC_DIFFUSE)
+        << "Vertex colour tracking MUST include TVC_DIFFUSE for colours "
+           "to display with lighting disabled (RTSS requirement)";
+}
+
+// ===========================================================================
+// weightToColor tests (no Ogre required)
+// ===========================================================================
 
 TEST(BoneWeightOverlayTest, WeightToColorAtZeroIsBlue)
 {
