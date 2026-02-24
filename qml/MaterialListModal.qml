@@ -1,7 +1,6 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
-import QtQuick.Dialogs
 import MaterialEditorQML 1.0
 
 ApplicationWindow {
@@ -10,7 +9,6 @@ ApplicationWindow {
     width: 600
     height: 500
     visible: true
-    modality: Qt.ApplicationModal
     color: backgroundColor
     
     // Theme colors
