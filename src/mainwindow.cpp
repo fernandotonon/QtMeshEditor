@@ -34,6 +34,7 @@
 #include "TransformWidget.h"
 #include "MaterialWidget.h"
 #include "AnimationWidget.h"
+#include "AnimationMerger.h"
 #include "SelectionSet.h"
 #include "animationcontrolwidget.h"
 #include "MaterialEditorQML.h"
@@ -306,6 +307,10 @@ void MainWindow::initToolBar()
             }
         }
     });
+
+    // Merge Animations button — enable/disable based on selection
+    connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
+            this, &MainWindow::updateMergeAnimationsButton);
 
     // Viewport
     connect(ui->actionAdd_Viewport, SIGNAL(triggered()), this, SLOT(createEditorViewport()));
@@ -607,6 +612,103 @@ void MainWindow::on_actionMaterial_Editor_triggered()
         QMessageBox::critical(this, "Material List Error", 
             "QML Material List Modal encountered an unknown error.");
     }
+}
+
+void MainWindow::updateMergeAnimationsButton()
+{
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+
+    // Filter to entities with skeletons
+    QList<Ogre::Entity*> skelEntities;
+    for (Ogre::Entity* e : entities)
+    {
+        if (e && e->hasSkeleton())
+            skelEntities.append(e);
+    }
+
+    if (skelEntities.size() < 2)
+    {
+        ui->actionMerge_Animations->setEnabled(false);
+        return;
+    }
+
+    // Check all pairs are compatible
+    Ogre::SkeletonPtr baseSkel = skelEntities.first()->getMesh()->getSkeleton();
+    for (int i = 1; i < skelEntities.size(); ++i)
+    {
+        Ogre::SkeletonPtr otherSkel = skelEntities[i]->getMesh()->getSkeleton();
+        if (!AnimationMerger::areSkeletonsCompatible(baseSkel, otherSkel))
+        {
+            ui->actionMerge_Animations->setEnabled(false);
+            return;
+        }
+    }
+
+    ui->actionMerge_Animations->setEnabled(true);
+}
+
+void MainWindow::on_actionMerge_Animations_triggered()
+{
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+
+    // Filter to entities with skeletons
+    QList<Ogre::Entity*> skelEntities;
+    for (Ogre::Entity* e : entities)
+    {
+        if (e && e->hasSkeleton())
+            skelEntities.append(e);
+    }
+
+    if (skelEntities.size() < 2)
+    {
+        QMessageBox::warning(this, tr("Merge Animations"),
+            tr("Select at least 2 objects with skeletons to merge."));
+        return;
+    }
+
+    Ogre::Entity* baseEntity = skelEntities.first();
+    QString errorMsg;
+    Ogre::Entity* merged = nullptr;
+
+    try {
+        merged = AnimationMerger::mergeAnimations(baseEntity, skelEntities, errorMsg);
+    } catch (const Ogre::Exception& e) {
+        errorMsg = QString("Ogre error: %1").arg(e.getFullDescription().c_str());
+    } catch (const std::exception& e) {
+        errorMsg = QString("Error: %1").arg(e.what());
+    }
+
+    if (!merged)
+    {
+        QMessageBox::warning(this, tr("Merge Animations"), errorMsg);
+        return;
+    }
+
+    // Clear selection BEFORE destroying nodes to avoid dangling references
+    SelectionSet::getSingleton()->clear();
+
+    // Collect nodes to destroy (separate from iteration to avoid issues)
+    QList<Ogre::SceneNode*> nodesToDestroy;
+    for (int i = 1; i < skelEntities.size(); ++i)
+    {
+        Ogre::Entity* e = skelEntities[i];
+        if (auto* node = e->getParentSceneNode())
+            nodesToDestroy.append(node);
+    }
+
+    for (Ogre::SceneNode* node : nodesToDestroy)
+        Manager::getSingleton()->destroySceneNode(node);
+
+    // Select the merged entity
+    SelectionSet::getSingleton()->append(baseEntity);
+
+    int animCount = 0;
+    if (auto* set = baseEntity->getAllAnimationStates())
+        animCount = static_cast<int>(set->getAnimationStates().size());
+
+    QMessageBox::information(this, tr("Merge Animations"),
+        tr("Successfully merged animations. The result has %1 animation(s).")
+            .arg(animCount));
 }
 
 void MainWindow::on_actionAbout_triggered()

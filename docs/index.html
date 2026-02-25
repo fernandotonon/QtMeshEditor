@@ -499,7 +499,7 @@
                 <div class="feature-card">
                     <div class="feature-icon">🦴</div>
                     <h3 class="feature-title">Skeleton & Animation</h3>
-                    <p class="feature-desc">Bone visualization, animation preview, keyframe inspection, and animation renaming tools for complete skeletal mesh workflow.</p>
+                    <p class="feature-desc">Bone visualization, animation preview, keyframe inspection, animation renaming, and animation merging tools for complete skeletal mesh workflow.</p>
                 </div>
                 
                 <div class="feature-card">
@@ -517,7 +517,7 @@
                 <div class="feature-card">
                     <div class="feature-icon">🔌</div>
                     <h3 class="feature-title">MCP Server (AI Agent Control)</h3>
-                    <p class="feature-desc">Built-in Model Context Protocol server lets AI agents (Claude, Cursor, etc.) control the editor programmatically. 15 tools for materials, meshes, transforms, textures, and animations.</p>
+                    <p class="feature-desc">Built-in Model Context Protocol server lets AI agents (Claude, Cursor, etc.) control the editor programmatically. 25 tools for materials, meshes, transforms, textures, animations, skeletons, and more.</p>
                 </div>
 
                 <div class="feature-card">
@@ -620,7 +620,7 @@ make -j$(nproc)</div>
                     <h3 class="feature-title">MCP Agent Integration</h3>
                     <p class="feature-desc">
                         • AI agents control the editor via MCP<br>
-                        • 15 tools: materials, meshes, transforms<br>
+                        • 25 tools: materials, meshes, animations<br>
                         • HTTP REST API on port 8080<br>
                         • Works with Claude, Cursor, and more<br>
                         • Create scenes with natural language
@@ -704,24 +704,78 @@ curl localhost:8080/api/tools</div>
 
                 <div class="install-step">
                     <h3>Available MCP Tools</h3>
-                    <p>15 tools for complete scene control:</p>
+                    <p>25 tools for complete scene control:</p>
                     <div class="code-wrapper">
                         <div class="code-block">
-create_material    — Create materials with colors or full scripts
-modify_material    — Modify material properties (colors, textures)
-get_material       — Get the full material script
-list_materials     — List all materials in the scene
-apply_material     — Apply a material to a mesh
-set_texture        — Set a texture on a material
-load_mesh          — Load a 3D mesh file
-get_mesh_info      — Get mesh information
-export_mesh        — Export mesh to file
-transform_mesh     — Position, rotate, and scale objects by name
-create_primitive   — Create spheres, cubes, cylinders, cones, etc.
-get_scene_info     — Get full scene information
-list_textures      — List loaded textures
-take_screenshot    — Capture the viewport
-animate            — Start/stop rotation animations</div>
+create_material          — Create materials with colors or full scripts
+modify_material          — Modify material properties (colors, textures)
+get_material             — Get the full material script
+list_materials           — List all materials in the scene
+apply_material           — Apply a material to a mesh
+set_texture              — Set a texture on a material
+load_mesh                — Load a 3D mesh file
+get_mesh_info            — Get mesh information
+export_mesh              — Export mesh to file
+transform_mesh           — Position, rotate, and scale objects by name
+create_primitive         — Create spheres, cubes, cylinders, cones, etc.
+get_scene_info           — Get full scene information
+list_textures            — List loaded textures
+take_screenshot          — Capture the viewport
+animate                  — Start/stop rotation animations
+list_skeletal_animations — List all skeletal animations in the scene
+get_animation_info       — Get detailed animation and keyframe info
+set_animation_length     — Change animation duration
+set_animation_time       — Seek to a specific time in an animation
+add_keyframe             — Add a keyframe to an animation track
+remove_keyframe          — Remove a keyframe from an animation track
+play_animation           — Play/stop skeletal animations
+toggle_skeleton_debug    — Show/hide skeleton bone overlay
+toggle_bone_weights      — Show/hide bone weight visualization
+merge_animations         — Merge animations from multiple meshes into one</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Animation Merging Section -->
+        <section class="section">
+            <h2 class="section-title">🔀 Animation Merging</h2>
+            <p style="text-align: center; color: #cccccc; margin-bottom: 40px; max-width: 800px; margin-left: auto; margin-right: auto;">
+                Combine skeletal animations from multiple mesh files into a single entity. Perfect for workflows with sites like <strong style="color: var(--neon-cyan);">Mixamo</strong>, where each animation is downloaded as a separate file.
+            </p>
+
+            <div class="install-steps">
+                <div class="install-step">
+                    <h3>GUI Workflow</h3>
+                    <p>Load all your animation files (e.g. from Mixamo), select all entities in the scene, then click the <strong style="color: var(--neon-cyan);">Merge Animations</strong> button in the toolbar. All animations are combined into the first entity and the others are removed.</p>
+                    <!-- TODO: Add screenshot/GIF of GUI merge workflow -->
+                </div>
+
+                <div class="install-step">
+                    <h3>CLI Usage</h3>
+                    <p>Merge animations from the command line:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+./bin/QtMeshEditor merge-animations --base base_model.fbx --animations walk.fbx run.fbx jump.fbx --output merged.mesh</div>
+                    </div>
+                </div>
+
+                <div class="install-step">
+                    <h3>MCP API Usage</h3>
+                    <p>Use the HTTP REST API to load meshes and merge their animations programmatically:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+# Load mesh files
+curl -X POST localhost:8080/api/tools/load_mesh \
+  -d '{"path":"/path/to/base_model.fbx"}'
+curl -X POST localhost:8080/api/tools/load_mesh \
+  -d '{"path":"/path/to/walk.fbx"}'
+curl -X POST localhost:8080/api/tools/load_mesh \
+  -d '{"path":"/path/to/run.fbx"}'
+
+# Merge all animations into the base entity
+curl -X POST localhost:8080/api/tools/merge_animations \
+  -d '{"base_entity":"base_model"}'</div>
                     </div>
                 </div>
             </div>
@@ -818,7 +872,7 @@ animate            — Start/stop rotation animations</div>
     <footer class="footer">
         <div class="container">
             <p class="footer-text">
-                QtMeshEditor 2.0.0 © 2012-2025 Fernando Tonon |
+                QtMeshEditor 2.0.0 © 2012-2026 Fernando Tonon |
                 <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> | 
                 <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--ogre-orange);">Ogre3D Forum</a>
             </p>

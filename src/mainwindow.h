@@ -46,6 +46,7 @@ private slots:
     void on_actionImport_triggered();
     void on_actionMaterial_Editor_triggered();
     void on_actionAbout_triggered();
+    void on_actionMerge_Animations_triggered();
 
     void on_actionObjects_Toolbar_toggled(bool arg1);
     void on_actionTools_Toolbar_toggled(bool arg1);
@@ -112,6 +113,7 @@ protected:
 
 private:
     void initToolBar();
+    void updateMergeAnimationsButton();
     const QPalette& darkPalette();
 
     QMenu* m_recentFilesMenu = nullptr;

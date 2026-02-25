@@ -144,6 +144,7 @@
    <addaction name="actionSelect_Object"/>
    <addaction name="actionRemove_Object"/>
    <addaction name="actionMaterial_Editor"/>
+   <addaction name="actionMerge_Animations"/>
   </widget>
   <widget class="QDockWidget" name="meshEditorWidget">
    <property name="sizePolicy">
@@ -428,6 +429,17 @@
   <action name="actionVerify_Update">
    <property name="text">
     <string>Verify Update</string>
+   </property>
+  </action>
+  <action name="actionMerge_Animations">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Merge Animations</string>
+   </property>
+   <property name="toolTip">
+    <string>Merge animations from selected objects into one</string>
    </property>
   </action>
  </widget>

@@ -41,6 +41,7 @@ LLMSettingsWidget.cpp
 MCPServer.cpp
 SentryReporter.cpp
 BoneWeightOverlay.cpp
+AnimationMerger.cpp
 )
 
 set(HEADER_FILES
@@ -85,6 +86,7 @@ LLMSettingsWidget.h
 MCPServer.h
 SentryReporter.h
 BoneWeightOverlay.h
+AnimationMerger.h
 )
 
 set(TEST_SOURCES "")
