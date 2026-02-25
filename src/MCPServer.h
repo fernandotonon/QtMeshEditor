@@ -49,8 +49,9 @@ public:
     /**
      * @brief Start the HTTP REST API server
      * @param port TCP port to listen on (default 8080)
+     * @return true if the server started successfully
      */
-    void startHttp(int port = 8080);
+    bool startHttp(int port = 8080);
 
     /**
      * @brief Call a tool by name with arguments (public API for HTTP)
@@ -67,6 +68,21 @@ public:
      * Used when stdout is redirected to stderr to avoid mixing with Ogre output
      */
     void setOutputFd(int fd);
+
+    /**
+     * @brief Stop the HTTP REST API server
+     */
+    void stopHttp();
+
+    /**
+     * @brief Check if the HTTP server is currently running
+     */
+    bool isHttpRunning() const;
+
+    /**
+     * @brief Get the configured HTTP port
+     */
+    int httpPort() const;
 
     /**
      * @brief Check if server is running

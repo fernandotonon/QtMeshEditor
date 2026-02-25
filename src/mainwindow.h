@@ -12,6 +12,7 @@
 #include "TransformOperator.h"
 
 class LLMSettingsWidget;
+class MCPServer;
 
 namespace Ui {
 class MainWindow;
@@ -38,6 +39,7 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
+    void setMCPServer(MCPServer* server);
 
     void keyPressEvent(QKeyEvent *event) override;
     void dropEvent(QDropEvent *event) override;
@@ -80,6 +82,9 @@ private slots:
     void on_actionVerify_Update_triggered();
 
     void showAIModelSettings();
+    void showMCPSettings();
+    bool startMCPServer(int port);
+    void stopMCPServer();
 
 public slots:
     void setPlaying(bool playing);
@@ -115,6 +120,8 @@ private:
     void initToolBar();
     void updateMergeAnimationsButton();
     const QPalette& darkPalette();
+
+    MCPServer* m_mcpServer = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
     void addToRecentFiles(const QString& filePath);

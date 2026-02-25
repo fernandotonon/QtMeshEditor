@@ -39,6 +39,7 @@ LLMManager.cpp
 ModelDownloader.cpp
 LLMSettingsWidget.cpp
 MCPServer.cpp
+MCPSettingsDialog.cpp
 SentryReporter.cpp
 BoneWeightOverlay.cpp
 AnimationMerger.cpp
@@ -84,6 +85,7 @@ LLMManager.h
 ModelDownloader.h
 LLMSettingsWidget.h
 MCPServer.h
+MCPSettingsDialog.h
 SentryReporter.h
 BoneWeightOverlay.h
 AnimationMerger.h

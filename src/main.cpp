@@ -259,23 +259,17 @@ int main(int argc, char *argv[])
     w.show();
 
     // Start MCP server alongside GUI if requested
-    MCPServer *mcpServer = nullptr;
     if (mcpWithGuiMode) {
-        mcpServer = new MCPServer(&w);
+        auto *mcpServer = new MCPServer(&w);
         mcpServer->setMainWindow(&w);
         mcpServer->setOutputFd(savedStdoutFd);
         mcpServer->start();
         mcpServer->startHttp(httpPort);
+        w.setMCPServer(mcpServer);  // MainWindow takes ownership
         qDebug() << "MCP Server started alongside GUI";
     }
 
     int result = a.exec();
-
-    // Cleanup
-    if (mcpServer) {
-        mcpServer->stop();
-        delete mcpServer;
-    }
 
     // SentryReporter::shutdown() is called automatically via qScopeGuard
 
