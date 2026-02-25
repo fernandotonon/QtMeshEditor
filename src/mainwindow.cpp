@@ -103,7 +103,6 @@ MainWindow::MainWindow(QWidget *parent) :
     ///// Workaround, when using mRoot->startRendering() there's a flickering effect on the grid
     m_pTimer = new QTimer(this);
     connect(m_pTimer, &QTimer::timeout, this, [this](){
-        // Safely check if root and windows still exist before rendering
         if(m_pRoot && m_pRoot->getRenderSystem())
         {
             try {

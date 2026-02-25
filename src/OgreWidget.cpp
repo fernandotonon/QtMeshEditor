@@ -159,7 +159,6 @@ void OgreWidget::initOgreWindow(void)
 
     params["externalWindowHandle"] = winHandle;
 #ifdef Q_OS_MACOS
-    // code for Mac
     params["macAPI"] = "cocoa";
     params["macAPICocoaUseNSView"] = "true";
 #endif
