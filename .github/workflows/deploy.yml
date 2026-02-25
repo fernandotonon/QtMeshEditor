@@ -512,13 +512,16 @@ jobs:
             cp ./bin/QtMeshEditor ./pack-deb/usr/share/qtmesheditor/qtmesheditor
 
             # Create proper launcher script
-            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
+            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
             chmod 755 ./pack-deb/usr/bin/qtmesheditor
 
             # Copy copyright file
             cp ./DEBIAN-copyright ./pack-deb/usr/share/doc/qtmesheditor/copyright
 
             cp -R ./bin/cfg/ ./pack-deb/usr/share/qtmesheditor/
+            # Fix OGRE plugin path: CI build hardcodes /usr/local/lib/OGRE but
+            # the .deb bundles plugins in /usr/lib/qtmesheditor/
+            sed -i 's|^PluginFolder=.*|PluginFolder=/usr/lib/qtmesheditor|' ./pack-deb/usr/share/qtmesheditor/cfg/plugins.cfg
             sudo chmod -R 755 ./pack-deb/usr/share/qtmesheditor/cfg
             cp -R ./bin/media/ ./pack-deb/usr/share/qtmesheditor/
             cp -R ./bin/platforms/ ./pack-deb/usr/share/qtmesheditor/

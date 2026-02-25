@@ -23,8 +23,24 @@
 #include <unistd.h>
 #endif
 
+#ifdef Q_OS_LINUX
+static void forceX11PlatformIfNeeded()
+{
+    if (!qEnvironmentVariableIsSet("QT_QPA_PLATFORM")) {
+        qputenv("QT_QPA_PLATFORM", "xcb");
+    }
+}
+#endif
+
 int main(int argc, char *argv[])
 {
+#ifdef Q_OS_LINUX
+    // Ogre's externalWindowHandle requires X11 window IDs.
+    // Under Wayland, Qt's winId() returns an incompatible surface handle,
+    // causing Ogre to render to the wrong target (black viewport).
+    forceX11PlatformIfNeeded();
+#endif
+
     // Check for MCP server mode before creating QApplication
     bool mcpOnlyMode = false;
     bool mcpWithGuiMode = false;

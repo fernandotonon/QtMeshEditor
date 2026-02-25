@@ -506,12 +506,10 @@ void Manager::initRoot()
 
 void Manager::initRenderSystem()
 {
-    // setup a renderer
-    Ogre::RenderSystem *renderSystem = mRoot->getRenderSystemByName("OpenGL Rendering Subsystem"); //TODO: Add OpenGL 3+, and allow the user to select the render system.
+    Ogre::RenderSystem *renderSystem = mRoot->getRenderSystemByName("OpenGL Rendering Subsystem");
 
     if (!renderSystem)
     {
-        // Try GL3Plus as fallback
         renderSystem = mRoot->getRenderSystemByName("OpenGL 3+ Rendering Subsystem");
     }
 
