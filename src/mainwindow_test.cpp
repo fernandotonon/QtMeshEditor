@@ -566,9 +566,12 @@ TEST_F(MainWindowTest, DropEvent) {
     auto mimeData = std::make_unique<QMimeData>();
     auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
 
-    // Set the mime data with a valid URI
-    QString validUri = "file:///./media/models/ninja.mesh\nfile:///./media/models/robot.mesh\nfile:///./media/models/Rumba%20Dancing.fbx";
-    mimeData->setData("text/uri-list", validUri.toUtf8());
+    // Set the mime data with valid URIs
+    mimeData->setUrls({
+        QUrl::fromLocalFile("./media/models/ninja.mesh"),
+        QUrl::fromLocalFile("./media/models/robot.mesh"),
+        QUrl::fromLocalFile("./media/models/Rumba Dancing.fbx")
+    });
 
     // Call the dropEvent method
     mainWindow->dropEvent(event.get());
@@ -580,8 +583,7 @@ TEST_F(MainWindowTest, DropEvent) {
     ASSERT_EQ(entities.count(), countBefore+3);
 
     // Set the mime data with an invalid URI
-    QString invalidUri = "file:///./UnitTests";
-    mimeData->setData("text/uri-list", invalidUri.toUtf8());
+    mimeData->setUrls({QUrl::fromLocalFile("./UnitTests")});
 
     // Call the dropEvent method again
     mainWindow->dropEvent(event.get());
@@ -592,9 +594,8 @@ TEST_F(MainWindowTest, DropEvent) {
     entities = Manager::getSingleton()->getEntities();
     ASSERT_EQ(entities.count(), countBefore+3);
 
-    // Set the mime data with another type of data
-    QString other = "asd";
-    mimeData->setData("text", other.toUtf8());
+    // Set the mime data with no URLs
+    mimeData->setUrls({});
 
     // Call the dropEvent method again
     mainWindow->dropEvent(event.get());
@@ -784,8 +785,7 @@ TEST_F(MainWindowTest, AddToRecentFiles) {
 
     // Simulate importing via drop to add to recent files
     auto mimeData = std::make_unique<QMimeData>();
-    QString validUri = "file:///tmp/test_model.mesh\n";
-    mimeData->setData("text/uri-list", validUri.toUtf8());
+    mimeData->setUrls({QUrl::fromLocalFile("/tmp/test_model.mesh")});
     auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
     mainWindow->dropEvent(event.get());
 
@@ -810,8 +810,7 @@ TEST_F(MainWindowTest, RecentFilesMaxLimit) {
     // Add 12 files via drop events
     for (int i = 0; i < 12; ++i) {
         auto mimeData = std::make_unique<QMimeData>();
-        QString uri = QString("file:///tmp/model_%1.mesh\n").arg(i);
-        mimeData->setData("text/uri-list", uri.toUtf8());
+        mimeData->setUrls({QUrl::fromLocalFile(QString("/tmp/model_%1.mesh").arg(i))});
         auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
         mainWindow->dropEvent(event.get());
     }
@@ -836,8 +835,7 @@ TEST_F(MainWindowTest, RecentFilesDeduplicate) {
     // Add the same file twice via drop
     for (int i = 0; i < 2; ++i) {
         auto mimeData = std::make_unique<QMimeData>();
-        QString uri = "file:///tmp/duplicate.mesh\n";
-        mimeData->setData("text/uri-list", uri.toUtf8());
+        mimeData->setUrls({QUrl::fromLocalFile("/tmp/duplicate.mesh")});
         auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
         mainWindow->dropEvent(event.get());
     }
@@ -857,8 +855,7 @@ TEST_F(MainWindowTest, ClearRecentFiles) {
 
     // Add a file
     auto mimeData = std::make_unique<QMimeData>();
-    QString uri = "file:///tmp/to_clear.mesh\n";
-    mimeData->setData("text/uri-list", uri.toUtf8());
+    mimeData->setUrls({QUrl::fromLocalFile("/tmp/to_clear.mesh")});
     auto event = std::make_unique<QDropEvent>(QPoint(), Qt::CopyAction, mimeData.get(), Qt::LeftButton, Qt::NoModifier);
     mainWindow->dropEvent(event.get());
 
