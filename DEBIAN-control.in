@@ -1,13 +1,12 @@
 Package: qtmesheditor 
 Version: @PROJECT_VERSION@
 Section: editors 
-Priority: extra 
+Priority: optional
 Installed-Size: 757000 
 Architecture: amd64 
-Origin: ubuntu 
-Bugs: https://github.com/fernandotonon/QtMeshEditor/issues 
+Bugs: https://github.com/fernandotonon/QtMeshEditor/issues
 Homepage: https://github.com/fernandotonon/QtMeshEditor 
-Depends: libxcb-cursor0 
+Depends: libxcb-cursor0, libqt6core6, libqt6gui6, libqt6widgets6, libqt6network6, libqt6opengl6, libqt6qml6, libqt6quick6
 Maintainer: Fernando Tonon de Rossi <tonon.fernando@hotmail.com> 
 Description: It is a graphical editor for Ogre3D mesh and material 
  I have made this editor to make it easier to change the meshes instead of using the meshmagick and meshupgrader, it is not finished yet, but the main operations are implemented, I hope it helps someone... :)

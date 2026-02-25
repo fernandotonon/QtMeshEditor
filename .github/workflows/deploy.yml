@@ -500,24 +500,47 @@ jobs:
     - name: Manual Pack
       run: |
             echo "Creating folders 'n files"
-            mkdir -p ./pack-deb/usr/local/bin
+            mkdir -p ./pack-deb/usr/bin
             mkdir -p ./pack-deb/usr/share/qtmesheditor/
-            mkdir ./pack-deb/usr/share/qtmesheditor/cfg/
-            mkdir ./pack-deb/usr/share/qtmesheditor/media/
-            mkdir ./pack-deb/usr/share/qtmesheditor/platforms/
-            mkdir -p ./pack-deb/lib/x86_64-linux-gnu/
+            mkdir -p ./pack-deb/usr/share/qtmesheditor/cfg/
+            mkdir -p ./pack-deb/usr/share/qtmesheditor/media/
+            mkdir -p ./pack-deb/usr/share/qtmesheditor/platforms/
+            mkdir -p ./pack-deb/usr/lib/qtmesheditor/
+            mkdir -p ./pack-deb/usr/share/doc/qtmesheditor/
             mkdir ./pack-deb/DEBIAN/
             cp ./bin/DEBIAN-control ./pack-deb/DEBIAN/control
             cp ./bin/QtMeshEditor ./pack-deb/usr/share/qtmesheditor/qtmesheditor
-            touch ./pack-deb/usr/local/bin/qtmesheditor
-            echo "/usr/share/qtmesheditor/qtmesheditor" >> ./pack-deb/usr/local/bin/qtmesheditor
-            sudo chmod 755 ./pack-deb/usr/local/bin/qtmesheditor
+
+            # Create proper launcher script
+            printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
+            chmod 755 ./pack-deb/usr/bin/qtmesheditor
+
+            # Copy copyright file
+            cp ./DEBIAN-copyright ./pack-deb/usr/share/doc/qtmesheditor/copyright
+
             cp -R ./bin/cfg/ ./pack-deb/usr/share/qtmesheditor/
             sudo chmod -R 755 ./pack-deb/usr/share/qtmesheditor/cfg
             cp -R ./bin/media/ ./pack-deb/usr/share/qtmesheditor/
             cp -R ./bin/platforms/ ./pack-deb/usr/share/qtmesheditor/
-            cp -R ./bin/*.so* ./pack-deb/lib/x86_64-linux-gnu/
-            dpkg-deb --build --root-owner-group pack-deb 
+
+            # Copy bundled libraries to private lib directory
+            cp -R ./bin/*.so* ./pack-deb/usr/lib/qtmesheditor/
+
+            # Copy Qt QML modules for Material Editor
+            QT_DIR="/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64"
+            mkdir -p ./pack-deb/usr/share/qtmesheditor/qml
+            cp -R "$QT_DIR/qml/QtQuick" ./pack-deb/usr/share/qtmesheditor/qml/
+            cp -R "$QT_DIR/qml/QtQml" ./pack-deb/usr/share/qtmesheditor/qml/
+
+            # Copy Qt QML runtime libraries
+            for lib in QuickControls2 QuickControls2Impl QuickControls2Basic QuickControls2BasicStyleImpl \
+                       QuickDialogs2 QuickDialogs2Utils QuickDialogs2QuickImpl \
+                       QuickTemplates2 QuickLayouts Quick QmlModels QmlMeta QmlWorkerScript Qml QmlCore \
+                       OpenGL; do
+                cp -R "$QT_DIR/lib/libQt6${lib}.so"* ./pack-deb/usr/lib/qtmesheditor/ 2>/dev/null || true
+            done
+
+            dpkg-deb --build --root-owner-group pack-deb
             mv pack-deb.deb qtmesheditor_amd64.deb
     
     - uses: actions/upload-artifact@v4
@@ -1155,9 +1178,14 @@ jobs:
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtNetwork.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtOpenGL.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickControls2.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickControls2 not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickControls2Impl.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickControls2Impl not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickControls2Basic.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickControls2Basic not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickControls2BasicStyleImpl.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickControls2BasicStyleImpl not found, continuing..."
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickDialogs2.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickDialogs2 not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickDialogs2Utils.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickDialogs2Utils not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickDialogs2QuickImpl.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickDialogs2QuickImpl not found, continuing..."
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickTemplates2.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickTemplates2 not found, continuing..."
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtLabsPlatform.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtLabsPlatform not found, continuing..."
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQuickLayouts.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQuickLayouts not found, continuing..."
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQmlCore.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQmlCore not found, continuing..."
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/lib/QtQmlWorkerScript.framework ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/ || echo "QtQmlWorkerScript not found, continuing..."
             
@@ -1168,7 +1196,6 @@ jobs:
             sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/qml
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/qml/QtQuick ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/qml/
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/qml/QtQml ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/qml/
-            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/qml/Qt ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/qml/ || echo "Qt labs plugins not found, continuing..."
 
             # Copy Assimp libraries to MacOS directory
             sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ || echo "Assimp libraries not found, continuing..."
@@ -1228,7 +1255,7 @@ jobs:
             
             # Sign Qt frameworks - try both versioned and direct paths
             echo "Signing Qt frameworks..."
-            for framework in QtCore QtGui QtWidgets QtDBus QtQuickWidgets QtQuick QtQml QtQmlModels QtQmlMeta QtNetwork QtOpenGL QtQuickControls2 QtQuickDialogs2 QtQuickTemplates2 QtLabsPlatform QtQmlCore QtQmlWorkerScript; do
+            for framework in QtCore QtGui QtWidgets QtDBus QtQuickWidgets QtQuick QtQml QtQmlModels QtQmlMeta QtNetwork QtOpenGL QtQuickControls2 QtQuickControls2Impl QtQuickControls2Basic QtQuickControls2BasicStyleImpl QtQuickDialogs2 QtQuickDialogs2Utils QtQuickDialogs2QuickImpl QtQuickTemplates2 QtQuickLayouts QtQmlCore QtQmlWorkerScript; do
                 framework_path="${{github.workspace}}/bin/QtMeshEditor.app/Contents/Frameworks/${framework}.framework"
                 if [ -d "$framework_path" ]; then
                     echo "Processing $framework framework..."
