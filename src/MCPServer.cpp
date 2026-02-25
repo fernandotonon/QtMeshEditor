@@ -36,6 +36,7 @@
 #include <OgreAnimationState.h>
 #include <OgreKeyFrame.h>
 #include <OgreBone.h>
+#include "AnimationMerger.h"
 
 #ifdef Q_OS_WIN
 #include <io.h>
@@ -352,7 +353,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 
     // Start a performance transaction for heavy tools
     static const QStringList heavyTools = {
-        "load_mesh", "export_mesh", "take_screenshot", "create_primitive", "create_material"
+        "load_mesh", "export_mesh", "take_screenshot", "create_primitive", "create_material",
+        "merge_animations"
     };
     uintptr_t txn = 0;
     if (heavyTools.contains(name)) {
@@ -416,6 +418,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolToggleSkeletonDebug(args);
     } else if (name == "toggle_bone_weights") {
         toolResult = toolToggleBoneWeights(args);
+    } else if (name == "merge_animations") {
+        toolResult = toolMergeAnimations(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -1857,6 +1861,104 @@ void MCPServer::onAnimationTick()
     }
 }
 
+QJsonObject MCPServer::toolMergeAnimations(const QJsonObject &args)
+{
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr) {
+            return makeErrorResult("Error: Manager not available");
+        }
+
+        // Get base entity name (optional — defaults to first entity with skeleton)
+        QString baseName = args["base_entity"].toString();
+        Ogre::Entity* baseEntity = nullptr;
+
+        // Collect all entities with skeletons
+        QList<Ogre::Entity*> allEntities = mgr->getEntities();
+        QList<Ogre::Entity*> skeletonEntities;
+        for (auto* ent : allEntities) {
+            if (ent && ent->hasSkeleton())
+                skeletonEntities.append(ent);
+        }
+
+        if (skeletonEntities.size() < 2) {
+            return makeErrorResult("Error: Need at least 2 entities with skeletons in the scene to merge. "
+                                   "Use load_mesh to load mesh files first.");
+        }
+
+        // Resolve base entity
+        if (!baseName.isEmpty()) {
+            for (auto* ent : skeletonEntities) {
+                if (QString::fromStdString(ent->getName()) == baseName) {
+                    baseEntity = ent;
+                    break;
+                }
+            }
+            if (!baseEntity) {
+                return makeErrorResult(QString("Error: Entity '%1' not found or has no skeleton").arg(baseName));
+            }
+        } else {
+            baseEntity = skeletonEntities.first();
+        }
+
+        // Check skeleton compatibility
+        Ogre::SkeletonPtr baseSkel = baseEntity->getMesh()->getSkeleton();
+        for (auto* ent : skeletonEntities) {
+            if (ent == baseEntity) continue;
+            if (!AnimationMerger::areSkeletonsCompatible(baseSkel, ent->getMesh()->getSkeleton())) {
+                return makeErrorResult(QString("Error: Skeleton of '%1' is incompatible with base entity '%2'")
+                    .arg(QString::fromStdString(ent->getName()),
+                         QString::fromStdString(baseEntity->getName())));
+            }
+        }
+
+        // Perform the merge
+        QString errorMsg;
+        Ogre::Entity* merged = AnimationMerger::mergeAnimations(baseEntity, skeletonEntities, errorMsg);
+        if (!merged) {
+            return makeErrorResult(QString("Error: Merge failed — %1").arg(errorMsg));
+        }
+
+        // Clean up: remove non-base entities from scene (like the GUI does)
+        SelectionSet::getSingleton()->clear();
+
+        QList<Ogre::SceneNode*> nodesToDestroy;
+        for (auto* ent : skeletonEntities) {
+            if (ent == baseEntity) continue;
+            if (auto* node = ent->getParentSceneNode())
+                nodesToDestroy.append(node);
+        }
+        for (auto* node : nodesToDestroy)
+            Manager::getSingleton()->destroySceneNode(node);
+
+        // Select the merged entity
+        SelectionSet::getSingleton()->append(baseEntity);
+
+        // Count animations on the merged entity
+        unsigned short animCount = merged->getMesh()->getSkeleton()->getNumAnimations();
+
+        // Build result with animation list
+        QString result = QString("Successfully merged animations into '%1'. Total animations: %2\n\nAnimations:")
+            .arg(QString::fromStdString(merged->getName()))
+            .arg(animCount);
+
+        auto* skel = merged->getMesh()->getSkeleton().get();
+        for (unsigned short i = 0; i < animCount; ++i) {
+            auto* anim = skel->getAnimation(i);
+            result += QString("\n  - %1 (%2s)")
+                .arg(QString::fromStdString(anim->getName()))
+                .arg(anim->getLength(), 0, 'f', 2);
+        }
+
+        return makeSuccessResult(result);
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
 // Helper methods
 
 QJsonArray MCPServer::buildToolsList()
@@ -2282,6 +2384,24 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "toggle_bone_weights",
             "Show or hide bone weight heat-map overlay on an entity. Colors range from blue (0) to red (1). Optionally select a specific bone to highlight its weight influence.",
+            inputSchema
+        ));
+    }
+
+    // merge_animations
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["base_entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the base entity whose mesh receives all merged animations. If omitted, the first entity with a skeleton is used."}};
+        inputSchema["properties"] = props;
+
+        tools.append(buildToolDefinition(
+            "merge_animations",
+            "Merge skeletal animations from all loaded entities into a single base entity. All entities must have compatible skeletons (same bone names). "
+            "Animations from non-base entities are prefixed with a slugified version of their scene node name. "
+            "Load multiple mesh files first with load_mesh, then call this tool to combine all animations. "
+            "Use list_skeletal_animations to see the result.",
             inputSchema
         ));
     }

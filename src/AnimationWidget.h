@@ -42,7 +42,6 @@ private slots:
     void on_animTable_clicked(const QModelIndex &index) const;
     void on_skeletonTable_clicked(const QModelIndex &index);
 
-    void on_mergeButton_clicked();
     void pollAnimationState();
 
 signals:

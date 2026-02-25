@@ -416,7 +416,8 @@ TEST_F(MCPServerTest, HandleToolsList)
         "take_screenshot", "create_primitive", "animate",
         "list_skeletal_animations", "get_animation_info", "set_animation_length",
         "set_animation_time", "add_keyframe", "remove_keyframe",
-        "play_animation", "toggle_skeleton_debug", "toggle_bone_weights"
+        "play_animation", "toggle_skeleton_debug", "toggle_bone_weights",
+        "merge_animations"
     };
 
     for (const QString &tool : knownTools) {
@@ -1650,4 +1651,46 @@ TEST_F(MCPServerTest, ToggleBoneWeightsNoSkeleton)
     QJsonObject result = server->callTool("toggle_bone_weights", args);
     EXPECT_TRUE(isError(result));
     EXPECT_TRUE(getResultText(result).contains("no skeleton"));
+}
+
+// ==========================================================================
+// NEW TESTS: merge_animations
+// ==========================================================================
+
+TEST_F(MCPServerTest, MergeAnimationsNoEntities)
+{
+    // Empty scene — should require at least 2 entities
+    QJsonObject result = server->callTool("merge_animations", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Need at least 2 entities"));
+}
+
+TEST_F(MCPServerTest, MergeAnimationsNoSkeletonEntities)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    // Create primitives (no skeleton) — should still fail
+    QJsonObject args1;
+    args1["type"] = "sphere";
+    args1["name"] = "MergeSphere1";
+    server->callTool("create_primitive", args1);
+
+    QJsonObject args2;
+    args2["type"] = "cube";
+    args2["name"] = "MergeCube1";
+    server->callTool("create_primitive", args2);
+
+    QJsonObject result = server->callTool("merge_animations", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Need at least 2 entities"));
+}
+
+TEST_F(MCPServerTest, MergeAnimationsInvalidBaseEntity)
+{
+    // With an empty scene, specifying a non-existent base entity
+    QJsonObject args;
+    args["base_entity"] = "NonExistentEntity";
+    QJsonObject result = server->callTool("merge_animations", args);
+    EXPECT_TRUE(isError(result));
+    // Should fail with "Need at least 2 entities" since there are no skeleton entities
+    EXPECT_TRUE(getResultText(result).contains("Need at least 2 entities"));
 }
