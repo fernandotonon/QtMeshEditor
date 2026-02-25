@@ -51,6 +51,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationMerger.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
     )
     
@@ -95,6 +96,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationMerger.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)

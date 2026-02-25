@@ -2,8 +2,8 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QProcess>
-#include <QTemporaryFile>
 
 namespace {
 
@@ -39,6 +39,11 @@ QString testDataDir()
     dir.cdUp(); // bin -> build_local
     dir.cdUp(); // build_local -> project root
     return dir.absoluteFilePath("media/models");
+}
+
+QString tempPath(const QString& filename)
+{
+    return QDir::tempPath() + "/" + filename;
 }
 
 } // anonymous namespace
@@ -82,7 +87,7 @@ TEST(MergeAnimationsCLI, MissingBase)
         GTEST_SKIP() << "QtMeshEditor binary not found";
 
     QProcess proc;
-    proc.start(binary, {"merge-animations", "--output", "/tmp/out.mesh"});
+    proc.start(binary, {"merge-animations", "--output", tempPath("out.mesh")});
     ASSERT_TRUE(proc.waitForFinished(30000));
 
     EXPECT_NE(proc.exitCode(), 0);
@@ -98,8 +103,8 @@ TEST(MergeAnimationsCLI, NonExistentBaseFile)
 
     QProcess proc;
     proc.start(binary, {"merge-animations",
-                         "--base", "/tmp/nonexistent_file_12345.fbx",
-                         "--output", "/tmp/merge_test_out.mesh"});
+                         "--base", tempPath("nonexistent_file_12345.fbx"),
+                         "--output", tempPath("merge_test_out.mesh")});
     ASSERT_TRUE(proc.waitForFinished(30000));
 
     EXPECT_NE(proc.exitCode(), 0);
@@ -118,10 +123,12 @@ TEST(MergeAnimationsCLI, SingleFileNoAnimations)
     if (!QFile::exists(baseFile))
         GTEST_SKIP() << "Test data not found: " << baseFile.toStdString();
 
+    QString outputFile = tempPath("merge_test_single.mesh");
+
     QProcess proc;
     proc.start(binary, {"merge-animations",
                          "--base", baseFile,
-                         "--output", "/tmp/merge_test_single.mesh"});
+                         "--output", outputFile});
     ASSERT_TRUE(proc.waitForFinished(60000));
 
     EXPECT_EQ(proc.exitCode(), 1);
@@ -130,7 +137,7 @@ TEST(MergeAnimationsCLI, SingleFileNoAnimations)
         << "stderr: " << stderrOutput.toStdString();
 
     // Clean up in case a file was created
-    QFile::remove("/tmp/merge_test_single.mesh");
+    QFile::remove(outputFile);
 }
 
 TEST(MergeAnimationsCLI, SuccessfulMerge)
@@ -142,7 +149,8 @@ TEST(MergeAnimationsCLI, SuccessfulMerge)
     QString dataDir = testDataDir();
     QString baseFile = dataDir + "/Twist Dance.fbx";
     QString animFile = dataDir + "/Hip Hop Dancing.fbx";
-    QString outputFile = "/tmp/merge_test_cli_output.mesh";
+    QString outputFile = tempPath("merge_test_cli_output.mesh");
+    QString materialFile = tempPath("merge_test_cli_output.material");
 
     if (!QFile::exists(baseFile))
         GTEST_SKIP() << "Test data not found: " << baseFile.toStdString();
@@ -151,6 +159,7 @@ TEST(MergeAnimationsCLI, SuccessfulMerge)
 
     // Remove any leftover output from previous runs
     QFile::remove(outputFile);
+    QFile::remove(materialFile);
 
     QProcess proc;
     proc.start(binary, {"merge-animations",
@@ -173,5 +182,5 @@ TEST(MergeAnimationsCLI, SuccessfulMerge)
 
     // Clean up
     QFile::remove(outputFile);
-    QFile::remove(outputFile.replace(".mesh", ".material"));
+    QFile::remove(materialFile);
 }

@@ -115,14 +115,22 @@ int main(int argc, char *argv[])
         Manager::getSingleton()->getRoot()->createRenderWindow(
             "MergeHidden", 1, 1, false, &params);
 
-        // Load base file
+        // Load base file and verify it loaded
         MeshImporterExporter::importer({mergeBase});
+        {
+            auto& baseEntities = Manager::getSingleton()->getEntities();
+            if (baseEntities.isEmpty()) {
+                qCritical().noquote() << "Failed to load base file:" << mergeBase;
+                Manager::kill();
+                return 1;
+            }
+        }
 
         // Load animation files
         for (const auto& f : mergeAnimFiles)
             MeshImporterExporter::importer({f});
 
-        // Get all loaded entities
+        // Get all loaded entities (getEntities() rebuilds the list each call)
         auto& entities = Manager::getSingleton()->getEntities();
         if (entities.size() < 2) {
             qCritical() << "Need at least 2 loaded entities to merge (got" << entities.size() << ")";
