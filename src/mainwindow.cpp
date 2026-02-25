@@ -39,6 +39,8 @@
 #include "animationcontrolwidget.h"
 #include "MaterialEditorQML.h"
 #include "LLMSettingsWidget.h"
+#include "MCPSettingsDialog.h"
+#include "MCPServer.h"
 #include "LLMManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
@@ -123,12 +125,27 @@ MainWindow::MainWindow(QWidget *parent) :
         }
     });
     m_pTimer->start(0);
+
+    // Auto-start MCP HTTP server if enabled in settings
+    QSettings mcpSettings;
+    bool mcpEnabled = mcpSettings.value("MCP/enabled", false).toBool();
+    int mcpPort = mcpSettings.value("MCP/port", 8080).toInt();
+    if (mcpEnabled && !m_mcpServer) {
+        startMCPServer(mcpPort);
+    }
 }
 
 /////////////////////////// TODO Clean up the code of MainWindow
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)
 MainWindow::~MainWindow()
 {
+    // Stop MCP server if running
+    if (m_mcpServer) {
+        m_mcpServer->stop();
+        delete m_mcpServer;
+        m_mcpServer = nullptr;
+    }
+
     // CRITICAL: Stop the timer FIRST to prevent any renderOneFrame() calls
     // during shutdown. This prevents swap buffer errors when windows are destroyed.
     if(m_pTimer)
@@ -323,6 +340,9 @@ void MainWindow::initToolBar()
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     QAction* aiSettingsAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Model Settings..."));
     connect(aiSettingsAction, &QAction::triggered, this, &MainWindow::showAIModelSettings);
+
+    QAction* mcpSettingsAction = aiMenu->addAction(tr("MCP Server Settings..."));
+    connect(mcpSettingsAction, &QAction::triggered, this, &MainWindow::showMCPSettings);
 
     // Crash reporting toggle in Help menu
     ui->menuHelp->addSeparator();
@@ -1140,6 +1160,42 @@ void MainWindow::showAIModelSettings()
     LLMSettingsWidget* settingsWidget = new LLMSettingsWidget(this);
     settingsWidget->setAttribute(Qt::WA_DeleteOnClose);
     settingsWidget->exec();
+}
+
+void MainWindow::showMCPSettings()
+{
+    bool running = m_mcpServer && m_mcpServer->isHttpRunning();
+    int port = m_mcpServer ? m_mcpServer->httpPort()
+                           : QSettings().value("MCP/port", 8080).toInt();
+
+    MCPSettingsDialog dialog(running, port, this);
+    connect(&dialog, &MCPSettingsDialog::serverStartRequested, this, &MainWindow::startMCPServer);
+    connect(&dialog, &MCPSettingsDialog::serverStopRequested, this, &MainWindow::stopMCPServer);
+    dialog.exec();
+}
+
+void MainWindow::startMCPServer(int port)
+{
+    if (m_mcpServer && m_mcpServer->isHttpRunning())
+        return;
+
+    if (!m_mcpServer) {
+        m_mcpServer = new MCPServer(this);
+        m_mcpServer->setMainWindow(this);
+    }
+    m_mcpServer->startHttp(port);
+}
+
+void MainWindow::stopMCPServer()
+{
+    if (m_mcpServer) {
+        m_mcpServer->stopHttp();
+    }
+}
+
+void MainWindow::setMCPServer(MCPServer* server)
+{
+    m_mcpServer = server;
 }
 
 void MainWindow::addToRecentFiles(const QString& filePath)

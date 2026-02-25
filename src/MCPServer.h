@@ -69,6 +69,21 @@ public:
     void setOutputFd(int fd);
 
     /**
+     * @brief Stop the HTTP REST API server
+     */
+    void stopHttp();
+
+    /**
+     * @brief Check if the HTTP server is currently running
+     */
+    bool isHttpRunning() const;
+
+    /**
+     * @brief Get the configured HTTP port
+     */
+    int httpPort() const;
+
+    /**
      * @brief Check if server is running
      */
     bool isRunning() const { return m_running; }

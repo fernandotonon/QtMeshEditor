@@ -86,6 +86,8 @@ void MCPServer::start()
 
 void MCPServer::stop()
 {
+    stopHttp();
+
     if (!m_running) return;
 
     if (m_stdinNotifier) {
@@ -96,6 +98,26 @@ void MCPServer::stop()
 
     m_running = false;
     qDebug() << "MCP Server stopped";
+}
+
+void MCPServer::stopHttp()
+{
+    if (m_httpServer) {
+        m_httpServer->close();
+        delete m_httpServer;
+        m_httpServer = nullptr;
+        qDebug() << "HTTP REST API stopped";
+    }
+}
+
+bool MCPServer::isHttpRunning() const
+{
+    return m_httpServer && m_httpServer->isListening();
+}
+
+int MCPServer::httpPort() const
+{
+    return m_httpPort;
 }
 
 void MCPServer::onReadyRead()
