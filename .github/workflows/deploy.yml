@@ -260,13 +260,20 @@ jobs:
             Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/libzlib.dll" -ErrorAction SilentlyContinue
       shell: powershell
 
+    - name: Remove test-only dance models from package
+      run: |
+            Remove-Item "${{github.workspace}}/bin/media/models/Twist Dance.fbx" -ErrorAction SilentlyContinue
+            Remove-Item "${{github.workspace}}/bin/media/models/Rumba Dancing.fbx" -ErrorAction SilentlyContinue
+            Remove-Item "${{github.workspace}}/bin/media/models/Hip Hop Dancing.fbx" -ErrorAction SilentlyContinue
+      shell: powershell
+
     - name: Upload Artifact
       if: github.event_name == 'release' && github.event.action == 'published'
       uses: actions/upload-artifact@v4
       with:
         name: QtMeshEditor-${{github.ref_name}}-bin-Windows
         path: ${{github.workspace}}/bin
-    
+
     - name: Compress File
       if: github.event_name == 'release' && github.event.action == 'published'
       run: Compress-Archive ${{github.workspace}}/bin QtMeshEditor-${{github.ref_name}}-bin-Windows.zip
@@ -524,6 +531,10 @@ jobs:
             sed -i 's|^PluginFolder=.*|PluginFolder=/usr/lib/qtmesheditor|' ./pack-deb/usr/share/qtmesheditor/cfg/plugins.cfg
             sudo chmod -R 755 ./pack-deb/usr/share/qtmesheditor/cfg
             cp -R ./bin/media/ ./pack-deb/usr/share/qtmesheditor/
+            # Remove large dance model files used only for testing
+            rm -f ./pack-deb/usr/share/qtmesheditor/media/models/"Twist Dance.fbx"
+            rm -f ./pack-deb/usr/share/qtmesheditor/media/models/"Rumba Dancing.fbx"
+            rm -f ./pack-deb/usr/share/qtmesheditor/media/models/"Hip Hop Dancing.fbx"
             cp -R ./bin/platforms/ ./pack-deb/usr/share/qtmesheditor/
 
             # Copy bundled libraries to private lib directory
@@ -1206,6 +1217,10 @@ jobs:
     - name: Prepare for packing
       run: |
             sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
+            # Remove large dance model files used only for testing
+            sudo rm -f ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media/models/"Twist Dance.fbx"
+            sudo rm -f ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media/models/"Rumba Dancing.fbx"
+            sudo rm -f ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media/models/"Hip Hop Dancing.fbx"
             sudo cp -R ${{github.workspace}}/bin/cfg ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/cfg
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
             sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
