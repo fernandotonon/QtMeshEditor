@@ -36,9 +36,6 @@
    <property name="focusPolicy">
     <enum>Qt::StrongFocus</enum>
    </property>
-   <property name="acceptDrops">
-    <bool>true</bool>
-   </property>
   </widget>
   <widget class="QMenuBar" name="menuBar">
    <property name="geometry">

@@ -479,28 +479,16 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
 
 void MainWindow::dropEvent(QDropEvent *event)
 {
-    QString mime = event->mimeData()->data("text/uri-list");
-    QStringList uris = mime.split("\n",Qt::SkipEmptyParts);
-
-    for(int c=uris.size()-1;c>=0;--c)
+    QStringList validFiles;
+    for (const QUrl& url : event->mimeData()->urls())
     {
-        QString uri = uris.at(c);
-        uri=uri.remove(0,8);
-        uri.chop(1);
-
-        if(Manager::getSingleton()->isValidFileExtention(uri))
-        {
-            uri.replace("%20"," ");
-            uris.replace(c,uri);
-        }
-        else
-        {
-            uris.removeAt(c);
-        }
+        QString filePath = url.toLocalFile();
+        if (!filePath.isEmpty() && Manager::getSingleton()->isValidFileExtention(filePath))
+            validFiles.append(filePath);
     }
-    for (const QString& f : uris)
+    for (const QString& f : validFiles)
         addToRecentFiles(f);
-    mUriList.append(uris);
+    mUriList.append(validFiles);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
