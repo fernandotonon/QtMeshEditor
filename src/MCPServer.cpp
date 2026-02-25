@@ -2443,7 +2443,7 @@ QJsonObject MCPServer::buildToolDefinition(const QString &name, const QString &d
 
 // HTTP REST API
 
-void MCPServer::startHttp(int port)
+bool MCPServer::startHttp(int port)
 {
     m_httpPort = port;
     m_httpServer = new QTcpServer(this);
@@ -2451,9 +2451,13 @@ void MCPServer::startHttp(int port)
 
     if (m_httpServer->listen(QHostAddress::Any, m_httpPort)) {
         qDebug() << "HTTP REST API listening on port" << m_httpPort;
+        return true;
     } else {
         qWarning() << "Failed to start HTTP server on port" << m_httpPort
                     << ":" << m_httpServer->errorString();
+        delete m_httpServer;
+        m_httpServer = nullptr;
+        return false;
     }
 }
 

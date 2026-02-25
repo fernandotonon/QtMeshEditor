@@ -24,6 +24,7 @@ private:
     void buildOverlay();
     void createMaterial();
     void destroyOverlay();
+    void pollBoneSelection();
     void updateOverlayPositions();
 
     Ogre::Entity* mEntity;

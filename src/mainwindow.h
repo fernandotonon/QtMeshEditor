@@ -83,7 +83,7 @@ private slots:
 
     void showAIModelSettings();
     void showMCPSettings();
-    void startMCPServer(int port);
+    bool startMCPServer(int port);
     void stopMCPServer();
 
 public slots:

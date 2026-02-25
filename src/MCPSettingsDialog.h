@@ -5,6 +5,7 @@
 #include <QCheckBox>
 #include <QSpinBox>
 #include <QLabel>
+#include <functional>
 
 class MCPSettingsDialog : public QDialog
 {
@@ -13,9 +14,9 @@ class MCPSettingsDialog : public QDialog
 public:
     explicit MCPSettingsDialog(bool serverRunning, int currentPort, QWidget *parent = nullptr);
 
-signals:
-    void serverStartRequested(int port);
-    void serverStopRequested();
+    // Callbacks set by the caller; startCallback returns true on success
+    std::function<bool(int port)> startCallback;
+    std::function<void()> stopCallback;
 
 private:
     void onEnableToggled(bool checked);

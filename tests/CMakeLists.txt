@@ -52,10 +52,11 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationMerger.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
     )
-    
+
     set(TEST_HEADER_FILES
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/animationcontrolwidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/animationcontrolslider.h
@@ -98,6 +99,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationMerger.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.h
     )
 

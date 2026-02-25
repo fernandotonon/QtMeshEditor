@@ -15,7 +15,10 @@ BoneWeightOverlay::BoneWeightOverlay(Ogre::Entity* entity, Ogre::SceneManager* s
         mSoftwareAnimRequested = true;
     }
 
-    connect(&mUpdateTimer, &QTimer::timeout, this, &BoneWeightOverlay::updateOverlayPositions);
+    connect(&mUpdateTimer, &QTimer::timeout, this, [this]() {
+        pollBoneSelection();
+        updateOverlayPositions();
+    });
 }
 
 BoneWeightOverlay::~BoneWeightOverlay()
@@ -254,6 +257,24 @@ void BoneWeightOverlay::buildOverlay()
     }
 
     mEntity->getParentSceneNode()->attachObject(mOverlay);
+}
+
+void BoneWeightOverlay::pollBoneSelection()
+{
+    if (!mEntity || !mEntity->hasSkeleton())
+        return;
+
+    auto* skeleton = mEntity->getSkeleton();
+    for (unsigned short i = 0; i < skeleton->getNumBones(); ++i)
+    {
+        auto& bindings = skeleton->getBone(i)->getUserObjectBindings();
+        if (bindings.getUserAny("selected").has_value() &&
+            Ogre::any_cast<bool>(bindings.getUserAny("selected")))
+        {
+            setSelectedBone(i);
+            return;
+        }
+    }
 }
 
 void BoneWeightOverlay::updateOverlayPositions()

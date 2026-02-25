@@ -4,7 +4,6 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QPushButton>
-#include <QSettings>
 
 MCPSettingsDialog::MCPSettingsDialog(bool serverRunning, int currentPort, QWidget *parent)
     : QDialog(parent)
@@ -55,20 +54,22 @@ void MCPSettingsDialog::onEnableToggled(bool checked)
 {
     if (checked) {
         int port = m_portSpinBox->value();
-        emit serverStartRequested(port);
-        m_portSpinBox->setEnabled(false);
-        updateStatus(true);
-
-        QSettings settings;
-        settings.setValue("MCP/enabled", true);
-        settings.setValue("MCP/port", port);
+        bool ok = startCallback ? startCallback(port) : false;
+        if (ok) {
+            m_portSpinBox->setEnabled(false);
+            updateStatus(true);
+        } else {
+            // Revert checkbox without re-triggering
+            m_enableCheckBox->blockSignals(true);
+            m_enableCheckBox->setChecked(false);
+            m_enableCheckBox->blockSignals(false);
+            m_statusLabel->setText(tr("Failed to start on port %1").arg(port));
+            m_statusLabel->setStyleSheet("color: red;");
+        }
     } else {
-        emit serverStopRequested();
+        if (stopCallback) stopCallback();
         m_portSpinBox->setEnabled(true);
         updateStatus(false);
-
-        QSettings settings;
-        settings.setValue("MCP/enabled", false);
     }
 }
 

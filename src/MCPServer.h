@@ -49,8 +49,9 @@ public:
     /**
      * @brief Start the HTTP REST API server
      * @param port TCP port to listen on (default 8080)
+     * @return true if the server started successfully
      */
-    void startHttp(int port = 8080);
+    bool startHttp(int port = 8080);
 
     /**
      * @brief Call a tool by name with arguments (public API for HTTP)

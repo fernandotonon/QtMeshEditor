@@ -1169,21 +1169,28 @@ void MainWindow::showMCPSettings()
                            : QSettings().value("MCP/port", 8080).toInt();
 
     MCPSettingsDialog dialog(running, port, this);
-    connect(&dialog, &MCPSettingsDialog::serverStartRequested, this, &MainWindow::startMCPServer);
-    connect(&dialog, &MCPSettingsDialog::serverStopRequested, this, &MainWindow::stopMCPServer);
+    dialog.startCallback = [this](int p) { return startMCPServer(p); };
+    dialog.stopCallback  = [this]()      { stopMCPServer(); };
     dialog.exec();
 }
 
-void MainWindow::startMCPServer(int port)
+bool MainWindow::startMCPServer(int port)
 {
     if (m_mcpServer && m_mcpServer->isHttpRunning())
-        return;
+        return true;
 
     if (!m_mcpServer) {
         m_mcpServer = new MCPServer(this);
         m_mcpServer->setMainWindow(this);
     }
-    m_mcpServer->startHttp(port);
+
+    bool ok = m_mcpServer->startHttp(port);
+    if (ok) {
+        QSettings settings;
+        settings.setValue("MCP/enabled", true);
+        settings.setValue("MCP/port", port);
+    }
+    return ok;
 }
 
 void MainWindow::stopMCPServer()
@@ -1191,10 +1198,16 @@ void MainWindow::stopMCPServer()
     if (m_mcpServer) {
         m_mcpServer->stopHttp();
     }
+    QSettings settings;
+    settings.setValue("MCP/enabled", false);
 }
 
 void MainWindow::setMCPServer(MCPServer* server)
 {
+    if (m_mcpServer && m_mcpServer != server) {
+        m_mcpServer->stop();
+        delete m_mcpServer;
+    }
     m_mcpServer = server;
 }
 
