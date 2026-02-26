@@ -1,6 +1,6 @@
 
 # <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor
-A free, open-source 3D asset tool for indie game developers — merge Mixamo animations, convert between 40+ formats, edit materials with AI, and more.
+A free, open-source 3D asset tool for indie game developers — merge animations from multiple files, convert between 40+ formats, edit materials with AI, and more.
 
 [![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star if you like it!
 
@@ -36,12 +36,12 @@ Split View|Skeleton Animation Controls
 
 QtMeshEditor helps you prepare 3D assets for your game or project:
 
-- **Merge Mixamo animations** — Combine multiple Mixamo FBX downloads into one mesh with all animations
+- **Merge animations** — Combine multiple animation files (e.g. from Mixamo) into one mesh with all animations
 - **Convert between 40+ formats** — Import FBX, glTF, OBJ, Collada, STL, and more; export to what your engine needs
 - **Edit materials visually** — Real-time material preview with AI-assisted generation
 - **Inspect skeletons & animations** — Visualize bones, bone weights, preview animations, rename them
 - **AI agent integration** — Let AI tools like Claude, Cursor, or custom scripts control the editor via MCP protocol
-- **Batch process via CLI** — Automate asset pipelines from the command line
+- **Batch process via CLI** — Deterministic asset processing, safe for CI pipelines
 
 ### :package: Format Support
 

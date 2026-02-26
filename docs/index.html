@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>QtMeshEditor - Free 3D Asset Tool for Indie Game Developers</title>
-    <meta name="description" content="Merge Mixamo animations, convert between 40+ 3D formats, edit materials with AI. Free and open-source 3D asset tool for indie game developers.">
+    <meta name="description" content="Free 3D asset tool for indie game developers. Merge Mixamo animations, convert between 40+ formats, edit materials with AI. Deterministic processing via GUI, CLI, and REST API.">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Source+Code+Pro:wght@400;600&display=swap');
 
@@ -513,7 +513,8 @@
             <h1 class="logo">QtMeshEditor</h1>
             <div class="version">v2.8.1</div>
             <p class="tagline">Free 3D Asset Tool for Indie Game Developers</p>
-            <p class="tagline-sub">Merge Mixamo animations, convert 40+ formats, edit materials with AI</p>
+            <p class="tagline-sub">Merge animations from multiple files, convert 40+ formats, edit materials with AI</p>
+            <p class="tagline-sub" style="margin-top: 5px; font-size: 0.8rem; color: #777;">Deterministic asset processing &mdash; in the GUI or automated via CLI and REST API</p>
             <div class="engine-badges">
                 <span class="engine-badge">FBX</span>
                 <span class="engine-badge">glTF</span>
@@ -532,8 +533,8 @@
             <h2 class="section-title">Merge Mixamo Animations in Seconds</h2>
             <p class="section-subtitle">Download individual animations from <strong style="color: var(--neon-cyan);">Mixamo</strong>, drop them into QtMeshEditor, and merge them into a single mesh &mdash; export as glTF, Collada, OBJ, or Ogre Mesh.</p>
             <div class="hero-demo">
-                <img src="https://github.com/user-attachments/assets/16e81f29-f64c-402d-aac4-dbb1bc2f3aef" alt="Merge Mixamo animations demo - combining multiple FBX files into one mesh">
-                <p class="hero-demo-caption">Load FBX files from Mixamo &rarr; Select all &rarr; Click Merge &rarr; Export to your engine</p>
+                <img src="https://github.com/user-attachments/assets/16e81f29-f64c-402d-aac4-dbb1bc2f3aef" alt="Merge animations demo - combining multiple FBX files into one mesh">
+                <p class="hero-demo-caption">Load animation files &rarr; Select all &rarr; Click Merge &rarr; Export to your engine</p>
             </div>
         </section>
 
@@ -544,7 +545,7 @@
                 <div class="feature-card">
                     <div class="feature-icon">🔀</div>
                     <h3 class="feature-title">Animation Merging</h3>
-                    <p class="feature-desc">Combine skeletal animations from multiple files into one mesh. Perfect for Mixamo workflows where each animation is a separate FBX download. GUI, CLI, and API support.</p>
+                    <p class="feature-desc">Combine skeletal animations from multiple files into one mesh. Works with any source where each animation is a separate file. GUI, CLI, and API support.</p>
                 </div>
 
                 <div class="feature-card">
@@ -585,9 +586,9 @@
 
             <div class="features-grid">
                 <div class="feature-card">
-                    <h3 class="feature-title">Mixamo to Game Engine</h3>
+                    <h3 class="feature-title">Animation Pipeline</h3>
                     <p class="feature-desc">
-                        1. Download animations from Mixamo as FBX<br>
+                        1. Download animations as FBX (e.g. from Mixamo)<br>
                         2. Drag all files into QtMeshEditor<br>
                         3. Select all entities and click Merge<br>
                         4. Export as glTF, Collada, or OBJ<br>
@@ -623,7 +624,7 @@
                         &bull; Merge animations from command line<br>
                         &bull; HTTP REST API for scripting<br>
                         &bull; MCP protocol for AI agents<br>
-                        &bull; Integrate into CI/CD pipelines<br>
+                        &bull; Deterministic processing &mdash; safe for CI pipelines<br>
                         &bull; Headless mode for servers
                     </p>
                 </div>
@@ -638,7 +639,7 @@
             <div class="install-steps">
                 <div class="install-step">
                     <h3>GUI &mdash; Drag, Select, Merge</h3>
-                    <p>Load all your animation files (e.g. from Mixamo), select all entities in the scene, then click the <strong style="color: var(--neon-cyan);">Merge Animations</strong> button in the toolbar. All animations are combined into the first entity.</p>
+                    <p>Load all your animation files, select all entities in the scene, then click the <strong style="color: var(--neon-cyan);">Merge Animations</strong> button in the toolbar. All animations are combined into the first entity.</p>
                 </div>
 
                 <div class="install-step">
@@ -806,7 +807,7 @@ cmake --build build -j$(nproc)</div>
                             <tr><td style="padding: 6px 8px;">Assimp Binary</td><td style="padding: 6px 8px;">.assbin</td><td style="text-align: center;">&#8212;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
                         </tbody>
                     </table>
-                    <p class="feature-desc" style="margin-top: 10px; font-size: 0.85rem;">Import supports all formats provided by Assimp (40+). Works with assets from Mixamo, Blender, Maya, 3ds Max, and more.</p>
+                    <p class="feature-desc" style="margin-top: 10px; font-size: 0.85rem;">Import supports all formats provided by Assimp (40+). Works with assets from Blender, Maya, 3ds Max, animation marketplaces, and more.</p>
                 </div>
 
                 <div class="feature-card">
