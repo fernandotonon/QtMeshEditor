@@ -3,28 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QtMeshEditor - Graphical Editor for Ogre3D Mesh and Material</title>
+    <title>QtMeshEditor - Free 3D Asset Tool for Indie Game Developers</title>
+    <meta name="description" content="Merge Mixamo animations, convert between 40+ 3D formats, edit materials with AI. Free and open-source 3D asset tool for indie game developers.">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Source+Code+Pro:wght@400;600&display=swap');
-        
+
         :root {
             --primary-green: #00ff41;
             --secondary-green: #00cc33;
             --dark-green: #003d0f;
             --qt-blue: #41cd52;
-            --ogre-orange: #ff6b35;
+            --accent-orange: #ff6b35;
             --retro-purple: #8b00ff;
             --neon-cyan: #00ffff;
             --dark-bg: #0a0a0a;
             --grid-color: #1a1a1a;
         }
-        
+
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             background: linear-gradient(135deg, var(--dark-bg) 0%, #1a1a2e 50%, #0f0f23 100%);
             background-attachment: fixed;
@@ -33,7 +34,7 @@
             line-height: 1.6;
             overflow-x: hidden;
         }
-        
+
         /* Retro grid background */
         body::before {
             content: '';
@@ -42,31 +43,31 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background-image: 
+            background-image:
                 linear-gradient(var(--grid-color) 1px, transparent 1px),
                 linear-gradient(90deg, var(--grid-color) 1px, transparent 1px);
             background-size: 50px 50px;
             opacity: 0.1;
             z-index: -1;
         }
-        
+
         .container {
             max-width: 1200px;
             margin: 0 auto;
             padding: 0 20px;
         }
-        
+
         /* Header */
         .header {
             text-align: center;
             padding: 60px 0;
             position: relative;
         }
-        
+
         .logo {
             font-size: 4rem;
             font-weight: 900;
-            background: linear-gradient(45deg, var(--primary-green), var(--neon-cyan), var(--ogre-orange));
+            background: linear-gradient(45deg, var(--primary-green), var(--neon-cyan), var(--accent-orange));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
             background-clip: text;
@@ -74,32 +75,39 @@
             animation: glow 2s ease-in-out infinite alternate;
             margin-bottom: 20px;
         }
-        
+
         @keyframes glow {
             from { text-shadow: 0 0 20px var(--primary-green), 0 0 30px var(--primary-green); }
             to { text-shadow: 0 0 30px var(--neon-cyan), 0 0 40px var(--neon-cyan); }
         }
-        
+
         .version {
             font-size: 1.5rem;
-            color: var(--ogre-orange);
+            color: var(--accent-orange);
             font-weight: 700;
             margin-bottom: 10px;
         }
-        
+
         .tagline {
             font-size: 1.2rem;
             color: var(--secondary-green);
-            margin-bottom: 30px;
+            margin-bottom: 10px;
         }
-        
+
+        .tagline-sub {
+            font-size: 0.95rem;
+            color: #aaa;
+            margin-bottom: 30px;
+            font-family: 'Source Code Pro', monospace;
+        }
+
         .cta-buttons {
             display: flex;
             gap: 20px;
             justify-content: center;
             flex-wrap: wrap;
         }
-        
+
         .btn {
             padding: 15px 30px;
             background: linear-gradient(45deg, var(--retro-purple), var(--qt-blue));
@@ -114,7 +122,7 @@
             position: relative;
             overflow: hidden;
         }
-        
+
         .btn::before {
             content: '';
             position: absolute;
@@ -125,27 +133,27 @@
             background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
             transition: left 0.5s;
         }
-        
+
         .btn:hover::before {
             left: 100%;
         }
-        
+
         .btn:hover {
             transform: translateY(-3px);
             box-shadow: 0 10px 25px rgba(0,255,65,0.3);
             border-color: var(--primary-green);
         }
-        
+
         .btn-secondary {
-            background: linear-gradient(45deg, var(--dark-green), var(--ogre-orange));
+            background: linear-gradient(45deg, var(--dark-green), var(--accent-orange));
         }
-        
+
         /* Sections */
         .section {
             padding: 80px 0;
             border-bottom: 1px solid rgba(0,255,65,0.2);
         }
-        
+
         .section-title {
             font-size: 2.5rem;
             text-align: center;
@@ -154,14 +162,26 @@
             text-transform: uppercase;
             letter-spacing: 3px;
         }
-        
+
+        .section-subtitle {
+            text-align: center;
+            color: #cccccc;
+            margin-bottom: 40px;
+            margin-top: -40px;
+            max-width: 800px;
+            margin-left: auto;
+            margin-right: auto;
+            font-family: 'Source Code Pro', monospace;
+            font-size: 1rem;
+        }
+
         .features-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 30px;
             margin-top: 40px;
         }
-        
+
         .feature-card {
             background: linear-gradient(135deg, rgba(0,255,65,0.1), rgba(139,0,255,0.1));
             border: 2px solid var(--primary-green);
@@ -171,7 +191,7 @@
             overflow: hidden;
             transition: all 0.3s ease;
         }
-        
+
         .feature-card::before {
             content: '';
             position: absolute;
@@ -184,46 +204,92 @@
             transition: all 0.6s ease;
             opacity: 0;
         }
-        
+
         .feature-card:hover::before {
             opacity: 1;
             animation: scan 1.5s linear infinite;
         }
-        
+
         @keyframes scan {
             0% { transform: translateX(-100%) translateY(-100%) rotate(45deg); }
             100% { transform: translateX(100%) translateY(100%) rotate(45deg); }
         }
-        
+
         .feature-card:hover {
             transform: translateY(-10px);
             box-shadow: 0 20px 40px rgba(0,255,65,0.2);
             border-color: var(--neon-cyan);
         }
-        
+
         .feature-icon {
             font-size: 3rem;
             margin-bottom: 20px;
-            color: var(--ogre-orange);
+            color: var(--accent-orange);
         }
-        
+
         .feature-title {
             font-size: 1.5rem;
             margin-bottom: 15px;
             color: var(--primary-green);
             font-weight: 700;
         }
-        
+
         .feature-desc {
             color: #cccccc;
             line-height: 1.6;
         }
-        
+
+        /* Hero demo */
+        .hero-demo {
+            text-align: center;
+            margin: 40px 0;
+        }
+
+        .hero-demo img {
+            max-width: 100%;
+            border-radius: 15px;
+            border: 2px solid var(--primary-green);
+            box-shadow: 0 0 40px rgba(0,255,65,0.2);
+        }
+
+        .hero-demo-caption {
+            color: #aaa;
+            font-size: 0.85rem;
+            margin-top: 15px;
+            font-family: 'Source Code Pro', monospace;
+        }
+
+        /* Engine badges */
+        .engine-badges {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            flex-wrap: wrap;
+            margin: 30px 0;
+        }
+
+        .engine-badge {
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.15);
+            border-radius: 10px;
+            padding: 12px 24px;
+            color: #ccc;
+            font-family: 'Source Code Pro', monospace;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+        }
+
+        .engine-badge:hover {
+            border-color: var(--neon-cyan);
+            color: var(--neon-cyan);
+            background: rgba(0,255,255,0.05);
+        }
+
         /* Installation Steps */
         .install-steps {
             counter-reset: step-counter;
         }
-        
+
         .install-step {
             background: rgba(0,255,65,0.05);
             border-left: 4px solid var(--primary-green);
@@ -233,7 +299,7 @@
             position: relative;
             counter-increment: step-counter;
         }
-        
+
         .install-step::before {
             content: counter(step-counter);
             position: absolute;
@@ -250,18 +316,18 @@
             font-weight: 700;
             font-size: 0.9rem;
         }
-        
+
         .install-step h3 {
             color: var(--neon-cyan);
             margin-bottom: 10px;
             font-size: 1.3rem;
         }
-        
+
         .code-wrapper {
             position: relative;
             margin: 25px 0 15px 0;
         }
-        
+
         .code-block {
             background: #111;
             border: 1px solid var(--primary-green);
@@ -275,7 +341,7 @@
             white-space: pre-wrap;
             word-wrap: break-word;
         }
-        
+
         .code-wrapper::before {
             content: 'TERMINAL';
             position: absolute;
@@ -283,7 +349,7 @@
             left: 15px;
             background: var(--dark-bg);
             padding: 2px 8px;
-            color: var(--ogre-orange);
+            color: var(--accent-orange);
             font-size: 0.75rem;
             font-weight: 700;
             z-index: 10;
@@ -291,7 +357,7 @@
             border: 1px solid var(--primary-green);
             border-radius: 4px 4px 0 0;
         }
-        
+
         /* Community Section */
         .community {
             background: linear-gradient(135deg, rgba(139,0,255,0.1), rgba(255,107,53,0.1));
@@ -300,32 +366,39 @@
             text-align: center;
             margin: 40px 0;
         }
-        
+
         .community h3 {
-            color: var(--ogre-orange);
+            color: var(--accent-orange);
             font-size: 2rem;
             margin-bottom: 20px;
         }
-        
+
+        .community-links {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
+
         .forum-link {
             display: inline-flex;
             align-items: center;
             gap: 10px;
-            background: linear-gradient(45deg, var(--ogre-orange), var(--retro-purple));
+            background: linear-gradient(45deg, var(--accent-orange), var(--retro-purple));
             color: white;
             text-decoration: none;
             padding: 15px 30px;
             border-radius: 50px;
             font-weight: 700;
             transition: all 0.3s ease;
-            margin-top: 20px;
         }
-        
+
         .forum-link:hover {
             transform: scale(1.05);
             box-shadow: 0 10px 30px rgba(255,107,53,0.4);
         }
-        
+
         /* Footer */
         .footer {
             text-align: center;
@@ -333,91 +406,81 @@
             border-top: 1px solid rgba(0,255,65,0.3);
             margin-top: 60px;
         }
-        
+
         .footer-text {
             color: #888;
             font-size: 0.9rem;
         }
-        
+
         /* Responsive */
         @media (max-width: 768px) {
             .logo {
                 font-size: 2.5rem;
             }
-            
+
             .section-title {
                 font-size: 2rem;
             }
-            
+
             .cta-buttons {
                 flex-direction: column;
                 align-items: center;
             }
-            
+
             .features-grid {
                 grid-template-columns: 1fr;
             }
         }
-        
+
         /* Scrollbar */
         ::-webkit-scrollbar {
             width: 12px;
         }
-        
+
         ::-webkit-scrollbar-track {
             background: var(--dark-bg);
         }
-        
+
         ::-webkit-scrollbar-thumb {
             background: linear-gradient(var(--primary-green), var(--neon-cyan));
             border-radius: 6px;
         }
-        
+
         ::-webkit-scrollbar-thumb:hover {
             background: linear-gradient(var(--neon-cyan), var(--primary-green));
         }
     </style>
     <script>
-        // Function to fetch latest release version from GitHub API
         async function fetchLatestVersion() {
             try {
                 const response = await fetch('https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest');
-                if (!response.ok) {
-                    throw new Error(`HTTP error! status: ${response.status}`);
-                }
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const release = await response.json();
                 return release.tag_name;
             } catch (error) {
                 console.warn('Failed to fetch latest version:', error);
-                return '2.0.0'; // Fallback version
+                return '2.8.1';
             }
         }
 
-        // Function to update version elements on the page
         async function updateVersionDisplay() {
             const version = await fetchLatestVersion();
             const currentYear = new Date().getFullYear();
-            
-            // Update page title
-            document.title = `QtMeshEditor ${version} - Graphical Editor for Ogre3D Mesh and Material`;
-            
-            // Update version display in header
+
+            document.title = `QtMeshEditor ${version} - Free 3D Asset Tool for Indie Game Developers`;
+
             const versionElement = document.querySelector('.version');
-            if (versionElement) {
-                versionElement.textContent = `v${version}`;
-            }
-            
-            // Update footer text with current year
+            if (versionElement) versionElement.textContent = `v${version}`;
+
             const footerText = document.querySelector('.footer-text');
             if (footerText) {
                 footerText.innerHTML = `
-                    QtMeshEditor ${version} © 2012-${currentYear} Fernando Tonon |
-                    <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> | 
-                    <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--ogre-orange);">Ogre3D Forum</a>
+                    QtMeshEditor ${version} &copy; 2012-${currentYear} Fernando Tonon |
+                    <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> |
+                    <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--accent-orange);">Community Forum</a>
                 `;
             }
 
-            // Update download button to point to latest release
             const downloadBtn = document.querySelector('a[href*="releases"]');
             if (downloadBtn) {
                 downloadBtn.href = `https://github.com/fernandotonon/QtMeshEditor/releases/tag/${version}`;
@@ -425,17 +488,12 @@
             }
         }
 
-        // Initialize version fetching when DOM is loaded
         document.addEventListener('DOMContentLoaded', function() {
             updateVersionDisplay();
-            
-            // Add loading indicator for version
             const versionElement = document.querySelector('.version');
             if (versionElement) {
                 versionElement.style.opacity = '0.6';
                 versionElement.textContent = 'v...';
-                
-                // Restore opacity after version is loaded
                 setTimeout(() => {
                     if (versionElement) {
                         versionElement.style.opacity = '1';
@@ -445,7 +503,6 @@
             }
         });
 
-        // Optional: Refresh version every 5 minutes for long-running sessions
         setInterval(updateVersionDisplay, 5 * 60 * 1000);
     </script>
 </head>
@@ -454,214 +511,198 @@
         <!-- Header -->
         <header class="header">
             <h1 class="logo">QtMeshEditor</h1>
-            <div class="version">v2.0.0</div>
-            <p class="tagline">Graphical Editor for Ogre3D Mesh and Material • Built with Qt Framework</p>
+            <div class="version">v2.8.1</div>
+            <p class="tagline">Free 3D Asset Tool for Indie Game Developers</p>
+            <p class="tagline-sub">Merge Mixamo animations, convert 40+ formats, edit materials with AI</p>
+            <div class="engine-badges">
+                <span class="engine-badge">FBX</span>
+                <span class="engine-badge">glTF</span>
+                <span class="engine-badge">Collada</span>
+                <span class="engine-badge">OBJ</span>
+                <span class="engine-badge">40+ Formats</span>
+            </div>
             <div class="cta-buttons">
                 <a href="https://github.com/fernandotonon/QtMeshEditor/releases" class="btn">Download Latest</a>
                 <a href="https://github.com/fernandotonon/QtMeshEditor" class="btn btn-secondary">View Source</a>
             </div>
         </header>
 
-        <!-- Features Section -->
+        <!-- Hero: Animation Merging Demo -->
         <section class="section">
-            <h2 class="section-title">🚀 Comprehensive Ogre3D Editing Suite</h2>
+            <h2 class="section-title">Merge Mixamo Animations in Seconds</h2>
+            <p class="section-subtitle">Download individual animations from <strong style="color: var(--neon-cyan);">Mixamo</strong>, drop them into QtMeshEditor, and merge them into a single mesh &mdash; export as glTF, Collada, OBJ, or Ogre Mesh.</p>
+            <div class="hero-demo">
+                <img src="https://github.com/user-attachments/assets/16e81f29-f64c-402d-aac4-dbb1bc2f3aef" alt="Merge Mixamo animations demo - combining multiple FBX files into one mesh">
+                <p class="hero-demo-caption">Load FBX files from Mixamo &rarr; Select all &rarr; Click Merge &rarr; Export to your engine</p>
+            </div>
+        </section>
+
+        <!-- Why QtMeshEditor -->
+        <section class="section">
+            <h2 class="section-title">Why QtMeshEditor?</h2>
             <div class="features-grid">
                 <div class="feature-card">
-                    <div class="feature-icon">🎨</div>
-                    <h3 class="feature-title">Advanced Material System</h3>
-                    <p class="feature-desc">Modern QML-based material editor with real-time preview. Visual material editing alongside script-based authoring for complete Ogre3D material workflow.</p>
+                    <div class="feature-icon">🔀</div>
+                    <h3 class="feature-title">Animation Merging</h3>
+                    <p class="feature-desc">Combine skeletal animations from multiple files into one mesh. Perfect for Mixamo workflows where each animation is a separate FBX download. GUI, CLI, and API support.</p>
                 </div>
-                
-                <div class="feature-card">
-                    <div class="feature-icon">🤖</div>
-                    <h3 class="feature-title">AI-Powered Generation</h3>
-                    <p class="feature-desc">Generate materials using AI with OpenAI GPT or local LLM models. Run completely offline with GPU-accelerated local inference — no API keys needed.</p>
-                </div>
-                
-                <div class="feature-card">
-                    <div class="feature-icon">⏪</div>
-                    <h3 class="feature-title">Professional Undo/Redo</h3>
-                    <p class="feature-desc">Complete undo/redo system with 50-step history, keyboard shortcuts (Ctrl+Z/Y), and smart button management.</p>
-                </div>
-                
-                <div class="feature-card">
-                    <div class="feature-icon">🔍</div>
-                    <h3 class="feature-title">Enhanced Validation</h3>
-                    <p class="feature-desc">Comprehensive material script validation with syntax error detection, line-specific reporting, and detailed error descriptions.</p>
-                </div>
-                
-                <div class="feature-card">
-                    <div class="feature-icon">⚙️</div>
-                    <h3 class="feature-title">Mesh Transformation & Operations</h3>
-                    <p class="feature-desc">Complete mesh editing suite with translation, scaling, rotation, and format conversion. Easier than OgreMeshMagick with visual feedback and batch operations.</p>
-                </div>
-                
-                <div class="feature-card">
-                    <div class="feature-icon">🦴</div>
-                    <h3 class="feature-title">Skeleton & Animation</h3>
-                    <p class="feature-desc">Bone visualization, animation preview, keyframe inspection, animation renaming, and animation merging tools for complete skeletal mesh workflow.</p>
-                </div>
-                
+
                 <div class="feature-card">
                     <div class="feature-icon">📦</div>
-                    <h3 class="feature-title">Multi-Format Support</h3>
-                    <p class="feature-desc">Import/export various 3D formats via ASSIMP. Convert to Ogre mesh, material, and skeleton formats with version compatibility.</p>
+                    <h3 class="feature-title">40+ Format Support</h3>
+                    <p class="feature-desc">Import FBX, glTF, OBJ, Collada, STL, 3DS, and more via Assimp. Export to glTF, Collada, OBJ, or Ogre Mesh. Convert between formats for any game engine.</p>
                 </div>
-                
+
                 <div class="feature-card">
-                    <div class="feature-icon">🎯</div>
-                    <h3 class="feature-title">Primitive Creation</h3>
-                    <p class="feature-desc">Built-in primitive generation using Ogre-Procedural. Create boxes, spheres, planes, and more with customizable parameters.</p>
+                    <div class="feature-icon">🤖</div>
+                    <h3 class="feature-title">AI-Powered Materials</h3>
+                    <p class="feature-desc">Generate and edit materials using AI with OpenAI GPT or local LLM models. Run completely offline with GPU-accelerated inference &mdash; no API keys needed.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">🦴</div>
+                    <h3 class="feature-title">Skeleton & Animation Tools</h3>
+                    <p class="feature-desc">Visualize bones and bone weights, preview animations in real-time, rename animations, inspect keyframes. Everything you need to prepare animated characters.</p>
+                </div>
+
+                <div class="feature-card">
+                    <div class="feature-icon">🎨</div>
+                    <h3 class="feature-title">Visual Material Editor</h3>
+                    <p class="feature-desc">Real-time material preview with a visual editor. Change colors, textures, lighting, blending, and fog settings. Full undo/redo with 50-step history.</p>
                 </div>
 
                 <div class="feature-card">
                     <div class="feature-icon">🔌</div>
-                    <h3 class="feature-title">MCP Server (AI Agent Control)</h3>
-                    <p class="feature-desc">Built-in Model Context Protocol server lets AI agents (Claude, Cursor, etc.) control the editor programmatically. 25 tools for materials, meshes, transforms, textures, animations, skeletons, and more.</p>
-                </div>
-
-                <div class="feature-card">
-                    <div class="feature-icon">🧠</div>
-                    <h3 class="feature-title">Local LLM Support</h3>
-                    <p class="feature-desc">Run AI material generation entirely offline using bundled llama.cpp with Metal/CUDA GPU acceleration. Download and manage GGUF models directly from the app.</p>
+                    <h3 class="feature-title">MCP Server (AI Agents)</h3>
+                    <p class="feature-desc">Built-in Model Context Protocol server lets AI agents like Claude or Cursor control the editor. 25 tools for materials, meshes, transforms, and animations via HTTP API.</p>
                 </div>
             </div>
         </section>
 
-        <!-- Installation Section -->
+        <!-- Workflow Section -->
         <section class="section">
-            <h2 class="section-title">⚡ Quick Start Guide</h2>
-            
-            <div class="install-steps">
-                <div class="install-step">
-                    <h3>Download QtMeshEditor</h3>
-                    <p>Get the latest release from GitHub or build from source:</p>
-                    <div class="code-wrapper">
-                        <div class="code-block">
-git clone https://github.com/fernandotonon/QtMeshEditor.git
-cd QtMeshEditor</div>
-                    </div>
-                </div>
-                
-                <div class="install-step">
-                    <h3>Install Dependencies</h3>
-                    <p>Ensure you have Qt6, Ogre3D, and ASSIMP installed:</p>
-                    <div class="code-wrapper">
-                        <div class="code-block">
-# Ubuntu/Debian
-sudo apt install qt6-base-dev libogre-1.12-dev libassimp-dev
+            <h2 class="section-title">Game Dev Workflows</h2>
 
-# Build dependencies
-sudo apt install cmake build-essential</div>
-                    </div>
-                </div>
-                
-                <div class="install-step">
-                    <h3>Build the Project</h3>
-                    <p>Compile QtMeshEditor with CMake:</p>
-                    <div class="code-wrapper">
-                        <div class="code-block">
-mkdir build && cd build
-cmake ..
-make -j$(nproc)</div>
-                    </div>
-                </div>
-                
-                <div class="install-step">
-                    <h3>Run QtMeshEditor</h3>
-                    <p>Launch the application and start creating:</p>
-                    <div class="code-wrapper">
-                        <div class="code-block">
-./bin/QtMeshEditor</div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- Usage Section -->
-        <section class="section">
-            <h2 class="section-title">🎮 Complete Ogre3D Workflow</h2>
-            
             <div class="features-grid">
                 <div class="feature-card">
-                    <h3 class="feature-title">Material Editing</h3>
+                    <h3 class="feature-title">Mixamo to Game Engine</h3>
                     <p class="feature-desc">
-                        • Open the QML Material Editor<br>
-                        • Use AI assistance for script generation<br>
-                        • Edit materials with real-time preview<br>
-                        • Validate and apply changes instantly<br>
-                        • Use Ctrl+Z/Y for undo/redo
-                    </p>
-                </div>
-                
-                <div class="feature-card">
-                    <h3 class="feature-title">Mesh Operations</h3>
-                    <p class="feature-desc">
-                        • Import meshes via File → Import<br>
-                        • Transform with scale/rotate/translate tools<br>
-                        • Preview animations in real-time<br>
-                        • Export to different Ogre versions<br>
-                        • Convert between 3D formats
-                    </p>
-                </div>
-                
-                <div class="feature-card">
-                    <h3 class="feature-title">AI Material Generation</h3>
-                    <p class="feature-desc">
-                        • Describe your desired material<br>
-                        • Use OpenAI GPT or local LLM models<br>
-                        • GPU-accelerated offline inference<br>
-                        • Automatic validation and application<br>
-                        • Download GGUF models from the app
+                        1. Download animations from Mixamo as FBX<br>
+                        2. Drag all files into QtMeshEditor<br>
+                        3. Select all entities and click Merge<br>
+                        4. Export as glTF, Collada, or OBJ<br>
+                        5. Import into your game engine
                     </p>
                 </div>
 
                 <div class="feature-card">
-                    <h3 class="feature-title">MCP Agent Integration</h3>
+                    <h3 class="feature-title">Format Conversion</h3>
                     <p class="feature-desc">
-                        • AI agents control the editor via MCP<br>
-                        • 25 tools: materials, meshes, animations<br>
-                        • HTTP REST API on port 8080<br>
-                        • Works with Claude, Cursor, and more<br>
-                        • Create scenes with natural language
+                        &bull; FBX &rarr; glTF for web or Godot<br>
+                        &bull; OBJ &rarr; Collada with materials<br>
+                        &bull; Any format &rarr; Ogre Mesh<br>
+                        &bull; Batch convert via CLI<br>
+                        &bull; Preserve skeletons and animations
                     </p>
+                </div>
+
+                <div class="feature-card">
+                    <h3 class="feature-title">Asset Inspection</h3>
+                    <p class="feature-desc">
+                        &bull; Preview models before importing<br>
+                        &bull; Check skeleton bone hierarchy<br>
+                        &bull; Verify bone weight painting<br>
+                        &bull; Test animations at different speeds<br>
+                        &bull; Multi-viewport split view
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <h3 class="feature-title">CLI & Automation</h3>
+                    <p class="feature-desc">
+                        &bull; Merge animations from command line<br>
+                        &bull; HTTP REST API for scripting<br>
+                        &bull; MCP protocol for AI agents<br>
+                        &bull; Integrate into CI/CD pipelines<br>
+                        &bull; Headless mode for servers
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Animation Merging Detail -->
+        <section class="section">
+            <h2 class="section-title">Animation Merging</h2>
+            <p class="section-subtitle">Three ways to merge animations &mdash; pick what works for your workflow.</p>
+
+            <div class="install-steps">
+                <div class="install-step">
+                    <h3>GUI &mdash; Drag, Select, Merge</h3>
+                    <p>Load all your animation files (e.g. from Mixamo), select all entities in the scene, then click the <strong style="color: var(--neon-cyan);">Merge Animations</strong> button in the toolbar. All animations are combined into the first entity.</p>
+                </div>
+
+                <div class="install-step">
+                    <h3>CLI &mdash; One Command</h3>
+                    <p>Merge animations from the command line, perfect for build scripts and automation:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+./QtMeshEditor merge-animations \
+  --base character.fbx \
+  --animations walk.fbx run.fbx jump.fbx idle.fbx \
+  --output character_merged.mesh</div>
+                    </div>
+                </div>
+
+                <div class="install-step">
+                    <h3>HTTP API &mdash; Script It</h3>
+                    <p>Use the REST API to load meshes and merge animations programmatically:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+# Load mesh files
+curl -X POST localhost:8080/api/tools/load_mesh \
+  -d '{"path":"/path/to/character.fbx"}'
+curl -X POST localhost:8080/api/tools/load_mesh \
+  -d '{"path":"/path/to/walk.fbx"}'
+
+# Merge all animations into the base entity
+curl -X POST localhost:8080/api/tools/merge_animations \
+  -d '{"base_entity":"character"}'</div>
+                    </div>
                 </div>
             </div>
         </section>
 
         <!-- MCP Server Section -->
         <section class="section">
-            <h2 class="section-title">🔌 MCP Server — AI Agent Integration</h2>
-            <p style="text-align: center; color: #cccccc; margin-bottom: 40px; max-width: 800px; margin-left: auto; margin-right: auto;">
-                QtMeshEditor includes a built-in <strong style="color: var(--neon-cyan);">Model Context Protocol (MCP)</strong> server that lets AI agents control the 3D editor programmatically. Create scenes, apply materials, and transform objects using natural language through Claude, Cursor, or any MCP-compatible agent.
+            <h2 class="section-title">AI Agent Integration</h2>
+            <p class="section-subtitle">
+                Built-in <strong style="color: var(--neon-cyan);">Model Context Protocol (MCP)</strong> server lets AI agents control the 3D editor. Create scenes, apply materials, and transform objects using natural language through Claude, Cursor, or any MCP-compatible tool.
             </p>
 
             <div class="install-steps">
                 <div class="install-step">
                     <h3>Launch with MCP Server</h3>
-                    <p>Start QtMeshEditor with the MCP server enabled alongside the GUI:</p>
                     <div class="code-wrapper">
                         <div class="code-block">
 # GUI + MCP server (stdio + HTTP on port 8080)
-./bin/QtMeshEditor --with-mcp
+./QtMeshEditor --with-mcp
 
 # Headless MCP mode (no GUI, for scripting)
-./bin/QtMeshEditor --mcp
+./QtMeshEditor --mcp
 
 # Custom HTTP port
-./bin/QtMeshEditor --with-mcp --http-port 9090</div>
+./QtMeshEditor --with-mcp --http-port 9090</div>
                     </div>
                 </div>
 
                 <div class="install-step">
                     <h3>Configure Your AI Agent</h3>
-                    <p>Add QtMeshEditor as an MCP server in your agent's configuration:</p>
                     <div class="code-wrapper">
                         <div class="code-block">
 # Claude Code
 claude mcp add --transport stdio qtmeshEditor -- /path/to/QtMeshEditor --with-mcp
 
-# Or create .mcp.json in your project root:
+# Or .mcp.json in your project root:
 {
   "mcpServers": {
     "qtmeshEditor": {
@@ -675,146 +716,71 @@ claude mcp add --transport stdio qtmeshEditor -- /path/to/QtMeshEditor --with-mc
                 </div>
 
                 <div class="install-step">
-                    <h3>Use the HTTP REST API</h3>
-                    <p>Or call tools directly via HTTP from any terminal or script:</p>
+                    <h3>25 Tools Available</h3>
                     <div class="code-wrapper">
                         <div class="code-block">
-# Create a sphere
+# Create a sphere and apply a red material
 curl -X POST localhost:8080/api/tools/create_primitive \
   -d '{"type":"sphere","name":"MySphere"}'
-
-# Create and apply a material with texture
 curl -X POST localhost:8080/api/tools/create_material \
   -d '{"name":"RedMat","colors":{"diffuse":[1,0,0]}}'
 curl -X POST localhost:8080/api/tools/apply_material \
   -d '{"material":"RedMat","mesh":"MySphere"}'
 
-# Transform objects
-curl -X POST localhost:8080/api/tools/transform_mesh \
-  -d '{"name":"MySphere","position":{"x":3,"y":0,"z":0}}'
-
-# Animate rotation
-curl -X POST localhost:8080/api/tools/animate \
-  -d '{"name":"MySphere","yaw":60,"pitch":20}'
-
 # List all available tools
 curl localhost:8080/api/tools</div>
                     </div>
                 </div>
-
-                <div class="install-step">
-                    <h3>Available MCP Tools</h3>
-                    <p>25 tools for complete scene control:</p>
-                    <div class="code-wrapper">
-                        <div class="code-block">
-create_material          — Create materials with colors or full scripts
-modify_material          — Modify material properties (colors, textures)
-get_material             — Get the full material script
-list_materials           — List all materials in the scene
-apply_material           — Apply a material to a mesh
-set_texture              — Set a texture on a material
-load_mesh                — Load a 3D mesh file
-get_mesh_info            — Get mesh information
-export_mesh              — Export mesh to file
-transform_mesh           — Position, rotate, and scale objects by name
-create_primitive         — Create spheres, cubes, cylinders, cones, etc.
-get_scene_info           — Get full scene information
-list_textures            — List loaded textures
-take_screenshot          — Capture the viewport
-animate                  — Start/stop rotation animations
-list_skeletal_animations — List all skeletal animations in the scene
-get_animation_info       — Get detailed animation and keyframe info
-set_animation_length     — Change animation duration
-set_animation_time       — Seek to a specific time in an animation
-add_keyframe             — Add a keyframe to an animation track
-remove_keyframe          — Remove a keyframe from an animation track
-play_animation           — Play/stop skeletal animations
-toggle_skeleton_debug    — Show/hide skeleton bone overlay
-toggle_bone_weights      — Show/hide bone weight visualization
-merge_animations         — Merge animations from multiple meshes into one</div>
-                    </div>
-                </div>
             </div>
         </section>
 
-        <!-- Animation Merging Section -->
+        <!-- Quick Start -->
         <section class="section">
-            <h2 class="section-title">🔀 Animation Merging</h2>
-            <p style="text-align: center; color: #cccccc; margin-bottom: 40px; max-width: 800px; margin-left: auto; margin-right: auto;">
-                Combine skeletal animations from multiple mesh files into a single entity. Perfect for workflows with sites like <strong style="color: var(--neon-cyan);">Mixamo</strong>, where each animation is downloaded as a separate file.
-            </p>
+            <h2 class="section-title">Quick Start</h2>
 
             <div class="install-steps">
                 <div class="install-step">
-                    <h3>GUI Workflow</h3>
-                    <p>Load all your animation files (e.g. from Mixamo), select all entities in the scene, then click the <strong style="color: var(--neon-cyan);">Merge Animations</strong> button in the toolbar. All animations are combined into the first entity and the others are removed.</p>
-                    <!-- TODO: Add screenshot/GIF of GUI merge workflow -->
-                </div>
-
-                <div class="install-step">
-                    <h3>CLI Usage</h3>
-                    <p>Merge animations from the command line:</p>
+                    <h3>macOS (Homebrew)</h3>
                     <div class="code-wrapper">
                         <div class="code-block">
-./bin/QtMeshEditor merge-animations --base base_model.fbx --animations walk.fbx run.fbx jump.fbx --output merged.mesh</div>
+brew tap fernandotonon/qtmesheditor
+brew install qtmesheditor</div>
                     </div>
                 </div>
 
                 <div class="install-step">
-                    <h3>MCP API Usage</h3>
-                    <p>Use the HTTP REST API to load meshes and merge their animations programmatically:</p>
+                    <h3>Linux (Ubuntu/Debian)</h3>
+                    <p>Download the .deb from the <a href="https://github.com/fernandotonon/QtMeshEditor/releases" style="color: var(--neon-cyan);">releases page</a>, then:</p>
                     <div class="code-wrapper">
                         <div class="code-block">
-# Load mesh files
-curl -X POST localhost:8080/api/tools/load_mesh \
-  -d '{"path":"/path/to/base_model.fbx"}'
-curl -X POST localhost:8080/api/tools/load_mesh \
-  -d '{"path":"/path/to/walk.fbx"}'
-curl -X POST localhost:8080/api/tools/load_mesh \
-  -d '{"path":"/path/to/run.fbx"}'
+sudo apt install ./qtmesheditor_amd64.deb</div>
+                    </div>
+                </div>
 
-# Merge all animations into the base entity
-curl -X POST localhost:8080/api/tools/merge_animations \
-  -d '{"base_entity":"base_model"}'</div>
+                <div class="install-step">
+                    <h3>Windows</h3>
+                    <p>Download the .zip from the <a href="https://github.com/fernandotonon/QtMeshEditor/releases" style="color: var(--neon-cyan);">releases page</a>, unpack, and run <code style="color: var(--primary-green);">QtMeshEditor.exe</code>.</p>
+                </div>
+
+                <div class="install-step">
+                    <h3>Build from Source</h3>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+git clone https://github.com/fernandotonon/QtMeshEditor.git
+cd QtMeshEditor
+cmake . -B build
+cmake --build build -j$(nproc)</div>
                     </div>
                 </div>
             </div>
         </section>
 
-        <!-- Community Section -->
+        <!-- Format Support -->
         <section class="section">
-            <div class="community">
-                <h3>🌟 Join the Community</h3>
-                <p>Connect with other QtMeshEditor users and Ogre3D developers. Share your creations, get help, and contribute to the project!</p>
-                <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" class="forum-link" target="_blank">
-                    🏛️ Ogre3D Forum Discussion
-                </a>
-                <div style="margin-top: 20px;">
-                    <p style="color: #888; font-size: 0.9rem;">
-                        Active community since 2013 • 63+ posts • Regular updates and support
-                    </p>
-                </div>
-            </div>
-        </section>
+            <h2 class="section-title">Format Support</h2>
 
-        <!-- Technical Info -->
-        <section class="section">
-            <h2 class="section-title">🔧 Technical Details</h2>
-            
             <div class="features-grid">
-                <div class="feature-card">
-                    <h3 class="feature-title">Requirements</h3>
-                    <p class="feature-desc">
-                        • Qt 6.x framework<br>
-                        • Ogre3D 14.x engine<br>
-                        • ASSIMP library<br>
-                        • CMake 3.24+<br>
-                        • C++17 compiler
-                    </p>
-                </div>
-                
                 <div class="feature-card" style="grid-column: 1 / -1;">
-                    <h3 class="feature-title">Supported Formats</h3>
                     <table style="width: 100%; border-collapse: collapse; margin-top: 10px; font-family: 'Source Code Pro', monospace; font-size: 0.85rem;">
                         <thead>
                             <tr style="border-bottom: 2px solid var(--primary-green);">
@@ -826,42 +792,64 @@ curl -X POST localhost:8080/api/tools/merge_animations \
                             </tr>
                         </thead>
                         <tbody>
-                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">Ogre Mesh</td><td style="padding: 6px 8px;">.mesh</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
-                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">Ogre XML</td><td style="padding: 6px 8px;">.mesh.xml</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
                             <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">FBX</td><td style="padding: 6px 8px;">.fbx</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td><td style="text-align: center;">&#10003;</td></tr>
-                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">Collada</td><td style="padding: 6px 8px;">.dae</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
-                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">DirectX X</td><td style="padding: 6px 8px;">.x</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
                             <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">glTF 2.0</td><td style="padding: 6px 8px;">.gltf2</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
                             <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">glTF 2.0 Binary</td><td style="padding: 6px 8px;">.glb2</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">Collada</td><td style="padding: 6px 8px;">.dae</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
                             <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">OBJ</td><td style="padding: 6px 8px;">.obj</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td></tr>
                             <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">STL</td><td style="padding: 6px 8px;">.stl</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">Ogre Mesh</td><td style="padding: 6px 8px;">.mesh</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">Ogre XML</td><td style="padding: 6px 8px;">.mesh.xml</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
+                            <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">DirectX X</td><td style="padding: 6px 8px;">.x</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
                             <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">PLY</td><td style="padding: 6px 8px;">.ply</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td></tr>
                             <tr style="border-bottom: 1px solid rgba(0,255,65,0.2);"><td style="padding: 6px 8px;">3DS</td><td style="padding: 6px 8px;">.3ds</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#8212;</td></tr>
                             <tr><td style="padding: 6px 8px;">Assimp Binary</td><td style="padding: 6px 8px;">.assbin</td><td style="text-align: center;">&#8212;</td><td style="text-align: center;">&#10003;</td><td style="text-align: center;">&#10003;</td></tr>
                         </tbody>
                     </table>
-                    <p class="feature-desc" style="margin-top: 10px; font-size: 0.85rem;">Import supports all formats provided by Assimp (40+).</p>
+                    <p class="feature-desc" style="margin-top: 10px; font-size: 0.85rem;">Import supports all formats provided by Assimp (40+). Works with assets from Mixamo, Blender, Maya, 3ds Max, and more.</p>
                 </div>
-                
+
                 <div class="feature-card">
                     <h3 class="feature-title">Platforms</h3>
                     <p class="feature-desc">
-                        • Linux (Ubuntu, Debian, etc.)<br>
-                        • Windows 10/11<br>
-                        • macOS (experimental)<br>
-                        • Cross-platform Qt deployment<br>
-                        • CI/CD automated builds
+                        &bull; Linux (Ubuntu, Debian, etc.)<br>
+                        &bull; Windows 10/11<br>
+                        &bull; macOS (Apple Silicon & Intel)<br>
+                        &bull; CI/CD automated builds
                     </p>
                 </div>
-                
+
                 <div class="feature-card">
-                    <h3 class="feature-title">License & Source</h3>
+                    <h3 class="feature-title">Open Source</h3>
                     <p class="feature-desc">
-                        • MIT License (open source)<br>
-                        • GitHub repository available<br>
-                        • Community contributions welcome<br>
-                        • Comprehensive test suite<br>
-                        • SonarCloud quality analysis
+                        &bull; MIT License &mdash; free forever<br>
+                        &bull; Community contributions welcome<br>
+                        &bull; Comprehensive test suite<br>
+                        &bull; Active development since 2012
+                    </p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Community Section -->
+        <section class="section">
+            <div class="community">
+                <h3>Join the Community</h3>
+                <p>Connect with other QtMeshEditor users, share your workflow, get help, and contribute to the project!</p>
+                <div class="community-links">
+                    <a href="https://github.com/fernandotonon/QtMeshEditor" class="forum-link" target="_blank">
+                        GitHub Repository
+                    </a>
+                    <a href="https://github.com/fernandotonon/QtMeshEditor/issues" class="forum-link" target="_blank">
+                        Report Issues
+                    </a>
+                    <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" class="forum-link" target="_blank">
+                        Community Forum
+                    </a>
+                </div>
+                <div style="margin-top: 20px;">
+                    <p style="color: #888; font-size: 0.9rem;">
+                        Active development since 2012 &bull; Open source &bull; MIT License
                     </p>
                 </div>
             </div>
@@ -872,12 +860,12 @@ curl -X POST localhost:8080/api/tools/merge_animations \
     <footer class="footer">
         <div class="container">
             <p class="footer-text">
-                QtMeshEditor 2.0.0 © 2012-2026 Fernando Tonon |
-                <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> | 
-                <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--ogre-orange);">Ogre3D Forum</a>
+                QtMeshEditor 2.8.1 &copy; 2012-2026 Fernando Tonon |
+                <a href="https://github.com/fernandotonon/QtMeshEditor" style="color: var(--primary-green);">GitHub</a> |
+                <a href="https://forums.ogre3d.org/viewtopic.php?t=76016" style="color: var(--accent-orange);">Community Forum</a>
             </p>
             <p style="margin-top: 10px; color: #666; font-size: 0.8rem;">
-                Built with ❤️ for the Ogre3D and Qt communities
+                Built with Qt &amp; Ogre3D &bull; Free and open-source forever
             </p>
         </div>
     </footer>
