@@ -1,8 +1,8 @@
 
 # <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor
-A graphical editor for Ogre3D mesh and material made with Qt Framework
+A free, open-source 3D asset tool for indie game developers — merge animations from multiple files, convert between 40+ formats, edit materials with AI, and more.
 
-[![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star if you like it! 
+[![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star if you like it!
 
 [![Github All Releases](https://img.shields.io/github/downloads/fernandotonon/QtMeshEditor/total.svg)]()
 [![Deploy](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml/badge.svg)](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml)
@@ -12,13 +12,19 @@ A graphical editor for Ogre3D mesh and material made with Qt Framework
 [![Technical Debt](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=sqale_index)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
-### :movie_camera: Preview
+### :sparkles: Merge Mixamo Animations in Seconds
+
+Download individual animations from [Mixamo](https://www.mixamo.com), drop them into QtMeshEditor, and merge them into a single mesh — export as glTF, Collada, OBJ, or Ogre Mesh for your game engine of choice.
+
+![Merge Animations Demo](https://github.com/user-attachments/assets/16e81f29-f64c-402d-aac4-dbb1bc2f3aef)
+
+### :movie_camera: More in Action
 
 Split View|Skeleton Animation Controls
 ---|---
 ![QtMeshEditor1 5 0](https://user-images.githubusercontent.com/996529/210196572-7b49da4c-c5db-406d-9ab4-7fa20bacb6ae.gif)|![QtMeshEditor1 6 0](https://user-images.githubusercontent.com/996529/218779819-0a61156d-c014-4ad1-aa8b-cee900c9da56.gif)
-**MCP tools**|**Show Bone Weights**
-![Gravação de Tela 2026-02-18 às 20 57 42 (1)](https://github.com/user-attachments/assets/ed3b7e9d-22ba-4e6e-a06c-868570db7a07)|![Gravação de Tela 2026-02-18 às 21 20 55](https://github.com/user-attachments/assets/289403ac-8952-488c-bc65-0a768ab278e1)
+**MCP tools (AI Agent Control)**|**Bone Weight Visualization**
+![Gravação de Tela 2026-02-18 às 20 57 42 (1)](https://github.com/user-attachments/assets/ed3b7e9d-22ba-4e6e-a06c-868570db7a07)|![Gravação de Tela 2026-02-18 às 21 20 55](https://github.com/user-attachments/assets/289403ac-8952-488c-bc65-0a768ab278e1)
 
 
 #### :robot: AI-enhanced Material Editor
@@ -26,42 +32,35 @@ Split View|Skeleton Animation Controls
 ![Screencast From 2025-06-26 23-35-53](https://github.com/user-attachments/assets/c58978d7-7564-41f2-8c95-527ddf7ae78e)
 
 
-#### :scroll: How it looked like back in the days up to 2014
+### :video_game: Built for Indie Game Developers
 
-![Old version](https://camo.githubusercontent.com/58b2de95aedb5e4ce768a6f03f51bac7e8a1bd59aea5c3ceac33540224f60f4f/68747470733a2f2f64726976652e676f6f676c652e636f6d2f75633f69643d3150644e7a396135485f4157625a764948693139725368506e2d6e6a4b466a4e45)
+QtMeshEditor helps you prepare 3D assets for your game or project:
 
+- **Merge animations** — Combine multiple animation files (e.g. from Mixamo) into one mesh with all animations
+- **Convert between 40+ formats** — Import FBX, glTF, OBJ, Collada, STL, and more; export to what your engine needs
+- **Edit materials visually** — Real-time material preview with AI-assisted generation
+- **Inspect skeletons & animations** — Visualize bones, bone weights, preview animations, rename them
+- **AI agent integration** — Let AI tools like Claude, Cursor, or custom scripts control the editor via MCP protocol
+- **Batch process via CLI** — Automate your asset pipeline from the command line
 
-### :sparkles: Features
-* Mesh
-  - Translation, Scale, and Rotation
-  - Change the material of the mesh - Allows the change of the mesh material
-  - Primitives creation, using ogre-procedural - Easy tool to create Box, Sphere, and Plane
-* Material
-  - Shows in real time the material changes on the model
-  - Material can be edited using a form or a code editor, and also with the AI-assistant's help
-* Skeleton
-  - View the bones
-  - Animation Preview - Shows a list of animations and allows for animation preview.
-  - Renaming Animation
-  - View keyframe positions and values
-* Import/Export
+### :package: Format Support
 
-  | Format | Extension | Import | Export | Skeleton/Animation |
-  |--------|-----------|--------|--------|--------------------|
-  | Ogre Mesh | .mesh | Yes | Yes | Yes |
-  | Ogre XML | .mesh.xml | Yes | Yes | Yes |
-  | FBX | .fbx | Yes | No | Yes |
-  | Collada | .dae | Yes | Yes | Yes |
-  | DirectX X | .x | Yes | Yes | Yes |
-  | glTF 2.0 | .gltf2 | Yes | Yes | Yes |
-  | glTF 2.0 Binary | .glb2 | Yes | Yes | Yes |
-  | Assimp Binary | .assbin | No | Yes | Yes |
-  | OBJ | .obj | Yes | Yes | No |
-  | STL | .stl | Yes | Yes | No |
-  | PLY | .ply | Yes | Yes | No |
-  | 3DS | .3ds | Yes | Yes | No |
+| Format | Extension | Import | Export | Skeleton/Animation |
+|--------|-----------|--------|--------|--------------------|
+| FBX | .fbx | Yes | No | Yes |
+| glTF 2.0 | .gltf2 | Yes | Yes | Yes |
+| glTF 2.0 Binary | .glb2 | Yes | Yes | Yes |
+| Collada | .dae | Yes | Yes | Yes |
+| OBJ | .obj | Yes | Yes | No |
+| STL | .stl | Yes | Yes | No |
+| Ogre Mesh | .mesh | Yes | Yes | Yes |
+| Ogre XML | .mesh.xml | Yes | Yes | Yes |
+| DirectX X | .x | Yes | Yes | Yes |
+| PLY | .ply | Yes | Yes | No |
+| 3DS | .3ds | Yes | Yes | No |
+| Assimp Binary | .assbin | No | Yes | Yes |
 
-  Import supports all formats provided by Assimp (40+). Export to older Ogre Mesh versions (v1.0–v1.10) is also available.
+Import supports all formats provided by Assimp (40+). Export to older Ogre Mesh versions (v1.0-v1.10) is also available.
 
 ### :computer: Install from release binaries
 #### :apple: macOS
@@ -100,7 +99,7 @@ Then there are a few options for installing it:
 * Using the Software Install:
 <img width="600" src="https://user-images.githubusercontent.com/996529/216799515-51494c16-c420-4535-a898-5b915a340c88.png">
 
-Remove with 
+Remove with
 
 `sudo apt remove qtmesheditor`
 
