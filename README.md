@@ -41,7 +41,7 @@ QtMeshEditor helps you prepare 3D assets for your game or project:
 - **Edit materials visually** — Real-time material preview with AI-assisted generation
 - **Inspect skeletons & animations** — Visualize bones, bone weights, preview animations, rename them
 - **AI agent integration** — Let AI tools like Claude, Cursor, or custom scripts control the editor via MCP protocol
-- **Batch process via CLI** — Deterministic asset processing, safe for CI pipelines
+- **Batch process via CLI** — Automate your asset pipeline from the command line
 
 ### :package: Format Support
 
