@@ -12,10 +12,10 @@ env:
   # Customize the CMake build type here (Release, Debug, RelWithDebInfo, etc.)
   BUILD_TYPE: Release
   AQT_VERSION: '==3.3.*'
-  QT_VERSION: '6.9.1'
-  ASSIMP_VERSION: '6.0.2'
+  QT_VERSION: '6.9.3'
+  ASSIMP_VERSION: '6.0.4'
   ASSIMP_DIR_VERSION: '6.0'
-  OGRE_VERSION: '14.4.1'
+  OGRE_VERSION: '14.5.2'
 
 jobs:
 #  send-slack-notification:
