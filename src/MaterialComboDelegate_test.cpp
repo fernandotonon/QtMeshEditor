@@ -20,10 +20,8 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        try {
-            Manager::getSingleton();
-        } catch (const Ogre::Exception& e) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
         }
         createStandardOgreMaterials();
     }

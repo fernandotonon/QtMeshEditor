@@ -5,7 +5,6 @@
 #include <QSignalSpy>
 #include <QTableWidget>
 #include <QPushButton>
-#include <OgreException.h>
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "MeshImporterExporter.h"
@@ -24,10 +23,8 @@ protected:
         QThread::msleep(50);
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
-        try {
-            Manager::getSingleton();
-        } catch (const Ogre::Exception& e) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
         }
         createStandardOgreMaterials();
         // Start with a clean selection

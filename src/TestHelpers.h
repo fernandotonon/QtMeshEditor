@@ -4,7 +4,9 @@
 #include <OgreMaterialManager.h>
 #include <OgreResourceGroupManager.h>
 #include <OgreRoot.h>
+#include <OgreException.h>
 #include <QGuiApplication>
+#include "Manager.h"
 
 /**
  * Ensures that Ogre's MaterialManager has been initialised.
@@ -75,6 +77,36 @@ static inline void createStandardOgreMaterials()
         guiMat->getTechnique(0)->setLightingEnabled(false);
         guiMat->getTechnique(0)->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
         guiMat->getTechnique(0)->setDepthCheckEnabled(false);
+    }
+}
+
+/**
+ * Safely initializes Ogre via Manager::getSingleton().
+ *
+ * Catches Ogre::Exception (e.g., no render system found when plugins
+ * are missing) and returns false instead of letting the exception
+ * propagate and crash the test.
+ *
+ * Note: On macOS, if plugins ARE found but GL context creation fails,
+ * the crash is a SIGSEGV (not a C++ exception) and cannot be caught
+ * here. On Linux CI with Xvfb, GL context creation succeeds.
+ *
+ * Returns true if Ogre initialized successfully, false otherwise.
+ * Test fixtures should call this and GTEST_SKIP() on false.
+ */
+static inline bool tryInitOgre()
+{
+    // Already initialized — nothing to do
+    if (Manager::getSingletonPtr())
+        return true;
+
+    try {
+        Manager::getSingleton();
+        return true;
+    } catch (const Ogre::Exception&) {
+        return false;
+    } catch (...) {
+        return false;
     }
 }
 

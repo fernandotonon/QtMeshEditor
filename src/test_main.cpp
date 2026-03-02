@@ -39,13 +39,14 @@ static void crashHandler(int sig)
 
 int main(int argc, char **argv)
 {
+    QApplication app(argc, argv);
+
+    // Install signal handlers AFTER QApplication to avoid Qt overwriting them.
     signal(SIGSEGV, crashHandler);
     signal(SIGABRT, crashHandler);
 #ifndef Q_OS_WIN
     signal(SIGBUS, crashHandler);
 #endif
-
-    QApplication app(argc, argv);
 
     testing::InitGoogleTest(&argc, argv);
     int result = RUN_ALL_TESTS();

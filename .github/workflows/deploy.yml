@@ -875,6 +875,7 @@ jobs:
               --exclude '.*_autogen' \
               --exclude '.*/ui_files/' \
               --exclude '.*/moc_' \
+              --exclude '.*qrc_.*\.cpp' \
               --sonarqube=coverage.xml \
               --gcov-executable gcov \
               build \

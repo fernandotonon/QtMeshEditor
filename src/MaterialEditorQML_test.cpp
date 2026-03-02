@@ -54,10 +54,8 @@ protected:
         app = ensureQApplication();
         ASSERT_NE(app, nullptr);
 
-        try {
-            Manager::getSingleton();  // headless
-        } catch (const Ogre::Exception& e) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
         }
         createStandardOgreMaterials();
 
@@ -831,4 +829,263 @@ TEST_F(MaterialEditorQMLWithOgreTest, AlphaToCoverage) {
 
     editor->setAlphaToCoverageEnabled(true);
     EXPECT_TRUE(editor->alphaToCoverageEnabled());
+}
+
+// ===========================================================================
+// Texture transform setters (with Ogre)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureUOffset) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexOffsetTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureUOffsetChanged);
+    editor->setTextureUOffset(0.5f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureUOffset(), 0.5f);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureVOffset) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexVOffsetTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureVOffsetChanged);
+    editor->setTextureVOffset(0.3f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureVOffset(), 0.3f);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureUScale) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexUScaleTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureUScaleChanged);
+    editor->setTextureUScale(2.0f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureUScale(), 2.0f);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureVScale) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexVScaleTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureVScaleChanged);
+    editor->setTextureVScale(3.0f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureVScale(), 3.0f);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureRotation) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexRotTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureRotationChanged);
+    editor->setTextureRotation(45.0f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureRotation(), 45.0f);
+}
+
+// ===========================================================================
+// UV animation setters (with Ogre)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, ScrollAnimUSpeed) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("ScrollUTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::scrollAnimUSpeedChanged);
+    editor->setScrollAnimUSpeed(1.5);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_DOUBLE_EQ(editor->scrollAnimUSpeed(), 1.5);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ScrollAnimVSpeed) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("ScrollVTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::scrollAnimVSpeedChanged);
+    editor->setScrollAnimVSpeed(2.0);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_DOUBLE_EQ(editor->scrollAnimVSpeed(), 2.0);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, RotateAnimSpeed) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("RotAnimTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::rotateAnimSpeedChanged);
+    editor->setRotateAnimSpeed(0.5);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_DOUBLE_EQ(editor->rotateAnimSpeed(), 0.5);
+}
+
+// ===========================================================================
+// Environment mapping (with Ogre)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, EnvironmentMapping) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("EnvMapTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::environmentMappingChanged);
+
+    // Test None
+    editor->setEnvironmentMapping(0);
+    EXPECT_EQ(editor->environmentMapping(), 0);
+
+    // Test Planar
+    editor->setEnvironmentMapping(1);
+    EXPECT_EQ(editor->environmentMapping(), 1);
+
+    // Test Curved
+    editor->setEnvironmentMapping(2);
+    EXPECT_EQ(editor->environmentMapping(), 2);
+
+    EXPECT_GE(spy.count(), 2); // at least 2 changes (0->1, 1->2)
+}
+
+// ===========================================================================
+// Export material (with Ogre)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, ExportMaterial_Valid) {
+    editor->loadMaterial("BaseWhite");
+
+    editor->exportMaterial("/tmp/test_matexport.material");
+
+    // Verify file was created
+    EXPECT_TRUE(QFile::exists("/tmp/test_matexport.material"));
+    QFile::remove("/tmp/test_matexport.material");
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ExportMaterial_NoMaterial) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    // No material loaded — should emit error
+    editor->exportMaterial("/tmp/test_matexport_none.material");
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ExportMaterial_ByName) {
+    editor->exportMaterial("/tmp/test_matexport_named.material", "BaseWhite");
+
+    EXPECT_TRUE(QFile::exists("/tmp/test_matexport_named.material"));
+    QFile::remove("/tmp/test_matexport_named.material");
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ExportMaterial_ByNameNotFound) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    editor->exportMaterial("/tmp/test.material", "NonExistentMaterial_XYZ");
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ExportMaterial_EmptyParams) {
+    // Both empty — should silently return
+    editor->exportMaterial("", "");
+    // No crash is the test
+}
+
+// ===========================================================================
+// Import material file (with Ogre)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, ImportMaterialFile_Empty) {
+    // Empty path should silently return
+    editor->importMaterialFile("");
+    // No crash is the test
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ImportMaterialFile_NonExistentPath) {
+    // Non-existent path — Ogre may throw, should be caught
+    editor->importMaterialFile("/tmp/nonexistent_xyz.material");
+    // No crash is the test — error is handled internally
+}
+
+// ===========================================================================
+// Texture transform setters without Ogre (signal-only)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, TextureTransform_SignalsOnly) {
+    QSignalSpy uOffSpy(editor.get(), &MaterialEditorQML::textureUOffsetChanged);
+    editor->setTextureUOffset(0.25f);
+    EXPECT_GE(uOffSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureUOffset(), 0.25f);
+
+    QSignalSpy vOffSpy(editor.get(), &MaterialEditorQML::textureVOffsetChanged);
+    editor->setTextureVOffset(0.75f);
+    EXPECT_GE(vOffSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureVOffset(), 0.75f);
+
+    QSignalSpy uScaleSpy(editor.get(), &MaterialEditorQML::textureUScaleChanged);
+    editor->setTextureUScale(4.0f);
+    EXPECT_GE(uScaleSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureUScale(), 4.0f);
+
+    QSignalSpy vScaleSpy(editor.get(), &MaterialEditorQML::textureVScaleChanged);
+    editor->setTextureVScale(5.0f);
+    EXPECT_GE(vScaleSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureVScale(), 5.0f);
+
+    QSignalSpy rotSpy(editor.get(), &MaterialEditorQML::textureRotationChanged);
+    editor->setTextureRotation(90.0f);
+    EXPECT_GE(rotSpy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->textureRotation(), 90.0f);
+}
+
+TEST_F(MaterialEditorQMLTest, ScrollAnim_SignalsOnly) {
+    QSignalSpy uSpeedSpy(editor.get(), &MaterialEditorQML::scrollAnimUSpeedChanged);
+    editor->setScrollAnimUSpeed(3.0);
+    EXPECT_GE(uSpeedSpy.count(), 1);
+    EXPECT_DOUBLE_EQ(editor->scrollAnimUSpeed(), 3.0);
+
+    QSignalSpy vSpeedSpy(editor.get(), &MaterialEditorQML::scrollAnimVSpeedChanged);
+    editor->setScrollAnimVSpeed(4.0);
+    EXPECT_GE(vSpeedSpy.count(), 1);
+    EXPECT_DOUBLE_EQ(editor->scrollAnimVSpeed(), 4.0);
+}
+
+TEST_F(MaterialEditorQMLTest, RotateAnimSpeed_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::rotateAnimSpeedChanged);
+    editor->setRotateAnimSpeed(1.0);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_DOUBLE_EQ(editor->rotateAnimSpeed(), 1.0);
+}
+
+TEST_F(MaterialEditorQMLTest, EnvironmentMapping_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::environmentMappingChanged);
+    editor->setEnvironmentMapping(1);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->environmentMapping(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, TextureTransform_NoChangeNoSignal) {
+    // Set initial values
+    editor->setTextureUOffset(0.0f);
+    editor->setTextureVOffset(0.0f);
+
+    // Setting same value again should not emit
+    QSignalSpy uSpy(editor.get(), &MaterialEditorQML::textureUOffsetChanged);
+    editor->setTextureUOffset(0.0f);
+    EXPECT_EQ(uSpy.count(), 0);
+
+    QSignalSpy vSpy(editor.get(), &MaterialEditorQML::textureVOffsetChanged);
+    editor->setTextureVOffset(0.0f);
+    EXPECT_EQ(vSpy.count(), 0);
 }

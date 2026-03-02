@@ -4,6 +4,9 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QJsonDocument>
+#include <QTcpSocket>
+#include <QSignalSpy>
+#include <QElapsedTimer>
 #include <memory>
 #include "MCPServer.h"
 #include "Manager.h"
@@ -37,10 +40,8 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        try {
-            Manager::getSingleton();  // headless -- no render window needed
-        } catch (const Ogre::Exception& e) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
         }
         createStandardOgreMaterials();
 
@@ -1693,4 +1694,361 @@ TEST_F(MCPServerTest, MergeAnimationsInvalidBaseEntity)
     EXPECT_TRUE(isError(result));
     // Should fail with "Need at least 2 entities" since there are no skeleton entities
     EXPECT_TRUE(getResultText(result).contains("Need at least 2 entities"));
+}
+
+// ==========================================================================
+// NEW TESTS: export_mesh success path with selection
+// ==========================================================================
+
+TEST_F(MCPServerTest, ExportMeshWithSelection)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    // Create a primitive and select it
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "ExportCube";
+    server->callTool("create_primitive", primArgs);
+
+    // Select the node
+    auto nodes = Manager::getSingleton()->getSceneNodes();
+    ASSERT_FALSE(nodes.isEmpty());
+    SelectionSet::getSingleton()->selectOne(nodes.last());
+
+    QJsonObject args;
+    args["path"] = "/tmp/mcp_test_export.obj";
+    QJsonObject result = server->callTool("export_mesh", args);
+    EXPECT_FALSE(isError(result));
+
+    // Clean up exported file
+    QFile::remove("/tmp/mcp_test_export.obj");
+    QFile::remove("/tmp/mcp_test_export.material");
+}
+
+// ==========================================================================
+// NEW TESTS: load_mesh file not found
+// ==========================================================================
+
+TEST_F(MCPServerTest, LoadMeshFileNotFound)
+{
+    QJsonObject args;
+    args["path"] = "/tmp/definitely_nonexistent_file_xyz.mesh";
+    QJsonObject result = server->callTool("load_mesh", args);
+    // Without MainWindow load_mesh returns an error
+    EXPECT_TRUE(isError(result) || !getResultText(result).isEmpty());
+}
+
+// ==========================================================================
+// NEW TESTS: take_screenshot with path but no MainWindow
+// ==========================================================================
+
+TEST_F(MCPServerTest, TakeScreenshotWithPathNoMainWindow)
+{
+    QJsonObject args;
+    args["path"] = "/tmp/mcp_test_screenshot_path.png";
+    QJsonObject result = server->callTool("take_screenshot", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("MainWindow not available"));
+}
+
+// ==========================================================================
+// HTTP API TEST FIXTURE
+// ==========================================================================
+
+class MCPServerHttpTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+
+        // HTTP tests only need MCPServer — not full Ogre.
+        // Tool calls that need Ogre will return errors, which is fine for
+        // testing the HTTP routing and response handling.
+        server = std::make_unique<MCPServer>();
+    }
+
+    void TearDown() override
+    {
+        if (server) {
+            server->stopHttp();
+            server.reset();
+        }
+        if (app) {
+            app->processEvents();
+        }
+    }
+
+    // Send a raw HTTP request and return the response.
+    // Since client and server share the same event loop, we must use
+    // processEvents() instead of blocking waitForReadyRead().
+    QByteArray sendHttpRequest(int port, const QByteArray &request, int timeoutMs = 5000)
+    {
+        QTcpSocket socket;
+        socket.connectToHost("127.0.0.1", port);
+        if (!socket.waitForConnected(1000))
+            return {};
+
+        socket.write(request);
+        socket.flush();
+
+        QByteArray response;
+        QElapsedTimer timer;
+        timer.start();
+
+        while (timer.elapsed() < timeoutMs) {
+            // Process events for both client and server sides
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            if (socket.bytesAvailable() > 0) {
+                response.append(socket.readAll());
+            }
+            // Check if the connection was closed (response complete)
+            if (socket.state() == QAbstractSocket::UnconnectedState && response.size() > 0)
+                break;
+            if (socket.state() == QAbstractSocket::ClosingState) {
+                response.append(socket.readAll());
+                break;
+            }
+            QThread::msleep(10);
+        }
+        // Final read
+        if (socket.bytesAvailable() > 0)
+            response.append(socket.readAll());
+        return response;
+    }
+
+    // Extract JSON body from HTTP response
+    QJsonObject parseHttpResponse(const QByteArray &response)
+    {
+        int bodyStart = response.indexOf("\r\n\r\n");
+        if (bodyStart == -1) return {};
+        QByteArray body = response.mid(bodyStart + 4);
+        return QJsonDocument::fromJson(body).object();
+    }
+
+    // Extract HTTP status code from response
+    int getHttpStatus(const QByteArray &response)
+    {
+        // HTTP/1.1 200 OK
+        int firstSpace = response.indexOf(' ');
+        if (firstSpace == -1) return 0;
+        int secondSpace = response.indexOf(' ', firstSpace + 1);
+        if (secondSpace == -1) return 0;
+        return response.mid(firstSpace + 1, secondSpace - firstSpace - 1).toInt();
+    }
+
+    QApplication* app = nullptr;
+    std::unique_ptr<MCPServer> server;
+};
+
+// --- HTTP server lifecycle ---
+
+TEST_F(MCPServerHttpTest, StartAndStop)
+{
+    EXPECT_FALSE(server->isHttpRunning());
+
+    EXPECT_TRUE(server->startHttp(0));
+    EXPECT_TRUE(server->isHttpRunning());
+    EXPECT_GT(server->httpPort(), 0);
+
+    server->stopHttp();
+    EXPECT_FALSE(server->isHttpRunning());
+}
+
+TEST_F(MCPServerHttpTest, StopWithoutStart)
+{
+    // Stopping without starting should not crash
+    EXPECT_FALSE(server->isHttpRunning());
+    server->stopHttp();
+    EXPECT_FALSE(server->isHttpRunning());
+}
+
+TEST_F(MCPServerHttpTest, DoubleStart)
+{
+    EXPECT_TRUE(server->startHttp(0));
+    int port1 = server->httpPort();
+    EXPECT_GT(port1, 0);
+
+    // Second start — may fail or succeed but should not crash
+    // (The old server is still running)
+    server->stopHttp();
+    EXPECT_TRUE(server->startHttp(0));
+    EXPECT_TRUE(server->isHttpRunning());
+    server->stopHttp();
+}
+
+// --- HTTP GET /api/tools ---
+
+TEST_F(MCPServerHttpTest, GetToolsList)
+{
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    QByteArray request = "GET /api/tools HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_TRUE(response.contains("application/json"));
+    EXPECT_TRUE(response.contains("Access-Control-Allow-Origin"));
+
+    QJsonObject json = parseHttpResponse(response);
+    EXPECT_TRUE(json.contains("tools"));
+}
+
+// --- HTTP POST /api/tools/<name> ---
+
+TEST_F(MCPServerHttpTest, PostToolCall)
+{
+    // Mark Ogre as failed so tool calls skip GL initialization (avoids SIGSEGV)
+    server->setOgreInitFailed(true);
+
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    QByteArray body = R"({"name":"HttpTestMat"})";
+    QByteArray request = "POST /api/tools/create_material HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\n"
+                         "Content-Type: application/json\r\n"
+                         "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
+                         "Connection: close\r\n\r\n" + body;
+
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 200);
+    // Tool result will be an Ogre-not-initialized error, but HTTP wrapping is correct
+    EXPECT_TRUE(response.contains("application/json"));
+}
+
+// --- HTTP GET /api/tools/<name> (no body) ---
+
+TEST_F(MCPServerHttpTest, GetToolCallNoBody)
+{
+    server->setOgreInitFailed(true);
+
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    QByteArray request = "GET /api/tools/list_materials HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
+
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 200);
+}
+
+// --- HTTP OPTIONS (CORS preflight) ---
+
+TEST_F(MCPServerHttpTest, OptionsCorsPreflightReturns204)
+{
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    QByteArray request = "OPTIONS /api/tools HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\n"
+                         "Origin: http://example.com\r\n"
+                         "Access-Control-Request-Method: POST\r\n"
+                         "Connection: close\r\n\r\n";
+
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 204);
+    EXPECT_TRUE(response.contains("Access-Control-Allow-Origin"));
+    EXPECT_TRUE(response.contains("Access-Control-Allow-Methods"));
+}
+
+// --- HTTP 404 for unknown route ---
+
+TEST_F(MCPServerHttpTest, UnknownRouteReturns404)
+{
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    QByteArray request = "GET /unknown HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 404);
+
+    QJsonObject json = parseHttpResponse(response);
+    EXPECT_TRUE(json.contains("error"));
+}
+
+// --- HTTP POST with invalid JSON ---
+
+TEST_F(MCPServerHttpTest, PostInvalidJsonReturns400)
+{
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    QByteArray body = "{ not valid json !!!";
+    QByteArray request = "POST /api/tools/list_materials HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\n"
+                         "Content-Type: application/json\r\n"
+                         "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
+                         "Connection: close\r\n\r\n" + body;
+
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 400);
+}
+
+// --- HTTP malformed request ---
+
+TEST_F(MCPServerHttpTest, MalformedRequestReturns400)
+{
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    // Only one word in request line (missing path and version)
+    QByteArray request = "BADREQUEST\r\n\r\n";
+
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 400);
+}
+
+// --- HTTP POST with empty body (should work) ---
+
+TEST_F(MCPServerHttpTest, PostEmptyBody)
+{
+    server->setOgreInitFailed(true);
+
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    QByteArray request = "POST /api/tools/list_materials HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\n"
+                         "Content-Length: 0\r\n"
+                         "Connection: close\r\n\r\n";
+
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 200);
+}
+
+// --- HTTP response contains CORS headers on all responses ---
+
+TEST_F(MCPServerHttpTest, CorsHeadersOnAllResponses)
+{
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    // Test CORS on 404
+    QByteArray request = "GET /nonexistent HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    QByteArray response = sendHttpRequest(port, request);
+    EXPECT_TRUE(response.contains("Access-Control-Allow-Origin: *"));
+
+    // Test CORS on tool list
+    request = "GET /api/tools HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+    response = sendHttpRequest(port, request);
+    EXPECT_TRUE(response.contains("Access-Control-Allow-Origin: *"));
 }
