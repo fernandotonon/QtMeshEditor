@@ -8,6 +8,7 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "GlobalDefinitions.h"
+#include <QSignalSpy>
 #include "TestHelpers.h"
 
 // Helper function to create required OGRE materials for tests
@@ -181,4 +182,158 @@ TEST_F(TransformOperatorTestFixture, OnSelectionChangedEmpty) {
     TransformOperator* instance = TransformOperator::getSingleton();
     ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
     EXPECT_NO_THROW(instance->onSelectionChanged());
+}
+
+
+// Test setSelectedPosition with a selected node
+TEST_F(TransformOperatorTestFixture, SetSelectedPositionWithSelection) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestPosNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+    ASSERT_FALSE(SelectionSet::getSingleton()->isEmpty());
+    Ogre::Vector3 newPos(10.0f, 20.0f, 30.0f);
+    instance->setSelectedPosition(newPos);
+    EXPECT_EQ(node->getPosition(), newPos);
+}
+
+TEST_F(TransformOperatorTestFixture, TranslateSelectedWithSelection) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestTransNode");
+    ASSERT_NE(node, nullptr);
+    node->setPosition(5.0f, 5.0f, 5.0f);
+    SelectionSet::getSingleton()->selectOne(node);
+    Ogre::Vector3 offset(10.0f, 15.0f, 20.0f);
+    instance->translateSelected(offset);
+    EXPECT_EQ(node->getPosition(), Ogre::Vector3(15.0f, 20.0f, 25.0f));
+}
+
+TEST_F(TransformOperatorTestFixture, SetSelectedScaleWithSelection) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestScaleNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+    Ogre::Vector3 newScale(2.0f, 3.0f, 4.0f);
+    instance->setSelectedScale(newScale);
+    EXPECT_EQ(node->getScale(), newScale);
+}
+
+TEST_F(TransformOperatorTestFixture, ScaleSelectedWithSelection) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestScaleMulNode");
+    ASSERT_NE(node, nullptr);
+    node->setScale(2.0f, 2.0f, 2.0f);
+    SelectionSet::getSingleton()->selectOne(node);
+    Ogre::Vector3 scaleFactor(1.5f, 2.0f, 0.5f);
+    instance->scaleSelected(scaleFactor);
+    EXPECT_EQ(node->getScale(), Ogre::Vector3(3.0f, 4.0f, 1.0f));
+}
+
+TEST_F(TransformOperatorTestFixture, SetSelectedOrientationWithSelection) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestOrientNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+    Ogre::Vector3 eulerAngles(45.0f, 90.0f, 30.0f);
+    instance->setSelectedOrientation(eulerAngles);
+    EXPECT_NE(node->getOrientation(), Ogre::Quaternion::IDENTITY);
+}
+
+TEST_F(TransformOperatorTestFixture, RotateSelectedQuaternionWithSelection) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestRotQNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+    Ogre::Quaternion originalOrientation = node->getOrientation();
+    Ogre::Quaternion rotation(Ogre::Degree(45), Ogre::Vector3::UNIT_Y);
+    instance->rotateSelected(rotation);
+    EXPECT_NE(node->getOrientation(), originalOrientation);
+}
+
+TEST_F(TransformOperatorTestFixture, RotateSelectedVectorWithSelection) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestRotVNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+    Ogre::Quaternion originalOrientation = node->getOrientation();
+    Ogre::Vector3 rotation(15.0f, 30.0f, 45.0f);
+    instance->rotateSelected(rotation);
+    EXPECT_NE(node->getOrientation(), originalOrientation);
+}
+
+TEST_F(TransformOperatorTestFixture, RemoveSelectedWithSelection) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestNodeToRemove");
+    ASSERT_NE(node, nullptr);
+    QString nodeName = QString::fromStdString(node->getName());
+    SelectionSet::getSingleton()->selectOne(node);
+    ASSERT_FALSE(SelectionSet::getSingleton()->isEmpty());
+    instance->removeSelected();
+    EXPECT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_FALSE(mgr->hasSceneNode(nodeName));
+}
+
+TEST_F(TransformOperatorTestFixture, OnSelectionChangedWithSelection) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestSelChgNode");
+    ASSERT_NE(node, nullptr);
+    node->setPosition(100.0f, 200.0f, 300.0f);
+    SelectionSet::getSingleton()->selectOne(node);
+    EXPECT_NO_THROW(instance->onSelectionChanged());
+}
+
+TEST_F(TransformOperatorTestFixture, SelectedPositionChangedSignal) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestSigPosNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+    QSignalSpy spy(instance, &TransformOperator::selectedPositionChanged);
+    Ogre::Vector3 newPos(10.0f, 20.0f, 30.0f);
+    instance->setSelectedPosition(newPos);
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(TransformOperatorTestFixture, SelectedOrientationChangedSignal) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestSigOrientNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+    QSignalSpy spy(instance, &TransformOperator::selectedOrientationChanged);
+    Ogre::Vector3 eulerAngles(45.0f, 90.0f, 30.0f);
+    instance->setSelectedOrientation(eulerAngles);
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(TransformOperatorTestFixture, ObjectsDeletedSignal) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestNodeToDelete");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+    QSignalSpy spy(instance, &TransformOperator::objectsDeleted);
+    instance->removeSelected();
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(TransformOperatorTestFixture, CycleTransformStates) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Manager* mgr = Manager::getSingletonPtr();
+    Ogre::SceneNode* node = mgr->addSceneNode("TestCycleNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_TRANSLATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_ROTATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
 }

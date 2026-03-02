@@ -1090,3 +1090,225 @@ TEST_F(MaterialEditorQMLTest, TextureTransform_NoChangeNoSignal) {
     editor->setTextureVOffset(0.0f);
     EXPECT_EQ(vSpy.count(), 0);
 }
+
+// ===========================================================================
+// Texture Unit properties signal-only tests (no Ogre)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, TexCoordSet_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::texCoordSetChanged);
+    editor->setTexCoordSet(1);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->texCoordSet(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, TextureAddressMode_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureAddressModeChanged);
+    editor->setTextureAddressMode(2);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->textureAddressMode(), 2);
+}
+
+TEST_F(MaterialEditorQMLTest, TextureBorderColor_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureBorderColorChanged);
+    QColor borderColor(255, 128, 64);
+    editor->setTextureBorderColor(borderColor);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->textureBorderColor(), borderColor);
+}
+
+TEST_F(MaterialEditorQMLTest, TextureFiltering_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureFilteringChanged);
+    editor->setTextureFiltering(3);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->textureFiltering(), 3);
+}
+
+TEST_F(MaterialEditorQMLTest, MaxAnisotropy_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::maxAnisotropyChanged);
+    editor->setMaxAnisotropy(16);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->maxAnisotropy(), 16);
+}
+
+TEST_F(MaterialEditorQMLTest, ThemeColors_DisabledTextColorIsValid) {
+    EXPECT_TRUE(editor->disabledTextColor().isValid());
+}
+
+TEST_F(MaterialEditorQMLTest, ColorSetters_NoChangeNoSignal) {
+    QColor red(255, 0, 0);
+    editor->setAmbientColor(red);
+
+    QSignalSpy ambientSpy(editor.get(), &MaterialEditorQML::ambientColorChanged);
+    editor->setAmbientColor(red);
+    EXPECT_EQ(ambientSpy.count(), 0);
+
+    QColor green(0, 255, 0);
+    editor->setDiffuseColor(green);
+    QSignalSpy diffuseSpy(editor.get(), &MaterialEditorQML::diffuseColorChanged);
+    editor->setDiffuseColor(green);
+    EXPECT_EQ(diffuseSpy.count(), 0);
+
+    QColor blue(0, 0, 255);
+    editor->setSpecularColor(blue);
+    QSignalSpy specularSpy(editor.get(), &MaterialEditorQML::specularColorChanged);
+    editor->setSpecularColor(blue);
+    EXPECT_EQ(specularSpy.count(), 0);
+
+    QColor white(255, 255, 255);
+    editor->setEmissiveColor(white);
+    QSignalSpy emissiveSpy(editor.get(), &MaterialEditorQML::emissiveColorChanged);
+    editor->setEmissiveColor(white);
+    EXPECT_EQ(emissiveSpy.count(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, FogColor_NoChangeNoSignal) {
+    QColor fogCol(64, 128, 192);
+    editor->setFogColor(fogCol);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::fogColorChanged);
+    editor->setFogColor(fogCol);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, TextureBorderColor_NoChangeNoSignal) {
+    QColor borderCol(32, 64, 96);
+    editor->setTextureBorderColor(borderCol);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureBorderColorChanged);
+    editor->setTextureBorderColor(borderCol);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+// Texture unit properties with Ogre pass
+
+TEST_F(MaterialEditorQMLWithOgreTest, TexCoordSet) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexCoordTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::texCoordSetChanged);
+    editor->setTexCoordSet(2);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->texCoordSet(), 2);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureAddressMode) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexAddrTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureAddressModeChanged);
+    editor->setTextureAddressMode(1);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->textureAddressMode(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureBorderColor) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexBorderTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureBorderColorChanged);
+    QColor borderColor(128, 64, 32);
+    editor->setTextureBorderColor(borderColor);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->textureBorderColor(), borderColor);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureFiltering) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexFilterTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureFilteringChanged);
+    editor->setTextureFiltering(2);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->textureFiltering(), 2);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, MaxAnisotropy) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+    editor->createNewTextureUnit("TexAnisoTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::maxAnisotropyChanged);
+    editor->setMaxAnisotropy(8);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->maxAnisotropy(), 8);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, GetAvailableTextures) {
+    QStringList textures = editor->getAvailableTextures();
+    EXPECT_GE(textures.size(), 0);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, GetTexturePreviewPath) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    QString previewPath = editor->getTexturePreviewPath();
+    EXPECT_GE(previewPath.length(), 0);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, MultiplePassOperations) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->techniqueList().isEmpty());
+    editor->setSelectedTechniqueIndex(0);
+
+    int originalCount = editor->passList().size();
+    editor->createNewPass("Pass1");
+    editor->createNewPass("Pass2");
+    editor->createNewPass("Pass3");
+
+    EXPECT_EQ(editor->passList().size(), originalCount + 3);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, SwitchBetweenPasses) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->techniqueList().isEmpty());
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    editor->setSelectedPassIndex(0);
+    editor->setLightingEnabled(false);
+    EXPECT_FALSE(editor->lightingEnabled());
+
+    editor->createNewPass("SecondPass");
+    editor->setSelectedPassIndex(editor->passList().size() - 1);
+
+    EXPECT_TRUE(editor->lightingEnabled());
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ApplyMaterial_InvalidText) {
+    editor->loadMaterial("BaseWhite");
+    editor->setMaterialText("invalid material script {{{" );
+
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    bool result = editor->applyMaterial();
+
+    EXPECT_FALSE(result);
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ApplyMaterial_EmptyText) {
+    editor->loadMaterial("BaseWhite");
+    editor->setMaterialText("");
+
+    bool result = editor->applyMaterial();
+    EXPECT_FALSE(result);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, OpenMaterialEditorWindow_WithMaterialName) {
+    editor->openMaterialEditorWindow("BaseWhite");
+    EXPECT_EQ(editor->materialName(), "BaseWhite");
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, OpenMaterialEditorWindow_WithoutMaterialName) {
+    editor->openMaterialEditorWindow();
+    EXPECT_EQ(editor->materialName(), "new_material");
+}
