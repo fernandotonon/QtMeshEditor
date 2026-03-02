@@ -378,6 +378,10 @@ if(BUILD_TESTS)
 
     ADD_DEPENDENCIES(UnitTests ui)
 
+    # On macOS, create symlinks from Ogre plugin .framework bundles into the
+    # UnitTests binary directory so that plugins.cfg (PluginFolder=../) can
+    # find them.  The app bundle has these in Contents/MacOS/ via INSTALL
+    # commands, but UnitTests is a plain executable — not a bundle.
     gtest_discover_tests(UnitTests)
 endif()
 

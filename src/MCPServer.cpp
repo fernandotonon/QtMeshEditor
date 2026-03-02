@@ -2450,6 +2450,7 @@ bool MCPServer::startHttp(int port)
     connect(m_httpServer, &QTcpServer::newConnection, this, &MCPServer::onHttpConnection);
 
     if (m_httpServer->listen(QHostAddress::Any, m_httpPort)) {
+        m_httpPort = m_httpServer->serverPort(); // update to actual port (important when port=0)
         qDebug() << "HTTP REST API listening on port" << m_httpPort;
         return true;
     } else {

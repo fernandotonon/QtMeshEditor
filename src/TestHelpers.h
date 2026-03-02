@@ -4,7 +4,11 @@
 #include <OgreMaterialManager.h>
 #include <OgreResourceGroupManager.h>
 #include <OgreRoot.h>
+#include <OgreException.h>
+#include <OgreStringConverter.h>
 #include <QGuiApplication>
+#include <QWidget>
+#include "Manager.h"
 
 /**
  * Ensures that Ogre's MaterialManager has been initialised.
@@ -79,37 +83,117 @@ static inline void createStandardOgreMaterials()
 }
 
 /**
+ * Creates a hidden 1x1 QWidget and uses its native window handle to
+ * create an Ogre RenderWindow named "TestHidden".  This provides the
+ * GL context that Ogre needs for hardware buffer operations (creating
+ * entities, loading meshes, etc.) without requiring a visible window.
+ *
+ * Follows the same pattern used in main.cpp for merge-animations CLI.
+ *
+ * Returns true if a render window already exists or was created
+ * successfully, false on failure.
+ */
+static inline bool createTestRenderWindow()
+{
+    auto* root = Ogre::Root::getSingletonPtr();
+    if (!root || !root->getRenderSystem())
+        return false;
+
+    // Already have a render window
+    try {
+        if (root->getRenderTarget("TestHidden"))
+            return true;
+    } catch (...) {
+        // getRenderTarget throws if not found in some Ogre versions
+    }
+
+    static QWidget* hiddenWidget = nullptr;
+    if (!hiddenWidget) {
+        hiddenWidget = new QWidget();
+        hiddenWidget->setAttribute(Qt::WA_DontShowOnScreen);
+        hiddenWidget->resize(1, 1);
+        hiddenWidget->show();
+    }
+    try {
+        Ogre::NameValuePairList params;
+        params["externalWindowHandle"] = Ogre::StringConverter::toString(
+            static_cast<unsigned long>(hiddenWidget->winId()));
+#ifdef Q_OS_MACOS
+        params["macAPI"] = "cocoa";
+        params["macAPICocoaUseNSView"] = "true";
+#endif
+        root->createRenderWindow("TestHidden", 1, 1, false, &params);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+/**
+ * Safely initializes Ogre via Manager::getSingleton() and creates a
+ * hidden render window for GL context.
+ *
+ * Catches Ogre::Exception (e.g., no render system found when plugins
+ * are missing) and returns false instead of letting the exception
+ * propagate and crash the test.
+ *
+ * Note: On macOS, if plugins ARE found but GL context creation fails,
+ * the crash is a SIGSEGV (not a C++ exception) and cannot be caught
+ * here. On Linux CI with Xvfb, GL context creation succeeds.
+ *
+ * Returns true if Ogre initialized successfully, false otherwise.
+ * Test fixtures should call this and GTEST_SKIP() on false.
+ */
+static inline bool tryInitOgre()
+{
+    // Already initialized — ensure render window exists
+    if (Manager::getSingletonPtr()) {
+        createTestRenderWindow();
+        return true;
+    }
+
+    try {
+        Manager::getSingleton();
+        createTestRenderWindow();
+        return true;
+    } catch (const Ogre::Exception&) {
+        return false;
+    } catch (...) {
+        return false;
+    }
+}
+
+/**
  * Returns true if the environment supports creating entities from meshes.
  *
  * Creating entities requires Ogre hardware buffers which need a GL context.
- * In headless CI (Xvfb + Mesa), Manager::getSingleton() initialises Ogre
- * with `mRoot->initialise(false)` — no RenderWindow is created, so no GL
- * context exists.  Any attempt to create an Entity, ManualObject, or
- * realize a procedural mesh will SIGSEGV (not a C++ exception).
+ * A GL context is available when either a RenderWindow has been created
+ * (via createTestRenderWindow() or OgreWidget) or Ogre auto-created one.
  *
  * Tests that create entities or meshes should call this and GTEST_SKIP()
  * if false.
  */
 static inline bool canLoadMeshFiles()
 {
-    // Offscreen Qt platform typically has no real GPU context
-    if (QGuiApplication::platformName() == "offscreen")
+    auto* root = Ogre::Root::getSingletonPtr();
+    if (!root || !root->getRenderSystem())
         return false;
-    // No render system means Ogre can't load materials
-    if (!Ogre::Root::getSingletonPtr() || !Ogre::Root::getSingleton().getRenderSystem())
-        return false;
-    // Without a RenderWindow there is no GL context — entity creation
-    // will crash with SIGSEGV (can't be caught by try/catch).
+    // Check for our test render window
+    try {
+        if (root->getRenderTarget("TestHidden"))
+            return true;
+    } catch (...) {}
+    // Check for auto-created window (legacy path)
 #if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
 #endif
-    if (!Ogre::Root::getSingleton().getAutoCreatedWindow())
-        return false;
+    if (root->getAutoCreatedWindow())
+        return true;
 #if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
-    return true;
+    return false;
 }
 
 #endif // TEST_HELPERS_H

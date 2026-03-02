@@ -24,10 +24,8 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        try {
-            Manager::getSingleton();  // headless — no render window needed
-        } catch (const Ogre::Exception& e) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed (" << e.getFullDescription() << ")";
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
         }
         createStandardOgreMaterials();
     }
@@ -360,4 +358,160 @@ TEST_F(MeshImporterExporterTest, XMLSkeletonSerializer_TrackHandlesMatchBoneHand
     QFile::remove("./tracktest.mesh.xml");
     QFile::remove("./tracktest.skeleton.xml");
     QFile::remove("./tracktest.material");
+}
+
+// ── Export round-trip tests for additional formats ────────────────
+
+TEST_F(MeshImporterExporterTest, ExportImport_OBJ_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip_obj.obj", "OBJ (*.obj)"), 0);
+
+    QStringList reimport{"./roundtrip_obj.obj"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove("./roundtrip_obj.obj");
+    QFile::remove("./roundtrip_obj.material");
+    QFile::remove("./roundtrip_obj.mtl");
+}
+
+TEST_F(MeshImporterExporterTest, ExportImport_STL_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip_stl.stl", "STL (*.stl)"), 0);
+
+    QStringList reimport{"./roundtrip_stl.stl"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove("./roundtrip_stl.stl");
+    QFile::remove("./roundtrip_stl.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportImport_PLY_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip_ply.ply", "PLY (*.ply)"), 0);
+
+    QStringList reimport{"./roundtrip_ply.ply"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove("./roundtrip_ply.ply");
+    QFile::remove("./roundtrip_ply.material");
+}
+
+// ── Export material test ─────────────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, ExportMaterial) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+
+    // Export to Ogre mesh (produces .material file)
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./matexport.mesh", "Ogre Mesh (*.mesh)"), 0);
+    EXPECT_TRUE(QFile::exists("./matexport.material"));
+
+    QFile::remove("./matexport.mesh");
+    QFile::remove("./matexport.material");
+    QFile::remove("./matexport.skeleton");
+}
+
+// ── Error handling tests ─────────────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, Importer_NonExistentFile) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{"/tmp/definitely_nonexistent_xyz.mesh"};
+    MeshImporterExporter::importer(uri);
+    // No new nodes should be added for a non-existent file
+    EXPECT_EQ(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+}
+
+TEST_F(MeshImporterExporterTest, Exporter_InvalidPath) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+
+    // Export to a path that doesn't exist (nested directories)
+    int result = MeshImporterExporter::exporter(sn, "/nonexistent_dir_xyz/sub/file.mesh", "Ogre Mesh (*.mesh)");
+    // Should fail or handle gracefully
+    EXPECT_NE(result, 0);
+}
+
+// ── GLB export round-trip ────────────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, ExportImport_GLB2_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip.glb2", "glTF 2.0 Binary (*.glb2)"), 0);
+
+    QStringList reimport{"./roundtrip.glb2"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove("./roundtrip.glb2");
+    QFile::remove("./roundtrip.material");
+}
+
+// ── 3DS export round-trip ────────────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, ExportImport_3DS_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip.3ds", "3DS (*.3ds)"), 0);
+
+    QStringList reimport{"./roundtrip.3ds"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove("./roundtrip.3ds");
+    QFile::remove("./roundtrip.material");
 }

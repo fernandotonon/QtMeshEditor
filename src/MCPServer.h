@@ -89,6 +89,11 @@ public:
      */
     bool isRunning() const { return m_running; }
 
+    /**
+     * @brief Mark Ogre initialization as failed (for testing without GL context)
+     */
+    void setOgreInitFailed(bool failed) { m_ogreInitFailed = failed; }
+
 signals:
     void messageReceived(const QJsonObject &message);
     void errorOccurred(const QString &error);

@@ -586,7 +586,7 @@ jobs:
     permissions: read-all
     env: 
           LD_LIBRARY_PATH: gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
-          QT_QPA_PLATFORM: offscreen
+          QT_QPA_PLATFORM: xcb
           QT_DEBUG_PLUGINS: 0
           DISPLAY: :99
     steps:
@@ -657,6 +657,20 @@ jobs:
       run: |
         npm install -g sonar-scanner
 
+    - name: Setup headless environment for Qt tests
+      run: |
+            sudo apt-get update
+            sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libx11-dev xvfb \
+                mesa-utils libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0
+            # Start Xvfb with GLX support for Ogre GL initialization
+            Xvfb :99 -screen 0 1024x768x24 +extension GLX > /dev/null 2>&1 &
+            sleep 3
+            echo "DISPLAY=:99" >> $GITHUB_ENV
+            echo "QT_QPA_PLATFORM=xcb" >> $GITHUB_ENV
+            # Force Mesa software rendering (llvmpipe) - avoids DRI3 hardware errors in CI
+            echo "LIBGL_ALWAYS_SOFTWARE=1" >> $GITHUB_ENV
+            echo "MESA_GL_VERSION_OVERRIDE=3.3" >> $GITHUB_ENV
+
     - name: Configure CMake for Tests
       run: |
             mkdir build
@@ -713,29 +727,15 @@ jobs:
             sudo cp -R /usr/local/lib/OGRE/* ./build/bin/ || true
             sudo cp -R /usr/local/lib/OGRE/* ./build/debug/ || true
 
-    - name: Setup headless environment for Qt tests
-      run: |
-            sudo apt-get update
-            sudo apt-get install -y libxcb-cursor0 libxcb-xinerama0 libx11-dev xvfb \
-                mesa-utils libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0
-            # Start Xvfb with GLX support for Ogre GL initialization
-            Xvfb :99 -screen 0 1024x768x24 +extension GLX > /dev/null 2>&1 &
-            sleep 3
-            echo "DISPLAY=:99" >> $GITHUB_ENV
-            echo "QT_QPA_PLATFORM=offscreen" >> $GITHUB_ENV
-            # Force Mesa software rendering (llvmpipe) - avoids DRI3 hardware errors in CI
-            echo "LIBGL_ALWAYS_SOFTWARE=1" >> $GITHUB_ENV
-            echo "MESA_GL_VERSION_OVERRIDE=3.3" >> $GITHUB_ENV
-
     - name: Run Comprehensive Test Suite
       env:
-         QT_QPA_PLATFORM: offscreen
+         QT_QPA_PLATFORM: xcb
          QT_DEBUG_PLUGINS: 0
          DISPLAY: :99
          LIBGL_ALWAYS_SOFTWARE: 1
          MESA_GL_VERSION_OVERRIDE: "3.3"
       run: |
-            export QT_QPA_PLATFORM="offscreen"
+            export QT_QPA_PLATFORM="xcb"
             export QT_DEBUG_PLUGINS=0
             export LIBGL_ALWAYS_SOFTWARE=1
             export MESA_GL_VERSION_OVERRIDE=3.3
@@ -875,6 +875,7 @@ jobs:
               --exclude '.*_autogen' \
               --exclude '.*/ui_files/' \
               --exclude '.*/moc_' \
+              --exclude '.*qrc_.*\.cpp' \
               --sonarqube=coverage.xml \
               --gcov-executable gcov \
               build \
