@@ -681,7 +681,8 @@ TEST_F(MaterialEditorQMLWithOgreTest, BlendFactors) {
     EXPECT_GE(srcSpy.count(), 1);
 
     QSignalSpy dstSpy(editor.get(), &MaterialEditorQML::destBlendFactorChanged);
-    editor->setDestBlendFactor(2); // Zero + 1
+    // BaseWhite default dest blend is SBF_ZERO (enum 1) loaded as 1+1=2, so use a different value
+    editor->setDestBlendFactor(7); // SBF_SOURCE_ALPHA + 1
     EXPECT_GE(dstSpy.count(), 1);
 }
 

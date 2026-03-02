@@ -660,6 +660,12 @@ TEST_F(SkeletonTransformNoSkeletonTest, RenameAnimationNullEntityAndEmptyName)
 // Programmatic skeleton tests (no file I/O -- runs on CI headless)
 // --------------------------------------------------------------------------
 
+// No-op loader so Ogre marks the skeleton as LOADED (avoids file-based load)
+class NullSkeletonLoader : public Ogre::ManualResourceLoader {
+public:
+    void loadResource(Ogre::Resource*) override {}
+};
+
 class SkeletonTransformProgrammaticTest : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
@@ -709,8 +715,11 @@ protected:
 
         try {
             // Create skeleton with a root bone at (0, 5, 0) and child at relative (0, 3, 0)
+            // Use ManualResourceLoader so skeleton is marked as LOADED when load() is called
+            static NullSkeletonLoader nullLoader;
             auto skeleton = Ogre::SkeletonManager::getSingleton().create(
-                skeletonName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                skeletonName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                true, &nullLoader);
 
             auto* rootBone = skeleton->createBone("Root", 0);
             rootBone->setPosition(Ogre::Vector3(0, 5, 0));
@@ -720,6 +729,7 @@ protected:
             rootBone->addChild(childBone);
 
             skeleton->setBindingPose();
+            skeleton->load();
 
             // Create an animation
             auto* anim = skeleton->createAnimation("TestWalk", 1.0f);

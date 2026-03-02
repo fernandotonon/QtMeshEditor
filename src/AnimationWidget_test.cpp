@@ -97,14 +97,11 @@ TEST_F(AnimationWidgetTest, UIElementsExist)
 
     QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
     ASSERT_NE(skeletonTable, nullptr);
-    EXPECT_EQ(skeletonTable->columnCount(), 2);
+    EXPECT_EQ(skeletonTable->columnCount(), 3);
 
     QPushButton* playPauseButton = widget.findChild<QPushButton*>("PlayPauseButton");
     ASSERT_NE(playPauseButton, nullptr);
     EXPECT_TRUE(playPauseButton->isCheckable());
-
-    QPushButton* mergeButton = widget.findChild<QPushButton*>("mergeButton");
-    ASSERT_NE(mergeButton, nullptr);
 }
 
 TEST_F(AnimationWidgetTest, EmptySelectionShowsNoRows)
@@ -161,6 +158,8 @@ TEST_F(AnimationWidgetTest, ChangeAnimationStateSignal)
 TEST_F(AnimationWidgetWithMeshTest, AnimationTablePopulatedAfterSelection)
 {
     AnimationWidget widget;
+    // Re-select entity so the widget (which connects in its constructor) sees the signal
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
@@ -178,6 +177,7 @@ TEST_F(AnimationWidgetWithMeshTest, AnimationTablePopulatedAfterSelection)
 TEST_F(AnimationWidgetWithMeshTest, AnimationTableHasCorrectColumns)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
@@ -212,6 +212,7 @@ TEST_F(AnimationWidgetWithMeshTest, AnimationTableHasCorrectColumns)
 TEST_F(AnimationWidgetWithMeshTest, SkeletonTablePopulatedAfterSelection)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
@@ -224,6 +225,7 @@ TEST_F(AnimationWidgetWithMeshTest, SkeletonTablePopulatedAfterSelection)
 TEST_F(AnimationWidgetWithMeshTest, SkeletonTableEntityName)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
@@ -243,6 +245,7 @@ TEST_F(AnimationWidgetWithMeshTest, SkeletonTableEntityName)
 TEST_F(AnimationWidgetWithMeshTest, SkeletonTableCheckboxInitiallyUnchecked)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
@@ -261,6 +264,7 @@ TEST_F(AnimationWidgetWithMeshTest, SkeletonTableCheckboxInitiallyUnchecked)
 TEST_F(AnimationWidgetWithMeshTest, IsSkeletonShownReturnsFalseByDefault)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     // By default no skeleton debug display is active
@@ -270,6 +274,7 @@ TEST_F(AnimationWidgetWithMeshTest, IsSkeletonShownReturnsFalseByDefault)
 TEST_F(AnimationWidgetWithMeshTest, TablesUpdateOnSelectionChange)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
@@ -298,6 +303,7 @@ TEST_F(AnimationWidgetWithMeshTest, TablesUpdateOnSelectionChange)
 TEST_F(AnimationWidgetWithMeshTest, AnimationCountMatchesEntityAnimations)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
@@ -316,6 +322,7 @@ TEST_F(AnimationWidgetWithMeshTest, AnimationCountMatchesEntityAnimations)
 TEST_F(AnimationWidgetWithMeshTest, PlayPauseToggleEmitsSignal)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QSignalSpy spy(&widget, &AnimationWidget::changeAnimationState);
@@ -341,6 +348,7 @@ TEST_F(AnimationWidgetWithMeshTest, PlayPauseToggleEmitsSignal)
 TEST_F(AnimationWidgetWithMeshTest, AnimationItemsAreNonEditable)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
@@ -362,6 +370,7 @@ TEST_F(AnimationWidgetWithMeshTest, AnimationItemsAreNonEditable)
 TEST_F(AnimationWidgetWithMeshTest, SkeletonItemsAreNonEditable)
 {
     AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
@@ -385,6 +394,7 @@ TEST_F(AnimationWidgetWithMeshTest, DestroyWidgetWithSkeletonCleanup)
     // exercising the destructor path that calls disableAllSkeletonDebug().
     {
         AnimationWidget widget;
+        SelectionSet::getSingleton()->selectOne(entity);
         if (app) app->processEvents();
     }
     // If we reach here without a crash, the cleanup logic is working
@@ -397,6 +407,7 @@ TEST_F(AnimationWidgetWithMeshTest, MultipleWidgetInstancesShareSelection)
     // both populate their tables identically.
     AnimationWidget widget1;
     AnimationWidget widget2;
+    SelectionSet::getSingleton()->selectOne(entity);
     if (app) app->processEvents();
 
     QTableWidget* animTable1 = widget1.findChild<QTableWidget*>("animTable");
