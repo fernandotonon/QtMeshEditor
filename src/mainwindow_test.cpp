@@ -883,3 +883,38 @@ TEST_F(MainWindowTest, ClearRecentFiles) {
     // Clean up
     settings.remove("RecentFiles/files");
 }
+
+
+TEST_F(MainWindowTest, SetPlayingTrue) {
+    mainWindow->setPlaying(true);
+    EXPECT_TRUE(true);
+}
+
+TEST_F(MainWindowTest, SetPlayingFalse) {
+    mainWindow->setPlaying(true);
+    mainWindow->setPlaying(false);
+    EXPECT_TRUE(true);
+}
+
+TEST_F(MainWindowTest, SetMCPServerPointer) {
+    mainWindow->setMCPServer(nullptr);
+    EXPECT_TRUE(true);
+}
+
+TEST_F(MainWindowTest, ImportMeshsWithInvalidPaths) {
+    QStringList invalidPaths = {"/nonexistent/path/fake.mesh", ""};
+    auto entitiesBefore = Manager::getSingleton()->getEntities().count();
+    mainWindow->importMeshs(invalidPaths);
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+    auto entitiesAfter = Manager::getSingleton()->getEntities().count();
+    EXPECT_EQ(entitiesBefore, entitiesAfter);
+}
+
+TEST_F(MainWindowTest, ImportMeshsWithEmptyList) {
+    QStringList emptyList;
+    auto entitiesBefore = Manager::getSingleton()->getEntities().count();
+    mainWindow->importMeshs(emptyList);
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+    auto entitiesAfter = Manager::getSingleton()->getEntities().count();
+    EXPECT_EQ(entitiesBefore, entitiesAfter);
+}

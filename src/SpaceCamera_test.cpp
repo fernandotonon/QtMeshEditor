@@ -169,3 +169,120 @@ TEST(SpaceCamera, MouseMoveWithoutPress)
 // WheelEvent and ZoomByDelta tests require Ogre scene nodes (mCameraNode, mTarget)
 // which are only initialized in the OgreWidget constructor path.
 // These are tested via integration tests with a full Ogre context.
+
+
+TEST(SpaceCamera, KeyPressW)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+    spaceCamera.keyPressEvent(&pressEvent);
+}
+
+TEST(SpaceCamera, KeyPressReleaseW)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+    spaceCamera.keyPressEvent(&pressEvent);
+    QKeyEvent releaseEvent(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
+    spaceCamera.keyReleaseEvent(&releaseEvent);
+}
+
+TEST(SpaceCamera, KeyPressA)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+    spaceCamera.keyPressEvent(&pressEvent);
+}
+
+TEST(SpaceCamera, KeyPressS)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier);
+    spaceCamera.keyPressEvent(&pressEvent);
+}
+
+TEST(SpaceCamera, KeyPressD)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_D, Qt::NoModifier);
+    spaceCamera.keyPressEvent(&pressEvent);
+}
+
+TEST(SpaceCamera, KeyPressControlModifier)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+    spaceCamera.keyPressEvent(&pressEvent);
+    // Control sets precision mode speed to 0.01
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
+}
+
+TEST(SpaceCamera, KeyReleaseControlModifier)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressCtrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+    spaceCamera.keyPressEvent(&pressCtrl);
+    float speedWithCtrl = spaceCamera.getCameraSpeed();
+    QKeyEvent releaseCtrl(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+    spaceCamera.keyReleaseEvent(&releaseCtrl);
+    // After releasing Control, speed is restored to 0.1
+    EXPECT_GT(spaceCamera.getCameraSpeed(), speedWithCtrl);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
+}
+
+TEST(SpaceCamera, MultipleKeyPressesInSequence)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressW(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+    spaceCamera.keyPressEvent(&pressW);
+    QKeyEvent pressA(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+    spaceCamera.keyPressEvent(&pressA);
+    QKeyEvent releaseW(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
+    spaceCamera.keyReleaseEvent(&releaseW);
+    QKeyEvent releaseA(QEvent::KeyRelease, Qt::Key_A, Qt::NoModifier);
+    spaceCamera.keyReleaseEvent(&releaseA);
+}
+
+TEST(SpaceCamera, MouseMoveAfterMiddleButtonPress)
+{
+    MockSpaceCamera spaceCamera;
+    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
+                          Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+    spaceCamera.mousePressEvent(&pressEvent);
+    QMouseEvent moveEvent(QEvent::MouseMove, QPointF(150, 120),
+                         Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+    spaceCamera.mouseMoveEvent(&moveEvent);
+}
+
+TEST(SpaceCamera, MouseMoveAfterRightButtonPress)
+{
+    MockSpaceCamera spaceCamera;
+    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
+                          Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    spaceCamera.mousePressEvent(&pressEvent);
+    QMouseEvent moveEvent(QEvent::MouseMove, QPointF(120, 130),
+                         Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    spaceCamera.mouseMoveEvent(&moveEvent);
+}
+
+TEST(SpaceCamera, MousePressAndReleaseMiddleButton)
+{
+    MockSpaceCamera spaceCamera;
+    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
+                          Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+    spaceCamera.mousePressEvent(&pressEvent);
+    QMouseEvent releaseEvent(QEvent::MouseButtonRelease, QPointF(150, 150),
+                            Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+    spaceCamera.mouseReleaseEvent(&releaseEvent);
+}
+
+TEST(SpaceCamera, MousePressAndReleaseRightButton)
+{
+    MockSpaceCamera spaceCamera;
+    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
+                          Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    spaceCamera.mousePressEvent(&pressEvent);
+    QMouseEvent releaseEvent(QEvent::MouseButtonRelease, QPointF(120, 110),
+                            Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+    spaceCamera.mouseReleaseEvent(&releaseEvent);
+}

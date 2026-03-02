@@ -8,6 +8,7 @@
 #include <OgreException.h>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QSignalSpy>
 #include <QThread>
 #include "TestHelpers.h"
 
@@ -338,4 +339,113 @@ TEST_F(ManagerHeadlessTest, CreateEntity)
         }
     }
     EXPECT_TRUE(foundCube);
+}
+
+TEST_F(ManagerHeadlessTest, GetSceneNode_ExistingNode)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    Ogre::SceneNode* addedNode = mgr->addSceneNode("GetTestNode");
+    ASSERT_NE(addedNode, nullptr);
+    Ogre::SceneNode* retrievedNode = mgr->getSceneNode("GetTestNode");
+    EXPECT_EQ(retrievedNode, addedNode);
+}
+
+TEST_F(ManagerHeadlessTest, GetSceneNode_NonExistentNode)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    Ogre::SceneNode* node = mgr->getSceneNode("NonExistentNode");
+    EXPECT_EQ(node, nullptr);
+}
+
+TEST_F(ManagerHeadlessTest, DestroyAllAttachedMovableObjects)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    Ogre::SceneNode* cubeNode = PrimitiveObject::createCube("CubeForDestroy");
+    ASSERT_NE(cubeNode, nullptr);
+    EXPECT_GT(cubeNode->numAttachedObjects(), 0u);
+    mgr->destroyAllAttachedMovableObjects(cubeNode);
+    EXPECT_EQ(cubeNode->numAttachedObjects(), 0u);
+}
+
+TEST_F(ManagerHeadlessTest, AddSceneNode_WithOgreAny)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    Ogre::Any userData = Ogre::Any(std::string("TestUserData"));
+    Ogre::SceneNode* node = mgr->addSceneNode("NodeWithAny", userData);
+    ASSERT_NE(node, nullptr);
+    EXPECT_TRUE(mgr->hasSceneNode("NodeWithAny"));
+    EXPECT_TRUE(node->getUserObjectBindings().getUserAny().has_value());
+}
+
+TEST_F(ManagerHeadlessTest, DestroySceneNode_ByPointer)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    Ogre::SceneNode* node = mgr->addSceneNode("PointerDestroyNode");
+    ASSERT_NE(node, nullptr);
+    EXPECT_TRUE(mgr->hasSceneNode("PointerDestroyNode"));
+    mgr->destroySceneNode(node);
+    EXPECT_FALSE(mgr->hasSceneNode("PointerDestroyNode"));
+}
+
+TEST_F(ManagerHeadlessTest, SceneNodeCreated_Signal)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    QSignalSpy spy(mgr, &Manager::sceneNodeCreated);
+    Ogre::SceneNode* node = mgr->addSceneNode("SignalTestNode");
+    ASSERT_NE(node, nullptr);
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(ManagerHeadlessTest, SceneNodeDestroyed_Signal_ByName)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    Ogre::SceneNode* node = mgr->addSceneNode("DestroySignalNode");
+    ASSERT_NE(node, nullptr);
+    QSignalSpy spy(mgr, &Manager::sceneNodeDestroyed);
+    mgr->destroySceneNode("DestroySignalNode");
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(ManagerHeadlessTest, SceneNodeDestroyed_Signal_ByPointer)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    Ogre::SceneNode* node = mgr->addSceneNode("DestroyPtrSignalNode");
+    ASSERT_NE(node, nullptr);
+    QSignalSpy spy(mgr, &Manager::sceneNodeDestroyed);
+    mgr->destroySceneNode(node);
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(ManagerHeadlessTest, EntityCreated_Signal)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    QSignalSpy spy(mgr, &Manager::entityCreated);
+    Ogre::SceneNode* cubeNode = PrimitiveObject::createCube("SignalEntityCube");
+    ASSERT_NE(cubeNode, nullptr);
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(ManagerHeadlessTest, GetRoot_ReturnsNonNull)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    EXPECT_NE(mgr->getRoot(), nullptr);
+}
+
+TEST_F(ManagerHeadlessTest, GetSceneMgr_ReturnsNonNull)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    EXPECT_NE(mgr->getSceneMgr(), nullptr);
 }
