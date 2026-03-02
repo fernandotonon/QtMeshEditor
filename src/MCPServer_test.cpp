@@ -2052,3 +2052,175 @@ TEST_F(MCPServerHttpTest, CorsHeadersOnAllResponses)
     response = sendHttpRequest(port, request);
     EXPECT_TRUE(response.contains("Access-Control-Allow-Origin: *"));
 }
+
+// ==========================================================================
+// NEW: create_primitive with custom params (radius, height, segments)
+// ==========================================================================
+
+TEST_F(MCPServerTest, CreatePrimitiveWithCustomParams)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject args;
+    args["type"] = "sphere";
+    args["name"] = "CustomParamSphere";
+    args["radius"] = 2.5;
+    args["segments"] = 32;
+    QJsonObject result = server->callTool("create_primitive", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("CustomParamSphere"));
+}
+
+TEST_F(MCPServerTest, CreatePrimitiveCylinderWithParams)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject args;
+    args["type"] = "cylinder";
+    args["name"] = "CustomCylinder";
+    args["radius"] = 1.5;
+    args["height"] = 5.0;
+    QJsonObject result = server->callTool("create_primitive", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("CustomCylinder"));
+}
+
+// ==========================================================================
+// NEW: modify_material with no color changes (only name)
+// ==========================================================================
+
+TEST_F(MCPServerTest, ModifyMaterialNoChanges)
+{
+    QJsonObject createArgs;
+    createArgs["name"] = "NoChangesMat";
+    server->callTool("create_material", createArgs);
+
+    // Modify with only the name — no color args at all
+    QJsonObject modArgs;
+    modArgs["name"] = "NoChangesMat";
+    QJsonObject result = server->callTool("modify_material", modArgs);
+    // Should succeed but with no changes reported
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Modified material") || text.contains("No changes"));
+}
+
+// ==========================================================================
+// NEW: apply_material with material exists but mesh doesn't
+// ==========================================================================
+
+TEST_F(MCPServerTest, ApplyMaterialMeshNotFound)
+{
+    QJsonObject matArgs;
+    matArgs["name"] = "ApplyMeshNotFoundMat";
+    server->callTool("create_material", matArgs);
+
+    QJsonObject applyArgs;
+    applyArgs["material"] = "ApplyMeshNotFoundMat";
+    applyArgs["mesh"] = "NonExistentMesh_XYZ";
+    QJsonObject result = server->callTool("apply_material", applyArgs);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+// ==========================================================================
+// NEW: transform_mesh missing name key
+// ==========================================================================
+
+TEST_F(MCPServerTest, TransformMeshEmptyName)
+{
+    QJsonObject args;
+    args["name"] = "";
+    args["position"] = QJsonArray{1.0, 2.0, 3.0};
+    QJsonObject result = server->callTool("transform_mesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+// ==========================================================================
+// NEW: modify_material with all color types at once
+// ==========================================================================
+
+TEST_F(MCPServerTest, ModifyMaterialAllColors)
+{
+    QJsonObject createArgs;
+    createArgs["name"] = "ModAllColorsMat";
+    server->callTool("create_material", createArgs);
+
+    QJsonObject modArgs;
+    modArgs["name"] = "ModAllColorsMat";
+    modArgs["diffuse"] = QJsonArray{0.8, 0.2, 0.1};
+    modArgs["ambient"] = QJsonArray{0.3, 0.3, 0.3};
+    modArgs["specular"] = QJsonArray{1.0, 1.0, 1.0};
+    modArgs["emissive"] = QJsonArray{0.0, 0.5, 0.0};
+    modArgs["shininess"] = 128.0;
+    QJsonObject result = server->callTool("modify_material", modArgs);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Modified material"));
+    EXPECT_TRUE(text.contains("diffuse"));
+    EXPECT_TRUE(text.contains("ambient"));
+    EXPECT_TRUE(text.contains("specular"));
+    EXPECT_TRUE(text.contains("emissive"));
+    EXPECT_TRUE(text.contains("shininess"));
+}
+
+// ==========================================================================
+// NEW: create_primitive roundedbox with params
+// ==========================================================================
+
+TEST_F(MCPServerTest, CreatePrimitiveRoundedBoxWithParams)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject args;
+    args["type"] = "roundedbox";
+    args["name"] = "CustomRBox";
+    args["sizeX"] = 3.0;
+    args["sizeY"] = 2.0;
+    args["sizeZ"] = 1.0;
+    QJsonObject result = server->callTool("create_primitive", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("CustomRBox"));
+}
+
+// ==========================================================================
+// NEW: animate with only pitch (no yaw or roll)
+// ==========================================================================
+
+TEST_F(MCPServerTest, AnimateWithOnlyPitch)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "PitchOnlyCube";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject animArgs;
+    animArgs["name"] = "PitchOnlyCube";
+    animArgs["pitch"] = 45.0;
+    QJsonObject result = server->callTool("animate", animArgs);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Started animation"));
+    EXPECT_TRUE(text.contains("pitch: 45"));
+}
+
+// ==========================================================================
+// NEW: animate with only roll (no yaw or pitch)
+// ==========================================================================
+
+TEST_F(MCPServerTest, AnimateWithOnlyRoll)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    QJsonObject primArgs;
+    primArgs["type"] = "sphere";
+    primArgs["name"] = "RollOnlySphere";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject animArgs;
+    animArgs["name"] = "RollOnlySphere";
+    animArgs["roll"] = 90.0;
+    QJsonObject result = server->callTool("animate", animArgs);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Started animation"));
+    EXPECT_TRUE(text.contains("roll: 90"));
+}
