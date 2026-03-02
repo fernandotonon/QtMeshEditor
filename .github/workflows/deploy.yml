@@ -586,7 +586,7 @@ jobs:
     permissions: read-all
     env: 
           LD_LIBRARY_PATH: gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
-          QT_QPA_PLATFORM: offscreen
+          QT_QPA_PLATFORM: xcb
           QT_DEBUG_PLUGINS: 0
           DISPLAY: :99
     steps:
@@ -722,20 +722,20 @@ jobs:
             Xvfb :99 -screen 0 1024x768x24 +extension GLX > /dev/null 2>&1 &
             sleep 3
             echo "DISPLAY=:99" >> $GITHUB_ENV
-            echo "QT_QPA_PLATFORM=offscreen" >> $GITHUB_ENV
+            echo "QT_QPA_PLATFORM=xcb" >> $GITHUB_ENV
             # Force Mesa software rendering (llvmpipe) - avoids DRI3 hardware errors in CI
             echo "LIBGL_ALWAYS_SOFTWARE=1" >> $GITHUB_ENV
             echo "MESA_GL_VERSION_OVERRIDE=3.3" >> $GITHUB_ENV
 
     - name: Run Comprehensive Test Suite
       env:
-         QT_QPA_PLATFORM: offscreen
+         QT_QPA_PLATFORM: xcb
          QT_DEBUG_PLUGINS: 0
          DISPLAY: :99
          LIBGL_ALWAYS_SOFTWARE: 1
          MESA_GL_VERSION_OVERRIDE: "3.3"
       run: |
-            export QT_QPA_PLATFORM="offscreen"
+            export QT_QPA_PLATFORM="xcb"
             export QT_DEBUG_PLUGINS=0
             export LIBGL_ALWAYS_SOFTWARE=1
             export MESA_GL_VERSION_OVERRIDE=3.3
