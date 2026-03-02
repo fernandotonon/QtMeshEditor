@@ -28,6 +28,7 @@ THE SOFTWARE.
 
 #include "MeshTransform.h"
 
+#include <limits>
 #include "Manager.h"
 #include "SkeletonTransform.h"
 
@@ -50,8 +51,8 @@ template<typename TransformFn>
 void transformPositions(Ogre::Mesh *mesh, TransformFn transformFn)
 {
     bool addedShared = false;
-    auto minimum = mesh->getBounds().getMaximum();
-    auto maximum = mesh->getBounds().getMinimum();
+    Ogre::Vector3 minimum(std::numeric_limits<Ogre::Real>::max());
+    Ogre::Vector3 maximum(std::numeric_limits<Ogre::Real>::lowest());
 
     for(int i = 0; i < mesh->getNumSubMeshes(); i++)
     {

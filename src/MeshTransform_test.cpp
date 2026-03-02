@@ -423,13 +423,12 @@ TEST_F(MeshTransformTest, TranslateMeshUpdatesBounds)
     EXPECT_NEAR(newCenter.y, originalCenter.y + translation.y, 0.2f);
     EXPECT_NEAR(newCenter.z, originalCenter.z + translation.z, 0.2f);
 
-    // The bounding box size should remain approximately the same
-    // (bounds recomputed from vertices may have small floating-point drift)
+    // The bounding box size should remain the same
     Ogre::Vector3 originalSize = originalBounds.getSize();
     Ogre::Vector3 newSize = newBounds.getSize();
-    EXPECT_NEAR(newSize.x, originalSize.x, 0.5f);
-    EXPECT_NEAR(newSize.y, originalSize.y, 0.5f);
-    EXPECT_NEAR(newSize.z, originalSize.z, 0.5f);
+    EXPECT_NEAR(newSize.x, originalSize.x, 0.1f);
+    EXPECT_NEAR(newSize.y, originalSize.y, 0.1f);
+    EXPECT_NEAR(newSize.z, originalSize.z, 0.1f);
 
     Manager::getSingleton()->destroySceneNode("TranslateBoundsCube");
 }
