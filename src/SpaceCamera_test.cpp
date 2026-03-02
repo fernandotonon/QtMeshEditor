@@ -208,25 +208,26 @@ TEST(SpaceCamera, KeyPressD)
     spaceCamera.keyPressEvent(&pressEvent);
 }
 
-TEST(SpaceCamera, KeyPressShiftModifier)
+TEST(SpaceCamera, KeyPressControlModifier)
 {
     MockSpaceCamera spaceCamera;
-    spaceCamera.setCameraSpeed(0.5f);
-    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_Shift, Qt::ShiftModifier);
+    QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
     spaceCamera.keyPressEvent(&pressEvent);
-    EXPECT_GT(spaceCamera.getCameraSpeed(), 0.5f);
+    // Control sets precision mode speed to 0.01
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
 }
 
-TEST(SpaceCamera, KeyReleaseShiftModifier)
+TEST(SpaceCamera, KeyReleaseControlModifier)
 {
     MockSpaceCamera spaceCamera;
-    spaceCamera.setCameraSpeed(0.5f);
-    QKeyEvent pressShift(QEvent::KeyPress, Qt::Key_Shift, Qt::ShiftModifier);
-    spaceCamera.keyPressEvent(&pressShift);
-    float speedWithShift = spaceCamera.getCameraSpeed();
-    QKeyEvent releaseShift(QEvent::KeyRelease, Qt::Key_Shift, Qt::NoModifier);
-    spaceCamera.keyReleaseEvent(&releaseShift);
-    EXPECT_LT(spaceCamera.getCameraSpeed(), speedWithShift);
+    QKeyEvent pressCtrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+    spaceCamera.keyPressEvent(&pressCtrl);
+    float speedWithCtrl = spaceCamera.getCameraSpeed();
+    QKeyEvent releaseCtrl(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+    spaceCamera.keyReleaseEvent(&releaseCtrl);
+    // After releasing Control, speed is restored to 0.1
+    EXPECT_GT(spaceCamera.getCameraSpeed(), speedWithCtrl);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
 }
 
 TEST(SpaceCamera, MultipleKeyPressesInSequence)
