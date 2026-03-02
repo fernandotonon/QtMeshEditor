@@ -403,6 +403,8 @@ TEST(SelectionSetTests, IndexedAccessors)
 
     auto node1 = Manager::getSingleton()->addSceneNode("testIdx1");
     auto node2 = Manager::getSingleton()->addSceneNode("testIdx2");
+    // addSceneNode auto-selects; clear and re-add in expected order
+    selectionSet->clear();
     selectionSet->append(node1);
     selectionSet->append(node2);
 
@@ -490,6 +492,8 @@ TEST(SelectionSetTests, GetSelectionOrientationWithEntity)
 
     auto cubeNode = PrimitiveObject::createCube("testOrientEntity");
     Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    // createCube auto-selects the node; clear so only the entity is selected
+    selectionSet->clear();
     Ogre::Vector3 rotation(45.0f, 90.0f, 0.0f);
     selectionSet->setEntityRotation(entity, rotation);
     selectionSet->append(entity);
@@ -536,6 +540,8 @@ TEST(SelectionSetTests, GetSelectionScaleWithEntity)
 
     auto cubeNode = PrimitiveObject::createCube("testScaleEntity");
     Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    // createCube auto-selects the node; clear so only the entity is selected
+    selectionSet->clear();
     Ogre::Vector3 scaleFactor(2.0f, 3.0f, 4.0f);
     selectionSet->setEntityScaleFactor(entity, scaleFactor);
     selectionSet->append(entity);
