@@ -29,6 +29,11 @@ static QApplication* ensureQApplication()
 class MaterialEditorQMLTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // Ensure no Ogre state leaks from prior test suites so that
+        // isOgreAvailable() reliably returns false for these tests.
+        Manager::kill();
+        QThread::msleep(50);
+
         app = ensureQApplication();
         ASSERT_NE(app, nullptr);
         editor = std::make_unique<MaterialEditorQML>();
