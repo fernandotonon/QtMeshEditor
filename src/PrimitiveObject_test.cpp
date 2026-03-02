@@ -332,3 +332,178 @@ TEST_F(PrimitiveObjectOgreTest, GetPrimitiveFromSceneNode)
 
     Manager::getSingleton()->destroySceneNode("RetrieveCube");
 }
+
+// ==========================================================================
+// NEW: isPrimitive with non-PrimitiveObject UserAny
+// ==========================================================================
+
+TEST_F(PrimitiveObjectOgreTest, IsPrimitiveNonPrimitiveUserAny)
+{
+    // Create a plain scene node and set a UserAny that is NOT a PrimitiveObject*
+    auto node = Manager::getSingleton()->addSceneNode("NonPrimAny");
+    ASSERT_NE(node, nullptr);
+
+    node->getUserObjectBindings().setUserAny(Ogre::Any(std::string("NotAPrimitive")));
+
+    // isPrimitive should return false because any_cast<PrimitiveObject*> will throw
+    EXPECT_FALSE(PrimitiveObject::isPrimitive(node));
+
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+// ==========================================================================
+// NEW: isPrimitive with node that has no UserAny at all
+// ==========================================================================
+
+TEST_F(PrimitiveObjectOgreTest, IsPrimitiveNoUserAny)
+{
+    auto node = Manager::getSingleton()->addSceneNode("NoUserAnyNode");
+    ASSERT_NE(node, nullptr);
+
+    // Node has no UserAny set, so isPrimitive should return false
+    EXPECT_FALSE(PrimitiveObject::isPrimitive(node));
+
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+// ==========================================================================
+// NEW: setInnerRadius validation — must be < radius
+// ==========================================================================
+
+TEST(PrimitivesTest, SetInnerRadiusValidation)
+{
+    PrimitiveObject primitive("InnerRadTest");
+
+    // Set radius first
+    primitive.setRadius(5.0f);
+    EXPECT_FLOAT_EQ(primitive.getRadius(), 5.0f);
+
+    // setInnerRadius with value >= radius should not change
+    primitive.setInnerRadius(5.0f);
+    EXPECT_FLOAT_EQ(primitive.getInnerRadius(), 0.5f); // default
+
+    primitive.setInnerRadius(6.0f);
+    EXPECT_FLOAT_EQ(primitive.getInnerRadius(), 0.5f); // unchanged
+
+    // setInnerRadius with value == 0 should not change (must be > 0)
+    primitive.setInnerRadius(0.0f);
+    EXPECT_FLOAT_EQ(primitive.getInnerRadius(), 0.5f); // unchanged
+
+    // setInnerRadius with negative value should not change
+    primitive.setInnerRadius(-1.0f);
+    EXPECT_FLOAT_EQ(primitive.getInnerRadius(), 0.5f); // unchanged
+
+    // setInnerRadius with valid value should change
+    primitive.setInnerRadius(3.0f);
+    EXPECT_FLOAT_EQ(primitive.getInnerRadius(), 3.0f);
+}
+
+// ==========================================================================
+// NEW: setChamferRadius is alias for setRadius, getChamferRadius returns mRadius
+// ==========================================================================
+
+TEST(PrimitivesTest, ChamferRadiusGetterSetter)
+{
+    PrimitiveObject primitive("ChamferTest", PrimitiveObject::AP_ROUNDEDBOX);
+    EXPECT_FLOAT_EQ(primitive.getChamferRadius(), 1.0f); // mRadius for ROUNDEDBOX
+
+    // setOuterRadius is alias for setRadius which sets mRadius
+    primitive.setOuterRadius(3.0f);
+    EXPECT_FLOAT_EQ(primitive.getChamferRadius(), 3.0f);
+    EXPECT_FLOAT_EQ(primitive.getRadius(), 3.0f);
+}
+
+// ==========================================================================
+// NEW: Setter validation — negative values rejected
+// ==========================================================================
+
+TEST(PrimitivesTest, SetterValidationRejectsInvalid)
+{
+    PrimitiveObject primitive("ValidationTest");
+
+    // setSizeX with 0 should not change
+    primitive.setSizeX(5.0f);
+    primitive.setSizeX(0.0f);
+    EXPECT_FLOAT_EQ(primitive.getSizeX(), 5.0f);
+
+    primitive.setSizeX(-1.0f);
+    EXPECT_FLOAT_EQ(primitive.getSizeX(), 5.0f);
+
+    // setSizeY with 0 should not change
+    primitive.setSizeY(5.0f);
+    primitive.setSizeY(0.0f);
+    EXPECT_FLOAT_EQ(primitive.getSizeY(), 5.0f);
+
+    // setSizeZ with 0 should not change
+    primitive.setSizeZ(5.0f);
+    primitive.setSizeZ(0.0f);
+    EXPECT_FLOAT_EQ(primitive.getSizeZ(), 5.0f);
+
+    // setRadius with 0 should not change
+    primitive.setRadius(5.0f);
+    primitive.setRadius(0.0f);
+    EXPECT_FLOAT_EQ(primitive.getRadius(), 5.0f);
+
+    // setHeight with 0 should not change
+    primitive.setHeight(5.0f);
+    primitive.setHeight(0.0f);
+    EXPECT_FLOAT_EQ(primitive.getHeight(), 5.0f);
+
+    // setNumSegX with 0 should not change
+    primitive.setNumSegX(8);
+    primitive.setNumSegX(0);
+    EXPECT_EQ(primitive.getNumSegX(), 8);
+
+    primitive.setNumSegX(-1);
+    EXPECT_EQ(primitive.getNumSegX(), 8);
+
+    // setNumSegY with 0 should not change
+    primitive.setNumSegY(8);
+    primitive.setNumSegY(0);
+    EXPECT_EQ(primitive.getNumSegY(), 8);
+
+    // setNumSegZ with 0 should not change
+    primitive.setNumSegZ(8);
+    primitive.setNumSegZ(0);
+    EXPECT_EQ(primitive.getNumSegZ(), 8);
+}
+
+// ==========================================================================
+// NEW: setNumSegSection and setNumSegHeight aliases
+// ==========================================================================
+
+TEST(PrimitivesTest, SetNumSegSectionAndHeight)
+{
+    PrimitiveObject primitive("SegAliasTest");
+
+    primitive.setNumSegSection(12);
+    EXPECT_EQ(primitive.getNumSegY(), 12);
+
+    primitive.setNumSegHeight(8);
+    EXPECT_EQ(primitive.getNumSegZ(), 8);
+
+    // Invalid values should not change
+    primitive.setNumSegSection(0);
+    EXPECT_EQ(primitive.getNumSegY(), 12);
+
+    primitive.setNumSegHeight(-1);
+    EXPECT_EQ(primitive.getNumSegZ(), 8);
+}
+
+// ==========================================================================
+// NEW: PrimitiveObject scene node link after creation
+// ==========================================================================
+
+TEST_F(PrimitiveObjectOgreTest, PrimitiveSceneNodeLink)
+{
+    Ogre::SceneNode* node = PrimitiveObject::createSphere("LinkedSphere");
+    ASSERT_NE(node, nullptr);
+
+    PrimitiveObject* primitive = PrimitiveObject::getPrimitiveFromSceneNode(node);
+    ASSERT_NE(primitive, nullptr);
+    EXPECT_EQ(primitive->getSceneNode(), node);
+    EXPECT_EQ(primitive->getName(), "LinkedSphere");
+    EXPECT_EQ(primitive->getType(), PrimitiveObject::AP_SPHERE);
+
+    Manager::getSingleton()->destroySceneNode("LinkedSphere");
+}

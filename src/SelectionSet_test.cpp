@@ -647,3 +647,487 @@ TEST(SelectionSetTests, RemoveNonExistent)
 
     Manager::getSingleton()->destroySceneNode(node);
 }
+
+// ==========================================================================
+// NEW: SubEntity branch coverage for getSelectionCenter
+// ==========================================================================
+
+TEST(SelectionSetTests, GetSelectionCenterWithSubEntity)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testCenterSubEntity");
+    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_GT(entity->getNumSubEntities(), 0u);
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+
+    // Only select subEntity (no nodes, no entities)
+    selectionSet->clear();
+    selectionSet->append(subEntity);
+
+    auto center = selectionSet->getSelectionCenter();
+    // Should hit the hasSubEntities() branch and return finite values
+    EXPECT_TRUE(std::isfinite(center.x));
+    EXPECT_TRUE(std::isfinite(center.y));
+    EXPECT_TRUE(std::isfinite(center.z));
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+// ==========================================================================
+// NEW: SubEntity branch coverage for getSelectionNodesCenter
+// ==========================================================================
+
+TEST(SelectionSetTests, GetSelectionNodesCenterWithSubEntity)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testNodesCenterSubEntity");
+    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_GT(entity->getNumSubEntities(), 0u);
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+
+    cubeNode->setPosition(5.0f, 10.0f, 15.0f);
+
+    // Only select subEntity
+    selectionSet->clear();
+    selectionSet->append(subEntity);
+
+    auto center = selectionSet->getSelectionNodesCenter();
+    // Should go through hasSubEntities() branch and use parent's parent node position
+    EXPECT_EQ(center.x, 5.0f);
+    EXPECT_EQ(center.y, 10.0f);
+    EXPECT_EQ(center.z, 15.0f);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+// ==========================================================================
+// NEW: getResolvedEntities branches
+// ==========================================================================
+
+TEST(SelectionSetTests, GetResolvedEntitiesWithEntitySelection)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testResolvedEntity");
+    ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+
+    // Select entity directly — hasEntities() branch returns the list
+    selectionSet->clear();
+    selectionSet->append(entity);
+
+    auto resolved = selectionSet->getResolvedEntities();
+    EXPECT_EQ(resolved.size(), 1);
+    EXPECT_EQ(resolved.first(), entity);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, GetResolvedEntitiesWithNodeSelection)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testResolvedNode");
+    // Select node (not entity) — hasNodes() branch resolves via sceneMgr
+    selectionSet->clear();
+    selectionSet->append(cubeNode);
+
+    auto resolved = selectionSet->getResolvedEntities();
+    // The entity name matches the scene node name, so it should be resolved
+    EXPECT_EQ(resolved.size(), 1);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, GetResolvedEntitiesEmpty)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    auto resolved = selectionSet->getResolvedEntities();
+    EXPECT_TRUE(resolved.isEmpty());
+}
+
+TEST(SelectionSetTests, GetResolvedEntitiesNodeWithoutEntity)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    // Add a plain scene node (no entity attached)
+    auto node = Manager::getSingleton()->addSceneNode("testResolvedNoEntity");
+    selectionSet->clear();
+    selectionSet->append(node);
+
+    auto resolved = selectionSet->getResolvedEntities();
+    // Node exists but has no entity with the same name, so resolved is empty
+    EXPECT_TRUE(resolved.isEmpty());
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+// ==========================================================================
+// NEW: hideBoundingBox branch coverage (tested via removeOne)
+// ==========================================================================
+
+TEST(SelectionSetTests, HideBoundingBoxEntityContainsNode)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testHideBboxEntity");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+
+    // Select both the node and the entity
+    selectionSet->clear();
+    selectionSet->append(cubeNode);
+    selectionSet->append(entity);
+    EXPECT_EQ(selectionSet->getNodesCount(), 1);
+    EXPECT_EQ(selectionSet->getEntitiesCount(), 1);
+
+    // Remove the node — hideBoundingBox(cubeNode) should return early
+    // because entity->getParentSceneNode() == cubeNode (entity still selected)
+    selectionSet->removeOne(cubeNode);
+    EXPECT_EQ(selectionSet->getNodesCount(), 0);
+    EXPECT_EQ(selectionSet->getEntitiesCount(), 1);
+    // Bounding box should still be shown because entity is still selected
+    EXPECT_TRUE(cubeNode->getShowBoundingBox());
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, HideBoundingBoxSubEntityContainsNode)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testHideBboxSubEnt");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_GT(entity->getNumSubEntities(), 0u);
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+
+    // Select both the node and the subEntity
+    selectionSet->clear();
+    selectionSet->append(cubeNode);
+    selectionSet->append(subEntity);
+
+    // Remove the node — hideBoundingBox(cubeNode) should return early
+    // because subEntity's parent's parent node == cubeNode
+    selectionSet->removeOne(cubeNode);
+    EXPECT_EQ(selectionSet->getNodesCount(), 0);
+    EXPECT_EQ(selectionSet->getSubEntitiesCount(), 1);
+    EXPECT_TRUE(cubeNode->getShowBoundingBox());
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, HideBoundingBoxNotInSelection)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testHideBboxNone");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+
+    // Select only the entity (not the node directly)
+    selectionSet->clear();
+    selectionSet->append(entity);
+
+    // Remove the entity — hideBoundingBox(cubeNode) should hide bbox
+    // because cubeNode is NOT in mNodesSelected, no other entity/subEntity points to it
+    selectionSet->removeOne(entity);
+    EXPECT_EQ(selectionSet->getEntitiesCount(), 0);
+    EXPECT_FALSE(cubeNode->getShowBoundingBox());
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+// ==========================================================================
+// NEW: hideAllBoundingBox with mixed selection types
+// ==========================================================================
+
+TEST(SelectionSetTests, HideAllBoundingBoxMixed)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode1 = PrimitiveObject::createCube("testHideAllMixed1");
+    Ogre::Entity* entity1 = Manager::getSingleton()->getEntities().last();
+
+    auto cubeNode2 = PrimitiveObject::createCube("testHideAllMixed2");
+    Ogre::Entity* entity2 = Manager::getSingleton()->getEntities().last();
+    ASSERT_GT(entity2->getNumSubEntities(), 0u);
+    Ogre::SubEntity* subEntity2 = entity2->getSubEntity(0);
+
+    auto plainNode = Manager::getSingleton()->addSceneNode("testHideAllMixedNode");
+
+    // Build mixed selection: node + entity + subEntity
+    selectionSet->clear();
+    selectionSet->append(plainNode);
+    selectionSet->append(entity1);
+    selectionSet->append(subEntity2);
+    EXPECT_EQ(selectionSet->getCount(), 3);
+
+    // All should have bounding boxes shown
+    EXPECT_TRUE(plainNode->getShowBoundingBox());
+    EXPECT_TRUE(cubeNode1->getShowBoundingBox());
+    EXPECT_TRUE(cubeNode2->getShowBoundingBox());
+
+    // clear() calls hideAllBoundingBox then clears all lists
+    selectionSet->clear();
+    EXPECT_FALSE(plainNode->getShowBoundingBox());
+    EXPECT_FALSE(cubeNode1->getShowBoundingBox());
+    EXPECT_FALSE(cubeNode2->getShowBoundingBox());
+
+    Manager::getSingleton()->destroySceneNode(plainNode);
+    Manager::getSingleton()->destroySceneNode(cubeNode1);
+    Manager::getSingleton()->destroySceneNode(cubeNode2);
+}
+
+// ==========================================================================
+// NEW: getSelectionCenter with multiple nodes (average)
+// ==========================================================================
+
+TEST(SelectionSetTests, GetSelectionCenterMultipleNodes)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    auto node1 = Manager::getSingleton()->addSceneNode("testCenterMulti1");
+    auto node2 = Manager::getSingleton()->addSceneNode("testCenterMulti2");
+    auto node3 = Manager::getSingleton()->addSceneNode("testCenterMulti3");
+
+    node1->setPosition(0.0f, 0.0f, 0.0f);
+    node2->setPosition(3.0f, 6.0f, 9.0f);
+    node3->setPosition(6.0f, 12.0f, 18.0f);
+
+    selectionSet->clear();
+    selectionSet->append(node1);
+    selectionSet->append(node2);
+    selectionSet->append(node3);
+
+    auto center = selectionSet->getSelectionCenter();
+    EXPECT_FLOAT_EQ(center.x, 3.0f);
+    EXPECT_FLOAT_EQ(center.y, 6.0f);
+    EXPECT_FLOAT_EQ(center.z, 9.0f);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node1);
+    Manager::getSingleton()->destroySceneNode(node2);
+    Manager::getSingleton()->destroySceneNode(node3);
+}
+
+// ==========================================================================
+// NEW: getSelectionCenter with empty selection
+// ==========================================================================
+
+TEST(SelectionSetTests, GetSelectionCenterEmpty)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    auto center = selectionSet->getSelectionCenter();
+    EXPECT_EQ(center.x, 0.0f);
+    EXPECT_EQ(center.y, 0.0f);
+    EXPECT_EQ(center.z, 0.0f);
+}
+
+// ==========================================================================
+// NEW: selectOne cross-type clearing
+// ==========================================================================
+
+TEST(SelectionSetTests, SelectOneNodeClearsEntitiesAndSubEntities)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testSelectOneClear");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+    auto plainNode = Manager::getSingleton()->addSceneNode("testSelectOneClearNode");
+
+    // Add entity and subEntity to selection
+    selectionSet->clear();
+    selectionSet->append(entity);
+    selectionSet->append(subEntity);
+    EXPECT_EQ(selectionSet->getEntitiesCount(), 1);
+    EXPECT_EQ(selectionSet->getSubEntitiesCount(), 1);
+
+    // selectOne(node) should clear entities and subEntities
+    selectionSet->selectOne(plainNode);
+    EXPECT_EQ(selectionSet->getNodesCount(), 1);
+    EXPECT_EQ(selectionSet->getEntitiesCount(), 0);
+    EXPECT_EQ(selectionSet->getSubEntitiesCount(), 0);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(plainNode);
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, SelectOneSubEntityClearsNodesAndEntities)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testSelectOneSubEnt");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+    auto plainNode = Manager::getSingleton()->addSceneNode("testSelectOneSubEntNode");
+
+    // Add node and entity to selection
+    selectionSet->clear();
+    selectionSet->append(plainNode);
+    selectionSet->append(entity);
+    EXPECT_EQ(selectionSet->getNodesCount(), 1);
+    EXPECT_EQ(selectionSet->getEntitiesCount(), 1);
+
+    // selectOne(subEntity) should clear nodes and entities
+    selectionSet->selectOne(subEntity);
+    EXPECT_EQ(selectionSet->getNodesCount(), 0);
+    EXPECT_EQ(selectionSet->getEntitiesCount(), 0);
+    EXPECT_EQ(selectionSet->getSubEntitiesCount(), 1);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(plainNode);
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+// ==========================================================================
+// NEW: Signal emission for entity and subEntity selection changes
+// ==========================================================================
+
+TEST(SelectionSetTests, EntitySignalEmission)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testEntitySignal");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+
+    QSignalSpy entitySpy(selectionSet, &SelectionSet::entitySelectionChanged);
+    QSignalSpy selectionSpy(selectionSet, &SelectionSet::selectionChanged);
+
+    selectionSet->clear();
+    selectionSet->append(entity);
+    EXPECT_GE(entitySpy.count(), 1);
+    EXPECT_GE(selectionSpy.count(), 1);
+
+    int prevEntityCount = entitySpy.count();
+    selectionSet->removeOne(entity);
+    EXPECT_GT(entitySpy.count(), prevEntityCount);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}
+
+TEST(SelectionSetTests, SubEntitySignalEmission)
+{
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+    createStandardOgreMaterials();
+
+    auto cubeNode = PrimitiveObject::createCube("testSubEntitySignal");
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+
+    QSignalSpy subEntitySpy(selectionSet, &SelectionSet::subEntitySelectionChanged);
+    QSignalSpy selectionSpy(selectionSet, &SelectionSet::selectionChanged);
+
+    selectionSet->clear();
+    selectionSet->append(subEntity);
+    EXPECT_GE(subEntitySpy.count(), 1);
+    EXPECT_GE(selectionSpy.count(), 1);
+
+    int prevSubEntityCount = subEntitySpy.count();
+    selectionSet->removeOne(subEntity);
+    EXPECT_GT(subEntitySpy.count(), prevSubEntityCount);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(cubeNode);
+}

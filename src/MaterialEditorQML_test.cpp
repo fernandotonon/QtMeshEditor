@@ -1312,3 +1312,154 @@ TEST_F(MaterialEditorQMLWithOgreTest, OpenMaterialEditorWindow_WithoutMaterialNa
     editor->openMaterialEditorWindow();
     EXPECT_EQ(editor->materialName(), "new_material");
 }
+
+// ===========================================================================
+// NEW: Branch coverage — applyMaterial without Ogre (no-Ogre branch)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, ApplyMaterial_NoOgre_ValidScript) {
+    // Without Ogre, applyMaterial validates + emits materialApplied
+    QString validScript =
+        "material TestApplyNoOgre\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    editor->setMaterialText(validScript);
+
+    QSignalSpy appliedSpy(editor.get(), &MaterialEditorQML::materialApplied);
+    bool result = editor->applyMaterial();
+    EXPECT_TRUE(result);
+    EXPECT_GE(appliedSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, ApplyMaterial_NoOgre_InvalidScript) {
+    // Without Ogre, applyMaterial returns false for invalid scripts
+    editor->setMaterialText("invalid garbage {{{");
+
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    bool result = editor->applyMaterial();
+    EXPECT_FALSE(result);
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+// ===========================================================================
+// NEW: Branch coverage — loadMaterial without Ogre (isOgreAvailable=false)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, LoadMaterial_NoOgre_SetsTemplate) {
+    // Without Ogre, loadMaterial(name) generates a template script
+    QSignalSpy nameSpy(editor.get(), &MaterialEditorQML::materialNameChanged);
+    editor->loadMaterial("TestNoOgreMat");
+
+    EXPECT_EQ(editor->materialName(), "TestNoOgreMat");
+    EXPECT_TRUE(editor->materialText().contains("material TestNoOgreMat"));
+    EXPECT_TRUE(editor->materialText().contains("technique"));
+    EXPECT_GE(nameSpy.count(), 1);
+}
+
+// ===========================================================================
+// NEW: Branch coverage — undo stack max limit (>50 items)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, UndoRedo_StackMaxLimit) {
+    // Push more than the 50-step limit to test truncation
+    for (int i = 0; i < 55; ++i) {
+        editor->setMaterialText(QString("text_%1").arg(i));
+    }
+    EXPECT_TRUE(editor->canUndo());
+
+    // Undo all possible steps
+    int undoCount = 0;
+    while (editor->canUndo()) {
+        editor->undo();
+        ++undoCount;
+    }
+    // Should be capped at 50 max undo steps
+    EXPECT_LE(undoCount, 50);
+}
+
+TEST_F(MaterialEditorQMLTest, UndoRedo_RedoClearedOnNewEdit) {
+    editor->setMaterialText("first");
+    editor->setMaterialText("second");
+    editor->setMaterialText("third");
+
+    // Undo twice
+    editor->undo();
+    editor->undo();
+    EXPECT_TRUE(editor->canRedo());
+
+    // New edit should clear redo stack
+    editor->setMaterialText("new_text");
+    EXPECT_FALSE(editor->canRedo());
+    EXPECT_TRUE(editor->canUndo());
+}
+
+// ===========================================================================
+// NEW: Branch coverage — applyMaterial with Ogre (remove-existing branch)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, ApplyMaterial_ReapplyRemovesExisting) {
+    editor->loadMaterial("BaseWhite");
+    QString originalText = editor->materialText();
+
+    // Apply once
+    bool result1 = editor->applyMaterial();
+    EXPECT_TRUE(result1);
+
+    // Apply again — exercises the "resourceExists → remove" branch
+    bool result2 = editor->applyMaterial();
+    EXPECT_TRUE(result2);
+}
+
+// ===========================================================================
+// NEW: Branch coverage — loadMaterial then createNewMaterial (state reset)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, LoadThenCreateNew_ResetsState) {
+    // Load an existing material
+    editor->loadMaterial("BaseWhite");
+    EXPECT_EQ(editor->materialName(), "BaseWhite");
+    EXPECT_GE(editor->selectedTechniqueIndex(), 0);
+
+    // Create a new material — should reset state
+    editor->createNewMaterial("FreshMat");
+    EXPECT_EQ(editor->materialName(), "FreshMat");
+    EXPECT_TRUE(editor->materialText().contains("material FreshMat"));
+}
+
+// ===========================================================================
+// NEW: Branch coverage — ValidateMaterialScript with deeper nesting
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MultipleTechniques) {
+    QString script =
+        "material MultiTech\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t}\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_TRUE(editor->validateMaterialScript(script));
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MissingMaterialKeyword) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    // Script without "material" keyword
+    QString script = "{\n\ttechnique\n\t{\n\t\tpass\n\t\t{\n\t\t}\n\t}\n}";
+    EXPECT_FALSE(editor->validateMaterialScript(script));
+    EXPECT_GE(errorSpy.count(), 1);
+}

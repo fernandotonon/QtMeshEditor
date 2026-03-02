@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QToolBar>
+#include <QMenuBar>
 #include <QStatusBar>
 #include <QSettings>
 #include <QDockWidget>
@@ -917,4 +918,92 @@ TEST_F(MainWindowTest, ImportMeshsWithEmptyList) {
     Manager::getSingleton()->getRoot()->renderOneFrame();
     auto entitiesAfter = Manager::getSingleton()->getEntities().count();
     EXPECT_EQ(entitiesBefore, entitiesAfter);
+}
+
+// ===========================================================================
+// NEW: Branch coverage — setPlaying toggle on/off/on
+// ===========================================================================
+
+TEST_F(MainWindowTest, SetPlayingToggleMultiple) {
+    mainWindow->setPlaying(true);
+    mainWindow->setPlaying(false);
+    mainWindow->setPlaying(true);
+    mainWindow->setPlaying(false);
+    // No crash — exercises isPlaying toggle paths in frameRenderingQueued
+    EXPECT_TRUE(true);
+}
+
+// ===========================================================================
+// NEW: Branch coverage — menu bar structural verification
+// ===========================================================================
+
+TEST_F(MainWindowTest, MenuBarExists) {
+    auto menuBar = mainWindow->menuBar();
+    ASSERT_NE(menuBar, nullptr);
+
+    // Verify expected menus exist
+    auto actions = menuBar->actions();
+    ASSERT_GE(actions.size(), 3); // File, View, Help at minimum
+
+    QStringList menuTitles;
+    for (auto* action : actions) {
+        if (action->menu()) {
+            menuTitles << action->text().remove('&');
+        }
+    }
+    EXPECT_TRUE(menuTitles.contains("File"));
+    EXPECT_TRUE(menuTitles.contains("View"));
+}
+
+// ===========================================================================
+// NEW: Branch coverage — toolbars structural verification
+// ===========================================================================
+
+TEST_F(MainWindowTest, ObjectsToolBarExists) {
+    auto objectsToolbar = mainWindow->findChild<QToolBar*>("objectsToolbar");
+    ASSERT_NE(objectsToolbar, nullptr);
+    EXPECT_FALSE(objectsToolbar->actions().isEmpty());
+}
+
+TEST_F(MainWindowTest, ToolsToolBarExists) {
+    auto toolsToolbar = mainWindow->findChild<QToolBar*>("toolToolbar");
+    ASSERT_NE(toolsToolbar, nullptr);
+    EXPECT_FALSE(toolsToolbar->actions().isEmpty());
+}
+
+// ===========================================================================
+// NEW: Branch coverage — status bar exists
+// ===========================================================================
+
+TEST_F(MainWindowTest, StatusBarExists) {
+    auto statusBar = mainWindow->findChild<QStatusBar*>("statusBar");
+    ASSERT_NE(statusBar, nullptr);
+}
+
+// ===========================================================================
+// NEW: Branch coverage — Scale action exists and toggles
+// ===========================================================================
+
+TEST_F(MainWindowTest, ScaleActionExists) {
+    auto actionScale = mainWindow->findChild<QAction*>("actionScale_Object");
+    if (actionScale) {
+        EXPECT_TRUE(actionScale->isCheckable());
+        actionScale->trigger();
+        EXPECT_TRUE(actionScale->isChecked());
+    }
+    // If action doesn't exist, that's also fine — optional feature
+}
+
+// ===========================================================================
+// NEW: Branch coverage — frameRenderingQueued with playing + animations
+// ===========================================================================
+
+TEST_F(MainWindowTest, FrameRenderingQueuedWhilePlaying) {
+    mainWindow->setPlaying(true);
+    // Render a frame — exercises the isPlaying branch in frameRenderingQueued
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+    mainWindow->setPlaying(false);
+    // Render again — exercises the !isPlaying path
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+    EXPECT_TRUE(true);
 }

@@ -286,3 +286,132 @@ TEST(SpaceCamera, MousePressAndReleaseRightButton)
                             Qt::RightButton, Qt::NoButton, Qt::NoModifier);
     spaceCamera.mouseReleaseEvent(&releaseEvent);
 }
+
+// ==========================================================================
+// NEW: Middle button + Shift modifier triggers roll branch
+// ==========================================================================
+
+TEST(SpaceCamera, MouseMoveMiddleButtonWithShift)
+{
+    MockSpaceCamera spaceCamera;
+    // Press middle button with Shift modifier
+    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
+                          Qt::MiddleButton, Qt::MiddleButton, Qt::ShiftModifier);
+    spaceCamera.mousePressEvent(&pressEvent);
+    // Move with Shift held — should trigger roll branch instead of arc ball
+    QMouseEvent moveEvent(QEvent::MouseMove, QPointF(150, 100),
+                         Qt::MiddleButton, Qt::MiddleButton, Qt::ShiftModifier);
+    spaceCamera.mouseMoveEvent(&moveEvent);
+    // Release
+    QMouseEvent releaseEvent(QEvent::MouseButtonRelease, QPointF(150, 100),
+                            Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+    spaceCamera.mouseReleaseEvent(&releaseEvent);
+    // No crash is the test — roll branch was exercised
+}
+
+// ==========================================================================
+// NEW: Left button mouse move should be ignored
+// ==========================================================================
+
+TEST(SpaceCamera, MouseMoveAfterLeftButtonPressIgnored)
+{
+    MockSpaceCamera spaceCamera;
+    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
+                          Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    spaceCamera.mousePressEvent(&pressEvent);
+    QMouseEvent moveEvent(QEvent::MouseMove, QPointF(200, 200),
+                         Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+    spaceCamera.mouseMoveEvent(&moveEvent);
+    // Left button move should be ignored — no crash
+}
+
+// ==========================================================================
+// NEW: Multiple press/release cycles without crash
+// ==========================================================================
+
+TEST(SpaceCamera, MultipleButtonPressReleaseCycles)
+{
+    MockSpaceCamera spaceCamera;
+    for (int i = 0; i < 5; ++i) {
+        // Middle button cycle
+        QMouseEvent pressMiddle(QEvent::MouseButtonPress, QPointF(100 + i, 100),
+                              Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+        spaceCamera.mousePressEvent(&pressMiddle);
+        QMouseEvent moveMiddle(QEvent::MouseMove, QPointF(110 + i, 110),
+                             Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+        spaceCamera.mouseMoveEvent(&moveMiddle);
+        QMouseEvent releaseMiddle(QEvent::MouseButtonRelease, QPointF(110 + i, 110),
+                                Qt::MiddleButton, Qt::NoButton, Qt::NoModifier);
+        spaceCamera.mouseReleaseEvent(&releaseMiddle);
+
+        // Right button cycle
+        QMouseEvent pressRight(QEvent::MouseButtonPress, QPointF(200 + i, 200),
+                             Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        spaceCamera.mousePressEvent(&pressRight);
+        QMouseEvent moveRight(QEvent::MouseMove, QPointF(210 + i, 210),
+                            Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+        spaceCamera.mouseMoveEvent(&moveRight);
+        QMouseEvent releaseRight(QEvent::MouseButtonRelease, QPointF(210 + i, 210),
+                               Qt::RightButton, Qt::NoButton, Qt::NoModifier);
+        spaceCamera.mouseReleaseEvent(&releaseRight);
+    }
+}
+
+// ==========================================================================
+// NEW: All direction keys pressed simultaneously
+// ==========================================================================
+
+TEST(SpaceCamera, KeyPressAllDirectionKeys)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressW(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+    QKeyEvent pressA(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
+    QKeyEvent pressS(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier);
+    QKeyEvent pressD(QEvent::KeyPress, Qt::Key_D, Qt::NoModifier);
+
+    spaceCamera.keyPressEvent(&pressW);
+    spaceCamera.keyPressEvent(&pressA);
+    spaceCamera.keyPressEvent(&pressS);
+    spaceCamera.keyPressEvent(&pressD);
+
+    // Process a frame
+    Ogre::FrameEvent frameEvent;
+    frameEvent.timeSinceLastFrame = 0.016f;
+    EXPECT_TRUE(spaceCamera.frameStarted(frameEvent));
+
+    QKeyEvent releaseW(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
+    QKeyEvent releaseA(QEvent::KeyRelease, Qt::Key_A, Qt::NoModifier);
+    QKeyEvent releaseS(QEvent::KeyRelease, Qt::Key_S, Qt::NoModifier);
+    QKeyEvent releaseD(QEvent::KeyRelease, Qt::Key_D, Qt::NoModifier);
+
+    spaceCamera.keyReleaseEvent(&releaseW);
+    spaceCamera.keyReleaseEvent(&releaseA);
+    spaceCamera.keyReleaseEvent(&releaseS);
+    spaceCamera.keyReleaseEvent(&releaseD);
+}
+
+// ==========================================================================
+// NEW: Rapid direction changes
+// ==========================================================================
+
+TEST(SpaceCamera, RapidDirectionChanges)
+{
+    MockSpaceCamera spaceCamera;
+    Ogre::FrameEvent frameEvent;
+    frameEvent.timeSinceLastFrame = 0.016f;
+
+    // Rapidly alternate W and S
+    for (int i = 0; i < 10; ++i) {
+        QKeyEvent pressW(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+        spaceCamera.keyPressEvent(&pressW);
+        spaceCamera.frameStarted(frameEvent);
+        QKeyEvent releaseW(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
+        spaceCamera.keyReleaseEvent(&releaseW);
+
+        QKeyEvent pressS(QEvent::KeyPress, Qt::Key_S, Qt::NoModifier);
+        spaceCamera.keyPressEvent(&pressS);
+        spaceCamera.frameStarted(frameEvent);
+        QKeyEvent releaseS(QEvent::KeyRelease, Qt::Key_S, Qt::NoModifier);
+        spaceCamera.keyReleaseEvent(&releaseS);
+    }
+}
