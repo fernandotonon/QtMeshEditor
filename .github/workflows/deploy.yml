@@ -586,7 +586,7 @@ jobs:
     permissions: read-all
     env: 
           LD_LIBRARY_PATH: gcc_64/lib/:/usr/local/lib/:/usr/local/lib/OGRE/:/usr/local/lib/pkgconfig/:/lib/x86_64-linux-gnu/
-          QT_QPA_PLATFORM: xcb
+          QT_QPA_PLATFORM: offscreen
           QT_DEBUG_PLUGINS: 0
           DISPLAY: :99
     steps:
