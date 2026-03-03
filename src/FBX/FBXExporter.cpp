@@ -797,6 +797,7 @@ private:
 
             int64_t geomId = nextId();
             m_geomIds.push_back(geomId);
+            m_geomSubmeshIndices.push_back(si);
 
             std::string geomName = std::string(m_entity->getName()) +
                                    "_submesh" + std::to_string(si);
@@ -1227,9 +1228,9 @@ private:
     // ── Skin Deformers ───────────────────────────────────────────
     void writeSkinDeformers()
     {
-        for (unsigned int si = 0; si < m_mesh->getNumSubMeshes(); ++si)
+        for (size_t gi = 0; gi < m_geomIds.size(); ++gi)
         {
-            if (si >= m_geomIds.size()) break;
+            unsigned int si = m_geomSubmeshIndices[gi];
             const Ogre::SubMesh* subMesh = m_mesh->getSubMesh(si);
 
             int64_t skinId = nextId();
@@ -1932,6 +1933,7 @@ private:
     int64_t m_meshModelId = 0;
 
     std::vector<int64_t> m_geomIds;
+    std::vector<unsigned int> m_geomSubmeshIndices; // submesh index for each entry in m_geomIds
     std::map<std::string, int64_t> m_materialIds;
     std::map<std::string, int> m_materialIndexMap; // matName → index (matching connection order)
     std::map<std::string, int64_t> m_textureIds;
