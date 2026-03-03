@@ -95,6 +95,7 @@ set(TEST_SOURCES "")
 
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/Assimp")
+ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/FBX")
 
 #file(GLOB UI_FILES ./ui_files/*.ui)
 # if we don't include this CMake will not include ui headers properly:

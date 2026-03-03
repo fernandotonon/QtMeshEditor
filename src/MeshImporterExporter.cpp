@@ -65,7 +65,8 @@ const QMap<QString, QString> MeshImporterExporter::exportFormats = {
     {"3DS (*.3ds)", ".3ds"},
     {"glTF 2.0 (*.gltf2)", ".gltf2"},
     {"glTF 2.0 Binary (*.glb2)", ".glb2"},
-    {"Assimp Binary (*.assbin)", ".assbin"}
+    {"Assimp Binary (*.assbin)", ".assbin"},
+    {"FBX Binary (*.fbx)", ".fbx"}
 };
 
 void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
@@ -944,6 +945,12 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         m.exportMesh(e->getMesh().get(),_uri.toStdString().data(),(Ogre::MeshVersion)version);
 
         exportMaterial(e, file);
+    } else if (_format == "FBX Binary (*.fbx)") {
+        bool ok = FBXExporter::exportFBX(e, _uri);
+        if (ok)
+            exportMaterial(e, file);
+        else
+            return -1;
     } else {
         // Export using Assimp — build aiScene directly from Ogre mesh data
         try {
