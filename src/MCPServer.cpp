@@ -2165,7 +2165,8 @@ QJsonArray MCPServer::buildToolsList()
             "'Ogre Mesh v1.7+(*.mesh)', 'Ogre Mesh v1.4+(*.mesh)', 'Ogre Mesh v1.0+(*.mesh)', "
             "'Ogre XML (*.mesh.xml)', 'Collada (*.dae)', 'X (*.x)', 'OBJ (*.obj)', "
             "'OBJ without MTL (*.objnomtl)', 'STL (*.stl)', 'PLY (*.ply)', '3DS (*.3ds)', "
-            "'glTF 2.0 (*.gltf2)', 'glTF 2.0 Binary (*.glb2)', 'Assimp Binary (*.assbin)'. "
+            "'glTF 2.0 (*.gltf2)', 'glTF 2.0 Binary (*.glb2)', 'Assimp Binary (*.assbin)', "
+            "'FBX Binary (*.fbx)'. "
             "Default: 'Ogre Mesh (*.mesh)'"}};
         inputSchema["properties"] = properties;
         inputSchema["required"] = QJsonArray{"path"};

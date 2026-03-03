@@ -8,6 +8,7 @@
 #include <OgreSkeleton.h>
 #include <OgreSkeletonManager.h>
 #include <OgreMeshManager.h>
+#include <OgreHardwareBufferManager.h>
 
 class AnimationMergerTest : public ::testing::Test {
 protected:
@@ -30,6 +31,43 @@ protected:
     }
 
     QApplication* app = nullptr;
+
+    // Helper: create an in-memory mesh with a minimal triangle so Ogre
+    // doesn't try to load the resource from disk when creating an Entity.
+    Ogre::MeshPtr createInMemoryMesh(const std::string& name,
+                                      const Ogre::SkeletonPtr& skel)
+    {
+        auto mesh = Ogre::MeshManager::getSingleton().createManual(
+            name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+        auto* sub = mesh->createSubMesh();
+        mesh->sharedVertexData = new Ogre::VertexData();
+        auto* decl = mesh->sharedVertexData->vertexDeclaration;
+        decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+
+        auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+            decl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+        float verts[] = {0,0,0, 1,0,0, 0,1,0};
+        vbuf->writeData(0, sizeof(verts), verts);
+        mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf);
+        mesh->sharedVertexData->vertexCount = 3;
+
+        auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+            Ogre::HardwareIndexBuffer::IT_16BIT, 3,
+            Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+        uint16_t idx[] = {0, 1, 2};
+        ibuf->writeData(0, sizeof(idx), idx);
+        sub->useSharedVertices = true;
+        sub->indexData->indexBuffer = ibuf;
+        sub->indexData->indexCount = 3;
+
+        mesh->_notifySkeleton(skel);
+        mesh->_setBounds(Ogre::AxisAlignedBox(-1,-1,-1,1,1,1));
+        mesh->_setBoundingSphereRadius(1.0);
+        mesh->load();
+
+        return mesh;
+    }
 
     // Helper: create a skeleton with given bone names and animations
     Ogre::SkeletonPtr createTestSkeleton(const std::string& name,
@@ -97,20 +135,12 @@ TEST_F(AnimationMergerTest, NullSkeletons)
 
 TEST_F(AnimationMergerTest, MergeAnimationsBasic)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: cannot load mesh files in this environment";
-
     // Create two meshes sharing compatible skeletons
     auto skelA = createTestSkeleton("merge_skel_a", {"root", "spine"}, {"idle"});
     auto skelB = createTestSkeleton("merge_skel_b", {"root", "spine"}, {"walk"});
 
-    auto meshA = Ogre::MeshManager::getSingleton().create("merge_mesh_a",
-        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    meshA->_notifySkeleton(skelA);
-
-    auto meshB = Ogre::MeshManager::getSingleton().create("merge_mesh_b",
-        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    meshB->_notifySkeleton(skelB);
+    auto meshA = createInMemoryMesh("merge_mesh_a", skelA);
+    auto meshB = createInMemoryMesh("merge_mesh_b", skelB);
 
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* nodeA = sceneMgr->getRootSceneNode()->createChildSceneNode("baseNode");
@@ -148,20 +178,12 @@ TEST_F(AnimationMergerTest, MergeAnimationsBasic)
 
 TEST_F(AnimationMergerTest, MergeAnimationsNameCollision)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: cannot load mesh files in this environment";
-
     // Both skeletons have an animation that would result in the same name
     auto skelA = createTestSkeleton("collision_skel_a", {"root"}, {"idle"});
     auto skelB = createTestSkeleton("collision_skel_b", {"root"}, {"idle"});
 
-    auto meshA = Ogre::MeshManager::getSingleton().create("collision_mesh_a",
-        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    meshA->_notifySkeleton(skelA);
-
-    auto meshB = Ogre::MeshManager::getSingleton().create("collision_mesh_b",
-        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    meshB->_notifySkeleton(skelB);
+    auto meshA = createInMemoryMesh("collision_mesh_a", skelA);
+    auto meshB = createInMemoryMesh("collision_mesh_b", skelB);
 
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     // Name the node "idle" so it collides with base's "idle" animation

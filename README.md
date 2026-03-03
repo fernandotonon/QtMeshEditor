@@ -47,7 +47,7 @@ QtMeshEditor helps you prepare 3D assets for your game or project:
 
 | Format | Extension | Import | Export | Skeleton/Animation |
 |--------|-----------|--------|--------|--------------------|
-| FBX | .fbx | Yes | No | Yes |
+| FBX Binary | .fbx | Yes | Yes | Yes |
 | glTF 2.0 | .gltf2 | Yes | Yes | Yes |
 | glTF 2.0 Binary | .glb2 | Yes | Yes | Yes |
 | Collada | .dae | Yes | Yes | Yes |
