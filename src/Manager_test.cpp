@@ -449,3 +449,248 @@ TEST_F(ManagerHeadlessTest, GetSceneMgr_ReturnsNonNull)
     ASSERT_NE(mgr, nullptr);
     EXPECT_NE(mgr->getSceneMgr(), nullptr);
 }
+
+// ==========================================================================
+// NEW: destroySceneNode error paths
+// ==========================================================================
+
+TEST_F(ManagerHeadlessTest, DestroySceneNodeByNameNotFound)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    // Destroying a non-existent node should not crash (catch path)
+    mgr->destroySceneNode("NonExistentNode_XYZ_99999");
+    // No assertion needed — just verify no crash
+}
+
+TEST_F(ManagerHeadlessTest, DestroySceneNodeNull)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    // Passing nullptr should be a no-op
+    Ogre::SceneNode* nullNode = nullptr;
+    mgr->destroySceneNode(nullNode);
+    // No crash is the test
+}
+
+TEST_F(ManagerHeadlessTest, DestroySceneNodeForbiddenName)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    // Trying to destroy a forbidden node name should be a no-op
+    mgr->destroySceneNode("GridLine_node");
+    // No crash, and the forbidden node (if it existed) would remain
+}
+
+TEST_F(ManagerHeadlessTest, DestroySceneNodePrimitive)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto cubeNode = PrimitiveObject::createCube("PrimitiveDestroy");
+    ASSERT_NE(cubeNode, nullptr);
+    EXPECT_TRUE(PrimitiveObject::isPrimitive(cubeNode));
+    EXPECT_TRUE(mgr->hasSceneNode("PrimitiveDestroy"));
+
+    // Destroying a primitive should also clean up the PrimitiveObject
+    mgr->destroySceneNode(cubeNode);
+    EXPECT_FALSE(mgr->hasSceneNode("PrimitiveDestroy"));
+}
+
+// ==========================================================================
+// NEW: destroyAllAttachedMovableObjects with null
+// ==========================================================================
+
+TEST_F(ManagerHeadlessTest, DestroyAllAttachedMovableObjectsNull)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    // Passing nullptr should be a no-op
+    mgr->destroyAllAttachedMovableObjects(nullptr);
+    // No crash is the test
+}
+
+// ==========================================================================
+// NEW: addSceneNode auto-selects (not during scene init)
+// ==========================================================================
+
+TEST_F(ManagerHeadlessTest, AddSceneNodeAutoSelects)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    EXPECT_TRUE(SelectionSet::getSingleton()->isEmpty());
+
+    Ogre::SceneNode* node = mgr->addSceneNode("AutoSelectNode");
+    ASSERT_NE(node, nullptr);
+
+    // addSceneNode calls selectOne when not initializing scene
+    EXPECT_TRUE(SelectionSet::getSingleton()->contains(node));
+    EXPECT_EQ(SelectionSet::getSingleton()->getNodesCount(), 1);
+
+    SelectionSet::getSingleton()->clear();
+}
+
+// ==========================================================================
+// NEW: getMainWindow returns nullptr in headless mode
+// ==========================================================================
+
+TEST_F(ManagerHeadlessTest, GetMainWindowReturnsNull)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    // In headless test mode, MainWindow is not set
+    EXPECT_EQ(mgr->getMainWindow(), nullptr);
+}
+
+// ==========================================================================
+// NEW: getViewportGrid returns nullptr before CreateEmptyScene
+// ==========================================================================
+
+TEST_F(ManagerHeadlessTest, GetViewportGridNullBeforeCreateScene)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    // Before CreateEmptyScene, viewport grid should be null
+    EXPECT_EQ(mgr->getViewportGrid(), nullptr);
+}
+
+// ==========================================================================
+// NEW: destroySceneNode by name string — verify destroy and signal
+// ==========================================================================
+
+TEST_F(ManagerHeadlessTest, DestroySceneNodeByNameWithSignal)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    mgr->addSceneNode("SignalDestroyByName");
+    ASSERT_TRUE(mgr->hasSceneNode("SignalDestroyByName"));
+
+    QSignalSpy spy(mgr, &Manager::sceneNodeDestroyed);
+    mgr->destroySceneNode("SignalDestroyByName");
+    EXPECT_FALSE(mgr->hasSceneNode("SignalDestroyByName"));
+    EXPECT_EQ(spy.count(), 1);
+}
+
+// ==========================================================================
+// NEW: hasAnimationName with non-skeletal entity
+// ==========================================================================
+
+TEST_F(ManagerHeadlessTest, HasAnimationNameNoSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto cubeNode = PrimitiveObject::createCube("AnimNameCube");
+    ASSERT_FALSE(mgr->getEntities().isEmpty());
+    Ogre::Entity* entity = mgr->getEntities().last();
+
+    // Primitives have no skeleton, so hasAnimationName should return false
+    EXPECT_FALSE(mgr->hasAnimationName(entity, "Walk"));
+    EXPECT_FALSE(mgr->hasAnimationName(entity, ""));
+
+    mgr->destroySceneNode(cubeNode);
+}
+
+// --- In-memory entity tests ---
+
+TEST_F(ManagerHeadlessTest, CreateInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("MgrInMemTriangle");
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = mgr->addSceneNode("MgrInMemNode");
+    auto* entity = sceneMgr->createEntity("MgrInMemEntity", mesh);
+    node->attachObject(entity);
+
+    EXPECT_TRUE(mgr->hasSceneNode("MgrInMemNode"));
+    EXPECT_FALSE(mgr->getEntities().isEmpty());
+}
+
+TEST_F(ManagerHeadlessTest, CreateInMemorySkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto mesh = createInMemorySkeletonMesh("MgrSkelMesh");
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = mgr->addSceneNode("MgrSkelNode");
+    auto* entity = sceneMgr->createEntity("MgrSkelEntity", mesh);
+    node->attachObject(entity);
+
+    EXPECT_TRUE(entity->hasSkeleton());
+    EXPECT_EQ(entity->getSkeleton()->getNumBones(), 2u);
+}
+
+TEST_F(ManagerHeadlessTest, CreateAnimatedEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* entity = createAnimatedTestEntity("MgrAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    EXPECT_TRUE(entity->hasSkeleton());
+    EXPECT_TRUE(entity->hasAnimationState("TestAnim"));
+
+    auto* state = entity->getAnimationState("TestAnim");
+    EXPECT_NEAR(state->getLength(), 1.0f, 0.01f);
+}
+
+TEST_F(ManagerHeadlessTest, HasAnimationNameWithSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* entity = createAnimatedTestEntity("MgrAnimNameEntity");
+    ASSERT_NE(entity, nullptr);
+
+    EXPECT_TRUE(mgr->hasAnimationName(entity, "TestAnim"));
+    EXPECT_FALSE(mgr->hasAnimationName(entity, "NonExistentAnim"));
+}
+
+TEST_F(ManagerHeadlessTest, DestroyInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("MgrDestroyTriangle");
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = mgr->addSceneNode("MgrDestroyNode");
+    auto* entity = sceneMgr->createEntity("MgrDestroyEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(mgr->hasSceneNode("MgrDestroyNode"));
+    mgr->destroySceneNode("MgrDestroyNode");
+    EXPECT_FALSE(mgr->hasSceneNode("MgrDestroyNode"));
+}
+
+TEST_F(ManagerHeadlessTest, SceneNodeParenting)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* parent = mgr->addSceneNode("ParentNode");
+    ASSERT_NE(parent, nullptr);
+
+    auto* child = mgr->getSceneMgr()->getRootSceneNode()->createChildSceneNode("ChildNode");
+    ASSERT_NE(child, nullptr);
+
+    // Move child under parent
+    mgr->getSceneMgr()->getRootSceneNode()->removeChild(child);
+    parent->addChild(child);
+
+    EXPECT_EQ(child->getParentSceneNode(), parent);
+    EXPECT_EQ(parent->numChildren(), 1u);
+}

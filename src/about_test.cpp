@@ -14,8 +14,8 @@ protected:
 };
 
 TEST_F(AboutTest, VersionTextIsCorrect) {
-    int argc = 0;
-    QApplication app(argc, nullptr);
+    // QApplication already created by test_main.cpp - do not create another
+    ASSERT_NE(QCoreApplication::instance(), nullptr);
 
     About aboutDialog;
     About aboutDialog2(&aboutDialog); // Also test with a parent widget.

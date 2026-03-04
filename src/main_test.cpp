@@ -21,37 +21,13 @@ public:
     MOCK_METHOD(void, show, ());
 };
 
-// Mock class for QApplication
-class MockQApplication : public QApplication
+// Test that QApplication exists (created by test_main.cpp) - do not create another
+TEST(MainTest, QApplicationExists)
 {
-public:
-    MockQApplication(int& argc, char** argv) : QApplication(argc, argv) {}
-
-    MOCK_METHOD(int, exec, ());
-};
-
-// Test case using the mocked MainWindow and QApplication
-TEST(MainTest, QApplicationAndMainWindowMock)
-{
-    int argc = 0;
-    char* argv[] = { nullptr };
-
-    // Create mock objects
-    MockQApplication mockQApplication(argc, argv);
-   // MockMainWindow mockMainWindow;
-
-    // Set expectations
-   // EXPECT_CALL(mockMainWindow, show()).Times(0);
-    EXPECT_CALL(mockQApplication, exec()).Times(1);
-
-    // Run the code under test
-    int result = mockQApplication.exec();
-
-    // Assertions on the result if needed
-    EXPECT_EQ(result, 0);
-    
-    // Clear the mock object
-    Mock::VerifyAndClear(&mockQApplication);
+    // QApplication is created by test_main.cpp - verify it exists
+    ASSERT_NE(QCoreApplication::instance(), nullptr);
+    auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
+    ASSERT_NE(app, nullptr);
 }
 
 // DISABLED: This test causes segfault during mesh import/cleanup (Ogre hardware buffer manager issues)
