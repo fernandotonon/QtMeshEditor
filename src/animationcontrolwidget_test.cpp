@@ -596,13 +596,21 @@ TEST_F(AnimationControlWidgetTest, MultipleAnimationsInTree) {
     QTreeWidgetItem* entityItem = tree->topLevelItem(0);
     EXPECT_EQ(entityItem->childCount(), 2);
 
-    // Switch to second animation
-    tree->setCurrentItem(entityItem->child(1));
+    // Find the "Run" animation by name (iteration order is not guaranteed)
+    QTreeWidgetItem* runItem = nullptr;
+    for (int i = 0; i < entityItem->childCount(); ++i) {
+        if (entityItem->child(i)->text(0).contains("Run")) {
+            runItem = entityItem->child(i);
+            break;
+        }
+    }
+    ASSERT_NE(runItem, nullptr) << "Could not find 'Run' animation in tree";
+    tree->setCurrentItem(runItem);
     if (app) app->processEvents();
 
     auto* slider = widget.findChild<QSlider*>("horizontalSlider");
     ASSERT_NE(slider, nullptr);
-    // Second anim length is 0.5s = 500ms
+    // "Run" anim length is 0.5s = 500ms
     EXPECT_EQ(slider->maximum(), 500);
 }
 

@@ -287,7 +287,11 @@ TEST_F(PrimitivesWidgetTest, CreateCubeVerifyEntity)
     auto* sceneMgr = mgr->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity("VerifyCube"));
     auto* entity = sceneMgr->getEntity("VerifyCube");
-    EXPECT_GT(entity->getMesh()->sharedVertexData->vertexCount, 0u);
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
     mgr->destroySceneNode("VerifyCube");
 }
 
@@ -299,7 +303,11 @@ TEST_F(PrimitivesWidgetTest, CreateSphereVerifyEntity)
     auto* sceneMgr = mgr->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity("VerifySphere"));
     auto* entity = sceneMgr->getEntity("VerifySphere");
-    EXPECT_GT(entity->getMesh()->sharedVertexData->vertexCount, 0u);
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
     mgr->destroySceneNode("VerifySphere");
 }
 
@@ -311,7 +319,11 @@ TEST_F(PrimitivesWidgetTest, CreateTorusVerifyEntity)
     auto* sceneMgr = mgr->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity("VerifyTorus"));
     auto* entity = sceneMgr->getEntity("VerifyTorus");
-    EXPECT_GT(entity->getMesh()->sharedVertexData->vertexCount, 0u);
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
     mgr->destroySceneNode("VerifyTorus");
 }
 
@@ -323,7 +335,11 @@ TEST_F(PrimitivesWidgetTest, CreateConeVerifyEntity)
     auto* sceneMgr = mgr->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity("VerifyCone"));
     auto* entity = sceneMgr->getEntity("VerifyCone");
-    EXPECT_GT(entity->getMesh()->sharedVertexData->vertexCount, 0u);
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
     mgr->destroySceneNode("VerifyCone");
 }
 
@@ -335,7 +351,11 @@ TEST_F(PrimitivesWidgetTest, CreateTubeVerifyEntity)
     auto* sceneMgr = mgr->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity("VerifyTube"));
     auto* entity = sceneMgr->getEntity("VerifyTube");
-    EXPECT_GT(entity->getMesh()->sharedVertexData->vertexCount, 0u);
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
     mgr->destroySceneNode("VerifyTube");
 }
 
@@ -347,7 +367,11 @@ TEST_F(PrimitivesWidgetTest, CreateCapsuleVerifyEntity)
     auto* sceneMgr = mgr->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity("VerifyCapsule"));
     auto* entity = sceneMgr->getEntity("VerifyCapsule");
-    EXPECT_GT(entity->getMesh()->sharedVertexData->vertexCount, 0u);
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
     mgr->destroySceneNode("VerifyCapsule");
 }
 
@@ -359,7 +383,11 @@ TEST_F(PrimitivesWidgetTest, CreateIcoSphereVerifyEntity)
     auto* sceneMgr = mgr->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity("VerifyIcoSphere"));
     auto* entity = sceneMgr->getEntity("VerifyIcoSphere");
-    EXPECT_GT(entity->getMesh()->sharedVertexData->vertexCount, 0u);
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
     mgr->destroySceneNode("VerifyIcoSphere");
 }
 
@@ -371,7 +399,11 @@ TEST_F(PrimitivesWidgetTest, CreateRoundedBoxVerifyEntity)
     auto* sceneMgr = mgr->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity("VerifyRBox"));
     auto* entity = sceneMgr->getEntity("VerifyRBox");
-    EXPECT_GT(entity->getMesh()->sharedVertexData->vertexCount, 0u);
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
     mgr->destroySceneNode("VerifyRBox");
 }
 
@@ -383,7 +415,11 @@ TEST_F(PrimitivesWidgetTest, CreateSpringVerifyEntity)
     auto* sceneMgr = mgr->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity("VerifySpring"));
     auto* entity = sceneMgr->getEntity("VerifySpring");
-    EXPECT_GT(entity->getMesh()->sharedVertexData->vertexCount, 0u);
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
     mgr->destroySceneNode("VerifySpring");
 }
 

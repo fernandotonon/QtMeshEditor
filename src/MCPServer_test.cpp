@@ -7,6 +7,7 @@
 #include <QTcpSocket>
 #include <QSignalSpy>
 #include <QElapsedTimer>
+#include <QDir>
 #include <memory>
 #include "MCPServer.h"
 #include "Manager.h"
@@ -2321,13 +2322,14 @@ TEST_F(MCPServerTest, ExportMeshWithInMemoryEntity)
     SelectionSet::getSingleton()->selectOne(node);
 
     QJsonObject args;
-    args["path"] = "/tmp/mcp_inmemory_export.obj";
+    const QString exportBase = QDir(QDir::tempPath()).filePath("mcp_inmemory_export");
+    args["path"] = exportBase + ".obj";
     QJsonObject result = server->callTool("export_mesh", args);
     EXPECT_FALSE(isError(result));
 
-    QFile::remove("/tmp/mcp_inmemory_export.obj");
-    QFile::remove("/tmp/mcp_inmemory_export.material");
-    QFile::remove("/tmp/mcp_inmemory_export.mtl");
+    QFile::remove(exportBase + ".obj");
+    QFile::remove(exportBase + ".material");
+    QFile::remove(exportBase + ".mtl");
     SelectionSet::getSingleton()->clear();
 }
 

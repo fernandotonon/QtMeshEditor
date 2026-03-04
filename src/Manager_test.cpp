@@ -587,7 +587,14 @@ TEST_F(ManagerHeadlessTest, HasAnimationNameNoSkeleton)
 
     auto cubeNode = PrimitiveObject::createCube("AnimNameCube");
     ASSERT_FALSE(mgr->getEntities().isEmpty());
-    Ogre::Entity* entity = mgr->getEntities().last();
+    // Filter by movable type to avoid casting ManualObjects to Entity
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : mgr->getEntities()) {
+        if (obj->getMovableType() == "Entity") {
+            entity = static_cast<Ogre::Entity*>(obj);
+        }
+    }
+    ASSERT_NE(entity, nullptr);
 
     // Primitives have no skeleton, so hasAnimationName should return false
     EXPECT_FALSE(mgr->hasAnimationName(entity, "Walk"));
