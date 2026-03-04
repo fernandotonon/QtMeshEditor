@@ -277,6 +277,172 @@ TEST_F(PrimitivesWidgetTest, UpdateParamsFromUi)
     ASSERT_TRUE(pb_switchUV->isChecked());
 }
 
+// --- Primitive entity verification tests ---
+
+TEST_F(PrimitivesWidgetTest, CreateCubeVerifyEntity)
+{
+    PrimitiveObject::createCube("VerifyCube");
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("VerifyCube"));
+    auto* sceneMgr = mgr->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity("VerifyCube"));
+    auto* entity = sceneMgr->getEntity("VerifyCube");
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
+    mgr->destroySceneNode("VerifyCube");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateSphereVerifyEntity)
+{
+    PrimitiveObject::createSphere("VerifySphere");
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("VerifySphere"));
+    auto* sceneMgr = mgr->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity("VerifySphere"));
+    auto* entity = sceneMgr->getEntity("VerifySphere");
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
+    mgr->destroySceneNode("VerifySphere");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateTorusVerifyEntity)
+{
+    PrimitiveObject::createTorus("VerifyTorus");
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("VerifyTorus"));
+    auto* sceneMgr = mgr->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity("VerifyTorus"));
+    auto* entity = sceneMgr->getEntity("VerifyTorus");
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
+    mgr->destroySceneNode("VerifyTorus");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateConeVerifyEntity)
+{
+    PrimitiveObject::createCone("VerifyCone");
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("VerifyCone"));
+    auto* sceneMgr = mgr->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity("VerifyCone"));
+    auto* entity = sceneMgr->getEntity("VerifyCone");
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
+    mgr->destroySceneNode("VerifyCone");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateTubeVerifyEntity)
+{
+    PrimitiveObject::createTube("VerifyTube");
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("VerifyTube"));
+    auto* sceneMgr = mgr->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity("VerifyTube"));
+    auto* entity = sceneMgr->getEntity("VerifyTube");
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
+    mgr->destroySceneNode("VerifyTube");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateCapsuleVerifyEntity)
+{
+    PrimitiveObject::createCapsule("VerifyCapsule");
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("VerifyCapsule"));
+    auto* sceneMgr = mgr->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity("VerifyCapsule"));
+    auto* entity = sceneMgr->getEntity("VerifyCapsule");
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
+    mgr->destroySceneNode("VerifyCapsule");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateIcoSphereVerifyEntity)
+{
+    PrimitiveObject::createIcoSphere("VerifyIcoSphere");
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("VerifyIcoSphere"));
+    auto* sceneMgr = mgr->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity("VerifyIcoSphere"));
+    auto* entity = sceneMgr->getEntity("VerifyIcoSphere");
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
+    mgr->destroySceneNode("VerifyIcoSphere");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateRoundedBoxVerifyEntity)
+{
+    PrimitiveObject::createRoundedBox("VerifyRBox");
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("VerifyRBox"));
+    auto* sceneMgr = mgr->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity("VerifyRBox"));
+    auto* entity = sceneMgr->getEntity("VerifyRBox");
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
+    mgr->destroySceneNode("VerifyRBox");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateSpringVerifyEntity)
+{
+    PrimitiveObject::createSpring("VerifySpring");
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("VerifySpring"));
+    auto* sceneMgr = mgr->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity("VerifySpring"));
+    auto* entity = sceneMgr->getEntity("VerifySpring");
+    auto* mesh = entity->getMesh().get();
+    auto* submesh = mesh->getSubMesh(0);
+    Ogre::VertexData* vdata = submesh->useSharedVertices ? mesh->sharedVertexData : submesh->vertexData;
+    ASSERT_NE(vdata, nullptr);
+    EXPECT_GT(vdata->vertexCount, 0u);
+    mgr->destroySceneNode("VerifySpring");
+}
+
+TEST_F(PrimitivesWidgetTest, CreateAndDestroyMultiplePrimitives)
+{
+    PrimitiveObject::createCube("MultiPrim1");
+    PrimitiveObject::createSphere("MultiPrim2");
+    PrimitiveObject::createCylinder("MultiPrim3");
+
+    auto* mgr = Manager::getSingleton();
+    EXPECT_TRUE(mgr->hasSceneNode("MultiPrim1"));
+    EXPECT_TRUE(mgr->hasSceneNode("MultiPrim2"));
+    EXPECT_TRUE(mgr->hasSceneNode("MultiPrim3"));
+
+    mgr->destroySceneNode("MultiPrim1");
+    mgr->destroySceneNode("MultiPrim2");
+    mgr->destroySceneNode("MultiPrim3");
+
+    EXPECT_FALSE(mgr->hasSceneNode("MultiPrim1"));
+    EXPECT_FALSE(mgr->hasSceneNode("MultiPrim2"));
+    EXPECT_FALSE(mgr->hasSceneNode("MultiPrim3"));
+}
+
 TEST_F(PrimitivesWidgetTest, UpdateParamsFromUiForACube)
 {
     PrimitivesWidget widget;

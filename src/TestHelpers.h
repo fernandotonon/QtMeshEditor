@@ -196,4 +196,212 @@ static inline bool canLoadMeshFiles()
     return false;
 }
 
+/**
+ * Creates an in-memory triangle mesh with positions, normals, and UVs.
+ *
+ * The mesh has 3 vertices and 1 triangle. This is the simplest possible
+ * mesh that can be used to create an Ogre::Entity without loading from disk.
+ *
+ * Returns a MeshPtr. Call canLoadMeshFiles() before using this — it needs
+ * a GL context for hardware buffer creation.
+ */
+static inline Ogre::MeshPtr createInMemoryTriangleMesh(const std::string& name)
+{
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* sub = mesh->createSubMesh();
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* decl = mesh->sharedVertexData->vertexDeclaration;
+
+    size_t offset = 0;
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    float verts[] = {
+        0,0,0,   0,0,1,  0.0f,0.0f,
+        1,0,0,   0,0,1,  1.0f,0.0f,
+        0,1,0,   0,0,1,  0.0f,1.0f,
+    };
+    vbuf->writeData(0, sizeof(verts), verts);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf);
+    mesh->sharedVertexData->vertexCount = 3;
+
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint16_t idx[] = {0, 1, 2};
+    ibuf->writeData(0, sizeof(idx), idx);
+    sub->useSharedVertices = true;
+    sub->indexData->indexBuffer = ibuf;
+    sub->indexData->indexCount = 3;
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1,-1,-1,1,1,1));
+    mesh->_setBoundingSphereRadius(2.0);
+    mesh->load();
+
+    return mesh;
+}
+
+/**
+ * Creates an in-memory mesh with a skeleton (2 bones: root + child)
+ * and bone assignments. Does NOT include animations.
+ *
+ * Returns a MeshPtr linked to its skeleton. The skeleton name is
+ * "<name>_skel".
+ */
+static inline Ogre::MeshPtr createInMemorySkeletonMesh(const std::string& name)
+{
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        name + "_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* rootBone = skel->createBone("Root", 0);
+    rootBone->setPosition(Ogre::Vector3(0, 0, 0));
+
+    auto* childBone = skel->createBone("Child", 1);
+    childBone->setPosition(Ogre::Vector3(0, 1, 0));
+    rootBone->addChild(childBone);
+
+    skel->setBindingPose();
+
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* sub = mesh->createSubMesh();
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* decl = mesh->sharedVertexData->vertexDeclaration;
+    decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    float verts[] = {0,0,0, 1,0,0, 0,1,0};
+    vbuf->writeData(0, sizeof(verts), verts);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf);
+    mesh->sharedVertexData->vertexCount = 3;
+
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint16_t idx[] = {0, 1, 2};
+    ibuf->writeData(0, sizeof(idx), idx);
+    sub->useSharedVertices = true;
+    sub->indexData->indexBuffer = ibuf;
+    sub->indexData->indexCount = 3;
+
+    Ogre::VertexBoneAssignment vba;
+    vba.boneIndex = 1;
+    vba.weight = 1.0f;
+    for (unsigned short v = 0; v < 3; ++v) {
+        vba.vertexIndex = v;
+        mesh->addBoneAssignment(vba);
+    }
+
+    mesh->_notifySkeleton(skel);
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1,-1,-1,2,2,2));
+    mesh->_setBoundingSphereRadius(3.0);
+    mesh->load();
+
+    return mesh;
+}
+
+/**
+ * Creates an in-memory mesh with a skeleton (2 bones: Root + Child),
+ * bone assignments, and a "TestAnim" animation with 3 keyframes at
+ * t=0.0, t=0.5, and t=1.0 seconds.
+ *
+ * The animation is on the Child bone (track handle = 1).
+ *
+ * Also creates an Ogre::Entity and attaches it to a new scene node
+ * via Manager::addSceneNode(). The entity name is "<name>" and has
+ * a valid SkeletonInstance with animation states.
+ *
+ * Returns the Entity, or nullptr on failure.
+ */
+static inline Ogre::Entity* createAnimatedTestEntity(const std::string& name)
+{
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        name + "_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* rootBone = skel->createBone("Root", 0);
+    rootBone->setPosition(Ogre::Vector3(0, 0, 0));
+
+    auto* childBone = skel->createBone("Child", 1);
+    childBone->setPosition(Ogre::Vector3(0, 1, 0));
+    rootBone->addChild(childBone);
+
+    skel->setBindingPose();
+
+    // Create animation "TestAnim" with 3 keyframes
+    auto* anim = skel->createAnimation("TestAnim", 1.0f);
+    auto* track = anim->createNodeTrack(1);
+    track->setAssociatedNode(childBone);
+
+    auto* kf0 = track->createNodeKeyFrame(0.0f);
+    kf0->setTranslate(Ogre::Vector3::ZERO);
+    kf0->setRotation(Ogre::Quaternion::IDENTITY);
+    kf0->setScale(Ogre::Vector3::UNIT_SCALE);
+
+    auto* kf1 = track->createNodeKeyFrame(0.5f);
+    kf1->setTranslate(Ogre::Vector3(0.5f, 0, 0));
+    kf1->setRotation(Ogre::Quaternion(Ogre::Radian(Ogre::Degree(30)),
+                                       Ogre::Vector3::UNIT_Y));
+    kf1->setScale(Ogre::Vector3::UNIT_SCALE);
+
+    auto* kf2 = track->createNodeKeyFrame(1.0f);
+    kf2->setTranslate(Ogre::Vector3::ZERO);
+    kf2->setRotation(Ogre::Quaternion::IDENTITY);
+    kf2->setScale(Ogre::Vector3::UNIT_SCALE);
+
+    // Create mesh
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name + "_mesh", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* sub = mesh->createSubMesh();
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* decl = mesh->sharedVertexData->vertexDeclaration;
+    decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    float verts[] = {0,0,0, 1,0,0, 0,1,0};
+    vbuf->writeData(0, sizeof(verts), verts);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf);
+    mesh->sharedVertexData->vertexCount = 3;
+
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint16_t idx[] = {0, 1, 2};
+    ibuf->writeData(0, sizeof(idx), idx);
+    sub->useSharedVertices = true;
+    sub->indexData->indexBuffer = ibuf;
+    sub->indexData->indexCount = 3;
+
+    Ogre::VertexBoneAssignment vba;
+    vba.boneIndex = 1;
+    vba.weight = 1.0f;
+    for (unsigned short v = 0; v < 3; ++v) {
+        vba.vertexIndex = v;
+        mesh->addBoneAssignment(vba);
+    }
+
+    mesh->_notifySkeleton(skel);
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1,-1,-1,2,2,2));
+    mesh->_setBoundingSphereRadius(3.0);
+    mesh->load();
+
+    // Create entity via Manager
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode(name.c_str());
+    auto* entity = sceneMgr->createEntity(name, mesh);
+    node->attachObject(entity);
+
+    return entity;
+}
+
 #endif // TEST_HELPERS_H

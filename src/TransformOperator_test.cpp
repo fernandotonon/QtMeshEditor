@@ -337,3 +337,123 @@ TEST_F(TransformOperatorTestFixture, CycleTransformStates) {
     EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_ROTATE));
     EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
 }
+
+// --- New tests using in-memory entities ---
+
+TEST_F(TransformOperatorTestFixture, TranslateEntityNode) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("TranslateEntityMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("TranslateEntityNode");
+    auto* entity = sceneMgr->createEntity("TranslateEntityEnt", mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->selectOne(node);
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setSelectedPosition(Ogre::Vector3(10, 20, 30));
+
+    EXPECT_EQ(node->getPosition(), Ogre::Vector3(10, 20, 30));
+}
+
+TEST_F(TransformOperatorTestFixture, ScaleEntityNode) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("ScaleEntityMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ScaleEntityNode");
+    auto* entity = sceneMgr->createEntity("ScaleEntityEnt", mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->selectOne(node);
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setSelectedScale(Ogre::Vector3(2, 3, 4));
+
+    EXPECT_EQ(node->getScale(), Ogre::Vector3(2, 3, 4));
+}
+
+TEST_F(TransformOperatorTestFixture, RotateEntityNode) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("RotateEntityMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("RotateEntityNode");
+    auto* entity = sceneMgr->createEntity("RotateEntityEnt", mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->selectOne(node);
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setSelectedOrientation(Ogre::Vector3(45, 90, 0));
+
+    EXPECT_NE(node->getOrientation(), Ogre::Quaternion::IDENTITY);
+}
+
+TEST_F(TransformOperatorTestFixture, RemoveEntityNode) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("RemoveEntityMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("RemoveEntityNode");
+    auto* entity = sceneMgr->createEntity("RemoveEntityEnt", mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->selectOne(node);
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->removeSelected();
+
+    EXPECT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_FALSE(Manager::getSingletonPtr()->hasSceneNode("RemoveEntityNode"));
+}
+
+TEST_F(TransformOperatorTestFixture, MultipleNodesTranslate) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+
+    Ogre::SceneNode* node1 = mgr->addSceneNode("MultiTrNode1");
+    Ogre::SceneNode* node2 = mgr->addSceneNode("MultiTrNode2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+
+    node1->setPosition(0, 0, 0);
+    node2->setPosition(10, 10, 10);
+
+    SelectionSet::getSingleton()->selectOne(node1);
+    SelectionSet::getSingleton()->append(node2);
+
+    instance->translateSelected(Ogre::Vector3(5, 5, 5));
+
+    EXPECT_EQ(node1->getPosition(), Ogre::Vector3(5, 5, 5));
+    EXPECT_EQ(node2->getPosition(), Ogre::Vector3(15, 15, 15));
+}
+
+TEST_F(TransformOperatorTestFixture, OnSelectionChangedWithEntity) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("SelChangedEntityMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("SelChangedEntityNode");
+    auto* entity = sceneMgr->createEntity("SelChangedEntityEnt", mesh);
+    node->attachObject(entity);
+    node->setPosition(100, 200, 300);
+
+    SelectionSet::getSingleton()->selectOne(node);
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->onSelectionChanged());
+}
+
+TEST_F(TransformOperatorTestFixture, TransformStateChangeWithEntity) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("StateChangeEntityMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("StateChangeEntityNode");
+    auto* entity = sceneMgr->createEntity("StateChangeEntityEnt", mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->selectOne(node);
+    TransformOperator* instance = TransformOperator::getSingleton();
+
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_TRANSLATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_ROTATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
+}

@@ -7,6 +7,7 @@
 #include <QTcpSocket>
 #include <QSignalSpy>
 #include <QElapsedTimer>
+#include <QDir>
 #include <memory>
 #include "MCPServer.h"
 #include "Manager.h"
@@ -2223,4 +2224,268 @@ TEST_F(MCPServerTest, AnimateWithOnlyRoll)
     QString text = getResultText(result);
     EXPECT_TRUE(text.contains("Started animation"));
     EXPECT_TRUE(text.contains("roll: 90"));
+}
+
+// ==========================================================================
+// NEW: In-memory entity success path tests
+// ==========================================================================
+
+TEST_F(MCPServerTest, GetMeshInfoWithInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("MCPMeshInfoTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("MCPMeshInfoNode");
+    auto* entity = sceneMgr->createEntity("MCPMeshInfoEntity", mesh);
+    node->attachObject(entity);
+
+    QJsonObject result = server->callTool("get_mesh_info", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Vertices"));
+}
+
+TEST_F(MCPServerTest, TransformMeshPositionWithInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("MCPTransformTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("MCPTransformNode");
+    auto* entity = sceneMgr->createEntity("MCPTransformEntity", mesh);
+    node->attachObject(entity);
+
+    QJsonObject transArgs;
+    transArgs["name"] = "MCPTransformNode";
+    transArgs["position"] = QJsonArray{5.0, 10.0, 15.0};
+    QJsonObject result = server->callTool("transform_mesh", transArgs);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("position"));
+
+    // Verify position was actually set
+    EXPECT_NEAR(node->getPosition().x, 5.0f, 0.01f);
+    EXPECT_NEAR(node->getPosition().y, 10.0f, 0.01f);
+    EXPECT_NEAR(node->getPosition().z, 15.0f, 0.01f);
+}
+
+TEST_F(MCPServerTest, TransformMeshRotationWithInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("MCPRotateTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("MCPRotateNode");
+    auto* entity = sceneMgr->createEntity("MCPRotateEntity", mesh);
+    node->attachObject(entity);
+
+    QJsonObject transArgs;
+    transArgs["name"] = "MCPRotateNode";
+    transArgs["rotation"] = QJsonArray{45.0, 90.0, 0.0};
+    QJsonObject result = server->callTool("transform_mesh", transArgs);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("rotation"));
+}
+
+TEST_F(MCPServerTest, TransformMeshScaleWithInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("MCPScaleTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("MCPScaleNode");
+    auto* entity = sceneMgr->createEntity("MCPScaleEntity", mesh);
+    node->attachObject(entity);
+
+    QJsonObject transArgs;
+    transArgs["name"] = "MCPScaleNode";
+    transArgs["scale"] = QJsonArray{2.0, 3.0, 4.0};
+    QJsonObject result = server->callTool("transform_mesh", transArgs);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("scale"));
+
+    EXPECT_NEAR(node->getScale().x, 2.0f, 0.01f);
+    EXPECT_NEAR(node->getScale().y, 3.0f, 0.01f);
+    EXPECT_NEAR(node->getScale().z, 4.0f, 0.01f);
+}
+
+TEST_F(MCPServerTest, ExportMeshWithInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("MCPExportTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("MCPExportNode");
+    auto* entity = sceneMgr->createEntity("MCPExportEntity", mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->selectOne(node);
+
+    QJsonObject args;
+    const QString exportBase = QDir(QDir::tempPath()).filePath("mcp_inmemory_export");
+    args["path"] = exportBase + ".obj";
+    QJsonObject result = server->callTool("export_mesh", args);
+    EXPECT_FALSE(isError(result));
+
+    QFile::remove(exportBase + ".obj");
+    QFile::remove(exportBase + ".material");
+    QFile::remove(exportBase + ".mtl");
+    SelectionSet::getSingleton()->clear();
+}
+
+TEST_F(MCPServerTest, SetMaterialOnInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    // Create material
+    QJsonObject matArgs;
+    matArgs["name"] = "InMemMatTest";
+    server->callTool("create_material", matArgs);
+
+    // Create entity
+    auto mesh = createInMemoryTriangleMesh("MCPMatTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("MCPMatNode");
+    auto* entity = sceneMgr->createEntity("MCPMatEntity", mesh);
+    node->attachObject(entity);
+
+    // Apply material
+    QJsonObject applyArgs;
+    applyArgs["material"] = "InMemMatTest";
+    applyArgs["mesh"] = "MCPMatEntity";
+    QJsonObject result = server->callTool("apply_material", applyArgs);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Applied material"));
+}
+
+TEST_F(MCPServerTest, GetSceneInfoWithInMemoryEntities)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh1 = createInMemoryTriangleMesh("MCPSceneInfo1");
+    auto mesh2 = createInMemoryTriangleMesh("MCPSceneInfo2");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+
+    auto* node1 = Manager::getSingleton()->addSceneNode("MCPSceneNode1");
+    auto* entity1 = sceneMgr->createEntity("MCPSceneEntity1", mesh1);
+    node1->attachObject(entity1);
+
+    auto* node2 = Manager::getSingleton()->addSceneNode("MCPSceneNode2");
+    auto* entity2 = sceneMgr->createEntity("MCPSceneEntity2", mesh2);
+    node2->attachObject(entity2);
+
+    QJsonObject result = server->callTool("get_scene_info", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Scene Information"));
+    EXPECT_TRUE(text.contains("MCPSceneNode1"));
+    EXPECT_TRUE(text.contains("MCPSceneNode2"));
+}
+
+TEST_F(MCPServerTest, ListSkeletalAnimationsWithSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("MCPSkelAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject result = server->callTool("list_skeletal_animations", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("TestAnim"));
+}
+
+TEST_F(MCPServerTest, GetAnimationInfoWithSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("MCPAnimInfoEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "MCPAnimInfoEntity";
+    args["animation"] = "TestAnim";
+    QJsonObject result = server->callTool("get_animation_info", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("TestAnim"));
+    EXPECT_TRUE(text.contains("length") || text.contains("Length"));
+}
+
+TEST_F(MCPServerTest, SetAnimationLengthWithSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("MCPSetAnimLenEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "MCPSetAnimLenEntity";
+    args["animation"] = "TestAnim";
+    args["length"] = 2.5;
+    QJsonObject result = server->callTool("set_animation_length", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("2.5") || getResultText(result).contains("length"));
+}
+
+TEST_F(MCPServerTest, SetAnimationTimeWithSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("MCPSetAnimTimeEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "MCPSetAnimTimeEntity";
+    args["animation"] = "TestAnim";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+}
+
+TEST_F(MCPServerTest, AddKeyframeWithSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("MCPAddKfEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "MCPAddKfEntity";
+    args["animation"] = "TestAnim";
+    args["track"] = "Child";
+    args["time"] = 0.25;
+    QJsonObject result = server->callTool("add_keyframe", args);
+    EXPECT_FALSE(isError(result));
+}
+
+TEST_F(MCPServerTest, RemoveKeyframeWithSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("MCPRemoveKfEntity");
+    ASSERT_NE(entity, nullptr);
+
+    // Remove keyframe at t=0.5
+    QJsonObject args;
+    args["entity"] = "MCPRemoveKfEntity";
+    args["animation"] = "TestAnim";
+    args["track"] = "Child";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_FALSE(isError(result));
+}
+
+TEST_F(MCPServerTest, PlayAnimationWithSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("MCPPlayAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "MCPPlayAnimEntity";
+    args["animation"] = "TestAnim";
+    QJsonObject result = server->callTool("play_animation", args);
+    EXPECT_FALSE(isError(result));
 }

@@ -515,3 +515,129 @@ TEST_F(MeshImporterExporterTest, ExportImport_3DS_RoundTrip) {
     QFile::remove("./roundtrip.3ds");
     QFile::remove("./roundtrip.material");
 }
+
+// ── In-memory mesh export tests ──────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, ExportInMemoryMesh_OBJ) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("ExportOBJTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportOBJNode");
+    auto* entity = sceneMgr->createEntity("ExportOBJEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_export.obj", "OBJ (*.obj)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_export.obj"));
+
+    QFile::remove("./inmem_export.obj");
+    QFile::remove("./inmem_export.material");
+    QFile::remove("./inmem_export.mtl");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemoryMesh_STL) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("ExportSTLTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportSTLNode");
+    auto* entity = sceneMgr->createEntity("ExportSTLEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_export.stl", "STL (*.stl)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_export.stl"));
+
+    QFile::remove("./inmem_export.stl");
+    QFile::remove("./inmem_export.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemoryMesh_glTF2) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("ExportGLTFTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportGLTFNode");
+    auto* entity = sceneMgr->createEntity("ExportGLTFEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_export.gltf2", "glTF 2.0 (*.gltf2)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_export.gltf2"));
+
+    QFile::remove("./inmem_export.gltf2");
+    QFile::remove("./inmem_export.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemoryMesh_FBX) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("ExportFBXTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportFBXNode");
+    auto* entity = sceneMgr->createEntity("ExportFBXEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_export.fbx", "FBX Binary (*.fbx)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_export.fbx"));
+
+    QFile::remove("./inmem_export.fbx");
+    QFile::remove("./inmem_export.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemoryMesh_OgreMesh) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("ExportMeshTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportMeshNode");
+    auto* entity = sceneMgr->createEntity("ExportMeshEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_export.mesh", "Ogre Mesh (*.mesh)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_export.mesh"));
+
+    QFile::remove("./inmem_export.mesh");
+    QFile::remove("./inmem_export.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemoryMesh_OgreXML) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("ExportXMLTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportXMLNode");
+    auto* entity = sceneMgr->createEntity("ExportXMLEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_export.mesh.xml", "Ogre XML (*.mesh.xml)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_export.mesh.xml"));
+
+    QFile::remove("./inmem_export.mesh.xml");
+    QFile::remove("./inmem_export.skeleton.xml");
+    QFile::remove("./inmem_export.material");
+}
+
+TEST_F(MeshImporterExporterTest, ImportMultipleFiles) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList files{"./media/models/Rumba Dancing.fbx", "./media/models/Twist Dance.fbx"};
+    MeshImporterExporter::importer(files);
+    // Both files should be imported
+    EXPECT_GE(Manager::getSingleton()->getSceneNodes().size(), nodesBefore + 2);
+}
+
+

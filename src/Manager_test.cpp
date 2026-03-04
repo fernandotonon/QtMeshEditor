@@ -587,11 +587,117 @@ TEST_F(ManagerHeadlessTest, HasAnimationNameNoSkeleton)
 
     auto cubeNode = PrimitiveObject::createCube("AnimNameCube");
     ASSERT_FALSE(mgr->getEntities().isEmpty());
-    Ogre::Entity* entity = mgr->getEntities().last();
+    // Filter by movable type to avoid casting ManualObjects to Entity
+    Ogre::Entity* entity = nullptr;
+    for (auto* obj : mgr->getEntities()) {
+        if (obj->getMovableType() == "Entity") {
+            entity = static_cast<Ogre::Entity*>(obj);
+        }
+    }
+    ASSERT_NE(entity, nullptr);
 
     // Primitives have no skeleton, so hasAnimationName should return false
     EXPECT_FALSE(mgr->hasAnimationName(entity, "Walk"));
     EXPECT_FALSE(mgr->hasAnimationName(entity, ""));
 
     mgr->destroySceneNode(cubeNode);
+}
+
+// --- In-memory entity tests ---
+
+TEST_F(ManagerHeadlessTest, CreateInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("MgrInMemTriangle");
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = mgr->addSceneNode("MgrInMemNode");
+    auto* entity = sceneMgr->createEntity("MgrInMemEntity", mesh);
+    node->attachObject(entity);
+
+    EXPECT_TRUE(mgr->hasSceneNode("MgrInMemNode"));
+    EXPECT_FALSE(mgr->getEntities().isEmpty());
+}
+
+TEST_F(ManagerHeadlessTest, CreateInMemorySkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto mesh = createInMemorySkeletonMesh("MgrSkelMesh");
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = mgr->addSceneNode("MgrSkelNode");
+    auto* entity = sceneMgr->createEntity("MgrSkelEntity", mesh);
+    node->attachObject(entity);
+
+    EXPECT_TRUE(entity->hasSkeleton());
+    EXPECT_EQ(entity->getSkeleton()->getNumBones(), 2u);
+}
+
+TEST_F(ManagerHeadlessTest, CreateAnimatedEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* entity = createAnimatedTestEntity("MgrAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    EXPECT_TRUE(entity->hasSkeleton());
+    EXPECT_TRUE(entity->hasAnimationState("TestAnim"));
+
+    auto* state = entity->getAnimationState("TestAnim");
+    EXPECT_NEAR(state->getLength(), 1.0f, 0.01f);
+}
+
+TEST_F(ManagerHeadlessTest, HasAnimationNameWithSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* entity = createAnimatedTestEntity("MgrAnimNameEntity");
+    ASSERT_NE(entity, nullptr);
+
+    EXPECT_TRUE(mgr->hasAnimationName(entity, "TestAnim"));
+    EXPECT_FALSE(mgr->hasAnimationName(entity, "NonExistentAnim"));
+}
+
+TEST_F(ManagerHeadlessTest, DestroyInMemoryEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("MgrDestroyTriangle");
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = mgr->addSceneNode("MgrDestroyNode");
+    auto* entity = sceneMgr->createEntity("MgrDestroyEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(mgr->hasSceneNode("MgrDestroyNode"));
+    mgr->destroySceneNode("MgrDestroyNode");
+    EXPECT_FALSE(mgr->hasSceneNode("MgrDestroyNode"));
+}
+
+TEST_F(ManagerHeadlessTest, SceneNodeParenting)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* parent = mgr->addSceneNode("ParentNode");
+    ASSERT_NE(parent, nullptr);
+
+    auto* child = mgr->getSceneMgr()->getRootSceneNode()->createChildSceneNode("ChildNode");
+    ASSERT_NE(child, nullptr);
+
+    // Move child under parent
+    mgr->getSceneMgr()->getRootSceneNode()->removeChild(child);
+    parent->addChild(child);
+
+    EXPECT_EQ(child->getParentSceneNode(), parent);
+    EXPECT_EQ(parent->numChildren(), 1u);
 }
