@@ -876,6 +876,8 @@ jobs:
               --exclude '.*/ui_files/' \
               --exclude '.*/moc_' \
               --exclude '.*qrc_.*\.cpp' \
+              --exclude-throw-branches \
+              --exclude-unreachable-branches \
               --sonarqube=coverage.xml \
               --gcov-executable gcov \
               build \

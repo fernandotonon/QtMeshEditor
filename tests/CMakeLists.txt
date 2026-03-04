@@ -183,6 +183,15 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Assimp/MeshProcessor.h
     )
 
+    # Add FBX sources (matching src/FBX/CMakeLists.txt)
+    set(TEST_SRC_FILES ${TEST_SRC_FILES}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FBX/FBXExporter.cpp
+    )
+
+    set(TEST_HEADER_FILES ${TEST_HEADER_FILES}
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/FBX/FBXExporter.h
+    )
+
     # Add Qt resources (matching src/CMakeLists.txt)
     qt_add_resources(TEST_RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../resources/resource.qrc")
     qt_add_resources(TEST_QML_RESOURCE_SRCS "${CMAKE_CURRENT_SOURCE_DIR}/../src/qml_resources.qrc")
@@ -239,6 +248,7 @@ if(BUILD_TESTS)
             ${OGRE_PROCEDURAL_LIB_DIR}include
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/OgreXML
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/Assimp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/FBX
         )
         
         target_link_libraries(${target_name} ${COMMON_TEST_LIBRARIES})
@@ -268,6 +278,7 @@ if(BUILD_TESTS)
             ${OGRE_PROCEDURAL_LIB_DIR}include
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/OgreXML
             ${CMAKE_CURRENT_SOURCE_DIR}/../src/Assimp
+            ${CMAKE_CURRENT_SOURCE_DIR}/../src/FBX
         )
         
         target_link_libraries(${target_name} ${COMMON_TEST_LIBRARIES})

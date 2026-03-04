@@ -80,6 +80,12 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         BoneProcessor boneProcessor;
         boneProcessor.processBones(skeleton, scene);
 
+        // Save the bind pose so that animation deltas are applied relative to
+        // the correct base transforms.  Binary SkeletonSerializer calls this
+        // automatically on load, but for in-memory skeletons we must do it
+        // explicitly before creating animations.
+        skeleton->setBindingPose();
+
         // Process animations
         AnimationProcessor animationProcessor(skeleton);
         animationProcessor.processAnimations(scene);

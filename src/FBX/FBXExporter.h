@@ -26,30 +26,16 @@ THE SOFTWARE.
 -----------------------------------------------------------------------------------
 */
 
-#ifndef MESHIMPORTEREXPORTER_H
-#define MESHIMPORTEREXPORTER_H
+#ifndef FBXEXPORTER_H
+#define FBXEXPORTER_H
 
-#include <Ogre.h>
-#include <QStringList>
-#include <QFileInfo>
+#include <OgreEntity.h>
+#include <QString>
 
-#include "mainwindow.h"
-#include "FBX/FBXExporter.h"
-
-class MeshImporterExporter
+class FBXExporter
 {
-private:
-    static void configureCamera(const Ogre::Entity *en);
-    static void exportMaterial(const Ogre::Entity *e, const QFileInfo &file);
-    static void exportTextures(const Ogre::MaterialPtr &material, const QFileInfo &file);
-    static const QMap<QString, QString> exportFormats;
-
 public:
-    static void importer(const QStringList &_uriList);
-    static QString exporter(const Ogre::SceneNode *_sn);
-    static int exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format);
-    static QString formatFileURI(const QString &_uri, const QString &_format);
-    static QString exportFileDialogFilter();
+    static bool exportFBX(const Ogre::Entity* entity, const QString& filePath);
 };
 
-#endif // MESHIMPORTEREXPORTER_H
+#endif // FBXEXPORTER_H
