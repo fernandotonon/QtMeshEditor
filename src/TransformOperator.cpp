@@ -422,6 +422,12 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
         }
         else if((!SelectionSet::getSingleton()->isEmpty()) && (e->button() == Qt::LeftButton))
         {
+            // Log a single breadcrumb per transform gesture (not per mouse-move frame)
+            if(mTransformState == TS_TRANSLATE)
+                SentryReporter::addBreadcrumb("ui.transform", "Translate selected");
+            else if(mTransformState == TS_ROTATE)
+                SentryReporter::addBreadcrumb("ui.transform", "Rotate selected");
+
             // Checking the ray intersection with a plane parallele to viewport & on the geometric center of selection
             Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
             std::pair<bool, Ogre::Real> result = mouseRay.intersects(Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
@@ -565,7 +571,6 @@ void TransformOperator::setSelectedPosition(const Ogre::Vector3& newPosition)
 
 void TransformOperator::translateSelected(const Ogre::Vector3& translation)
 {
-    SentryReporter::addBreadcrumb("ui.transform", "Translate selected");
     if(SelectionSet::getSingleton()->hasNodes())
     {
         foreach(Ogre::SceneNode* node,SelectionSet::getSingleton()->getNodesSelectionList())
@@ -601,7 +606,6 @@ void TransformOperator::setSelectedScale(const Ogre::Vector3& newScale)
 
 void TransformOperator::scaleSelected(const Ogre::Vector3& scaleFactor)
 {
-    SentryReporter::addBreadcrumb("ui.transform", "Scale selected");
     if(SelectionSet::getSingleton()->hasNodes())
     {
         foreach(Ogre::SceneNode* node,SelectionSet::getSingleton()->getNodesSelectionList())
@@ -643,7 +647,6 @@ void TransformOperator::setSelectedOrientation(const Ogre::Vector3& newOrientati
 
 void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
 {
-    SentryReporter::addBreadcrumb("ui.transform", "Rotate selected");
     if(SelectionSet::getSingleton()->hasNodes())
     {
         Ogre::Vector3 translation;
