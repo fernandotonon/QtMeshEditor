@@ -11,6 +11,7 @@
 #include "mainwindow.h"
 #include "TransformWidget.h"
 #include "Manager.h"
+#include "SentryReporter.h"
 #include "MeshTransform.h"
 #include "Euler.h"
 #include "ViewportGrid.h"
@@ -149,6 +150,7 @@ void TransformOperator::onTransformStateChange(const TransformState newState)
 
 void TransformOperator::removeSelected()
 {
+    SentryReporter::addBreadcrumb("ui.action", "Remove selected objects");
     SelectionSet* pCurrentSelection = SelectionSet::getSingleton();
     if(!pCurrentSelection->isEmpty())
     {
@@ -563,6 +565,7 @@ void TransformOperator::setSelectedPosition(const Ogre::Vector3& newPosition)
 
 void TransformOperator::translateSelected(const Ogre::Vector3& translation)
 {
+    SentryReporter::addBreadcrumb("ui.transform", "Translate selected");
     if(SelectionSet::getSingleton()->hasNodes())
     {
         foreach(Ogre::SceneNode* node,SelectionSet::getSingleton()->getNodesSelectionList())
@@ -598,6 +601,7 @@ void TransformOperator::setSelectedScale(const Ogre::Vector3& newScale)
 
 void TransformOperator::scaleSelected(const Ogre::Vector3& scaleFactor)
 {
+    SentryReporter::addBreadcrumb("ui.transform", "Scale selected");
     if(SelectionSet::getSingleton()->hasNodes())
     {
         foreach(Ogre::SceneNode* node,SelectionSet::getSingleton()->getNodesSelectionList())
@@ -639,6 +643,7 @@ void TransformOperator::setSelectedOrientation(const Ogre::Vector3& newOrientati
 
 void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
 {
+    SentryReporter::addBreadcrumb("ui.transform", "Rotate selected");
     if(SelectionSet::getSingleton()->hasNodes())
     {
         Ogre::Vector3 translation;

@@ -13,6 +13,7 @@
 #include "SelectionSet.h"
 #include "Manager.h"
 #include "AnimationWidget.h"
+#include "SentryReporter.h"
 
 AnimationWidget::AnimationWidget(QWidget *parent) :
     QWidget(parent)
@@ -252,6 +253,7 @@ void AnimationWidget::updateSkeletonTable()
 
 void AnimationWidget::on_PlayPauseButton_toggled(bool checked)
 {
+    SentryReporter::addBreadcrumb("ui.animation", "Toggle animation playback");
     setAnimationState(checked);
 }
 

@@ -1,5 +1,6 @@
 #include "MaterialEditorQML.h"
 #include "Manager.h"
+#include "SentryReporter.h"
 #include "LLMManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
@@ -154,6 +155,7 @@ void MaterialEditorQML::loadMaterial(const QString &materialName)
 
 void MaterialEditorQML::createNewMaterial(const QString &materialName)
 {
+    SentryReporter::addBreadcrumb("ui.material", "Create new material");
     QString name = materialName.isEmpty() ? "new_material" : materialName;
     setMaterialName(name);
     setMaterialText(QString("material %1\n{\n\ttechnique\n\t{\n\t\tpass\n\t\t{\n\t\t}\n\t}\n}").arg(name));
@@ -175,6 +177,7 @@ void MaterialEditorQML::createNewMaterial(const QString &materialName)
 
 bool MaterialEditorQML::applyMaterial()
 {
+    SentryReporter::addBreadcrumb("ui.material", "Apply material");
     // Safety check for Ogre availability
     if (!isOgreAvailable()) {
         // Just validate the script and emit success if Ogre is not available

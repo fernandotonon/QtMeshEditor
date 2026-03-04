@@ -8,6 +8,7 @@
 #include "SelectionSet.h"
 #include "Manager.h"
 #include "PrimitivesWidget.h"
+#include "SentryReporter.h"
 
 #include "mainwindow.h"
 
@@ -816,6 +817,7 @@ void PrimitivesWidget::createCube()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Cube");
     PrimitiveObject::createCube(name);
 }
 
@@ -830,6 +832,7 @@ void PrimitivesWidget::createSphere()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Sphere");
     PrimitiveObject::createSphere(name);
     //createPrimitive(PrimitiveObject::AP_SPHERE, name);
 }
@@ -845,6 +848,7 @@ void PrimitivesWidget::createPlane()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Plane");
     PrimitiveObject::createPlane(name);
     //createPrimitive(PrimitiveObject::AP_PLAN, name);
 }
@@ -860,6 +864,7 @@ void PrimitivesWidget::createCylinder()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Cylinder");
     PrimitiveObject::createCylinder(name);
     //createPrimitive(PrimitiveObject::AP_CYLINDER, name);
 }
@@ -874,6 +879,7 @@ void PrimitivesWidget::createCone()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Cone");
     PrimitiveObject::createCone(name);
     //createPrimitive(PrimitiveObject::AP_CONE, name);
 }
@@ -888,6 +894,7 @@ void PrimitivesWidget::createTorus()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Torus");
     PrimitiveObject::createTorus(name);
     //createPrimitive(PrimitiveObject::AP_TORUS, name);
 }
@@ -902,6 +909,7 @@ void PrimitivesWidget::createTube()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Tube");
     PrimitiveObject::createTube(name);
     //createPrimitive(PrimitiveObject::AP_TUBE, name);
 }
@@ -916,6 +924,7 @@ void PrimitivesWidget::createCapsule()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Capsule");
     PrimitiveObject::createCapsule(name);
     //createPrimitive(PrimitiveObject::AP_CAPSULE, name);
 }
@@ -930,6 +939,7 @@ void PrimitivesWidget::createIcoSphere()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: IcoSphere");
     PrimitiveObject::createIcoSphere(name);
     //createPrimitive(PrimitiveObject::AP_ICOSPHERE, name);
 }
@@ -944,6 +954,7 @@ void PrimitivesWidget::createRoundedBox()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: RoundedBox");
     PrimitiveObject::createRoundedBox(name);
     //createPrimitive(PrimitiveObject::AP_ROUNDEDBOX, name);
 }
@@ -958,6 +969,7 @@ void PrimitivesWidget::createSpring()
     if(!ok)
         return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Spring");
     PrimitiveObject::createSpring(name);
     //createPrimitive(PrimitiveObject::AP_SPRING, name);
 }

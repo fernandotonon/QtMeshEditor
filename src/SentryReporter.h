@@ -27,6 +27,9 @@ public:
     static void addBreadcrumb(const QString &category, const QString &message,
                               const QString &level = "info");
 
+    // Tags (persist for the entire session, appear on every event)
+    static void setTag(const QString &key, const QString &value);
+
     // Manual events
     static void captureMessage(const QString &message, const QString &level = "info");
 
