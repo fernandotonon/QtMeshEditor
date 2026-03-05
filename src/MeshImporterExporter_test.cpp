@@ -640,4 +640,14 @@ TEST_F(MeshImporterExporterTest, ImportMultipleFiles) {
     EXPECT_GE(Manager::getSingleton()->getSceneNodes().size(), nodesBefore + 2);
 }
 
+TEST(MeshImporterExporterStandaloneTest, GetSupportedExportFormats) {
+    QString filter = MeshImporterExporter::exportFileDialogFilter();
+    EXPECT_TRUE(filter.contains("*.obj"));
+    EXPECT_TRUE(filter.contains("*.stl"));
+    EXPECT_TRUE(filter.contains("*.dae"));
+    EXPECT_TRUE(filter.contains("*.mesh"));
+    EXPECT_TRUE(filter.contains("*.gltf2"));
+    EXPECT_TRUE(filter.contains("*.glb2"));
+    EXPECT_TRUE(filter.contains("*.mesh.xml"));
+}
 

@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include "PrimitiveObject.h"
 
 #include "Manager.h"
+#include "SentryReporter.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
 #include "mainwindow.h"
@@ -251,9 +252,10 @@ Ogre::Entity* Manager::createEntity(Ogre::SceneNode* const& sceneNode, const Ogr
 
 void Manager::destroySceneNode(const QString & name)
 {
+    SentryReporter::addBreadcrumb("scene", "Destroy scene node");
     if (!mSceneMgr)
         return;
-    
+
     try {
         Ogre::SceneNode* node = mSceneMgr->getSceneNode(name.toStdString().data());
         if (node)
@@ -521,6 +523,7 @@ void Manager::initRenderSystem()
     }
 
     mRoot->setRenderSystem( renderSystem );
+    SentryReporter::setTag("ogre_renderer", QString::fromStdString(renderSystem->getName()));
 
     try {
         mRoot->saveConfig();

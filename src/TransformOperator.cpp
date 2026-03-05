@@ -11,6 +11,7 @@
 #include "mainwindow.h"
 #include "TransformWidget.h"
 #include "Manager.h"
+#include "SentryReporter.h"
 #include "MeshTransform.h"
 #include "Euler.h"
 #include "ViewportGrid.h"
@@ -149,6 +150,7 @@ void TransformOperator::onTransformStateChange(const TransformState newState)
 
 void TransformOperator::removeSelected()
 {
+    SentryReporter::addBreadcrumb("ui.action", "Remove selected objects");
     SelectionSet* pCurrentSelection = SelectionSet::getSingleton();
     if(!pCurrentSelection->isEmpty())
     {
@@ -420,6 +422,12 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
         }
         else if((!SelectionSet::getSingleton()->isEmpty()) && (e->button() == Qt::LeftButton))
         {
+            // Log a single breadcrumb per transform gesture (not per mouse-move frame)
+            if(mTransformState == TS_TRANSLATE)
+                SentryReporter::addBreadcrumb("ui.transform", "Translate selected");
+            else if(mTransformState == TS_ROTATE)
+                SentryReporter::addBreadcrumb("ui.transform", "Rotate selected");
+
             // Checking the ray intersection with a plane parallele to viewport & on the geometric center of selection
             Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
             std::pair<bool, Ogre::Real> result = mouseRay.intersects(Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));

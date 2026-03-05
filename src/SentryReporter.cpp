@@ -89,6 +89,17 @@ void SentryReporter::showConsentDialog()
     setEnabled(true);
 }
 
+void SentryReporter::setTag(const QString &key, const QString &value)
+{
+#ifdef ENABLE_SENTRY
+    if (!s_initialized) return;
+    sentry_set_tag(key.toUtf8().constData(), value.toUtf8().constData());
+#else
+    Q_UNUSED(key);
+    Q_UNUSED(value);
+#endif
+}
+
 void SentryReporter::addBreadcrumb(const QString &category, const QString &message,
                                    const QString &level)
 {

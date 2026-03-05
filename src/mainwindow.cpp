@@ -499,6 +499,8 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 void MainWindow::on_actionImport_triggered()
 {
+    SentryReporter::addBreadcrumb("ui.action", "Import mesh files");
+
     QStringList fileNames = QFileDialog::getOpenFileNames(this, tr("Select a mesh file to import"),
                                                      "",
                                                      QString("Model ( "+ Manager::getSingleton()->getValidFileExtention().replace(".","*.") + " )"),
@@ -511,33 +513,49 @@ void MainWindow::on_actionImport_triggered()
 
 void MainWindow::importMeshs(const QStringList &_uriList)
 {
-    MeshImporterExporter::importer(_uriList/*, &lastImported*/);
+    auto txn = SentryReporter::startTransaction("ui.import", "file.import");
+    try {
+        MeshImporterExporter::importer(_uriList/*, &lastImported*/);
+    } catch (...) {
+        SentryReporter::finishTransaction(txn);
+        throw;
+    }
+    SentryReporter::finishTransaction(txn);
 }
 
 void MainWindow::on_actionExport_Selected_triggered()
 {
-    const auto* sel = SelectionSet::getSingleton();
+    SentryReporter::addBreadcrumb("ui.action", "Export selected mesh");
+    auto txn = SentryReporter::startTransaction("ui.export", "file.export");
 
-    if(sel->hasNodes())
-    {
-        foreach(Ogre::SceneNode* node, sel->getNodesSelectionList())
+    try {
+        const auto* sel = SelectionSet::getSingleton();
+
+        if(sel->hasNodes())
         {
-            QString exportedPath = MeshImporterExporter::exporter(node);
-            if (!exportedPath.isEmpty())
-                addToRecentFiles(exportedPath);
+            foreach(Ogre::SceneNode* node, sel->getNodesSelectionList())
+            {
+                QString exportedPath = MeshImporterExporter::exporter(node);
+                if (!exportedPath.isEmpty())
+                    addToRecentFiles(exportedPath);
+            }
         }
-    }
-    else if(sel->hasEntities())
-    {
-        foreach(Ogre::Entity* entity, sel->getEntitiesSelectionList())
+        else if(sel->hasEntities())
         {
-            auto* node = entity->getParentSceneNode();
-            if (!node) continue;
-            QString exportedPath = MeshImporterExporter::exporter(node);
-            if (!exportedPath.isEmpty())
-                addToRecentFiles(exportedPath);
+            foreach(Ogre::Entity* entity, sel->getEntitiesSelectionList())
+            {
+                auto* node = entity->getParentSceneNode();
+                if (!node) continue;
+                QString exportedPath = MeshImporterExporter::exporter(node);
+                if (!exportedPath.isEmpty())
+                    addToRecentFiles(exportedPath);
+            }
         }
+    } catch (...) {
+        SentryReporter::finishTransaction(txn);
+        throw;
     }
+    SentryReporter::finishTransaction(txn);
 }
 
 void MainWindow::on_actionMaterial_Editor_triggered()

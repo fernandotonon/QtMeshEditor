@@ -5,6 +5,7 @@
 #include <QTimer>
 #include <QStyleFactory>
 #include <QSettings>
+#include <QSysInfo>
 #include <QLibraryInfo>
 #include <QCommandLineParser>
 #include <QScopeGuard>
@@ -36,6 +37,14 @@ static void forceX11PlatformIfNeeded()
     }
 }
 #endif
+
+static void setSentrySessionTags(const QString& launchMode)
+{
+    SentryReporter::setTag("os", QSysInfo::prettyProductName());
+    SentryReporter::setTag("arch", QSysInfo::currentCpuArchitecture());
+    SentryReporter::setTag("qt_version", qVersion());
+    SentryReporter::setTag("launch_mode", launchMode);
+}
 
 int main(int argc, char *argv[])
 {
@@ -183,6 +192,8 @@ int main(int argc, char *argv[])
         SentryReporter::initialize();
         auto sentryClose = qScopeGuard([] { SentryReporter::shutdown(); });
 
+        setSentrySessionTags("mcp");
+
         MCPServer server;
         // Note: In standalone MCP mode, we don't have a MainWindow
         server.setOutputFd(savedStdoutFd);
@@ -234,6 +245,8 @@ int main(int argc, char *argv[])
     SentryReporter::initialize();
     auto sentryClose = qScopeGuard([] { SentryReporter::shutdown(); });
 
+    setSentrySessionTags(mcpWithGuiMode ? "gui+mcp" : "gui");
+
     // Register QML types
     qmlRegisterSingletonType<MaterialEditorQML>("MaterialEditorQML", 1, 0, "MaterialEditorQML",
         [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
@@ -255,6 +268,8 @@ int main(int argc, char *argv[])
     // Register QMLMaterialHighlighter for QML use
     qmlRegisterType<QMLMaterialHighlighter>("MaterialEditorQML", 1, 0, "MaterialHighlighter");
 
+    auto startupTxn = SentryReporter::startTransaction("app.startup", "app.load");
+    auto startupTxnClose = qScopeGuard([&] { SentryReporter::finishTransaction(startupTxn); });
     MainWindow w;
     w.show();
 
