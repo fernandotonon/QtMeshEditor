@@ -140,6 +140,11 @@ MainWindow::MainWindow(QWidget *parent) :
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)
 MainWindow::~MainWindow()
 {
+    // Destroy NormalVisualizer early — it connects to Manager signals and
+    // accesses Ogre resources, so it must be deleted while Manager is alive.
+    delete m_normalVisualizer;
+    m_normalVisualizer = nullptr;
+
     // Stop MCP server if running
     if (m_mcpServer) {
         m_mcpServer->stop();

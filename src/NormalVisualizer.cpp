@@ -65,7 +65,7 @@ void NormalVisualizer::setVisible(bool visible)
                     buildOverlayForEntity(static_cast<Ogre::Entity*>(obj));
             }
         }
-        mUpdateTimer.start(0);
+        mUpdateTimer.start(16);
     }
     else
     {
@@ -109,6 +109,29 @@ void NormalVisualizer::buildOverlayForEntity(Ogre::Entity* entity)
     if (!mesh)
         return;
 
+    // Clean up stale overlay if an entity with the same name was replaced
+    // (e.g. PrimitiveObject::updatePrimitive destroys/recreates entities
+    // without emitting sceneNodeDestroyed, leaving a dangling entry).
+    Ogre::String moName = "NormalVisualizer_" + entity->getName();
+    if (mSceneMgr->hasManualObject(moName))
+    {
+        // Find and remove the stale entry keyed by the old (dangling) pointer
+        for (auto it = mOverlays.begin(); it != mOverlays.end(); ++it)
+        {
+            if (it.value().manualObject->getName() == moName)
+            {
+                OverlayData& stale = it.value();
+                stale.node->detachObject(stale.manualObject);
+                mSceneMgr->destroyManualObject(stale.manualObject);
+                mSceneMgr->destroySceneNode(stale.node);
+                Ogre::Entity* staleEntity = it.key();
+                mOverlays.erase(it);
+                mSoftwareAnimRequested.remove(staleEntity);
+                break;
+            }
+        }
+    }
+
     bool hasSkel = entity->hasSkeleton();
 
     // Request software animation with normals for skeletal entities
@@ -118,7 +141,6 @@ void NormalVisualizer::buildOverlayForEntity(Ogre::Entity* entity)
         mSoftwareAnimRequested.insert(entity);
     }
 
-    Ogre::String moName = "NormalVisualizer_" + entity->getName();
     Ogre::ManualObject* mo = mSceneMgr->createManualObject(moName);
     mo->setDynamic(hasSkel);
 
