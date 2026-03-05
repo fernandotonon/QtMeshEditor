@@ -41,6 +41,7 @@
 #include "LLMSettingsWidget.h"
 #include "MCPSettingsDialog.h"
 #include "MCPServer.h"
+#include "NormalVisualizer.h"
 #include "LLMManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
@@ -139,6 +140,11 @@ MainWindow::MainWindow(QWidget *parent) :
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)
 MainWindow::~MainWindow()
 {
+    // Destroy NormalVisualizer early — it connects to Manager signals and
+    // accesses Ogre resources, so it must be deleted while Manager is alive.
+    delete m_normalVisualizer;
+    m_normalVisualizer = nullptr;
+
     // Stop MCP server if running
     if (m_mcpServer) {
         m_mcpServer->stop();
@@ -335,6 +341,10 @@ void MainWindow::initToolBar()
 
     // show grid
     connect(ui->actionShow_Grid, SIGNAL(toggled(bool)),Manager::getSingleton()->getViewportGrid(),SLOT(setVisible(bool)));
+
+    // show normals
+    m_normalVisualizer = new NormalVisualizer(Manager::getSingleton()->getSceneMgr(), this);
+    connect(ui->actionShow_Normals, &QAction::toggled, m_normalVisualizer, &NormalVisualizer::setVisible);
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));

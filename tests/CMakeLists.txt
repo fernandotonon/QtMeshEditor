@@ -51,6 +51,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalVisualizer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationMerger.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp
@@ -98,6 +99,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ModelDownloader.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SentryReporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneWeightOverlay.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/NormalVisualizer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationMerger.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPServer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.h

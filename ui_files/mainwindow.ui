@@ -79,6 +79,7 @@
      <addaction name="actionCustom"/>
     </widget>
     <addaction name="actionShow_Grid"/>
+    <addaction name="actionShow_Normals"/>
     <addaction name="actionChange_Ambient_Light"/>
     <addaction name="actionChange_BG_Color"/>
     <addaction name="menuView"/>
@@ -211,6 +212,17 @@
    </property>
    <property name="text">
     <string>Show Grid</string>
+   </property>
+  </action>
+  <action name="actionShow_Normals">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Show Normals</string>
    </property>
   </action>
   <action name="actionImport">

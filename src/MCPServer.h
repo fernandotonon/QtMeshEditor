@@ -141,6 +141,7 @@ private:
     QJsonObject toolPlayAnimation(const QJsonObject &args);
     QJsonObject toolToggleSkeletonDebug(const QJsonObject &args);
     QJsonObject toolToggleBoneWeights(const QJsonObject &args);
+    QJsonObject toolToggleNormals(const QJsonObject &args);
     QJsonObject toolMergeAnimations(const QJsonObject &args);
 
     // Animation
@@ -192,7 +193,7 @@ private:
     // MCP Protocol version
     static constexpr const char* MCP_VERSION = "2024-11-05";
     static constexpr const char* SERVER_NAME = "QtMeshEditor";
-    static constexpr const char* SERVER_VERSION = "1.0.0";
+    static constexpr const char* SERVER_VERSION = "1.1.0";
 };
 
 #endif // MCPSERVER_H

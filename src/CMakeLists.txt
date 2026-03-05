@@ -42,6 +42,7 @@ MCPServer.cpp
 MCPSettingsDialog.cpp
 SentryReporter.cpp
 BoneWeightOverlay.cpp
+NormalVisualizer.cpp
 AnimationMerger.cpp
 )
 
@@ -88,6 +89,7 @@ MCPServer.h
 MCPSettingsDialog.h
 SentryReporter.h
 BoneWeightOverlay.h
+NormalVisualizer.h
 AnimationMerger.h
 )
 

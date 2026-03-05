@@ -419,7 +419,7 @@ TEST_F(MCPServerTest, HandleToolsList)
         "list_skeletal_animations", "get_animation_info", "set_animation_length",
         "set_animation_time", "add_keyframe", "remove_keyframe",
         "play_animation", "toggle_skeleton_debug", "toggle_bone_weights",
-        "merge_animations"
+        "toggle_normals", "merge_animations"
     };
 
     for (const QString &tool : knownTools) {
@@ -2488,4 +2488,25 @@ TEST_F(MCPServerTest, PlayAnimationWithSkeletonEntity)
     args["animation"] = "TestAnim";
     QJsonObject result = server->callTool("play_animation", args);
     EXPECT_FALSE(isError(result));
+}
+
+// ==========================================================================
+// NEW TESTS: toggle_normals
+// ==========================================================================
+
+TEST_F(MCPServerTest, ToggleNormalsNoMainWindow)
+{
+    // Server has no MainWindow set — should fail gracefully
+    QJsonObject args;
+    args["show"] = true;
+    QJsonObject result = server->callTool("toggle_normals", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("MainWindow") ||
+                getResultText(result).contains("NormalVisualizer"));
+}
+
+TEST_F(MCPServerTest, ToggleNormalsIsRecognizedTool)
+{
+    QJsonObject result = server->callTool("toggle_normals", QJsonObject());
+    EXPECT_FALSE(getResultText(result).contains("Unknown tool"));
 }

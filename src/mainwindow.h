@@ -13,6 +13,7 @@
 
 class LLMSettingsWidget;
 class MCPServer;
+class NormalVisualizer;
 
 namespace Ui {
 class MainWindow;
@@ -121,6 +122,7 @@ private:
     void updateMergeAnimationsButton();
     const QPalette& darkPalette();
 
+    NormalVisualizer* m_normalVisualizer = nullptr;
     MCPServer* m_mcpServer = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
