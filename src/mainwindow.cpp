@@ -41,6 +41,7 @@
 #include "LLMSettingsWidget.h"
 #include "MCPSettingsDialog.h"
 #include "MCPServer.h"
+#include "NormalVisualizer.h"
 #include "LLMManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
@@ -335,6 +336,10 @@ void MainWindow::initToolBar()
 
     // show grid
     connect(ui->actionShow_Grid, SIGNAL(toggled(bool)),Manager::getSingleton()->getViewportGrid(),SLOT(setVisible(bool)));
+
+    // show normals
+    m_normalVisualizer = new NormalVisualizer(Manager::getSingleton()->getSceneMgr(), this);
+    connect(ui->actionShow_Normals, &QAction::toggled, m_normalVisualizer, &NormalVisualizer::setVisible);
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
