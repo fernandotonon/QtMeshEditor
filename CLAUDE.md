@@ -65,6 +65,11 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 
 - **MaterialEditorQML** (`src/MaterialEditorQML.h/cpp`): QML_SINGLETON exposing full Ogre material property access (colors, lighting, depth, blending, fog, textures) with undo/redo. QML UI in `qml/`.
 
+### Debug Overlays
+
+- **NormalVisualizer** (`src/NormalVisualizer.h/cpp`): Draws vertex normals as colored lines (|X|=Red, |Y|=Green, |Z|=Blue). Toggled globally via Options → Show Normals menu or MCP `toggle_normals` tool. Supports real-time animation: requests software-skinned normals via `addSoftwareAnimationRequest(true)` and updates each frame for skeletal entities. Overlays attach to dedicated child scene nodes to avoid unsafe `static_cast<Entity*>` crashes in `ObjectItemModel` and `Manager::getEntities()`.
+- **BoneWeightOverlay** (`src/BoneWeightOverlay.h/cpp`): Per-entity bone weight heat-map overlay.
+
 ### MCP Server
 
 - **MCPServer** (`src/MCPServer.h/cpp`): JSON-RPC 2.0 over stdio + HTTP REST API on configurable port.

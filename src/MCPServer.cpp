@@ -8,6 +8,7 @@
 #include "MeshImporterExporter.h"
 #include "OgreWidget.h"
 #include "AnimationWidget.h"
+#include "NormalVisualizer.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -440,6 +441,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolToggleSkeletonDebug(args);
     } else if (name == "toggle_bone_weights") {
         toolResult = toolToggleBoneWeights(args);
+    } else if (name == "toggle_normals") {
+        toolResult = toolToggleNormals(args);
     } else if (name == "merge_animations") {
         toolResult = toolMergeAnimations(args);
     } else {
@@ -1883,6 +1886,21 @@ void MCPServer::onAnimationTick()
     }
 }
 
+QJsonObject MCPServer::toolToggleNormals(const QJsonObject &args)
+{
+    if (!m_mainWindow)
+        return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag.");
+
+    NormalVisualizer* visualizer = m_mainWindow->findChild<NormalVisualizer*>();
+    if (!visualizer)
+        return makeErrorResult("Error: NormalVisualizer not found");
+
+    bool show = args.contains("show") ? args["show"].toBool() : !visualizer->isVisible();
+    visualizer->setVisible(show);
+
+    return makeSuccessResult(QString("Normals %1").arg(show ? "shown" : "hidden"));
+}
+
 QJsonObject MCPServer::toolMergeAnimations(const QJsonObject &args)
 {
     try {
@@ -2407,6 +2425,24 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "toggle_bone_weights",
             "Show or hide bone weight heat-map overlay on an entity. Colors range from blue (0) to red (1). Optionally select a specific bone to highlight its weight influence.",
+            inputSchema
+        ));
+    }
+
+    // toggle_normals
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["show"] = QJsonObject{{"type", "boolean"}, {"description", "True to show, false to hide. If omitted, toggles the current state."}};
+        inputSchema["properties"] = props;
+
+        tools.append(buildToolDefinition(
+            "toggle_normals",
+            "Show or hide vertex normal visualization on all entities in the scene. "
+            "Normals are displayed as colored lines extending from each vertex, "
+            "color-coded by direction (|X|=Red, |Y|=Green, |Z|=Blue). "
+            "Normals follow skeletal animations in real-time.",
             inputSchema
         ));
     }

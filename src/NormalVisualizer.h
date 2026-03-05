@@ -2,8 +2,11 @@
 #define NORMALVISUALIZER_H
 
 #include <Ogre.h>
+#include <OgreSubEntity.h>
 #include <QObject>
 #include <QMap>
+#include <QTimer>
+#include <QSet>
 
 class NormalVisualizer : public QObject
 {
@@ -26,15 +29,22 @@ private:
     void destroyOverlayForEntity(Ogre::Entity* entity);
     void destroyAllOverlays();
     void createMaterial();
+    void updateAnimatedOverlays();
 
     Ogre::SceneManager* mSceneMgr;
     Ogre::MaterialPtr mMaterial;
     bool mVisible = false;
+    QTimer mUpdateTimer;
+
+    static constexpr float NORMAL_LENGTH = 0.1f;
+
     struct OverlayData {
         Ogre::ManualObject* manualObject;
         Ogre::SceneNode* node;
+        bool hasSkeleton;
     };
     QMap<Ogre::Entity*, OverlayData> mOverlays;
+    QSet<Ogre::Entity*> mSoftwareAnimRequested;
 };
 
 #endif // NORMALVISUALIZER_H
