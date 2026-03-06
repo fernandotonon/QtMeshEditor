@@ -1792,15 +1792,18 @@ TEST_F(MaterialEditorQMLWithOgreTest, ResetPropertiesToDefaults) {
     editor->setDepthCheckEnabled(false);
     editor->setPolygonMode(0); // Points
 
-    // Now load a new material which triggers resetPropertiesToDefaults internally
+    // Create a fresh new material. Its script template has an empty pass,
+    // which Ogre parses with default pass properties (lighting on, depth
+    // write on, depth check on).
     editor->createNewMaterial("ResetTest");
+    ASSERT_TRUE(editor->applyMaterial());
 
-    // After creating new material, load it with Ogre to trigger property reset
-    editor->loadMaterial("BaseWhite");
+    // Load the freshly-created Ogre material to read its pass properties
+    editor->loadMaterial("ResetTest");
+    ASSERT_FALSE(editor->passList().isEmpty());
 
-    // Properties should be at defaults from the loaded material
-    // The key assertion is that loading a material resets properties
-    // and doesn't carry stale values from the previous material
+    // A brand-new Ogre pass has these defaults; the editor must reflect them
+    // and not carry stale values from the previously edited BaseWhite material
     EXPECT_TRUE(editor->lightingEnabled());
     EXPECT_TRUE(editor->depthWriteEnabled());
     EXPECT_TRUE(editor->depthCheckEnabled());

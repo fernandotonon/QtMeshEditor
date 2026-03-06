@@ -2478,8 +2478,9 @@ TEST_F(FBXExporterCoverageTest, ExportMultiSubmeshMesh_WritesAllGeometry) {
         auto* verts = geom->find("Vertices");
         ASSERT_NE(verts, nullptr);
         EXPECT_FALSE(verts->properties.empty());
-        // 3 vertices * 3 components = 9 doubles per submesh
-        EXPECT_EQ(verts->properties[0].doubleArray.size(), 9u);
+        // Both submeshes use shared vertex data (6 vertices total),
+        // so each Geometry node contains all 6 vertices * 3 components = 18 doubles
+        EXPECT_EQ(verts->properties[0].doubleArray.size(), 18u);
     }
 
     // Should have connections

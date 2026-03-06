@@ -518,22 +518,24 @@ TEST_F(PrimitivesWidgetTest, SetUiEmptyHidesAllFields)
     auto* edit_VTile = widget.findChild<QDoubleSpinBox*>("edit_VTile");
     auto* pb_switchUV = widget.findChild<QPushButton*>("pb_switchUV");
 
-    // setUiEmpty is called during construction, so verify initial state
+    // setUiEmpty is called during construction, so verify initial state.
+    // Use isHidden() instead of !isVisible() because isVisible() checks the
+    // entire ancestor chain, which is unreliable in headless test environments.
     EXPECT_EQ(edit_type->text(), "");
-    EXPECT_FALSE(gb_Geometry->isVisible());
-    EXPECT_FALSE(gb_Mesh->isVisible());
-    EXPECT_FALSE(edit_sizeX->isVisible());
-    EXPECT_FALSE(edit_sizeY->isVisible());
-    EXPECT_FALSE(edit_sizeZ->isVisible());
-    EXPECT_FALSE(edit_radius->isVisible());
-    EXPECT_FALSE(edit_radius2->isVisible());
-    EXPECT_FALSE(edit_height->isVisible());
-    EXPECT_FALSE(edit_numSegX->isVisible());
-    EXPECT_FALSE(edit_numSegY->isVisible());
-    EXPECT_FALSE(edit_numSegZ->isVisible());
-    EXPECT_FALSE(edit_UTile->isVisible());
-    EXPECT_FALSE(edit_VTile->isVisible());
-    EXPECT_FALSE(pb_switchUV->isVisible());
+    EXPECT_TRUE(gb_Geometry->isHidden());
+    EXPECT_TRUE(gb_Mesh->isHidden());
+    EXPECT_TRUE(edit_sizeX->isHidden());
+    EXPECT_TRUE(edit_sizeY->isHidden());
+    EXPECT_TRUE(edit_sizeZ->isHidden());
+    EXPECT_TRUE(edit_radius->isHidden());
+    EXPECT_TRUE(edit_radius2->isHidden());
+    EXPECT_TRUE(edit_height->isHidden());
+    EXPECT_TRUE(edit_numSegX->isHidden());
+    EXPECT_TRUE(edit_numSegY->isHidden());
+    EXPECT_TRUE(edit_numSegZ->isHidden());
+    EXPECT_TRUE(edit_UTile->isHidden());
+    EXPECT_TRUE(edit_VTile->isHidden());
+    EXPECT_TRUE(pb_switchUV->isHidden());
 }
 
 TEST_F(PrimitivesWidgetTest, CubeUiShowsSizeFieldsAndSegments)
@@ -560,20 +562,23 @@ TEST_F(PrimitivesWidgetTest, CubeUiShowsSizeFieldsAndSegments)
     auto* pb_switchUV = widget.findChild<QPushButton*>("pb_switchUV");
 
     EXPECT_EQ(edit_type->text(), "Cube");
-    EXPECT_TRUE(gb_Geometry->isVisible());
-    EXPECT_TRUE(gb_Mesh->isVisible());
-    EXPECT_TRUE(edit_sizeX->isVisible());
-    EXPECT_TRUE(edit_sizeY->isVisible());
-    EXPECT_TRUE(edit_sizeZ->isVisible());
-    EXPECT_FALSE(edit_radius->isVisible());
-    EXPECT_FALSE(edit_height->isVisible());
-    EXPECT_TRUE(edit_numSegX->isVisible());
-    EXPECT_TRUE(edit_numSegY->isVisible());
-    EXPECT_TRUE(edit_numSegZ->isVisible());
-    EXPECT_TRUE(edit_UTile->isVisible());
-    EXPECT_TRUE(edit_VTile->isVisible());
+    // Use !isHidden() instead of isVisible() because isVisible() requires
+    // the entire ancestor widget chain to be shown, which fails under
+    // headless (Xvfb) testing where the top-level widget is never shown.
+    EXPECT_FALSE(gb_Geometry->isHidden());
+    EXPECT_FALSE(gb_Mesh->isHidden());
+    EXPECT_FALSE(edit_sizeX->isHidden());
+    EXPECT_FALSE(edit_sizeY->isHidden());
+    EXPECT_FALSE(edit_sizeZ->isHidden());
+    EXPECT_TRUE(edit_radius->isHidden());
+    EXPECT_TRUE(edit_height->isHidden());
+    EXPECT_FALSE(edit_numSegX->isHidden());
+    EXPECT_FALSE(edit_numSegY->isHidden());
+    EXPECT_FALSE(edit_numSegZ->isHidden());
+    EXPECT_FALSE(edit_UTile->isHidden());
+    EXPECT_FALSE(edit_VTile->isHidden());
     // Cube hides switchUV
-    EXPECT_FALSE(pb_switchUV->isVisible());
+    EXPECT_TRUE(pb_switchUV->isHidden());
 
     Manager::getSingleton()->destroySceneNode("UiCube");
 }
@@ -597,13 +602,13 @@ TEST_F(PrimitivesWidgetTest, SphereUiShowsRadiusAndRingLoopSegments)
     auto* label_numSegY = widget.findChild<QLabel*>("label_numSegY");
 
     EXPECT_EQ(edit_type->text(), "Sphere");
-    EXPECT_FALSE(edit_sizeX->isVisible());
-    EXPECT_TRUE(edit_radius->isVisible());
-    EXPECT_FALSE(edit_radius2->isVisible());
-    EXPECT_FALSE(edit_height->isVisible());
-    EXPECT_TRUE(edit_numSegX->isVisible());
-    EXPECT_TRUE(edit_numSegY->isVisible());
-    EXPECT_FALSE(edit_numSegZ->isVisible());
+    EXPECT_TRUE(edit_sizeX->isHidden());
+    EXPECT_FALSE(edit_radius->isHidden());
+    EXPECT_TRUE(edit_radius2->isHidden());
+    EXPECT_TRUE(edit_height->isHidden());
+    EXPECT_FALSE(edit_numSegX->isHidden());
+    EXPECT_FALSE(edit_numSegY->isHidden());
+    EXPECT_TRUE(edit_numSegZ->isHidden());
     EXPECT_EQ(label_numSegX->text(), "Seg Ring");
     EXPECT_EQ(label_numSegY->text(), "Seg Loop");
 
@@ -629,13 +634,13 @@ TEST_F(PrimitivesWidgetTest, CylinderUiShowsRadiusHeightAndBaseHeightSegments)
     auto* label_numSegZ = widget.findChild<QLabel*>("label_numSegZ");
 
     EXPECT_EQ(edit_type->text(), "Cylinder");
-    EXPECT_FALSE(edit_sizeX->isVisible());
-    EXPECT_TRUE(edit_radius->isVisible());
-    EXPECT_FALSE(edit_radius2->isVisible());
-    EXPECT_TRUE(edit_height->isVisible());
-    EXPECT_TRUE(edit_numSegX->isVisible());
-    EXPECT_FALSE(edit_numSegY->isVisible());
-    EXPECT_TRUE(edit_numSegZ->isVisible());
+    EXPECT_TRUE(edit_sizeX->isHidden());
+    EXPECT_FALSE(edit_radius->isHidden());
+    EXPECT_TRUE(edit_radius2->isHidden());
+    EXPECT_FALSE(edit_height->isHidden());
+    EXPECT_FALSE(edit_numSegX->isHidden());
+    EXPECT_TRUE(edit_numSegY->isHidden());
+    EXPECT_FALSE(edit_numSegZ->isHidden());
     EXPECT_EQ(label_numSegX->text(), "Seg Base");
     EXPECT_EQ(label_numSegZ->text(), "Seg Height");
 
@@ -659,9 +664,9 @@ TEST_F(PrimitivesWidgetTest, TorusUiShowsTwoRadiiAndCircleSectionSegments)
     auto* label_numSegY = widget.findChild<QLabel*>("label_numSegY");
 
     EXPECT_EQ(edit_type->text(), "Torus");
-    EXPECT_TRUE(edit_radius->isVisible());
-    EXPECT_TRUE(edit_radius2->isVisible());
-    EXPECT_FALSE(edit_height->isVisible());
+    EXPECT_FALSE(edit_radius->isHidden());
+    EXPECT_FALSE(edit_radius2->isHidden());
+    EXPECT_TRUE(edit_height->isHidden());
     EXPECT_EQ(label_radius->text(), "Radius");
     EXPECT_EQ(label_radius2->text(), "Section Radius");
     EXPECT_EQ(label_numSegX->text(), "Seg Circle");
@@ -685,9 +690,9 @@ TEST_F(PrimitivesWidgetTest, TubeUiShowsOuterInnerRadiusAndHeight)
     auto* label_radius2 = widget.findChild<QLabel*>("label_radius2");
 
     EXPECT_EQ(edit_type->text(), "Tube");
-    EXPECT_TRUE(edit_radius->isVisible());
-    EXPECT_TRUE(edit_radius2->isVisible());
-    EXPECT_TRUE(edit_height->isVisible());
+    EXPECT_FALSE(edit_radius->isHidden());
+    EXPECT_FALSE(edit_radius2->isHidden());
+    EXPECT_FALSE(edit_height->isHidden());
     EXPECT_EQ(label_radius->text(), "Outer Radius");
     EXPECT_EQ(label_radius2->text(), "Inner Radius");
 
@@ -711,12 +716,12 @@ TEST_F(PrimitivesWidgetTest, IcoSphereUiShowsRadiusAndIterations)
     auto* label_numSegX = widget.findChild<QLabel*>("label_numSegX");
 
     EXPECT_EQ(edit_type->text(), "IcoSphere");
-    EXPECT_TRUE(edit_radius->isVisible());
-    EXPECT_FALSE(edit_radius2->isVisible());
-    EXPECT_FALSE(edit_height->isVisible());
-    EXPECT_TRUE(edit_numSegX->isVisible());
-    EXPECT_FALSE(edit_numSegY->isVisible());
-    EXPECT_FALSE(edit_numSegZ->isVisible());
+    EXPECT_FALSE(edit_radius->isHidden());
+    EXPECT_TRUE(edit_radius2->isHidden());
+    EXPECT_TRUE(edit_height->isHidden());
+    EXPECT_FALSE(edit_numSegX->isHidden());
+    EXPECT_TRUE(edit_numSegY->isHidden());
+    EXPECT_TRUE(edit_numSegZ->isHidden());
     EXPECT_EQ(label_numSegX->text(), "Iterations");
 
     Manager::getSingleton()->destroySceneNode("UiIco");
@@ -774,15 +779,15 @@ TEST_F(PrimitivesWidgetTest, SelectCubeThenSphereSwitchesUi)
     SelectionSet::getSingleton()->selectOne(
         Manager::getSingleton()->getSceneMgr()->getSceneNode("SwitchCube"));
     EXPECT_EQ(edit_type->text(), "Cube");
-    EXPECT_TRUE(edit_sizeX->isVisible());
-    EXPECT_FALSE(edit_radius->isVisible());
+    EXPECT_FALSE(edit_sizeX->isHidden());
+    EXPECT_TRUE(edit_radius->isHidden());
 
     // Switch to sphere
     SelectionSet::getSingleton()->selectOne(
         Manager::getSingleton()->getSceneMgr()->getSceneNode("SwitchSphere"));
     EXPECT_EQ(edit_type->text(), "Sphere");
-    EXPECT_FALSE(edit_sizeX->isVisible());
-    EXPECT_TRUE(edit_radius->isVisible());
+    EXPECT_TRUE(edit_sizeX->isHidden());
+    EXPECT_FALSE(edit_radius->isHidden());
 
     Manager::getSingleton()->destroySceneNode("SwitchCube");
     Manager::getSingleton()->destroySceneNode("SwitchSphere");
@@ -1181,14 +1186,14 @@ TEST_F(PrimitivesWidgetTest, RoundedBoxUiShowsSizeRadiusAndAllSegments)
     auto* label_radius = widget.findChild<QLabel*>("label_radius");
 
     EXPECT_EQ(edit_type->text(), "Rounded Box");
-    EXPECT_TRUE(edit_sizeX->isVisible());
-    EXPECT_TRUE(edit_sizeY->isVisible());
-    EXPECT_TRUE(edit_sizeZ->isVisible());
-    EXPECT_TRUE(edit_radius->isVisible());
-    EXPECT_FALSE(edit_radius2->isVisible());
-    EXPECT_TRUE(edit_numSegX->isVisible());
-    EXPECT_TRUE(edit_numSegY->isVisible());
-    EXPECT_TRUE(edit_numSegZ->isVisible());
+    EXPECT_FALSE(edit_sizeX->isHidden());
+    EXPECT_FALSE(edit_sizeY->isHidden());
+    EXPECT_FALSE(edit_sizeZ->isHidden());
+    EXPECT_FALSE(edit_radius->isHidden());
+    EXPECT_TRUE(edit_radius2->isHidden());
+    EXPECT_FALSE(edit_numSegX->isHidden());
+    EXPECT_FALSE(edit_numSegY->isHidden());
+    EXPECT_FALSE(edit_numSegZ->isHidden());
     EXPECT_EQ(label_radius->text(), "Chamfer");
 
     Manager::getSingleton()->destroySceneNode("UiRBox");
@@ -1213,12 +1218,12 @@ TEST_F(PrimitivesWidgetTest, CapsuleUiShowsRadiusHeightAndThreeSegments)
     auto* label_numSegZ = widget.findChild<QLabel*>("label_numSegZ");
 
     EXPECT_EQ(edit_type->text(), "Capsule");
-    EXPECT_TRUE(edit_radius->isVisible());
-    EXPECT_FALSE(edit_radius2->isVisible());
-    EXPECT_TRUE(edit_height->isVisible());
-    EXPECT_TRUE(edit_numSegX->isVisible());
-    EXPECT_TRUE(edit_numSegY->isVisible());
-    EXPECT_TRUE(edit_numSegZ->isVisible());
+    EXPECT_FALSE(edit_radius->isHidden());
+    EXPECT_TRUE(edit_radius2->isHidden());
+    EXPECT_FALSE(edit_height->isHidden());
+    EXPECT_FALSE(edit_numSegX->isHidden());
+    EXPECT_FALSE(edit_numSegY->isHidden());
+    EXPECT_FALSE(edit_numSegZ->isHidden());
     EXPECT_EQ(label_numSegX->text(), "Seg Ring");
     EXPECT_EQ(label_numSegY->text(), "Seg Loop");
     EXPECT_EQ(label_numSegZ->text(), "Seg Height");
@@ -1272,13 +1277,13 @@ TEST_F(PrimitivesWidgetTest, PlaneUiShowsTwoSizeFieldsAndTwoSegments)
     auto* edit_numSegZ = widget.findChild<QSpinBox*>("edit_numSegZ");
 
     EXPECT_EQ(edit_type->text(), "Plane");
-    EXPECT_TRUE(edit_sizeX->isVisible());
-    EXPECT_TRUE(edit_sizeY->isVisible());
-    EXPECT_FALSE(edit_sizeZ->isVisible());
-    EXPECT_FALSE(edit_radius->isVisible());
-    EXPECT_TRUE(edit_numSegX->isVisible());
-    EXPECT_TRUE(edit_numSegY->isVisible());
-    EXPECT_FALSE(edit_numSegZ->isVisible());
+    EXPECT_FALSE(edit_sizeX->isHidden());
+    EXPECT_FALSE(edit_sizeY->isHidden());
+    EXPECT_TRUE(edit_sizeZ->isHidden());
+    EXPECT_TRUE(edit_radius->isHidden());
+    EXPECT_FALSE(edit_numSegX->isHidden());
+    EXPECT_FALSE(edit_numSegY->isHidden());
+    EXPECT_TRUE(edit_numSegZ->isHidden());
 
     Manager::getSingleton()->destroySceneNode("UiPlane");
 }
