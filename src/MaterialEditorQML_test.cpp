@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QThread>
+#include <QDir>
 #include "MaterialEditorQML.h"
 #include "Manager.h"
 #include <OgreException.h>
@@ -2292,7 +2293,7 @@ TEST_F(MaterialEditorQMLWithOgreTest, ExportAndImportMaterial_RoundTrip) {
     ASSERT_FALSE(editor->techniqueList().isEmpty());
 
     // Export it
-    QString exportPath = "/tmp/round_trip_test.material";
+    QString exportPath = QDir(QDir::tempPath()).filePath("round_trip_test.material");
     editor->exportMaterial(exportPath);
     EXPECT_TRUE(QFile::exists(exportPath));
 
@@ -2345,6 +2346,12 @@ TEST_F(MaterialEditorQMLWithOgreTest, ApplyMaterial_ColorsReflectedInOgrePass) {
 
     // The shininess should be close to what we set
     EXPECT_NEAR(editor->shininess(), 50.0f, 1.0f);
+
+    // Verify the colors round-tripped
+    // Note: Ogre may adjust color precision, so we use component comparison
+    EXPECT_NEAR(editor->ambientColor().redF(), 1.0, 0.1);
+    EXPECT_NEAR(editor->diffuseColor().greenF(), 1.0, 0.1);
+    EXPECT_NEAR(editor->specularColor().blueF(), 1.0, 0.1);
 }
 
 // ===========================================================================

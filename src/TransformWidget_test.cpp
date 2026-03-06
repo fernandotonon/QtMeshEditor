@@ -214,6 +214,8 @@ TEST_F(TransformWidgetTests, PositionSpinBoxRanges)
 TEST_F(TransformWidgetTests, ScaleSpinBoxMinimum)
 {
     ASSERT_NE(scaleX, nullptr);
+    ASSERT_NE(scaleY, nullptr);
+    ASSERT_NE(scaleZ, nullptr);
     EXPECT_GT(scaleX->minimum(), 0.0);
     EXPECT_GT(scaleY->minimum(), 0.0);
     EXPECT_GT(scaleZ->minimum(), 0.0);

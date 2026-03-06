@@ -679,6 +679,13 @@ TEST_F(MeshImporterExporterTest, ExportImport_FBX_WithSkeleton_RoundTrip) {
     MeshImporterExporter::importer(reimport);
     EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
 
+    // Verify skeleton was preserved after reimport
+    auto* reimportedNode = Manager::getSingleton()->getSceneNodes().last();
+    if (sceneMgr->hasEntity(reimportedNode->getName())) {
+        auto* reimportedEntity = sceneMgr->getEntity(reimportedNode->getName());
+        EXPECT_TRUE(reimportedEntity->hasSkeleton());
+    }
+
     // Clean up
     QFile::remove("./roundtrip_skel.fbx");
     QFile::remove("./roundtrip_skel.material");
@@ -710,6 +717,13 @@ TEST_F(MeshImporterExporterTest, ExportImport_Collada_WithSkeleton_RoundTrip) {
     QStringList reimport{"./roundtrip_skel.dae"};
     MeshImporterExporter::importer(reimport);
     EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    // Verify skeleton was preserved after reimport
+    auto* reimportedNode = Manager::getSingleton()->getSceneNodes().last();
+    if (sceneMgr->hasEntity(reimportedNode->getName())) {
+        auto* reimportedEntity = sceneMgr->getEntity(reimportedNode->getName());
+        EXPECT_TRUE(reimportedEntity->hasSkeleton());
+    }
 
     // Clean up
     QFile::remove("./roundtrip_skel.dae");

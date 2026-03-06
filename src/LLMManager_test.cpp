@@ -987,7 +987,7 @@ TEST_F(LLMManagerTest, InitialStateQueries)
     bool loaded = manager->isModelLoaded();
     // Without a real model file, this should be false
     // (unless autoload succeeded, but typically no model is available in test env)
-    (void)loaded; // Suppress unused variable warning
+    EXPECT_FALSE(loaded) << "No model should be loaded in test environment";
 
     // isGenerating: should be false when idle
     EXPECT_FALSE(manager->isGenerating());
@@ -997,7 +997,7 @@ TEST_F(LLMManagerTest, InitialStateQueries)
 
     // currentModelName: should be empty or a valid string (no crash)
     QString modelName = manager->currentModelName();
-    (void)modelName; // Just verify no crash
+    // Model name depends on environment, just verify no crash
 }
 
 TEST_F(LLMManagerTest, SettingsGettersReturnReasonableValues)
@@ -1158,8 +1158,8 @@ TEST_F(LLMManagerTest, LoadModel_NonExistentModel)
     if (QCoreApplication::instance()) {
         QCoreApplication::instance()->processEvents();
     }
-    // The model load should either error or silently fail
-    // Just verify no crash
+    // Verify no model became loaded
+    EXPECT_FALSE(manager->isModelLoaded());
 }
 
 // =============================================================================

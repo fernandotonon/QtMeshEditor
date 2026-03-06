@@ -5,6 +5,8 @@
 #include <cmath>
 #include <algorithm>
 #include <QFile>
+#include <QDir>
+#include <QTemporaryFile>
 #include <QCoreApplication>
 #include <QApplication>
 #include <QThread>
@@ -2324,7 +2326,7 @@ TEST_F(FBXExporterCoverageTest, ExportInMemoryMesh_CreatesValidFile) {
     auto* entity = createSimpleMesh(name);
     ASSERT_NE(entity, nullptr);
 
-    QString outPath = QString("/tmp/fbx_inmem_%1.fbx").arg(meshCounter);
+    QString outPath = QDir(QDir::tempPath()).filePath(QString("fbx_inmem_%1.fbx").arg(meshCounter));
     ASSERT_TRUE(FBXExporter::exportFBX(entity, outPath));
 
     // Verify file exists
@@ -2417,16 +2419,20 @@ TEST_F(FBXExporterCoverageTest, ExportToInvalidPath_HandlesGracefully) {
     auto* entity = createSimpleMesh(name);
     ASSERT_NE(entity, nullptr);
 
-    // Export to a path that does not exist
-    bool result = FBXExporter::exportFBX(entity, "/nonexistent_directory_xyz/sub/test.fbx");
+    // Export to a path where the parent is a file, not a directory
+    QTemporaryFile tempFile;
+    tempFile.open();
+    QString invalidPath = tempFile.fileName() + "/test.fbx";
+    bool result = FBXExporter::exportFBX(entity, invalidPath);
     EXPECT_FALSE(result);
 }
 
 TEST_F(FBXExporterCoverageTest, ExportNullEntity_HandlesGracefully) {
     // Should return false for nullptr entity
-    EXPECT_FALSE(FBXExporter::exportFBX(nullptr, "/tmp/null_entity_test.fbx"));
+    QString nullTestPath = QDir(QDir::tempPath()).filePath("null_entity_test.fbx");
+    EXPECT_FALSE(FBXExporter::exportFBX(nullptr, nullTestPath));
     // Ensure no file was created
-    EXPECT_FALSE(QFile::exists("/tmp/null_entity_test.fbx"));
+    EXPECT_FALSE(QFile::exists(nullTestPath));
 }
 
 TEST_F(FBXExporterCoverageTest, ExportEmptyMesh_HandlesGracefully) {
@@ -2445,7 +2451,7 @@ TEST_F(FBXExporterCoverageTest, ExportEmptyMesh_HandlesGracefully) {
     auto* entity = sceneMgr->createEntity(name + "_entity", mesh);
     node->attachObject(entity);
 
-    QString outPath = QString("/tmp/fbx_empty_%1.fbx").arg(meshCounter);
+    QString outPath = QDir(QDir::tempPath()).filePath(QString("fbx_empty_%1.fbx").arg(meshCounter));
     // Should either succeed with a minimal file or fail gracefully
     bool result = FBXExporter::exportFBX(entity, outPath);
     // Either way, no crash

@@ -2515,12 +2515,11 @@ TEST_F(MCPServerTest, ToggleNormalsIsRecognizedTool)
 // NEW TESTS: Protocol edge cases
 // ==========================================================================
 
-TEST_F(MCPServerTest, HandleInitialize_ReturnsServerInfo)
+TEST_F(MCPServerTest, ServerFunctionalAfterConstruction)
 {
-    // Call handleInitialize indirectly via processMessage / handleToolsCall
+    // Verify the server is functional after construction by calling a tool.
     // Since handleInitialize is private, we test through the public callTool
-    // and verify the server responds to known tools after initialization.
-    // We can verify the server's state by checking that tools work.
+    // and verify the server responds to known tools after construction.
 
     // The server should respond to tools without explicit initialize call
     QJsonObject result = server->callTool("list_materials", QJsonObject());
@@ -2529,7 +2528,7 @@ TEST_F(MCPServerTest, HandleInitialize_ReturnsServerInfo)
     EXPECT_FALSE(getResultText(result).isEmpty());
 }
 
-TEST_F(MCPServerTest, HandleToolsList_ContainsAllTools)
+TEST_F(MCPServerTest, AllToolNamesAreRecognized)
 {
     // Verify every known tool name is recognized (not "Unknown tool")
     QStringList allTools = {
@@ -2586,7 +2585,7 @@ TEST_F(MCPServerTest, CallTool_WithNullArgs)
     EXPECT_TRUE(getResultText(result2).contains("Material name is required"));
 }
 
-TEST_F(MCPServerTest, DoubleInitialize)
+TEST_F(MCPServerTest, DoubleServerConstruction_DoesNotCrash)
 {
     // Creating the server twice and calling tools should not crash
     auto server2 = std::make_unique<MCPServer>();
@@ -2603,23 +2602,19 @@ TEST_F(MCPServerTest, DoubleInitialize)
 // NEW TESTS: Resource protocol
 // ==========================================================================
 
-TEST_F(MCPServerTest, HandleResourcesList_ReturnsResources)
+TEST_F(MCPServerTest, GetSceneInfo_ReturnsSceneInformation)
 {
-    // We can't call handleResourcesList directly (it's private), but we can
-    // verify the server exposes resources by testing the resource-related
-    // tools indirectly. The resources are "qtmesheditor://material/current"
-    // and "qtmesheditor://scene/info".
-    // Since handleResourcesList is part of the MCP JSON-RPC flow, we verify
-    // the underlying data is accessible through callTool.
+    // Verify that get_scene_info returns scene information.
+    // This exercises the same data that the MCP resource protocol would
+    // expose via "qtmesheditor://scene/info".
     QJsonObject result = server->callTool("get_scene_info", QJsonObject());
     EXPECT_FALSE(isError(result));
     EXPECT_TRUE(getResultText(result).contains("Scene Information"));
 }
 
-TEST_F(MCPServerTest, HandleResourcesRead_ValidURI)
+TEST_F(MCPServerTest, GetSceneInfo_ContainsSceneNodes)
 {
-    // The "scene/info" resource is backed by toolGetSceneInfo.
-    // Verify the scene info tool returns valid data (same as resource read).
+    // Verify the scene info tool returns data including scene nodes.
     QJsonObject result = server->callTool("get_scene_info", QJsonObject());
     EXPECT_FALSE(isError(result));
     QString text = getResultText(result);
@@ -2627,22 +2622,17 @@ TEST_F(MCPServerTest, HandleResourcesRead_ValidURI)
     EXPECT_TRUE(text.contains("Scene Nodes"));
 }
 
-TEST_F(MCPServerTest, HandleResourcesRead_InvalidURI)
+TEST_F(MCPServerTest, UnknownToolReturnsError)
 {
-    // An invalid resource URI would return empty contents in handleResourcesRead.
-    // We verify that the server handles unknown tools gracefully.
+    // Verify that calling a non-existent tool returns an error.
     QJsonObject result = server->callTool("nonexistent_resource_tool", QJsonObject());
     EXPECT_TRUE(isError(result));
     EXPECT_TRUE(getResultText(result).contains("Unknown tool"));
 }
 
-TEST_F(MCPServerTest, HandleResourcesRead_EmptyURI)
+TEST_F(MCPServerTest, GetMaterialWithEmptyNameReturnsError)
 {
-    // Verify that tools handle empty/missing string params correctly
-    QJsonObject args;
-    args["uri"] = "";
-    // There's no direct "read_resource" tool, but we can verify
-    // material read with empty name returns proper error
+    // Verify that get_material with an empty name returns a proper error
     QJsonObject args2;
     args2["name"] = "";
     QJsonObject result = server->callTool("get_material", args2);
@@ -2771,7 +2761,7 @@ TEST_F(MCPServerTest, ExportMesh_ToTempFile)
     SelectionSet::getSingleton()->selectOne(node);
 
     // Use .mesh extension with the default "Ogre Mesh (*.mesh)" format
-    QString exportPath = "/tmp/mcp_export_temp_test.mesh";
+    QString exportPath = QDir(QDir::tempPath()).filePath("mcp_export_temp_test.mesh");
     QJsonObject args;
     args["path"] = exportPath;
     QJsonObject result = server->callTool("export_mesh", args);
@@ -2784,7 +2774,7 @@ TEST_F(MCPServerTest, ExportMesh_ToTempFile)
 
     // Cleanup
     QFile::remove(exportPath);
-    QFile::remove("/tmp/mcp_export_temp_test.material");
+    QFile::remove(QDir(QDir::tempPath()).filePath("mcp_export_temp_test.material"));
     SelectionSet::getSingleton()->clear();
 }
 

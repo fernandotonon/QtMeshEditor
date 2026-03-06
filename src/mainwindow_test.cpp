@@ -1405,10 +1405,10 @@ TEST_F(MainWindowTest, MergeAnimationsButton_DisabledWithSingleEntity) {
 }
 
 // ===========================================================================
-// NEW: MergeAnimations button state -- enabled with two compatible entities
+// NEW: MergeAnimations button -- verify selection recalc doesn't crash
 // ===========================================================================
 
-TEST_F(MainWindowTest, MergeAnimationsButton_EnabledWithTwoCompatibleEntities) {
+TEST_F(MainWindowTest, MergeAnimationsButton_SelectionRecalc_NoCrash) {
     if (!canLoadMeshFiles()) {
         GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
     }

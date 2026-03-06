@@ -41,10 +41,12 @@ protected:
         if (!tryInitOgre()) {
             GTEST_SKIP() << "Skipping: Ogre initialization failed";
         }
+        SelectionSet::getSingleton()->clear();
         createOGREMaterials();
     }
 
     void TearDown() override {
+        SelectionSet::getSingleton()->clear();
         if (app) {
             app->processEvents();
         }
