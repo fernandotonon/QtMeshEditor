@@ -922,3 +922,352 @@ TEST_F(AnimationWidgetTest, PlayPauseButtonInitiallyUnchecked)
     // The button should start in the unchecked (paused) state
     EXPECT_FALSE(playPauseButton->isChecked());
 }
+
+// ===========================================================================
+// NEW: on_animTable_clicked with enable/disable columns
+// ===========================================================================
+
+TEST_F(AnimationWidgetTest, AnimTableClicked_EnableColumn)
+{
+    // Test clicking on the enable column (col 2) to toggle animation enabled state
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_enable_click");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
+    ASSERT_NE(animTable, nullptr);
+    ASSERT_GT(animTable->rowCount(), 0);
+
+    // Find "TestAnim" row
+    int testAnimRow = -1;
+    for (int r = 0; r < animTable->rowCount(); ++r) {
+        auto* item = animTable->item(r, 1);
+        if (item && item->text() == "TestAnim") {
+            testAnimRow = r;
+            break;
+        }
+    }
+    ASSERT_GE(testAnimRow, 0);
+
+    // Enable the animation by setting the checkbox and emitting clicked
+    auto* enabledItem = animTable->item(testAnimRow, 2);
+    ASSERT_NE(enabledItem, nullptr);
+    enabledItem->setCheckState(Qt::Checked);
+    emit animTable->clicked(animTable->indexFromItem(enabledItem));
+    if (app) app->processEvents();
+
+    // Verify the animation state is now enabled
+    auto* animState = entity->getAnimationState("TestAnim");
+    ASSERT_NE(animState, nullptr);
+    EXPECT_TRUE(animState->getEnabled());
+
+    // Disable the animation
+    enabledItem->setCheckState(Qt::Unchecked);
+    emit animTable->clicked(animTable->indexFromItem(enabledItem));
+    if (app) app->processEvents();
+
+    EXPECT_FALSE(animState->getEnabled());
+}
+
+TEST_F(AnimationWidgetTest, AnimTableClicked_LoopColumn)
+{
+    // Test clicking on the loop column (col 3) to toggle animation loop state
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_loop_click");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
+    ASSERT_NE(animTable, nullptr);
+    ASSERT_GT(animTable->rowCount(), 0);
+
+    int testAnimRow = -1;
+    for (int r = 0; r < animTable->rowCount(); ++r) {
+        auto* item = animTable->item(r, 1);
+        if (item && item->text() == "TestAnim") {
+            testAnimRow = r;
+            break;
+        }
+    }
+    ASSERT_GE(testAnimRow, 0);
+
+    // Enable loop
+    auto* loopItem = animTable->item(testAnimRow, 3);
+    ASSERT_NE(loopItem, nullptr);
+    loopItem->setCheckState(Qt::Checked);
+    emit animTable->clicked(animTable->indexFromItem(loopItem));
+    if (app) app->processEvents();
+
+    auto* animState = entity->getAnimationState("TestAnim");
+    ASSERT_NE(animState, nullptr);
+    EXPECT_TRUE(animState->getLoop());
+
+    // Disable loop
+    loopItem->setCheckState(Qt::Unchecked);
+    emit animTable->clicked(animTable->indexFromItem(loopItem));
+    if (app) app->processEvents();
+
+    EXPECT_FALSE(animState->getLoop());
+}
+
+TEST_F(AnimationWidgetTest, AnimTableClicked_Column0And1_NoEffect)
+{
+    // Clicking on column 0 or 1 should NOT change animation state
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_col01_click");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
+    ASSERT_NE(animTable, nullptr);
+    ASSERT_GT(animTable->rowCount(), 0);
+
+    auto* animState = entity->getAnimationState("TestAnim");
+    ASSERT_NE(animState, nullptr);
+    bool wasEnabled = animState->getEnabled();
+
+    // Click on column 0 (entity name)
+    auto* entityItem = animTable->item(0, 0);
+    ASSERT_NE(entityItem, nullptr);
+    emit animTable->clicked(animTable->indexFromItem(entityItem));
+    if (app) app->processEvents();
+
+    EXPECT_EQ(animState->getEnabled(), wasEnabled);
+
+    // Click on column 1 (animation name)
+    auto* animNameItem = animTable->item(0, 1);
+    ASSERT_NE(animNameItem, nullptr);
+    emit animTable->clicked(animTable->indexFromItem(animNameItem));
+    if (app) app->processEvents();
+
+    EXPECT_EQ(animState->getEnabled(), wasEnabled);
+}
+
+// ===========================================================================
+// NEW: on_skeletonTable_clicked column 1 (skeleton debug)
+// ===========================================================================
+
+TEST_F(AnimationWidgetTest, SkeletonTableClicked_Column1_ToggleSkeletonDebug)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_skel_col1");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
+    ASSERT_NE(skeletonTable, nullptr);
+    ASSERT_EQ(skeletonTable->rowCount(), 1);
+
+    // Initially skeleton debug should be off
+    EXPECT_FALSE(widget.isSkeletonShown(entity));
+
+    // Check the skeleton debug checkbox (column 1)
+    auto* showSkeletonItem = skeletonTable->item(0, 1);
+    ASSERT_NE(showSkeletonItem, nullptr);
+    showSkeletonItem->setCheckState(Qt::Checked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(showSkeletonItem));
+    if (app) app->processEvents();
+
+    EXPECT_TRUE(widget.isSkeletonShown(entity));
+
+    // Uncheck it
+    // After toggle, the table is rebuilt, so re-fetch the item
+    showSkeletonItem = skeletonTable->item(0, 1);
+    ASSERT_NE(showSkeletonItem, nullptr);
+    showSkeletonItem->setCheckState(Qt::Unchecked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(showSkeletonItem));
+    if (app) app->processEvents();
+
+    EXPECT_FALSE(widget.isSkeletonShown(entity));
+}
+
+// ===========================================================================
+// NEW: on_skeletonTable_clicked column 2 (bone weights)
+// ===========================================================================
+
+TEST_F(AnimationWidgetTest, SkeletonTableClicked_Column2_ToggleBoneWeights)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_skel_col2");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
+    ASSERT_NE(skeletonTable, nullptr);
+    ASSERT_EQ(skeletonTable->rowCount(), 1);
+
+    // Initially bone weights should be off
+    EXPECT_FALSE(widget.isBoneWeightsShown(entity));
+
+    // Check the bone weights checkbox (column 2)
+    auto* weightsItem = skeletonTable->item(0, 2);
+    ASSERT_NE(weightsItem, nullptr);
+
+    // The item should be enabled for entities with a skeleton
+    if (!(weightsItem->flags() & Qt::ItemIsEnabled)) {
+        GTEST_SKIP() << "Skipping: bone weights item is disabled for this entity";
+    }
+
+    weightsItem->setCheckState(Qt::Checked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(weightsItem));
+    if (app) app->processEvents();
+
+    EXPECT_TRUE(widget.isBoneWeightsShown(entity));
+
+    // Uncheck it
+    weightsItem = skeletonTable->item(0, 2);
+    ASSERT_NE(weightsItem, nullptr);
+    weightsItem->setCheckState(Qt::Unchecked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(weightsItem));
+    if (app) app->processEvents();
+
+    EXPECT_FALSE(widget.isBoneWeightsShown(entity));
+}
+
+// ===========================================================================
+// NEW: on_skeletonTable_clicked column 0 (entity name) -- no effect
+// ===========================================================================
+
+TEST_F(AnimationWidgetTest, SkeletonTableClicked_Column0_NoEffect)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_skel_col0");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
+    ASSERT_NE(skeletonTable, nullptr);
+    ASSERT_EQ(skeletonTable->rowCount(), 1);
+
+    // Click on column 0 (entity name) -- should do nothing
+    auto* entityItem = skeletonTable->item(0, 0);
+    ASSERT_NE(entityItem, nullptr);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(entityItem));
+    if (app) app->processEvents();
+
+    // No state change -- skeleton debug should still be off
+    EXPECT_FALSE(widget.isSkeletonShown(entity));
+    EXPECT_FALSE(widget.isBoneWeightsShown(entity));
+}
+
+// ===========================================================================
+// NEW: on_animTable_cellDoubleClicked column 0 (entity name) -- no effect
+// ===========================================================================
+
+TEST_F(AnimationWidgetTest, AnimTableCellDoubleClicked_Column0_NoEffect)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_dblclick_col0");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
+    ASSERT_NE(animTable, nullptr);
+    ASSERT_GT(animTable->rowCount(), 0);
+
+    // Double-click on column 0 -- should do nothing (the handler returns early if column != 1)
+    emit animTable->cellDoubleClicked(0, 0);
+    if (app) app->processEvents();
+
+    // If we get here without crash or a modal dialog, the test passes
+    SUCCEED();
+}
+
+// ===========================================================================
+// NEW: Enable animation, then toggle enable off via table click
+// ===========================================================================
+
+TEST_F(AnimationWidgetTest, AnimTableClicked_EnableThenDisable_RoundTrip)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_enable_roundtrip");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
+    ASSERT_NE(animTable, nullptr);
+    ASSERT_GT(animTable->rowCount(), 0);
+
+    auto* animState = entity->getAnimationState("TestAnim");
+    ASSERT_NE(animState, nullptr);
+
+    // Start disabled
+    EXPECT_FALSE(animState->getEnabled());
+    EXPECT_FALSE(animState->getLoop());
+
+    // Enable via table
+    auto* enableItem = animTable->item(0, 2);
+    ASSERT_NE(enableItem, nullptr);
+    enableItem->setCheckState(Qt::Checked);
+    emit animTable->clicked(animTable->indexFromItem(enableItem));
+
+    EXPECT_TRUE(animState->getEnabled());
+
+    // Set loop
+    auto* loopItem = animTable->item(0, 3);
+    ASSERT_NE(loopItem, nullptr);
+    loopItem->setCheckState(Qt::Checked);
+    emit animTable->clicked(animTable->indexFromItem(loopItem));
+
+    EXPECT_TRUE(animState->getLoop());
+
+    // Disable both
+    enableItem = animTable->item(0, 2);
+    enableItem->setCheckState(Qt::Unchecked);
+    emit animTable->clicked(animTable->indexFromItem(enableItem));
+    EXPECT_FALSE(animState->getEnabled());
+
+    loopItem = animTable->item(0, 3);
+    loopItem->setCheckState(Qt::Unchecked);
+    emit animTable->clicked(animTable->indexFromItem(loopItem));
+    EXPECT_FALSE(animState->getLoop());
+}

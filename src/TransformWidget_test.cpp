@@ -179,6 +179,139 @@ TEST_F(TransformWidgetTests, DISABLED_UpdateSceneNodePositionScaleOrientation) {
     ASSERT_NEAR(z.valueDegrees(), rotationZ->value(),0.1);
 }
 
+// Test that spin boxes exist and have correct names
+TEST_F(TransformWidgetTests, SpinBoxesExist)
+{
+    ASSERT_NE(positionX, nullptr);
+    ASSERT_NE(positionY, nullptr);
+    ASSERT_NE(positionZ, nullptr);
+    ASSERT_NE(scaleX, nullptr);
+    ASSERT_NE(scaleY, nullptr);
+    ASSERT_NE(scaleZ, nullptr);
+    ASSERT_NE(rotationX, nullptr);
+    ASSERT_NE(rotationY, nullptr);
+    ASSERT_NE(rotationZ, nullptr);
+}
+
+// Test that the tree view exists
+TEST_F(TransformWidgetTests, TreeViewExists)
+{
+    auto treeView = transformWidget->findChild<QTreeView*>("treeView");
+    ASSERT_NE(treeView, nullptr);
+    ASSERT_NE(treeView->model(), nullptr);
+}
+
+// Test position spin box ranges
+TEST_F(TransformWidgetTests, PositionSpinBoxRanges)
+{
+    ASSERT_NE(positionX, nullptr);
+    EXPECT_LE(positionX->minimum(), -10000.0);
+    EXPECT_GE(positionX->maximum(), 10000.0);
+    EXPECT_EQ(positionX->decimals(), 4);
+}
+
+// Test scale spin box minimum > 0
+TEST_F(TransformWidgetTests, ScaleSpinBoxMinimum)
+{
+    ASSERT_NE(scaleX, nullptr);
+    EXPECT_GT(scaleX->minimum(), 0.0);
+    EXPECT_GT(scaleY->minimum(), 0.0);
+    EXPECT_GT(scaleZ->minimum(), 0.0);
+}
+
+// Test rotation spin box ranges
+TEST_F(TransformWidgetTests, RotationSpinBoxRanges)
+{
+    ASSERT_NE(rotationX, nullptr);
+    EXPECT_LE(rotationX->minimum(), -360.0);
+    EXPECT_GE(rotationX->maximum(), 360.0);
+    EXPECT_EQ(rotationX->decimals(), 4);
+}
+
+// Test setting position values on the spin boxes
+TEST_F(TransformWidgetTests, SetPositionSpinBoxValues)
+{
+    ASSERT_NE(positionX, nullptr);
+    ASSERT_NE(positionY, nullptr);
+    ASSERT_NE(positionZ, nullptr);
+
+    positionX->setValue(1.5);
+    positionY->setValue(2.5);
+    positionZ->setValue(3.5);
+
+    EXPECT_DOUBLE_EQ(positionX->value(), 1.5);
+    EXPECT_DOUBLE_EQ(positionY->value(), 2.5);
+    EXPECT_DOUBLE_EQ(positionZ->value(), 3.5);
+}
+
+// Test setting scale values on the spin boxes
+TEST_F(TransformWidgetTests, SetScaleSpinBoxValues)
+{
+    ASSERT_NE(scaleX, nullptr);
+    ASSERT_NE(scaleY, nullptr);
+    ASSERT_NE(scaleZ, nullptr);
+
+    scaleX->setValue(2.0);
+    scaleY->setValue(3.0);
+    scaleZ->setValue(4.0);
+
+    EXPECT_DOUBLE_EQ(scaleX->value(), 2.0);
+    EXPECT_DOUBLE_EQ(scaleY->value(), 3.0);
+    EXPECT_DOUBLE_EQ(scaleZ->value(), 4.0);
+}
+
+// Test setting rotation values on the spin boxes
+TEST_F(TransformWidgetTests, SetRotationSpinBoxValues)
+{
+    ASSERT_NE(rotationX, nullptr);
+    ASSERT_NE(rotationY, nullptr);
+    ASSERT_NE(rotationZ, nullptr);
+
+    rotationX->setValue(45.0);
+    rotationY->setValue(90.0);
+    rotationZ->setValue(180.0);
+
+    EXPECT_DOUBLE_EQ(rotationX->value(), 45.0);
+    EXPECT_DOUBLE_EQ(rotationY->value(), 90.0);
+    EXPECT_DOUBLE_EQ(rotationZ->value(), 180.0);
+}
+
+// Test that setting position values triggers onPositionEdited (via signal)
+TEST_F(TransformWidgetTests, PositionValueChangeTriggers)
+{
+    ASSERT_NE(positionX, nullptr);
+
+    // Setting a value should trigger the signal connection to onPositionEdited.
+    // Since we do not have a selection, TransformOperator::setSelectedPosition
+    // will be called but should not crash (no selection means no-op).
+    EXPECT_NO_THROW({
+        positionX->setValue(5.0);
+        if (app) app->processEvents();
+    });
+}
+
+// Test that setting scale values does not crash without selection
+TEST_F(TransformWidgetTests, ScaleValueChangeTriggers)
+{
+    ASSERT_NE(scaleX, nullptr);
+
+    EXPECT_NO_THROW({
+        scaleX->setValue(2.0);
+        if (app) app->processEvents();
+    });
+}
+
+// Test that setting rotation values does not crash without selection
+TEST_F(TransformWidgetTests, RotationValueChangeTriggers)
+{
+    ASSERT_NE(rotationX, nullptr);
+
+    EXPECT_NO_THROW({
+        rotationX->setValue(45.0);
+        if (app) app->processEvents();
+    });
+}
+
 // DISABLED: This test requires entities to exist, which may cause segfault during mesh import
 // TODO: Fix Ogre render system initialization before mesh loading
 TEST_F(TransformWidgetTests, DISABLED_UpdateEntityPositionScaleOrientation) {

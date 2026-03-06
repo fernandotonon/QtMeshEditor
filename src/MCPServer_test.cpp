@@ -2787,3 +2787,610 @@ TEST_F(MCPServerTest, ExportMesh_ToTempFile)
     QFile::remove("/tmp/mcp_export_temp_test.material");
     SelectionSet::getSingleton()->clear();
 }
+
+// ==========================================================================
+// Animation tool success path tests
+// ==========================================================================
+
+TEST_F(MCPServerTest, AnimSuccPath_ListSkeletalAnimations)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccListSkel");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject result = server->callTool("list_skeletal_animations", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("TestAnim"));
+    EXPECT_TRUE(text.contains("AnimSuccListSkel"));
+    EXPECT_TRUE(text.contains("Length"));
+    EXPECT_TRUE(text.contains("Enabled"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_GetAnimationInfo)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccGetInfo");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccGetInfo";
+    args["animation"] = "TestAnim";
+    QJsonObject result = server->callTool("get_animation_info", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("TestAnim"));
+    EXPECT_TRUE(text.contains("Length"));
+    EXPECT_TRUE(text.contains("Tracks"));
+    EXPECT_TRUE(text.contains("Keyframes"));
+    // Should contain track info for Child bone
+    EXPECT_TRUE(text.contains("Child"));
+    // Should contain 3 keyframes
+    EXPECT_TRUE(text.contains("3"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationLength)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccSetLen");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccSetLen";
+    args["animation"] = "TestAnim";
+    args["length"] = 2.0;
+    QJsonObject result = server->callTool("set_animation_length", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Changed animation"));
+    EXPECT_TRUE(text.contains("2"));
+
+    // Verify the length actually changed via get_animation_info
+    QJsonObject infoArgs;
+    infoArgs["entity"] = "AnimSuccSetLen";
+    infoArgs["animation"] = "TestAnim";
+    QJsonObject infoResult = server->callTool("get_animation_info", infoArgs);
+    EXPECT_FALSE(isError(infoResult));
+    EXPECT_TRUE(getResultText(infoResult).contains("2"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTime)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccSetTime");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccSetTime";
+    args["animation"] = "TestAnim";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Set animation"));
+    EXPECT_TRUE(text.contains("0.5"));
+    EXPECT_TRUE(text.contains("enabled: yes"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateNext)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavNext");
+    ASSERT_NE(entity, nullptr);
+
+    // First set time to 0 so navigating "next" goes to t=0.5
+    QJsonObject setArgs;
+    setArgs["entity"] = "AnimSuccNavNext";
+    setArgs["animation"] = "TestAnim";
+    setArgs["time"] = 0.0;
+    server->callTool("set_animation_time", setArgs);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccNavNext";
+    args["animation"] = "TestAnim";
+    args["navigate"] = "next";
+    args["track"] = "Child";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Navigated to keyframe"));
+    EXPECT_TRUE(text.contains("0.5"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigatePrev)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavPrev");
+    ASSERT_NE(entity, nullptr);
+
+    // First set time to 1.0 so navigating "prev" goes to t=0.5
+    QJsonObject setArgs;
+    setArgs["entity"] = "AnimSuccNavPrev";
+    setArgs["animation"] = "TestAnim";
+    setArgs["time"] = 1.0;
+    server->callTool("set_animation_time", setArgs);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccNavPrev";
+    args["animation"] = "TestAnim";
+    args["navigate"] = "prev";
+    args["track"] = "Child";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Navigated to keyframe"));
+    EXPECT_TRUE(text.contains("0.5"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateFirst)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavFirst");
+    ASSERT_NE(entity, nullptr);
+
+    // Set time to something non-zero first
+    QJsonObject setArgs;
+    setArgs["entity"] = "AnimSuccNavFirst";
+    setArgs["animation"] = "TestAnim";
+    setArgs["time"] = 0.5;
+    server->callTool("set_animation_time", setArgs);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccNavFirst";
+    args["animation"] = "TestAnim";
+    args["navigate"] = "first";
+    args["track"] = "Child";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Navigated to keyframe"));
+    // First keyframe is at t=0
+    EXPECT_TRUE(text.contains("0s") || text.contains("at 0"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateLast)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavLast");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccNavLast";
+    args["animation"] = "TestAnim";
+    args["navigate"] = "last";
+    args["track"] = "Child";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Navigated to keyframe"));
+    // Last keyframe is at t=1.0
+    EXPECT_TRUE(text.contains("1s") || text.contains("at 1"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeNavigateInvalidDirection)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavInvalid");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccNavInvalid";
+    args["animation"] = "TestAnim";
+    args["navigate"] = "sideways";
+    args["track"] = "Child";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("must be 'next', 'prev', 'first', or 'last'"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeNavigateMissingTrack)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavNoTrack");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccNavNoTrack";
+    args["animation"] = "TestAnim";
+    args["navigate"] = "next";
+    // No "track" param
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("track"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_AddKeyframe)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccAddKf");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccAddKf";
+    args["animation"] = "TestAnim";
+    args["track"] = "Child";
+    args["time"] = 0.75;
+    QJsonObject result = server->callTool("add_keyframe", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Added keyframe"));
+    EXPECT_TRUE(text.contains("0.75"));
+    EXPECT_TRUE(text.contains("Child"));
+
+    // Verify the keyframe was added - get_animation_info should now show 4 keyframes
+    QJsonObject infoArgs;
+    infoArgs["entity"] = "AnimSuccAddKf";
+    infoArgs["animation"] = "TestAnim";
+    QJsonObject infoResult = server->callTool("get_animation_info", infoArgs);
+    EXPECT_FALSE(isError(infoResult));
+    EXPECT_TRUE(getResultText(infoResult).contains("4"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeWithExplicitTransforms)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccAddKfTransform");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccAddKfTransform";
+    args["animation"] = "TestAnim";
+    args["track"] = "Child";
+    args["time"] = 0.25;
+    args["translate"] = QJsonArray{1.0, 0.0, 0.0};
+    args["rotate"] = QJsonArray{1.0, 0.0, 0.0, 0.0};
+    args["scale"] = QJsonArray{2.0, 2.0, 2.0};
+    QJsonObject result = server->callTool("add_keyframe", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Added keyframe"));
+    EXPECT_TRUE(text.contains("0.25"));
+    // Verify position was set
+    EXPECT_TRUE(text.contains("pos=(1"));
+    // Verify scale was set
+    EXPECT_TRUE(text.contains("scale=(2"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframe)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccRemoveKf");
+    ASSERT_NE(entity, nullptr);
+
+    // Remove the keyframe at t=0.5
+    QJsonObject args;
+    args["entity"] = "AnimSuccRemoveKf";
+    args["animation"] = "TestAnim";
+    args["track"] = "Child";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Removed keyframe"));
+    EXPECT_TRUE(text.contains("0.5"));
+    EXPECT_TRUE(text.contains("Child"));
+
+    // Verify the keyframe was removed - get_animation_info should now show 2 keyframes
+    QJsonObject infoArgs;
+    infoArgs["entity"] = "AnimSuccRemoveKf";
+    infoArgs["animation"] = "TestAnim";
+    QJsonObject infoResult = server->callTool("get_animation_info", infoArgs);
+    EXPECT_FALSE(isError(infoResult));
+    EXPECT_TRUE(getResultText(infoResult).contains("2"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframeNotFound)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccRemoveKfNF");
+    ASSERT_NE(entity, nullptr);
+
+    // Try to remove a keyframe that doesn't exist (t=0.99)
+    QJsonObject args;
+    args["entity"] = "AnimSuccRemoveKfNF";
+    args["animation"] = "TestAnim";
+    args["track"] = "Child";
+    args["time"] = 0.99;
+    QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No keyframe found"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_PlayAnimation)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccPlay");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccPlay";
+    args["animation"] = "TestAnim";
+    QJsonObject result = server->callTool("play_animation", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Playing animation"));
+    EXPECT_TRUE(text.contains("TestAnim"));
+    EXPECT_TRUE(text.contains("AnimSuccPlay"));
+
+    // Verify the animation state was enabled
+    Ogre::AnimationState* state = entity->getAnimationState("TestAnim");
+    EXPECT_TRUE(state->getEnabled());
+    EXPECT_TRUE(state->getLoop());
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationStop)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccPlayStop");
+    ASSERT_NE(entity, nullptr);
+
+    // First start playing
+    QJsonObject playArgs;
+    playArgs["entity"] = "AnimSuccPlayStop";
+    playArgs["animation"] = "TestAnim";
+    server->callTool("play_animation", playArgs);
+
+    // Verify it's playing
+    Ogre::AnimationState* state = entity->getAnimationState("TestAnim");
+    EXPECT_TRUE(state->getEnabled());
+
+    // Now stop
+    QJsonObject stopArgs;
+    stopArgs["entity"] = "AnimSuccPlayStop";
+    stopArgs["animation"] = "TestAnim";
+    stopArgs["play"] = false;
+    QJsonObject result = server->callTool("play_animation", stopArgs);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Stopped animation"));
+
+    // Verify the animation state was disabled
+    EXPECT_FALSE(state->getEnabled());
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationNoLoop)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccPlayNoLoop");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccPlayNoLoop";
+    args["animation"] = "TestAnim";
+    args["loop"] = false;
+    QJsonObject result = server->callTool("play_animation", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Playing animation"));
+    EXPECT_TRUE(text.contains("loop=false"));
+
+    // Verify the animation state
+    Ogre::AnimationState* state = entity->getAnimationState("TestAnim");
+    EXPECT_TRUE(state->getEnabled());
+    EXPECT_FALSE(state->getLoop());
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_MergeAnimations)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity1 = createAnimatedTestEntity("AnimSuccMerge1");
+    ASSERT_NE(entity1, nullptr);
+
+    Ogre::Entity* entity2 = createAnimatedTestEntity("AnimSuccMerge2");
+    ASSERT_NE(entity2, nullptr);
+
+    QJsonObject args;
+    args["base_entity"] = "AnimSuccMerge1";
+    QJsonObject result = server->callTool("merge_animations", args);
+    // Merge may succeed or fail depending on skeleton compatibility details,
+    // but it should not crash
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithLoopDisabled)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccTimeLoop");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccTimeLoop";
+    args["animation"] = "TestAnim";
+    args["time"] = 0.3;
+    args["loop"] = false;
+    args["enabled"] = true;
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("loop: no"));
+    EXPECT_TRUE(text.contains("enabled: yes"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeDisabled)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccTimeDisabled");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccTimeDisabled";
+    args["animation"] = "TestAnim";
+    args["time"] = 0.8;
+    args["enabled"] = false;
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("enabled: no"));
+
+    // Verify the state is disabled
+    Ogre::AnimationState* state = entity->getAnimationState("TestAnim");
+    EXPECT_FALSE(state->getEnabled());
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeTrackNotFound)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccAddKfNoTrack");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccAddKfNoTrack";
+    args["animation"] = "TestAnim";
+    args["track"] = "NonExistentBone";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("add_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Track for bone 'NonExistentBone' not found"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframeTrackNotFound)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccRemKfNoTrack");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccRemKfNoTrack";
+    args["animation"] = "TestAnim";
+    args["track"] = "NonExistentBone";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Track for bone 'NonExistentBone' not found"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_GetAnimationInfoAnimNotFound)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccInfoAnimNF");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccInfoAnimNF";
+    args["animation"] = "NonExistentAnim";
+    QJsonObject result = server->callTool("get_animation_info", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_SetAnimationLengthAnimNotFound)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccLenAnimNF");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccLenAnimNF";
+    args["animation"] = "NonExistentAnim";
+    args["length"] = 5.0;
+    QJsonObject result = server->callTool("set_animation_length", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationAnimNotFound)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccPlayAnimNF");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccPlayAnimNF";
+    args["animation"] = "NonExistentAnim";
+    QJsonObject result = server->callTool("play_animation", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeAnimNotFound)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccAddKfAnimNF");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccAddKfAnimNF";
+    args["animation"] = "NonExistentAnim";
+    args["track"] = "Child";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("add_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_NavigateNextAtEnd)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavNextEnd");
+    ASSERT_NE(entity, nullptr);
+
+    // Set time to the last keyframe so "next" wraps to the last keyframe
+    QJsonObject setArgs;
+    setArgs["entity"] = "AnimSuccNavNextEnd";
+    setArgs["animation"] = "TestAnim";
+    setArgs["time"] = 1.0;
+    server->callTool("set_animation_time", setArgs);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccNavNextEnd";
+    args["animation"] = "TestAnim";
+    args["navigate"] = "next";
+    args["track"] = "Child";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+    // When already at last keyframe, "next" should stay at last keyframe (t=1.0)
+    EXPECT_TRUE(getResultText(result).contains("Navigated to keyframe"));
+    EXPECT_TRUE(getResultText(result).contains("1s") || getResultText(result).contains("at 1"));
+}
+
+TEST_F(MCPServerTest, AnimSuccPath_NavigatePrevAtStart)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavPrevStart");
+    ASSERT_NE(entity, nullptr);
+
+    // Set time to the first keyframe
+    QJsonObject setArgs;
+    setArgs["entity"] = "AnimSuccNavPrevStart";
+    setArgs["animation"] = "TestAnim";
+    setArgs["time"] = 0.0;
+    server->callTool("set_animation_time", setArgs);
+
+    QJsonObject args;
+    args["entity"] = "AnimSuccNavPrevStart";
+    args["animation"] = "TestAnim";
+    args["navigate"] = "prev";
+    args["track"] = "Child";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_FALSE(isError(result));
+    // When at first keyframe, "prev" should stay at first keyframe (t=0.0)
+    EXPECT_TRUE(getResultText(result).contains("Navigated to keyframe"));
+}

@@ -377,6 +377,182 @@ TEST_F(NormalVisualizerIntegrationTest, MultipleEntitiesSimultaneously)
     }
 }
 
+// Exercise updateAnimatedOverlays via the timer path for skeletal entities.
+TEST_F(NormalVisualizerIntegrationTest, UpdateAnimatedOverlaysViaTimer)
+{
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("NormVizAnimTimer");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
+    visualizer.setVisible(true);
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    EXPECT_GE(node->numChildren(), 1u);
+
+    // Enable an animation state to exercise the animated overlay update path
+    auto* animState = entity->getAnimationState("TestAnim");
+    ASSERT_NE(animState, nullptr);
+    animState->setEnabled(true);
+    animState->setLoop(true);
+    animState->addTime(0.25f);
+
+    // Let the timer fire a few times to exercise updateAnimatedOverlays
+    for (int i = 0; i < 3; ++i) {
+        QThread::msleep(30);
+        if (app) app->processEvents();
+    }
+
+    // The overlay should still be intact after animation updates
+    EXPECT_GE(node->numChildren(), 1u);
+
+    // Advance animation more
+    animState->addTime(0.5f);
+    QThread::msleep(30);
+    if (app) app->processEvents();
+
+    EXPECT_GE(node->numChildren(), 1u);
+
+    visualizer.setVisible(false);
+
+    // Clean up
+    node->detachObject(entity);
+    Manager::getSingleton()->getSceneMgr()->destroyEntity(entity);
+    Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
+}
+
+// Multiple show/hide/show cycles to exercise repeated toggling with entities.
+TEST_F(NormalVisualizerIntegrationTest, MultipleShowHideShowCycles)
+{
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    auto meshPtr = createInMemoryTriangleMesh("NormVizCycleMesh");
+    ASSERT_TRUE(meshPtr);
+
+    Ogre::SceneNode* node = Manager::getSingleton()->getSceneMgr()
+        ->getRootSceneNode()->createChildSceneNode("NormVizCycleNode");
+    Ogre::Entity* entity = Manager::getSingleton()->getSceneMgr()->createEntity(
+        "NormVizCycleEntity", meshPtr);
+    node->attachObject(entity);
+
+    NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
+
+    for (int i = 0; i < 5; ++i) {
+        visualizer.setVisible(true);
+        EXPECT_TRUE(visualizer.isVisible());
+        EXPECT_GE(node->numChildren(), 1u)
+            << "Cycle " << i << ": overlay should be built when visible";
+
+        visualizer.setVisible(false);
+        EXPECT_FALSE(visualizer.isVisible());
+        EXPECT_EQ(node->numChildren(), 0u)
+            << "Cycle " << i << ": overlay should be destroyed when hidden";
+    }
+
+    // Clean up
+    node->detachObject(entity);
+    Manager::getSingleton()->getSceneMgr()->destroyEntity(entity);
+    Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
+}
+
+// Add entity while visible, then remove it -- exercises full lifecycle.
+TEST_F(NormalVisualizerIntegrationTest, AddEntityWhileVisibleThenRemove)
+{
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
+    visualizer.setVisible(true);
+
+    // Create entity while normals are visible
+    auto meshPtr = createInMemoryTriangleMesh("NormVizAddRemoveMesh");
+    ASSERT_TRUE(meshPtr);
+
+    Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode("NormVizAddRemoveNode");
+    Ogre::Entity* entity = Manager::getSingleton()->getSceneMgr()->createEntity(
+        "NormVizAddRemoveEntity", meshPtr);
+    node->attachObject(entity);
+
+    // Emit entityCreated signal to trigger overlay build
+    emit Manager::getSingleton()->entityCreated(entity);
+    EXPECT_GE(node->numChildren(), 1u);
+
+    // Now remove: emit sceneNodeDestroyed to clean up overlay
+    emit Manager::getSingleton()->sceneNodeDestroyed(node);
+    EXPECT_EQ(node->numChildren(), 0u);
+
+    // Re-add: emit entityCreated again to rebuild overlay
+    emit Manager::getSingleton()->entityCreated(entity);
+    EXPECT_GE(node->numChildren(), 1u);
+
+    visualizer.setVisible(false);
+
+    // Clean up
+    node->detachObject(entity);
+    Manager::getSingleton()->getSceneMgr()->destroyEntity(entity);
+    Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
+}
+
+// Animated entity overlay update with animation state changes
+TEST_F(NormalVisualizerIntegrationTest, AnimatedOverlayWithStateChanges)
+{
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    Ogre::Entity* entity = createAnimatedTestEntity("NormVizAnimState");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
+    visualizer.setVisible(true);
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    EXPECT_GE(node->numChildren(), 1u);
+
+    // Enable animation
+    auto* animState = entity->getAnimationState("TestAnim");
+    ASSERT_NE(animState, nullptr);
+    animState->setEnabled(true);
+
+    // Process several timer updates at different animation times
+    for (float t = 0.0f; t <= 1.0f; t += 0.1f) {
+        animState->setTimePosition(t);
+        QThread::msleep(20);
+        if (app) app->processEvents();
+    }
+
+    // Disable animation
+    animState->setEnabled(false);
+    QThread::msleep(20);
+    if (app) app->processEvents();
+
+    // Re-enable and advance
+    animState->setEnabled(true);
+    animState->setTimePosition(0.5f);
+    QThread::msleep(20);
+    if (app) app->processEvents();
+
+    // Overlay should still be intact
+    EXPECT_GE(node->numChildren(), 1u);
+
+    visualizer.setVisible(false);
+
+    // Clean up
+    node->detachObject(entity);
+    Manager::getSingleton()->getSceneMgr()->destroyEntity(entity);
+    Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
+}
+
 // Toggle normals while adding/removing entities via signals.
 TEST_F(NormalVisualizerIntegrationTest, ToggleWhileAddingRemovingEntities)
 {

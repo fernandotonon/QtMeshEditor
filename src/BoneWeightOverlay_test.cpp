@@ -397,6 +397,119 @@ TEST_F(BoneWeightOverlayInMemoryTest, NonSkeletalEntityDoesNotCrash)
     Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
 }
 
+// Timer-based update positions: enable overlay, wait for timer to fire,
+// verify overlay positions update for animated entity.
+TEST_F(BoneWeightOverlayInMemoryTest, TimerBasedUpdatePositions)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_TimerUpdate");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    overlay.setVisible(true);
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    EXPECT_GE(node->numAttachedObjects(), 2u);
+
+    // Enable animation to give the timer something to update
+    auto* animState = entity->getAnimationState("TestAnim");
+    ASSERT_NE(animState, nullptr);
+    animState->setEnabled(true);
+    animState->setLoop(true);
+    animState->addTime(0.25f);
+
+    // Wait for the timer to fire (timer interval is 0ms, so processEvents should trigger it)
+    for (int i = 0; i < 5; ++i) {
+        QThread::msleep(10);
+        if (app) app->processEvents();
+    }
+
+    // The overlay should still be intact after timer-driven updates
+    EXPECT_TRUE(overlay.isVisible());
+    EXPECT_GE(node->numAttachedObjects(), 2u);
+
+    overlay.setVisible(false);
+}
+
+// pollBoneSelection: when visible, the timer polls for bone selection changes.
+TEST_F(BoneWeightOverlayInMemoryTest, PollBoneSelectionChanges)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_PollBone");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_GE(entity->getSkeleton()->getNumBones(), 2u);
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    overlay.setVisible(true);
+
+    // Simulate bone selection by setting user object bindings (this is what pollBoneSelection reads)
+    auto* skeleton = entity->getSkeleton();
+    auto* bone0 = skeleton->getBone(0);
+    bone0->getUserObjectBindings().setUserAny("selected", Ogre::Any(true));
+
+    // Let timer fire to pick up the bone selection
+    for (int i = 0; i < 5; ++i) {
+        QThread::msleep(10);
+        if (app) app->processEvents();
+    }
+
+    // Overlay should still be valid
+    EXPECT_TRUE(overlay.isVisible());
+
+    // Clear bone 0 selection and select bone 1
+    bone0->getUserObjectBindings().setUserAny("selected", Ogre::Any(false));
+    auto* bone1 = skeleton->getBone(1);
+    bone1->getUserObjectBindings().setUserAny("selected", Ogre::Any(true));
+
+    // Let timer fire again
+    for (int i = 0; i < 5; ++i) {
+        QThread::msleep(10);
+        if (app) app->processEvents();
+    }
+
+    EXPECT_TRUE(overlay.isVisible());
+
+    // Clean up bone bindings
+    bone1->getUserObjectBindings().setUserAny("selected", Ogre::Any(false));
+
+    overlay.setVisible(false);
+}
+
+// Multiple rapid bone selection changes while visible.
+TEST_F(BoneWeightOverlayInMemoryTest, RapidBoneSelectionChanges)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_RapidBone");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_GE(entity->getSkeleton()->getNumBones(), 2u);
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    overlay.setVisible(true);
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    // Rapidly switch between bones
+    for (int i = 0; i < 10; ++i) {
+        overlay.setSelectedBone(static_cast<unsigned short>(i % 2));
+        if (app) app->processEvents();
+    }
+
+    // The overlay should still be functional after rapid switches
+    EXPECT_TRUE(overlay.isVisible());
+    EXPECT_GE(node->numAttachedObjects(), 2u);
+
+    overlay.setVisible(false);
+    EXPECT_EQ(node->numAttachedObjects(), 1u);
+}
+
 // setVisible(true) followed immediately by setVisible(true) again should
 // not create duplicate overlays.
 TEST_F(BoneWeightOverlayInMemoryTest, DoubleSetVisibleTrueNoDuplicate)
