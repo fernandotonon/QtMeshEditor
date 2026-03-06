@@ -4,6 +4,7 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QThread>
+#include <QDir>
 #include "MaterialEditorQML.h"
 #include "Manager.h"
 #include <OgreException.h>
@@ -1467,4 +1468,948 @@ TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MissingMaterialKeyword) {
     QString script = "{\n\ttechnique\n\t{\n\t\tpass\n\t\t{\n\t\t}\n\t}\n}";
     EXPECT_FALSE(editor->validateMaterialScript(script));
     EXPECT_GE(errorSpy.count(), 1);
+}
+
+// ===========================================================================
+// Signal-only tests (MaterialEditorQMLTest fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, DepthCheckEnabled_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::depthCheckEnabledChanged);
+    editor->setDepthCheckEnabled(false);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FALSE(editor->depthCheckEnabled());
+}
+
+TEST_F(MaterialEditorQMLTest, SpecularColor_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::specularColorChanged);
+    QColor newColor(100, 200, 50);
+    editor->setSpecularColor(newColor);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->specularColor(), newColor);
+}
+
+TEST_F(MaterialEditorQMLTest, EmissiveColor_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::emissiveColorChanged);
+    QColor newColor(255, 128, 64);
+    editor->setEmissiveColor(newColor);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->emissiveColor(), newColor);
+}
+
+TEST_F(MaterialEditorQMLTest, ShadingMode_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::shadingModeChanged);
+    editor->setShadingMode(2); // Phong
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->shadingMode(), 2);
+}
+
+TEST_F(MaterialEditorQMLTest, CullHardware_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::cullHardwareChanged);
+    editor->setCullHardware(2); // Counter-Clockwise
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->cullHardware(), 2);
+}
+
+TEST_F(MaterialEditorQMLTest, CullSoftware_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::cullSoftwareChanged);
+    editor->setCullSoftware(1); // Back
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->cullSoftware(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, DepthFunction_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::depthFunctionChanged);
+    editor->setDepthFunction(3); // Greater
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->depthFunction(), 3);
+}
+
+TEST_F(MaterialEditorQMLTest, AlphaRejectionEnabled_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::alphaRejectionEnabledChanged);
+    editor->setAlphaRejectionEnabled(true);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_TRUE(editor->alphaRejectionEnabled());
+}
+
+TEST_F(MaterialEditorQMLTest, AlphaRejectionFunction_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::alphaRejectionFunctionChanged);
+    editor->setAlphaRejectionFunction(3); // Greater
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->alphaRejectionFunction(), 3);
+}
+
+TEST_F(MaterialEditorQMLTest, AlphaRejectionValue_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::alphaRejectionValueChanged);
+    editor->setAlphaRejectionValue(200);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->alphaRejectionValue(), 200);
+}
+
+TEST_F(MaterialEditorQMLTest, AlphaToCoverageEnabled_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::alphaToCoverageEnabledChanged);
+    editor->setAlphaToCoverageEnabled(true);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_TRUE(editor->alphaToCoverageEnabled());
+}
+
+TEST_F(MaterialEditorQMLTest, ColourWriteChannels_SignalOnly) {
+    // Red channel
+    QSignalSpy redSpy(editor.get(), &MaterialEditorQML::colourWriteRedChanged);
+    editor->setColourWriteRed(false);
+    EXPECT_GE(redSpy.count(), 1);
+    EXPECT_FALSE(editor->colourWriteRed());
+
+    // Green channel
+    QSignalSpy greenSpy(editor.get(), &MaterialEditorQML::colourWriteGreenChanged);
+    editor->setColourWriteGreen(false);
+    EXPECT_GE(greenSpy.count(), 1);
+    EXPECT_FALSE(editor->colourWriteGreen());
+
+    // Blue channel
+    QSignalSpy blueSpy(editor.get(), &MaterialEditorQML::colourWriteBlueChanged);
+    editor->setColourWriteBlue(false);
+    EXPECT_GE(blueSpy.count(), 1);
+    EXPECT_FALSE(editor->colourWriteBlue());
+
+    // Alpha channel
+    QSignalSpy alphaSpy(editor.get(), &MaterialEditorQML::colourWriteAlphaChanged);
+    editor->setColourWriteAlpha(false);
+    EXPECT_GE(alphaSpy.count(), 1);
+    EXPECT_FALSE(editor->colourWriteAlpha());
+}
+
+TEST_F(MaterialEditorQMLTest, SceneBlendOperation_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::sceneBlendOperationChanged);
+    editor->setSceneBlendOperation(2); // Reverse Subtract
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->sceneBlendOperation(), 2);
+}
+
+TEST_F(MaterialEditorQMLTest, LineWidth_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::lineWidthChanged);
+    editor->setLineWidth(3.5f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->lineWidth(), 3.5f);
+}
+
+TEST_F(MaterialEditorQMLTest, PointSpritesEnabled_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::pointSpritesEnabledChanged);
+    editor->setPointSpritesEnabled(true);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_TRUE(editor->pointSpritesEnabled());
+}
+
+TEST_F(MaterialEditorQMLTest, MaxLights_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::maxLightsChanged);
+    editor->setMaxLights(8);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->maxLights(), 8);
+}
+
+TEST_F(MaterialEditorQMLTest, StartLight_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::startLightChanged);
+    editor->setStartLight(2);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->startLight(), 2);
+}
+
+TEST_F(MaterialEditorQMLTest, SourceBlendFactor_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::sourceBlendFactorChanged);
+    editor->setSourceBlendFactor(3); // Different from default 6
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->sourceBlendFactor(), 3);
+}
+
+TEST_F(MaterialEditorQMLTest, DestBlendFactor_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::destBlendFactorChanged);
+    editor->setDestBlendFactor(5); // Different from default 1
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->destBlendFactor(), 5);
+}
+
+TEST_F(MaterialEditorQMLTest, DiffuseAlpha_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::diffuseAlphaChanged);
+    editor->setDiffuseAlpha(0.7f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->diffuseAlpha(), 0.7f);
+}
+
+TEST_F(MaterialEditorQMLTest, SpecularAlpha_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::specularAlphaChanged);
+    editor->setSpecularAlpha(0.4f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->specularAlpha(), 0.4f);
+}
+
+TEST_F(MaterialEditorQMLTest, DepthBiasConstant_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::depthBiasConstantChanged);
+    editor->setDepthBiasConstant(2.5f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->depthBiasConstant(), 2.5f);
+}
+
+TEST_F(MaterialEditorQMLTest, DepthBiasSlopeScale_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::depthBiasSlopeScaleChanged);
+    editor->setDepthBiasSlopeScale(1.5f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->depthBiasSlopeScale(), 1.5f);
+}
+
+TEST_F(MaterialEditorQMLTest, FogMode_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::fogModeChanged);
+    editor->setFogMode(2); // Exponential
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->fogMode(), 2);
+}
+
+TEST_F(MaterialEditorQMLTest, FogDensity_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::fogDensityChanged);
+    editor->setFogDensity(0.8f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->fogDensity(), 0.8f);
+}
+
+TEST_F(MaterialEditorQMLTest, FogStart_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::fogStartChanged);
+    editor->setFogStart(25.0f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->fogStart(), 25.0f);
+}
+
+TEST_F(MaterialEditorQMLTest, FogEnd_SignalOnly) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::fogEndChanged);
+    editor->setFogEnd(200.0f);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_FLOAT_EQ(editor->fogEnd(), 200.0f);
+}
+
+// ===========================================================================
+// No-change-no-signal tests (MaterialEditorQMLTest fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, DepthWriteEnabled_NoChangeNoSignal) {
+    // Default is true
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::depthWriteEnabledChanged);
+    editor->setDepthWriteEnabled(true);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, DepthCheckEnabled_NoChangeNoSignal) {
+    // Default is true
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::depthCheckEnabledChanged);
+    editor->setDepthCheckEnabled(true);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, Shininess_NoChangeNoSignal) {
+    // Default is 0.0f
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::shininessChanged);
+    editor->setShininess(0.0f);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, PolygonMode_NoChangeNoSignal) {
+    // Default is 2 (Solid)
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::polygonModeChanged);
+    editor->setPolygonMode(2);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, FogOverride_NoChangeNoSignal) {
+    // Default is false
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::fogOverrideChanged);
+    editor->setFogOverride(false);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, PointSize_NoChangeNoSignal) {
+    // Default is 1.0f
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::pointSizeChanged);
+    editor->setPointSize(1.0f);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+// ===========================================================================
+// Vertex color tracking without Ogre (MaterialEditorQMLTest fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, VertexColorTracking_SignalOnly) {
+    // Ambient
+    QSignalSpy ambientSpy(editor.get(), &MaterialEditorQML::useVertexColorToAmbientChanged);
+    editor->setUseVertexColorToAmbient(true);
+    EXPECT_GE(ambientSpy.count(), 1);
+    EXPECT_TRUE(editor->useVertexColorToAmbient());
+
+    // Diffuse
+    QSignalSpy diffuseSpy(editor.get(), &MaterialEditorQML::useVertexColorToDiffuseChanged);
+    editor->setUseVertexColorToDiffuse(true);
+    EXPECT_GE(diffuseSpy.count(), 1);
+    EXPECT_TRUE(editor->useVertexColorToDiffuse());
+
+    // Specular
+    QSignalSpy specularSpy(editor.get(), &MaterialEditorQML::useVertexColorToSpecularChanged);
+    editor->setUseVertexColorToSpecular(true);
+    EXPECT_GE(specularSpy.count(), 1);
+    EXPECT_TRUE(editor->useVertexColorToSpecular());
+
+    // Emissive
+    QSignalSpy emissiveSpy(editor.get(), &MaterialEditorQML::useVertexColorToEmissiveChanged);
+    editor->setUseVertexColorToEmissive(true);
+    EXPECT_GE(emissiveSpy.count(), 1);
+    EXPECT_TRUE(editor->useVertexColorToEmissive());
+}
+
+// ===========================================================================
+// With-Ogre material edge cases (MaterialEditorQMLWithOgreTest fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, CreateMaterial_DuplicateName) {
+    // Create a material first
+    editor->createNewMaterial("DupTestMat");
+    EXPECT_EQ(editor->materialName(), "DupTestMat");
+
+    // Create another material with the same name -- should not crash
+    editor->createNewMaterial("DupTestMat");
+    EXPECT_EQ(editor->materialName(), "DupTestMat");
+    EXPECT_TRUE(editor->materialText().contains("material DupTestMat"));
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, CreateMaterial_SpecialCharacters) {
+    // Create material with special characters in name
+    editor->createNewMaterial("Mat_With-Special.Chars/123");
+    EXPECT_EQ(editor->materialName(), "Mat_With-Special.Chars/123");
+    EXPECT_TRUE(editor->materialText().contains("material Mat_With-Special.Chars/123"));
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, ResetPropertiesToDefaults) {
+    // Load a material and change various properties
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    editor->setLightingEnabled(false);
+    editor->setShininess(99.0f);
+    editor->setDepthWriteEnabled(false);
+    editor->setDepthCheckEnabled(false);
+    editor->setPolygonMode(0); // Points
+
+    // Create a fresh new material. Its script template has an empty pass,
+    // which Ogre parses with default pass properties (lighting on, depth
+    // write on, depth check on).
+    editor->createNewMaterial("ResetTest");
+    ASSERT_TRUE(editor->applyMaterial());
+
+    // Load the freshly-created Ogre material to read its pass properties
+    editor->loadMaterial("ResetTest");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // A brand-new Ogre pass has these defaults; the editor must reflect them
+    // and not carry stale values from the previously edited BaseWhite material
+    EXPECT_TRUE(editor->lightingEnabled());
+    EXPECT_TRUE(editor->depthWriteEnabled());
+    EXPECT_TRUE(editor->depthCheckEnabled());
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, MultipleTextureUnits) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Create 3 texture units
+    editor->createNewTextureUnit("TU_First");
+    editor->createNewTextureUnit("TU_Second");
+    editor->createNewTextureUnit("TU_Third");
+
+    EXPECT_GE(editor->textureUnitList().size(), 3);
+
+    // Switch between texture units
+    editor->setSelectedTextureUnitIndex(0);
+    EXPECT_EQ(editor->selectedTextureUnitIndex(), 0);
+
+    editor->setSelectedTextureUnitIndex(1);
+    EXPECT_EQ(editor->selectedTextureUnitIndex(), 1);
+
+    editor->setSelectedTextureUnitIndex(2);
+    EXPECT_EQ(editor->selectedTextureUnitIndex(), 2);
+}
+
+TEST_F(MaterialEditorQMLWithOgreTest, TextureUnitProperties_AfterSwitch) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Create two texture units
+    editor->createNewTextureUnit("TU_A");
+    editor->createNewTextureUnit("TU_B");
+    int lastIdx = editor->textureUnitList().size() - 1;
+
+    // Set properties on first texture unit (index lastIdx - 1)
+    editor->setSelectedTextureUnitIndex(lastIdx - 1);
+    editor->setTextureUOffset(0.3f);
+    editor->setTextureVOffset(0.7f);
+    EXPECT_FLOAT_EQ(editor->textureUOffset(), 0.3f);
+    EXPECT_FLOAT_EQ(editor->textureVOffset(), 0.7f);
+
+    // Switch to second texture unit (index lastIdx)
+    editor->setSelectedTextureUnitIndex(lastIdx);
+    // Properties should reflect the second TU's values (defaults)
+    // The key assertion is that switching doesn't carry values from TU_A
+    float uOffset = editor->textureUOffset();
+    float vOffset = editor->textureVOffset();
+    // Second TU was just created with default offsets (0.0)
+    EXPECT_FLOAT_EQ(uOffset, 0.0f);
+    EXPECT_FLOAT_EQ(vOffset, 0.0f);
+}
+
+// ===========================================================================
+// LLM callback stubs (MaterialEditorQMLTest fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, LLMProperties_InitialState) {
+    // llmGenerationProgress should be 0 initially
+    EXPECT_FLOAT_EQ(editor->llmGenerationProgress(), 0.0f);
+
+    // llmModelLoaded and llmCurrentModel depend on LLMManager singleton,
+    // which may or may not be available. Just verify they don't crash.
+    bool loaded = editor->llmModelLoaded();
+    QString model = editor->llmCurrentModel();
+    // We don't assert specific values since LLMManager state depends on
+    // whether llama.cpp was compiled in, but the calls should not throw.
+    Q_UNUSED(loaded);
+    Q_UNUSED(model);
+}
+
+// ===========================================================================
+// Additional coverage tests (MaterialEditorQMLTest fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, CreateNewMaterial_EmptyName) {
+    // Empty name should use default "new_material"
+    editor->createNewMaterial("");
+    EXPECT_EQ(editor->materialName(), "new_material");
+    EXPECT_TRUE(editor->materialText().contains("material new_material"));
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_TextureUnitInPass) {
+    QString script =
+        "material TexturedMat\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t\ttexture_unit\n"
+        "\t\t\t{\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_TRUE(editor->validateMaterialScript(script));
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MultiplePassesInTechnique) {
+    QString script =
+        "material MultiPassMat\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass FirstPass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t\tpass SecondPass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_TRUE(editor->validateMaterialScript(script));
+}
+
+// ===========================================================================
+// NEW: applyMaterial with modified properties (Ogre fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, ApplyMaterial_ModifiedProperties_ReflectedInPass) {
+    // Load BaseWhite, change several properties, apply, and verify Ogre::Pass reflects them
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->techniqueList().isEmpty());
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Modify properties
+    editor->setLightingEnabled(false);
+    editor->setPolygonMode(1); // Wireframe
+    editor->setShininess(77.0f);
+    editor->setDepthWriteEnabled(false);
+    editor->setDepthCheckEnabled(false);
+    QColor red(255, 0, 0);
+    editor->setAmbientColor(red);
+    QColor green(0, 255, 0);
+    editor->setDiffuseColor(green);
+
+    // The material text should have been updated to reflect changes
+    QString matText = editor->materialText();
+    EXPECT_FALSE(matText.isEmpty());
+
+    // Apply the material
+    bool result = editor->applyMaterial();
+    EXPECT_TRUE(result);
+
+    // Reload the material to pick up the applied changes from Ogre
+    editor->loadMaterial(editor->materialName());
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Verify properties match what we set
+    EXPECT_FALSE(editor->lightingEnabled());
+    EXPECT_FALSE(editor->depthWriteEnabled());
+    EXPECT_FALSE(editor->depthCheckEnabled());
+}
+
+// ===========================================================================
+// NEW: undoMaterialChange / redoMaterialChange with Ogre
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, UndoRedo_OgrePropertyChangesRevertState) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Record the initial state
+    QString initialText = editor->materialText();
+    bool initialLighting = editor->lightingEnabled();
+
+    // Change lighting -- this updates material text and pushes to undo stack
+    editor->setLightingEnabled(!initialLighting);
+    QString afterLightingText = editor->materialText();
+    EXPECT_NE(initialText, afterLightingText);
+    EXPECT_TRUE(editor->canUndo());
+
+    // Change shininess -- another undo entry
+    editor->setShininess(99.0f);
+    QString afterShininessText = editor->materialText();
+    EXPECT_NE(afterLightingText, afterShininessText);
+
+    // Undo shininess change
+    editor->undo();
+    EXPECT_EQ(editor->materialText(), afterLightingText);
+
+    // Undo lighting change
+    editor->undo();
+    EXPECT_EQ(editor->materialText(), initialText);
+
+    // Redo lighting change
+    EXPECT_TRUE(editor->canRedo());
+    editor->redo();
+    EXPECT_EQ(editor->materialText(), afterLightingText);
+
+    // Redo shininess change
+    editor->redo();
+    EXPECT_EQ(editor->materialText(), afterShininessText);
+}
+
+// ===========================================================================
+// NEW: validateMaterialScript with various edge cases
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_WithComments) {
+    // Script with comments should be valid
+    QString script =
+        "material CommentedMat\n"
+        "{\n"
+        "\t// This is a comment\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t\t// Another comment\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_TRUE(editor->validateMaterialScript(script));
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_TextureUnitOutsidePass) {
+    // texture_unit outside a pass should fail
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    QString script =
+        "material BadMat\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\ttexture_unit\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_FALSE(editor->validateMaterialScript(script));
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_UnterminatedString) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    QString script =
+        "material BadStringMat\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t\ttexture \"unterminated\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_FALSE(editor->validateMaterialScript(script));
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_NestedMaterialDeclaration) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    QString script =
+        "material OuterMat\n"
+        "{\n"
+        "\tmaterial InnerMat\n"
+        "\t{\n"
+        "\t\ttechnique\n"
+        "\t\t{\n"
+        "\t\t\tpass\n"
+        "\t\t\t{\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t}\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_FALSE(editor->validateMaterialScript(script));
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MaterialNameMissing) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    // "material" keyword but no name (just "material" followed by {)
+    QString script =
+        "material\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    // This should fail because "material " has less than 2 parts
+    // Note: "material\n" without trailing space - startsWith("material ") won't match
+    // Actually, the validator checks line.startsWith("material ") — the space is important.
+    // "material\n" trimmed is just "material" which does NOT start with "material ".
+    // So it will not be recognized as a material declaration and fail with "No valid material declaration found".
+    EXPECT_FALSE(editor->validateMaterialScript(script));
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_TypoTextureUnt) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::errorOccurred);
+    QString script =
+        "material TypoMat\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t\ttexture_unt\n"
+        "\t\t\t{\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_FALSE(editor->validateMaterialScript(script));
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_WithPropertyValues) {
+    // Valid script with property keywords that exercise the property-value check branch
+    QString script =
+        "material PropMat\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t\tambient 0.5 0.5 0.5\n"
+        "\t\t\tdiffuse 1.0 1.0 1.0 1.0\n"
+        "\t\t\tspecular 0.3 0.3 0.3 32.0\n"
+        "\t\t\temissive 0.0 0.0 0.0\n"
+        "\t\t\tlighting on\n"
+        "\t\t\tdepth_write on\n"
+        "\t\t\tdepth_check on\n"
+        "\t\t\tscene_blend alpha_blend\n"
+        "\t\t\tcull_hardware clockwise\n"
+        "\t\t\tcull_software back\n"
+        "\t\t\tshininess 32.0\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_TRUE(editor->validateMaterialScript(script));
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_BraceOnSameLine) {
+    // Material declaration with { on the same line
+    QString script =
+        "material InlineBraceMat {\n"
+        "\ttechnique {\n"
+        "\t\tpass {\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_TRUE(editor->validateMaterialScript(script));
+}
+
+TEST_F(MaterialEditorQMLTest, ValidateMaterialScript_MultipleTextureUnitsInPass) {
+    QString script =
+        "material MultiTexMat\n"
+        "{\n"
+        "\ttechnique\n"
+        "\t{\n"
+        "\t\tpass\n"
+        "\t\t{\n"
+        "\t\t\ttexture_unit first\n"
+        "\t\t\t{\n"
+        "\t\t\t}\n"
+        "\t\t\ttexture_unit second\n"
+        "\t\t\t{\n"
+        "\t\t\t}\n"
+        "\t\t\ttexture_unit third\n"
+        "\t\t\t{\n"
+        "\t\t\t}\n"
+        "\t\t}\n"
+        "\t}\n"
+        "}";
+    EXPECT_TRUE(editor->validateMaterialScript(script));
+}
+
+// ===========================================================================
+// NEW: removeTechnique / removePass / removeTextureUnit (Ogre fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, RemoveTextureUnit) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Create two texture units
+    editor->createNewTextureUnit("RemTU_A");
+    editor->createNewTextureUnit("RemTU_B");
+    int countBefore = editor->textureUnitList().size();
+    ASSERT_GE(countBefore, 2);
+
+    // Remove the texture (which recreates the TU without a texture name)
+    editor->setSelectedTextureUnitIndex(countBefore - 1);
+    editor->removeTexture();
+    // After removeTexture, the texture name should be reset
+    EXPECT_EQ(editor->textureName(), "*Select a texture*");
+}
+
+// ===========================================================================
+// NEW: setTextureName with a valid texture name (Ogre fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, SetTextureName_ValidName) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    editor->createNewTextureUnit("TexNameTU");
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureNameChanged);
+    editor->setTextureName("some_texture.png");
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->textureName(), "some_texture.png");
+}
+
+TEST_F(MaterialEditorQMLTest, SetTextureName_NoOgre) {
+    QSignalSpy spy(editor.get(), &MaterialEditorQML::textureNameChanged);
+    editor->setTextureName("test_texture.dds");
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(editor->textureName(), "test_texture.dds");
+}
+
+// ===========================================================================
+// NEW: Multiple technique/pass selection (Ogre fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, MultipleTechniqueSelection) {
+    editor->loadMaterial("BaseWhite");
+    int origTechCount = editor->techniqueList().size();
+
+    // Create additional techniques
+    editor->createNewTechnique("Tech_A");
+    editor->createNewTechnique("Tech_B");
+    EXPECT_EQ(editor->techniqueList().size(), origTechCount + 2);
+
+    // Select first technique
+    editor->setSelectedTechniqueIndex(0);
+    EXPECT_EQ(editor->selectedTechniqueIndex(), 0);
+    QStringList passListForTech0 = editor->passList();
+
+    // Select second technique (newly created -- may have no passes)
+    editor->setSelectedTechniqueIndex(origTechCount);
+    EXPECT_EQ(editor->selectedTechniqueIndex(), origTechCount);
+    QStringList passListForTechA = editor->passList();
+
+    // Select third technique
+    editor->setSelectedTechniqueIndex(origTechCount + 1);
+    EXPECT_EQ(editor->selectedTechniqueIndex(), origTechCount + 1);
+
+    // Switch back to first technique, pass list should match original
+    editor->setSelectedTechniqueIndex(0);
+    EXPECT_EQ(editor->passList(), passListForTech0);
+}
+
+// ===========================================================================
+// NEW: loadMaterial for GUI_Material (Ogre fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, LoadMaterial_GUI_Material) {
+    editor->loadMaterial("GUI_Material");
+
+    EXPECT_EQ(editor->materialName(), "GUI_Material");
+    EXPECT_FALSE(editor->techniqueList().isEmpty());
+    EXPECT_TRUE(editor->materialText().contains("GUI_Material"));
+
+    // GUI_Material has lighting disabled in its setup (see TestHelpers.h)
+    EXPECT_FALSE(editor->lightingEnabled());
+}
+
+// ===========================================================================
+// NEW: saveMaterial / importMaterial round-trip (Ogre fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, ExportAndImportMaterial_RoundTrip) {
+    // Create a custom material
+    editor->createNewMaterial("RoundTripTestMat");
+    EXPECT_TRUE(editor->applyMaterial());
+
+    // Load the material via Ogre to set it up properly
+    editor->loadMaterial("RoundTripTestMat");
+    ASSERT_FALSE(editor->techniqueList().isEmpty());
+
+    // Export it
+    QString exportPath = QDir(QDir::tempPath()).filePath("round_trip_test.material");
+    editor->exportMaterial(exportPath);
+    EXPECT_TRUE(QFile::exists(exportPath));
+
+    // Now import it -- importMaterialFile reads .material files
+    editor->importMaterialFile(exportPath);
+
+    // Clean up
+    QFile::remove(exportPath);
+}
+
+// ===========================================================================
+// NEW: createNewMaterial with duplicate name (Ogre fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, CreateNewMaterial_DuplicateExisting) {
+    // BaseWhite already exists in Ogre
+    editor->createNewMaterial("BaseWhite");
+    // Should not crash. The editor should still have a valid state
+    EXPECT_EQ(editor->materialName(), "BaseWhite");
+    EXPECT_TRUE(editor->materialText().contains("material BaseWhite"));
+}
+
+// ===========================================================================
+// NEW: Verify Ogre Pass reflects color changes after apply
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, ApplyMaterial_ColorsReflectedInOgrePass) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Set distinct colors
+    QColor red(255, 0, 0);
+    QColor green(0, 255, 0);
+    QColor blue(0, 0, 255);
+    QColor yellow(255, 255, 0);
+
+    editor->setAmbientColor(red);
+    editor->setDiffuseColor(green);
+    editor->setSpecularColor(blue);
+    editor->setEmissiveColor(yellow);
+    editor->setShininess(50.0f);
+
+    // Apply the material
+    bool result = editor->applyMaterial();
+    EXPECT_TRUE(result);
+
+    // Reload to verify Ogre actually parsed the applied script
+    editor->loadMaterial(editor->materialName());
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // The shininess should be close to what we set
+    EXPECT_NEAR(editor->shininess(), 50.0f, 1.0f);
+
+    // Verify the colors round-tripped
+    // Note: Ogre may adjust color precision, so we use component comparison
+    EXPECT_NEAR(editor->ambientColor().redF(), 1.0, 0.1);
+    EXPECT_NEAR(editor->diffuseColor().greenF(), 1.0, 0.1);
+    EXPECT_NEAR(editor->specularColor().blueF(), 1.0, 0.1);
+}
+
+// ===========================================================================
+// NEW: Additional undo/redo edge cases
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLTest, UndoRedo_UndoOnEmptyStackDoesNothing) {
+    // Undo when nothing is on the stack should not crash
+    EXPECT_FALSE(editor->canUndo());
+    editor->undo();
+    // No crash = pass
+    EXPECT_FALSE(editor->canUndo());
+}
+
+TEST_F(MaterialEditorQMLTest, UndoRedo_RedoOnEmptyStackDoesNothing) {
+    EXPECT_FALSE(editor->canRedo());
+    editor->redo();
+    // No crash = pass
+    EXPECT_FALSE(editor->canRedo());
+}
+
+// ===========================================================================
+// NEW: openMaterialEditorWindow with different states (Ogre fixture)
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, OpenMaterialEditorWindow_WithGUIMaterial) {
+    editor->openMaterialEditorWindow("GUI_Material");
+    EXPECT_EQ(editor->materialName(), "GUI_Material");
+    EXPECT_FALSE(editor->techniqueList().isEmpty());
+}
+
+// ===========================================================================
+// NEW: Adding a pass to a new technique, then selecting it
+// ===========================================================================
+
+TEST_F(MaterialEditorQMLWithOgreTest, NewTechniqueAddPassAndSelectIt) {
+    editor->loadMaterial("BaseWhite");
+    int origTechCount = editor->techniqueList().size();
+
+    // Create a new technique
+    editor->createNewTechnique("MyNewTech");
+    EXPECT_EQ(editor->techniqueList().size(), origTechCount + 1);
+
+    // Select the new technique
+    editor->setSelectedTechniqueIndex(origTechCount);
+    int passCountBefore = editor->passList().size();
+
+    // Create a pass in it
+    editor->createNewPass("MyNewPass");
+    EXPECT_EQ(editor->passList().size(), passCountBefore + 1);
+
+    // Select the new pass and modify its properties
+    editor->setSelectedPassIndex(editor->passList().size() - 1);
+    editor->setLightingEnabled(false);
+    EXPECT_FALSE(editor->lightingEnabled());
+
+    // Switch back to original technique and verify properties are independent
+    editor->setSelectedTechniqueIndex(0);
+    editor->setSelectedPassIndex(0);
+    EXPECT_TRUE(editor->lightingEnabled());
 }

@@ -701,3 +701,276 @@ TEST_F(ManagerHeadlessTest, SceneNodeParenting)
     EXPECT_EQ(child->getParentSceneNode(), parent);
     EXPECT_EQ(parent->numChildren(), 1u);
 }
+
+// ==========================================================================
+// NEW BATCH: Additional coverage tests
+// ==========================================================================
+
+// Test clearScene-like behavior: destroy all user nodes and verify cleanup
+TEST_F(ManagerHeadlessTest, DestroyAllUserNodes_ClearsScene)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    // Create several nodes with entities
+    auto mesh1 = createInMemoryTriangleMesh("ClearSceneMesh1");
+    auto mesh2 = createInMemoryTriangleMesh("ClearSceneMesh2");
+    auto* sceneMgr = mgr->getSceneMgr();
+
+    auto* node1 = mgr->addSceneNode("ClearNode1");
+    auto* ent1 = sceneMgr->createEntity("ClearEntity1", mesh1);
+    node1->attachObject(ent1);
+
+    auto* node2 = mgr->addSceneNode("ClearNode2");
+    auto* ent2 = sceneMgr->createEntity("ClearEntity2", mesh2);
+    node2->attachObject(ent2);
+
+    // Also add a plain node with no entity
+    mgr->addSceneNode("ClearNodeEmpty");
+
+    ASSERT_TRUE(mgr->hasSceneNode("ClearNode1"));
+    ASSERT_TRUE(mgr->hasSceneNode("ClearNode2"));
+    ASSERT_TRUE(mgr->hasSceneNode("ClearNodeEmpty"));
+    ASSERT_FALSE(mgr->getEntities().isEmpty());
+
+    // Destroy all user nodes one-by-one (mimics clearScene for user content)
+    QList<Ogre::SceneNode*> nodesToDestroy;
+    for (auto* sn : mgr->getSceneNodes()) {
+        nodesToDestroy.append(sn);
+    }
+    for (auto* sn : nodesToDestroy) {
+        mgr->destroySceneNode(sn);
+    }
+
+    // Verify everything is cleaned up
+    EXPECT_EQ(mgr->getSceneNodes().count(), 0);
+    EXPECT_EQ(mgr->getEntities().count(), 0);
+    EXPECT_FALSE(mgr->hasSceneNode("ClearNode1"));
+    EXPECT_FALSE(mgr->hasSceneNode("ClearNode2"));
+    EXPECT_FALSE(mgr->hasSceneNode("ClearNodeEmpty"));
+}
+
+// Test getEntities with ManualObjects mixed in -- verifies the type-filtering pitfall
+// Manager::getEntities() does static_cast<Entity*> without checking movableType,
+// so attaching a ManualObject to a user node would cause issues. This test
+// verifies that ManualObjects attached to forbidden-name nodes are filtered out
+// by the isForbiddenNodeName check in getEntities().
+TEST_F(ManagerHeadlessTest, GetEntitiesWithManualObjectOnForbiddenNode)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    auto* sceneMgr = mgr->getSceneMgr();
+
+    // Create a ManualObject on the root (but under a forbidden-name node).
+    // getEntities filters out forbidden nodes, so this ManualObject should not appear.
+    auto* manualObj = sceneMgr->createManualObject("TestManual_Unnamed");
+    // Attach to a node that starts with "Unnamed_" (forbidden)
+    auto* forbiddenNode = sceneMgr->getRootSceneNode()->createChildSceneNode("Unnamed_manual_test");
+    forbiddenNode->attachObject(manualObj);
+
+    // getEntities should not crash and should return 0 entities
+    // (the forbidden node is filtered out, so the ManualObject cast never happens)
+    QList<Ogre::Entity*>& entities = mgr->getEntities();
+    EXPECT_EQ(entities.count(), 0);
+
+    // Cleanup
+    forbiddenNode->detachAllObjects();
+    sceneMgr->destroyManualObject(manualObj);
+    sceneMgr->destroySceneNode(forbiddenNode);
+}
+
+// Test duplicate node name auto-numbering with many collisions
+TEST_F(ManagerHeadlessTest, AddSceneNode_AutoNumbering_ManyDuplicates)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    // Create 5 nodes with the same base name "Sphere"
+    Ogre::SceneNode* nodes[5];
+    nodes[0] = mgr->addSceneNode("Sphere");
+    nodes[1] = mgr->addSceneNode("Sphere");
+    nodes[2] = mgr->addSceneNode("Sphere");
+    nodes[3] = mgr->addSceneNode("Sphere");
+    nodes[4] = mgr->addSceneNode("Sphere");
+
+    // First gets exact name, subsequent get Sphere1..Sphere4
+    EXPECT_TRUE(mgr->hasSceneNode("Sphere"));
+    EXPECT_TRUE(mgr->hasSceneNode("Sphere1"));
+    EXPECT_TRUE(mgr->hasSceneNode("Sphere2"));
+    EXPECT_TRUE(mgr->hasSceneNode("Sphere3"));
+    EXPECT_TRUE(mgr->hasSceneNode("Sphere4"));
+
+    // All nodes must be distinct
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_NE(nodes[i], nullptr);
+        for (int j = i + 1; j < 5; ++j) {
+            EXPECT_NE(nodes[i], nodes[j]) << "Nodes at index " << i << " and " << j << " should differ";
+        }
+    }
+}
+
+// Test auto-numbering when middle names are missing (gap filling)
+TEST_F(ManagerHeadlessTest, AddSceneNode_AutoNumbering_WithGap)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    // Create "Plane" and "Plane1", then destroy "Plane"
+    auto* n0 = mgr->addSceneNode("Plane");  // "Plane"
+    auto* n1 = mgr->addSceneNode("Plane");  // "Plane1"
+    ASSERT_TRUE(mgr->hasSceneNode("Plane"));
+    ASSERT_TRUE(mgr->hasSceneNode("Plane1"));
+
+    mgr->destroySceneNode("Plane");
+    EXPECT_FALSE(mgr->hasSceneNode("Plane"));
+    EXPECT_TRUE(mgr->hasSceneNode("Plane1"));
+
+    // Adding "Plane" again should reuse the name "Plane" (the gap)
+    auto* n2 = mgr->addSceneNode("Plane");
+    ASSERT_NE(n2, nullptr);
+    EXPECT_TRUE(mgr->hasSceneNode("Plane"));
+    EXPECT_TRUE(mgr->hasSceneNode("Plane1"));
+}
+
+// Test hasAnimationName with createAnimatedTestEntity - multiple animation name checks
+TEST_F(ManagerHeadlessTest, HasAnimationName_MultipleChecks)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* entity = createAnimatedTestEntity("AnimMultiCheck");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    // The helper creates a "TestAnim" animation
+    EXPECT_TRUE(mgr->hasAnimationName(entity, "TestAnim"));
+
+    // Non-existent animation names
+    EXPECT_FALSE(mgr->hasAnimationName(entity, "Walk"));
+    EXPECT_FALSE(mgr->hasAnimationName(entity, "Run"));
+    EXPECT_FALSE(mgr->hasAnimationName(entity, "Idle"));
+    EXPECT_FALSE(mgr->hasAnimationName(entity, ""));
+    EXPECT_FALSE(mgr->hasAnimationName(entity, "testAnim")); // case-sensitive
+}
+
+// Test scene node parent-child chain after multiple addSceneNode calls
+TEST_F(ManagerHeadlessTest, SceneNodeParentChain_MultipleDepth)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* root = sceneMgr->getRootSceneNode();
+
+    // addSceneNode always creates children of root
+    auto* a = mgr->addSceneNode("ChainA");
+    auto* b = mgr->addSceneNode("ChainB");
+    auto* c = mgr->addSceneNode("ChainC");
+
+    // All are children of root by default
+    EXPECT_EQ(a->getParentSceneNode(), root);
+    EXPECT_EQ(b->getParentSceneNode(), root);
+    EXPECT_EQ(c->getParentSceneNode(), root);
+
+    // Now reparent: A -> B -> C
+    root->removeChild(b);
+    a->addChild(b);
+    root->removeChild(c);
+    b->addChild(c);
+
+    // Verify the chain
+    EXPECT_EQ(c->getParentSceneNode(), b);
+    EXPECT_EQ(b->getParentSceneNode(), a);
+    EXPECT_EQ(a->getParentSceneNode(), root);
+
+    // C's derived position should accumulate the parent chain
+    a->setPosition(10, 0, 0);
+    b->setPosition(0, 20, 0);
+    c->setPosition(0, 0, 30);
+
+    // Force updates
+    a->_update(true, false);
+
+    Ogre::Vector3 derivedPos = c->_getDerivedPosition();
+    EXPECT_NEAR(derivedPos.x, 10.0f, 0.01f);
+    EXPECT_NEAR(derivedPos.y, 20.0f, 0.01f);
+    EXPECT_NEAR(derivedPos.z, 30.0f, 0.01f);
+}
+
+// Test createEntity via Manager::createEntity helper (not manual attach)
+TEST_F(ManagerHeadlessTest, CreateEntityViaManagerHelper)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("MgrHelperMesh");
+    auto* node = mgr->addSceneNode("MgrHelperNode");
+    ASSERT_NE(node, nullptr);
+
+    QSignalSpy spy(mgr, &Manager::entityCreated);
+    auto* entity = mgr->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+    EXPECT_EQ(spy.count(), 1);
+    EXPECT_EQ(node->numAttachedObjects(), 1u);
+    EXPECT_FALSE(mgr->getEntities().isEmpty());
+}
+
+// Test destroying a node with children recursively
+TEST_F(ManagerHeadlessTest, DestroySceneNode_WithChildren)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+    auto* sceneMgr = mgr->getSceneMgr();
+
+    auto* parent = mgr->addSceneNode("DestroyParent");
+    ASSERT_NE(parent, nullptr);
+
+    // Create child nodes directly under parent
+    auto* child1 = parent->createChildSceneNode("DestroyChild1");
+    auto* child2 = parent->createChildSceneNode("DestroyChild2");
+    ASSERT_NE(child1, nullptr);
+    ASSERT_NE(child2, nullptr);
+
+    EXPECT_EQ(parent->numChildren(), 2u);
+
+    // Destroying parent should also destroy children (removeAndDestroyAllChildren)
+    mgr->destroySceneNode(parent);
+    EXPECT_FALSE(mgr->hasSceneNode("DestroyParent"));
+}
+
+// Test getSceneNodes does not include forbidden-name nodes
+TEST_F(ManagerHeadlessTest, GetSceneNodes_ExcludesForbiddenNames)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    mgr->addSceneNode("VisibleNode");
+
+    QList<Ogre::SceneNode*>& nodes = mgr->getSceneNodes();
+    for (auto* sn : nodes) {
+        QString name = sn->getName().c_str();
+        EXPECT_FALSE(name.startsWith("Unnamed_")) << "Found forbidden node: " << name.toStdString();
+        EXPECT_NE(name, QString("TPCameraChildSceneNode"));
+        EXPECT_NE(name, QString("GridLine_node"));
+        EXPECT_NE(name, QString(SELECTIONBOX_OBJECT_NAME));
+        EXPECT_NE(name, QString(TRANSFORM_OBJECT_NAME));
+    }
+}
+
+// Test hasSceneNode with empty and whitespace names
+TEST_F(ManagerHeadlessTest, HasSceneNode_EdgeCaseNames)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    EXPECT_FALSE(mgr->hasSceneNode(""));
+    EXPECT_FALSE(mgr->hasSceneNode("   "));
+    EXPECT_FALSE(mgr->hasSceneNode("nonexistent_12345"));
+
+    // A node with spaces in the name should work
+    auto* node = mgr->addSceneNode("Node With Spaces");
+    ASSERT_NE(node, nullptr);
+    EXPECT_TRUE(mgr->hasSceneNode("Node With Spaces"));
+}

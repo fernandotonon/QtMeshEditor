@@ -5,6 +5,8 @@
 #include <cmath>
 #include <algorithm>
 #include <QFile>
+#include <QDir>
+#include <QTemporaryFile>
 #include <QCoreApplication>
 #include <QApplication>
 #include <QThread>
@@ -2311,6 +2313,229 @@ TEST_F(FBXExporterCoverageTest, AnimationLayer) {
     auto* weight = findP70(*props, "Weight");
     ASSERT_NE(weight, nullptr);
     EXPECT_NEAR(weight->properties[4].doubleVal, 100.0, 0.01);
+
+    cleanup(r);
+}
+
+// ==========================================================================
+// NEW TESTS: Full export round-trip
+// ==========================================================================
+
+TEST_F(FBXExporterCoverageTest, ExportInMemoryMesh_CreatesValidFile) {
+    auto name = uniqueName("inmem");
+    auto* entity = createSimpleMesh(name);
+    ASSERT_NE(entity, nullptr);
+
+    QString outPath = QDir(QDir::tempPath()).filePath(QString("fbx_inmem_%1.fbx").arg(meshCounter));
+    ASSERT_TRUE(FBXExporter::exportFBX(entity, outPath));
+
+    // Verify file exists
+    QFile file(outPath);
+    EXPECT_TRUE(file.exists());
+    EXPECT_GT(file.size(), 27); // At least larger than the 27-byte FBX header
+
+    // Verify FBX magic bytes
+    std::ifstream in(outPath.toStdString(), std::ios::binary);
+    ASSERT_TRUE(in.is_open());
+
+    char magic[21];
+    in.read(magic, 21);
+    EXPECT_EQ(std::string(magic, 20), "Kaydara FBX Binary  ");
+    EXPECT_EQ(magic[20], '\0');
+
+    char pad[2];
+    in.read(pad, 2);
+    EXPECT_EQ(pad[0], '\x1A');
+    EXPECT_EQ(pad[1], '\x00');
+
+    uint32_t version;
+    in.read(reinterpret_cast<char*>(&version), 4);
+    EXPECT_EQ(version, 7300u);
+
+    in.close();
+    QFile::remove(outPath);
+}
+
+TEST_F(FBXExporterCoverageTest, ExportSkeletonMesh_PreservesHierarchy) {
+    auto name = uniqueName("skelhier");
+    auto* entity = createSkeletonMesh(name);
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    auto r = exportAndParse(entity);
+    ASSERT_TRUE(r.success);
+
+    // Find the Objects node
+    auto* objects = findTopLevel(r.nodes, "Objects");
+    ASSERT_NE(objects, nullptr);
+
+    // Find all Model nodes (bones are represented as Limb models)
+    auto models = objects->findAll("Model");
+    // Should have at least 4 models: mesh model + 3 bones (root, spine, head)
+    EXPECT_GE(models.size(), 4u);
+
+    // Verify Connections node exists (bone hierarchy connections)
+    auto* connections = findTopLevel(r.nodes, "Connections");
+    ASSERT_NE(connections, nullptr);
+    EXPECT_FALSE(connections->children.empty());
+
+    cleanup(r);
+}
+
+TEST_F(FBXExporterCoverageTest, ExportAnimatedMesh_PreservesAnimations) {
+    auto name = uniqueName("anim");
+    auto* entity = createAnimatedMesh(name);
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    auto r = exportAndParse(entity);
+    ASSERT_TRUE(r.success);
+
+    // Find the Objects node
+    auto* objects = findTopLevel(r.nodes, "Objects");
+    ASSERT_NE(objects, nullptr);
+
+    // Should have AnimationStack nodes for the "walk" animation
+    auto animStacks = objects->findAll("AnimationStack");
+    EXPECT_GE(animStacks.size(), 1u);
+
+    // Should have AnimationCurveNode entries for the keyframes
+    auto curveNodes = objects->findAll("AnimationCurveNode");
+    EXPECT_GE(curveNodes.size(), 1u);
+
+    // Should have AnimationCurve entries with the actual data
+    auto curves = objects->findAll("AnimationCurve");
+    EXPECT_GE(curves.size(), 1u);
+
+    cleanup(r);
+}
+
+// ==========================================================================
+// NEW TESTS: Error handling
+// ==========================================================================
+
+TEST_F(FBXExporterCoverageTest, ExportToInvalidPath_HandlesGracefully) {
+    auto name = uniqueName("invpath");
+    auto* entity = createSimpleMesh(name);
+    ASSERT_NE(entity, nullptr);
+
+    // Export to a path where the parent is a file, not a directory
+    QTemporaryFile tempFile;
+    tempFile.open();
+    QString invalidPath = tempFile.fileName() + "/test.fbx";
+    bool result = FBXExporter::exportFBX(entity, invalidPath);
+    EXPECT_FALSE(result);
+}
+
+TEST_F(FBXExporterCoverageTest, ExportNullEntity_HandlesGracefully) {
+    // Should return false for nullptr entity
+    QString nullTestPath = QDir(QDir::tempPath()).filePath("null_entity_test.fbx");
+    EXPECT_FALSE(FBXExporter::exportFBX(nullptr, nullTestPath));
+    // Ensure no file was created
+    EXPECT_FALSE(QFile::exists(nullTestPath));
+}
+
+TEST_F(FBXExporterCoverageTest, ExportEmptyMesh_HandlesGracefully) {
+    // Create a mesh with no submeshes (just shared vertex data)
+    auto name = uniqueName("empty");
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    // Empty mesh with no vertex data and no submeshes
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1,-1,-1,1,1,1));
+    mesh->_setBoundingSphereRadius(2.0);
+    mesh->load();
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode(name + "_node");
+    auto* entity = sceneMgr->createEntity(name + "_entity", mesh);
+    node->attachObject(entity);
+
+    QString outPath = QDir(QDir::tempPath()).filePath(QString("fbx_empty_%1.fbx").arg(meshCounter));
+    // Should either succeed with a minimal file or fail gracefully
+    bool result = FBXExporter::exportFBX(entity, outPath);
+    // Either way, no crash
+    if (result) {
+        QFile::remove(outPath);
+    }
+}
+
+// ==========================================================================
+// NEW TESTS: Edge cases
+// ==========================================================================
+
+TEST_F(FBXExporterCoverageTest, ExportMultiSubmeshMesh_WritesAllGeometry) {
+    auto name = uniqueName("multisub");
+    auto* entity = createMultiSubmeshMesh(name);
+    ASSERT_NE(entity, nullptr);
+
+    auto r = exportAndParse(entity);
+    ASSERT_TRUE(r.success);
+
+    auto* objects = findTopLevel(r.nodes, "Objects");
+    ASSERT_NE(objects, nullptr);
+
+    // Should have 2 Geometry nodes (one per submesh)
+    auto geomNodes = objects->findAll("Geometry");
+    EXPECT_EQ(geomNodes.size(), 2u);
+
+    // Each geometry should have vertices
+    for (const auto* geom : geomNodes) {
+        auto* verts = geom->find("Vertices");
+        ASSERT_NE(verts, nullptr);
+        EXPECT_FALSE(verts->properties.empty());
+        // Both submeshes use shared vertex data (6 vertices total),
+        // so each Geometry node contains all 6 vertices * 3 components = 18 doubles
+        EXPECT_EQ(verts->properties[0].doubleArray.size(), 18u);
+    }
+
+    // Should have connections
+    auto* connections = findTopLevel(r.nodes, "Connections");
+    ASSERT_NE(connections, nullptr);
+    EXPECT_FALSE(connections->children.empty());
+
+    cleanup(r);
+}
+
+TEST_F(FBXExporterCoverageTest, ExportMeshWithMaterials_WritesMaterialData) {
+    auto name = uniqueName("matdata");
+    auto* entity = createMaterialTestMesh(name);
+    ASSERT_NE(entity, nullptr);
+
+    auto r = exportAndParse(entity);
+    ASSERT_TRUE(r.success);
+
+    auto* objects = findTopLevel(r.nodes, "Objects");
+    ASSERT_NE(objects, nullptr);
+
+    // Should have Material node(s)
+    auto materials = objects->findAll("Material");
+    ASSERT_GE(materials.size(), 1u);
+
+    // Verify material has Properties70 with color data
+    auto* props = materials[0]->find("Properties70");
+    ASSERT_NE(props, nullptr);
+
+    // Check for diffuse color property
+    auto* diffuse = findP70(*props, "DiffuseColor");
+    ASSERT_NE(diffuse, nullptr);
+    // Diffuse was set to (0.9, 0.1, 0.2)
+    EXPECT_NEAR(diffuse->properties[4].doubleVal, 0.9, 0.05);
+    EXPECT_NEAR(diffuse->properties[5].doubleVal, 0.1, 0.05);
+    EXPECT_NEAR(diffuse->properties[6].doubleVal, 0.2, 0.05);
+
+    // Check for specular color property
+    auto* specular = findP70(*props, "SpecularColor");
+    ASSERT_NE(specular, nullptr);
+    // Specular was set to (0.5, 0.6, 0.7)
+    EXPECT_NEAR(specular->properties[4].doubleVal, 0.5, 0.05);
+    EXPECT_NEAR(specular->properties[5].doubleVal, 0.6, 0.05);
+    EXPECT_NEAR(specular->properties[6].doubleVal, 0.7, 0.05);
+
+    // Check for shininess
+    auto* shininess = findP70(*props, "Shininess");
+    ASSERT_NE(shininess, nullptr);
+    EXPECT_NEAR(shininess->properties[4].doubleVal, 64.0, 0.5);
 
     cleanup(r);
 }

@@ -651,3 +651,446 @@ TEST(MeshImporterExporterStandaloneTest, GetSupportedExportFormats) {
     EXPECT_TRUE(filter.contains("*.mesh.xml"));
 }
 
+// ── FBX round-trip with skeleton ─────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, ExportImport_FBX_WithSkeleton_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    // Import FBX with skeleton
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    // Verify skeleton exists before export
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity(sn->getName()));
+    auto* entity = sceneMgr->getEntity(sn->getName());
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    // Export to FBX (exercises FBXExporter code path with skeleton data)
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip_skel.fbx", "FBX Binary (*.fbx)"), 0);
+    EXPECT_TRUE(QFile::exists("./roundtrip_skel.fbx"));
+
+    // Reimport the exported FBX
+    QStringList reimport{"./roundtrip_skel.fbx"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    // Verify skeleton was preserved after reimport
+    auto* reimportedNode = Manager::getSingleton()->getSceneNodes().last();
+    if (sceneMgr->hasEntity(reimportedNode->getName())) {
+        auto* reimportedEntity = sceneMgr->getEntity(reimportedNode->getName());
+        EXPECT_TRUE(reimportedEntity->hasSkeleton());
+    }
+
+    // Clean up
+    QFile::remove("./roundtrip_skel.fbx");
+    QFile::remove("./roundtrip_skel.material");
+}
+
+// ── Collada round-trip with skeleton ─────────────────────────────
+
+TEST_F(MeshImporterExporterTest, ExportImport_Collada_WithSkeleton_RoundTrip) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    // Verify skeleton
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity(sn->getName()));
+    auto* entity = sceneMgr->getEntity(sn->getName());
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    // Export to Collada (exercises buildAiScene with skeleton)
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./roundtrip_skel.dae", "Collada (*.dae)"), 0);
+    EXPECT_TRUE(QFile::exists("./roundtrip_skel.dae"));
+
+    // Reimport
+    QStringList reimport{"./roundtrip_skel.dae"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    // Verify skeleton was preserved after reimport
+    auto* reimportedNode = Manager::getSingleton()->getSceneNodes().last();
+    if (sceneMgr->hasEntity(reimportedNode->getName())) {
+        auto* reimportedEntity = sceneMgr->getEntity(reimportedNode->getName());
+        EXPECT_TRUE(reimportedEntity->hasSkeleton());
+    }
+
+    // Clean up
+    QFile::remove("./roundtrip_skel.dae");
+    QFile::remove("./roundtrip_skel.material");
+}
+
+// ── In-memory skeleton mesh export (no animations) ──────────────
+
+TEST_F(MeshImporterExporterTest, ExportInMemorySkeletonMesh_OBJ) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemorySkeletonMesh("ExportSkelOBJ");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportSkelOBJNode");
+    auto* entity = sceneMgr->createEntity("ExportSkelOBJEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_skel.obj", "OBJ (*.obj)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_skel.obj"));
+
+    QFile::remove("./inmem_skel.obj");
+    QFile::remove("./inmem_skel.material");
+    QFile::remove("./inmem_skel.mtl");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemorySkeletonMesh_FBX) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemorySkeletonMesh("ExportSkelFBX");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportSkelFBXNode");
+    auto* entity = sceneMgr->createEntity("ExportSkelFBXEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_skel.fbx", "FBX Binary (*.fbx)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_skel.fbx"));
+
+    QFile::remove("./inmem_skel.fbx");
+    QFile::remove("./inmem_skel.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemorySkeletonMesh_Collada) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemorySkeletonMesh("ExportSkelDAE");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportSkelDAENode");
+    auto* entity = sceneMgr->createEntity("ExportSkelDAEEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_skel.dae", "Collada (*.dae)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_skel.dae"));
+
+    QFile::remove("./inmem_skel.dae");
+    QFile::remove("./inmem_skel.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemorySkeletonMesh_glTF2) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemorySkeletonMesh("ExportSkelGLTF");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportSkelGLTFNode");
+    auto* entity = sceneMgr->createEntity("ExportSkelGLTFEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_skel.gltf2", "glTF 2.0 (*.gltf2)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_skel.gltf2"));
+
+    QFile::remove("./inmem_skel.gltf2");
+    QFile::remove("./inmem_skel.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemorySkeletonMesh_OgreMesh) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemorySkeletonMesh("ExportSkelMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportSkelMeshNode");
+    auto* entity = sceneMgr->createEntity("ExportSkelMeshEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_skel.mesh", "Ogre Mesh (*.mesh)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_skel.mesh"));
+
+    QFile::remove("./inmem_skel.mesh");
+    QFile::remove("./inmem_skel.material");
+    QFile::remove("./inmem_skel.skeleton");
+}
+
+TEST_F(MeshImporterExporterTest, ExportInMemorySkeletonMesh_OgreXML) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemorySkeletonMesh("ExportSkelXML");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportSkelXMLNode");
+    auto* entity = sceneMgr->createEntity("ExportSkelXMLEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./inmem_skel.mesh.xml", "Ogre XML (*.mesh.xml)"), 0);
+    EXPECT_TRUE(QFile::exists("./inmem_skel.mesh.xml"));
+
+    QFile::remove("./inmem_skel.mesh.xml");
+    QFile::remove("./inmem_skel.skeleton.xml");
+    QFile::remove("./inmem_skel.material");
+}
+
+// ── In-memory animated entity export (skeleton + animations) ────
+
+TEST_F(MeshImporterExporterTest, ExportAnimatedEntity_OBJ) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("ExportAnimOBJ");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./anim_export.obj", "OBJ (*.obj)"), 0);
+    EXPECT_TRUE(QFile::exists("./anim_export.obj"));
+
+    QFile::remove("./anim_export.obj");
+    QFile::remove("./anim_export.material");
+    QFile::remove("./anim_export.mtl");
+}
+
+TEST_F(MeshImporterExporterTest, ExportAnimatedEntity_FBX) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("ExportAnimFBX");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./anim_export.fbx", "FBX Binary (*.fbx)"), 0);
+    EXPECT_TRUE(QFile::exists("./anim_export.fbx"));
+
+    QFile::remove("./anim_export.fbx");
+    QFile::remove("./anim_export.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportAnimatedEntity_Collada) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("ExportAnimDAE");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./anim_export.dae", "Collada (*.dae)"), 0);
+    EXPECT_TRUE(QFile::exists("./anim_export.dae"));
+
+    QFile::remove("./anim_export.dae");
+    QFile::remove("./anim_export.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportAnimatedEntity_glTF2) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("ExportAnimGLTF");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./anim_export.gltf2", "glTF 2.0 (*.gltf2)"), 0);
+    EXPECT_TRUE(QFile::exists("./anim_export.gltf2"));
+
+    QFile::remove("./anim_export.gltf2");
+    QFile::remove("./anim_export.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportAnimatedEntity_OgreMesh) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("ExportAnimMesh");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./anim_export.mesh", "Ogre Mesh (*.mesh)"), 0);
+    EXPECT_TRUE(QFile::exists("./anim_export.mesh"));
+
+    QFile::remove("./anim_export.mesh");
+    QFile::remove("./anim_export.material");
+    QFile::remove("./anim_export.skeleton");
+}
+
+TEST_F(MeshImporterExporterTest, ExportAnimatedEntity_OgreXML) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("ExportAnimXML");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./anim_export.mesh.xml", "Ogre XML (*.mesh.xml)"), 0);
+    EXPECT_TRUE(QFile::exists("./anim_export.mesh.xml"));
+
+    QFile::remove("./anim_export.mesh.xml");
+    QFile::remove("./anim_export.skeleton.xml");
+    QFile::remove("./anim_export.material");
+}
+
+// ── OgreXML reimport with skeleton verification ─────────────────
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_SkeletonXMLSerializerPath) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    // Import FBX with skeleton
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+
+    // Export to Ogre XML
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./xmlskel_test.mesh.xml", "Ogre XML (*.mesh.xml)"), 0);
+    EXPECT_TRUE(QFile::exists("./xmlskel_test.mesh.xml"));
+    EXPECT_TRUE(QFile::exists("./xmlskel_test.skeleton.xml"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+
+    // Reimport the Ogre XML -- exercises XMLSkeletonSerializer path
+    QStringList reimport{"./xmlskel_test.mesh.xml"};
+    MeshImporterExporter::importer(reimport);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    // The reimported entity should have a skeleton
+    auto* reimportedSn = Manager::getSingleton()->getSceneNodes().last();
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    if (sceneMgr->hasEntity(reimportedSn->getName())) {
+        auto* reimportedEntity = sceneMgr->getEntity(reimportedSn->getName());
+        EXPECT_TRUE(reimportedEntity->hasSkeleton());
+        if (reimportedEntity->hasSkeleton()) {
+            // Verify the skeleton has animations
+            EXPECT_GT(reimportedEntity->getSkeleton()->getNumAnimations(), 0u);
+        }
+    }
+
+    // Clean up
+    QFile::remove("./xmlskel_test.mesh.xml");
+    QFile::remove("./xmlskel_test.skeleton.xml");
+    QFile::remove("./xmlskel_test.material");
+}
+
+// ── OBJ without MTL export format ───────────────────────────────
+
+TEST_F(MeshImporterExporterTest, ExportOBJNoMTL) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("ExportOBJNoMTLTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportOBJNoMTLNode");
+    auto* entity = sceneMgr->createEntity("ExportOBJNoMTLEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./nomtl_export.objnomtl", "OBJ without MTL (*.objnomtl)"), 0);
+    EXPECT_TRUE(QFile::exists("./nomtl_export.objnomtl"));
+
+    // Clean up
+    QFile::remove("./nomtl_export.objnomtl");
+    QFile::remove("./nomtl_export.material");
+    QFile::remove("./nomtl_export.mtl");
+}
+
+TEST_F(MeshImporterExporterTest, ExportOBJNoMTL_FromImportedMesh) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./nomtl_imported.objnomtl", "OBJ without MTL (*.objnomtl)"), 0);
+    EXPECT_TRUE(QFile::exists("./nomtl_imported.objnomtl"));
+
+    // Clean up
+    QFile::remove("./nomtl_imported.objnomtl");
+    QFile::remove("./nomtl_imported.material");
+    QFile::remove("./nomtl_imported.mtl");
+}
+
+// ── Assimp Binary export format ─────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, ExportAssimpBinary) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("ExportAssbinTriangle");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("ExportAssbinNode");
+    auto* entity = sceneMgr->createEntity("ExportAssbinEntity", mesh);
+    node->attachObject(entity);
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./assbin_export.assbin", "Assimp Binary (*.assbin)"), 0);
+    EXPECT_TRUE(QFile::exists("./assbin_export.assbin"));
+
+    // Clean up
+    QFile::remove("./assbin_export.assbin");
+    QFile::remove("./assbin_export.material");
+}
+
+TEST_F(MeshImporterExporterTest, ExportAssimpBinary_FromImportedMesh) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+
+    ASSERT_EQ(MeshImporterExporter::exporter(sn, "./assbin_imported.assbin", "Assimp Binary (*.assbin)"), 0);
+    EXPECT_TRUE(QFile::exists("./assbin_imported.assbin"));
+
+    // Clean up
+    QFile::remove("./assbin_imported.assbin");
+    QFile::remove("./assbin_imported.material");
+}
+

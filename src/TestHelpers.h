@@ -357,18 +357,27 @@ static inline Ogre::Entity* createAnimatedTestEntity(const std::string& name)
     kf2->setRotation(Ogre::Quaternion::IDENTITY);
     kf2->setScale(Ogre::Vector3::UNIT_SCALE);
 
-    // Create mesh
+    // Create mesh with position and normal data (normals are required by
+    // NormalVisualizer::buildOverlayForEntity to produce an overlay).
     auto mesh = Ogre::MeshManager::getSingleton().createManual(
         name + "_mesh", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
     auto* sub = mesh->createSubMesh();
     mesh->sharedVertexData = new Ogre::VertexData();
     auto* decl = mesh->sharedVertexData->vertexDeclaration;
-    decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    size_t offset = 0;
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
 
     auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
         decl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
-    float verts[] = {0,0,0, 1,0,0, 0,1,0};
+    // position (x,y,z) + normal (nx,ny,nz) per vertex
+    float verts[] = {
+        0,0,0,  0,0,1,
+        1,0,0,  0,0,1,
+        0,1,0,  0,0,1,
+    };
     vbuf->writeData(0, sizeof(verts), verts);
     mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf);
     mesh->sharedVertexData->vertexCount = 3;

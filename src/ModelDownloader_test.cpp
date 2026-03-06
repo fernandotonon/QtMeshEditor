@@ -622,3 +622,91 @@ TEST_F(ModelDownloaderTest, DISABLED_PropertiesAreConsistentAfterCancel) {
     EXPECT_EQ(downloader->bytesTotal(), 0);
     EXPECT_FLOAT_EQ(downloader->downloadSpeed(), 0.0f);
 }
+
+// =============================================================================
+// Additional tests -- no network access required
+// =============================================================================
+
+TEST_F(ModelDownloaderTest, InitialStateFullPropertyCheck) {
+    // Comprehensive check of all property getters in initial state
+    EXPECT_FALSE(downloader->isDownloading());
+    EXPECT_FLOAT_EQ(downloader->downloadProgress(), 0.0f);
+    EXPECT_FLOAT_EQ(downloader->downloadSpeed(), 0.0f);
+    EXPECT_EQ(downloader->bytesReceived(), 0);
+    EXPECT_EQ(downloader->bytesTotal(), 0);
+    EXPECT_TRUE(downloader->currentModelName().isEmpty());
+}
+
+TEST_F(ModelDownloaderTest, SignalConnectionsExist) {
+    // Verify that we can create QSignalSpy on all signals without error,
+    // confirming the signals are properly declared and connectable.
+    QSignalSpy isDownloadingSpy(downloader, &ModelDownloader::isDownloadingChanged);
+    QSignalSpy modelNameSpy(downloader, &ModelDownloader::currentModelNameChanged);
+    QSignalSpy progressSpy(downloader, &ModelDownloader::downloadProgressChanged);
+    QSignalSpy bytesRecvSpy(downloader, &ModelDownloader::bytesReceivedChanged);
+    QSignalSpy bytesTotalSpy(downloader, &ModelDownloader::bytesTotalChanged);
+    QSignalSpy speedSpy(downloader, &ModelDownloader::downloadSpeedChanged);
+    QSignalSpy startedSpy(downloader, &ModelDownloader::downloadStarted);
+    QSignalSpy progressUpdateSpy(downloader, &ModelDownloader::downloadProgressUpdated);
+    QSignalSpy completedSpy(downloader, &ModelDownloader::downloadCompleted);
+    QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    QSignalSpy pausedSpy(downloader, &ModelDownloader::downloadPaused);
+    QSignalSpy resumedSpy(downloader, &ModelDownloader::downloadResumed);
+    QSignalSpy canceledSpy(downloader, &ModelDownloader::downloadCanceled);
+
+    // All spies should be valid (isValid)
+    EXPECT_TRUE(isDownloadingSpy.isValid());
+    EXPECT_TRUE(modelNameSpy.isValid());
+    EXPECT_TRUE(progressSpy.isValid());
+    EXPECT_TRUE(bytesRecvSpy.isValid());
+    EXPECT_TRUE(bytesTotalSpy.isValid());
+    EXPECT_TRUE(speedSpy.isValid());
+    EXPECT_TRUE(startedSpy.isValid());
+    EXPECT_TRUE(progressUpdateSpy.isValid());
+    EXPECT_TRUE(completedSpy.isValid());
+    EXPECT_TRUE(errorSpy.isValid());
+    EXPECT_TRUE(pausedSpy.isValid());
+    EXPECT_TRUE(resumedSpy.isValid());
+    EXPECT_TRUE(canceledSpy.isValid());
+}
+
+TEST_F(ModelDownloaderTest, CancelDownloadWhenNotDownloadingDoesNotCrash) {
+    // Calling cancelDownload when not downloading should be safe
+    downloader->cancelDownload();
+    app->processEvents();
+    EXPECT_FALSE(downloader->isDownloading());
+
+    // Call it multiple times
+    downloader->cancelDownload();
+    downloader->cancelDownload();
+    downloader->cancelDownload();
+    app->processEvents();
+    EXPECT_FALSE(downloader->isDownloading());
+}
+
+TEST_F(ModelDownloaderTest, PauseDownloadWhenNotDownloadingDoesNotCrash) {
+    // Calling pauseDownload when not downloading should be safe and a no-op
+    downloader->pauseDownload();
+    app->processEvents();
+    EXPECT_FALSE(downloader->isDownloading());
+
+    // Multiple calls should also be safe
+    downloader->pauseDownload();
+    downloader->pauseDownload();
+    app->processEvents();
+    EXPECT_FALSE(downloader->isDownloading());
+}
+
+TEST_F(ModelDownloaderTest, MultipleInstanceCheckReturnsSame) {
+    // ModelDownloader::instance() should always return the same pointer
+    // (singleton pattern). Verify across multiple calls.
+    ModelDownloader* inst1 = ModelDownloader::instance();
+    ModelDownloader* inst2 = ModelDownloader::instance();
+    ModelDownloader* inst3 = ModelDownloader::instance();
+    EXPECT_EQ(inst1, inst2);
+    EXPECT_EQ(inst2, inst3);
+    EXPECT_NE(inst1, nullptr);
+
+    // Also verify the downloader from SetUp is the same instance
+    EXPECT_EQ(downloader, inst1);
+}
