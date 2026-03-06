@@ -240,14 +240,12 @@ jobs:
         SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
         SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
       run: |
-        Copy-Item "${{github.workspace}}/bin/QtMeshEditor.exe" "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
-        & "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/strip.exe" --strip-debug "${{github.workspace}}/bin/QtMeshEditor.exe"
-        # Install sentry-cli via PowerShell (npm may not be in PATH)
-        Invoke-WebRequest -Uri "https://release-registry.services.sentry.io/apps/sentry-cli/latest?response=download&arch=x86_64&platform=Windows&package=sentry-cli" -OutFile "${{github.workspace}}/sentry-cli.exe"
-        & "${{github.workspace}}/sentry-cli.exe" debug-files upload --include-sources "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
-        Remove-Item "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
-        Remove-Item "${{github.workspace}}/sentry-cli.exe" -ErrorAction SilentlyContinue
-      shell: powershell
+        cp "${{github.workspace}}/bin/QtMeshEditor.exe" "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
+        "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/strip.exe" --strip-debug "${{github.workspace}}/bin/QtMeshEditor.exe"
+        curl -sL https://sentry.io/get-cli/ | bash
+        sentry-cli debug-files upload --include-sources "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
+        rm -f "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
+      shell: bash
 
     - name: Copy assimp dll to the binary folder
       run: |
