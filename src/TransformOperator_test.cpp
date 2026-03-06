@@ -457,3 +457,226 @@ TEST_F(TransformOperatorTestFixture, TransformStateChangeWithEntity) {
     EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_ROTATE));
     EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
 }
+
+// ==========================================================================
+// NEW BATCH: Additional coverage tests
+// ==========================================================================
+
+// Test rapid state cycling through all states with a selected entity
+TEST_F(TransformOperatorTestFixture, RapidStateCycling_AllStates) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("RapidCycleMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("RapidCycleNode");
+    auto* entity = sceneMgr->createEntity("RapidCycleEnt", mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->selectOne(node);
+    TransformOperator* instance = TransformOperator::getSingleton();
+
+    // Cycle through all states rapidly multiple times
+    for (int i = 0; i < 5; ++i) {
+        EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_NONE));
+        EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
+        EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_TRANSLATE));
+        EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_ROTATE));
+    }
+    // End in SELECT mode
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
+}
+
+// Test removeSelected with entity node and verify scene cleanup
+TEST_F(TransformOperatorTestFixture, RemoveSelected_EntityCleanup) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto mesh = createInMemoryTriangleMesh("RemoveCleanupMesh");
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = mgr->addSceneNode("RemoveCleanupNode");
+    auto* entity = sceneMgr->createEntity("RemoveCleanupEnt", mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(mgr->hasSceneNode("RemoveCleanupNode"));
+    ASSERT_FALSE(mgr->getEntities().isEmpty());
+
+    SelectionSet::getSingleton()->selectOne(node);
+    TransformOperator* instance = TransformOperator::getSingleton();
+
+    QSignalSpy spy(instance, &TransformOperator::objectsDeleted);
+    instance->removeSelected();
+
+    EXPECT_EQ(spy.count(), 1);
+    EXPECT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_FALSE(mgr->hasSceneNode("RemoveCleanupNode"));
+    EXPECT_TRUE(mgr->getEntities().isEmpty());
+}
+
+// Test translate with zero vector -- position should not change
+TEST_F(TransformOperatorTestFixture, TranslateSelected_ZeroVector) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TransZeroNode");
+    ASSERT_NE(node, nullptr);
+    node->setPosition(5.0f, 10.0f, 15.0f);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    instance->translateSelected(Ogre::Vector3::ZERO);
+    EXPECT_EQ(node->getPosition(), Ogre::Vector3(5.0f, 10.0f, 15.0f));
+}
+
+// Test translate with negative values
+TEST_F(TransformOperatorTestFixture, TranslateSelected_NegativeValues) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TransNegNode");
+    ASSERT_NE(node, nullptr);
+    node->setPosition(10.0f, 20.0f, 30.0f);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    instance->translateSelected(Ogre::Vector3(-15.0f, -25.0f, -35.0f));
+    EXPECT_EQ(node->getPosition(), Ogre::Vector3(-5.0f, -5.0f, -5.0f));
+}
+
+// Test setSelectedScale with zero scale (edge case)
+TEST_F(TransformOperatorTestFixture, SetSelectedScale_ZeroScale) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("ScaleZeroNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    instance->setSelectedScale(Ogre::Vector3::ZERO);
+    EXPECT_EQ(node->getScale(), Ogre::Vector3::ZERO);
+}
+
+// Test setSelectedScale with negative scale values
+TEST_F(TransformOperatorTestFixture, SetSelectedScale_NegativeValues) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("ScaleNegNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    instance->setSelectedScale(Ogre::Vector3(-1.0f, -2.0f, -3.0f));
+    EXPECT_EQ(node->getScale(), Ogre::Vector3(-1.0f, -2.0f, -3.0f));
+}
+
+// Test updateGizmoPosition with multiple selected nodes at different positions
+TEST_F(TransformOperatorTestFixture, OnSelectionChanged_MultipleNodes) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+
+    Ogre::SceneNode* node1 = mgr->addSceneNode("GizmoMulti1");
+    Ogre::SceneNode* node2 = mgr->addSceneNode("GizmoMulti2");
+    Ogre::SceneNode* node3 = mgr->addSceneNode("GizmoMulti3");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+    ASSERT_NE(node3, nullptr);
+
+    node1->setPosition(0, 0, 0);
+    node2->setPosition(10, 10, 10);
+    node3->setPosition(20, 20, 20);
+
+    SelectionSet::getSingleton()->selectOne(node1);
+    SelectionSet::getSingleton()->append(node2);
+    SelectionSet::getSingleton()->append(node3);
+
+    EXPECT_EQ(SelectionSet::getSingleton()->getNodesCount(), 3);
+
+    // onSelectionChanged should handle multiple selections without crash
+    EXPECT_NO_THROW(instance->onSelectionChanged());
+
+    // Switch to translate mode with multiple selection
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_TRANSLATE));
+    EXPECT_NO_THROW(instance->onSelectionChanged());
+}
+
+// Test selection with no entities in scene - all operations should be no-ops
+TEST_F(TransformOperatorTestFixture, AllOperations_EmptyScene) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    ASSERT_TRUE(SelectionSet::getSingleton()->isEmpty());
+
+    // All transform operations on empty selection should be safe
+    EXPECT_NO_THROW(instance->setSelectedPosition(Ogre::Vector3(100, 200, 300)));
+    EXPECT_NO_THROW(instance->translateSelected(Ogre::Vector3(1, 2, 3)));
+    EXPECT_NO_THROW(instance->setSelectedScale(Ogre::Vector3(5, 5, 5)));
+    EXPECT_NO_THROW(instance->scaleSelected(Ogre::Vector3(2, 2, 2)));
+    EXPECT_NO_THROW(instance->setSelectedOrientation(Ogre::Vector3(90, 180, 270)));
+    EXPECT_NO_THROW(instance->rotateSelected(Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_X)));
+    EXPECT_NO_THROW(instance->rotateSelected(Ogre::Vector3(45, 45, 45)));
+    EXPECT_NO_THROW(instance->removeSelected());
+
+    // No signals should have been emitted
+    QSignalSpy posSpy(instance, &TransformOperator::selectedPositionChanged);
+    QSignalSpy orientSpy(instance, &TransformOperator::selectedOrientationChanged);
+    QSignalSpy deleteSpy(instance, &TransformOperator::objectsDeleted);
+
+    instance->setSelectedPosition(Ogre::Vector3(1, 1, 1));
+    EXPECT_EQ(posSpy.count(), 0);
+
+    instance->setSelectedOrientation(Ogre::Vector3(45, 45, 45));
+    EXPECT_EQ(orientSpy.count(), 0);
+}
+
+// Test translateSelected signal emission with a selected node
+TEST_F(TransformOperatorTestFixture, TranslateSelected_EmitsPositionSignal) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("TransSigNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    QSignalSpy spy(instance, &TransformOperator::selectedPositionChanged);
+    instance->translateSelected(Ogre::Vector3(5.0f, 5.0f, 5.0f));
+    EXPECT_EQ(spy.count(), 1);
+}
+
+// Test scaleSelected signal and actual scale multiplication
+TEST_F(TransformOperatorTestFixture, ScaleSelected_WithEntity) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto mesh = createInMemoryTriangleMesh("ScaleSigMesh");
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = mgr->addSceneNode("ScaleSigNode");
+    auto* entity = sceneMgr->createEntity("ScaleSigEnt", mesh);
+    node->attachObject(entity);
+
+    node->setScale(2.0f, 2.0f, 2.0f);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->scaleSelected(Ogre::Vector3(3.0f, 0.5f, 1.0f));
+
+    EXPECT_EQ(node->getScale(), Ogre::Vector3(6.0f, 1.0f, 2.0f));
+}
+
+// Test multiple nodes translate with entity nodes
+TEST_F(TransformOperatorTestFixture, MultipleEntityNodesTranslate) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto mesh1 = createInMemoryTriangleMesh("MultiEntTransMesh1");
+    auto mesh2 = createInMemoryTriangleMesh("MultiEntTransMesh2");
+    auto* sceneMgr = mgr->getSceneMgr();
+
+    auto* node1 = mgr->addSceneNode("MultiEntTransNode1");
+    auto* ent1 = sceneMgr->createEntity("MultiEntTransEnt1", mesh1);
+    node1->attachObject(ent1);
+    node1->setPosition(0, 0, 0);
+
+    auto* node2 = mgr->addSceneNode("MultiEntTransNode2");
+    auto* ent2 = sceneMgr->createEntity("MultiEntTransEnt2", mesh2);
+    node2->attachObject(ent2);
+    node2->setPosition(100, 100, 100);
+
+    SelectionSet::getSingleton()->selectOne(node1);
+    SelectionSet::getSingleton()->append(node2);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->translateSelected(Ogre::Vector3(-10, -20, -30));
+
+    EXPECT_EQ(node1->getPosition(), Ogre::Vector3(-10, -20, -30));
+    EXPECT_EQ(node2->getPosition(), Ogre::Vector3(90, 80, 70));
+}

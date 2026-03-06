@@ -1007,3 +1007,291 @@ TEST_F(MainWindowTest, FrameRenderingQueuedWhilePlaying) {
     Manager::getSingleton()->getRoot()->renderOneFrame();
     EXPECT_TRUE(true);
 }
+
+// ===========================================================================
+// Drag-and-drop: dragEnterEvent accepts various file types
+// ===========================================================================
+
+TEST_F(MainWindowTest, DragEnterEvent_AcceptsMeshFiles) {
+    auto mimeData = new QMimeData();
+    mimeData->setUrls({QUrl::fromLocalFile("/tmp/test.mesh")});
+    QDragEnterEvent event(QPoint(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(mainWindow.get(), &event);
+    EXPECT_TRUE(event.isAccepted());
+    delete mimeData;
+}
+
+TEST_F(MainWindowTest, DragEnterEvent_AcceptsFBXFiles) {
+    auto mimeData = new QMimeData();
+    mimeData->setUrls({QUrl::fromLocalFile("/tmp/model.fbx")});
+    QDragEnterEvent event(QPoint(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(mainWindow.get(), &event);
+    EXPECT_TRUE(event.isAccepted());
+    delete mimeData;
+}
+
+TEST_F(MainWindowTest, DragEnterEvent_AcceptsOBJFiles) {
+    auto mimeData = new QMimeData();
+    mimeData->setUrls({QUrl::fromLocalFile("/tmp/scene.obj")});
+    QDragEnterEvent event(QPoint(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(mainWindow.get(), &event);
+    EXPECT_TRUE(event.isAccepted());
+    delete mimeData;
+}
+
+TEST_F(MainWindowTest, DragEnterEvent_AcceptsDAEFiles) {
+    auto mimeData = new QMimeData();
+    mimeData->setUrls({QUrl::fromLocalFile("/tmp/animation.dae")});
+    QDragEnterEvent event(QPoint(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(mainWindow.get(), &event);
+    // dragEnterEvent accepts all proposed actions unconditionally
+    EXPECT_TRUE(event.isAccepted());
+    delete mimeData;
+}
+
+TEST_F(MainWindowTest, DragEnterEvent_AcceptsNonMeshFiles) {
+    // The current implementation accepts all drag events unconditionally
+    // (filtering happens in dropEvent). Verify this behavior.
+    auto mimeData = new QMimeData();
+    mimeData->setUrls({QUrl::fromLocalFile("/tmp/readme.txt"),
+                        QUrl::fromLocalFile("/tmp/program.exe")});
+    QDragEnterEvent event(QPoint(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(mainWindow.get(), &event);
+    EXPECT_TRUE(event.isAccepted());
+    delete mimeData;
+}
+
+TEST_F(MainWindowTest, DragEnterEvent_AcceptsEmptyUrls) {
+    // Even with no URLs the drag enter is accepted (filtering in dropEvent)
+    auto mimeData = new QMimeData();
+    QDragEnterEvent event(QPoint(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(mainWindow.get(), &event);
+    EXPECT_TRUE(event.isAccepted());
+    delete mimeData;
+}
+
+// ===========================================================================
+// Keyboard shortcut: Key_E is unmapped — does not change transform state
+// ===========================================================================
+
+TEST_F(MainWindowTest, KeyE_DoesNotChangeTransformState) {
+    auto actionSelect = mainWindow->findChild<QAction*>("actionSelect_Object");
+    auto actionTranslate = mainWindow->findChild<QAction*>("actionTranslate_Object");
+    auto actionRotate = mainWindow->findChild<QAction*>("actionRotate_Object");
+    ASSERT_NE(actionSelect, nullptr);
+    ASSERT_NE(actionTranslate, nullptr);
+    ASSERT_NE(actionRotate, nullptr);
+
+    // Put into SELECT state first
+    auto keyY = std::make_unique<QKeyEvent>(QEvent::KeyPress, Qt::Key_Y, Qt::NoModifier);
+    mainWindow->keyPressEvent(keyY.get());
+    ASSERT_TRUE(actionSelect->isChecked());
+
+    // Press Key_E — should have no effect (unmapped key)
+    auto keyE = std::make_unique<QKeyEvent>(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier);
+    mainWindow->keyPressEvent(keyE.get());
+    EXPECT_TRUE(actionSelect->isChecked());
+    EXPECT_FALSE(actionTranslate->isChecked());
+    EXPECT_FALSE(actionRotate->isChecked());
+}
+
+// ===========================================================================
+// Show Grid action exists and is checkable
+// ===========================================================================
+
+TEST_F(MainWindowTest, ShowGrid_ActionExists) {
+    auto actionShowGrid = mainWindow->findChild<QAction*>("actionShow_Grid");
+    ASSERT_NE(actionShowGrid, nullptr);
+    EXPECT_TRUE(actionShowGrid->isCheckable());
+}
+
+// ===========================================================================
+// Show Normals action exists and is checkable
+// ===========================================================================
+
+TEST_F(MainWindowTest, ShowNormals_ActionExists) {
+    auto actionShowNormals = mainWindow->findChild<QAction*>("actionShow_Normals");
+    ASSERT_NE(actionShowNormals, nullptr);
+    EXPECT_TRUE(actionShowNormals->isCheckable());
+    // Default state: normals are off
+    EXPECT_FALSE(actionShowNormals->isChecked());
+}
+
+// ===========================================================================
+// Export with no selection — should be a safe no-op
+// ===========================================================================
+
+TEST_F(MainWindowTest, ExportSelected_NoSelection) {
+    // Ensure nothing is selected
+    SelectionSet::getSingleton()->clear();
+    ASSERT_FALSE(SelectionSet::getSingleton()->hasNodes());
+    ASSERT_FALSE(SelectionSet::getSingleton()->hasEntities());
+
+    // Trigger the export — should be a no-op, not crash
+    auto actionExport = mainWindow->findChild<QAction*>("actionExport_Selected");
+    ASSERT_NE(actionExport, nullptr);
+    actionExport->trigger();
+    EXPECT_TRUE(true); // Reached here without crashing
+}
+
+// ===========================================================================
+// Single viewport action — verify toggle behavior
+// ===========================================================================
+
+TEST_F(MainWindowTest, SingleViewportAction_Toggle) {
+    auto actionSingle = mainWindow->findChild<QAction*>("actionSingle");
+    ASSERT_NE(actionSingle, nullptr);
+    EXPECT_TRUE(actionSingle->isCheckable());
+
+    // Toggle to single (default)
+    actionSingle->setChecked(false);
+    actionSingle->toggle();
+    EXPECT_TRUE(actionSingle->isChecked());
+}
+
+// ===========================================================================
+// Side-by-side viewport action — verify toggle and mutual exclusion
+// ===========================================================================
+
+TEST_F(MainWindowTest, SideBySideViewportAction_Toggle) {
+    auto actionSingle = mainWindow->findChild<QAction*>("actionSingle");
+    auto actionSideBySide = mainWindow->findChild<QAction*>("action1x1_Side_by_Side");
+    ASSERT_NE(actionSingle, nullptr);
+    ASSERT_NE(actionSideBySide, nullptr);
+    EXPECT_TRUE(actionSideBySide->isCheckable());
+
+    // Toggle side-by-side on
+    actionSideBySide->toggle();
+    EXPECT_TRUE(actionSideBySide->isChecked());
+    EXPECT_FALSE(actionSingle->isChecked());
+
+    // Restore single viewport
+    actionSingle->toggle();
+    EXPECT_TRUE(actionSingle->isChecked());
+}
+
+// ===========================================================================
+// Upper-and-lower viewport action — verify toggle and mutual exclusion
+// ===========================================================================
+
+TEST_F(MainWindowTest, UpperLowerViewportAction_Toggle) {
+    auto actionSingle = mainWindow->findChild<QAction*>("actionSingle");
+    auto actionUpperLower = mainWindow->findChild<QAction*>("action1x1_Upper_and_Lower");
+    ASSERT_NE(actionSingle, nullptr);
+    ASSERT_NE(actionUpperLower, nullptr);
+    EXPECT_TRUE(actionUpperLower->isCheckable());
+
+    // Toggle upper-and-lower on
+    actionUpperLower->toggle();
+    EXPECT_TRUE(actionUpperLower->isChecked());
+    EXPECT_FALSE(actionSingle->isChecked());
+
+    // Restore single viewport
+    actionSingle->toggle();
+    EXPECT_TRUE(actionSingle->isChecked());
+}
+
+// ===========================================================================
+// Frame ended callback — no crash on renderOneFrame
+// ===========================================================================
+
+TEST_F(MainWindowTest, FrameEnded_NoCrash) {
+    // frameEnded processes the mUriList and updates viewports.
+    // A single renderOneFrame triggers frameStarted, frameRenderingQueued, and frameEnded.
+    Manager::getSingleton()->getRoot()->renderOneFrame();
+    EXPECT_TRUE(true);
+}
+
+// ===========================================================================
+// Multiple consecutive render frames — stability test
+// ===========================================================================
+
+TEST_F(MainWindowTest, MultipleRenderFrames) {
+    for (int i = 0; i < 5; ++i) {
+        Manager::getSingleton()->getRoot()->renderOneFrame();
+    }
+    EXPECT_TRUE(true);
+}
+
+// ===========================================================================
+// Key release event — no crash
+// ===========================================================================
+
+TEST_F(MainWindowTest, KeyReleaseEvent_NoCrash) {
+    auto keyRelease = std::make_unique<QKeyEvent>(QEvent::KeyRelease, Qt::Key_T, Qt::NoModifier);
+    QApplication::sendEvent(mainWindow.get(), keyRelease.get());
+    EXPECT_TRUE(true); // No crash
+}
+
+// ===========================================================================
+// Key release for multiple keys — exercises keyReleaseEvent path
+// ===========================================================================
+
+TEST_F(MainWindowTest, KeyReleaseEvent_MultipleKeys) {
+    auto keyR = std::make_unique<QKeyEvent>(QEvent::KeyRelease, Qt::Key_R, Qt::NoModifier);
+    auto keyY = std::make_unique<QKeyEvent>(QEvent::KeyRelease, Qt::Key_Y, Qt::NoModifier);
+    auto keyE = std::make_unique<QKeyEvent>(QEvent::KeyRelease, Qt::Key_E, Qt::NoModifier);
+    auto keyDel = std::make_unique<QKeyEvent>(QEvent::KeyRelease, Qt::Key_Delete, Qt::NoModifier);
+    QApplication::sendEvent(mainWindow.get(), keyR.get());
+    QApplication::sendEvent(mainWindow.get(), keyY.get());
+    QApplication::sendEvent(mainWindow.get(), keyE.get());
+    QApplication::sendEvent(mainWindow.get(), keyDel.get());
+    EXPECT_TRUE(true);
+}
+
+// ===========================================================================
+// Show Grid toggle — flip on/off
+// ===========================================================================
+
+TEST_F(MainWindowTest, ShowGrid_ToggleOnOff) {
+    auto actionShowGrid = mainWindow->findChild<QAction*>("actionShow_Grid");
+    ASSERT_NE(actionShowGrid, nullptr);
+
+    bool initialState = actionShowGrid->isChecked();
+    actionShowGrid->toggle();
+    EXPECT_NE(actionShowGrid->isChecked(), initialState);
+    actionShowGrid->toggle();
+    EXPECT_EQ(actionShowGrid->isChecked(), initialState);
+}
+
+// ===========================================================================
+// Show Normals toggle — flip on/off
+// ===========================================================================
+
+TEST_F(MainWindowTest, ShowNormals_ToggleOnOff) {
+    auto actionShowNormals = mainWindow->findChild<QAction*>("actionShow_Normals");
+    ASSERT_NE(actionShowNormals, nullptr);
+
+    bool initialState = actionShowNormals->isChecked();
+    actionShowNormals->toggle();
+    EXPECT_NE(actionShowNormals->isChecked(), initialState);
+    actionShowNormals->toggle();
+    EXPECT_EQ(actionShowNormals->isChecked(), initialState);
+}
+
+// ===========================================================================
+// Viewport actions exist as a complete group
+// ===========================================================================
+
+TEST_F(MainWindowTest, AllViewportActionsExist) {
+    EXPECT_NE(mainWindow->findChild<QAction*>("actionSingle"), nullptr);
+    EXPECT_NE(mainWindow->findChild<QAction*>("action1x1_Side_by_Side"), nullptr);
+    EXPECT_NE(mainWindow->findChild<QAction*>("action1x1_Upper_and_Lower"), nullptr);
+    EXPECT_NE(mainWindow->findChild<QAction*>("action2x2_Grid"), nullptr);
+}
+
+// ===========================================================================
+// DragEnterEvent with multiple mesh URLs — all accepted
+// ===========================================================================
+
+TEST_F(MainWindowTest, DragEnterEvent_MultipleUrls) {
+    auto mimeData = new QMimeData();
+    mimeData->setUrls({QUrl::fromLocalFile("/tmp/a.mesh"),
+                        QUrl::fromLocalFile("/tmp/b.fbx"),
+                        QUrl::fromLocalFile("/tmp/c.obj"),
+                        QUrl::fromLocalFile("/tmp/d.dae")});
+    QDragEnterEvent event(QPoint(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+    QApplication::sendEvent(mainWindow.get(), &event);
+    EXPECT_TRUE(event.isAccepted());
+    delete mimeData;
+}

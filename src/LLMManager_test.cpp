@@ -960,4 +960,97 @@ TEST_F(LLMManagerTest, CleanupHandlesMarkdownWithLanguageTag)
     EXPECT_TRUE(result.startsWith("material"));
 }
 
+// =============================================================================
+// Additional tests -- no network access or model files required
+// =============================================================================
+
+TEST_F(LLMManagerTest, GetModelFilePathWithValidAndInvalidNames)
+{
+    // Non-existent model names should return empty paths
+    EXPECT_TRUE(manager->getModelFilePath("completely_nonexistent_model_xyz").isEmpty());
+    EXPECT_TRUE(manager->getModelFilePath("../../../etc/passwd").isEmpty());
+    EXPECT_TRUE(manager->getModelFilePath("model with spaces").isEmpty());
+
+    // modelFileExists should also return false for non-existent models
+    EXPECT_FALSE(manager->modelFileExists("completely_nonexistent_model_xyz"));
+
+    // Empty string may or may not match depending on the models directory contents,
+    // so we just verify it does not crash
+    manager->getModelFilePath("");
+    manager->modelFileExists("");
+}
+
+TEST_F(LLMManagerTest, InitialStateQueries)
+{
+    // isModelLoaded: no model loaded during tests (no real model file available)
+    // The call should not crash regardless of the return value
+    bool loaded = manager->isModelLoaded();
+    // Without a real model file, this should be false
+    // (unless autoload succeeded, but typically no model is available in test env)
+    (void)loaded; // Suppress unused variable warning
+
+    // isGenerating: should be false when idle
+    EXPECT_FALSE(manager->isGenerating());
+
+    // isLoading: should be false when no model loading is in progress
+    EXPECT_FALSE(manager->isLoading());
+
+    // currentModelName: should be empty or a valid string (no crash)
+    QString modelName = manager->currentModelName();
+    (void)modelName; // Just verify no crash
+}
+
+TEST_F(LLMManagerTest, SettingsGettersReturnReasonableValues)
+{
+    // Verify contextSize, maxTokens, temperature are within reasonable bounds
+    int ctx = manager->contextSize();
+    EXPECT_GT(ctx, 0);
+    EXPECT_LE(ctx, 1048576); // reasonable upper bound (1M tokens)
+
+    int maxTok = manager->maxTokens();
+    EXPECT_GT(maxTok, 0);
+    EXPECT_LE(maxTok, 1048576);
+
+    float temp = manager->temperature();
+    EXPECT_GE(temp, 0.0f);
+    EXPECT_LE(temp, 10.0f); // reasonable upper bound
+
+    int gpu = manager->gpuLayers();
+    EXPECT_GE(gpu, 0);
+
+    // lastModelName should be callable without crash
+    QString lastModel = manager->lastModelName();
+    (void)lastModel;
+}
+
+TEST_F(LLMManagerTest, AvailableModelsInitialState)
+{
+    // availableModels may be empty if no model files are in the models directory.
+    // The call must not crash, and should return a valid QStringList.
+    QStringList models = manager->availableModels();
+    // We do not assert on size since it depends on the local file system,
+    // but we verify the list is a valid object
+    EXPECT_GE(models.size(), 0);
+
+    // getAvailableModelsInfo should also be callable and consistent
+    QVariantList modelsInfo = manager->getAvailableModelsInfo();
+    // Each entry in modelsInfo should correspond to an entry in availableModels
+    // (though their representation differs -- name list vs variant map list)
+    EXPECT_GE(modelsInfo.size(), 0);
+}
+
+TEST_F(LLMManagerTest, GetOgre3DSystemPromptContentCheck)
+{
+    // The system prompt should be non-empty and contain relevant keywords
+    QString prompt = LLMManager::getOgre3DSystemPrompt();
+    EXPECT_FALSE(prompt.isEmpty());
+    EXPECT_GT(prompt.length(), 50); // Should be a substantial prompt
+
+    // Should contain Ogre material-related terms
+    EXPECT_TRUE(prompt.contains("material", Qt::CaseInsensitive));
+    EXPECT_TRUE(prompt.contains("Ogre", Qt::CaseInsensitive));
+    EXPECT_TRUE(prompt.contains("technique", Qt::CaseInsensitive));
+    EXPECT_TRUE(prompt.contains("pass", Qt::CaseInsensitive));
+}
+
 #endif // ENABLE_LOCAL_LLM

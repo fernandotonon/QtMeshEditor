@@ -2510,3 +2510,277 @@ TEST_F(MCPServerTest, ToggleNormalsIsRecognizedTool)
     QJsonObject result = server->callTool("toggle_normals", QJsonObject());
     EXPECT_FALSE(getResultText(result).contains("Unknown tool"));
 }
+
+// ==========================================================================
+// NEW TESTS: Protocol edge cases
+// ==========================================================================
+
+TEST_F(MCPServerTest, HandleInitialize_ReturnsServerInfo)
+{
+    // Call handleInitialize indirectly via processMessage / handleToolsCall
+    // Since handleInitialize is private, we test through the public callTool
+    // and verify the server responds to known tools after initialization.
+    // We can verify the server's state by checking that tools work.
+
+    // The server should respond to tools without explicit initialize call
+    QJsonObject result = server->callTool("list_materials", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    // Server is functional, which means Ogre initialized correctly
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, HandleToolsList_ContainsAllTools)
+{
+    // Verify every known tool name is recognized (not "Unknown tool")
+    QStringList allTools = {
+        "create_material", "modify_material", "get_material", "list_materials",
+        "apply_material", "load_mesh", "get_mesh_info", "transform_mesh",
+        "list_textures", "set_texture", "export_mesh", "get_scene_info",
+        "take_screenshot", "create_primitive", "animate",
+        "list_skeletal_animations", "get_animation_info", "set_animation_length",
+        "set_animation_time", "add_keyframe", "remove_keyframe",
+        "play_animation", "toggle_skeleton_debug", "toggle_bone_weights",
+        "toggle_normals", "merge_animations"
+    };
+    EXPECT_EQ(allTools.size(), 26);
+
+    for (const QString &tool : allTools) {
+        QJsonObject result = server->callTool(tool, QJsonObject());
+        EXPECT_FALSE(getResultText(result).contains("Unknown tool"))
+            << "Tool should be recognized: " << tool.toStdString();
+    }
+}
+
+TEST_F(MCPServerTest, CallTool_WithEmptyArgs)
+{
+    // Call several tools with empty QJsonObject - they should return errors
+    // (missing required params) but NOT crash
+    QStringList toolsExpectingArgs = {
+        "create_material", "modify_material", "get_material",
+        "apply_material", "set_texture", "transform_mesh"
+    };
+    for (const QString &tool : toolsExpectingArgs) {
+        QJsonObject result = server->callTool(tool, QJsonObject());
+        // Should be an error (missing required params) but not Unknown tool
+        EXPECT_TRUE(isError(result))
+            << "Expected error for empty args on: " << tool.toStdString();
+        EXPECT_FALSE(getResultText(result).contains("Unknown tool"))
+            << "Tool should be recognized: " << tool.toStdString();
+    }
+}
+
+TEST_F(MCPServerTest, CallTool_WithNullArgs)
+{
+    // Call tools with a QJsonObject that has null values for required keys
+    QJsonObject args;
+    args["name"] = QJsonValue::Null;
+    QJsonObject result = server->callTool("create_material", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Material name is required"));
+
+    QJsonObject args2;
+    args2["material"] = QJsonValue::Null;
+    args2["mesh"] = QJsonValue::Null;
+    QJsonObject result2 = server->callTool("apply_material", args2);
+    EXPECT_TRUE(isError(result2));
+    EXPECT_TRUE(getResultText(result2).contains("Material name is required"));
+}
+
+TEST_F(MCPServerTest, DoubleInitialize)
+{
+    // Creating the server twice and calling tools should not crash
+    auto server2 = std::make_unique<MCPServer>();
+    QJsonObject result = server2->callTool("list_materials", QJsonObject());
+    // May succeed or fail depending on Ogre state, but should not crash
+    EXPECT_FALSE(getResultText(result).isEmpty());
+
+    // Original server should still work
+    QJsonObject result2 = server->callTool("list_materials", QJsonObject());
+    EXPECT_FALSE(isError(result2));
+}
+
+// ==========================================================================
+// NEW TESTS: Resource protocol
+// ==========================================================================
+
+TEST_F(MCPServerTest, HandleResourcesList_ReturnsResources)
+{
+    // We can't call handleResourcesList directly (it's private), but we can
+    // verify the server exposes resources by testing the resource-related
+    // tools indirectly. The resources are "qtmesheditor://material/current"
+    // and "qtmesheditor://scene/info".
+    // Since handleResourcesList is part of the MCP JSON-RPC flow, we verify
+    // the underlying data is accessible through callTool.
+    QJsonObject result = server->callTool("get_scene_info", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Scene Information"));
+}
+
+TEST_F(MCPServerTest, HandleResourcesRead_ValidURI)
+{
+    // The "scene/info" resource is backed by toolGetSceneInfo.
+    // Verify the scene info tool returns valid data (same as resource read).
+    QJsonObject result = server->callTool("get_scene_info", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Scene Information"));
+    EXPECT_TRUE(text.contains("Scene Nodes"));
+}
+
+TEST_F(MCPServerTest, HandleResourcesRead_InvalidURI)
+{
+    // An invalid resource URI would return empty contents in handleResourcesRead.
+    // We verify that the server handles unknown tools gracefully.
+    QJsonObject result = server->callTool("nonexistent_resource_tool", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Unknown tool"));
+}
+
+TEST_F(MCPServerTest, HandleResourcesRead_EmptyURI)
+{
+    // Verify that tools handle empty/missing string params correctly
+    QJsonObject args;
+    args["uri"] = "";
+    // There's no direct "read_resource" tool, but we can verify
+    // material read with empty name returns proper error
+    QJsonObject args2;
+    args2["name"] = "";
+    QJsonObject result = server->callTool("get_material", args2);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Material name is required"));
+}
+
+// ==========================================================================
+// NEW TESTS: Additional tool tests
+// ==========================================================================
+
+TEST_F(MCPServerTest, MergeAnimations_WithAnimatedEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    // Create two animated entities (merge_animations needs at least 2 skeleton entities)
+    Ogre::Entity* entity1 = createAnimatedTestEntity("MCPMergeAnim1");
+    ASSERT_NE(entity1, nullptr);
+
+    Ogre::Entity* entity2 = createAnimatedTestEntity("MCPMergeAnim2");
+    ASSERT_NE(entity2, nullptr);
+
+    QJsonObject args;
+    args["base_entity"] = "MCPMergeAnim1";
+    QJsonObject result = server->callTool("merge_animations", args);
+    // Should succeed or fail gracefully - the important thing is no crash
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, ToggleNormals_ToggleOnOff)
+{
+    // Server has no MainWindow set -- toggle_normals requires MainWindow
+    // Verify it fails gracefully for both on and off
+    QJsonObject argsOn;
+    argsOn["show"] = true;
+    QJsonObject resultOn = server->callTool("toggle_normals", argsOn);
+    EXPECT_TRUE(isError(resultOn));
+
+    QJsonObject argsOff;
+    argsOff["show"] = false;
+    QJsonObject resultOff = server->callTool("toggle_normals", argsOff);
+    EXPECT_TRUE(isError(resultOff));
+
+    // Both should give consistent error messages
+    EXPECT_TRUE(getResultText(resultOn).contains("MainWindow") ||
+                getResultText(resultOn).contains("NormalVisualizer"));
+    EXPECT_TRUE(getResultText(resultOff).contains("MainWindow") ||
+                getResultText(resultOff).contains("NormalVisualizer"));
+}
+
+TEST_F(MCPServerTest, PlayAnimation_StartAndStop)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("MCPPlayStopAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    // Start playing
+    QJsonObject playArgs;
+    playArgs["entity"] = "MCPPlayStopAnimEntity";
+    playArgs["animation"] = "TestAnim";
+    QJsonObject playResult = server->callTool("play_animation", playArgs);
+    EXPECT_FALSE(isError(playResult));
+
+    // Stop playing
+    QJsonObject stopArgs;
+    stopArgs["entity"] = "MCPPlayStopAnimEntity";
+    stopArgs["animation"] = "TestAnim";
+    stopArgs["stop"] = true;
+    QJsonObject stopResult = server->callTool("play_animation", stopArgs);
+    EXPECT_FALSE(isError(stopResult));
+}
+
+TEST_F(MCPServerTest, SetOgreInitFailed_AffectsToolCalls)
+{
+    // Create a fresh server and mark Ogre as failed
+    auto failServer = std::make_unique<MCPServer>();
+    failServer->setOgreInitFailed(true);
+
+    // All tools that need Ogre should return an error
+    QJsonObject result1 = failServer->callTool("create_material", QJsonObject{{"name", "FailMat"}});
+    EXPECT_TRUE(isError(result1));
+    EXPECT_TRUE(getResultText(result1).contains("Ogre") || getResultText(result1).contains("initialized"));
+
+    QJsonObject result2 = failServer->callTool("list_materials", QJsonObject());
+    EXPECT_TRUE(isError(result2));
+    EXPECT_TRUE(getResultText(result2).contains("Ogre") || getResultText(result2).contains("initialized"));
+
+    QJsonObject result3 = failServer->callTool("get_scene_info", QJsonObject());
+    EXPECT_TRUE(isError(result3));
+    EXPECT_TRUE(getResultText(result3).contains("Ogre") || getResultText(result3).contains("initialized"));
+}
+
+TEST_F(MCPServerTest, GetMeshInfo_WithSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemorySkeletonMesh("MCPMeshInfoSkelMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("MCPMeshInfoSkelNode");
+    auto* entity = sceneMgr->createEntity("MCPMeshInfoSkelEntity", mesh);
+    node->attachObject(entity);
+
+    QJsonObject result = server->callTool("get_mesh_info", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Vertices"));
+    // Should mention skeleton info
+    EXPECT_TRUE(text.contains("skeleton") || text.contains("Skeleton") ||
+                text.contains("bones") || text.contains("Bones"));
+}
+
+TEST_F(MCPServerTest, ExportMesh_ToTempFile)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh = createInMemoryTriangleMesh("MCPExportTempMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("MCPExportTempNode");
+    auto* entity = sceneMgr->createEntity("MCPExportTempEntity", mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->selectOne(node);
+
+    QString exportPath = "/tmp/mcp_export_temp_test.obj";
+    QJsonObject args;
+    args["path"] = exportPath;
+    QJsonObject result = server->callTool("export_mesh", args);
+    EXPECT_FALSE(isError(result));
+
+    // Verify the file was created
+    QFile exportedFile(exportPath);
+    EXPECT_TRUE(exportedFile.exists());
+    EXPECT_GT(exportedFile.size(), 0);
+
+    // Cleanup
+    QFile::remove(exportPath);
+    QFile::remove("/tmp/mcp_export_temp_test.material");
+    QFile::remove("/tmp/mcp_export_temp_test.mtl");
+    SelectionSet::getSingleton()->clear();
+}

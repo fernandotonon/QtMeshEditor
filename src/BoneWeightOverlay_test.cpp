@@ -164,3 +164,260 @@ TEST(BoneWeightOverlayTest, WeightToColorMidpointsInterpolate)
     EXPECT_NEAR(color2.g, 1.0f, 1e-5f);
     EXPECT_NEAR(color2.b, 0.0f, 1e-5f);
 }
+
+// ===========================================================================
+// In-memory entity tests (require Ogre + GL context, no robot.mesh needed)
+// ===========================================================================
+
+class BoneWeightOverlayInMemoryTest : public ::testing::Test {
+protected:
+    QApplication* app = nullptr;
+
+    void SetUp() override {
+        Manager::kill();
+        QThread::msleep(50);
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
+        }
+        createStandardOgreMaterials();
+
+        if (!canLoadMeshFiles())
+            GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+        // Remove leftover material so createMaterial() runs fresh
+        auto existing = Ogre::MaterialManager::getSingleton().getByName(
+            "BoneWeightOverlay/Material");
+        if (existing)
+            Ogre::MaterialManager::getSingleton().remove(existing);
+    }
+
+    void TearDown() override {
+        if (!Manager::getSingletonPtr())
+            return;
+        auto existing = Ogre::MaterialManager::getSingleton().getByName(
+            "BoneWeightOverlay/Material");
+        if (existing)
+            Ogre::MaterialManager::getSingleton().remove(existing);
+        SelectionSet::getSingleton()->clear();
+        Manager::kill();
+        if (app) app->processEvents();
+        QThread::msleep(50);
+    }
+};
+
+// setVisible(true) starts the update timer and builds the overlay;
+// setVisible(false) stops the timer and destroys it.
+TEST_F(BoneWeightOverlayInMemoryTest, SetVisibleTogglesTimerAndOverlay)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_VisToggle");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+
+    EXPECT_FALSE(overlay.isVisible());
+
+    overlay.setVisible(true);
+    EXPECT_TRUE(overlay.isVisible());
+
+    // The overlay ManualObject should now be attached to the entity's parent node
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    EXPECT_GE(node->numAttachedObjects(), 2u)
+        << "Entity + overlay ManualObject should both be attached";
+
+    overlay.setVisible(false);
+    EXPECT_FALSE(overlay.isVisible());
+
+    // After hiding, the overlay ManualObject should have been destroyed,
+    // leaving only the entity attached
+    EXPECT_EQ(node->numAttachedObjects(), 1u);
+}
+
+// setSelectedBone with a valid bone index rebuilds the overlay when visible.
+TEST_F(BoneWeightOverlayInMemoryTest, SetSelectedBoneWithValidIndex)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_BoneValid");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_GE(entity->getSkeleton()->getNumBones(), 2u);
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    overlay.setVisible(true);
+
+    // Select bone index 0 (Root bone)
+    overlay.setSelectedBone(0);
+    EXPECT_TRUE(overlay.isVisible());
+
+    // Select bone index 1 (Child bone -- all vertices are assigned to this bone)
+    overlay.setSelectedBone(1);
+    EXPECT_TRUE(overlay.isVisible());
+
+    // Verify the overlay is still attached
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    EXPECT_GE(node->numAttachedObjects(), 2u);
+
+    overlay.setVisible(false);
+}
+
+// setSelectedBone with an out-of-range index should not crash.
+// The overlay just shows zero weight (blue) for all vertices.
+TEST_F(BoneWeightOverlayInMemoryTest, SetSelectedBoneWithInvalidIndex)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_BoneInvalid");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    overlay.setVisible(true);
+
+    // Use a bone index far beyond the skeleton's bone count
+    overlay.setSelectedBone(999);
+    EXPECT_TRUE(overlay.isVisible());
+
+    // The overlay should still be functional (showing zero-weight colours)
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    EXPECT_GE(node->numAttachedObjects(), 2u);
+
+    overlay.setVisible(false);
+}
+
+// Build overlay on an in-memory animated entity (using createAnimatedTestEntity).
+TEST_F(BoneWeightOverlayInMemoryTest, BuildOverlayOnAnimatedEntity)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_AnimBuild");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    overlay.setVisible(true);
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    // Should have both the entity and the overlay ManualObject
+    EXPECT_GE(node->numAttachedObjects(), 2u);
+
+    // Select the bone that has assignments (bone index 1 = "Child")
+    overlay.setSelectedBone(1);
+
+    // Overlay should still be attached after bone selection change
+    EXPECT_GE(node->numAttachedObjects(), 2u);
+
+    overlay.setVisible(false);
+}
+
+// Destroying the overlay (via destructor) cleans up while visible.
+TEST_F(BoneWeightOverlayInMemoryTest, DestroyOverlayOnDeselect)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_Destroy");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    {
+        BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+        overlay.setVisible(true);
+        EXPECT_GE(node->numAttachedObjects(), 2u);
+        // Destructor runs here while overlay is visible -- should clean up
+    }
+
+    // After destruction, only the entity should remain
+    EXPECT_EQ(node->numAttachedObjects(), 1u);
+    // Entity should still be valid
+    EXPECT_EQ(entity->getParentSceneNode(), node);
+}
+
+// Multiple show/hide cycles should not leak ManualObjects or crash.
+TEST_F(BoneWeightOverlayInMemoryTest, MultipleShowHideCycles)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_MultiCycle");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    for (int i = 0; i < 5; ++i) {
+        overlay.setVisible(true);
+        EXPECT_TRUE(overlay.isVisible());
+        EXPECT_GE(node->numAttachedObjects(), 2u)
+            << "Cycle " << i << ": overlay should be attached when visible";
+
+        overlay.setVisible(false);
+        EXPECT_FALSE(overlay.isVisible());
+        EXPECT_EQ(node->numAttachedObjects(), 1u)
+            << "Cycle " << i << ": only entity should remain after hide";
+    }
+}
+
+// Verify that BoneWeightOverlay does not crash with a non-skeletal entity.
+// A non-skeletal entity has no bones, so the overlay should build with
+// zero-weight colours for all vertices.
+TEST_F(BoneWeightOverlayInMemoryTest, NonSkeletalEntityDoesNotCrash)
+{
+    auto meshPtr = createInMemoryTriangleMesh("BWO_NonSkelMesh");
+    ASSERT_TRUE(meshPtr);
+
+    Ogre::SceneNode* node = Manager::getSingleton()->getSceneMgr()
+        ->getRootSceneNode()->createChildSceneNode("BWO_NonSkelNode");
+    Ogre::Entity* entity = Manager::getSingleton()->getSceneMgr()->createEntity(
+        "BWO_NonSkelEntity", meshPtr);
+    node->attachObject(entity);
+
+    ASSERT_FALSE(entity->hasSkeleton());
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    overlay.setVisible(true);
+    EXPECT_TRUE(overlay.isVisible());
+
+    // Even without a skeleton, building the overlay should succeed
+    // (all vertices get zero weight = blue)
+    EXPECT_GE(node->numAttachedObjects(), 2u);
+
+    overlay.setSelectedBone(0);
+    EXPECT_TRUE(overlay.isVisible());
+
+    overlay.setVisible(false);
+    EXPECT_EQ(node->numAttachedObjects(), 1u);
+
+    node->detachObject(entity);
+    Manager::getSingleton()->getSceneMgr()->destroyEntity(entity);
+    Manager::getSingleton()->getSceneMgr()->destroySceneNode(node);
+}
+
+// setVisible(true) followed immediately by setVisible(true) again should
+// not create duplicate overlays.
+TEST_F(BoneWeightOverlayInMemoryTest, DoubleSetVisibleTrueNoDuplicate)
+{
+    Ogre::Entity* entity = createAnimatedTestEntity("BWO_DblShow");
+    if (!entity)
+        GTEST_SKIP() << "Skipping: could not create animated test entity";
+
+    BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    overlay.setVisible(true);
+    unsigned short countAfterFirst = node->numAttachedObjects();
+
+    overlay.setVisible(true);
+    unsigned short countAfterSecond = node->numAttachedObjects();
+
+    // The second setVisible(true) calls destroyOverlay then buildOverlay,
+    // so the count should be the same (no leaked ManualObjects)
+    EXPECT_EQ(countAfterFirst, countAfterSecond);
+
+    overlay.setVisible(false);
+}

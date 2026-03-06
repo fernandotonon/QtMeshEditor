@@ -1,11 +1,15 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include "SpaceCamera.h"
+#include "TestHelpers.h"
+#include "Manager.h"
 
 #include <QApplication>
+#include <QCoreApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QWheelEvent>
+#include <QThread>
 
 using ::testing::Mock;
 
@@ -16,6 +20,32 @@ public:
     // Mock constructor
     MockSpaceCamera():SpaceCamera(){}
     virtual ~MockSpaceCamera() = default;
+};
+
+// Fixture for tests that need Ogre scene (mouse move with camera manipulation)
+class SpaceCameraOgreTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        Manager::kill();
+        QThread::msleep(50);
+
+        auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
+        }
+    }
+
+    void TearDown() override
+    {
+        Manager::kill();
+        auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        if (app) app->processEvents();
+        QThread::msleep(50);
+    }
 };
 
 TEST(SpaceCamera, InitialSpeed)
@@ -243,7 +273,8 @@ TEST(SpaceCamera, MultipleKeyPressesInSequence)
     spaceCamera.keyReleaseEvent(&releaseA);
 }
 
-TEST(SpaceCamera, MouseMoveAfterMiddleButtonPress)
+// These tests need Ogre because mouseMoveEvent calls arcBall/pan which dereference mTarget
+TEST_F(SpaceCameraOgreTest, MouseMoveAfterMiddleButtonPress)
 {
     MockSpaceCamera spaceCamera;
     QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
@@ -254,7 +285,7 @@ TEST(SpaceCamera, MouseMoveAfterMiddleButtonPress)
     spaceCamera.mouseMoveEvent(&moveEvent);
 }
 
-TEST(SpaceCamera, MouseMoveAfterRightButtonPress)
+TEST_F(SpaceCameraOgreTest, MouseMoveAfterRightButtonPress)
 {
     MockSpaceCamera spaceCamera;
     QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100, 100),
@@ -291,7 +322,7 @@ TEST(SpaceCamera, MousePressAndReleaseRightButton)
 // NEW: Middle button + Shift modifier triggers roll branch
 // ==========================================================================
 
-TEST(SpaceCamera, MouseMoveMiddleButtonWithShift)
+TEST_F(SpaceCameraOgreTest, MouseMoveMiddleButtonWithShift)
 {
     MockSpaceCamera spaceCamera;
     // Press middle button with Shift modifier
@@ -329,7 +360,7 @@ TEST(SpaceCamera, MouseMoveAfterLeftButtonPressIgnored)
 // NEW: Multiple press/release cycles without crash
 // ==========================================================================
 
-TEST(SpaceCamera, MultipleButtonPressReleaseCycles)
+TEST_F(SpaceCameraOgreTest, MultipleButtonPressReleaseCycles)
 {
     MockSpaceCamera spaceCamera;
     for (int i = 0; i < 5; ++i) {
