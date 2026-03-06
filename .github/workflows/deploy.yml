@@ -239,13 +239,14 @@ jobs:
         SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
         SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
         SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
-        PATH: "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin;D:/a/QtMeshEditor/Qt/Tools/CMake_64/bin;${{ env.PATH }}"
       run: |
         Copy-Item "${{github.workspace}}/bin/QtMeshEditor.exe" "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
-        strip.exe --strip-debug "${{github.workspace}}/bin/QtMeshEditor.exe"
-        npm install -g @sentry/cli
-        sentry-cli debug-files upload --include-sources "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
+        & "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/strip.exe" --strip-debug "${{github.workspace}}/bin/QtMeshEditor.exe"
+        # Install sentry-cli via PowerShell (npm may not be in PATH)
+        Invoke-WebRequest -Uri "https://release-registry.services.sentry.io/apps/sentry-cli/latest?response=download&arch=x86_64&platform=Windows&package=sentry-cli" -OutFile "${{github.workspace}}/sentry-cli.exe"
+        & "${{github.workspace}}/sentry-cli.exe" debug-files upload --include-sources "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
         Remove-Item "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
+        Remove-Item "${{github.workspace}}/sentry-cli.exe" -ErrorAction SilentlyContinue
       shell: powershell
 
     - name: Copy assimp dll to the binary folder
@@ -506,12 +507,12 @@ jobs:
         SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
       run: |
         # Extract debug symbols, strip binary, upload to Sentry
-        objcopy --only-keep-debug ./bin/QtMeshEditor ./bin/QtMeshEditor.debug
-        strip --strip-debug --strip-unneeded ./bin/QtMeshEditor
-        objcopy --add-gnu-debuglink=./bin/QtMeshEditor.debug ./bin/QtMeshEditor
+        sudo objcopy --only-keep-debug ./bin/QtMeshEditor ./bin/QtMeshEditor.debug
+        sudo strip --strip-debug --strip-unneeded ./bin/QtMeshEditor
+        sudo objcopy --add-gnu-debuglink=./bin/QtMeshEditor.debug ./bin/QtMeshEditor
         curl -sL https://sentry.io/get-cli/ | bash
         sentry-cli debug-files upload --include-sources ./bin/QtMeshEditor.debug
-        rm -f ./bin/QtMeshEditor.debug
+        sudo rm -f ./bin/QtMeshEditor.debug
 
     - name: Add missing libraries
       run: |
@@ -1204,8 +1205,8 @@ jobs:
         SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
       run: |
         BIN_PATH="${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor"
-        dsymutil "$BIN_PATH" -o "${{github.workspace}}/bin/QtMeshEditor.dSYM"
-        strip "$BIN_PATH"
+        sudo dsymutil "$BIN_PATH" -o "${{github.workspace}}/bin/QtMeshEditor.dSYM"
+        sudo strip "$BIN_PATH"
         curl -sL https://sentry.io/get-cli/ | bash
         sentry-cli debug-files upload --include-sources "${{github.workspace}}/bin/QtMeshEditor.dSYM"
 
