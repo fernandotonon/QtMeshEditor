@@ -243,7 +243,7 @@ jobs:
         cp "${{github.workspace}}/bin/QtMeshEditor.exe" "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
         "D:/a/QtMeshEditor/Qt/Tools/mingw1310_64/bin/strip.exe" --strip-debug "${{github.workspace}}/bin/QtMeshEditor.exe"
         curl -sL https://sentry.io/get-cli/ | bash
-        sentry-cli debug-files upload --include-sources "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
+        /usr/local/bin/sentry-cli debug-files upload --include-sources "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
         rm -f "${{github.workspace}}/bin/QtMeshEditor.debug.exe"
       shell: bash
 
