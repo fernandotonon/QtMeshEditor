@@ -35,7 +35,7 @@ THE SOFTWARE.
 
 #include <algorithm>
 
-Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded) {
+Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded, unsigned int additionalFlags) {
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
     unsigned int flags = aiProcess_CalcTangentSpace |
@@ -54,6 +54,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
                          aiProcess_GlobalScale;
     if (convertToLeftHanded)
         flags |= aiProcess_ConvertToLeftHanded;
+    flags |= additionalFlags;
 
     const aiScene* scene = importer.ReadFile(path, flags);
 

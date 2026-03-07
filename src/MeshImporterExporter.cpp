@@ -776,7 +776,7 @@ static void ensureResourceGroup(const QString &path)
     }
 }
 
-void MeshImporterExporter::importer(const QStringList &_uriList)
+void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags)
 {
     try{
         foreach(const QString &fileName,_uriList)
@@ -810,7 +810,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList)
                 // DirectX .x is natively left-handed — skip ConvertToLeftHanded
                 // to avoid double-flipping geometry and UVs.
                 bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
-                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString(), convertLH);
+                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString(), convertLH, additionalFlags);
                 if (!mesh) return;
 
                 auto meshName = file.baseName();
