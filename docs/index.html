@@ -647,10 +647,9 @@
                     <p>Merge animations from the command line, perfect for build scripts and automation:</p>
                     <div class="code-wrapper">
                         <div class="code-block">
-qtmesh merge-animations \
-  --base character.fbx \
-  --animations walk.fbx run.fbx jump.fbx idle.fbx \
-  --output character_merged.mesh</div>
+qtmesh anim character.fbx \
+  --merge walk.fbx run.fbx jump.fbx idle.fbx \
+  -o character_merged.mesh</div>
                     </div>
                 </div>
 
@@ -726,15 +725,15 @@ qtmesh anim model.fbx --list --json
 qtmesh anim model.fbx --rename "Take 001" "Idle" -o renamed.fbx
 
 # Merge animations from multiple files
-qtmesh merge-animations \
-  --base base.fbx \
-  --animations walk.fbx run.fbx jump.fbx \
-  --output merged.fbx</div>
+qtmesh anim base.fbx \
+  --merge walk.fbx run.fbx jump.fbx \
+  -o merged.fbx</div>
                     </div>
                 </div>
             </div>
 
             <p style="text-align: center; color: #aaa; font-family: 'Source Code Pro', monospace; margin-top: 30px;">
+                Multiline examples use POSIX <code style="color: var(--primary-green);">\</code> continuations; on Windows, join into one line or adapt for PowerShell.<br>
                 Use <code style="color: var(--primary-green);">--verbose</code> for engine debug output &bull;
                 <code style="color: var(--primary-green);">--help</code> for full usage
             </p>

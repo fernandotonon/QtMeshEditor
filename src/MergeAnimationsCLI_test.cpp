@@ -56,43 +56,45 @@ TEST(MergeAnimationsCLI, MissingArgs)
     if (binary.isEmpty())
         GTEST_SKIP() << "QtMeshEditor binary not found";
 
+    // anim with no file or flags should fail with usage error
     QProcess proc;
-    proc.start(binary, {"merge-animations"});
+    proc.start(binary, {"anim"});
     ASSERT_TRUE(proc.waitForFinished(30000));
 
     EXPECT_NE(proc.exitCode(), 0);
     QString stderrOutput = QString::fromUtf8(proc.readAllStandardError());
-    EXPECT_TRUE(stderrOutput.contains("Usage:")) << "stderr: " << stderrOutput.toStdString();
+    EXPECT_TRUE(stderrOutput.contains("Error:")) << "stderr: " << stderrOutput.toStdString();
 }
 
-TEST(MergeAnimationsCLI, MissingOutput)
+TEST(MergeAnimationsCLI, MissingMergeFiles)
 {
     QString binary = findAppBinary();
     if (binary.isEmpty())
         GTEST_SKIP() << "QtMeshEditor binary not found";
 
+    // anim with file but --merge with no files should still proceed to load
+    // but fail because no merge files means only 1 entity loaded
     QProcess proc;
-    proc.start(binary, {"merge-animations", "--base", "somefile.fbx"});
+    proc.start(binary, {"anim", "somefile.fbx", "--merge"});
     ASSERT_TRUE(proc.waitForFinished(30000));
 
     EXPECT_NE(proc.exitCode(), 0);
-    QString stderrOutput = QString::fromUtf8(proc.readAllStandardError());
-    EXPECT_TRUE(stderrOutput.contains("Usage:")) << "stderr: " << stderrOutput.toStdString();
 }
 
-TEST(MergeAnimationsCLI, MissingBase)
+TEST(MergeAnimationsCLI, MissingAction)
 {
     QString binary = findAppBinary();
     if (binary.isEmpty())
         GTEST_SKIP() << "QtMeshEditor binary not found";
 
+    // anim with file but no --list/--rename/--merge should fail with usage
     QProcess proc;
-    proc.start(binary, {"merge-animations", "--output", tempPath("out.mesh")});
+    proc.start(binary, {"anim", "somefile.fbx"});
     ASSERT_TRUE(proc.waitForFinished(30000));
 
     EXPECT_NE(proc.exitCode(), 0);
     QString stderrOutput = QString::fromUtf8(proc.readAllStandardError());
-    EXPECT_TRUE(stderrOutput.contains("Usage:")) << "stderr: " << stderrOutput.toStdString();
+    EXPECT_TRUE(stderrOutput.contains("--merge")) << "stderr: " << stderrOutput.toStdString();
 }
 
 TEST(MergeAnimationsCLI, NonExistentBaseFile)
@@ -102,9 +104,9 @@ TEST(MergeAnimationsCLI, NonExistentBaseFile)
         GTEST_SKIP() << "QtMeshEditor binary not found";
 
     QProcess proc;
-    proc.start(binary, {"merge-animations",
-                         "--base", tempPath("nonexistent_file_12345.fbx"),
-                         "--output", tempPath("merge_test_out.mesh")});
+    proc.start(binary, {"anim", tempPath("nonexistent_file_12345.fbx"),
+                         "--merge", "other.fbx",
+                         "-o", tempPath("merge_test_out.mesh")});
     ASSERT_TRUE(proc.waitForFinished(30000));
 
     EXPECT_NE(proc.exitCode(), 0);
@@ -126,9 +128,8 @@ TEST(MergeAnimationsCLI, SingleFileNoAnimations)
     QString outputFile = tempPath("merge_test_single.mesh");
 
     QProcess proc;
-    proc.start(binary, {"merge-animations",
-                         "--base", baseFile,
-                         "--output", outputFile});
+    proc.start(binary, {"anim", baseFile, "--merge",
+                         "-o", outputFile});
     ASSERT_TRUE(proc.waitForFinished(60000));
 
     EXPECT_EQ(proc.exitCode(), 1);
@@ -162,10 +163,8 @@ TEST(MergeAnimationsCLI, SuccessfulMerge)
     QFile::remove(materialFile);
 
     QProcess proc;
-    proc.start(binary, {"merge-animations",
-                         "--base", baseFile,
-                         "--animations", animFile,
-                         "--output", outputFile});
+    proc.start(binary, {"anim", baseFile, "--merge", animFile,
+                         "-o", outputFile});
     ASSERT_TRUE(proc.waitForFinished(120000)) << "Process timed out";
 
     QString stderrOutput = QString::fromUtf8(proc.readAllStandardError());

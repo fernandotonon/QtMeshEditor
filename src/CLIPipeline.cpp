@@ -85,8 +85,9 @@ void CLIPipeline::printUsage()
         "  anim <file> --list [--json]       List animations\n"
         "  anim <file> --rename <old> <new> [-o <output>]\n"
         "                                    Rename an animation (overwrites input if no -o)\n"
-        "  merge-animations --base <file> --animations <f1> [f2...] --output <file>\n"
-        "                                    Merge animations from multiple files\n"
+        "  anim <file> --merge <f1> [f2...] [-o <output>]\n"
+        "                                    Merge animations from other files into base\n"
+        "                                    (overwrites input if no -o)\n"
         "\n"
         "Fix flags:\n"
         "  --remove-degenerates  Remove degenerate triangles\n"
@@ -380,7 +381,6 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "fix") rc = cmdFix(argc, argv);
     else if (cmd == "convert") rc = cmdConvert(argc, argv);
     else if (cmd == "anim") rc = cmdAnim(argc, argv);
-    else if (cmd == "merge-animations") rc = cmdMergeAnimations(argc, argv);
 
     if (rc >= 0) _exit(rc);
 
@@ -646,10 +646,13 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 {
     // Parse: anim <file> --list [--json]
     //    or: anim <file> --rename <old> <new> [-o <output>]
+    //    or: anim <file> --merge <f1> [f2...] [-o <output>]
     QString filePath, oldName, newName, outputPath;
     bool listMode = false;
     bool renameMode = false;
+    bool mergeMode = false;
     bool jsonOutput = false;
+    QStringList mergeFiles;
 
     // Collect positional args (excluding flags)
     QStringList positional;
@@ -662,6 +665,15 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             renameMode = true;
             oldName = QString(argv[++i]);
             newName = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--merge") {
+            mergeMode = true;
+            // Collect files until next --flag or end
+            while (i + 1 < argc && QString(argv[i + 1]).left(2) != "--"
+                   && QString(argv[i + 1]) != "-o") {
+                mergeFiles.append(QString(argv[++i]));
+            }
             continue;
         }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
@@ -679,14 +691,15 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     filePath = positional[0];
 
-    if (!listMode && !renameMode) {
-        err() << "Error: Specify --list or --rename <old> <new>." << Qt::endl;
+    if (!listMode && !renameMode && !mergeMode) {
+        err() << "Error: Specify --list, --rename <old> <new>, or --merge <files...>." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --rename <old> <new> [-o <output>]" << Qt::endl;
+        err() << "       qtmesh anim <file> --merge <f1> [f2...] [-o <output>]" << Qt::endl;
         return 2;
     }
 
-    if (renameMode && outputPath.isEmpty()) {
+    if ((renameMode || mergeMode) && outputPath.isEmpty()) {
         outputPath = filePath;  // overwrite in place
     }
 
@@ -748,12 +761,55 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         return 0;
     }
 
+    // Merge mode
+    if (mergeMode) {
+        // Load animation files, verifying each import succeeds
+        for (const auto& f : mergeFiles) {
+            int countBefore = Manager::getSingleton()->getEntities().size();
+            MeshImporterExporter::importer({f});
+            int countAfter = Manager::getSingleton()->getEntities().size();
+            if (countAfter <= countBefore) {
+                err() << "Error: Failed to load animation file: " << f << Qt::endl;
+                return 1;
+            }
+        }
+
+        auto& allEntities = Manager::getSingleton()->getEntities();
+        if (allEntities.size() < 2) {
+            err() << "Error: Need at least 2 loaded entities to merge (got " << allEntities.size() << ")" << Qt::endl;
+            return 1;
+        }
+
+        QString mergeErr;
+        Ogre::Entity* merged = AnimationMerger::mergeAnimations(allEntities.first(), allEntities, mergeErr);
+        if (!merged) {
+            err() << "Error: Merge failed: " << mergeErr << Qt::endl;
+            return 1;
+        }
+
+        auto* mergeNode = merged->getParentSceneNode();
+        QFileInfo outFi(outputPath);
+        int result = MeshImporterExporter::exporter(mergeNode, outFi.absoluteFilePath(), formatForExtension(outputPath));
+        if (result != 0) {
+            err() << "Error: Export failed." << Qt::endl;
+            return 1;
+        }
+
+        cliWrite(QString("Merged %1 files -> %2\n").arg(allEntities.size()).arg(outFi.fileName()));
+        return 0;
+    }
+
     // Rename mode
     if (!skel->hasAnimation(oldName.toStdString())) {
         err() << "Error: Animation '" << oldName << "' not found." << Qt::endl;
         err() << "Available animations:" << Qt::endl;
         for (unsigned short i = 0; i < skel->getNumAnimations(); ++i)
             err() << "  " << QString::fromStdString(skel->getAnimation(i)->getName()) << Qt::endl;
+        return 1;
+    }
+
+    if (oldName != newName && skel->hasAnimation(newName.toStdString())) {
+        err() << "Error: Animation '" << newName << "' already exists." << Qt::endl;
         return 1;
     }
 
@@ -775,73 +831,3 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     return 0;
 }
 
-int CLIPipeline::cmdMergeAnimations(int argc, char* argv[])
-{
-    // Parse: merge-animations --base <file> --animations <f1> [f2...] --output <file>
-    QString mergeBase, mergeOutput;
-    QStringList mergeAnimFiles;
-
-    for (int i = 1; i < argc; ++i) {
-        QString arg(argv[i]);
-        if (arg == "merge-animations" || arg == "--cli") continue;
-        if (arg == "--base" && i + 1 < argc) {
-            mergeBase = QString(argv[++i]);
-            continue;
-        }
-        if (arg == "--output" && i + 1 < argc) {
-            mergeOutput = QString(argv[++i]);
-            continue;
-        }
-        if (arg == "--animations") {
-            while (i + 1 < argc && QString(argv[i + 1]).left(2) != "--") {
-                mergeAnimFiles.append(QString(argv[++i]));
-            }
-            continue;
-        }
-    }
-
-    if (mergeBase.isEmpty() || mergeOutput.isEmpty()) {
-        err() << "Error: Missing required arguments." << Qt::endl;
-        err() << "Usage: qtmesh merge-animations --base <file> --animations <f1> [f2...] --output <file>" << Qt::endl;
-        return 2;
-    }
-
-    if (!initOgreHeadless()) return 1;
-
-    // Load base file
-    MeshImporterExporter::importer({mergeBase});
-    {
-        auto& baseEntities = Manager::getSingleton()->getEntities();
-        if (baseEntities.isEmpty()) {
-            err() << "Error: Failed to load base file: " << mergeBase << Qt::endl;
-            return 1;
-        }
-    }
-
-    // Load animation files
-    for (const auto& f : mergeAnimFiles)
-        MeshImporterExporter::importer({f});
-
-    auto& entities = Manager::getSingleton()->getEntities();
-    if (entities.size() < 2) {
-        err() << "Error: Need at least 2 loaded entities to merge (got " << entities.size() << ")" << Qt::endl;
-        return 1;
-    }
-
-    QString errMsg;
-    Ogre::Entity* merged = AnimationMerger::mergeAnimations(entities.first(), entities, errMsg);
-    if (!merged) {
-        err() << "Error: Merge failed: " << errMsg << Qt::endl;
-        return 1;
-    }
-
-    auto* node = merged->getParentSceneNode();
-    int result = MeshImporterExporter::exporter(node, mergeOutput, formatForExtension(mergeOutput));
-    if (result != 0) {
-        err() << "Error: Export failed." << Qt::endl;
-        return 1;
-    }
-
-    cliWrite(QString("Merged %1 files -> %2\n").arg(entities.size()).arg(mergeOutput));
-    return 0;
-}

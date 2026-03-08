@@ -66,7 +66,7 @@ qtmesh anim model.fbx --list --json            # list as JSON
 qtmesh anim model.fbx --rename "Take 001" "Idle" -o renamed.fbx
 
 # Merge animations from multiple files
-qtmesh merge-animations --base base.fbx --animations walk.fbx run.fbx --output merged.fbx
+qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
 ```
 
 Use `--verbose` for engine debug output, `--help` for full usage.
