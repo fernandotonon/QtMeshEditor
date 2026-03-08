@@ -12,6 +12,12 @@ public:
     /// Check if two skeletons have compatible bone hierarchies (matched by name).
     static bool areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const Ogre::SkeletonPtr& b);
 
+    /// Rename an animation on a skeleton by cloning with a new name and removing the old.
+    /// Ogre::Animation has no setName(), so this clone-and-remove pattern is the only way.
+    static void renameAnimation(Ogre::Skeleton* skel,
+                                const std::string& oldName,
+                                const std::string& newName);
+
     /// Merge animations from sourceEntities into baseEntity's skeleton.
     /// Base entity's own animations are kept as-is. Source animations are
     /// named after their scene node (single anim) or nodeName_animName (multiple).

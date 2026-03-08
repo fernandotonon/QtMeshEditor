@@ -21,6 +21,7 @@
 #include "SentryReporter.h"
 #include "AnimationMerger.h"
 #include "MeshImporterExporter.h"
+#include "CLIPipeline.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include <QWidget>
@@ -54,6 +55,26 @@ int main(int argc, char *argv[])
     // causing Ogre to render to the wrong target (black viewport).
     forceX11PlatformIfNeeded();
 #endif
+
+    // CLI pipeline mode detection — check before creating QApplication
+    {
+        bool cliMode = false;
+        QString execName = QFileInfo(QString(argv[0])).fileName().toLower();
+        if (execName.startsWith("qtmesh") && !execName.contains("editor")) {
+            cliMode = true;
+        }
+        for (int i = 1; i < argc; ++i) {
+            QString arg(argv[i]);
+            if (arg == "--cli") { cliMode = true; break; }
+        }
+        if (!cliMode && argc > 1) {
+            QString cmd(argv[1]);
+            if (cmd == "info" || cmd == "fix" || cmd == "convert" || cmd == "anim")
+                cliMode = true;
+        }
+        if (cliMode)
+            return CLIPipeline::run(argc, argv);
+    }
 
     // Check for MCP server mode and merge-animations CLI before creating QApplication
     bool mcpOnlyMode = false;

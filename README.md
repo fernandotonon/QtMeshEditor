@@ -43,6 +43,34 @@ QtMeshEditor helps you prepare 3D assets for your game or project:
 - **AI agent integration** — Let AI tools like Claude, Cursor, or custom scripts control the editor via MCP protocol
 - **Batch process via CLI** — Automate your asset pipeline from the command line
 
+### :wrench: CLI Pipeline (`qtmesh`)
+
+A `qtmesh` command is created alongside the GUI binary during build. Use it to automate your 3D asset pipeline without launching the editor:
+
+```bash
+# Inspect a mesh
+qtmesh info model.fbx                # human-readable summary
+qtmesh info model.fbx --json         # JSON output for scripting
+
+# Convert between formats
+qtmesh convert model.fbx -o model.gltf2
+qtmesh convert model.dae -o model.mesh
+
+# Fix / optimize a mesh
+qtmesh fix model.fbx -o fixed.fbx              # standard optimizations
+qtmesh fix model.fbx -o fixed.fbx --all        # all fixes (remove degenerates, merge materials)
+
+# Animation tools
+qtmesh anim model.fbx --list                   # list animations
+qtmesh anim model.fbx --list --json            # list as JSON
+qtmesh anim model.fbx --rename "Take 001" "Idle" -o renamed.fbx
+
+# Merge animations from multiple files
+qtmesh merge-animations --base base.fbx --animations walk.fbx run.fbx --output merged.fbx
+```
+
+Use `--verbose` for engine debug output, `--help` for full usage.
+
 ### :package: Format Support
 
 | Format | Extension | Import | Export | Skeleton/Animation |
