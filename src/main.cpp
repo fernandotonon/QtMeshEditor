@@ -62,10 +62,15 @@ int main(int argc, char *argv[])
             QString arg(argv[i]);
             if (arg == "--cli") { cliMode = true; break; }
         }
-        if (!cliMode && argc > 1) {
-            QString cmd(argv[1]);
-            if (cmd == "info" || cmd == "fix" || cmd == "convert" || cmd == "anim")
-                cliMode = true;
+        if (!cliMode) {
+            for (int i = 1; i < argc; ++i) {
+                QString arg(argv[i]);
+                if (arg.startsWith("-"))
+                    continue;  // skip flags like --verbose
+                if (arg == "info" || arg == "fix" || arg == "convert" || arg == "anim")
+                    cliMode = true;
+                break;  // first non-flag arg determines mode
+            }
         }
         if (cliMode)
             return CLIPipeline::run(argc, argv);

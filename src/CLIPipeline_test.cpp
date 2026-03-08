@@ -403,7 +403,7 @@ TEST(CLIPipelineCLI, InfoNonexistentFile)
     if (binary.isEmpty()) GTEST_SKIP() << "Binary not found";
 
     QProcess proc;
-    proc.start(binary, {"info", "/tmp/nonexistent_file_12345.fbx"});
+    proc.start(binary, {"info", tempPath("nonexistent_file_12345.fbx")});
     ASSERT_TRUE(proc.waitForFinished(30000));
     EXPECT_EQ(proc.exitCode(), 1);
 
@@ -480,7 +480,7 @@ TEST(CLIPipelineCLI, ConvertNonexistentFile)
     if (binary.isEmpty()) GTEST_SKIP() << "Binary not found";
 
     QProcess proc;
-    proc.start(binary, {"convert", "/tmp/nonexistent_12345.fbx", "-o", "/tmp/out.mesh"});
+    proc.start(binary, {"convert", tempPath("nonexistent_12345.fbx"), "-o", tempPath("out.mesh")});
     ASSERT_TRUE(proc.waitForFinished(30000));
     EXPECT_EQ(proc.exitCode(), 1);
 }
@@ -531,7 +531,7 @@ TEST(CLIPipelineCLI, FixNonexistentFile)
     if (binary.isEmpty()) GTEST_SKIP() << "Binary not found";
 
     QProcess proc;
-    proc.start(binary, {"fix", "/tmp/nonexistent_12345.fbx"});
+    proc.start(binary, {"fix", tempPath("nonexistent_12345.fbx")});
     ASSERT_TRUE(proc.waitForFinished(30000));
     EXPECT_EQ(proc.exitCode(), 1);
 }
@@ -650,7 +650,7 @@ TEST(CLIPipelineCLI, AnimListNonexistentFile)
     if (binary.isEmpty()) GTEST_SKIP() << "Binary not found";
 
     QProcess proc;
-    proc.start(binary, {"anim", "/tmp/nonexistent_12345.fbx", "--list"});
+    proc.start(binary, {"anim", tempPath("nonexistent_12345.fbx"), "--list"});
     ASSERT_TRUE(proc.waitForFinished(30000));
     EXPECT_EQ(proc.exitCode(), 1);
 }
@@ -793,7 +793,7 @@ TEST(CLIPipelineCLI, AnimMergeNonexistentAnimFile)
         GTEST_SKIP() << "Test data not found";
 
     QProcess proc;
-    proc.start(binary, {"anim", file, "--merge", "/tmp/nonexistent_file_12345.fbx",
+    proc.start(binary, {"anim", file, "--merge", tempPath("nonexistent_file_12345.fbx"),
                          "-o", tempPath("merge_fail.mesh")});
     ASSERT_TRUE(proc.waitForFinished(60000));
     EXPECT_NE(proc.exitCode(), 0);

@@ -339,12 +339,10 @@ int CLIPipeline::run(int argc, char* argv[])
             continue;
         }
         if (arg == "--help" || arg == "-h") {
-            QApplication a(argc, argv);
             printUsage();
             return 0;
         }
         if (arg == "--version" || arg == "-v") {
-            QApplication a(argc, argv);
             printVersion();
             return 0;
         }
@@ -356,7 +354,6 @@ int CLIPipeline::run(int argc, char* argv[])
     }
 
     if (cmdIndex >= argc) {
-        QApplication a(argc, argv);
         printUsage();
         return 2;
     }
@@ -426,12 +423,23 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
     }
 
     // If multiple entities loaded, show info for all
-    for (Ogre::Entity* entity : entities) {
-        MeshInfo info = extractMeshInfo(entity, fi.fileName());
-        if (jsonOutput)
-            cliWrite(formatMeshInfoJson(info));
+    if (jsonOutput) {
+        QJsonArray arr;
+        for (Ogre::Entity* entity : entities) {
+            MeshInfo info = extractMeshInfo(entity, fi.fileName());
+            QJsonDocument doc = QJsonDocument::fromJson(formatMeshInfoJson(info).toUtf8());
+            arr.append(doc.object());
+        }
+        // Single entity: emit object directly; multiple: emit array
+        if (arr.size() == 1)
+            cliWrite(QString::fromUtf8(QJsonDocument(arr[0].toObject()).toJson(QJsonDocument::Indented)));
         else
+            cliWrite(QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Indented)));
+    } else {
+        for (Ogre::Entity* entity : entities) {
+            MeshInfo info = extractMeshInfo(entity, fi.fileName());
             cliWrite(formatMeshInfoText(info));
+        }
     }
 
     return 0;

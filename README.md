@@ -45,7 +45,8 @@ QtMeshEditor helps you prepare 3D assets for your game or project:
 
 ### :wrench: CLI Pipeline (`qtmesh`)
 
-A `qtmesh` command is created alongside the GUI binary during build. Use it to automate your 3D asset pipeline without launching the editor:
+A `qtmesh` command is created alongside the GUI binary during build. Use it to automate your 3D asset pipeline without launching the editor.
+On Windows, use the bundled `qtmesh.cmd` wrapper (or add the install directory to `PATH`):
 
 ```bash
 # Inspect a mesh
