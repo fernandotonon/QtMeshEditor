@@ -1,4 +1,4 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
 ARG VERSION=latest
 
@@ -6,7 +6,8 @@ ARG VERSION=latest
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb x11-utils libxcb-cursor0 libxcb-xinerama0 libx11-6 libxrandr2 \
     libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0 \
-    freeglut3 libcurl4 libopengl0 libgomp1 \
+    freeglut3 libcurl4t64 libopengl0 libgomp1 \
+    libxkbcommon0 libegl1 libglib2.0-0t64 libdbus-1-3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install the .deb (skip declared Qt package deps — libs are bundled)
