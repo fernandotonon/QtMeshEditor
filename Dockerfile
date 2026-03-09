@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0 \
     libglut3.12 libcurl4t64 libopengl0 libgomp1 \
     libxkbcommon0 libegl1 libglib2.0-0t64 libdbus-1-3 \
+    libxcb-icccm4 libxcb-keysyms1 libxcb-render-util0 \
+    libxcb-shape0 libxcb-xkb1 libxkbcommon-x11-0 \
+    libfontconfig1 libfreetype6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install the .deb (skip declared Qt package deps — libs are bundled)
