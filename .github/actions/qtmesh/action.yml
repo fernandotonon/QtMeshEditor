@@ -48,7 +48,7 @@ runs:
         OUTPUT=$(docker run --rm \
           --user "$(id -u):$(id -g)" \
           -v "${{ github.workspace }}:/workspace" \
-          "ghcr.io/fernandotonon/qtmesheditor:${{ inputs.image-tag }}" \
+          "ghcr.io/fernandotonon/qtmesh:${{ inputs.image-tag }}" \
           "${cmd[@]}")
 
         echo "result<<EOF" >> "$GITHUB_OUTPUT"

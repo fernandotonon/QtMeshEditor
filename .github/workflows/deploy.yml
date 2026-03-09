@@ -1542,7 +1542,8 @@ jobs:
       packages: write
     env:
       REGISTRY_GHCR: ghcr.io
-      DOCKER_IMAGE_NAME: fernandotonon/qtmesheditor
+      GHCR_IMAGE: fernandotonon/qtmesh
+      DOCKERHUB_IMAGE: fernandotr1/qtmesh
     steps:
       - uses: actions/checkout@v4
 
@@ -1591,10 +1592,10 @@ jobs:
         id: tags
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          TAGS="${{ env.REGISTRY_GHCR }}/${{ env.DOCKER_IMAGE_NAME }}:${VERSION}"
-          TAGS="${TAGS},${{ env.REGISTRY_GHCR }}/${{ env.DOCKER_IMAGE_NAME }}:latest"
-          TAGS="${TAGS},${{ env.DOCKER_IMAGE_NAME }}:${VERSION}"
-          TAGS="${TAGS},${{ env.DOCKER_IMAGE_NAME }}:latest"
+          TAGS="${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${VERSION}"
+          TAGS="${TAGS},${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:latest"
+          TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:${VERSION}"
+          TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:latest"
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
@@ -1613,4 +1614,4 @@ jobs:
 
       - name: Verify image
         run: |
-          docker run --rm "${{ env.REGISTRY_GHCR }}/${{ env.DOCKER_IMAGE_NAME }}:${{ steps.version.outputs.version }}" --help
+          docker run --rm "${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}" --help

@@ -10,7 +10,8 @@ on:
 
 env:
   REGISTRY_GHCR: ghcr.io
-  IMAGE_NAME: fernandotonon/qtmesheditor
+  GHCR_IMAGE: fernandotonon/qtmesh
+  DOCKERHUB_IMAGE: fernandotr1/qtmesh
 
 jobs:
   docker:
@@ -81,13 +82,13 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAG="${{ steps.tag.outputs.tag }}"
-          TAGS="${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}"
+          TAGS="${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${VERSION}"
           # Only tag :latest for unversioned dispatch (avoids overwriting latest with old version)
           if [ "$TAG" = "latest" ]; then
-            TAGS="${TAGS},${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest"
-            TAGS="${TAGS},${{ env.IMAGE_NAME }}:latest"
+            TAGS="${TAGS},${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:latest"
+            TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:latest"
           fi
-          TAGS="${TAGS},${{ env.IMAGE_NAME }}:${VERSION}"
+          TAGS="${TAGS},${{ env.DOCKERHUB_IMAGE }}:${VERSION}"
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
@@ -106,4 +107,4 @@ jobs:
 
       - name: Verify image
         run: |
-          docker run --rm "${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" --help
+          docker run --rm "${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}" --help
