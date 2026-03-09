@@ -2387,7 +2387,7 @@ QString MaterialEditorQML::openFileDialog()
     QApplication::processEvents();
 
     QString selectedFile = QFileDialog::getOpenFileName(
-        nullptr,
+        QApplication::activeWindow(),
         "Select Texture File",
         startDir,
         "Image files (*.jpg *.jpeg *.png *.dds *.tga *.bmp);;All files (*)",
@@ -2420,7 +2420,7 @@ QString MaterialEditorQML::openMaterialImportDialog()
     QApplication::processEvents();
 
     QString selectedFile = QFileDialog::getOpenFileName(
-        nullptr,
+        QApplication::activeWindow(),
         "Import Material File",
         startDir,
         "Material files (*.material);;All files (*)",
@@ -2460,7 +2460,7 @@ QString MaterialEditorQML::openMaterialExportDialog(const QString &materialName)
     QApplication::processEvents();
 
     QString selectedFile = QFileDialog::getSaveFileName(
-        nullptr,
+        QApplication::activeWindow(),
         "Export Material File",
         defaultPath,
         "Material files (*.material);;All files (*)",
@@ -2483,14 +2483,17 @@ QString MaterialEditorQML::showNativeFileDialog(QObject *parentWindow)
     // Use absolute path if the directory exists, otherwise use current directory
     QString startDir = texturesDir.exists() ? texturesDir.absolutePath() : QDir::currentPath();
     
-    QWidget *parentWidget = nullptr;
-
-    // Find a visible top-level widget to parent the dialog
-    QWidgetList topLevelWidgets = QApplication::topLevelWidgets();
-    for (QWidget *widget : topLevelWidgets) {
-        if (widget->isWindow() && widget->isVisible()) {
-            parentWidget = widget;
-            break;
+    QWidget *parentWidget = qobject_cast<QWidget *>(parentWindow);
+    if (!parentWidget) {
+        parentWidget = QApplication::activeWindow();
+    }
+    if (!parentWidget) {
+        QWidgetList topLevelWidgets = QApplication::topLevelWidgets();
+        for (QWidget *widget : topLevelWidgets) {
+            if (widget->isWindow() && widget->isVisible()) {
+                parentWidget = widget;
+                break;
+            }
         }
     }
 

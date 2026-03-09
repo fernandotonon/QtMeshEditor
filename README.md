@@ -104,15 +104,17 @@ docker run --rm ghcr.io/fernandotonon/qtmesh --help
 # Inspect a mesh
 docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh info model.fbx --json
 
-# Convert between formats
-docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh convert model.fbx -o model.gltf2
+# Convert between formats (--user ensures output files are owned by you)
+docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \
+  ghcr.io/fernandotonon/qtmesh convert model.fbx -o model.gltf2
 
 # Fix / optimize
-docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh fix model.fbx -o fixed.fbx --all
+docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \
+  ghcr.io/fernandotonon/qtmesh fix model.fbx -o fixed.fbx --all
 
 # Merge animations
-docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \
-  anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
+docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \
+  ghcr.io/fernandotonon/qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
 ```
 
 Also available on Docker Hub: `docker pull fernandotr1/qtmesh`

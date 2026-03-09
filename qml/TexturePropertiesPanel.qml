@@ -74,18 +74,9 @@ GroupBox {
                     ThemedButton {
                         text: "Browse..."
                         onClicked: {
-                            console.log("Browse button clicked - testing connection first...")
-                            
-                            // Test the connection first
-                            var testResult = MaterialEditorQML.testConnection()
-                            console.log("Test result:", testResult)
-                            
                             var selectedFileName = MaterialEditorQML.openFileDialog()
                             if (selectedFileName !== "") {
-                                console.log("File selected:", selectedFileName)
                                 MaterialEditorQML.setTextureName(selectedFileName)
-                            } else {
-                                console.log("No file selected or dialog cancelled")
                             }
                         }
                     }
