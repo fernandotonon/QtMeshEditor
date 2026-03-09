@@ -6,7 +6,20 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include "CLIPipeline.h"
+#include "MeshImporterExporter.h"
 #include "TestHelpers.h"
+
+namespace {
+/// Path to the media/models directory relative to the test binary.
+QString testDataDir()
+{
+    QString binDir = QCoreApplication::applicationDirPath();
+    QDir dir(binDir);
+    dir.cdUp(); // bin -> build_local
+    dir.cdUp(); // build_local -> project root
+    return dir.absoluteFilePath("media/models");
+}
+} // anonymous namespace
 
 // --- Formatting tests (no Ogre needed) ---
 
@@ -260,6 +273,750 @@ TEST_F(CLIPipelineFormatTest, FormatMeshInfoJson_WithTextures)
     EXPECT_EQ(obj["textures"].toArray()[0].toString(), "color.png");
 }
 
+// --- formatForExtension tests (no Ogre needed) ---
+
+TEST(CLIPipelineFormatForExtension, FBX)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.fbx"), "FBX Binary (*.fbx)");
+}
+
+TEST(CLIPipelineFormatForExtension, GLB2)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.glb2"), "glTF 2.0 Binary (*.glb2)");
+}
+
+TEST(CLIPipelineFormatForExtension, GLTF2)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.gltf2"), "glTF 2.0 (*.gltf2)");
+}
+
+TEST(CLIPipelineFormatForExtension, DAE)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.dae"), "Collada (*.dae)");
+}
+
+TEST(CLIPipelineFormatForExtension, OBJ)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.obj"), "OBJ (*.obj)");
+}
+
+TEST(CLIPipelineFormatForExtension, STL)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.stl"), "STL (*.stl)");
+}
+
+TEST(CLIPipelineFormatForExtension, PLY)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.ply"), "PLY (*.ply)");
+}
+
+TEST(CLIPipelineFormatForExtension, ThreeDS)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.3ds"), "3DS (*.3ds)");
+}
+
+TEST(CLIPipelineFormatForExtension, X)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.x"), "X (*.x)");
+}
+
+TEST(CLIPipelineFormatForExtension, MeshXML)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.mesh.xml"), "Ogre XML (*.mesh.xml)");
+}
+
+TEST(CLIPipelineFormatForExtension, Mesh)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.mesh"), "Ogre Mesh (*.mesh)");
+}
+
+TEST(CLIPipelineFormatForExtension, Assbin)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.assbin"), "Assimp Binary (*.assbin)");
+}
+
+TEST(CLIPipelineFormatForExtension, UnknownDefaultsToMesh)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.xyz"), "Ogre Mesh (*.mesh)");
+}
+
+TEST(CLIPipelineFormatForExtension, CaseInsensitive)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("MODEL.FBX"), "FBX Binary (*.fbx)");
+    EXPECT_EQ(CLIPipeline::formatForExtension("test.DAE"), "Collada (*.dae)");
+    EXPECT_EQ(CLIPipeline::formatForExtension("FILE.OBJ"), "OBJ (*.obj)");
+}
+
+TEST(CLIPipelineFormatForExtension, PathWithDirectories)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("/tmp/dir/model.fbx"), "FBX Binary (*.fbx)");
+    EXPECT_EQ(CLIPipeline::formatForExtension("C:\\dir\\model.gltf2"), "glTF 2.0 (*.gltf2)");
+}
+
+// --- printUsage / printVersion smoke tests ---
+
+TEST(CLIPipelineSmoke, PrintUsageDoesNotCrash)
+{
+    EXPECT_NO_FATAL_FAILURE(CLIPipeline::printUsage());
+}
+
+TEST(CLIPipelineSmoke, PrintVersionDoesNotCrash)
+{
+    EXPECT_NO_FATAL_FAILURE(CLIPipeline::printVersion());
+}
+
+// --- run() tests (early-return paths that don't create QApplication or call _exit) ---
+
+TEST(CLIPipelineRun, HelpFlag)
+{
+    char arg0[] = "qtmesh";
+    char arg1[] = "--help";
+    char* argv[] = {arg0, arg1};
+    EXPECT_EQ(CLIPipeline::run(2, argv), 0);
+}
+
+TEST(CLIPipelineRun, HelpFlagShort)
+{
+    char arg0[] = "qtmesh";
+    char arg1[] = "-h";
+    char* argv[] = {arg0, arg1};
+    EXPECT_EQ(CLIPipeline::run(2, argv), 0);
+}
+
+TEST(CLIPipelineRun, VersionFlag)
+{
+    char arg0[] = "qtmesh";
+    char arg1[] = "--version";
+    char* argv[] = {arg0, arg1};
+    EXPECT_EQ(CLIPipeline::run(2, argv), 0);
+}
+
+TEST(CLIPipelineRun, VersionFlagShort)
+{
+    char arg0[] = "qtmesh";
+    char arg1[] = "-v";
+    char* argv[] = {arg0, arg1};
+    EXPECT_EQ(CLIPipeline::run(2, argv), 0);
+}
+
+TEST(CLIPipelineRun, NoCommand)
+{
+    char arg0[] = "qtmesh";
+    char* argv[] = {arg0};
+    EXPECT_EQ(CLIPipeline::run(1, argv), 2);
+}
+
+TEST(CLIPipelineRun, VerboseWithHelp)
+{
+    char arg0[] = "qtmesh";
+    char arg1[] = "--verbose";
+    char arg2[] = "--help";
+    char* argv[] = {arg0, arg1, arg2};
+    EXPECT_EQ(CLIPipeline::run(3, argv), 0);
+}
+
+TEST(CLIPipelineRun, CliWithHelp)
+{
+    char arg0[] = "qtmesh";
+    char arg1[] = "--cli";
+    char arg2[] = "--help";
+    char* argv[] = {arg0, arg1, arg2};
+    EXPECT_EQ(CLIPipeline::run(3, argv), 0);
+}
+
+// --- TestArgv helper for in-process cmd* tests ---
+
+namespace {
+
+/// RAII helper to build argc/argv from a list of strings.
+class TestArgv {
+public:
+    TestArgv(std::initializer_list<const char*> args)
+    {
+        for (auto* a : args) {
+            m_storage.push_back(QByteArray(a));
+        }
+        for (auto& ba : m_storage) {
+            m_argv.push_back(ba.data());
+        }
+        m_argc = static_cast<int>(m_argv.size());
+    }
+    int argc() const { return m_argc; }
+    char** argv() { return m_argv.data(); }
+private:
+    QList<QByteArray> m_storage;
+    QList<char*> m_argv;
+    int m_argc = 0;
+};
+
+} // anonymous namespace
+
+// --- initOgreHeadless tests ---
+
+class CLIPipelineInitTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!tryInitOgre() || !canLoadMeshFiles())
+            GTEST_SKIP() << "Ogre not available";
+        createStandardOgreMaterials();
+    }
+};
+
+TEST_F(CLIPipelineInitTest, InitOgreHeadless_Idempotent)
+{
+    // Should return true even though tryInitOgre() already created a render window
+    EXPECT_TRUE(CLIPipeline::initOgreHeadless());
+}
+
+TEST_F(CLIPipelineInitTest, InitOgreHeadless_CalledTwice)
+{
+    EXPECT_TRUE(CLIPipeline::initOgreHeadless());
+    EXPECT_TRUE(CLIPipeline::initOgreHeadless());
+}
+
+// --- In-process cmdInfo tests ---
+
+class CLIPipelineCmdTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!tryInitOgre() || !canLoadMeshFiles())
+            GTEST_SKIP() << "Ogre not available";
+        createStandardOgreMaterials();
+    }
+    void TearDown() override {
+        if (!Manager::getSingletonPtr()) return;
+        auto nodes = Manager::getSingleton()->getSceneNodes(); // copy
+        for (auto* node : nodes) {
+            Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+            Manager::getSingleton()->destroySceneNode(node);
+        }
+    }
+};
+
+// -- cmdInfo error paths (no Ogre needed) --
+
+TEST(CLIPipelineCmdInfoError, NoFile)
+{
+    TestArgv args({"qtmesh", "info"});
+    EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdInfoError, NonexistentFile)
+{
+    TestArgv args({"qtmesh", "info", "/tmp/nonexistent_cli_test_file_12345.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 1);
+}
+
+// -- cmdInfo success paths --
+
+TEST_F(CLIPipelineCmdTest, CmdInfo_TextOutput)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    TestArgv args({"qtmesh", "info", fileBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 0);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdInfo_JsonOutput)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    TestArgv args({"qtmesh", "info", fileBa.constData(), "--json"});
+    EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 0);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdInfo_SkipsCliFlag)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    TestArgv args({"qtmesh", "--cli", "info", fileBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 0);
+}
+
+// -- cmdConvert error paths --
+
+TEST(CLIPipelineCmdConvertError, NoArgs)
+{
+    TestArgv args({"qtmesh", "convert"});
+    EXPECT_EQ(CLIPipeline::cmdConvert(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdConvertError, MissingOutput)
+{
+    TestArgv args({"qtmesh", "convert", "somefile.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdConvert(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdConvertError, NonexistentFile)
+{
+    TestArgv args({"qtmesh", "convert", "/tmp/nonexistent_cli_test_12345.fbx",
+                   "-o", "/tmp/cli_test_out.mesh"});
+    EXPECT_EQ(CLIPipeline::cmdConvert(args.argc(), args.argv()), 1);
+}
+
+// -- cmdConvert success paths --
+
+TEST_F(CLIPipelineCmdTest, CmdConvert_ValidFile)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_convert_inproc.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "convert", fileBa.constData(), "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdConvert(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_convert_inproc.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdConvert_OutputLongForm)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_convert_long.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "convert", fileBa.constData(), "--output", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdConvert(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_convert_long.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdConvert_FormatFlag)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_convert_fmt.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "convert", fileBa.constData(), "-o", outBa.constData(),
+                   "--format", "Ogre Mesh (*.mesh)"});
+    EXPECT_EQ(CLIPipeline::cmdConvert(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_convert_fmt.material");
+}
+
+// -- cmdFix error paths --
+
+TEST(CLIPipelineCmdFixError, NoFile)
+{
+    TestArgv args({"qtmesh", "fix"});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdFixError, NonexistentFile)
+{
+    TestArgv args({"qtmesh", "fix", "/tmp/nonexistent_cli_test_12345.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 1);
+}
+
+// -- cmdFix success paths --
+
+TEST_F(CLIPipelineCmdTest, CmdFix_Basic)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_fix_basic.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "fix", fileBa.constData(), "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_fix_basic.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdFix_AllFlag)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_fix_all.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "fix", fileBa.constData(), "-o", outBa.constData(), "--all"});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_fix_all.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdFix_RemoveDegenerates)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_fix_degen.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "fix", fileBa.constData(), "-o", outBa.constData(),
+                   "--remove-degenerates"});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_fix_degen.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdFix_MergeMaterials)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_fix_merge.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "fix", fileBa.constData(), "-o", outBa.constData(),
+                   "--merge-materials"});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_fix_merge.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdFix_BothFlags)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_fix_both.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "fix", fileBa.constData(), "-o", outBa.constData(),
+                   "--remove-degenerates", "--merge-materials"});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_fix_both.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdFix_OutputLongForm)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_fix_long.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "fix", fileBa.constData(), "--output", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_fix_long.material");
+}
+
+// -- cmdAnim error paths --
+
+TEST(CLIPipelineCmdAnimError, NoFile)
+{
+    TestArgv args({"qtmesh", "anim"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdAnimError, NoAction)
+{
+    TestArgv args({"qtmesh", "anim", "somefile.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdAnimError, NonexistentFile)
+{
+    TestArgv args({"qtmesh", "anim", "/tmp/nonexistent_cli_test_12345.fbx", "--list"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
+}
+
+// -- cmdAnim list --
+
+TEST_F(CLIPipelineCmdTest, CmdAnimList_Text)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    TestArgv args({"qtmesh", "anim", fileBa.constData(), "--list"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimList_Json)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    TestArgv args({"qtmesh", "anim", fileBa.constData(), "--list", "--json"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimList_NoSkeletonFile)
+{
+    // Create a simple OBJ file with no skeleton
+    QString objFile = QDir::tempPath() + "/cli_test_noskel.obj";
+    {
+        QFile f(objFile);
+        f.open(QIODevice::WriteOnly | QIODevice::Text);
+        f.write("v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+        f.close();
+    }
+    QByteArray fileBa = objFile.toUtf8();
+
+    TestArgv args({"qtmesh", "anim", fileBa.constData(), "--list"});
+    int rc = CLIPipeline::cmdAnim(args.argc(), args.argv());
+    EXPECT_EQ(rc, 1);  // "no skeleton/animations"
+    QFile::remove(objFile);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimList_WithCliFlag)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    TestArgv args({"qtmesh", "--cli", "anim", fileBa.constData(), "--list"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+}
+
+// -- cmdAnim rename --
+
+TEST_F(CLIPipelineCmdTest, CmdAnimRename_NonexistentAnim)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    TestArgv args({"qtmesh", "anim", fileBa.constData(),
+                   "--rename", "NonExistentAnimXYZ", "NewName"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimRename_Valid)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_rename_inproc.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    // Load file first to discover animation name
+    MeshImporterExporter::importer({file});
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty() || !entities.first()->hasSkeleton())
+        GTEST_SKIP() << "Could not load animated file";
+
+    auto skel = entities.first()->getMesh()->getSkeleton();
+    if (!skel || skel->getNumAnimations() == 0)
+        GTEST_SKIP() << "No animations in file";
+
+    QByteArray animName = QString::fromStdString(skel->getAnimation(0)->getName()).toUtf8();
+
+    // Clean up loaded entities first
+    auto nodes = Manager::getSingleton()->getSceneNodes();
+    for (auto* node : nodes) {
+        Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+        Manager::getSingleton()->destroySceneNode(node);
+    }
+
+    TestArgv args({"qtmesh", "anim", fileBa.constData(),
+                   "--rename", animName.constData(), "RenamedInProc",
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_rename_inproc.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimRename_SameNameNoop)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_rename_noop.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    // Discover animation name
+    MeshImporterExporter::importer({file});
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty() || !entities.first()->hasSkeleton())
+        GTEST_SKIP() << "Could not load animated file";
+    auto skel = entities.first()->getMesh()->getSkeleton();
+    if (!skel || skel->getNumAnimations() == 0)
+        GTEST_SKIP() << "No animations in file";
+    QByteArray animName = QString::fromStdString(skel->getAnimation(0)->getName()).toUtf8();
+
+    auto nodes = Manager::getSingleton()->getSceneNodes();
+    for (auto* node : nodes) {
+        Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+        Manager::getSingleton()->destroySceneNode(node);
+    }
+
+    // Rename to the same name (should succeed — oldName == newName skips dup check)
+    TestArgv args({"qtmesh", "anim", fileBa.constData(),
+                   "--rename", animName.constData(), animName.constData(),
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_rename_noop.material");
+}
+
+// -- cmdAnim merge --
+
+TEST_F(CLIPipelineCmdTest, CmdAnimMerge_Valid)
+{
+    QString baseFile = testDataDir() + "/Twist Dance.fbx";
+    QString animFile = testDataDir() + "/Hip Hop Dancing.fbx";
+    if (!QFile::exists(baseFile) || !QFile::exists(animFile))
+        GTEST_SKIP() << "Test data not found";
+    QByteArray baseBa = baseFile.toUtf8();
+    QByteArray animBa = animFile.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_merge_inproc.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "anim", baseBa.constData(),
+                   "--merge", animBa.constData(),
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_merge_inproc.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimMerge_MultipleFiles)
+{
+    QString baseFile = testDataDir() + "/Twist Dance.fbx";
+    QString animFile1 = testDataDir() + "/Hip Hop Dancing.fbx";
+    QString animFile2 = testDataDir() + "/Rumba Dancing.fbx";
+    if (!QFile::exists(baseFile) || !QFile::exists(animFile1) || !QFile::exists(animFile2))
+        GTEST_SKIP() << "Test data not found";
+    QByteArray baseBa = baseFile.toUtf8();
+    QByteArray anim1Ba = animFile1.toUtf8();
+    QByteArray anim2Ba = animFile2.toUtf8();
+
+    QString outFile = QDir::tempPath() + "/cli_test_merge_multi.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+
+    TestArgv args({"qtmesh", "anim", baseBa.constData(),
+                   "--merge", anim1Ba.constData(), anim2Ba.constData(),
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_merge_multi.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimMerge_NonexistentAnimFile)
+{
+    QString baseFile = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(baseFile)) GTEST_SKIP() << "Test data not found";
+    QByteArray baseBa = baseFile.toUtf8();
+
+    TestArgv args({"qtmesh", "anim", baseBa.constData(),
+                   "--merge", "/tmp/nonexistent_anim_file_12345.fbx",
+                   "-o", "/tmp/cli_test_merge_fail.mesh"});
+    EXPECT_NE(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+}
+
+// --- Additional formatting edge cases ---
+
+TEST_F(CLIPipelineFormatTest, FormatMeshInfoText_ZeroValues)
+{
+    MeshInfo info;
+    info.file = "zero.mesh";
+    info.vertices = 0;
+    info.triangles = 0;
+    info.submeshes = 0;
+
+    QString text = CLIPipeline::formatMeshInfoText(info);
+    EXPECT_TRUE(text.contains("Vertices: 0"));
+    EXPECT_TRUE(text.contains("Triangles: 0"));
+    EXPECT_TRUE(text.contains("Submeshes: 0"));
+}
+
+TEST_F(CLIPipelineFormatTest, FormatMeshInfoText_MultipleAnimations)
+{
+    MeshInfo info;
+    info.file = "multi.fbx";
+    info.skeletonName = "multi.skeleton";
+    info.boneCount = 3;
+    info.animations.append({"walk", 1.0f});
+    info.animations.append({"run", 0.5f});
+    info.animations.append({"idle", 4.0f});
+
+    QString text = CLIPipeline::formatMeshInfoText(info);
+    EXPECT_TRUE(text.contains("walk"));
+    EXPECT_TRUE(text.contains("run"));
+    EXPECT_TRUE(text.contains("idle"));
+    EXPECT_TRUE(text.contains("4.000s"));
+}
+
+TEST_F(CLIPipelineFormatTest, FormatMeshInfoJson_BoundingBoxValues)
+{
+    MeshInfo info;
+    info.file = "bb.mesh";
+    info.bbMin = Ogre::Vector3(-5.5f, -3.2f, -1.0f);
+    info.bbMax = Ogre::Vector3(5.5f, 3.2f, 1.0f);
+
+    QString json = CLIPipeline::formatMeshInfoJson(info);
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QJsonObject obj = doc.object();
+
+    ASSERT_TRUE(obj.contains("boundingBox"));
+    QJsonObject bb = obj["boundingBox"].toObject();
+    QJsonArray minArr = bb["min"].toArray();
+    QJsonArray maxArr = bb["max"].toArray();
+    EXPECT_NEAR(minArr[0].toDouble(), -5.5, 0.01);
+    EXPECT_NEAR(minArr[1].toDouble(), -3.2, 0.01);
+    EXPECT_NEAR(maxArr[0].toDouble(), 5.5, 0.01);
+}
+
+TEST_F(CLIPipelineFormatTest, FormatMeshInfoJson_EmptyMaterials)
+{
+    MeshInfo info;
+    info.file = "nomats.mesh";
+
+    QString json = CLIPipeline::formatMeshInfoJson(info);
+    QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    QJsonObject obj = doc.object();
+
+    EXPECT_TRUE(obj["materials"].isArray());
+    EXPECT_EQ(obj["materials"].toArray().size(), 0);
+}
+
 // --- Process-based CLI tests ---
 
 namespace {
@@ -282,15 +1039,6 @@ QString findAppBinary()
         return directPath;
 
     return {};
-}
-
-QString testDataDir()
-{
-    QString binDir = QCoreApplication::applicationDirPath();
-    QDir dir(binDir);
-    dir.cdUp(); // bin -> build_local
-    dir.cdUp(); // build_local -> project root
-    return dir.absoluteFilePath("media/models");
 }
 
 QString tempPath(const QString& filename)
