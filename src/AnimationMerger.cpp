@@ -17,9 +17,7 @@ static QString slugify(const QString& name)
     return s;
 }
 
-// Rename an animation on a skeleton by cloning it with a new name and removing the old one.
-// Ogre::Animation has no setName(), so this is the only way.
-static void renameAnimationOnSkeleton(Ogre::Skeleton* skel,
+void AnimationMerger::renameAnimation(Ogre::Skeleton* skel,
                                        const std::string& oldName,
                                        const std::string& newName)
 {
@@ -164,7 +162,7 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
 
         // Apply renames on the source skeleton
         for (const auto& [oldName, newName] : renameList)
-            renameAnimationOnSkeleton(srcSkel.get(), oldName, newName);
+            renameAnimation(srcSkel.get(), oldName, newName);
 
         // Merge all animations (empty vector = all). Ogre handles track/keyframe
         // copying, bone handle remapping, and binding pose differences.

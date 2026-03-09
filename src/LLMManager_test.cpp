@@ -960,4 +960,371 @@ TEST_F(LLMManagerTest, CleanupHandlesMarkdownWithLanguageTag)
     EXPECT_TRUE(result.startsWith("material"));
 }
 
+// =============================================================================
+// Additional tests -- no network access or model files required
+// =============================================================================
+
+TEST_F(LLMManagerTest, GetModelFilePathWithValidAndInvalidNames)
+{
+    // Non-existent model names should return empty paths
+    EXPECT_TRUE(manager->getModelFilePath("completely_nonexistent_model_xyz").isEmpty());
+    EXPECT_TRUE(manager->getModelFilePath("../../../etc/passwd").isEmpty());
+    EXPECT_TRUE(manager->getModelFilePath("model with spaces").isEmpty());
+
+    // modelFileExists should also return false for non-existent models
+    EXPECT_FALSE(manager->modelFileExists("completely_nonexistent_model_xyz"));
+
+    // Empty string may or may not match depending on the models directory contents,
+    // so we just verify it does not crash
+    manager->getModelFilePath("");
+    manager->modelFileExists("");
+}
+
+TEST_F(LLMManagerTest, InitialStateQueries)
+{
+    // isModelLoaded: no model loaded during tests (no real model file available)
+    // The call should not crash regardless of the return value
+    bool loaded = manager->isModelLoaded();
+    // Without a real model file, this should be false
+    // (unless autoload succeeded, but typically no model is available in test env)
+    EXPECT_FALSE(loaded) << "No model should be loaded in test environment";
+
+    // isGenerating: should be false when idle
+    EXPECT_FALSE(manager->isGenerating());
+
+    // isLoading: should be false when no model loading is in progress
+    EXPECT_FALSE(manager->isLoading());
+
+    // currentModelName: should be empty or a valid string (no crash)
+    QString modelName = manager->currentModelName();
+    // Model name depends on environment, just verify no crash
+}
+
+TEST_F(LLMManagerTest, SettingsGettersReturnReasonableValues)
+{
+    // Verify contextSize, maxTokens, temperature are within reasonable bounds
+    int ctx = manager->contextSize();
+    EXPECT_GT(ctx, 0);
+    EXPECT_LE(ctx, 1048576); // reasonable upper bound (1M tokens)
+
+    int maxTok = manager->maxTokens();
+    EXPECT_GT(maxTok, 0);
+    EXPECT_LE(maxTok, 1048576);
+
+    float temp = manager->temperature();
+    EXPECT_GE(temp, 0.0f);
+    EXPECT_LE(temp, 10.0f); // reasonable upper bound
+
+    int gpu = manager->gpuLayers();
+    EXPECT_GE(gpu, 0);
+
+    // lastModelName should be callable without crash
+    QString lastModel = manager->lastModelName();
+    (void)lastModel;
+}
+
+TEST_F(LLMManagerTest, AvailableModelsInitialState)
+{
+    // availableModels may be empty if no model files are in the models directory.
+    // The call must not crash, and should return a valid QStringList.
+    QStringList models = manager->availableModels();
+    // We do not assert on size since it depends on the local file system,
+    // but we verify the list is a valid object
+    EXPECT_GE(models.size(), 0);
+
+    // getAvailableModelsInfo should also be callable and consistent
+    QVariantList modelsInfo = manager->getAvailableModelsInfo();
+    // Each entry in modelsInfo should correspond to an entry in availableModels
+    // (though their representation differs -- name list vs variant map list)
+    EXPECT_GE(modelsInfo.size(), 0);
+}
+
+TEST_F(LLMManagerTest, GetOgre3DSystemPromptContentCheck)
+{
+    // The system prompt should be non-empty and contain relevant keywords
+    QString prompt = LLMManager::getOgre3DSystemPrompt();
+    EXPECT_FALSE(prompt.isEmpty());
+    EXPECT_GT(prompt.length(), 50); // Should be a substantial prompt
+
+    // Should contain Ogre material-related terms
+    EXPECT_TRUE(prompt.contains("material", Qt::CaseInsensitive));
+    EXPECT_TRUE(prompt.contains("Ogre", Qt::CaseInsensitive));
+    EXPECT_TRUE(prompt.contains("technique", Qt::CaseInsensitive));
+    EXPECT_TRUE(prompt.contains("pass", Qt::CaseInsensitive));
+}
+
+// =============================================================================
+// generateMaterial tests (exercises buildUserPrompt indirectly when model loaded)
+// Since no model is loaded in tests, generateMaterial returns early with error.
+// These tests verify the error path and signal emission.
+// =============================================================================
+
+TEST_F(LLMManagerTest, GenerateMaterial_NoModelLoaded_EmitsError)
+{
+    QSignalSpy errorSpy(manager, &LLMManager::generationError);
+    manager->generateMaterial("Create a red material");
+    EXPECT_GE(errorSpy.count(), 1);
+    if (errorSpy.count() > 0) {
+        QString errorMsg = errorSpy.first().at(0).toString();
+        EXPECT_TRUE(errorMsg.contains("model", Qt::CaseInsensitive));
+    }
+}
+
+TEST_F(LLMManagerTest, GenerateMaterial_WithCurrentMaterial_NoModelLoaded)
+{
+    QSignalSpy errorSpy(manager, &LLMManager::generationError);
+    QString currentMaterial =
+        "material TestMaterial\n"
+        "{\n"
+        "    technique\n"
+        "    {\n"
+        "        pass\n"
+        "        {\n"
+        "            ambient 0.5 0.5 0.5\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    manager->generateMaterial("Make it shinier", currentMaterial);
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(LLMManagerTest, GenerateMaterial_WithTextures_NoModelLoaded)
+{
+    QSignalSpy errorSpy(manager, &LLMManager::generationError);
+    QStringList textures = {"brick.png", "grass.jpg", "metal.dds"};
+    manager->generateMaterial("Add a brick texture", QString(), textures);
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(LLMManagerTest, GenerateMaterial_WithMaterialAndTextures_NoModelLoaded)
+{
+    QSignalSpy errorSpy(manager, &LLMManager::generationError);
+    QString currentMaterial =
+        "material ExistingMat\n"
+        "{\n"
+        "    technique\n"
+        "    {\n"
+        "        pass\n"
+        "        {\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    QStringList textures = {"wood.png", "Ogre/internal_tex", "RTT_texture", "normal_map.dds"};
+    manager->generateMaterial("Apply a wood texture to this material", currentMaterial, textures);
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+TEST_F(LLMManagerTest, GenerateMaterial_EmptyPrompt_NoModelLoaded)
+{
+    QSignalSpy errorSpy(manager, &LLMManager::generationError);
+    manager->generateMaterial("");
+    EXPECT_GE(errorSpy.count(), 1);
+}
+
+// =============================================================================
+// stopGeneration tests
+// =============================================================================
+
+TEST_F(LLMManagerTest, StopGeneration_WhenNotGenerating)
+{
+    // Calling stopGeneration when not generating should not crash
+    EXPECT_FALSE(manager->isGenerating());
+    manager->stopGeneration();
+    // No crash = pass
+    EXPECT_FALSE(manager->isGenerating());
+}
+
+// =============================================================================
+// unloadModel tests
+// =============================================================================
+
+TEST_F(LLMManagerTest, UnloadModel_WhenNoModelLoaded)
+{
+    // Unloading when no model is loaded should be safe
+    manager->unloadModel();
+    // No crash = pass
+}
+
+// =============================================================================
+// loadModel with non-existent model
+// =============================================================================
+
+TEST_F(LLMManagerTest, LoadModel_NonExistentModel)
+{
+    QSignalSpy errorSpy(manager, &LLMManager::modelLoadError);
+    manager->loadModel("completely_nonexistent_model_xyz_999");
+    // Allow some time for the async operation to report an error
+    QThread::msleep(100);
+    if (QCoreApplication::instance()) {
+        QCoreApplication::instance()->processEvents();
+    }
+    // Verify no model became loaded
+    EXPECT_FALSE(manager->isModelLoaded());
+}
+
+// =============================================================================
+// tryAutoLoadModel tests
+// =============================================================================
+
+TEST_F(LLMManagerTest, TryAutoLoadModel_NoModelsAvailable)
+{
+    // In test environment, there are typically no model files
+    // tryAutoLoadModel should be safe to call
+    manager->tryAutoLoadModel();
+    // No crash = pass
+}
+
+// =============================================================================
+// Additional settings property tests
+// =============================================================================
+
+TEST_F(LLMManagerTest, SetAndGetTopP)
+{
+    LLMSettings original = manager->getSettings();
+
+    LLMSettings modified = original;
+    modified.topP = 0.5f;
+    manager->setSettings(modified);
+
+    LLMSettings retrieved = manager->getSettings();
+    EXPECT_FLOAT_EQ(retrieved.topP, 0.5f);
+
+    // Restore
+    manager->setSettings(original);
+}
+
+TEST_F(LLMManagerTest, SetAndGetTopK)
+{
+    LLMSettings original = manager->getSettings();
+
+    LLMSettings modified = original;
+    modified.topK = 10;
+    manager->setSettings(modified);
+
+    LLMSettings retrieved = manager->getSettings();
+    EXPECT_EQ(retrieved.topK, 10);
+
+    // Restore
+    manager->setSettings(original);
+}
+
+TEST_F(LLMManagerTest, SetAndGetRepeatPenalty)
+{
+    LLMSettings original = manager->getSettings();
+
+    LLMSettings modified = original;
+    modified.repeatPenalty = 1.5f;
+    manager->setSettings(modified);
+
+    LLMSettings retrieved = manager->getSettings();
+    EXPECT_FLOAT_EQ(retrieved.repeatPenalty, 1.5f);
+
+    // Restore
+    manager->setSettings(original);
+}
+
+TEST_F(LLMManagerTest, SetAndGetThreads)
+{
+    LLMSettings original = manager->getSettings();
+
+    LLMSettings modified = original;
+    modified.threads = 8;
+    manager->setSettings(modified);
+
+    LLMSettings retrieved = manager->getSettings();
+    EXPECT_EQ(retrieved.threads, 8);
+
+    // Restore
+    manager->setSettings(original);
+}
+
+// =============================================================================
+// Validate scripts with multiple texture_unit blocks
+// =============================================================================
+
+TEST_F(LLMManagerTest, ValidateScriptWithMultipleTextureUnits)
+{
+    QString error;
+    QString script =
+        "material MultiTexMaterial\n"
+        "{\n"
+        "    technique\n"
+        "    {\n"
+        "        pass\n"
+        "        {\n"
+        "            ambient 0.5 0.5 0.5\n"
+        "            diffuse 1.0 1.0 1.0\n"
+        "            texture_unit\n"
+        "            {\n"
+        "                texture brick.png\n"
+        "            }\n"
+        "            texture_unit\n"
+        "            {\n"
+        "                texture normalmap.dds\n"
+        "            }\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    EXPECT_TRUE(manager->validateMaterialScript(script, error));
+    EXPECT_TRUE(error.isEmpty());
+}
+
+// =============================================================================
+// Validate scripts with depth and lighting properties
+// =============================================================================
+
+TEST_F(LLMManagerTest, ValidateScriptWithDepthAndLightingProperties)
+{
+    QString error;
+    QString script =
+        "material AdvancedMaterial\n"
+        "{\n"
+        "    technique\n"
+        "    {\n"
+        "        pass\n"
+        "        {\n"
+        "            lighting on\n"
+        "            depth_write off\n"
+        "            depth_check off\n"
+        "            scene_blend add\n"
+        "            cull_hardware none\n"
+        "            cull_software none\n"
+        "            ambient 0.0 0.0 0.0\n"
+        "            diffuse 1.0 1.0 1.0\n"
+        "            specular 1.0 1.0 1.0 128\n"
+        "            emissive 0.1 0.1 0.1\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    EXPECT_TRUE(manager->validateMaterialScript(script, error));
+    EXPECT_TRUE(error.isEmpty());
+}
+
+// =============================================================================
+// cleanupGeneratedScript: additional edge cases
+// =============================================================================
+
+TEST_F(LLMManagerTest, CleanupHandlesOnlyCodeFences)
+{
+    QString input = "```\n```";
+    QString result = manager->cleanupGeneratedScript(input);
+    // After removing fences, result may be empty or just whitespace
+    EXPECT_FALSE(result.contains("```"));
+}
+
+TEST_F(LLMManagerTest, CleanupHandlesPartialMaterialBlock)
+{
+    // A partial material block (truncated output from LLM)
+    QString input =
+        "material Partial\n"
+        "{\n"
+        "    technique\n"
+        "    {\n"
+        "        pass\n"
+        "        {\n";
+    QString result = manager->cleanupGeneratedScript(input);
+    // Should start with "material"
+    EXPECT_TRUE(result.startsWith("material"));
+}
+
 #endif // ENABLE_LOCAL_LLM

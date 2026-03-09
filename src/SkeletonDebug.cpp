@@ -76,7 +76,7 @@ void SkeletonDebug::createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre
 {
     for(unsigned short i = 0; i < pBone->numChildren(); ++i)
     {
-        float length = pBone->getChild(i)->getPosition().length();
+        float length = pBone->getChild(i)->getInitialPosition().length();
         if(length < 0.00001f)
             continue;
 
@@ -109,7 +109,7 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
             auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
             mBoneEntities.push_back(ent);
 
-            float length = pBone->getPosition().length();
+            float length = pBone->getInitialPosition().length();
             if(length >= 0.00001f)
                 tp->setScale(length, length, length);
         }

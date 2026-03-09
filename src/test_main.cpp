@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <csignal>
 #include <cstdlib>
+#include <OgreLogManager.h>
 #include "Manager.h"
 
 #ifndef Q_OS_WIN
@@ -37,9 +38,28 @@ static void crashHandler(int sig)
 #endif
 }
 
+// Suppress qDebug/qInfo/qWarning noise from Ogre and Qt internals.
+// qCritical and qFatal always pass through so real errors are visible.
+static void testMessageHandler(QtMsgType type, const QMessageLogContext& ctx, const QString& msg)
+{
+    Q_UNUSED(ctx);
+    if (type == QtCriticalMsg || type == QtFatalMsg)
+        fprintf(stderr, "%s\n", qPrintable(msg));
+}
+
 int main(int argc, char **argv)
 {
     QApplication app(argc, argv);
+
+    // Suppress Ogre log output (debug spam from Root, RenderSystem, plugins).
+    // Must be done before any Manager::getSingleton() call creates Root.
+    if (!Ogre::LogManager::getSingletonPtr()) {
+        auto* logMgr = new Ogre::LogManager();
+        logMgr->createLog("ogre.log", true, false, true); // suppressDebugOut, suppressFileOutput
+    }
+
+    // Suppress Qt debug messages
+    qInstallMessageHandler(testMessageHandler);
 
     // Install signal handlers AFTER QApplication to avoid Qt overwriting them.
     signal(SIGSEGV, crashHandler);

@@ -44,6 +44,7 @@ SentryReporter.cpp
 BoneWeightOverlay.cpp
 NormalVisualizer.cpp
 AnimationMerger.cpp
+CLIPipeline.cpp
 )
 
 set(HEADER_FILES
@@ -91,6 +92,7 @@ SentryReporter.h
 BoneWeightOverlay.h
 NormalVisualizer.h
 AnimationMerger.h
+CLIPipeline.h
 )
 
 set(TEST_SOURCES "")
@@ -272,6 +274,28 @@ else()
         MaterialEditorQML.h
         MaterialEditorQML.cpp
         )
+endif()
+
+##############################################################
+#  Create 'qtmesh' symlink/wrapper for CLI pipeline mode
+##############################################################
+if(APPLE)
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "$<TARGET_BUNDLE_DIR:${CMAKE_PROJECT_NAME}>/Contents/MacOS/${CMAKE_PROJECT_NAME}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/qtmesh"
+        COMMENT "Creating qtmesh symlink -> app bundle binary"
+    )
+elseif(WIN32)
+    file(WRITE "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/qtmesh.cmd"
+        "@echo off\n\"%~dp0${CMAKE_PROJECT_NAME}.exe\" --cli %*\n")
+else()
+    add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E create_symlink
+            "${CMAKE_PROJECT_NAME}"
+            "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/qtmesh"
+        COMMENT "Creating qtmesh symlink -> ${CMAKE_PROJECT_NAME}"
+    )
 endif()
 
 ##############################################################

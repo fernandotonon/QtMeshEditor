@@ -19,7 +19,7 @@ void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scen
             aiBone* bone = mesh->mBones[j];
             if(bone->mNode && bone->mNode->mParent && !skeleton->hasBone(bone->mNode->mParent->mName.C_Str())) {
                 createBone(bone->mNode->mParent->mName.C_Str());
-                Ogre::Matrix4 rootBoneGlobalTransformation = convertToOgreMatrix4(bone->mNode->mParent->mTransformation).inverse();
+                Ogre::Matrix4 rootBoneGlobalTransformation = convertToOgreMatrix4(bone->mNode->mParent->mTransformation);
                 applyTransformation(bone->mNode->mParent->mName.C_Str(), rootBoneGlobalTransformation);
             }
         }
@@ -30,24 +30,30 @@ void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scen
 }
 
 void BoneProcessor::processBoneHierarchy(aiNode* node) {
-    // Check if this node corresponds to a bone
-    if(aiBonesMap.find(node->mName.C_Str()) != aiBonesMap.end()) {
+    bool isSkinned = (aiBonesMap.find(node->mName.C_Str()) != aiBonesMap.end());
+    bool isExistingBone = skeleton->hasBone(node->mName.C_Str());
+
+    if (isSkinned) {
         aiBone* bone = aiBonesMap[node->mName.C_Str()];
         createBone(bone->mName.C_Str());
         processBoneNode(bone);
-
-        // Recursively process children bones
-        for(auto i = 0u; i < node->mNumChildren; i++) {
-            aiNode* childNode = node->mChildren[i];
-            processBoneHierarchy(childNode);
-        }
     }
-    else {
-        // If this node isn't a bone, still process its children
-        for(auto i = 0u; i < node->mNumChildren; i++) {
-            aiNode* childNode = node->mChildren[i];
-            processBoneHierarchy(childNode);
+
+    // Recursively process children
+    for (auto i = 0u; i < node->mNumChildren; i++) {
+        aiNode* child = node->mChildren[i];
+
+        // If this node is a bone (skinned or already created as root),
+        // also create non-skinned children as bones (e.g. leaf/tip bones
+        // that have no vertex weights but are part of the skeleton).
+        if ((isSkinned || isExistingBone) && child->mNumMeshes == 0 &&
+            aiBonesMap.find(child->mName.C_Str()) == aiBonesMap.end() &&
+            !skeleton->hasBone(child->mName.C_Str()))
+        {
+            processNonSkinnedBone(child);
         }
+
+        processBoneHierarchy(child);
     }
 }
 
@@ -85,6 +91,29 @@ void BoneProcessor::applyTransformation(const std::string &boneName, const Ogre:
     ogreBone->setPosition(position);
     ogreBone->setOrientation(orientation);
     ogreBone->setScale(scale);
+}
+
+void BoneProcessor::processNonSkinnedBone(aiNode* node) {
+    std::string boneName = node->mName.C_Str();
+    createBone(boneName);
+
+    // Use the node's local transform directly.
+    Ogre::Matrix4 transform = convertToOgreMatrix4(node->mTransformation);
+    applyTransformation(boneName, transform);
+
+    // Set parent-child relationship
+    if (node->mParent && node->mParent->mName.length &&
+        skeleton->hasBone(node->mParent->mName.C_Str()))
+    {
+        Ogre::Bone* parentBone = skeleton->getBone(node->mParent->mName.C_Str());
+        Ogre::Bone* ogreBone = skeleton->getBone(boneName);
+        if (!std::any_of(parentBone->getChildren().begin(), parentBone->getChildren().end(),
+                         [&ogreBone](const auto& childNode) {
+                             return childNode->getName() == ogreBone->getName();
+                         })) {
+            parentBone->addChild(ogreBone);
+        }
+    }
 }
 
 void BoneProcessor::processBoneNode(aiBone* bone) {

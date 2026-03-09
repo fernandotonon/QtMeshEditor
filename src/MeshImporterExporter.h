@@ -45,7 +45,7 @@ private:
     static const QMap<QString, QString> exportFormats;
 
 public:
-    static void importer(const QStringList &_uriList);
+    static void importer(const QStringList &_uriList, unsigned int additionalFlags = 0);
     static QString exporter(const Ogre::SceneNode *_sn);
     static int exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format);
     static QString formatFileURI(const QString &_uri, const QString &_format);

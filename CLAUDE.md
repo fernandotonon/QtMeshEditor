@@ -34,6 +34,22 @@ cmake --build build_local --target UnitTests -j4
 ./build_local/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor --with-mcp --http-port 8080  # with HTTP API
 ```
 
+**CLI pipeline (`qtmesh`):**
+```bash
+# A 'qtmesh' symlink is created automatically during build
+qtmesh info model.fbx                          # show mesh info (text)
+qtmesh info model.fbx --json                   # show mesh info (JSON)
+qtmesh convert model.fbx -o model.gltf2        # convert between formats
+qtmesh fix model.fbx -o fixed.fbx              # re-import/export with standard optimizations
+qtmesh fix model.fbx --all                     # apply all extra fixes (remove degenerates, merge materials)
+qtmesh anim model.fbx --list                   # list animations
+qtmesh anim model.fbx --list --json            # list animations (JSON)
+qtmesh anim model.fbx --rename "Take 001" "Idle" -o out.fbx  # rename an animation
+qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
+```
+
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`) as the first argument. Use `--verbose` to see Ogre/engine debug output.
+
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
 ## Dependencies
@@ -77,6 +93,14 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - Launch modes: `--mcp` (headless), `--with-mcp` (GUI + MCP).
 - stdout is redirected to stderr to isolate MCP JSON-RPC from Ogre/Qt debug output; original stdout fd saved for MCP responses.
 - HTTP API uses QTcpServer with deferred tool execution (QTimer::singleShot) to avoid re-entrant crashes from Ogre event processing.
+
+### CLI Pipeline
+
+- **CLIPipeline** (`src/CLIPipeline.h/cpp`): Headless command-line interface for mesh operations. All static methods — entry point is `CLIPipeline::run(argc, argv)`.
+- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge).
+- Activated via `qtmesh` symlink (created at build time), `--cli` flag, or recognized subcommand as first arg.
+- Redirects stdout to stderr (Ogre/Qt noise) and writes CLI output to the original stdout fd. Uses `_exit()` to avoid Ogre static destructor crashes on macOS.
+- **AnimationMerger** (`src/AnimationMerger.h/cpp`): Public `renameAnimation()` static method used by both CLI and GUI for animation renaming.
 
 ### Mesh Import/Export
 

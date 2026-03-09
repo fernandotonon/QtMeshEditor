@@ -579,8 +579,10 @@ TEST_F(AnimationControlWidgetTest, MultipleAnimationsInTree) {
     mesh->load();
 
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = Manager::getSingleton()->addSceneNode("MultiAnimNode");
-    auto* entity = sceneMgr->createEntity("MultiAnimEntity", mesh);
+    // Entity name must match node name — getSelectedEntities() looks up
+    // entities via sceneMgr->hasEntity(node->getName())
+    auto* node = Manager::getSingleton()->addSceneNode("MultiAnim");
+    auto* entity = sceneMgr->createEntity("MultiAnim", mesh);
     node->attachObject(entity);
     SelectionSet::getSingleton()->selectOne(node);
     if (app) app->processEvents();
