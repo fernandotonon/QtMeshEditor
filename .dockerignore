@@ -1,0 +1,7 @@
+build/
+build_local/
+.git/
+.claude/
+.sentry-native/
+rumba*/
+src/dependencies/

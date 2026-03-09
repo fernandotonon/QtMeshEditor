@@ -1,0 +1,48 @@
+name: 'qtmesh'
+description: 'Run qtmesh CLI for 3D mesh operations (info, convert, fix, anim)'
+
+inputs:
+  command:
+    description: 'Subcommand: info, fix, convert, anim'
+    required: true
+  input-file:
+    description: 'Input file path (relative to workspace)'
+    required: true
+  output-file:
+    description: 'Output file path (for convert/fix/anim rename/merge)'
+    required: false
+  options:
+    description: 'Additional flags (e.g. --json, --all, --list)'
+    required: false
+  image-tag:
+    description: 'Docker image tag to use'
+    required: false
+    default: 'latest'
+
+outputs:
+  result:
+    description: 'Command stdout'
+    value: ${{ steps.run.outputs.result }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: run
+      shell: bash
+      run: |
+        # Build output flag if output-file is specified
+        OUTPUT_FLAG=""
+        if [ -n "${{ inputs.output-file }}" ]; then
+          OUTPUT_FLAG="-o /workspace/${{ inputs.output-file }}"
+        fi
+
+        OUTPUT=$(docker run --rm \
+          -v "${{ github.workspace }}:/workspace" \
+          "ghcr.io/fernandotonon/qtmesheditor:${{ inputs.image-tag }}" \
+          ${{ inputs.command }} "/workspace/${{ inputs.input-file }}" \
+          $OUTPUT_FLAG \
+          ${{ inputs.options }})
+
+        echo "result<<EOF" >> $GITHUB_OUTPUT
+        echo "$OUTPUT" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
