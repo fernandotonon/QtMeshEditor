@@ -1616,4 +1616,10 @@ jobs:
 
       - name: Verify image
         run: |
-          docker run --rm "${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}" --help
+          IMAGE="${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}"
+          # Check for missing shared libraries before running
+          echo "=== Checking for missing shared libraries ==="
+          docker run --rm --entrypoint bash "$IMAGE" -c \
+            'LD_LIBRARY_PATH=/usr/lib/qtmesheditor ldd /usr/share/qtmesheditor/qtmesheditor 2>&1 | grep "not found" && exit 1 || echo "All libraries found"'
+          # Run --help to verify CLI works end-to-end
+          docker run --rm "$IMAGE" --help
