@@ -59,12 +59,11 @@ public:
     /// Format MeshInfo as JSON string.
     static QString formatMeshInfoJson(const MeshInfo& info);
 
-private:
     static void printUsage();
     static void printVersion();
 
     /// Initialize Ogre in headless mode (hidden render window).
-    /// Returns true on success.
+    /// Returns true on success.  Idempotent — safe to call after tryInitOgre().
     static bool initOgreHeadless();
 
     static int cmdInfo(int argc, char* argv[]);

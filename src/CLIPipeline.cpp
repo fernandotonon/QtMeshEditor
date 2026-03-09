@@ -140,6 +140,17 @@ bool CLIPipeline::initOgreHeadless()
         return false;
     }
 
+    // Already have a render window (e.g. from tryInitOgre() in tests) — nothing to do.
+    auto* root = Manager::getSingleton()->getRoot();
+    if (root) {
+        try {
+            if (root->getRenderTarget("TestHidden") || root->getRenderTarget("CLIHidden"))
+                return true;
+        } catch (...) {
+            // getRenderTarget may throw if not found in some Ogre versions
+        }
+    }
+
     static QWidget* hiddenWidget = nullptr;
     if (!hiddenWidget) {
         hiddenWidget = new QWidget();
