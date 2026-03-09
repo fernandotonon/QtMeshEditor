@@ -831,6 +831,30 @@ sudo apt install ./qtmesheditor_amd64.deb</div>
                 </div>
 
                 <div class="install-step">
+                    <h3>Docker (any platform)</h3>
+                    <p>Run <code style="color: var(--neon-cyan);">qtmesh</code> CLI without installing anything locally:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh info model.fbx --json
+docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh convert model.fbx -o model.gltf2</div>
+                    </div>
+                    <p style="margin-top: 10px; font-size: 0.85rem; color: #aaa; font-family: 'Source Code Pro', monospace;">Also on Docker Hub: <code style="color: var(--primary-green);">docker pull fernandotr1/qtmesh</code></p>
+                </div>
+
+                <div class="install-step">
+                    <h3>GitHub Action</h3>
+                    <p>Use <code style="color: var(--neon-cyan);">qtmesh</code> in your CI/CD pipeline:</p>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@master
+  with:
+    command: info
+    input-file: assets/player.fbx
+    options: --json</div>
+                    </div>
+                </div>
+
+                <div class="install-step">
                     <h3>Build from Source</h3>
                     <div class="code-wrapper">
                         <div class="code-block">
