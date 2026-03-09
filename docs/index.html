@@ -621,11 +621,11 @@
                 <div class="feature-card">
                     <h3 class="feature-title">CLI & Automation</h3>
                     <p class="feature-desc">
-                        &bull; Merge animations from command line<br>
+                        &bull; <code style="color: var(--neon-cyan);">qtmesh</code> CLI for headless mesh ops<br>
+                        &bull; Inspect, convert, fix, merge &mdash; all from terminal<br>
                         &bull; HTTP REST API for scripting<br>
                         &bull; MCP protocol for AI agents<br>
-                        &bull; Scriptable &mdash; automate your asset pipeline<br>
-                        &bull; Headless mode for servers
+                        &bull; Scriptable &mdash; automate your asset pipeline
                     </p>
                 </div>
             </div>
@@ -647,10 +647,9 @@
                     <p>Merge animations from the command line, perfect for build scripts and automation:</p>
                     <div class="code-wrapper">
                         <div class="code-block">
-./QtMeshEditor merge-animations \
-  --base character.fbx \
-  --animations walk.fbx run.fbx jump.fbx idle.fbx \
-  --output character_merged.mesh</div>
+qtmesh anim character.fbx \
+  --merge walk.fbx run.fbx jump.fbx idle.fbx \
+  -o character_merged.mesh</div>
                     </div>
                 </div>
 
@@ -671,6 +670,74 @@ curl -X POST localhost:8080/api/tools/merge_animations \
                     </div>
                 </div>
             </div>
+        </section>
+
+        <!-- CLI Pipeline Section -->
+        <section class="section">
+            <h2 class="section-title">CLI Pipeline</h2>
+            <p class="section-subtitle">
+                A <code style="color: var(--neon-cyan);">qtmesh</code> command is built alongside the GUI. Use it to automate your 3D asset pipeline without launching the editor.
+                On Windows, use the bundled <code style="color: var(--primary-green);">qtmesh.cmd</code> wrapper, or add its directory to <code style="color: var(--primary-green);">PATH</code>.
+            </p>
+
+            <div class="install-steps">
+                <div class="install-step">
+                    <h3>Inspect a Mesh</h3>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+# Human-readable summary
+qtmesh info model.fbx
+
+# JSON output (for scripting)
+qtmesh info model.fbx --json</div>
+                    </div>
+                </div>
+
+                <div class="install-step">
+                    <h3>Convert Between Formats</h3>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+qtmesh convert model.fbx -o model.gltf2
+qtmesh convert model.dae -o model.mesh</div>
+                    </div>
+                </div>
+
+                <div class="install-step">
+                    <h3>Fix / Optimize a Mesh</h3>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+# Standard optimizations (join vertices, smooth normals, optimize)
+qtmesh fix model.fbx -o fixed.fbx
+
+# All fixes (remove degenerates, merge materials)
+qtmesh fix model.fbx -o fixed.fbx --all</div>
+                    </div>
+                </div>
+
+                <div class="install-step">
+                    <h3>Animation Tools</h3>
+                    <div class="code-wrapper">
+                        <div class="code-block">
+# List all animations
+qtmesh anim model.fbx --list
+qtmesh anim model.fbx --list --json
+
+# Rename an animation
+qtmesh anim model.fbx --rename "Take 001" "Idle" -o renamed.fbx
+
+# Merge animations from multiple files
+qtmesh anim base.fbx \
+  --merge walk.fbx run.fbx jump.fbx \
+  -o merged.fbx</div>
+                    </div>
+                </div>
+            </div>
+
+            <p style="text-align: center; color: #aaa; font-family: 'Source Code Pro', monospace; margin-top: 30px;">
+                Multiline examples use POSIX <code style="color: var(--primary-green);">\</code> continuations; on Windows, join into one line or adapt for PowerShell.<br>
+                Use <code style="color: var(--primary-green);">--verbose</code> for engine debug output &bull;
+                <code style="color: var(--primary-green);">--help</code> for full usage
+            </p>
         </section>
 
         <!-- MCP Server Section -->

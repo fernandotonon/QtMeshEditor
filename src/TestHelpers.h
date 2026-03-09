@@ -88,7 +88,7 @@ static inline void createStandardOgreMaterials()
  * GL context that Ogre needs for hardware buffer operations (creating
  * entities, loading meshes, etc.) without requiring a visible window.
  *
- * Follows the same pattern used in main.cpp for merge-animations CLI.
+ * Follows the same pattern used in CLIPipeline for headless CLI mode.
  *
  * Returns true if a render window already exists or was created
  * successfully, false on failure.

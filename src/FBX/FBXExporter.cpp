@@ -458,32 +458,6 @@ public:
         if (m_skeleton)
             m_skeleton->reset();
 
-        // Collect which bones have vertex assignments (deforming bones).
-        // Bones WITHOUT assignments (e.g. "Armature") are root-container bones
-        // that BoneProcessor recreates from parentNode->mTransformation.inverse().
-        if (m_hasSkeleton)
-        {
-            for (unsigned int si = 0; si < m_mesh->getNumSubMeshes(); ++si)
-            {
-                const auto* subMesh = m_mesh->getSubMesh(si);
-                const auto& assignments = subMesh->useSharedVertices
-                    ? m_mesh->getBoneAssignments() : subMesh->getBoneAssignments();
-                for (const auto& [_, vba] : assignments)
-                    m_bonesWithAssignments.insert(vba.boneIndex);
-            }
-        }
-
-        // Build material index map (sorted by name, matching std::map iteration order
-        // which is the same order materials will be connected to the mesh model)
-        {
-            std::set<std::string> matNames;
-            for (const auto* sub : m_entity->getSubEntities())
-                matNames.insert(sub->getMaterial()->getName());
-            int idx = 0;
-            for (const auto& name : matNames)
-                m_materialIndexMap[name] = idx++;
-        }
-
         m_w.writeHeader();
 
         writeHeaderExtension();
@@ -575,7 +549,7 @@ private:
         // so the root-node scale becomes 100*0.01 = 1.0 (no additional scaling).
         writeP70double("UnitScaleFactor", 100.0);
         writeP70double("OriginalUnitScaleFactor", 100.0);
-        writeP70int("TimeMode", 6); // 30 fps
+        writeP70enum("TimeMode", 6); // 30 fps
         writeP70enum("TimeProtocol", 2);
         writeP70enum("SnapOnFrameMode", 0);
         writeP70KTime("TimeSpanStart", 0);
@@ -631,7 +605,7 @@ private:
     {
         // Count object types
         int defCount = 1; // GlobalSettings always
-        int modelCount = 1; // root mesh model
+        int modelCount = m_mesh->getNumSubMeshes(); // one mesh model per submesh
         int geomCount = m_mesh->getNumSubMeshes();
         int matCount = 0;
         int deformerCount = 0;
@@ -770,7 +744,7 @@ private:
         m_w.endProperties();
 
         writeGeometryObjects();
-        writeMeshModel();
+        writeMeshModels();
         writeMaterialObjects();
         writeTextureObjects();
         if (m_hasSkeleton)
@@ -1016,11 +990,8 @@ private:
 
             // ── LayerElementMaterial ──
             {
+                // Each Model has exactly one material connected, so index is always 0
                 int matIndex = 0;
-                auto* subEnt = m_entity->getSubEntity(si);
-                auto matIt = m_materialIndexMap.find(subEnt->getMaterial()->getName());
-                if (matIt != m_materialIndexMap.end())
-                    matIndex = matIt->second;
 
                 m_w.beginNode("LayerElementMaterial");
                 m_w.writePropertyI(0);
@@ -1075,31 +1046,38 @@ private:
         }
     }
 
-    // ── Mesh Model ───────────────────────────────────────────────
-    void writeMeshModel()
+    // ── Mesh Models (one per submesh) ─────────────────────────────
+    void writeMeshModels()
     {
-        m_meshModelId = nextId();
-        std::string modelName = std::string(m_entity->getName());
+        for (size_t gi = 0; gi < m_geomIds.size(); ++gi)
+        {
+            unsigned int si = m_geomSubmeshIndices[gi];
+            int64_t modelId = nextId();
+            m_meshModelIds.push_back(modelId);
 
-        m_w.beginNode("Model");
-        m_w.writePropertyL(m_meshModelId);
-        m_w.writePropertyS(modelName + std::string("\x00\x01", 2) + "Model");
-        m_w.writePropertyS("Mesh");
-        m_w.endProperties();
+            std::string modelName = std::string(m_entity->getName()) +
+                                    "_submesh" + std::to_string(si);
 
-        m_w.beginNode("Version"); m_w.writePropertyI(232); m_w.endProperties(); m_w.endNodeLeaf();
+            m_w.beginNode("Model");
+            m_w.writePropertyL(modelId);
+            m_w.writePropertyS(modelName + std::string("\x00\x01", 2) + "Model");
+            m_w.writePropertyS("Mesh");
+            m_w.endProperties();
 
-        m_w.beginNode("Properties70");
-        m_w.endProperties();
-        writeP70LclTranslation(0.0, 0.0, 0.0);
-        writeP70LclRotation(0.0, 0.0, 0.0);
-        writeP70LclScaling(1.0, 1.0, 1.0);
-        m_w.endNode(); // Properties70
+            m_w.beginNode("Version"); m_w.writePropertyI(232); m_w.endProperties(); m_w.endNodeLeaf();
 
-        m_w.beginNode("Shading"); m_w.writePropertyBool(true); m_w.endProperties(); m_w.endNodeLeaf();
-        m_w.beginNode("Culling"); m_w.writePropertyS("CullingOff"); m_w.endProperties(); m_w.endNodeLeaf();
+            m_w.beginNode("Properties70");
+            m_w.endProperties();
+            writeP70LclTranslation(0.0, 0.0, 0.0);
+            writeP70LclRotation(0.0, 0.0, 0.0);
+            writeP70LclScaling(1.0, 1.0, 1.0);
+            m_w.endNode(); // Properties70
 
-        m_w.endNode(); // Model
+            m_w.beginNode("Shading"); m_w.writePropertyBool(true); m_w.endProperties(); m_w.endNodeLeaf();
+            m_w.beginNode("Culling"); m_w.writePropertyS("CullingOff"); m_w.endProperties(); m_w.endNodeLeaf();
+
+            m_w.endNode(); // Model
+        }
     }
 
     // ── Material objects ─────────────────────────────────────────
@@ -1169,33 +1147,13 @@ private:
             m_w.endNode(); // NodeAttribute
 
             // Model (LimbNode) — Z-mirrored, using initial (bind pose) values.
-            // Non-deforming bones (no vertex weights, e.g. "Armature") need their
-            // transform INVERTED before writing. BoneProcessor on reimport creates
-            // these from parentNode->mTransformation.inverse(), so writing the
-            // inverse here ensures the double-inversion recovers the original.
-            bool isNonDeforming = m_bonesWithAssignments.find(bone->getHandle())
-                                  == m_bonesWithAssignments.end();
-
-            Ogre::Vector3 pos;
-            Ogre::Quaternion ori;
-            Ogre::Vector3 scl;
-
-            if (isNonDeforming)
-            {
-                Ogre::Matrix4 localMat = buildLocalMatrix(
-                    bone->getInitialPosition(),
-                    bone->getInitialScale(),
-                    bone->getInitialOrientation());
-                Ogre::Matrix4 invMat = localMat.inverse();
-                Ogre::Affine3 aff(invMat);
-                aff.decomposition(pos, scl, ori);
-            }
-            else
-            {
-                pos = bone->getInitialPosition();
-                ori = bone->getInitialOrientation();
-                scl = bone->getInitialScale();
-            }
+            // All bones use raw transforms directly. BoneProcessor on reimport
+            // also reads transforms directly (no inversion), so the round-trip
+            // preserves the original values. External tools like Blender also
+            // read these transforms directly and get correct bone positions.
+            Ogre::Vector3 pos = bone->getInitialPosition();
+            Ogre::Quaternion ori = bone->getInitialOrientation();
+            Ogre::Vector3 scl = bone->getInitialScale();
 
             Ogre::Quaternion mirroredRot = mirrorZ(ori);
             double rx, ry, rz;
@@ -1297,19 +1255,32 @@ private:
                 m_w.endProperties();
                 m_w.endNodeLeaf();
 
-                // Transform = mesh bind pose transform (identity — mesh is at origin)
-                double identityArr[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-                m_w.beginNode("Transform");
-                m_w.writePropertyArrayD(std::vector<double>(identityArr, identityArr + 16));
-                m_w.endProperties();
-                m_w.endNodeLeaf();
-
                 // TransformLink = bone's global bind pose, Z-mirrored
                 // Use computeGlobalBindPose (from initial transforms) instead of
                 // _getFullTransform() which may reflect the current animation state
                 Ogre::Matrix4 boneGlobal = computeGlobalBindPose(bone);
                 double transformLinkArr[16];
                 matrix4ToDoublesMirrorZ(boneGlobal, transformLinkArr);
+
+                // Transform = bone_global^{-1} @ mesh_global (in bone space, per FBX convention)
+                // Blender's FBX importer computes mesh_global = TransformLink @ Transform,
+                // so storing bone^{-1} ensures all clusters produce the same mesh_global.
+                // Since our mesh is at origin, mesh_global = identity → Transform = bone^{-1}.
+                Ogre::Matrix4 boneGlobalMirrored;
+                for (int r = 0; r < 4; ++r)
+                    for (int c = 0; c < 4; ++c)
+                        boneGlobalMirrored[r][c] = transformLinkArr[c * 4 + r];
+                Ogre::Matrix4 transformMat = boneGlobalMirrored.inverse();
+                double transformArr[16];
+                for (int r = 0; r < 4; ++r)
+                    for (int c = 0; c < 4; ++c)
+                        transformArr[c * 4 + r] = transformMat[r][c];
+
+                m_w.beginNode("Transform");
+                m_w.writePropertyArrayD(std::vector<double>(transformArr, transformArr + 16));
+                m_w.endProperties();
+                m_w.endNodeLeaf();
+
                 m_w.beginNode("TransformLink");
                 m_w.writePropertyArrayD(std::vector<double>(transformLinkArr, transformLinkArr + 16));
                 m_w.endProperties();
@@ -1548,7 +1519,8 @@ private:
     void writeBindPose()
     {
         int64_t poseId = nextId();
-        int poseNodeCount = 1 + m_skeleton->getNumBones(); // mesh + all bones
+        int poseNodeCount = static_cast<int>(m_meshModelIds.size()) +
+                            m_skeleton->getNumBones(); // mesh models + all bones
 
         m_w.beginNode("Pose");
         m_w.writePropertyL(poseId);
@@ -1571,10 +1543,11 @@ private:
         m_w.endProperties();
         m_w.endNodeLeaf();
 
-        // Mesh model PoseNode (identity — mesh has no transform)
+        // Mesh model PoseNodes (identity — meshes have no transform)
         {
             double identity[16] = {1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1};
-            writePoseNode(m_meshModelId, identity);
+            for (auto modelId : m_meshModelIds)
+                writePoseNode(modelId, identity);
         }
 
         // Bone PoseNodes (global bind pose, Z-mirrored)
@@ -1672,16 +1645,20 @@ private:
         m_w.beginNode("Connections");
         m_w.endProperties();
 
-        // Mesh model → root (id 0)
-        writeConnection("OO", m_meshModelId, 0);
+        // Each mesh model → root (id 0), geometry → its model, material → its model
+        for (size_t gi = 0; gi < m_meshModelIds.size(); ++gi)
+        {
+            int64_t modelId = m_meshModelIds[gi];
+            writeConnection("OO", modelId, 0);
+            writeConnection("OO", m_geomIds[gi], modelId);
 
-        // Geometry → mesh model
-        for (auto geomId : m_geomIds)
-            writeConnection("OO", geomId, m_meshModelId);
-
-        // Materials → mesh model
-        for (const auto& [name, matId] : m_materialIds)
-            writeConnection("OO", matId, m_meshModelId);
+            // Connect the submesh's material to this model
+            unsigned int si = m_geomSubmeshIndices[gi];
+            auto* subEnt = m_entity->getSubEntity(si);
+            auto matIt = m_materialIds.find(subEnt->getMaterial()->getName());
+            if (matIt != m_materialIds.end())
+                writeConnection("OO", matIt->second, modelId);
+        }
 
         // Texture → Material (OP with "DiffuseColor") — connect to ALL materials that use each texture
         {
@@ -1930,17 +1907,16 @@ private:
 
     int64_t m_nextId = 1000000;
     int64_t m_documentId = 100000;
-    int64_t m_meshModelId = 0;
+    std::vector<int64_t> m_meshModelIds;
 
     std::vector<int64_t> m_geomIds;
     std::vector<unsigned int> m_geomSubmeshIndices; // submesh index for each entry in m_geomIds
     std::map<std::string, int64_t> m_materialIds;
-    std::map<std::string, int> m_materialIndexMap; // matName → index (matching connection order)
     std::map<std::string, int64_t> m_textureIds;
     std::map<std::string, int64_t> m_videoIds;
     std::map<unsigned short, int64_t> m_boneModelIds;
     std::map<unsigned short, int64_t> m_boneAttrIds;
-    std::set<unsigned short> m_bonesWithAssignments;
+
     std::vector<int64_t> m_skinIds;
     std::vector<int64_t> m_animStackIds;
 
