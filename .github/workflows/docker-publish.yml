@@ -1,12 +1,10 @@
-name: Docker Publish
+name: Docker Publish (Manual)
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Release tag to build from (e.g. v2.11.0). Leave empty for latest.'
+        description: 'Release tag to build from (e.g. 2.11.1). Leave empty for latest.'
         required: false
         default: ''
 
@@ -27,9 +25,7 @@ jobs:
       - name: Determine release tag
         id: tag
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG="${{ github.event.release.tag_name }}"
-          elif [ -n "${{ github.event.inputs.version }}" ]; then
+          if [ -n "${{ github.event.inputs.version }}" ]; then
             TAG="${{ github.event.inputs.version }}"
           else
             TAG="latest"
@@ -76,7 +72,6 @@ jobs:
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
-        if: github.event_name == 'release'
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
@@ -85,15 +80,14 @@ jobs:
         id: tags
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+          TAG="${{ steps.tag.outputs.tag }}"
           TAGS="${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}"
-          # Only tag :latest for release events or unversioned dispatch
-          if [ "${{ github.event_name }}" = "release" ] || [ "${{ steps.tag.outputs.tag }}" = "latest" ]; then
+          # Only tag :latest for unversioned dispatch (avoids overwriting latest with old version)
+          if [ "$TAG" = "latest" ]; then
             TAGS="${TAGS},${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest"
-          fi
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAGS="${TAGS},${{ env.IMAGE_NAME }}:${VERSION}"
             TAGS="${TAGS},${{ env.IMAGE_NAME }}:latest"
           fi
+          TAGS="${TAGS},${{ env.IMAGE_NAME }}:${VERSION}"
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
