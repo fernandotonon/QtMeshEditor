@@ -552,6 +552,9 @@ jobs:
             printf '#!/bin/sh\nexport LD_LIBRARY_PATH="/usr/lib/qtmesheditor:${LD_LIBRARY_PATH}"\nexport QML2_IMPORT_PATH="/usr/share/qtmesheditor/qml:${QML2_IMPORT_PATH}"\n# Ogre requires X11 window handles; force XCB under Wayland\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec /usr/share/qtmesheditor/qtmesheditor "$@"\n' > ./pack-deb/usr/bin/qtmesheditor
             chmod 755 ./pack-deb/usr/bin/qtmesheditor
 
+            # Create qtmesh symlink for CLI mode (name starts with "qtmesh" but not "qtmesheditor")
+            ln -sf qtmesheditor ./pack-deb/usr/bin/qtmesh
+
             # Copy copyright file
             cp ./DEBIAN-copyright ./pack-deb/usr/share/doc/qtmesheditor/copyright
 

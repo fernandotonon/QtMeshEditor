@@ -1,0 +1,56 @@
+name: 'qtmesh'
+description: 'Run qtmesh CLI for 3D mesh operations (info, convert, fix, anim)'
+
+inputs:
+  command:
+    description: 'Subcommand: info, fix, convert, anim'
+    required: true
+  input-file:
+    description: 'Input file path (relative to workspace)'
+    required: true
+  output-file:
+    description: 'Output file path (for convert/fix/anim rename/merge)'
+    required: false
+  options:
+    description: 'Additional flags (e.g. --json, --all, --list)'
+    required: false
+  image-tag:
+    description: 'Docker image tag to use'
+    required: false
+    default: 'latest'
+
+outputs:
+  result:
+    description: 'Command stdout'
+    value: ${{ steps.run.outputs.result }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: run
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_FILE: ${{ inputs.input-file }}
+        INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
+        INPUT_OPTIONS: ${{ inputs.options }}
+      run: |
+        # Build command args safely via arrays to prevent injection
+        cmd=("$INPUT_COMMAND" "/workspace/$INPUT_FILE")
+        if [ -n "$INPUT_OUTPUT_FILE" ]; then
+          cmd+=("-o" "/workspace/$INPUT_OUTPUT_FILE")
+        fi
+        if [ -n "$INPUT_OPTIONS" ]; then
+          read -r -a opts <<< "$INPUT_OPTIONS"
+          cmd+=("${opts[@]}")
+        fi
+
+        OUTPUT=$(docker run --rm \
+          --user "$(id -u):$(id -g)" \
+          -v "${{ github.workspace }}:/workspace" \
+          "ghcr.io/fernandotonon/qtmesheditor:${{ inputs.image-tag }}" \
+          "${cmd[@]}")
+
+        echo "result<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$OUTPUT" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
