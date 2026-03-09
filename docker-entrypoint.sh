@@ -20,25 +20,27 @@ if [ -z "$DISPLAY" ]; then
     fi
 fi
 
-# Route to the right binary
+# Route to the right binary.
 # /usr/bin/qtmesh is a symlink to /usr/bin/qtmesheditor (launcher script)
-# which sets LD_LIBRARY_PATH etc. before exec'ing the real binary.
+# which always exec's /usr/share/qtmesheditor/qtmesheditor — the argv[0]
+# contains "editor" so CLI mode detection by name fails. Pass --cli
+# explicitly to force CLI mode.
 case "${1:-}" in
     info|fix|convert|anim|--help|-h|--version|-v)
-        exec /usr/bin/qtmesh "$@"
+        exec /usr/bin/qtmesheditor --cli "$@"
         ;;
     --mcp|--with-mcp)
         exec /usr/bin/qtmesheditor "$@"
         ;;
     qtmesh)
         shift
-        exec /usr/bin/qtmesh "$@"
+        exec /usr/bin/qtmesheditor --cli "$@"
         ;;
     QtMeshEditor|qtmesheditor)
         shift
         exec /usr/bin/qtmesheditor "$@"
         ;;
     *)
-        exec /usr/bin/qtmesh "$@"
+        exec /usr/bin/qtmesheditor --cli "$@"
         ;;
 esac
