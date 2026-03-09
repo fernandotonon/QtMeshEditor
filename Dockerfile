@@ -6,7 +6,7 @@ ARG VERSION=latest
 RUN apt-get update && apt-get install -y --no-install-recommends \
     xvfb x11-utils libxcb-cursor0 libxcb-xinerama0 libx11-6 libxrandr2 \
     libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0 \
-    freeglut3 libcurl4 \
+    freeglut3 libcurl4 libopengl0 \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install the .deb (skip declared Qt package deps — libs are bundled)
