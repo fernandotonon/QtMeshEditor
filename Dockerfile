@@ -10,21 +10,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy and install the .deb (skip declared Qt package deps — libs are bundled)
-COPY *.deb /tmp/qtmesheditor.deb
+COPY qtmesheditor.deb /tmp/qtmesheditor.deb
 RUN dpkg --install --force-depends /tmp/qtmesheditor.deb \
     && rm /tmp/qtmesheditor.deb
 
-# Create qtmesh symlink for CLI mode detection
-# (binary name must start with "qtmesh" but NOT contain "editor")
-RUN ln -sf /usr/share/qtmesheditor/qtmesheditor /usr/local/bin/qtmesh
+# The .deb installs /usr/bin/qtmesheditor (launcher script that sets
+# LD_LIBRARY_PATH, QT_QPA_PLATFORM, etc.) and /usr/bin/qtmesh (symlink).
+# If the .deb predates the qtmesh symlink, create it here as a fallback.
+RUN [ -e /usr/bin/qtmesh ] || ln -sf qtmesheditor /usr/bin/qtmesh
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Create non-root runtime user
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin qtmesh \
+    && mkdir -p /workspace \
+    && chown -R qtmesh:qtmesh /workspace
 
 LABEL org.opencontainers.image.source="https://github.com/fernandotonon/QtMeshEditor"
 LABEL org.opencontainers.image.description="qtmesh CLI - 3D mesh conversion, optimization, and animation tools"
 LABEL org.opencontainers.image.version="${VERSION}"
 
 WORKDIR /workspace
+USER qtmesh
 ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["--help"]

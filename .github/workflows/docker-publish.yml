@@ -34,7 +34,7 @@ jobs:
           else
             TAG="latest"
           fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download .deb from release
         env:
@@ -46,14 +46,22 @@ jobs:
           else
             gh release download "$TAG" --pattern "*.deb" --dir .
           fi
-          echo "Downloaded .deb files:"
-          ls -la *.deb
+          # Ensure exactly one .deb and rename to deterministic filename
+          shopt -s nullglob
+          debs=(./*.deb)
+          if [ "${#debs[@]}" -ne 1 ]; then
+            echo "Expected exactly one .deb, found ${#debs[@]}" >&2
+            ls -la ./*.deb 2>/dev/null || true
+            exit 1
+          fi
+          mv "${debs[0]}" ./qtmesheditor.deb
+          ls -la ./qtmesheditor.deb
 
-      - name: Extract version from CMakeLists.txt
+      - name: Extract version from downloaded package
         id: version
         run: |
-          VERSION=$(grep 'project(QtMeshEditor VERSION' CMakeLists.txt | sed 's/.*VERSION \([0-9.]*\).*/\1/')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          VERSION=$(dpkg-deb -f ./qtmesheditor.deb Version | sed 's/-.*//')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Extracted version: $VERSION"
 
       - name: Set up Docker Buildx
@@ -78,12 +86,15 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           TAGS="${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${VERSION}"
-          TAGS="${TAGS},${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest"
+          # Only tag :latest for release events or unversioned dispatch
+          if [ "${{ github.event_name }}" = "release" ] || [ "${{ steps.tag.outputs.tag }}" = "latest" ]; then
+            TAGS="${TAGS},${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:latest"
+          fi
           if [ "${{ github.event_name }}" = "release" ]; then
             TAGS="${TAGS},${{ env.IMAGE_NAME }}:${VERSION}"
             TAGS="${TAGS},${{ env.IMAGE_NAME }}:latest"
           fi
-          echo "tags=$TAGS" >> $GITHUB_OUTPUT
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
@@ -101,4 +112,4 @@ jobs:
 
       - name: Verify image
         run: |
-          docker run --rm ${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }} --help
+          docker run --rm "${{ env.REGISTRY_GHCR }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}" --help

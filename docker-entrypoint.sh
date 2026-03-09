@@ -6,29 +6,39 @@ if [ -z "$DISPLAY" ]; then
     export DISPLAY=:99
     Xvfb :99 -screen 0 1x1x24 -nolisten tcp &>/dev/null &
     # Wait for Xvfb to be ready
-    for i in $(seq 1 10); do
-        xdpyinfo -display :99 &>/dev/null && break
+    ready=0
+    for _ in $(seq 1 10); do
+        if xdpyinfo -display :99 &>/dev/null; then
+            ready=1
+            break
+        fi
         sleep 0.2
     done
+    if [ "$ready" -ne 1 ]; then
+        echo "Failed to start Xvfb on :99" >&2
+        exit 1
+    fi
 fi
 
 # Route to the right binary
+# /usr/bin/qtmesh is a symlink to /usr/bin/qtmesheditor (launcher script)
+# which sets LD_LIBRARY_PATH etc. before exec'ing the real binary.
 case "${1:-}" in
     info|fix|convert|anim|--help|-h|--version|-v)
-        exec qtmesh "$@"
+        exec /usr/bin/qtmesh "$@"
         ;;
     --mcp|--with-mcp)
         exec /usr/bin/qtmesheditor "$@"
         ;;
     qtmesh)
         shift
-        exec qtmesh "$@"
+        exec /usr/bin/qtmesh "$@"
         ;;
     QtMeshEditor|qtmesheditor)
         shift
         exec /usr/bin/qtmesheditor "$@"
         ;;
     *)
-        exec qtmesh "$@"
+        exec /usr/bin/qtmesh "$@"
         ;;
 esac

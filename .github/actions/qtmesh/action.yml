@@ -29,20 +29,28 @@ runs:
   steps:
     - id: run
       shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_FILE: ${{ inputs.input-file }}
+        INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
+        INPUT_OPTIONS: ${{ inputs.options }}
       run: |
-        # Build output flag if output-file is specified
-        OUTPUT_FLAG=""
-        if [ -n "${{ inputs.output-file }}" ]; then
-          OUTPUT_FLAG="-o /workspace/${{ inputs.output-file }}"
+        # Build command args safely via arrays to prevent injection
+        cmd=("$INPUT_COMMAND" "/workspace/$INPUT_FILE")
+        if [ -n "$INPUT_OUTPUT_FILE" ]; then
+          cmd+=("-o" "/workspace/$INPUT_OUTPUT_FILE")
+        fi
+        if [ -n "$INPUT_OPTIONS" ]; then
+          read -r -a opts <<< "$INPUT_OPTIONS"
+          cmd+=("${opts[@]}")
         fi
 
         OUTPUT=$(docker run --rm \
+          --user "$(id -u):$(id -g)" \
           -v "${{ github.workspace }}:/workspace" \
           "ghcr.io/fernandotonon/qtmesheditor:${{ inputs.image-tag }}" \
-          ${{ inputs.command }} "/workspace/${{ inputs.input-file }}" \
-          $OUTPUT_FLAG \
-          ${{ inputs.options }})
+          "${cmd[@]}")
 
-        echo "result<<EOF" >> $GITHUB_OUTPUT
-        echo "$OUTPUT" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
+        echo "result<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$OUTPUT" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
