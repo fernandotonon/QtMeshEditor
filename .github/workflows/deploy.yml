@@ -573,6 +573,9 @@ jobs:
             # Copy bundled libraries to private lib directory
             cp -R ./bin/*.so* ./pack-deb/usr/lib/qtmesheditor/
 
+            # Bundle Assimp (built from source at /usr/local/lib, not in ./bin/)
+            cp -R /usr/local/lib/libassimp.so* ./pack-deb/usr/lib/qtmesheditor/
+
             # Copy Qt QML modules for Material Editor
             QT_DIR="/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64"
             mkdir -p ./pack-deb/usr/share/qtmesheditor/qml
