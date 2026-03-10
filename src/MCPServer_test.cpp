@@ -3358,9 +3358,9 @@ TEST_F(MCPServerTest, AnimSuccPath_NavigateNextAtEnd)
     args["track"] = "Child";
     QJsonObject result = server->callTool("set_animation_time", args);
     EXPECT_FALSE(isError(result));
-    // When already at last keyframe, "next" should stay at last keyframe (t=1.0)
+    // "last" wraps time to 0 (fmod(1.0, 1.0)=0), so "next" finds keyframe at 0.5
     EXPECT_TRUE(getResultText(result).contains("Navigated to keyframe"));
-    EXPECT_TRUE(getResultText(result).contains("1s") || getResultText(result).contains("at 1"));
+    EXPECT_TRUE(getResultText(result).contains("0.5s") || getResultText(result).contains("at 0.5"));
 }
 
 TEST_F(MCPServerTest, AnimSuccPath_NavigatePrevAtStart)

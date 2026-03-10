@@ -1979,12 +1979,12 @@ TEST_F(MaterialEditorQMLWithOgreTest, UndoRedo_OgrePropertyChangesRevertState) {
     EXPECT_NE(initialText, afterLightingText);
     EXPECT_TRUE(editor->canUndo());
 
-    // Change ambient color -- another undo entry (ambient appears in serialized text)
-    editor->setAmbientColor(QColor(255, 0, 0));
-    QString afterAmbientText = editor->materialText();
-    EXPECT_NE(afterLightingText, afterAmbientText);
+    // Change depth write -- another undo entry (depth_write appears in serialized text)
+    editor->setDepthWriteEnabled(!editor->depthWriteEnabled());
+    QString afterDepthText = editor->materialText();
+    EXPECT_NE(afterLightingText, afterDepthText);
 
-    // Undo ambient change
+    // Undo depth write change
     editor->undo();
     EXPECT_EQ(editor->materialText(), afterLightingText);
 
@@ -1997,9 +1997,9 @@ TEST_F(MaterialEditorQMLWithOgreTest, UndoRedo_OgrePropertyChangesRevertState) {
     editor->redo();
     EXPECT_EQ(editor->materialText(), afterLightingText);
 
-    // Redo ambient change
+    // Redo depth write change
     editor->redo();
-    EXPECT_EQ(editor->materialText(), afterAmbientText);
+    EXPECT_EQ(editor->materialText(), afterDepthText);
 }
 
 // ===========================================================================

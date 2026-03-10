@@ -220,8 +220,8 @@ TEST_F(SkeletonDebugTests, BoneMaterialCreationVerification)
             EXPECT_GT(tech->getNumPasses(), 0u);
             if (tech->getNumPasses() > 0) {
                 Ogre::Pass* pass = tech->getPass(0);
-                // Bone material should have lighting enabled
-                EXPECT_TRUE(pass->getLightingEnabled());
+                // Bone material has lighting disabled (vertex colour tracking)
+                EXPECT_FALSE(pass->getLightingEnabled());
             }
         }
     }
