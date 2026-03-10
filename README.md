@@ -92,6 +92,33 @@ Use `--verbose` for engine debug output, `--help` for full usage.
 Import supports all formats provided by Assimp (40+). Export to older Ogre Mesh versions (v1.0-v1.10) is also available.
 
 ### :computer: Install from release binaries
+
+#### :whale: Docker (any platform)
+
+Run `qtmesh` without installing anything locally:
+
+```bash
+# Show help
+docker run --rm ghcr.io/fernandotonon/qtmesh --help
+
+# Inspect a mesh
+docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh info model.fbx --json
+
+# Convert between formats (--user ensures output files are owned by you)
+docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \
+  ghcr.io/fernandotonon/qtmesh convert model.fbx -o model.gltf2
+
+# Fix / optimize
+docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \
+  ghcr.io/fernandotonon/qtmesh fix model.fbx -o fixed.fbx --all
+
+# Merge animations
+docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \
+  ghcr.io/fernandotonon/qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
+```
+
+Also available on Docker Hub: `docker pull fernandotr1/qtmesh`
+
 #### :apple: macOS
 ##### Homebrew
 `brew tap fernandotonon/qtmesheditor`
@@ -140,6 +167,18 @@ Run it calling `qtmesheditor`
 
 #### :window: Windows
 Unpack the binaries and run the `QtMeshEditor.exe` file
+
+#### :hammer_and_wrench: GitHub Action
+
+Use `qtmesh` directly in your CI/CD pipeline:
+
+```yaml
+- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@master
+  with:
+    command: info
+    input-file: assets/player.fbx
+    options: --json
+```
 
 ### [Build-from-source](https://github.com/fernandotonon/QtMeshEditor/wiki/How-to-build)
 

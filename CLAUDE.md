@@ -148,6 +148,26 @@ All other version references are auto-generated from this via CMake template sub
 
 Note: `MCPServer.h` has a separate `SERVER_VERSION` ("1.0.0") for the MCP protocol — only bump that if the MCP interface changes.
 
+## Docker
+
+A Docker image is published on each release to both `ghcr.io/fernandotonon/qtmesh` and `fernandotr1/qtmesh` (Docker Hub).
+
+**Run via Docker:**
+```bash
+docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh info model.fbx --json
+docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh convert model.fbx -o model.gltf2
+```
+
+**Key files:**
+- `Dockerfile` — Ubuntu 24.04 base, installs the `.deb` release artifact, Xvfb for headless GL
+- `docker-entrypoint.sh` — Starts Xvfb, routes CLI commands via `--cli` flag, MCP commands to `qtmesheditor`
+- `.github/workflows/docker-publish.yml` — Manual `workflow_dispatch` for rebuilding images
+- `.github/actions/qtmesh/action.yml` — Reusable composite action for CI/CD pipelines
+
+**Notes:**
+- The entrypoint passes `--cli` explicitly because the launcher script's `exec` changes argv[0] to contain "editor", which breaks CLI mode detection by binary name.
+- The Docker base must be Ubuntu 24.04 (not 22.04) to match the CI build runner's GLIBC version.
+
 ## CI/CD
 
-GitHub Actions workflow in `.github/workflows/deploy.yml` builds for Windows (MinGW), macOS, and Linux. Tests run on Linux with SonarCloud coverage. Releases auto-update the Homebrew cask.
+GitHub Actions workflow in `.github/workflows/deploy.yml` builds for Windows (MinGW), macOS, and Linux. Tests run on Linux with SonarCloud coverage. Releases auto-update the Homebrew cask and publish the Docker image (via the `docker-publish` job in `deploy.yml`).
