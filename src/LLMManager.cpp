@@ -298,6 +298,7 @@ void LLMManager::loadModel(const QString &modelName)
         return;
     }
 
+    // LCOV_EXCL_START — requires a real GGUF model file
     m_isLoading = true;
     emit isLoadingChanged();
     emit modelLoadStarted(modelName);
@@ -307,6 +308,7 @@ void LLMManager::loadModel(const QString &modelName)
         m_worker->setSettings(m_settings);
         m_worker->loadModel(modelPath);
     }, Qt::QueuedConnection);
+    // LCOV_EXCL_STOP
 }
 
 // Settings setters for QML
@@ -367,8 +369,10 @@ void LLMManager::tryAutoLoadModel()
         return;
     }
 
+    // LCOV_EXCL_START — requires a downloaded model file
     qDebug() << "LLMManager: Auto-loading model:" << m_lastModelName;
     loadModel(m_lastModelName);
+    // LCOV_EXCL_STOP
 }
 
 void LLMManager::unloadModel()
@@ -414,6 +418,7 @@ void LLMManager::generateMaterial(const QString &prompt, const QString &currentM
         return;
     }
 
+    // LCOV_EXCL_START — requires a loaded LLM model
     // Store for potential retry
     m_pendingPrompt = prompt;
     m_pendingCurrentMaterial = currentMaterial;
@@ -425,6 +430,7 @@ void LLMManager::generateMaterial(const QString &prompt, const QString &currentM
     QMetaObject::invokeMethod(m_worker, [this, userPrompt]() {
         m_worker->generate(getOgre3DSystemPrompt(), userPrompt);
     }, Qt::QueuedConnection);
+    // LCOV_EXCL_STOP
 }
 
 QString LLMManager::buildUserPrompt(const QString &prompt, const QString &currentMaterial, const QStringList &availableTextures) const
@@ -603,7 +609,7 @@ QVariantList LLMManager::getRecommendedModelsInfo() const
     return result;
 }
 
-// Worker signal handlers
+// LCOV_EXCL_START — worker signal handlers require a loaded/running LLM model
 void LLMManager::onWorkerModelLoaded(const QString &modelPath)
 {
     qDebug() << "LLMManager: Model loaded:" << modelPath;
@@ -703,6 +709,7 @@ void LLMManager::onWorkerGenerationStopped()
     emit generationStopped();
     emit isGeneratingChanged();
 }
+// LCOV_EXCL_STOP
 
 QString LLMManager::cleanupGeneratedScript(const QString &script) const
 {

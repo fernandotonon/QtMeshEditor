@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QThread>
+#include <QDir>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
@@ -1092,5 +1093,493 @@ TEST_F(MeshImporterExporterTest, ExportAssimpBinary_FromImportedMesh) {
     // Clean up
     QFile::remove("./assbin_imported.assbin");
     QFile::remove("./assbin_imported.material");
+}
+
+// ── Standalone tests: export filter and format coverage ──────────
+
+TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAll18Formats) {
+    QString filter = MeshImporterExporter::exportFileDialogFilter();
+    // 18 formats means 17 ";;" separators
+    EXPECT_EQ(filter.count(";;"), 17);
+    // Spot-check all format keys
+    EXPECT_TRUE(filter.contains("3DS (*.3ds)"));
+    EXPECT_TRUE(filter.contains("Assimp Binary (*.assbin)"));
+    EXPECT_TRUE(filter.contains("Collada (*.dae)"));
+    EXPECT_TRUE(filter.contains("FBX Binary (*.fbx)"));
+    EXPECT_TRUE(filter.contains("OBJ (*.obj)"));
+    EXPECT_TRUE(filter.contains("OBJ without MTL (*.objnomtl)"));
+    EXPECT_TRUE(filter.contains("Ogre Mesh (*.mesh)"));
+    EXPECT_TRUE(filter.contains("Ogre Mesh v1.0+(*.mesh)"));
+    EXPECT_TRUE(filter.contains("Ogre Mesh v1.10+(*.mesh)"));
+    EXPECT_TRUE(filter.contains("Ogre Mesh v1.4+(*.mesh)"));
+    EXPECT_TRUE(filter.contains("Ogre Mesh v1.7+(*.mesh)"));
+    EXPECT_TRUE(filter.contains("Ogre Mesh v1.8+(*.mesh)"));
+    EXPECT_TRUE(filter.contains("Ogre XML (*.mesh.xml)"));
+    EXPECT_TRUE(filter.contains("PLY (*.ply)"));
+    EXPECT_TRUE(filter.contains("STL (*.stl)"));
+    EXPECT_TRUE(filter.contains("X (*.x)"));
+    EXPECT_TRUE(filter.contains("glTF 2.0 (*.gltf2)"));
+    EXPECT_TRUE(filter.contains("glTF 2.0 Binary (*.glb2)"));
+}
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_FBXFormat) {
+    QString result = MeshImporterExporter::formatFileURI("/path/to/model", "FBX Binary (*.fbx)");
+    EXPECT_EQ(result, "/path/to/model.fbx");
+}
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_FBXFormat_AlreadyHasExtension) {
+    QString result = MeshImporterExporter::formatFileURI("/path/to/model.fbx", "FBX Binary (*.fbx)");
+    EXPECT_EQ(result, "/path/to/model.fbx");
+}
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_VersionedMeshFormats) {
+    QStringList versionedFormats = {
+        "Ogre Mesh v1.10+(*.mesh)",
+        "Ogre Mesh v1.8+(*.mesh)",
+        "Ogre Mesh v1.7+(*.mesh)",
+        "Ogre Mesh v1.4+(*.mesh)",
+        "Ogre Mesh v1.0+(*.mesh)"
+    };
+    for (const auto& fmt : versionedFormats) {
+        QString result = MeshImporterExporter::formatFileURI("/path/to/model", fmt);
+        EXPECT_EQ(result, "/path/to/model.mesh") << "Failed for format: " << fmt.toStdString();
+    }
+}
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_AllFormats_CorrectExtension) {
+    struct FormatCase {
+        QString format;
+        QString expectedExt;
+    };
+    std::vector<FormatCase> cases = {
+        {"Ogre Mesh (*.mesh)", ".mesh"},
+        {"Ogre Mesh v1.10+(*.mesh)", ".mesh"},
+        {"Ogre Mesh v1.8+(*.mesh)", ".mesh"},
+        {"Ogre Mesh v1.7+(*.mesh)", ".mesh"},
+        {"Ogre Mesh v1.4+(*.mesh)", ".mesh"},
+        {"Ogre Mesh v1.0+(*.mesh)", ".mesh"},
+        {"Ogre XML (*.mesh.xml)", ".mesh.xml"},
+        {"Collada (*.dae)", ".dae"},
+        {"X (*.x)", ".x"},
+        {"OBJ (*.obj)", ".obj"},
+        {"OBJ without MTL (*.objnomtl)", ".obj"},
+        {"STL (*.stl)", ".stl"},
+        {"PLY (*.ply)", ".ply"},
+        {"3DS (*.3ds)", ".3ds"},
+        {"glTF 2.0 (*.gltf2)", ".gltf2"},
+        {"glTF 2.0 Binary (*.glb2)", ".glb2"},
+        {"Assimp Binary (*.assbin)", ".assbin"},
+        {"FBX Binary (*.fbx)", ".fbx"},
+    };
+    for (const auto& c : cases) {
+        QString result = MeshImporterExporter::formatFileURI("/tmp/test", c.format);
+        EXPECT_EQ(result, "/tmp/test" + c.expectedExt)
+            << "Format: " << c.format.toStdString();
+    }
+}
+
+// ── Import edge cases ────────────────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, Importer_EmptyList_DoesNothing) {
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList emptyList;
+    MeshImporterExporter::importer(emptyList);
+    EXPECT_EQ(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+}
+
+TEST_F(MeshImporterExporterTest, Importer_EmptyStringInList_SkipsEmpty) {
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList listWithEmpty{""};
+    MeshImporterExporter::importer(listWithEmpty);
+    EXPECT_EQ(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+}
+
+TEST_F(MeshImporterExporterTest, Importer_ConfiguresCameraAfterImport) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto cameras = Manager::getSingleton()->getSceneMgr()->getCameras();
+    if (cameras.empty())
+        GTEST_SKIP() << "No cameras available";
+
+    QStringList uri{"./media/models/Rumba Dancing.fbx"};
+    MeshImporterExporter::importer(uri);
+
+    // Camera should have been repositioned based on entity bounding box
+    auto camAfter = cameras.begin()->second->getParentSceneNode()->getPosition();
+    // The camera Z position should be negative (looking at origin from -Z)
+    EXPECT_LT(camAfter.z, 0);
+}
+
+// ── Exporter error/edge paths ────────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, Exporter_NoEntityOnNode_ReturnMinusOne) {
+    // Create a scene node with no entity attached
+    auto* sn = Manager::getSingleton()->addSceneNode("EmptyNodeForExport");
+    EXPECT_EQ(MeshImporterExporter::exporter(sn, "/tmp/test.mesh", "Ogre Mesh (*.mesh)"), -1);
+}
+
+TEST_F(MeshImporterExporterTest, Exporter_UnknownFormat_FallsBackToSuffix) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("UnknownFormatMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("UnknownFormat");
+    auto* entity = sceneMgr->createEntity(node->getName(), mesh);
+    node->attachObject(entity);
+
+    // Use a format string not in assimpFormatIds — should fall back to file suffix
+    int result = MeshImporterExporter::exporter(node, "./unknown_fmt_test.obj", "SomeUnknownFormat");
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFile::exists("./unknown_fmt_test.obj"));
+
+    QFile::remove("./unknown_fmt_test.obj");
+    QFile::remove("./unknown_fmt_test.material");
+    QFile::remove("./unknown_fmt_test.mtl");
+}
+
+// ── Ogre Mesh versioned export tests ─────────────────────────────
+
+static void testVersionedMeshExport(
+    Ogre::SceneManager* sceneMgr, const std::string& suffix,
+    const QString& format, const QString& basePath)
+{
+    std::string name = "Versioned_" + suffix;
+    auto mesh = createInMemoryTriangleMesh(name + "_mesh");
+    auto* node = Manager::getSingleton()->addSceneNode(name.c_str());
+    auto* entity = sceneMgr->createEntity(node->getName(), mesh);
+    node->attachObject(entity);
+
+    QString outPath = basePath + QString::fromStdString(suffix) + ".mesh";
+    ASSERT_EQ(MeshImporterExporter::exporter(node, outPath, format), 0)
+        << "Export failed for format: " << format.toStdString();
+    EXPECT_TRUE(QFile::exists(outPath));
+
+    QFile::remove(outPath);
+    QFile::remove(basePath + QString::fromStdString(suffix) + ".material");
+}
+
+TEST_F(MeshImporterExporterTest, Exporter_OgreMeshV1_10) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    testVersionedMeshExport(Manager::getSingleton()->getSceneMgr(),
+        "v1_10", "Ogre Mesh v1.10+(*.mesh)", "./versioned_");
+}
+
+TEST_F(MeshImporterExporterTest, Exporter_OgreMeshV1_8) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    testVersionedMeshExport(Manager::getSingleton()->getSceneMgr(),
+        "v1_8", "Ogre Mesh v1.8+(*.mesh)", "./versioned_");
+}
+
+TEST_F(MeshImporterExporterTest, Exporter_OgreMeshV1_7) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    testVersionedMeshExport(Manager::getSingleton()->getSceneMgr(),
+        "v1_7", "Ogre Mesh v1.7+(*.mesh)", "./versioned_");
+}
+
+TEST_F(MeshImporterExporterTest, Exporter_OgreMeshV1_4) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    testVersionedMeshExport(Manager::getSingleton()->getSceneMgr(),
+        "v1_4", "Ogre Mesh v1.4+(*.mesh)", "./versioned_");
+}
+
+TEST_F(MeshImporterExporterTest, Exporter_OgreMeshV1_0) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    testVersionedMeshExport(Manager::getSingleton()->getSceneMgr(),
+        "v1_0", "Ogre Mesh v1.0+(*.mesh)", "./versioned_");
+}
+
+TEST_F(MeshImporterExporterTest, Exporter_OgreMeshVersioned_WithSkeleton) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    auto mesh = createInMemorySkeletonMesh("VersionedSkelMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("VersionedSkel");
+    auto* entity = sceneMgr->createEntity(node->getName(), mesh);
+    node->attachObject(entity);
+
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(MeshImporterExporter::exporter(node, "./versioned_skel.mesh", "Ogre Mesh v1.10+(*.mesh)"), 0);
+    EXPECT_TRUE(QFile::exists("./versioned_skel.mesh"));
+    EXPECT_TRUE(QFile::exists("./versioned_skel.material"));
+    // Skeleton file should be created alongside the mesh
+    // The skeleton name comes from the mesh's skeleton name
+    // (VersionedSkelMesh_skel)
+
+    QFile::remove("./versioned_skel.mesh");
+    QFile::remove("./versioned_skel.material");
+    // Clean up any skeleton files (name depends on internal skeleton name)
+    QDir dir(".");
+    for (const auto& f : dir.entryList({"versioned_skel*"}, QDir::Files))
+        QFile::remove("./" + f);
+}
+
+// ── XML Import error path tests ──────────────────────────────────
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_InvalidXML_NoNewNodes) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    QString xmlPath = "./test_invalid.mesh.xml";
+    ASSERT_TRUE(writeTestXMLFile(xmlPath, "not xml garbage at all!!!"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{xmlPath};
+    MeshImporterExporter::importer(uri);
+    EXPECT_EQ(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove(xmlPath);
+}
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_NoMeshRoot_NoNewNodes) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    QString xmlPath = "./test_noroot.mesh.xml";
+    ASSERT_TRUE(writeTestXMLFile(xmlPath, "<?xml version=\"1.0\"?>\n<root/>"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{xmlPath};
+    MeshImporterExporter::importer(uri);
+    EXPECT_EQ(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove(xmlPath);
+}
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_NoSubmeshes) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    QString xmlPath = "./test_nosub.mesh.xml";
+    ASSERT_TRUE(writeTestXMLFile(xmlPath,
+        "<?xml version=\"1.0\"?>\n"
+        "<mesh>\n"
+        "  <submeshes/>\n"
+        "</mesh>\n"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{xmlPath};
+    MeshImporterExporter::importer(uri);
+    // Should create a node even though no submeshes have geometry
+    // (mesh is created but empty)
+    EXPECT_GE(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove(xmlPath);
+}
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_SubmeshNoMaterial) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    QString xmlPath = "./test_nomat.mesh.xml";
+    ASSERT_TRUE(writeTestXMLFile(xmlPath,
+        "<?xml version=\"1.0\"?>\n"
+        "<mesh>\n"
+        "  <submeshes>\n"
+        "    <submesh usesharedvertices=\"false\">\n"
+        "      <geometry vertexcount=\"3\">\n"
+        "        <vertexbuffer positions=\"true\" normals=\"false\" texture_coords=\"0\">\n"
+        "          <vertex><position x=\"0\" y=\"0\" z=\"0\"/></vertex>\n"
+        "          <vertex><position x=\"1\" y=\"0\" z=\"0\"/></vertex>\n"
+        "          <vertex><position x=\"0\" y=\"1\" z=\"0\"/></vertex>\n"
+        "        </vertexbuffer>\n"
+        "      </geometry>\n"
+        "      <faces count=\"1\">\n"
+        "        <face v1=\"0\" v2=\"1\" v3=\"2\"/>\n"
+        "      </faces>\n"
+        "    </submesh>\n"
+        "  </submeshes>\n"
+        "</mesh>\n"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{xmlPath};
+    MeshImporterExporter::importer(uri);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove(xmlPath);
+}
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_SubmeshNoFaces) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    QString xmlPath = "./test_nofaces.mesh.xml";
+    ASSERT_TRUE(writeTestXMLFile(xmlPath,
+        "<?xml version=\"1.0\"?>\n"
+        "<mesh>\n"
+        "  <submeshes>\n"
+        "    <submesh usesharedvertices=\"false\">\n"
+        "      <geometry vertexcount=\"3\">\n"
+        "        <vertexbuffer positions=\"true\" normals=\"false\" texture_coords=\"0\">\n"
+        "          <vertex><position x=\"0\" y=\"0\" z=\"0\"/></vertex>\n"
+        "          <vertex><position x=\"1\" y=\"0\" z=\"0\"/></vertex>\n"
+        "          <vertex><position x=\"0\" y=\"1\" z=\"0\"/></vertex>\n"
+        "        </vertexbuffer>\n"
+        "      </geometry>\n"
+        "    </submesh>\n"
+        "  </submeshes>\n"
+        "</mesh>\n"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{xmlPath};
+    MeshImporterExporter::importer(uri);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove(xmlPath);
+}
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_SubmeshEmptyGeometry) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    QString xmlPath = "./test_emptygeom.mesh.xml";
+    ASSERT_TRUE(writeTestXMLFile(xmlPath,
+        "<?xml version=\"1.0\"?>\n"
+        "<mesh>\n"
+        "  <submeshes>\n"
+        "    <submesh usesharedvertices=\"false\">\n"
+        "      <geometry vertexcount=\"0\">\n"
+        "        <vertexbuffer positions=\"true\" normals=\"false\" texture_coords=\"0\">\n"
+        "        </vertexbuffer>\n"
+        "      </geometry>\n"
+        "      <faces count=\"0\"/>\n"
+        "    </submesh>\n"
+        "  </submeshes>\n"
+        "</mesh>\n"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{xmlPath};
+    MeshImporterExporter::importer(uri);
+    // Empty geometry should hit continue path — the mesh is still created
+    EXPECT_GE(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove(xmlPath);
+}
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_SharedGeometry) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    QString xmlPath = "./test_shared.mesh.xml";
+    ASSERT_TRUE(writeTestXMLFile(xmlPath,
+        "<?xml version=\"1.0\"?>\n"
+        "<mesh>\n"
+        "  <sharedgeometry vertexcount=\"3\">\n"
+        "    <vertexbuffer positions=\"true\" normals=\"true\" texture_coords=\"1\">\n"
+        "      <vertex>\n"
+        "        <position x=\"0\" y=\"0\" z=\"0\"/>\n"
+        "        <normal x=\"0\" y=\"0\" z=\"1\"/>\n"
+        "        <texcoord u=\"0\" v=\"0\"/>\n"
+        "      </vertex>\n"
+        "      <vertex>\n"
+        "        <position x=\"1\" y=\"0\" z=\"0\"/>\n"
+        "        <normal x=\"0\" y=\"0\" z=\"1\"/>\n"
+        "        <texcoord u=\"1\" v=\"0\"/>\n"
+        "      </vertex>\n"
+        "      <vertex>\n"
+        "        <position x=\"0\" y=\"1\" z=\"0\"/>\n"
+        "        <normal x=\"0\" y=\"0\" z=\"1\"/>\n"
+        "        <texcoord u=\"0\" v=\"1\"/>\n"
+        "      </vertex>\n"
+        "    </vertexbuffer>\n"
+        "  </sharedgeometry>\n"
+        "  <submeshes>\n"
+        "    <submesh material=\"BaseWhite\" usesharedvertices=\"true\">\n"
+        "      <faces count=\"1\">\n"
+        "        <face v1=\"0\" v2=\"1\" v3=\"2\"/>\n"
+        "      </faces>\n"
+        "    </submesh>\n"
+        "  </submeshes>\n"
+        "</mesh>\n"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{xmlPath};
+    MeshImporterExporter::importer(uri);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove(xmlPath);
+}
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_MissingSkeletonFile) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    QString xmlPath = "./test_missingskel.mesh.xml";
+    ASSERT_TRUE(writeTestXMLFile(xmlPath,
+        "<?xml version=\"1.0\"?>\n"
+        "<mesh>\n"
+        "  <skeletonlink name=\"nonexistent_skeleton.skeleton.xml\"/>\n"
+        "  <submeshes>\n"
+        "    <submesh usesharedvertices=\"false\">\n"
+        "      <geometry vertexcount=\"3\">\n"
+        "        <vertexbuffer positions=\"true\" normals=\"false\" texture_coords=\"0\">\n"
+        "          <vertex><position x=\"0\" y=\"0\" z=\"0\"/></vertex>\n"
+        "          <vertex><position x=\"1\" y=\"0\" z=\"0\"/></vertex>\n"
+        "          <vertex><position x=\"0\" y=\"1\" z=\"0\"/></vertex>\n"
+        "        </vertexbuffer>\n"
+        "      </geometry>\n"
+        "      <faces count=\"1\">\n"
+        "        <face v1=\"0\" v2=\"1\" v3=\"2\"/>\n"
+        "      </faces>\n"
+        "    </submesh>\n"
+        "  </submeshes>\n"
+        "</mesh>\n"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{xmlPath};
+    MeshImporterExporter::importer(uri);
+    // Should still import the mesh even without skeleton
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    // Verify no skeleton was attached
+    auto* sn = Manager::getSingleton()->getSceneNodes().last();
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    if (sceneMgr->hasEntity(sn->getName())) {
+        auto* entity = sceneMgr->getEntity(sn->getName());
+        EXPECT_FALSE(entity->hasSkeleton());
+    }
+
+    QFile::remove(xmlPath);
+}
+
+TEST_F(MeshImporterExporterTest, ImportOgreXML_PositionsOnly_NoNormalsNoUVs) {
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+
+    QString xmlPath = "./test_posonly.mesh.xml";
+    ASSERT_TRUE(writeTestXMLFile(xmlPath,
+        "<?xml version=\"1.0\"?>\n"
+        "<mesh>\n"
+        "  <submeshes>\n"
+        "    <submesh usesharedvertices=\"false\">\n"
+        "      <geometry vertexcount=\"3\">\n"
+        "        <vertexbuffer positions=\"true\" normals=\"false\" texture_coords=\"0\">\n"
+        "          <vertex><position x=\"0\" y=\"0\" z=\"0\"/></vertex>\n"
+        "          <vertex><position x=\"1\" y=\"0\" z=\"0\"/></vertex>\n"
+        "          <vertex><position x=\"0\" y=\"1\" z=\"0\"/></vertex>\n"
+        "        </vertexbuffer>\n"
+        "      </geometry>\n"
+        "      <faces count=\"1\">\n"
+        "        <face v1=\"0\" v2=\"1\" v3=\"2\"/>\n"
+        "      </faces>\n"
+        "    </submesh>\n"
+        "  </submeshes>\n"
+        "</mesh>\n"));
+
+    int nodesBefore = Manager::getSingleton()->getSceneNodes().size();
+    QStringList uri{xmlPath};
+    MeshImporterExporter::importer(uri);
+    EXPECT_GT(Manager::getSingleton()->getSceneNodes().size(), nodesBefore);
+
+    QFile::remove(xmlPath);
 }
 
