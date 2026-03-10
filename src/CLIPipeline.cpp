@@ -386,12 +386,16 @@ int CLIPipeline::run(int argc, char* argv[])
     // pollute the CLI pipeline output (JSON, info text, etc.)
     redirectStdout();
 
-    // Initialize Sentry using stored consent (no dialog in headless CLI mode)
-    SentryReporter::initialize();
-    SentryReporter::setTag("os", QSysInfo::prettyProductName());
-    SentryReporter::setTag("arch", QSysInfo::currentCpuArchitecture());
-    SentryReporter::setTag("qt_version", qVersion());
-    SentryReporter::setTag("launch_mode", "cli");
+    // Initialize Sentry only if user has explicitly consented via the GUI.
+    // isFirstLaunch() returns true when no Sentry/enabled setting exists yet,
+    // meaning the user has never seen the consent dialog — skip in that case.
+    if (!SentryReporter::isFirstLaunch()) {
+        SentryReporter::initialize();
+        SentryReporter::setTag("os", QSysInfo::prettyProductName());
+        SentryReporter::setTag("arch", QSysInfo::currentCpuArchitecture());
+        SentryReporter::setTag("qt_version", qVersion());
+        SentryReporter::setTag("launch_mode", "cli");
+    }
 
     auto cliTxn = SentryReporter::startTransaction("cli." + cmd, "cli.command");
     SentryReporter::addBreadcrumb("cli", QString("CLI command: %1").arg(cmd));
@@ -402,16 +406,15 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "convert") rc = cmdConvert(argc, argv);
     else if (cmd == "anim") rc = cmdAnim(argc, argv);
 
-    SentryReporter::finishTransaction(cliTxn);
-
-    if (rc >= 0) {
-        SentryReporter::shutdown();
-        _exit(rc);
+    if (rc < 0) {
+        err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
+        printUsage();
+        rc = 2;
     }
 
-    err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
-    printUsage();
-    return 2;
+    SentryReporter::finishTransaction(cliTxn);
+    SentryReporter::shutdown();
+    _exit(rc);
 }
 
 int CLIPipeline::cmdInfo(int argc, char* argv[])
@@ -441,14 +444,14 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
 
     if (!initOgreHeadless()) return 1;
 
-    SentryReporter::addBreadcrumb("cli.info", QString("Inspect: %1%2").arg(fi.fileName(), jsonOutput ? " (JSON)" : ""));
+    SentryReporter::addBreadcrumb("cli.info", QString("Inspect .%1%2").arg(fi.suffix(), jsonOutput ? " json=true" : ""));
 
     // Load the file
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
     auto& entities = Manager::getSingleton()->getEntities();
     if (entities.isEmpty()) {
-        SentryReporter::captureMessage(QString("CLI info failed to load: %1").arg(fi.fileName()), "error");
+        SentryReporter::captureMessage(QString("CLI info: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << filePath << Qt::endl;
         return 1;
     }
@@ -512,13 +515,13 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
 
     if (!initOgreHeadless()) return 1;
 
-    SentryReporter::addBreadcrumb("cli.convert", QString("Convert: %1 -> %2").arg(fi.fileName(), QFileInfo(outputPath).fileName()));
+    SentryReporter::addBreadcrumb("cli.convert", QString("Convert .%1 -> .%2").arg(fi.suffix(), QFileInfo(outputPath).suffix()));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
     auto& entities = Manager::getSingleton()->getEntities();
     if (entities.isEmpty()) {
-        SentryReporter::captureMessage(QString("CLI convert failed to load: %1").arg(fi.fileName()), "error");
+        SentryReporter::captureMessage(QString("CLI convert: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << inputPath << Qt::endl;
         return 1;
     }
@@ -533,7 +536,7 @@ int CLIPipeline::cmdConvert(int argc, char* argv[])
 
     int result = MeshImporterExporter::exporter(node, absOutput, fmt);
     if (result != 0) {
-        SentryReporter::captureMessage(QString("CLI convert export failed: %1").arg(fi.fileName()), "error");
+        SentryReporter::captureMessage(QString("CLI convert: export failed (.%1 -> .%2)").arg(fi.suffix(), QFileInfo(outputPath).suffix()), "error");
         err() << "Error: Export failed." << Qt::endl;
         return 1;
     }
@@ -630,14 +633,14 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
     QStringList fixFlags;
     if (opts.removeDegenerates) fixFlags << "remove-degenerates";
     if (opts.mergeMaterials) fixFlags << "merge-materials";
-    SentryReporter::addBreadcrumb("cli.fix", QString("Fix: %1 -> %2%3")
-        .arg(fi.fileName(), outFi.fileName(),
+    SentryReporter::addBreadcrumb("cli.fix", QString("Fix .%1 -> .%2%3")
+        .arg(fi.suffix(), outFi.suffix(),
              fixFlags.isEmpty() ? "" : " [" + fixFlags.join(", ") + "]"));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()}, opts.toAssimpFlags());
     auto& entities = Manager::getSingleton()->getEntities();
     if (entities.isEmpty()) {
-        SentryReporter::captureMessage(QString("CLI fix failed to load: %1").arg(fi.fileName()), "error");
+        SentryReporter::captureMessage(QString("CLI fix: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << inputPath << Qt::endl;
         return 1;
     }
@@ -655,7 +658,7 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 
     int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), fmt);
     if (result != 0) {
-        SentryReporter::captureMessage(QString("CLI fix export failed: %1").arg(fi.fileName()), "error");
+        SentryReporter::captureMessage(QString("CLI fix: export failed (.%1 -> .%2)").arg(fi.suffix(), outFi.suffix()), "error");
         err() << "Error: Export failed." << Qt::endl;
         return 1;
     }
@@ -764,13 +767,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     if (!initOgreHeadless()) return 1;
 
     QString animOp = listMode ? "list" : (renameMode ? "rename" : "merge");
-    SentryReporter::addBreadcrumb("cli.anim", QString("Anim %1: %2").arg(animOp, fi.fileName()));
+    SentryReporter::addBreadcrumb("cli.anim", QString("Anim %1 .%2%3")
+        .arg(animOp, fi.suffix(), mergeMode ? QString(" files=%1").arg(mergeFiles.size()) : ""));
 
     MeshImporterExporter::importer({fi.absoluteFilePath()});
 
     auto& entities = Manager::getSingleton()->getEntities();
     if (entities.isEmpty()) {
-        SentryReporter::captureMessage(QString("CLI anim failed to load: %1").arg(fi.fileName()), "error");
+        SentryReporter::captureMessage(QString("CLI anim: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << filePath << Qt::endl;
         return 1;
     }
@@ -825,6 +829,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             MeshImporterExporter::importer({f});
             int countAfter = Manager::getSingleton()->getEntities().size();
             if (countAfter <= countBefore) {
+                SentryReporter::captureMessage(QString("CLI anim: merge input import failed (.%1)").arg(QFileInfo(f).suffix()), "error");
                 err() << "Error: Failed to load animation file: " << f << Qt::endl;
                 return 1;
             }
@@ -839,7 +844,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         QString mergeErr;
         Ogre::Entity* merged = AnimationMerger::mergeAnimations(allEntities.first(), allEntities, mergeErr);
         if (!merged) {
-            SentryReporter::captureMessage(QString("CLI anim merge failed: %1").arg(mergeErr), "error");
+            SentryReporter::captureMessage("CLI anim: merge failed", "error");
             err() << "Error: Merge failed: " << mergeErr << Qt::endl;
             return 1;
         }
@@ -848,6 +853,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         QFileInfo outFi(outputPath);
         int result = MeshImporterExporter::exporter(mergeNode, outFi.absoluteFilePath(), formatForExtension(outputPath));
         if (result != 0) {
+            SentryReporter::captureMessage(QString("CLI anim: merge export failed (.%1)").arg(outFi.suffix()), "error");
             err() << "Error: Export failed." << Qt::endl;
             return 1;
         }
@@ -879,6 +885,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), fmt);
     if (result != 0) {
+        SentryReporter::captureMessage(QString("CLI anim: rename export failed (.%1)").arg(outFi.suffix()), "error");
         err() << "Error: Export failed." << Qt::endl;
         return 1;
     }
