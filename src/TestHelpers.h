@@ -8,6 +8,7 @@
 #include <OgreStringConverter.h>
 #include <QGuiApplication>
 #include <QWidget>
+#include <QFile>
 #include "Manager.h"
 
 /**
@@ -411,6 +412,20 @@ static inline Ogre::Entity* createAnimatedTestEntity(const std::string& name)
     node->attachObject(entity);
 
     return entity;
+}
+
+/**
+ * Writes a test XML file with the given content.
+ * Returns true if the file was written successfully.
+ */
+static inline bool writeTestXMLFile(const QString& path, const QByteArray& content)
+{
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    f.write(content);
+    f.close();
+    return true;
 }
 
 #endif // TEST_HELPERS_H
