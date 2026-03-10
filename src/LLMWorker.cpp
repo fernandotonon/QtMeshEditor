@@ -41,6 +41,7 @@ bool LLMWorker::loadModel(const QString &modelPath)
         initBackend();
     }
 
+    // LCOV_EXCL_START — requires a real GGUF model file to exercise success paths
     // Stop any ongoing generation first
     if (m_isGenerating.load()) {
         m_stopRequested.store(true);
@@ -147,6 +148,7 @@ bool LLMWorker::loadModel(const QString &modelPath)
     }
 
     return success;
+    // LCOV_EXCL_STOP
 #else
     Q_UNUSED(modelPath);
     emit modelLoadError("Local LLM support is not enabled. Rebuild with ENABLE_LOCAL_LLM=ON");
@@ -157,6 +159,7 @@ bool LLMWorker::loadModel(const QString &modelPath)
 void LLMWorker::unloadModel()
 {
 #ifdef ENABLE_LOCAL_LLM
+    // LCOV_EXCL_START — requires a previously loaded model
     // Stop any ongoing generation first
     if (m_isGenerating.load()) {
         m_stopRequested.store(true);
@@ -178,9 +181,11 @@ void LLMWorker::unloadModel()
     if (wasLoaded) {
         emit modelUnloaded();
     }
+    // LCOV_EXCL_STOP
 #endif
 }
 
+// LCOV_EXCL_START — requires a previously loaded model
 void LLMWorker::unloadModelInternal()
 {
 #ifdef ENABLE_LOCAL_LLM
@@ -199,6 +204,7 @@ void LLMWorker::unloadModelInternal()
     m_isModelLoaded.store(false);
 #endif
 }
+// LCOV_EXCL_STOP
 
 bool LLMWorker::isModelLoaded() const
 {
@@ -233,6 +239,7 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
         return;
     }
 
+    // LCOV_EXCL_START — requires a loaded LLM model for generation
     m_stopRequested.store(false);
     m_isGenerating.store(true);
     emit generationStarted();
@@ -368,6 +375,7 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
 
     qDebug() << "LLMWorker: Generation completed, tokens:" << generatedTokens.size();
     emit generationCompleted(generatedText.trimmed());
+    // LCOV_EXCL_STOP
 #else
     Q_UNUSED(systemPrompt);
     Q_UNUSED(userPrompt);
@@ -375,6 +383,7 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
 #endif
 }
 
+// LCOV_EXCL_START — requires a loaded LLM model
 #ifdef ENABLE_LOCAL_LLM
 bool LLMWorker::initializeContext()
 {
@@ -476,3 +485,4 @@ QString LLMWorker::detokenize(const std::vector<llama_token> &tokens)
     return result;
 }
 #endif
+// LCOV_EXCL_STOP

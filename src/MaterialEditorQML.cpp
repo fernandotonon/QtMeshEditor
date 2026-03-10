@@ -2548,6 +2548,7 @@ void MaterialEditorQML::generateMaterialFromPrompt(const QString &prompt)
         return;
     }
 
+    // LCOV_EXCL_START — requires a loaded LLM model
     // Use local LLM
     m_llmGenerationProgress = 0.0f;
     emit llmGenerationProgressChanged();
@@ -2555,8 +2556,10 @@ void MaterialEditorQML::generateMaterialFromPrompt(const QString &prompt)
     // Get available textures to provide context to the LLM
     QStringList availableTextures = getAvailableTextures();
     llmManager->generateMaterial(prompt, m_materialText, availableTextures);
+    // LCOV_EXCL_STOP
 }
 
+// LCOV_EXCL_START — requires a running LLM generation or network AI service
 void MaterialEditorQML::stopAIGeneration()
 {
     LLMManager::instance()->stopGeneration();
@@ -2683,6 +2686,7 @@ void MaterialEditorQML::onLLMModelLoadedChanged()
     emit llmModelLoadedChanged();
     emit llmCurrentModelChanged();
 }
+// LCOV_EXCL_STOP
 
 // Undo/Redo Implementation
 void MaterialEditorQML::addToUndoStack(const QString &text)
