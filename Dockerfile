@@ -39,6 +39,8 @@ LABEL org.opencontainers.image.version="${VERSION}"
 ENV LANG=C.UTF-8
 ENV LIBGL_ALWAYS_SOFTWARE=1
 ENV MESA_LOG_LEVEL=0
+# Suppress first-run telemetry notice (QSettings is ephemeral in containers)
+ENV QTMESH_NO_TELEMETRY_NOTICE=1
 
 WORKDIR /workspace
 USER qtmesh

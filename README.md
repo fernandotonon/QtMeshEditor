@@ -70,7 +70,7 @@ qtmesh anim model.fbx --rename "Take 001" "Idle" -o renamed.fbx
 qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
 ```
 
-Use `--verbose` for engine debug output, `--help` for full usage.
+Use `--verbose` for engine debug output, `--no-telemetry` to opt out of anonymous usage data, `--help` for full usage.
 
 ### :package: Format Support
 
