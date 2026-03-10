@@ -389,13 +389,16 @@ int CLIPipeline::run(int argc, char* argv[])
 
     // Telemetry: --no-telemetry permanently opts out.
     // On first run (no stored preference), show a one-time notice and enable.
+    // In ephemeral environments (Docker), QTMESH_NO_TELEMETRY_NOTICE=1
+    // suppresses the notice to avoid printing it on every container run.
     if (s_noTelemetry) {
         SentryReporter::setEnabled(false);
         err() << "Telemetry disabled. This preference is stored permanently." << Qt::endl;
     } else if (SentryReporter::isFirstLaunch()) {
         SentryReporter::setEnabled(true);
-        err() << "Note: Anonymous usage data is collected to improve qtmesh. "
-                 "Use --no-telemetry to disable." << Qt::endl;
+        if (!qEnvironmentVariableIsSet("QTMESH_NO_TELEMETRY_NOTICE"))
+            err() << "Note: Anonymous usage data is collected to improve qtmesh. "
+                     "Use --no-telemetry to disable." << Qt::endl;
     }
 
     if (SentryReporter::isEnabled()) {
