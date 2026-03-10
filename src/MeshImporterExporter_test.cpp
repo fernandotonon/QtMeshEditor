@@ -1199,12 +1199,9 @@ TEST_F(MeshImporterExporterTest, Importer_ConfiguresCameraAfterImport) {
         GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
     }
 
-    // Record camera position before import
     auto cameras = Manager::getSingleton()->getSceneMgr()->getCameras();
     if (cameras.empty())
         GTEST_SKIP() << "No cameras available";
-
-    auto camBefore = cameras.begin()->second->getParentSceneNode()->getPosition();
 
     QStringList uri{"./media/models/Rumba Dancing.fbx"};
     MeshImporterExporter::importer(uri);
@@ -1228,10 +1225,10 @@ TEST_F(MeshImporterExporterTest, Exporter_UnknownFormat_FallsBackToSuffix) {
         GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
     }
 
-    auto mesh = createInMemoryTriangleMesh("UnknownFormatTriangle");
+    auto mesh = createInMemoryTriangleMesh("UnknownFormatMesh");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = Manager::getSingleton()->addSceneNode("UnknownFormatNode");
-    auto* entity = sceneMgr->createEntity("UnknownFormatEntity", mesh);
+    auto* node = Manager::getSingleton()->addSceneNode("UnknownFormat");
+    auto* entity = sceneMgr->createEntity(node->getName(), mesh);
     node->attachObject(entity);
 
     // Use a format string not in assimpFormatIds — should fall back to file suffix
@@ -1250,9 +1247,10 @@ static void testVersionedMeshExport(
     Ogre::SceneManager* sceneMgr, const std::string& suffix,
     const QString& format, const QString& basePath)
 {
-    auto mesh = createInMemoryTriangleMesh("VersionedMesh_" + suffix);
-    auto* node = Manager::getSingleton()->addSceneNode(("VersionedNode_" + suffix).c_str());
-    auto* entity = sceneMgr->createEntity("VersionedEntity_" + suffix, mesh);
+    std::string name = "Versioned_" + suffix;
+    auto mesh = createInMemoryTriangleMesh(name + "_mesh");
+    auto* node = Manager::getSingleton()->addSceneNode(name.c_str());
+    auto* entity = sceneMgr->createEntity(node->getName(), mesh);
     node->attachObject(entity);
 
     QString outPath = basePath + QString::fromStdString(suffix) + ".mesh";
@@ -1305,8 +1303,8 @@ TEST_F(MeshImporterExporterTest, Exporter_OgreMeshVersioned_WithSkeleton) {
 
     auto mesh = createInMemorySkeletonMesh("VersionedSkelMesh");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = Manager::getSingleton()->addSceneNode("VersionedSkelNode");
-    auto* entity = sceneMgr->createEntity("VersionedSkelEntity", mesh);
+    auto* node = Manager::getSingleton()->addSceneNode("VersionedSkel");
+    auto* entity = sceneMgr->createEntity(node->getName(), mesh);
     node->attachObject(entity);
 
     ASSERT_TRUE(entity->hasSkeleton());

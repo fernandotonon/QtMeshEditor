@@ -423,7 +423,8 @@ static inline bool writeTestXMLFile(const QString& path, const QByteArray& conte
     QFile f(path);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return false;
-    f.write(content);
+    if (f.write(content) != content.size())
+        return false;
     f.close();
     return true;
 }
