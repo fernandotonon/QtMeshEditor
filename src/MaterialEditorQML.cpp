@@ -513,16 +513,19 @@ void MaterialEditorQML::setSelectedTechniqueIndex(int index)
         updatePassList();
         emit selectedTechniqueIndexChanged();
 
-        // Force pass property refresh since the technique changed —
-        // reset pass index to -1 first so setSelectedPassIndex(0)
-        // always triggers updatePassProperties().
-        m_selectedPassIndex = -1;
+        // Technique changed: always refresh pass selection and properties,
+        // even if the target pass index equals the current value.
+        int targetPass = m_passList.isEmpty() ? -1 : 0;
+        m_selectedPassIndex = targetPass;
+        updateTextureUnitList();
+        updatePassProperties();
+        emit selectedPassIndexChanged();
 
-        // Auto-select first pass if available
-        if (!m_passList.isEmpty()) {
-            setSelectedPassIndex(0);
+        // Auto-select first texture unit if available
+        if (!m_textureUnitList.isEmpty()) {
+            setSelectedTextureUnitIndex(0);
         } else {
-            setSelectedPassIndex(-1);
+            setSelectedTextureUnitIndex(-1);
         }
     }
 }

@@ -847,6 +847,7 @@ jobs:
                 echo "=== UnitTests summary: $PASSED_SUITES/$TOTAL_SUITES suites passed, $FAILED_SUITES failed, $CRASHED_SUITES crashed ==="
             else
                 echo "ERROR: UnitTests not found!"
+                FAILED_SUITES=$((FAILED_SUITES + 1))
             fi
 
             # === Run other test executables ===

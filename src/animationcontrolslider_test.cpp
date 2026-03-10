@@ -157,7 +157,8 @@ TEST_F(AnimationControlSliderTest, MouseClickAtBeginning) {
 
     slider->resize(400, 30);
     slider->show();
-    if (app) app->processEvents();
+    if (!QTest::qWaitForWindowExposed(slider, 1000))
+        GTEST_SKIP() << "Window not exposed (headless environment)";
 
     // Click near the beginning (left side)
     QPoint leftSide(5, slider->height() / 2);

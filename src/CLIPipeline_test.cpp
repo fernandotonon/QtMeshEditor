@@ -482,26 +482,31 @@ TEST_F(CLIPipelineInitTest, InitOgreHeadless_CalledTwice)
 
 class CLIPipelineCmdTest : public ::testing::Test {
 protected:
-    void SetUp() override {
-        if (!tryInitOgre() || !canLoadMeshFiles())
-            GTEST_SKIP() << "Ogre not available";
+    // One-time warmup: the first FBX import in a process sometimes fails
+    // due to lazy initialization in the resource/plugin pipeline.
+    static void SetUpTestSuite() {
+        if (!tryInitOgre() || !canLoadMeshFiles()) return;
         createStandardOgreMaterials();
 
-        // Warm up the Assimp import pipeline with a test FBX file.
-        // The first FBX import in a process sometimes fails due to lazy
-        // initialization in the resource/plugin pipeline; this ensures
-        // any one-time setup completes before the actual tests run.
         QString warmupFile = testDataDir() + "/Twist Dance.fbx";
         if (QFile::exists(warmupFile)) {
             CLIPipeline::initOgreHeadless();
             MeshImporterExporter::importer({warmupFile});
             // Clean up so tests start fresh
-            auto nodes = Manager::getSingleton()->getSceneNodes();
-            for (auto* node : nodes) {
-                Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
-                Manager::getSingleton()->destroySceneNode(node);
+            if (Manager::getSingletonPtr()) {
+                auto nodes = Manager::getSingleton()->getSceneNodes();
+                for (auto* node : nodes) {
+                    Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+                    Manager::getSingleton()->destroySceneNode(node);
+                }
             }
         }
+    }
+
+    void SetUp() override {
+        if (!tryInitOgre() || !canLoadMeshFiles())
+            GTEST_SKIP() << "Ogre not available";
+        createStandardOgreMaterials();
     }
     void TearDown() override {
         if (!Manager::getSingletonPtr()) return;
@@ -937,22 +942,22 @@ TEST_F(CLIPipelineCmdTest, CmdAnimMerge_Valid)
 
 TEST_F(CLIPipelineCmdTest, CmdAnimMerge_MultipleFiles)
 {
-    // Use the same animation file twice to test multi-file merge path.
-    // Using distinct Mixamo FBX files causes internal Ogre skeleton name
-    // collisions when loading 3+ files in the same process.
+    // Merge two distinct animation files into the base to test multi-source path.
     QString baseFile = testDataDir() + "/Twist Dance.fbx";
-    QString animFile = testDataDir() + "/Hip Hop Dancing.fbx";
-    if (!QFile::exists(baseFile) || !QFile::exists(animFile))
+    QString animFile1 = testDataDir() + "/Hip Hop Dancing.fbx";
+    QString animFile2 = testDataDir() + "/Rumba Dancing.fbx";
+    if (!QFile::exists(baseFile) || !QFile::exists(animFile1) || !QFile::exists(animFile2))
         GTEST_SKIP() << "Test data not found";
     QByteArray baseBa = baseFile.toUtf8();
-    QByteArray animBa = animFile.toUtf8();
+    QByteArray anim1Ba = animFile1.toUtf8();
+    QByteArray anim2Ba = animFile2.toUtf8();
 
     QString outFile = QDir::tempPath() + "/cli_test_merge_multi.mesh";
     QByteArray outBa = outFile.toUtf8();
     QFile::remove(outFile);
 
     TestArgv args({"qtmesh", "anim", baseBa.constData(),
-                   "--merge", animBa.constData(), animBa.constData(),
+                   "--merge", anim1Ba.constData(), anim2Ba.constData(),
                    "-o", outBa.constData()});
     EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
     EXPECT_TRUE(QFile::exists(outFile));
