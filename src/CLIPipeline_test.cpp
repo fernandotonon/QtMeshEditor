@@ -6,6 +6,8 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSettings>
+#include <QTemporaryDir>
+#include <QProcessEnvironment>
 #include "CLIPipeline.h"
 #include "MeshImporterExporter.h"
 #include "SentryReporter.h"
@@ -1637,7 +1639,15 @@ TEST(CLIPipelineCLI, NoTelemetryWithHelp)
     QString binary = findAppBinary();
     if (binary.isEmpty()) GTEST_SKIP() << "Binary not found";
 
+    // Use isolated HOME so the child process doesn't mutate the real user's QSettings
+    QTemporaryDir tmpHome;
+    ASSERT_TRUE(tmpHome.isValid());
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert("HOME", tmpHome.path());
+    env.insert("XDG_CONFIG_HOME", tmpHome.path() + "/.config");
+
     QProcess proc;
+    proc.setProcessEnvironment(env);
     proc.start(binary, {"--cli", "--no-telemetry", "--help"});
     ASSERT_TRUE(proc.waitForFinished(30000));
     EXPECT_EQ(proc.exitCode(), 0);
@@ -1651,11 +1661,19 @@ TEST(CLIPipelineCLI, NoTelemetryPrintsConfirmation)
     QString binary = findAppBinary();
     if (binary.isEmpty()) GTEST_SKIP() << "Binary not found";
 
-    QProcess proc;
-    proc.start(binary, {"--cli", "--no-telemetry", "--help"});
-    ASSERT_TRUE(proc.waitForFinished(30000));
-    EXPECT_EQ(proc.exitCode(), 0);
+    // Use isolated HOME so the child process doesn't mutate the real user's QSettings.
+    // Use a real subcommand (not --help/--version) because those exit before telemetry runs.
+    QTemporaryDir tmpHome;
+    ASSERT_TRUE(tmpHome.isValid());
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    env.insert("HOME", tmpHome.path());
+    env.insert("XDG_CONFIG_HOME", tmpHome.path() + "/.config");
 
+    QProcess proc;
+    proc.setProcessEnvironment(env);
+    proc.start(binary, {"--cli", "--no-telemetry", "info", "nonexistent.fbx"});
+    ASSERT_TRUE(proc.waitForFinished(30000));
+    // Exit code will be non-zero (file not found), but we only care about the stderr message
     QString errOut = QString::fromUtf8(proc.readAllStandardError());
     EXPECT_TRUE(errOut.contains("Telemetry disabled"))
         << "stderr should confirm opt-out. Got: " << errOut.toStdString();
@@ -1666,6 +1684,13 @@ TEST(CLIPipelineCLI, NoTelemetryPrintsConfirmation)
 class CLIPipelineTelemetryTest : public ::testing::Test {
 protected:
     void SetUp() override {
+        // Match org/app name used by CLIPipeline::run() so QSettings
+        // accesses the same store as the real CLI binary.
+        m_prevOrg = QCoreApplication::organizationName();
+        m_prevApp = QCoreApplication::applicationName();
+        QCoreApplication::setOrganizationName("QtMeshEditor");
+        QCoreApplication::setApplicationName("QtMeshEditor");
+
         QSettings settings;
         m_hadSetting = settings.contains("Sentry/enabled");
         if (m_hadSetting)
@@ -1678,10 +1703,16 @@ protected:
             settings.setValue("Sentry/enabled", m_previousValue);
         else
             settings.remove("Sentry/enabled");
+
+        // Restore original org/app name
+        QCoreApplication::setOrganizationName(m_prevOrg);
+        QCoreApplication::setApplicationName(m_prevApp);
     }
 private:
     bool m_hadSetting = false;
     bool m_previousValue = true;
+    QString m_prevOrg;
+    QString m_prevApp;
 };
 
 TEST_F(CLIPipelineTelemetryTest, NoTelemetryPersistsOptOut)
