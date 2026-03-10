@@ -35,6 +35,11 @@ LABEL org.opencontainers.image.source="https://github.com/fernandotonon/QtMeshEd
 LABEL org.opencontainers.image.description="qtmesh CLI - 3D mesh conversion, optimization, and animation tools"
 LABEL org.opencontainers.image.version="${VERSION}"
 
+# Suppress Qt locale warning and Mesa EGL/DRI3 warnings
+ENV LANG=C.UTF-8
+ENV LIBGL_ALWAYS_SOFTWARE=1
+ENV MESA_LOG_LEVEL=0
+
 WORKDIR /workspace
 USER qtmesh
 ENTRYPOINT ["docker-entrypoint.sh"]
