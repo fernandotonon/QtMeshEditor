@@ -512,7 +512,12 @@ void MaterialEditorQML::setSelectedTechniqueIndex(int index)
         m_selectedTechniqueIndex = index;
         updatePassList();
         emit selectedTechniqueIndexChanged();
-        
+
+        // Force pass property refresh since the technique changed —
+        // reset pass index to -1 first so setSelectedPassIndex(0)
+        // always triggers updatePassProperties().
+        m_selectedPassIndex = -1;
+
         // Auto-select first pass if available
         if (!m_passList.isEmpty()) {
             setSelectedPassIndex(0);

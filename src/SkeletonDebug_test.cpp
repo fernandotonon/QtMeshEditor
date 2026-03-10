@@ -209,8 +209,8 @@ TEST_F(SkeletonDebugTests, BoneMaterialCreationVerification)
     auto& matMgr = Ogre::MaterialManager::getSingleton();
 
     // The bone material should exist (created in constructor via createBoneMaterial)
-    Ogre::MaterialPtr boneMat = matMgr.getByName("Skeleton/BoneMaterial");
-    ASSERT_TRUE(boneMat) << "Expected Skeleton/BoneMaterial to exist";
+    Ogre::MaterialPtr boneMat = matMgr.getByName("SkeletonDebug/BoneMat");
+    ASSERT_TRUE(boneMat) << "Expected SkeletonDebug/BoneMat to exist";
     {
         EXPECT_TRUE(boneMat->isLoaded() || boneMat->isPrepared());
         // Verify the material has at least one technique and pass
@@ -227,13 +227,13 @@ TEST_F(SkeletonDebugTests, BoneMaterialCreationVerification)
     }
 
     // The axis material should also exist
-    Ogre::MaterialPtr axisMat = matMgr.getByName("Skeleton/AxesMaterial");
-    ASSERT_TRUE(axisMat) << "Expected Skeleton/AxesMaterial to exist";
+    Ogre::MaterialPtr axisMat = matMgr.getByName("SkeletonDebug/AxesMat");
+    ASSERT_TRUE(axisMat) << "Expected SkeletonDebug/AxesMat to exist";
     EXPECT_GT(axisMat->getNumTechniques(), 0u);
 
     // The selected bone material should exist
-    Ogre::MaterialPtr selectedMat = matMgr.getByName("Skeleton/BoneMaterialSelected");
-    ASSERT_TRUE(selectedMat) << "Expected Skeleton/BoneMaterialSelected to exist";
+    Ogre::MaterialPtr selectedMat = matMgr.getByName("SkeletonDebug/BoneMatSelected");
+    ASSERT_TRUE(selectedMat) << "Expected SkeletonDebug/BoneMatSelected to exist";
     EXPECT_GT(selectedMat->getNumTechniques(), 0u);
 }
 

@@ -136,7 +136,8 @@ TEST_F(AnimationControlSliderTest, MouseClickAtTickPosition) {
 
     slider->resize(200, 30);
     slider->show();
-    if (app) app->processEvents();
+    if (!QTest::qWaitForWindowExposed(slider, 1000))
+        GTEST_SKIP() << "Window not exposed (headless environment)";
 
     // Simulate a mouse click near the middle of the slider (position for tick 50)
     // QSlider maps clicks to values; the click should change the slider value
@@ -173,7 +174,8 @@ TEST_F(AnimationControlSliderTest, MouseClickAtEnd) {
 
     slider->resize(400, 30);
     slider->show();
-    if (app) app->processEvents();
+    if (!QTest::qWaitForWindowExposed(slider, 1000))
+        GTEST_SKIP() << "Window not exposed (headless environment)";
 
     // Click near the end (right side)
     QPoint rightSide(slider->width() - 5, slider->height() / 2);

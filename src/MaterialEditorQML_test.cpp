@@ -1979,12 +1979,12 @@ TEST_F(MaterialEditorQMLWithOgreTest, UndoRedo_OgrePropertyChangesRevertState) {
     EXPECT_NE(initialText, afterLightingText);
     EXPECT_TRUE(editor->canUndo());
 
-    // Change shininess -- another undo entry
-    editor->setShininess(99.0f);
-    QString afterShininessText = editor->materialText();
-    EXPECT_NE(afterLightingText, afterShininessText);
+    // Change ambient color -- another undo entry (ambient appears in serialized text)
+    editor->setAmbientColor(QColor(255, 0, 0));
+    QString afterAmbientText = editor->materialText();
+    EXPECT_NE(afterLightingText, afterAmbientText);
 
-    // Undo shininess change
+    // Undo ambient change
     editor->undo();
     EXPECT_EQ(editor->materialText(), afterLightingText);
 
@@ -1997,9 +1997,9 @@ TEST_F(MaterialEditorQMLWithOgreTest, UndoRedo_OgrePropertyChangesRevertState) {
     editor->redo();
     EXPECT_EQ(editor->materialText(), afterLightingText);
 
-    // Redo shininess change
+    // Redo ambient change
     editor->redo();
-    EXPECT_EQ(editor->materialText(), afterShininessText);
+    EXPECT_EQ(editor->materialText(), afterAmbientText);
 }
 
 // ===========================================================================

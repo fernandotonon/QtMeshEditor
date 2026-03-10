@@ -816,6 +816,7 @@ jobs:
             TOTAL_SUITES=0
             PASSED_SUITES=0
             CRASHED_SUITES=0
+            FAILED_SUITES=0
 
             # === Run UnitTests: each test suite in its own process ===
             # This prevents a crash in one suite (e.g. Ogre GL init segfault)
@@ -837,32 +838,37 @@ jobs:
                             echo "WARNING: Suite $suite CRASHED (signal $(($exit_code - 128))). Coverage data saved by signal handler."
                             CRASHED_SUITES=$((CRASHED_SUITES + 1))
                         else
-                            echo "WARNING: Suite $suite failed (exit code $exit_code)"
+                            echo "ERROR: Suite $suite failed (exit code $exit_code)"
+                            FAILED_SUITES=$((FAILED_SUITES + 1))
                         fi
                     fi
                 done
 
-                echo "=== UnitTests summary: $PASSED_SUITES/$TOTAL_SUITES suites passed, $CRASHED_SUITES crashed ==="
+                echo "=== UnitTests summary: $PASSED_SUITES/$TOTAL_SUITES suites passed, $FAILED_SUITES failed, $CRASHED_SUITES crashed ==="
             else
                 echo "ERROR: UnitTests not found!"
             fi
 
             # === Run other test executables ===
             echo "Running MaterialEditorQML Unit Tests..."
-            run_test "MaterialEditorQML_test" "test-results-materialeditor.xml" || true
+            run_test "MaterialEditorQML_test" "test-results-materialeditor.xml" || FAILED_SUITES=$((FAILED_SUITES + 1))
 
             echo "Running MaterialEditorQML QML Integration Tests..."
-            run_test "MaterialEditorQML_qml_test" "test-results-qml.xml" || true
+            run_test "MaterialEditorQML_qml_test" "test-results-qml.xml" || FAILED_SUITES=$((FAILED_SUITES + 1))
 
             echo "Running MaterialEditorQML Performance Tests..."
-            run_test "MaterialEditorQML_perf_test" "test-results-perf.xml" || true
+            run_test "MaterialEditorQML_perf_test" "test-results-perf.xml" || FAILED_SUITES=$((FAILED_SUITES + 1))
 
             echo "Running QML Component Tests..."
-            run_test "MaterialEditorQML_qml_test_runner" "test-results-qml-component.xml" || true
+            run_test "MaterialEditorQML_qml_test_runner" "test-results-qml-component.xml" || FAILED_SUITES=$((FAILED_SUITES + 1))
 
             if [ "$CRASHED_SUITES" -gt 0 ]; then
                 echo "WARNING: $CRASHED_SUITES test suite(s) crashed, but coverage data was preserved"
             fi
+
+            # Save failure count for post-coverage check
+            echo "FAILED_SUITES=$FAILED_SUITES" >> $GITHUB_ENV
+            echo "CRASHED_SUITES=$CRASHED_SUITES" >> $GITHUB_ENV
 
     # Note: MCP integration tests are skipped because Ogre's GL3Plus render system
     # crashes (SIGABRT) during texture manager registration with Mesa EGL software
@@ -991,9 +997,22 @@ jobs:
         name: coverage-reports
         path: |
           coverage.xml
-            
+
+    - name: Fail if tests failed
+      if: always()
+      run: |
+        if [ "${FAILED_SUITES:-0}" -gt 0 ]; then
+          echo "ERROR: $FAILED_SUITES test suite(s) failed"
+          exit 1
+        fi
+        if [ "${CRASHED_SUITES:-0}" -gt 0 ]; then
+          echo "ERROR: $CRASHED_SUITES test suite(s) crashed"
+          exit 1
+        fi
+        echo "All test suites passed"
+
 ####################################################################
-# MacOS Deploy 
+# MacOS Deploy
 ####################################################################
 
  build-n-cache-assimp-macos:

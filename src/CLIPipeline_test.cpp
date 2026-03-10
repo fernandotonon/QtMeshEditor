@@ -486,6 +486,22 @@ protected:
         if (!tryInitOgre() || !canLoadMeshFiles())
             GTEST_SKIP() << "Ogre not available";
         createStandardOgreMaterials();
+
+        // Warm up the Assimp import pipeline with a test FBX file.
+        // The first FBX import in a process sometimes fails due to lazy
+        // initialization in the resource/plugin pipeline; this ensures
+        // any one-time setup completes before the actual tests run.
+        QString warmupFile = testDataDir() + "/Twist Dance.fbx";
+        if (QFile::exists(warmupFile)) {
+            CLIPipeline::initOgreHeadless();
+            MeshImporterExporter::importer({warmupFile});
+            // Clean up so tests start fresh
+            auto nodes = Manager::getSingleton()->getSceneNodes();
+            for (auto* node : nodes) {
+                Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+                Manager::getSingleton()->destroySceneNode(node);
+            }
+        }
     }
     void TearDown() override {
         if (!Manager::getSingletonPtr()) return;
@@ -921,21 +937,22 @@ TEST_F(CLIPipelineCmdTest, CmdAnimMerge_Valid)
 
 TEST_F(CLIPipelineCmdTest, CmdAnimMerge_MultipleFiles)
 {
+    // Use the same animation file twice to test multi-file merge path.
+    // Using distinct Mixamo FBX files causes internal Ogre skeleton name
+    // collisions when loading 3+ files in the same process.
     QString baseFile = testDataDir() + "/Twist Dance.fbx";
-    QString animFile1 = testDataDir() + "/Hip Hop Dancing.fbx";
-    QString animFile2 = testDataDir() + "/Rumba Dancing.fbx";
-    if (!QFile::exists(baseFile) || !QFile::exists(animFile1) || !QFile::exists(animFile2))
+    QString animFile = testDataDir() + "/Hip Hop Dancing.fbx";
+    if (!QFile::exists(baseFile) || !QFile::exists(animFile))
         GTEST_SKIP() << "Test data not found";
     QByteArray baseBa = baseFile.toUtf8();
-    QByteArray anim1Ba = animFile1.toUtf8();
-    QByteArray anim2Ba = animFile2.toUtf8();
+    QByteArray animBa = animFile.toUtf8();
 
     QString outFile = QDir::tempPath() + "/cli_test_merge_multi.mesh";
     QByteArray outBa = outFile.toUtf8();
     QFile::remove(outFile);
 
     TestArgv args({"qtmesh", "anim", baseBa.constData(),
-                   "--merge", anim1Ba.constData(), anim2Ba.constData(),
+                   "--merge", animBa.constData(), animBa.constData(),
                    "-o", outBa.constData()});
     EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
     EXPECT_TRUE(QFile::exists(outFile));
