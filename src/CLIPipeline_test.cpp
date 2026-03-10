@@ -5,8 +5,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QSettings>
 #include "CLIPipeline.h"
 #include "MeshImporterExporter.h"
+#include "SentryReporter.h"
 #include "TestHelpers.h"
 
 namespace {
@@ -1590,4 +1592,130 @@ TEST(CLIPipelineCLI, VerboseWithHelp)
     proc.start(binary, {"--cli", "--verbose", "--help"});
     ASSERT_TRUE(proc.waitForFinished(30000));
     EXPECT_EQ(proc.exitCode(), 0);
+}
+
+// --- Telemetry / --no-telemetry tests ---
+
+TEST(CLIPipelineRun, HelpTextContainsNoTelemetry)
+{
+    // printUsage should mention --no-telemetry
+    // We test this indirectly via the --help process test
+    char arg0[] = "qtmesh";
+    char arg1[] = "--help";
+    char* argv[] = {arg0, arg1};
+    // Just verify it doesn't crash; the process-based test checks content
+    EXPECT_EQ(CLIPipeline::run(2, argv), 0);
+}
+
+TEST(CLIPipelineRun, NoTelemetryWithHelp)
+{
+    // --no-telemetry should be skipped when looking for the subcommand
+    char arg0[] = "qtmesh";
+    char arg1[] = "--no-telemetry";
+    char arg2[] = "--help";
+    char* argv[] = {arg0, arg1, arg2};
+    EXPECT_EQ(CLIPipeline::run(3, argv), 0);
+}
+
+TEST(CLIPipelineCLI, HelpOutputContainsNoTelemetry)
+{
+    QString binary = findAppBinary();
+    if (binary.isEmpty()) GTEST_SKIP() << "Binary not found";
+
+    QProcess proc;
+    proc.start(binary, {"--cli", "--help"});
+    ASSERT_TRUE(proc.waitForFinished(30000));
+    EXPECT_EQ(proc.exitCode(), 0);
+
+    QString out = QString::fromUtf8(proc.readAllStandardOutput());
+    EXPECT_TRUE(out.contains("--no-telemetry"))
+        << "Help text should mention --no-telemetry. Got: " << out.toStdString();
+}
+
+TEST(CLIPipelineCLI, NoTelemetryWithHelp)
+{
+    QString binary = findAppBinary();
+    if (binary.isEmpty()) GTEST_SKIP() << "Binary not found";
+
+    QProcess proc;
+    proc.start(binary, {"--cli", "--no-telemetry", "--help"});
+    ASSERT_TRUE(proc.waitForFinished(30000));
+    EXPECT_EQ(proc.exitCode(), 0);
+
+    QString out = QString::fromUtf8(proc.readAllStandardOutput());
+    EXPECT_TRUE(out.contains("Usage:") || out.contains("Commands:"));
+}
+
+TEST(CLIPipelineCLI, NoTelemetryPrintsConfirmation)
+{
+    QString binary = findAppBinary();
+    if (binary.isEmpty()) GTEST_SKIP() << "Binary not found";
+
+    QProcess proc;
+    proc.start(binary, {"--cli", "--no-telemetry", "--help"});
+    ASSERT_TRUE(proc.waitForFinished(30000));
+    EXPECT_EQ(proc.exitCode(), 0);
+
+    QString errOut = QString::fromUtf8(proc.readAllStandardError());
+    EXPECT_TRUE(errOut.contains("Telemetry disabled"))
+        << "stderr should confirm opt-out. Got: " << errOut.toStdString();
+}
+
+// --- Telemetry consent logic unit tests ---
+
+class CLIPipelineTelemetryTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        QSettings settings;
+        m_hadSetting = settings.contains("Sentry/enabled");
+        if (m_hadSetting)
+            m_previousValue = settings.value("Sentry/enabled").toBool();
+        settings.remove("Sentry/enabled");
+    }
+    void TearDown() override {
+        QSettings settings;
+        if (m_hadSetting)
+            settings.setValue("Sentry/enabled", m_previousValue);
+        else
+            settings.remove("Sentry/enabled");
+    }
+private:
+    bool m_hadSetting = false;
+    bool m_previousValue = true;
+};
+
+TEST_F(CLIPipelineTelemetryTest, NoTelemetryPersistsOptOut)
+{
+    // Simulate --no-telemetry by directly calling setEnabled(false)
+    SentryReporter::setEnabled(false);
+    EXPECT_FALSE(SentryReporter::isEnabled());
+    EXPECT_FALSE(SentryReporter::isFirstLaunch());
+}
+
+TEST_F(CLIPipelineTelemetryTest, FirstLaunchEnablesTelemetry)
+{
+    // Simulate first CLI launch: isFirstLaunch() true, then setEnabled(true)
+    EXPECT_TRUE(SentryReporter::isFirstLaunch());
+    SentryReporter::setEnabled(true);
+    EXPECT_TRUE(SentryReporter::isEnabled());
+    EXPECT_FALSE(SentryReporter::isFirstLaunch());
+}
+
+TEST_F(CLIPipelineTelemetryTest, SubsequentRunSkipsNotice)
+{
+    // After first launch, isFirstLaunch() should be false
+    SentryReporter::setEnabled(true);
+    EXPECT_FALSE(SentryReporter::isFirstLaunch());
+    EXPECT_TRUE(SentryReporter::isEnabled());
+}
+
+TEST_F(CLIPipelineTelemetryTest, OptOutThenNoTelemetryIsIdempotent)
+{
+    SentryReporter::setEnabled(false);
+    EXPECT_FALSE(SentryReporter::isEnabled());
+
+    // Calling setEnabled(false) again shouldn't change anything
+    SentryReporter::setEnabled(false);
+    EXPECT_FALSE(SentryReporter::isEnabled());
+    EXPECT_FALSE(SentryReporter::isFirstLaunch());
 }

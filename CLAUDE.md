@@ -48,7 +48,7 @@ qtmesh anim model.fbx --rename "Take 001" "Idle" -o out.fbx  # rename an animati
 qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`) as the first argument. Use `--verbose` to see Ogre/engine debug output.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 

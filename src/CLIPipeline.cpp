@@ -48,6 +48,7 @@ static QTextStream& err()
 }
 
 static bool s_verbose = false;
+static bool s_noTelemetry = false;
 
 /// Suppress qDebug/qInfo/qWarning in non-verbose mode.
 /// qCritical and qFatal always pass through.
@@ -101,6 +102,7 @@ void CLIPipeline::printUsage()
         "  --help, -h            Show this help\n"
         "  --version, -v         Show version\n"
         "  --verbose             Show Ogre/engine debug output\n"
+        "  --no-telemetry        Permanently disable anonymous usage data\n"
     );
 }
 
@@ -335,19 +337,18 @@ QString CLIPipeline::formatMeshInfoJson(const MeshInfo& info)
 
 int CLIPipeline::run(int argc, char* argv[])
 {
-    // Pre-scan for --verbose before anything else
+    // Pre-scan for --verbose and --no-telemetry before anything else
     for (int i = 1; i < argc; ++i) {
-        if (QString(argv[i]) == "--verbose") {
-            s_verbose = true;
-            break;
-        }
+        QString arg(argv[i]);
+        if (arg == "--verbose") s_verbose = true;
+        if (arg == "--no-telemetry") s_noTelemetry = true;
     }
 
     // Find the subcommand (skip executable name and --cli flag)
     int cmdIndex = 1;
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
-        if (arg == "--cli" || arg == "--verbose") {
+        if (arg == "--cli" || arg == "--verbose" || arg == "--no-telemetry") {
             cmdIndex = i + 1;
             continue;
         }
@@ -386,10 +387,18 @@ int CLIPipeline::run(int argc, char* argv[])
     // pollute the CLI pipeline output (JSON, info text, etc.)
     redirectStdout();
 
-    // Initialize Sentry only if user has explicitly consented via the GUI.
-    // isFirstLaunch() returns true when no Sentry/enabled setting exists yet,
-    // meaning the user has never seen the consent dialog — skip in that case.
-    if (!SentryReporter::isFirstLaunch()) {
+    // Telemetry: --no-telemetry permanently opts out.
+    // On first run (no stored preference), show a one-time notice and enable.
+    if (s_noTelemetry) {
+        SentryReporter::setEnabled(false);
+        err() << "Telemetry disabled. This preference is stored permanently." << Qt::endl;
+    } else if (SentryReporter::isFirstLaunch()) {
+        SentryReporter::setEnabled(true);
+        err() << "Note: Anonymous usage data is collected to improve qtmesh. "
+                 "Use --no-telemetry to disable." << Qt::endl;
+    }
+
+    if (SentryReporter::isEnabled()) {
         SentryReporter::initialize();
         SentryReporter::setTag("os", QSysInfo::prettyProductName());
         SentryReporter::setTag("arch", QSysInfo::currentCpuArchitecture());
