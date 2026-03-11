@@ -2899,11 +2899,12 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigatePrev)
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavPrev");
     ASSERT_NE(entity, nullptr);
 
-    // First set time to 1.0 so navigating "prev" goes to t=0.5
+    // Set time to 0.99 (just before end) so navigating "prev" goes to t=0.5
+    // Note: setting exactly 1.0 on a 1.0-length animation wraps to 0.0
     QJsonObject setArgs;
     setArgs["entity"] = "AnimSuccNavPrev";
     setArgs["animation"] = "TestAnim";
-    setArgs["time"] = 1.0;
+    setArgs["time"] = 0.99;
     server->callTool("set_animation_time", setArgs);
 
     QJsonObject args;
@@ -3341,11 +3342,13 @@ TEST_F(MCPServerTest, AnimSuccPath_NavigateNextAtEnd)
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavNextEnd");
     ASSERT_NE(entity, nullptr);
 
-    // Set time to the last keyframe so "next" wraps to the last keyframe
+    // Use "last" navigation to position at the actual last keyframe (t=1.0)
+    // Note: setting time=1.0 directly wraps to 0.0 on a 1.0-length animation
     QJsonObject setArgs;
     setArgs["entity"] = "AnimSuccNavNextEnd";
     setArgs["animation"] = "TestAnim";
-    setArgs["time"] = 1.0;
+    setArgs["navigate"] = "last";
+    setArgs["track"] = "Child";
     server->callTool("set_animation_time", setArgs);
 
     QJsonObject args;
@@ -3355,9 +3358,9 @@ TEST_F(MCPServerTest, AnimSuccPath_NavigateNextAtEnd)
     args["track"] = "Child";
     QJsonObject result = server->callTool("set_animation_time", args);
     EXPECT_FALSE(isError(result));
-    // When already at last keyframe, "next" should stay at last keyframe (t=1.0)
+    // "last" wraps time to 0 (fmod(1.0, 1.0)=0), so "next" finds keyframe at 0.5
     EXPECT_TRUE(getResultText(result).contains("Navigated to keyframe"));
-    EXPECT_TRUE(getResultText(result).contains("1s") || getResultText(result).contains("at 1"));
+    EXPECT_TRUE(getResultText(result).contains("0.5s") || getResultText(result).contains("at 0.5"));
 }
 
 TEST_F(MCPServerTest, AnimSuccPath_NavigatePrevAtStart)

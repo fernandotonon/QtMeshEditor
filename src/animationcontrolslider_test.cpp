@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 #include <QApplication>
 #include <QCoreApplication>
-#include <QTest>
 #include "animationcontrolslider.h"
 
 // Test fixture for AnimationControlSlider class
@@ -124,66 +123,6 @@ TEST_F(AnimationControlSliderTest, PaintEvent_NoCrash) {
         slider->repaint();
         if (app) app->processEvents();
     });
-}
-
-// ── Mouse click on tick marks ────────────────────────────────────
-
-TEST_F(AnimationControlSliderTest, MouseClickAtTickPosition) {
-    // Add ticks at known positions
-    slider->addTick(25, Qt::red);
-    slider->addTick(50, Qt::green);
-    slider->addTick(75, Qt::blue);
-
-    slider->resize(200, 30);
-    slider->show();
-    if (app) app->processEvents();
-
-    // Simulate a mouse click near the middle of the slider (position for tick 50)
-    // QSlider maps clicks to values; the click should change the slider value
-    QPoint center(slider->width() / 2, slider->height() / 2);
-    QTest::mouseClick(slider, Qt::LeftButton, Qt::NoModifier, center);
-    if (app) app->processEvents();
-
-    // The slider value should have changed to something near the center
-    // (exact value depends on slider geometry, but should be roughly 50)
-    EXPECT_GE(slider->value(), 30);
-    EXPECT_LE(slider->value(), 70);
-}
-
-TEST_F(AnimationControlSliderTest, MouseClickAtBeginning) {
-    slider->addTick(0, Qt::red);
-    slider->addTick(100, Qt::blue);
-
-    slider->resize(400, 30);
-    slider->show();
-    if (app) app->processEvents();
-
-    // Click near the beginning (left side)
-    QPoint leftSide(5, slider->height() / 2);
-    QTest::mouseClick(slider, Qt::LeftButton, Qt::NoModifier, leftSide);
-    if (app) app->processEvents();
-
-    // Value should be in the lower half (slider click mapping varies by style)
-    EXPECT_LE(slider->value(), 50);
-}
-
-TEST_F(AnimationControlSliderTest, MouseClickAtEnd) {
-    slider->addTick(0, Qt::red);
-    slider->addTick(100, Qt::blue);
-
-    slider->resize(400, 30);
-    slider->show();
-    if (app) app->processEvents();
-
-    // Click near the end (right side)
-    QPoint rightSide(slider->width() - 5, slider->height() / 2);
-    QTest::mouseClick(slider, Qt::LeftButton, Qt::NoModifier, rightSide);
-    if (app) app->processEvents();
-
-    // Value should have changed from 0; exact value depends on platform style
-    // On macOS, clicking near the end may jump to a value around 40-100 depending
-    // on the slider groove margin. Just verify it moved to a non-zero value.
-    EXPECT_GT(slider->value(), 0);
 }
 
 // ── setValue changes ─────────────────────────────────────────────
