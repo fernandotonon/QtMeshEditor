@@ -9,8 +9,10 @@
 #include <QElapsedTimer>
 #include <QDir>
 #include <memory>
+#include <QMainWindow>
 #include "MCPServer.h"
 #include "Manager.h"
+#include "MeshInfoOverlay.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include <OgreException.h>
@@ -2512,6 +2514,26 @@ TEST_F(MCPServerTest, ToggleNormalsIsRecognizedTool)
 }
 
 // ==========================================================================
+// NEW TESTS: toggle_mesh_info
+// ==========================================================================
+
+TEST_F(MCPServerTest, ToggleMeshInfoNoMainWindow)
+{
+    QJsonObject args;
+    args["show"] = true;
+    QJsonObject result = server->callTool("toggle_mesh_info", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("MainWindow") ||
+                getResultText(result).contains("MeshInfoOverlay"));
+}
+
+TEST_F(MCPServerTest, ToggleMeshInfoIsRecognizedTool)
+{
+    QJsonObject result = server->callTool("toggle_mesh_info", QJsonObject());
+    EXPECT_FALSE(getResultText(result).contains("Unknown tool"));
+}
+
+// ==========================================================================
 // NEW TESTS: Protocol edge cases
 // ==========================================================================
 
@@ -2539,9 +2561,9 @@ TEST_F(MCPServerTest, AllToolNamesAreRecognized)
         "list_skeletal_animations", "get_animation_info", "set_animation_length",
         "set_animation_time", "add_keyframe", "remove_keyframe",
         "play_animation", "toggle_skeleton_debug", "toggle_bone_weights",
-        "toggle_normals", "merge_animations"
+        "toggle_normals", "toggle_mesh_info", "merge_animations"
     };
-    EXPECT_EQ(allTools.size(), 26);
+    EXPECT_EQ(allTools.size(), 27);
 
     for (const QString &tool : allTools) {
         QJsonObject result = server->callTool(tool, QJsonObject());
@@ -2681,6 +2703,61 @@ TEST_F(MCPServerTest, ToggleNormals_ToggleOnOff)
                 getResultText(resultOn).contains("NormalVisualizer"));
     EXPECT_TRUE(getResultText(resultOff).contains("MainWindow") ||
                 getResultText(resultOff).contains("NormalVisualizer"));
+}
+
+TEST_F(MCPServerTest, ToggleMeshInfo_ToggleOnOff)
+{
+    // Server has no MainWindow set -- toggle_mesh_info requires MainWindow
+    QJsonObject argsOn;
+    argsOn["show"] = true;
+    QJsonObject resultOn = server->callTool("toggle_mesh_info", argsOn);
+    EXPECT_TRUE(isError(resultOn));
+
+    QJsonObject argsOff;
+    argsOff["show"] = false;
+    QJsonObject resultOff = server->callTool("toggle_mesh_info", argsOff);
+    EXPECT_TRUE(isError(resultOff));
+
+    EXPECT_TRUE(getResultText(resultOn).contains("MainWindow") ||
+                getResultText(resultOn).contains("MeshInfoOverlay"));
+    EXPECT_TRUE(getResultText(resultOff).contains("MainWindow") ||
+                getResultText(resultOff).contains("MeshInfoOverlay"));
+}
+
+TEST_F(MCPServerTest, ToggleMeshInfo_SuccessPath)
+{
+    // Create a fake MainWindow with a MeshInfoOverlay child so findChild works
+    QMainWindow fakeWindow;
+    auto* overlay = new MeshInfoOverlay(reinterpret_cast<MainWindow*>(&fakeWindow));
+    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+
+    EXPECT_FALSE(overlay->isVisible());
+
+    // Toggle on
+    QJsonObject argsOn;
+    argsOn["show"] = true;
+    QJsonObject resultOn = server->callTool("toggle_mesh_info", argsOn);
+    EXPECT_FALSE(isError(resultOn)) << getResultText(resultOn).toStdString();
+    EXPECT_TRUE(getResultText(resultOn).contains("shown"));
+    EXPECT_TRUE(overlay->isVisible());
+
+    // Toggle off
+    QJsonObject argsOff;
+    argsOff["show"] = false;
+    QJsonObject resultOff = server->callTool("toggle_mesh_info", argsOff);
+    EXPECT_FALSE(isError(resultOff)) << getResultText(resultOff).toStdString();
+    EXPECT_TRUE(getResultText(resultOff).contains("hidden"));
+    EXPECT_FALSE(overlay->isVisible());
+
+    // Toggle without show arg — should flip to true
+    QJsonObject resultToggle = server->callTool("toggle_mesh_info", QJsonObject());
+    EXPECT_FALSE(isError(resultToggle)) << getResultText(resultToggle).toStdString();
+    EXPECT_TRUE(getResultText(resultToggle).contains("shown"));
+    EXPECT_TRUE(overlay->isVisible());
+
+    // Clean up
+    server->setMainWindow(nullptr);
+    delete overlay;
 }
 
 TEST_F(MCPServerTest, PlayAnimation_StartAndStop)

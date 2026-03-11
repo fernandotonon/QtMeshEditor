@@ -80,6 +80,7 @@
     </widget>
     <addaction name="actionShow_Grid"/>
     <addaction name="actionShow_Normals"/>
+    <addaction name="actionShow_Mesh_Info"/>
     <addaction name="actionChange_Ambient_Light"/>
     <addaction name="actionChange_BG_Color"/>
     <addaction name="menuView"/>
@@ -223,6 +224,17 @@
    </property>
    <property name="text">
     <string>Show Normals</string>
+   </property>
+  </action>
+  <action name="actionShow_Mesh_Info">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Show Mesh Info</string>
    </property>
   </action>
   <action name="actionImport">

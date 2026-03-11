@@ -14,6 +14,7 @@
 class LLMSettingsWidget;
 class MCPServer;
 class NormalVisualizer;
+class MeshInfoOverlay;
 
 namespace Ui {
 class MainWindow;
@@ -123,6 +124,7 @@ private:
     const QPalette& darkPalette();
 
     NormalVisualizer* m_normalVisualizer = nullptr;
+    MeshInfoOverlay* m_meshInfoOverlay = nullptr;
     MCPServer* m_mcpServer = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;

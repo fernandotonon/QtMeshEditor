@@ -9,6 +9,7 @@
 #include "OgreWidget.h"
 #include "AnimationWidget.h"
 #include "NormalVisualizer.h"
+#include "MeshInfoOverlay.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -443,6 +444,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolToggleBoneWeights(args);
     } else if (name == "toggle_normals") {
         toolResult = toolToggleNormals(args);
+    } else if (name == "toggle_mesh_info") {
+        toolResult = toolToggleMeshInfo(args);
     } else if (name == "merge_animations") {
         toolResult = toolMergeAnimations(args);
     } else {
@@ -1901,6 +1904,21 @@ QJsonObject MCPServer::toolToggleNormals(const QJsonObject &args)
     return makeSuccessResult(QString("Normals %1").arg(show ? "shown" : "hidden"));
 }
 
+QJsonObject MCPServer::toolToggleMeshInfo(const QJsonObject &args)
+{
+    if (!m_mainWindow)
+        return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag.");
+
+    MeshInfoOverlay* overlay = m_mainWindow->findChild<MeshInfoOverlay*>();
+    if (!overlay)
+        return makeErrorResult("Error: MeshInfoOverlay not found");
+
+    bool show = args.contains("show") ? args["show"].toBool() : !overlay->isVisible();
+    overlay->setVisible(show);
+
+    return makeSuccessResult(QString("Mesh info overlay %1").arg(show ? "shown" : "hidden"));
+}
+
 QJsonObject MCPServer::toolMergeAnimations(const QJsonObject &args)
 {
     try {
@@ -2443,6 +2461,24 @@ QJsonArray MCPServer::buildToolsList()
             "Normals are displayed as colored lines extending from each vertex, "
             "color-coded by direction (|X|=Red, |Y|=Green, |Z|=Blue). "
             "Normals follow skeletal animations in real-time.",
+            inputSchema
+        ));
+    }
+
+    // toggle_mesh_info
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["show"] = QJsonObject{{"type", "boolean"}, {"description", "True to show, false to hide. If omitted, toggles the current state."}};
+        inputSchema["properties"] = props;
+
+        tools.append(buildToolDefinition(
+            "toggle_mesh_info",
+            "Show or hide the mesh info overlay on the active viewport. "
+            "Displays statistics including vertex/triangle counts, submeshes, "
+            "materials, bones, and animations. Shows stats for selected entities "
+            "when a selection exists, otherwise shows aggregated scene stats.",
             inputSchema
         ));
     }
