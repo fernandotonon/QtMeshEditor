@@ -31,9 +31,8 @@ TEST(MeshInfoOverlayFormat, NullEntityInList)
     withNull << nullptr;
 
     QString result = MeshInfoOverlay::formatStats(withNull, false);
-    // Size is 1, so a header is generated, but null entity is skipped
-    EXPECT_FALSE(result.isEmpty());
-    EXPECT_TRUE(result.contains("Verts:"));
+    // Null entries are filtered out, so a null-only list reports "No meshes"
+    EXPECT_EQ(result, "No meshes");
 }
 
 // ===========================================================================

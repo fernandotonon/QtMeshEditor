@@ -352,6 +352,8 @@ void MainWindow::initToolBar()
     // show mesh info overlay
     m_meshInfoOverlay = new MeshInfoOverlay(this);
     connect(ui->actionShow_Mesh_Info, &QAction::toggled, m_meshInfoOverlay, &MeshInfoOverlay::setVisible);
+    // Sync menu checkmark when MCP or other code toggles the overlay directly
+    connect(m_meshInfoOverlay, &MeshInfoOverlay::visibilityChanged, ui->actionShow_Mesh_Info, &QAction::setChecked);
     // Connect viewports created before the overlay existed
     for (EditorViewport* vp : mDockWidgetList)
         connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);

@@ -33,6 +33,17 @@ MeshInfoOverlay::~MeshInfoOverlay()
 bool MeshInfoOverlay::eventFilter(QObject* obj, QEvent* event)
 {
     auto type = event->type();
+
+    // Hide the overlay when the active viewport is hidden or destroyed
+    if (obj == mActiveWidget &&
+        (type == QEvent::Hide || type == QEvent::Close || type == QEvent::Destroy)) {
+        if (mLabel)
+            mLabel->hide();
+        if (type != QEvent::Hide)
+            mActiveWidget = nullptr;
+        return QObject::eventFilter(obj, event);
+    }
+
     if (type == QEvent::Move || type == QEvent::Resize) {
         if (mVisible && mLabel && mActiveWidget)
             repositionLabel();
@@ -84,7 +95,13 @@ QList<Ogre::Entity*> MeshInfoOverlay::collectEntities(bool& isSelection) const
 
 QString MeshInfoOverlay::formatStats(const QList<Ogre::Entity*>& entities, bool isSelection)
 {
-    if (entities.isEmpty())
+    // Filter out null entries so counts and headers are accurate
+    QList<Ogre::Entity*> valid;
+    for (Ogre::Entity* e : entities) {
+        if (e) valid.append(e);
+    }
+
+    if (valid.isEmpty())
         return QStringLiteral("No meshes");
 
     QLocale locale;
@@ -95,8 +112,7 @@ QString MeshInfoOverlay::formatStats(const QList<Ogre::Entity*>& entities, bool 
     int totalAnims = 0;
     QSet<QString> materialSet;
 
-    for (Ogre::Entity* entity : entities) {
-        if (!entity) continue;
+    for (Ogre::Entity* entity : valid) {
         MeshInfo info = CLIPipeline::extractMeshInfo(entity, QString());
         totalVerts += info.vertices;
         totalTris += info.triangles;
@@ -108,18 +124,16 @@ QString MeshInfoOverlay::formatStats(const QList<Ogre::Entity*>& entities, bool 
     }
 
     QString header;
-    if (entities.size() == 1 && entities.first()) {
-        const Ogre::MeshPtr& mesh = entities.first()->getMesh();
+    if (valid.size() == 1) {
+        const Ogre::MeshPtr& mesh = valid.first()->getMesh();
         if (mesh)
             header = QString::fromStdString(mesh->getName());
         else
             header = QStringLiteral("Unknown mesh");
-    } else if (entities.size() == 1) {
-        header = QStringLiteral("Unknown mesh");
     } else if (isSelection) {
-        header = QString("Selected (%1 meshes)").arg(entities.size());
+        header = QString("Selected (%1 meshes)").arg(valid.size());
     } else {
-        header = QString("Scene (%1 meshes)").arg(entities.size());
+        header = QString("Scene (%1 meshes)").arg(valid.size());
     }
 
     QString text = header + "\n\n";
@@ -176,6 +190,7 @@ void MeshInfoOverlay::repositionLabel()
 void MeshInfoOverlay::setVisible(bool visible)
 {
     mVisible = visible;
+    emit visibilityChanged(visible);
     if (visible) {
         // If no active widget yet, use the first viewport
         if (!mActiveWidget) {

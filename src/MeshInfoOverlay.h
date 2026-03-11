@@ -22,6 +22,9 @@ public:
     /// Build overlay text from a list of entities (pure data, testable without GUI).
     static QString formatStats(const QList<Ogre::Entity*>& entities, bool isSelection);
 
+signals:
+    void visibilityChanged(bool visible);
+
 public slots:
     void setVisible(bool visible);
     void refresh();
