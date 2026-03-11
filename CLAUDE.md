@@ -84,6 +84,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### Debug Overlays
 
 - **NormalVisualizer** (`src/NormalVisualizer.h/cpp`): Draws vertex normals as colored lines (|X|=Red, |Y|=Green, |Z|=Blue). Toggled globally via Options → Show Normals menu or MCP `toggle_normals` tool. Supports real-time animation: requests software-skinned normals via `addSoftwareAnimationRequest(true)` and updates each frame for skeletal entities. Overlays attach to dedicated child scene nodes to avoid unsafe `static_cast<Entity*>` crashes in `ObjectItemModel` and `Manager::getEntities()`.
+- **MeshInfoOverlay** (`src/MeshInfoOverlay.h/cpp`): Floating overlay showing mesh statistics (vertices, triangles, submeshes, materials, bones, animations) on the active viewport. Shows stats for selected entities or aggregated scene stats. Toggled via Options → Show Mesh Info menu or MCP `toggle_mesh_info` tool. Implemented as a top-level `Qt::Tool` window to avoid ghost-text artifacts from Ogre's direct-to-native rendering (`WA_PaintOnScreen`).
 - **BoneWeightOverlay** (`src/BoneWeightOverlay.h/cpp`): Per-entity bone weight heat-map overlay.
 
 ### MCP Server

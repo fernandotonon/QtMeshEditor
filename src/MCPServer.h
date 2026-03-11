@@ -142,6 +142,7 @@ private:
     QJsonObject toolToggleSkeletonDebug(const QJsonObject &args);
     QJsonObject toolToggleBoneWeights(const QJsonObject &args);
     QJsonObject toolToggleNormals(const QJsonObject &args);
+    QJsonObject toolToggleMeshInfo(const QJsonObject &args);
     QJsonObject toolMergeAnimations(const QJsonObject &args);
 
     // Animation

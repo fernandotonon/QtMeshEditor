@@ -45,6 +45,7 @@ BoneWeightOverlay.cpp
 NormalVisualizer.cpp
 AnimationMerger.cpp
 CLIPipeline.cpp
+MeshInfoOverlay.cpp
 )
 
 set(HEADER_FILES
@@ -93,6 +94,7 @@ BoneWeightOverlay.h
 NormalVisualizer.h
 AnimationMerger.h
 CLIPipeline.h
+MeshInfoOverlay.h
 )
 
 set(TEST_SOURCES "")

@@ -42,6 +42,7 @@
 #include "MCPSettingsDialog.h"
 #include "MCPServer.h"
 #include "NormalVisualizer.h"
+#include "MeshInfoOverlay.h"
 #include "LLMManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
@@ -140,8 +141,10 @@ MainWindow::MainWindow(QWidget *parent) :
 /// /////////////////////// TODO improve the ui (toolbar, menubar,....) and add translation (obviously Portuguese but french, english, may be japaneese !)
 MainWindow::~MainWindow()
 {
-    // Destroy NormalVisualizer early — it connects to Manager signals and
-    // accesses Ogre resources, so it must be deleted while Manager is alive.
+    // Destroy overlays early — they connect to Manager signals and
+    // access Ogre resources, so they must be deleted while Manager is alive.
+    delete m_meshInfoOverlay;
+    m_meshInfoOverlay = nullptr;
     delete m_normalVisualizer;
     m_normalVisualizer = nullptr;
 
@@ -345,6 +348,13 @@ void MainWindow::initToolBar()
     // show normals
     m_normalVisualizer = new NormalVisualizer(Manager::getSingleton()->getSceneMgr(), this);
     connect(ui->actionShow_Normals, &QAction::toggled, m_normalVisualizer, &NormalVisualizer::setVisible);
+
+    // show mesh info overlay
+    m_meshInfoOverlay = new MeshInfoOverlay(this);
+    connect(ui->actionShow_Mesh_Info, &QAction::toggled, m_meshInfoOverlay, &MeshInfoOverlay::setVisible);
+    // Connect viewports created before the overlay existed
+    for (EditorViewport* vp : mDockWidgetList)
+        connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
@@ -831,6 +841,8 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
 
     connect(pOgreViewport, SIGNAL(widgetAboutToClose(EditorViewport* const&)), this, SLOT(onWidgetClosing(EditorViewport* const&)));
     connect(pOgreViewport->getOgreWidget(), SIGNAL(focusOnWidget(OgreWidget*)), TransformOperator::getSingleton(), SLOT(setActiveWidget(OgreWidget*)));
+    if (m_meshInfoOverlay)
+        connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
 
     if(!mDockWidgetList.isEmpty())
     {
