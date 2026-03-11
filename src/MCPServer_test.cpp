@@ -9,8 +9,10 @@
 #include <QElapsedTimer>
 #include <QDir>
 #include <memory>
+#include <QMainWindow>
 #include "MCPServer.h"
 #include "Manager.h"
+#include "MeshInfoOverlay.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
 #include <OgreException.h>
@@ -2720,6 +2722,42 @@ TEST_F(MCPServerTest, ToggleMeshInfo_ToggleOnOff)
                 getResultText(resultOn).contains("MeshInfoOverlay"));
     EXPECT_TRUE(getResultText(resultOff).contains("MainWindow") ||
                 getResultText(resultOff).contains("MeshInfoOverlay"));
+}
+
+TEST_F(MCPServerTest, ToggleMeshInfo_SuccessPath)
+{
+    // Create a fake MainWindow with a MeshInfoOverlay child so findChild works
+    QMainWindow fakeWindow;
+    auto* overlay = new MeshInfoOverlay(reinterpret_cast<MainWindow*>(&fakeWindow));
+    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+
+    EXPECT_FALSE(overlay->isVisible());
+
+    // Toggle on
+    QJsonObject argsOn;
+    argsOn["show"] = true;
+    QJsonObject resultOn = server->callTool("toggle_mesh_info", argsOn);
+    EXPECT_FALSE(isError(resultOn)) << getResultText(resultOn).toStdString();
+    EXPECT_TRUE(getResultText(resultOn).contains("shown"));
+    EXPECT_TRUE(overlay->isVisible());
+
+    // Toggle off
+    QJsonObject argsOff;
+    argsOff["show"] = false;
+    QJsonObject resultOff = server->callTool("toggle_mesh_info", argsOff);
+    EXPECT_FALSE(isError(resultOff)) << getResultText(resultOff).toStdString();
+    EXPECT_TRUE(getResultText(resultOff).contains("hidden"));
+    EXPECT_FALSE(overlay->isVisible());
+
+    // Toggle without show arg — should flip to true
+    QJsonObject resultToggle = server->callTool("toggle_mesh_info", QJsonObject());
+    EXPECT_FALSE(isError(resultToggle)) << getResultText(resultToggle).toStdString();
+    EXPECT_TRUE(getResultText(resultToggle).contains("shown"));
+    EXPECT_TRUE(overlay->isVisible());
+
+    // Clean up
+    server->setMainWindow(nullptr);
+    delete overlay;
 }
 
 TEST_F(MCPServerTest, PlayAnimation_StartAndStop)
