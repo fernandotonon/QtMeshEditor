@@ -218,13 +218,21 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
             aiMat->AddProperty(&shininess, 1, AI_MATKEY_SHININESS);
 
             // Add texture references
+            unsigned short diffuseIdx = 0;
+            unsigned short normalIdx = 0;
             for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
             {
                 auto* tus = pass->getTextureUnitState(ti);
                 if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
                 {
                     aiString texPath(tus->getTextureName());
-                    aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, ti));
+                    if (tus->getName() == "normal_map") {
+                        aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
+                        ++normalIdx;
+                    } else {
+                        aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
+                        ++diffuseIdx;
+                    }
                 }
             }
         }

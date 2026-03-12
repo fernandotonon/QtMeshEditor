@@ -1,6 +1,6 @@
 #include "MeshProcessor.h"
 
-// Binds a float3 vertex buffer (tangent or bitangent) to the given source index.
+// Binds a float3 vertex buffer (bitangent, etc.) to the given source index.
 static void bindVector3Buffer(Ogre::VertexData* vertexData, unsigned short source,
                               Ogre::VertexElementSemantic semantic,
                               const std::vector<Ogre::Vector3>& data) {
@@ -13,6 +13,25 @@ static void bindVector3Buffer(Ogre::VertexData* vertexData, unsigned short sourc
         *p++ = v.x;
         *p++ = v.y;
         *p++ = v.z;
+    }
+    buf->unlock();
+    vertexData->vertexBufferBinding->setBinding(source, buf);
+}
+
+// Binds a float4 vertex buffer (tangent with handedness in w) to the given source index.
+static void bindVector4Buffer(Ogre::VertexData* vertexData, unsigned short source,
+                              Ogre::VertexElementSemantic semantic,
+                              const std::vector<Ogre::Vector4>& data) {
+    vertexData->vertexDeclaration->addElement(source, 0, Ogre::VET_FLOAT4, semantic);
+    auto buf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT4),
+        vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    auto* p = static_cast<float*>(buf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+    for (const auto& v : data) {
+        *p++ = v.x;
+        *p++ = v.y;
+        *p++ = v.z;
+        *p++ = v.w;
     }
     buf->unlock();
     vertexData->vertexBufferBinding->setBinding(source, buf);
@@ -80,11 +99,16 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
     // Process Material Index
     subMeshData->materialIndex = mesh->mMaterialIndex;
 
-    // Process tangents and bitangents
+    // Process tangents and bitangents — store tangent as float4 with handedness in w
     if(mesh->HasTangentsAndBitangents()) {
         for(auto i = 0u; i < mesh->mNumVertices; i++) {
-            subMeshData->tangents.push_back(Ogre::Vector3(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z));
-            subMeshData->bitangents.push_back(Ogre::Vector3(mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z));
+            Ogre::Vector3 T(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z);
+            Ogre::Vector3 B(mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z);
+            Ogre::Vector3 N(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z);
+            // Compute handedness: if cross(N,T) is opposite to B, the tangent space is left-handed
+            float handedness = (N.crossProduct(T).dotProduct(B) < 0.0f) ? -1.0f : 1.0f;
+            subMeshData->tangents.push_back(Ogre::Vector4(T.x, T.y, T.z, handedness));
+            subMeshData->bitangents.push_back(B);
         }
     }
 
@@ -150,7 +174,7 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
         // Bind optional vertex attribute buffers
         unsigned short nextSource = 1;
         if (!subMeshData->tangents.empty())
-            bindVector3Buffer(vertexData, nextSource++, Ogre::VES_TANGENT, subMeshData->tangents);
+            bindVector4Buffer(vertexData, nextSource++, Ogre::VES_TANGENT, subMeshData->tangents);
         if (!subMeshData->bitangents.empty())
             bindVector3Buffer(vertexData, nextSource++, Ogre::VES_BINORMAL, subMeshData->bitangents);
         if (!subMeshData->colors.empty()) {

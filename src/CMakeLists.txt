@@ -46,6 +46,7 @@ NormalVisualizer.cpp
 AnimationMerger.cpp
 CLIPipeline.cpp
 MeshInfoOverlay.cpp
+RTShaderHelper.cpp
 )
 
 set(HEADER_FILES
@@ -95,6 +96,7 @@ NormalVisualizer.h
 AnimationMerger.h
 CLIPipeline.h
 MeshInfoOverlay.h
+RTShaderHelper.h
 )
 
 set(TEST_SOURCES "")
@@ -368,7 +370,7 @@ if(BUILD_TESTS)
     foreach(src IN LISTS SRC_FILES)
         if(NOT src MATCHES "main.cpp")
             list(APPEND TEST_SOURCES ${src})
-        endif() 
+        endif()
     endforeach()
 
     # Add all files ending with _test.cpp to the set (recursively to include subdirectories like Assimp)

@@ -1618,7 +1618,9 @@ private:
 
                 m_w.beginNode("Properties70");
                 m_w.endProperties();
+                writeP70enum("CurrentTextureBlendMode", 0);
                 writeP70string("UVSet", "UVMap");
+                writeP70int("UseMaterial", 1);
                 m_w.endNode(); // Properties70
 
                 m_w.endNode(); // Texture
@@ -1660,9 +1662,10 @@ private:
                 writeConnection("OO", matIt->second, modelId);
         }
 
-        // Texture → Material (OP with "DiffuseColor") — connect to ALL materials that use each texture
+        // Texture → Material (OP) — connect to ALL materials that use each texture
         {
-            std::set<std::pair<std::string, std::string>> texMatPairs;
+            // Track (texName, matName, fbxProperty) tuples
+            std::set<std::tuple<std::string, std::string, std::string>> texMatPairs;
             for (const auto* sub : m_entity->getSubEntities())
             {
                 auto mat = sub->getMaterial();
@@ -1670,17 +1673,20 @@ private:
                 auto* pass = mat->getTechnique(0)->getPass(0);
                 for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
                 {
-                    std::string texName = pass->getTextureUnitState(ti)->getTextureName();
-                    if (!texName.empty())
-                        texMatPairs.insert({texName, mat->getName()});
+                    auto* tus = pass->getTextureUnitState(ti);
+                    std::string texName = tus->getTextureName();
+                    if (!texName.empty()) {
+                        std::string fbxProp = (tus->getName() == "normal_map") ? "NormalMap" : "DiffuseColor";
+                        texMatPairs.insert({texName, mat->getName(), fbxProp});
+                    }
                 }
             }
-            for (const auto& [texName, matName] : texMatPairs)
+            for (const auto& [texName, matName, fbxProp] : texMatPairs)
             {
                 auto texIt = m_textureIds.find(texName);
                 auto matIt = m_materialIds.find(matName);
                 if (texIt != m_textureIds.end() && matIt != m_materialIds.end())
-                    writeConnection("OP", texIt->second, matIt->second, "DiffuseColor");
+                    writeConnection("OP", texIt->second, matIt->second, fbxProp);
             }
         }
         // Video → Texture (OO)

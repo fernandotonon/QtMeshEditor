@@ -1,4 +1,5 @@
 #include "MaterialProcessor.h"
+#include "RTShaderHelper.h"
 
 void MaterialProcessor::loadScene(const aiScene* scene)
 {
@@ -22,8 +23,30 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
 {
     std::string materialName = material->GetName().C_Str();
     if(materialName.empty()) materialName="importedMaterial" + std::to_string(materials.size());
-    if(auto existingMaterial = Ogre::MaterialManager::getSingleton().getByName(materialName))
+
+    if(auto existingMaterial = Ogre::MaterialManager::getSingleton().getByName(materialName)) {
+        // Material already exists (e.g. from a .material script), but still apply
+        // normal maps from Assimp if present, since scripts rarely include RTSS directives.
+        aiString existingNormalPath;
+        if(AI_SUCCESS == material->GetTexture(aiTextureType_NORMALS, 0, &existingNormalPath)
+           || AI_SUCCESS == material->GetTexture(aiTextureType_HEIGHT, 0, &existingNormalPath)) {
+            std::string normalTexPath = existingNormalPath.C_Str();
+            std::string normalFilename = normalTexPath.substr(normalTexPath.find_last_of("/\\") + 1);
+            Ogre::TexturePtr normalTexPtr = Ogre::TextureManager::getSingleton().getByName(normalFilename);
+            if(!normalTexPtr) {
+                try {
+                    normalTexPtr = loadTexture(normalFilename, existingNormalPath, scene);
+                } catch (...) {
+                    Ogre::LogManager::getSingleton().logMessage("MaterialProcessor: Failed to load normal map '" + normalFilename + "' for existing material '" + materialName + "'");
+                }
+            }
+            if(normalTexPtr) {
+                Ogre::LogManager::getSingleton().logMessage("MaterialProcessor: Applying RTSS normal map '" + normalFilename + "' to existing material '" + materialName + "'");
+                applyRTSSNormalMap(existingMaterial, normalTexPtr->getName());
+            }
+        }
         return existingMaterial;
+    }
 
     Ogre::MaterialPtr ogreMaterial = Ogre::MaterialManager::getSingleton().create(materialName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
@@ -33,7 +56,10 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     }
 
     if(AI_SUCCESS == material->Get(AI_MATKEY_COLOR_AMBIENT, color)) {
-        ogreMaterial->getTechnique(0)->getPass(0)->setAmbient(color.r, color.g, color.b);
+        // PBR-workflow exporters often set ambient to (0,0,0) which kills ambient
+        // lighting in Ogre's Phong model. Keep Ogre's default (white) in that case.
+        if(color.r > 0.001f || color.g > 0.001f || color.b > 0.001f)
+            ogreMaterial->getTechnique(0)->getPass(0)->setAmbient(color.r, color.g, color.b);
     }
 
     if(AI_SUCCESS == material->Get(AI_MATKEY_COLOR_SPECULAR, color)) {
@@ -59,7 +85,27 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         if(!texturePtr){
             texturePtr = loadTexture(textureFilename, path, scene);
         }
-        ogreMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(texturePtr->getName());
+        auto* tus = ogreMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(texturePtr->getName());
+        tus->setName("diffuse_map");
+    }
+
+    // Handle normal maps via RTSS (check NORMALS first, then HEIGHT as fallback for Blender exports)
+    aiString normalPath;
+    bool hasNormalMap = (AI_SUCCESS == material->GetTexture(aiTextureType_NORMALS, 0, &normalPath))
+                     || (AI_SUCCESS == material->GetTexture(aiTextureType_HEIGHT, 0, &normalPath));
+    if(hasNormalMap) {
+        std::string normalTexPath = normalPath.C_Str();
+        std::string normalFilename = normalTexPath.substr(normalTexPath.find_last_of("/\\") + 1);
+        Ogre::TexturePtr normalTexPtr = Ogre::TextureManager::getSingleton().getByName(normalFilename);
+        if(!normalTexPtr) {
+            try {
+                normalTexPtr = loadTexture(normalFilename, normalPath, scene);
+            } catch (...) {
+                Ogre::LogManager::getSingleton().logMessage("MaterialProcessor: Failed to load normal map '" + normalFilename + "'");
+            }
+        }
+        if(normalTexPtr)
+            applyRTSSNormalMap(ogreMaterial, normalTexPtr->getName());
     }
 
     return ogreMaterial;
@@ -95,4 +141,9 @@ Ogre::TexturePtr MaterialProcessor::loadTexture(const Ogre::String &filename, co
     } 
     //regular file, check if it exists and read it
     return Ogre::TextureManager::getSingleton().load(filename, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+}
+
+void MaterialProcessor::applyRTSSNormalMap(Ogre::MaterialPtr mat, const Ogre::String& normalMapName)
+{
+    RTShaderHelper::applyNormalMap(mat, normalMapName);
 }

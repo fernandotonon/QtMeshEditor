@@ -57,6 +57,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshInfoOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
     )
 
@@ -107,6 +108,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshInfoOverlay.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)

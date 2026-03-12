@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include "PrimitiveObject.h"
 
 #include "Manager.h"
+#include "RTShaderHelper.h"
 #include "SentryReporter.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -132,6 +133,8 @@ Manager::~Manager()
         mPlane = nullptr;
     }
 
+    shutdownRTShaderSystem();
+
     if (mSceneMgr)
     {
         try {
@@ -186,6 +189,8 @@ void Manager::CreateEmptyScene()
     mInitializingScene = true;
 
     { //TODO: Add the hability of the user adding/removing lights
+        mSceneMgr->setAmbientLight(Ogre::ColourValue(0.3f, 0.3f, 0.3f));
+
         Ogre::Light* light = mSceneMgr->createLight();
 
         light->setType(Ogre::Light::LT_DIRECTIONAL);
@@ -554,8 +559,21 @@ void Manager::initSceneMgr()
     }
 }
 
+void Manager::initRTShaderSystem()
+{
+    RTShaderHelper::initialize(mSceneMgr);
+}
+
+void Manager::shutdownRTShaderSystem()
+{
+    RTShaderHelper::shutdown(mSceneMgr);
+}
+
 void Manager::loadResources()
 {
+    // RTSS must be initialized after a render window (GL context) exists
+    initRTShaderSystem();
+
     QString file = QCoreApplication::applicationDirPath();
 
     // Load resource paths from config file

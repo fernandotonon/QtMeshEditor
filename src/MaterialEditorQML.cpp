@@ -4,6 +4,7 @@
 #include "LLMManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
+#include "RTShaderHelper.h"
 #include <QDebug>
 #include <QFileDialog>
 #include <QColorDialog>
@@ -224,15 +225,35 @@ bool MaterialEditorQML::applyMaterial()
             m_ogreMaterial->compile();
         }
 
-        // Reload all materials and meshes
-        Ogre::MaterialManager::getSingleton().reloadAll(true);
-        Ogre::MeshManager::getSingleton().reloadAll(true);
-
-        // Reapply materials to all scene nodes
+        // Re-apply the edited material to sub-entities that use it.
+        // Only update sub-entities whose material name matches — otherwise
+        // Entity::setMaterialName would override ALL sub-entities with one material.
+        std::string editedMatName = m_materialName.toStdString();
         for (Ogre::SceneNode* sn : Manager::getSingleton()->getSceneNodes()) {
-            if (!sn->getName().empty() && !sn->getAttachedObjects().empty()) {
-                Ogre::Entity *e = static_cast<Ogre::Entity *>(sn->getAttachedObject(0));
-                e->setMaterialName(e->getSubEntity(0)->getMaterialName());
+            if (sn->getName().empty() || sn->getAttachedObjects().empty())
+                continue;
+            for (auto* obj : sn->getAttachedObjects()) {
+                if (obj->getMovableType() != "Entity") continue;
+                auto* entity = static_cast<Ogre::Entity*>(obj);
+                for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
+                    if (entity->getSubEntity(si)->getMaterialName() == editedMatName)
+                        entity->getSubEntity(si)->setMaterialName(editedMatName);
+                }
+            }
+        }
+
+        // Re-apply RTSS normal map if the edited material has one
+        if (m_ogreMaterial && m_ogreMaterial->getNumTechniques() > 0) {
+            auto* pass = m_ogreMaterial->getTechnique(0)->getPass(0);
+            for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+                const auto& tusName = pass->getTextureUnitState(i)->getName();
+                if (tusName == "normal_map" || tusName == "NormalMap") {
+                    std::string texName = pass->getTextureUnitState(i)->getTextureName();
+                    if (!texName.empty()) {
+                        RTShaderHelper::applyNormalMap(m_ogreMaterial, texName);
+                    }
+                    break;
+                }
             }
         }
 

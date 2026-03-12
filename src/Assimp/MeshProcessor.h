@@ -8,7 +8,7 @@ struct SubMeshData {
     std::vector<Ogre::Vector3> vertices;
     std::vector<Ogre::Vector3> normals;
     std::vector<Ogre::Vector2> texCoords;
-    std::vector<Ogre::Vector3> tangents;
+    std::vector<Ogre::Vector4> tangents;  // xyz = tangent direction, w = handedness (±1)
     std::vector<Ogre::Vector3> bitangents;
     std::vector<Ogre::ColourValue> colors;
     std::vector<unsigned long> indices;
