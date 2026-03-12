@@ -97,6 +97,8 @@ static void addRTSSResources()
                << appDir + "/../media/RTShaderLib";
 
 #if OGRE_PLATFORM == OGRE_PLATFORM_APPLE
+    // macOS .app bundle: appDir is Contents/MacOS/, so ../.. is the bundle root
+    candidates << appDir + "/../../media/RTShaderLib";
     // macOS dev builds: cmake --install puts media at bin/media/ while the
     // binary is 3 levels deeper at bin/QtMeshEditor.app/Contents/MacOS/
     candidates << appDir + "/../../../media/RTShaderLib";

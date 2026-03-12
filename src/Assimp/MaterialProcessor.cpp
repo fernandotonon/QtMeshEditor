@@ -98,9 +98,14 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         std::string normalFilename = normalTexPath.substr(normalTexPath.find_last_of("/\\") + 1);
         Ogre::TexturePtr normalTexPtr = Ogre::TextureManager::getSingleton().getByName(normalFilename);
         if(!normalTexPtr) {
-            normalTexPtr = loadTexture(normalFilename, normalPath, scene);
+            try {
+                normalTexPtr = loadTexture(normalFilename, normalPath, scene);
+            } catch (...) {
+                Ogre::LogManager::getSingleton().logMessage("MaterialProcessor: Failed to load normal map '" + normalFilename + "'");
+            }
         }
-        applyRTSSNormalMap(ogreMaterial, normalTexPtr->getName());
+        if(normalTexPtr)
+            applyRTSSNormalMap(ogreMaterial, normalTexPtr->getName());
     }
 
     return ogreMaterial;

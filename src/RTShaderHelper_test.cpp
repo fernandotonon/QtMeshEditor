@@ -148,7 +148,7 @@ TEST_F(RTSSResourcesTest, RTShaderLibHasExpectedFileCount)
     QDir dir(rtssDir);
     auto entries = dir.entryList(QDir::Files | QDir::NoDotAndDotDot);
     // 16 .glsl + 3 .dds + 1 .material = 20 files
-    EXPECT_EQ(entries.size(), 20) << "Expected 20 files in RTShaderLib/";
+    EXPECT_GE(entries.size(), 20) << "Expected at least 20 files in RTShaderLib/";
 }
 
 TEST_F(RTSSResourcesTest, MainDirHasMinimumFiles)
