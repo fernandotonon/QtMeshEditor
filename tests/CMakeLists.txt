@@ -57,7 +57,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MCPSettingsDialog.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshInfoOverlay.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper_stub.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
     )
 

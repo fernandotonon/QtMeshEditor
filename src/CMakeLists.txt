@@ -368,7 +368,7 @@ if(BUILD_TESTS)
     set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
     
     foreach(src IN LISTS SRC_FILES)
-        if(NOT src MATCHES "main.cpp" AND NOT src MATCHES "RTShaderHelper.cpp")
+        if(NOT src MATCHES "main.cpp")
             list(APPEND TEST_SOURCES ${src})
         endif()
     endforeach()
@@ -386,7 +386,6 @@ if(BUILD_TESTS)
     ${RESOURCE_SRCS}
     ${QML_RESOURCE_SRCS}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/RTShaderHelper_stub.cpp
     )
 
     # Link against Google Test libraries (no gtest_main - we provide our own main)
