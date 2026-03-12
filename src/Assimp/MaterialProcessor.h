@@ -13,6 +13,7 @@ public:
 private:
     Ogre::MaterialPtr processMaterial(const aiMaterial* material, const aiScene* scene);
     Ogre::TexturePtr loadTexture(const Ogre::String& filename, const aiString& path, const aiScene* scene) const;
+    void applyRTSSNormalMap(Ogre::MaterialPtr mat, const Ogre::String& normalMapName);
 
     std::vector<Ogre::MaterialPtr> materials;
 };

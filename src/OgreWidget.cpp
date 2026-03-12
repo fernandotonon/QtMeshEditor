@@ -181,6 +181,7 @@ void OgreWidget::initOgreWindow(void)
     mViewport = mOgreWindow->addViewport( mCamera->getCamera() );
     mViewport->setBackgroundColour( Ogre::ColourValue( 0,0,0 ) );
     mViewport->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
+    mViewport->setMaterialScheme(Ogre::MSN_SHADERGEN);
 
     mOgreRoot->addFrameListener(this);
 }

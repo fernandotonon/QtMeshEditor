@@ -73,10 +73,11 @@ TEST_F(MeshProcessorTest, MeshDataProcessingTest) {
     EXPECT_EQ(resultData->normals[1], Ogre::Vector3(0, 1, 0));
     EXPECT_EQ(resultData->normals[2], Ogre::Vector3(0, 1, 0));
 
-    // Verify tangents
-    EXPECT_EQ(resultData->tangents[0], Ogre::Vector3(1, 0, 0));
-    EXPECT_EQ(resultData->tangents[1], Ogre::Vector3(1, 0, 0));
-    EXPECT_EQ(resultData->tangents[2], Ogre::Vector3(1, 0, 0));
+    // Verify tangents (float4: xyz=direction, w=handedness)
+    // N=(0,1,0), T=(1,0,0), B=(0,0,1) → cross(N,T)=(0,0,-1) → dot with B=(0,0,1) = -1 → handedness=-1
+    EXPECT_EQ(resultData->tangents[0], Ogre::Vector4(1, 0, 0, -1));
+    EXPECT_EQ(resultData->tangents[1], Ogre::Vector4(1, 0, 0, -1));
+    EXPECT_EQ(resultData->tangents[2], Ogre::Vector4(1, 0, 0, -1));
 
     // Verify bitangents
     EXPECT_EQ(resultData->bitangents[0], Ogre::Vector3(0, 0, 1));

@@ -317,9 +317,20 @@ GroupBox {
                     }
                     ThemedSpinBox {
                         from: 0
-                        to: 128
-                        value: Math.round(shininessSlider.value)
-                        onValueChanged: shininessSlider.value = value
+                        to: 12800
+                        property int factor: 100
+                        property bool updating: false
+                        stepSize: 100
+                        value: Math.round(shininessSlider.value * factor)
+                        textFromValue: function(value) { return (value / factor).toFixed(2); }
+                        valueFromText: function(text) { return Math.round(parseFloat(text) * factor); }
+                        onValueChanged: {
+                            if (!updating) {
+                                updating = true;
+                                shininessSlider.value = value / factor;
+                                updating = false;
+                            }
+                        }
                     }
                 }
             }

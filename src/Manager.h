@@ -104,6 +104,8 @@ private:
     void initRoot();         // Init Ogre Root
     void initRenderSystem(); // Init Ogre Render System
     void initSceneMgr();     // Init Ogre SceneManager
+    void initRTShaderSystem();   // Init Ogre RTSS for normal mapping
+    void shutdownRTShaderSystem();
 
 private:
     static Manager*      m_pSingleton; // the only instance of this!
