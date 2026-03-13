@@ -4,8 +4,12 @@ import ViewCubeModule 1.0
 
 Window {
     id: root
-    width: 50
-    height: 50
+    width: 64
+    height: 64
+    minimumWidth: 64
+    maximumWidth: 64
+    minimumHeight: 64
+    maximumHeight: 64
     flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     color: "transparent"
     visible: ViewCubeController.visible

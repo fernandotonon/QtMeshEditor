@@ -203,7 +203,7 @@ void ViewCubeController::reposition()
         return;
 
     // Position in top-right corner with a margin
-    const int cubeSize = 50;
+    const int cubeSize = 64;
     const int margin = 4;
     QPoint topRight = m_activeWidget->mapToGlobal(
         QPoint(m_activeWidget->width() - cubeSize - margin, margin));
