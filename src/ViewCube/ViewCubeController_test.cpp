@@ -3,6 +3,8 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QWidget>
+#include <QMoveEvent>
+#include <QResizeEvent>
 #include "ViewCubeController.h"
 
 // ===========================================================================
@@ -218,4 +220,141 @@ TEST_F(ViewCubeControllerTest, DefaultOrientationIsIdentity)
     EXPECT_DOUBLE_EQ(controller->qx(), 0.0);
     EXPECT_DOUBLE_EQ(controller->qy(), 0.0);
     EXPECT_DOUBLE_EQ(controller->qz(), 0.0);
+}
+
+// ===========================================================================
+// Constructor with mainWindow (tests event filter installation)
+// ===========================================================================
+
+TEST(ViewCubeControllerMainWindow, ConstructorInstallsEventFilter)
+{
+    QWidget mainWindow;
+    mainWindow.resize(300, 200);
+
+    auto* ctrl = new ViewCubeController(&mainWindow);
+    EXPECT_EQ(ViewCubeController::instance(), ctrl);
+
+    // Event filter is installed on mainWindow. Sending Move/Resize events
+    // exercises the eventFilter code path. Without an active widget,
+    // reposition() is not called, but the filter entry is covered.
+    QMoveEvent moveEvt(QPoint(50, 50), QPoint(0, 0));
+    QCoreApplication::sendEvent(&mainWindow, &moveEvt);
+
+    QResizeEvent resizeEvt(QSize(400, 300), QSize(300, 200));
+    QCoreApplication::sendEvent(&mainWindow, &resizeEvt);
+
+    // Position unchanged (no active widget)
+    EXPECT_EQ(ctrl->windowX(), 0);
+    EXPECT_EQ(ctrl->windowY(), 0);
+
+    delete ctrl;
+}
+
+TEST(ViewCubeControllerMainWindow, EventFilterPassesThroughNonMoveResizeEvents)
+{
+    QWidget mainWindow;
+    auto* ctrl = new ViewCubeController(&mainWindow);
+
+    // Unrelated events pass through the filter without effect
+    QEvent showEvt(QEvent::Show);
+    QCoreApplication::sendEvent(&mainWindow, &showEvt);
+
+    QEvent focusEvt(QEvent::FocusIn);
+    QCoreApplication::sendEvent(&mainWindow, &focusEvt);
+
+    EXPECT_EQ(ctrl->windowX(), 0);
+    EXPECT_EQ(ctrl->windowY(), 0);
+
+    delete ctrl;
+}
+
+TEST(ViewCubeControllerMainWindow, EventFilterMoveWithVisibleButNoActiveWidget)
+{
+    QWidget mainWindow;
+    auto* ctrl = new ViewCubeController(&mainWindow);
+    ctrl->setVisible(true);
+
+    // Move event: visible=true but no activeWidget → inner check short-circuits
+    QMoveEvent moveEvt(QPoint(100, 100), QPoint(0, 0));
+    QCoreApplication::sendEvent(&mainWindow, &moveEvt);
+
+    EXPECT_EQ(ctrl->windowX(), 0);
+
+    delete ctrl;
+}
+
+// ===========================================================================
+// Singleton lifetime edge cases
+// ===========================================================================
+
+TEST(ViewCubeControllerLifetime, DestructorPreservesSingletonWhenDifferentInstance)
+{
+    auto* first = new ViewCubeController(nullptr);
+    EXPECT_EQ(ViewCubeController::instance(), first);
+
+    // Second constructor overwrites the singleton
+    auto* second = new ViewCubeController(nullptr);
+    EXPECT_EQ(ViewCubeController::instance(), second);
+
+    // Deleting first should NOT clear singleton (s_instance != first)
+    delete first;
+    EXPECT_EQ(ViewCubeController::instance(), second);
+
+    // Deleting second clears singleton (s_instance == second)
+    delete second;
+    EXPECT_EQ(ViewCubeController::instance(), nullptr);
+}
+
+TEST(ViewCubeControllerLifetime, QmlInstanceCreatesNewWhenSingletonIsNull)
+{
+    // Precondition: no singleton exists
+    EXPECT_EQ(ViewCubeController::instance(), nullptr);
+
+    auto* inst = ViewCubeController::qmlInstance(nullptr, nullptr);
+    EXPECT_NE(inst, nullptr);
+    EXPECT_EQ(ViewCubeController::instance(), inst);
+
+    delete inst;
+    EXPECT_EQ(ViewCubeController::instance(), nullptr);
+}
+
+// ===========================================================================
+// Additional setVisible / updateOrientation edge cases
+// ===========================================================================
+
+TEST_F(ViewCubeControllerTest, SetVisibleTogglesEmitCorrectSignalCount)
+{
+    QSignalSpy spy(controller, &ViewCubeController::visibilityChanged);
+
+    controller->setVisible(true);
+    controller->setVisible(false);
+    controller->setVisible(true);
+    controller->setVisible(false);
+
+    EXPECT_EQ(spy.count(), 4);
+}
+
+TEST_F(ViewCubeControllerTest, UpdateOrientationDoesNotEmitWhenOrientationUnchanged)
+{
+    QSignalSpy spy(controller, &ViewCubeController::orientationChanged);
+
+    // Without a camera, orientation stays at default identity
+    controller->updateOrientation();
+    controller->updateOrientation();
+    controller->updateOrientation();
+
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(ViewCubeControllerTest, WindowPositionDefaultsToZero)
+{
+    QSignalSpy spy(controller, &ViewCubeController::positionChanged);
+
+    // Without active widget, reposition is a no-op
+    controller->setVisible(true);
+    controller->updateOrientation(); // calls reposition internally
+
+    EXPECT_EQ(controller->windowX(), 0);
+    EXPECT_EQ(controller->windowY(), 0);
+    EXPECT_EQ(spy.count(), 0);
 }

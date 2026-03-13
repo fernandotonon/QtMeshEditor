@@ -625,3 +625,94 @@ TEST(SpaceCamera, RapidDirectionChanges)
         spaceCamera.keyReleaseEvent(&releaseS);
     }
 }
+
+// ==========================================================================
+// Animation accessors
+// ==========================================================================
+
+TEST(SpaceCamera, IsAnimatingDefaultFalse)
+{
+    MockSpaceCamera spaceCamera;
+    EXPECT_FALSE(spaceCamera.isAnimating());
+}
+
+TEST(SpaceCamera, GetCameraReturnsNullForDefaultConstructed)
+{
+    MockSpaceCamera spaceCamera;
+    EXPECT_EQ(spaceCamera.getCamera(), nullptr);
+}
+
+TEST(SpaceCamera, MousePressSetsAnimatingFalse)
+{
+    MockSpaceCamera spaceCamera;
+    // mousePressEvent always sets mAnimating = false (cancels animation)
+    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(50, 50),
+                          Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+    spaceCamera.mousePressEvent(&pressEvent);
+    EXPECT_FALSE(spaceCamera.isAnimating());
+}
+
+// ==========================================================================
+// frameStarted edge cases
+// ==========================================================================
+
+TEST(SpaceCamera, FrameStartedWithZeroTimeDelta)
+{
+    MockSpaceCamera spaceCamera;
+    Ogre::FrameEvent frameEvent;
+    frameEvent.timeSinceLastFrame = 0.0f;
+    EXPECT_TRUE(spaceCamera.frameStarted(frameEvent));
+}
+
+TEST(SpaceCamera, FrameStartedWithLargeTimeDelta)
+{
+    MockSpaceCamera spaceCamera;
+    Ogre::FrameEvent frameEvent;
+    frameEvent.timeSinceLastFrame = 10.0f; // huge delta
+    EXPECT_TRUE(spaceCamera.frameStarted(frameEvent));
+}
+
+TEST(SpaceCamera, FrameStartedWithNegativeTimeDelta)
+{
+    MockSpaceCamera spaceCamera;
+    Ogre::FrameEvent frameEvent;
+    frameEvent.timeSinceLastFrame = -1.0f;
+    EXPECT_TRUE(spaceCamera.frameStarted(frameEvent));
+}
+
+// ==========================================================================
+// Speed transitions
+// ==========================================================================
+
+TEST(SpaceCamera, ControlKeySpeedTransitionCycle)
+{
+    MockSpaceCamera spaceCamera;
+    spaceCamera.setCameraSpeed(1.0f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 1.0f);
+
+    // Press Control → precision mode
+    QKeyEvent pressCtrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+    spaceCamera.keyPressEvent(&pressCtrl);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
+
+    // Release Control → restored speed
+    QKeyEvent releaseCtrl(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+    spaceCamera.keyReleaseEvent(&releaseCtrl);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
+
+    // Press again
+    spaceCamera.keyPressEvent(&pressCtrl);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
+    spaceCamera.keyReleaseEvent(&releaseCtrl);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
+}
+
+TEST(SpaceCamera, SetCameraSpeedExtremeValues)
+{
+    MockSpaceCamera spaceCamera;
+    spaceCamera.setCameraSpeed(99999.0f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 99999.0f);
+
+    spaceCamera.setCameraSpeed(0.0001f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.0001f);
+}
