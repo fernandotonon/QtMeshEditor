@@ -17,6 +17,12 @@ ViewCubeController::ViewCubeController(QWidget* mainWindow, QObject* parent)
         m_mainWindow->installEventFilter(this);
 }
 
+ViewCubeController::~ViewCubeController()
+{
+    if (s_instance == this)
+        s_instance = nullptr;
+}
+
 ViewCubeController* ViewCubeController::instance()
 {
     return s_instance;
@@ -131,11 +137,11 @@ void ViewCubeController::setActiveWidget(OgreWidget* widget)
         m_activeWidget->installEventFilter(this);
         connect(m_activeWidget, &QObject::destroyed, this, [this]() {
             m_activeWidget = nullptr;
-            emit visibilityChanged(m_visible);
+            emit visibilityChanged(isVisible());
         });
     }
 
-    emit visibilityChanged(m_visible);
+    emit visibilityChanged(isVisible());
     reposition();
     updateOrientation();
 }
@@ -176,8 +182,9 @@ bool ViewCubeController::eventFilter(QObject* obj, QEvent* event)
 
     if (obj == m_activeWidget &&
         (type == QEvent::Hide || type == QEvent::Close || type == QEvent::Destroy)) {
-        if (type != QEvent::Hide)
+        if (type == QEvent::Close || type == QEvent::Destroy)
             m_activeWidget = nullptr;
+        emit visibilityChanged(isVisible());
         return QObject::eventFilter(obj, event);
     }
 

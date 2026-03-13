@@ -25,6 +25,7 @@ class ViewCubeController : public QObject
 
 public:
     explicit ViewCubeController(QWidget* mainWindow, QObject* parent = nullptr);
+    ~ViewCubeController() override;
 
     static ViewCubeController* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
     static ViewCubeController* instance();

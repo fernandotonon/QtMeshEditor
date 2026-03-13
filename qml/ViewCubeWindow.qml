@@ -248,6 +248,28 @@ Window {
                 { vertIdx: 7, name: "BackTopLeft",      dir: [ 1,  1,  1] }
             ];
         }
+
+        // Edge definitions: two vertex indices and the "look-from" direction
+        // Direction is derived from the edge midpoint with X negated (same convention as corners)
+        function getEdgeDefs() {
+            return [
+                // Front face edges
+                { vertA: 0, vertB: 1, name: "EdgeFrontBottom",  dir: [ 0, -1, -1] },
+                { vertA: 1, vertB: 2, name: "EdgeFrontRight",   dir: [-1,  0, -1] },
+                { vertA: 2, vertB: 3, name: "EdgeFrontTop",     dir: [ 0,  1, -1] },
+                { vertA: 3, vertB: 0, name: "EdgeFrontLeft",    dir: [ 1,  0, -1] },
+                // Back face edges
+                { vertA: 4, vertB: 5, name: "EdgeBackBottom",   dir: [ 0, -1,  1] },
+                { vertA: 5, vertB: 6, name: "EdgeBackRight",    dir: [-1,  0,  1] },
+                { vertA: 6, vertB: 7, name: "EdgeBackTop",      dir: [ 0,  1,  1] },
+                { vertA: 7, vertB: 4, name: "EdgeBackLeft",     dir: [ 1,  0,  1] },
+                // Connecting edges (front-to-back)
+                { vertA: 0, vertB: 4, name: "EdgeLeftBottom",   dir: [ 1, -1,  0] },
+                { vertA: 1, vertB: 5, name: "EdgeRightBottom",  dir: [-1, -1,  0] },
+                { vertA: 2, vertB: 6, name: "EdgeRightTop",     dir: [-1,  1,  0] },
+                { vertA: 3, vertB: 7, name: "EdgeLeftTop",      dir: [ 1,  1,  0] }
+            ];
+        }
     }
 
     // Repaint when orientation changes
@@ -321,6 +343,15 @@ Window {
                     return;
                 }
             }
+            // Check if it's an edge
+            var edgeDefs = cubeCanvas.getEdgeDefs();
+            for (var j = 0; j < edgeDefs.length; j++) {
+                if (edgeDefs[j].name === zone) {
+                    var ed = edgeDefs[j].dir;
+                    ViewCubeController.snapToDirection(ed[0], ed[1], ed[2]);
+                    return;
+                }
+            }
             // Otherwise it's a face
             ViewCubeController.snapToView(zone);
         }
@@ -364,6 +395,28 @@ Window {
                 }
             }
             if (bestCorner !== "") return bestCorner;
+
+            // Check edges (midpoint of each edge's two vertices)
+            var edgeDefs = cubeCanvas.getEdgeDefs();
+            var edgeHitRadius = 6;
+            var bestEdge = "";
+            var bestEdgeDepth = Infinity;
+            for (var ei = 0; ei < edgeDefs.length; ei++) {
+                var edge = edgeDefs[ei];
+                var pa = projected[edge.vertA];
+                var pb = projected[edge.vertB];
+                var midX = (pa.x + pb.x) / 2;
+                var midY = (pa.y + pb.y) / 2;
+                var midZ = (pa.z + pb.z) / 2;
+                if (midZ > 0) continue; // behind
+
+                var edist = Math.sqrt((mx - midX) * (mx - midX) + (my - midY) * (my - midY));
+                if (edist <= edgeHitRadius && midZ < bestEdgeDepth) {
+                    bestEdge = edge.name;
+                    bestEdgeDepth = midZ;
+                }
+            }
+            if (bestEdge !== "") return bestEdge;
 
             // Check faces
             var faces = [
