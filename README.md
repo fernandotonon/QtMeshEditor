@@ -37,6 +37,7 @@ Split View|Skeleton Animation Controls
 QtMeshEditor helps you prepare 3D assets for your game or project:
 
 - **Merge animations** — Combine multiple animation files (e.g. from Mixamo) into one mesh with all animations
+- **Save & load scenes** — Persist your entire scene (meshes, transforms, materials, skeletons, animations) to a single glTF file
 - **Convert between 40+ formats** — Import FBX, glTF, OBJ, Collada, STL, and more; export to what your engine needs
 - **Edit materials visually** — Real-time material preview with AI-assisted generation
 - **Inspect skeletons & animations** — Visualize bones, bone weights, preview animations, rename them

@@ -50,6 +50,9 @@ public:
     static int exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format);
     static QString formatFileURI(const QString &_uri, const QString &_format);
     static QString exportFileDialogFilter();
+
+    static int sceneExporter(const QString &_uri);
+    static void sceneImporter(const QString &_uri);
 };
 
 #endif // MESHIMPORTEREXPORTER_H

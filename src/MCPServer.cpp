@@ -378,7 +378,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     // Start a performance transaction for heavy tools
     static const QStringList heavyTools = {
         "load_mesh", "export_mesh", "take_screenshot", "create_primitive", "create_material",
-        "merge_animations"
+        "merge_animations", "save_scene", "open_scene"
     };
     uintptr_t txn = 0;
     if (heavyTools.contains(name)) {
@@ -448,6 +448,10 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolToggleMeshInfo(args);
     } else if (name == "merge_animations") {
         toolResult = toolMergeAnimations(args);
+    } else if (name == "save_scene") {
+        toolResult = toolSaveScene(args);
+    } else if (name == "open_scene") {
+        toolResult = toolOpenScene(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -2017,6 +2021,80 @@ QJsonObject MCPServer::toolMergeAnimations(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolSaveScene(const QJsonObject &args)
+{
+    try {
+        QString filePath = args["file_path"].toString();
+        if (filePath.isEmpty())
+            return makeErrorResult("Error: 'file_path' is required (e.g. /tmp/scene.scene.glb)");
+
+        int result = MeshImporterExporter::sceneExporter(filePath);
+        if (result != 0)
+            return makeErrorResult("Error: Failed to save scene to " + filePath);
+
+        return makeSuccessResult("Scene saved to " + filePath);
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolOpenScene(const QJsonObject &args)
+{
+    try {
+        QString filePath = args["file_path"].toString();
+        if (filePath.isEmpty())
+            return makeErrorResult("Error: 'file_path' is required");
+
+        if (!QFile::exists(filePath))
+            return makeErrorResult("Error: File not found: " + filePath);
+
+        MeshImporterExporter::sceneImporter(filePath);
+
+        // Report what was loaded
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr)
+            return makeSuccessResult("Scene loaded from " + filePath);
+
+        auto sceneNodes = mgr->getSceneNodes();
+        QString result = QString("Scene loaded from %1. %2 scene node(s):\n")
+            .arg(filePath).arg(sceneNodes.size());
+
+        for (auto* node : sceneNodes) {
+            QString nodeName = QString::fromStdString(node->getName());
+            result += QString("  - %1").arg(nodeName);
+
+            auto it = node->getAttachedObjectIterator();
+            while (it.hasMoreElements()) {
+                auto* obj = it.getNext();
+                if (obj->getMovableType() == "Entity") {
+                    auto* entity = static_cast<Ogre::Entity*>(obj);
+                    result += QString(" (entity: %1").arg(QString::fromStdString(entity->getName()));
+                    if (entity->hasSkeleton()) {
+                        auto* skel = entity->getMesh()->getSkeleton().get();
+                        result += QString(", %1 animation(s)").arg(skel->getNumAnimations());
+                        for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+                            result += QString("\n      anim[%1]: '%2' (%3s)")
+                                .arg(ai)
+                                .arg(QString::fromStdString(skel->getAnimation(ai)->getName()))
+                                .arg(skel->getAnimation(ai)->getLength(), 0, 'f', 2);
+                        }
+                    }
+                    result += ")";
+                }
+            }
+            result += "\n";
+        }
+
+        return makeSuccessResult(result);
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
 // Helper methods
 
 QJsonArray MCPServer::buildToolsList()
@@ -2497,6 +2575,40 @@ QJsonArray MCPServer::buildToolsList()
             "Animations from non-base entities are prefixed with a slugified version of their scene node name. "
             "Load multiple mesh files first with load_mesh, then call this tool to combine all animations. "
             "Use list_skeletal_animations to see the result.",
+            inputSchema
+        ));
+    }
+
+    // save_scene
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["file_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to save the scene file (e.g. /tmp/scene.scene.glb). Use .scene.glb for binary glTF or .scene.gltf for text."}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"file_path"};
+
+        tools.append(buildToolDefinition(
+            "save_scene",
+            "Save the entire scene (all loaded meshes with positions, rotations, scales, materials, skeletons, and animations) to a glTF file. "
+            "Use .scene.glb for binary glTF (recommended, embeds textures) or .scene.gltf for text format.",
+            inputSchema
+        ));
+    }
+
+    // open_scene
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["file_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to a scene file to open (*.scene.glb, *.scene.gltf, *.glb, *.gltf)"}};
+        inputSchema["properties"] = props;
+        inputSchema["required"] = QJsonArray{"file_path"};
+
+        tools.append(buildToolDefinition(
+            "open_scene",
+            "Open a scene file, replacing the current scene. Loads all meshes with their transforms, materials, skeletons, and animations. "
+            "Reports what was loaded including entity names, positions, and animation counts.",
             inputSchema
         ));
     }

@@ -8,8 +8,10 @@
 #include <QCoreApplication>
 #include <QThread>
 #include <QDir>
+#include <QTemporaryDir>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "SelectionSet.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include <OgreException.h>
 #include "TestHelpers.h"
@@ -1583,3 +1585,165 @@ TEST_F(MeshImporterExporterTest, ImportOgreXML_PositionsOnly_NoNormalsNoUVs) {
     QFile::remove(xmlPath);
 }
 
+// ─── Scene Save/Load Tests ──────────────────────────────────────────
+
+class SceneSaveLoadTest : public ::testing::Test {
+protected:
+    QApplication* app = nullptr;
+
+    void SetUp() override {
+        Manager::kill();
+        QThread::msleep(50);
+
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
+        }
+        if (!canLoadMeshFiles()) {
+            GTEST_SKIP() << "Skipping: Cannot load mesh files (no GL context)";
+        }
+        createStandardOgreMaterials();
+    }
+
+    void TearDown() override {
+        Manager::kill();
+        if (app) app->processEvents();
+        QThread::msleep(50);
+    }
+};
+
+TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
+    auto* manager = Manager::getSingleton();
+
+    // Create two entities with different positions
+    auto mesh1 = createInMemoryTriangleMesh("scene_rt_mesh1");
+    auto* sn1 = manager->addSceneNode("SceneNode1");
+    manager->createEntity(sn1, mesh1);
+    sn1->setPosition(Ogre::Vector3(1.0f, 2.0f, 3.0f));
+    sn1->setScale(Ogre::Vector3(1.5f, 1.5f, 1.5f));
+
+    auto mesh2 = createInMemoryTriangleMesh("scene_rt_mesh2");
+    auto* sn2 = manager->addSceneNode("SceneNode2");
+    manager->createEntity(sn2, mesh2);
+    sn2->setPosition(Ogre::Vector3(-1.0f, 0.0f, 5.0f));
+
+    ASSERT_EQ(manager->getSceneNodes().size(), 2);
+
+    // Export to temp file
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/test_scene.scene.gltf";
+
+    int exportResult = MeshImporterExporter::sceneExporter(sceneFile);
+    ASSERT_EQ(exportResult, 0);
+    ASSERT_TRUE(QFileInfo::exists(sceneFile));
+
+    // Clear scene and reimport
+    MeshImporterExporter::sceneImporter(sceneFile);
+
+    // Verify 2 scene nodes were restored
+    auto& nodes = manager->getSceneNodes();
+    ASSERT_EQ(nodes.size(), 2);
+
+    // Find nodes and verify transforms (order may differ)
+    bool foundNode1 = false, foundNode2 = false;
+    for (auto* sn : nodes)
+    {
+        auto pos = sn->getPosition();
+        if (std::abs(pos.x - 1.0f) < 0.1f && std::abs(pos.y - 2.0f) < 0.1f)
+        {
+            foundNode1 = true;
+            EXPECT_NEAR(pos.z, 3.0f, 0.1f);
+            EXPECT_NEAR(sn->getScale().x, 1.5f, 0.1f);
+        }
+        else if (std::abs(pos.x - (-1.0f)) < 0.1f)
+        {
+            foundNode2 = true;
+            EXPECT_NEAR(pos.y, 0.0f, 0.1f);
+            EXPECT_NEAR(pos.z, 5.0f, 0.1f);
+        }
+    }
+    EXPECT_TRUE(foundNode1) << "First node with position (1,2,3) not found";
+    EXPECT_TRUE(foundNode2) << "Second node with position (-1,0,5) not found";
+}
+
+TEST_F(SceneSaveLoadTest, MaterialDedup_SharedMaterial_ExportedOnce) {
+    auto* manager = Manager::getSingleton();
+
+    // Create a shared material
+    auto sharedMat = Ogre::MaterialManager::getSingleton().create(
+        "SharedTestMat", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    sharedMat->getTechnique(0)->getPass(0)->setDiffuse(1, 0, 0, 1);
+
+    // Create two entities sharing the same material
+    auto mesh1 = createInMemoryTriangleMesh("dedup_mesh1");
+    auto* sn1 = manager->addSceneNode("DedupNode1");
+    auto* e1 = manager->createEntity(sn1, mesh1);
+    e1->setMaterialName("SharedTestMat");
+
+    auto mesh2 = createInMemoryTriangleMesh("dedup_mesh2");
+    auto* sn2 = manager->addSceneNode("DedupNode2");
+    auto* e2 = manager->createEntity(sn2, mesh2);
+    e2->setMaterialName("SharedTestMat");
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/test_dedup.scene.gltf";
+
+    int result = MeshImporterExporter::sceneExporter(sceneFile);
+    EXPECT_EQ(result, 0);
+
+    // Reimport to verify both entities load correctly
+    MeshImporterExporter::sceneImporter(sceneFile);
+    EXPECT_EQ(manager->getSceneNodes().size(), 2);
+}
+
+TEST_F(SceneSaveLoadTest, EmptyScene_ExportsValidFile) {
+    auto* manager = Manager::getSingleton();
+    ASSERT_EQ(manager->getSceneNodes().size(), 0);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/empty_scene.scene.gltf";
+
+    int result = MeshImporterExporter::sceneExporter(sceneFile);
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(sceneFile));
+}
+
+TEST_F(SceneSaveLoadTest, RoundTrip_SkeletonEntity_PreservesAnimations) {
+    auto* manager = Manager::getSingleton();
+
+    // Create an animated entity with skeleton and "TestAnim" animation
+    auto* entity = createAnimatedTestEntity("SceneAnimRT");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(entity->getMesh()->getSkeleton()->getNumAnimations(), 1);
+
+    // Export to temp .scene.gltf
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/test_anim_roundtrip.scene.gltf";
+
+    int exportResult = MeshImporterExporter::sceneExporter(sceneFile);
+    ASSERT_EQ(exportResult, 0);
+    ASSERT_TRUE(QFileInfo::exists(sceneFile));
+
+    // Clear scene and reimport
+    MeshImporterExporter::sceneImporter(sceneFile);
+
+    // Verify 1 scene node was restored
+    auto& nodes = manager->getSceneNodes();
+    ASSERT_EQ(nodes.size(), 1);
+
+    // Get the reimported entity and verify skeleton with animation
+    auto* reimportedNode = nodes.first();
+    auto* sceneMgr = manager->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity(reimportedNode->getName()));
+
+    auto* reimportedEntity = sceneMgr->getEntity(reimportedNode->getName());
+    ASSERT_TRUE(reimportedEntity->hasSkeleton());
+    EXPECT_GE(reimportedEntity->getMesh()->getSkeleton()->getNumAnimations(), 1);
+}

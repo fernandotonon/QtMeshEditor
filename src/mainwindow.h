@@ -50,6 +50,8 @@ public:
     
 private slots:
     void on_actionImport_triggered();
+    void on_actionOpen_Scene_triggered();
+    void on_actionSave_Scene_triggered();
     void on_actionMaterial_Editor_triggered();
     void on_actionAbout_triggered();
     void on_actionMerge_Animations_triggered();

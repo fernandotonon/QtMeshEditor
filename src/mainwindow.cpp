@@ -114,14 +114,17 @@ MainWindow::MainWindow(QWidget *parent) :
             try {
                 m_pRoot->renderOneFrame();
             } catch (Ogre::Exception& e) {
+                fprintf(stderr, "RENDER ERROR (Ogre): %s\n", e.getFullDescription().c_str());
                 SentryReporter::captureMessage(
                     QString("Render error (Ogre): %1").arg(e.getFullDescription().c_str()), "error");
                 if(m_pTimer) m_pTimer->stop();
             } catch (std::exception& e) {
+                fprintf(stderr, "RENDER ERROR (std): %s\n", e.what());
                 SentryReporter::captureMessage(
                     QString("Render error (std): %1").arg(e.what()), "error");
                 if(m_pTimer) m_pTimer->stop();
             } catch (...) {
+                fprintf(stderr, "RENDER ERROR (unknown)\n");
                 SentryReporter::captureMessage("Render error (unknown)", "error");
                 if(m_pTimer) m_pTimer->stop();
             }
@@ -393,10 +396,12 @@ void MainWindow::initToolBar()
             m_viewCubeController->setActiveWidget(w);
         });
 
-    // Default to visible and activate the first viewport
-    m_viewCubeController->setVisible(true);
+    // Activate the first viewport, then set visible
+    // (setActiveWidget emits visibilityChanged which checks isVisible(),
+    //  so m_visible must be true AND the widget must be visible)
     if (!mDockWidgetList.isEmpty())
         m_viewCubeController->setActiveWidget(mDockWidgetList.first()->getOgreWidget());
+    m_viewCubeController->setVisible(true);
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
@@ -588,6 +593,49 @@ void MainWindow::importMeshs(const QStringList &_uriList)
     auto txn = SentryReporter::startTransaction("ui.import", "file.import");
     try {
         MeshImporterExporter::importer(_uriList/*, &lastImported*/);
+    } catch (...) {
+        SentryReporter::finishTransaction(txn);
+        throw;
+    }
+    SentryReporter::finishTransaction(txn);
+}
+
+void MainWindow::on_actionOpen_Scene_triggered()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Open scene file");
+
+    QString fileName = QFileDialog::getOpenFileName(this, tr("Open Scene"),
+                                                    "",
+                                                    tr("Scene Files (*.scene.glb *.scene.gltf);;glTF Files (*.gltf *.glb);;All Files (*)"),
+                                                    nullptr, QFileDialog::DontUseNativeDialog);
+    if (fileName.isEmpty()) return;
+
+    auto txn = SentryReporter::startTransaction("ui.import", "scene.import");
+    try {
+        MeshImporterExporter::sceneImporter(fileName);
+    } catch (...) {
+        SentryReporter::finishTransaction(txn);
+        throw;
+    }
+    SentryReporter::finishTransaction(txn);
+    addToRecentFiles(fileName);
+}
+
+void MainWindow::on_actionSave_Scene_triggered()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Save scene file");
+
+    QString fileName = QFileDialog::getSaveFileName(this, tr("Save Scene"),
+                                                    "scene.scene.glb",
+                                                    tr("Scene glTF Binary (*.scene.glb);;Scene glTF (*.scene.gltf)"),
+                                                    nullptr, QFileDialog::DontUseNativeDialog);
+    if (fileName.isEmpty()) return;
+
+    auto txn = SentryReporter::startTransaction("ui.export", "scene.export");
+    try {
+        int result = MeshImporterExporter::sceneExporter(fileName);
+        if (result != 0)
+            QMessageBox::warning(this, tr("Save Scene"), tr("Failed to save scene."));
     } catch (...) {
         SentryReporter::finishTransaction(txn);
         throw;

@@ -41,8 +41,13 @@ THE SOFTWARE.
 #include "OgreXML/pugixml.hpp"
 
 #include "Manager.h"
+#include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "Assimp/Importer.h"
+#include "Assimp/MaterialProcessor.h"
+#include "Assimp/MeshProcessor.h"
+#include "Assimp/BoneProcessor.h"
+#include "Assimp/AnimationProcessor.h"
 
 #ifndef WIN32
     #include <unistd.h>
@@ -1042,4 +1047,862 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
     }
 
     return 0;
+}
+
+// ─── Scene-level export: all scene nodes → single glTF ──────────────
+static aiScene* buildSceneAiScene()
+{
+    auto* manager = Manager::getSingleton();
+    const auto& sceneNodes = manager->getSceneNodes();
+
+    auto* scene = new aiScene();
+    scene->mRootNode = new aiNode("Scene");
+
+    if (sceneNodes.isEmpty())
+    {
+        // Valid empty scene
+        scene->mNumMeshes = 0;
+        scene->mNumMaterials = 1;
+        scene->mMaterials = new aiMaterial*[1];
+        scene->mMaterials[0] = new aiMaterial();
+        return scene;
+    }
+
+    // --- Collect all entities from scene nodes ---
+    struct NodeEntityPair {
+        Ogre::SceneNode* sceneNode;
+        Ogre::Entity* entity;
+    };
+    std::vector<NodeEntityPair> nodeEntities;
+    for (auto* sn : sceneNodes)
+    {
+        if (!manager->getSceneMgr()->hasEntity(sn->getName()))
+            continue;
+        auto* entity = manager->getSceneMgr()->getEntity(sn->getName());
+        if (entity)
+            nodeEntities.push_back({sn, entity});
+    }
+
+    if (nodeEntities.empty())
+    {
+        scene->mNumMeshes = 0;
+        scene->mNumMaterials = 1;
+        scene->mMaterials = new aiMaterial*[1];
+        scene->mMaterials[0] = new aiMaterial();
+        return scene;
+    }
+
+    // --- Deduplicate materials across all entities ---
+    std::vector<Ogre::MaterialPtr> materials;
+    std::map<std::string, unsigned int, std::less<>> matIndexMap;
+    for (const auto& [sn, entity] : nodeEntities)
+    {
+        for (const auto* sub : entity->getSubEntities())
+        {
+            auto mat = sub->getMaterial();
+            if (matIndexMap.find(mat->getName()) == matIndexMap.end())
+            {
+                matIndexMap[mat->getName()] = static_cast<unsigned int>(materials.size());
+                materials.push_back(mat);
+            }
+        }
+    }
+
+    scene->mNumMaterials = static_cast<unsigned int>(materials.size());
+    scene->mMaterials = new aiMaterial*[scene->mNumMaterials];
+    for (unsigned int i = 0; i < scene->mNumMaterials; ++i)
+    {
+        auto* aiMat = new aiMaterial();
+        aiString matName(materials[i]->getName());
+        aiMat->AddProperty(&matName, AI_MATKEY_NAME);
+
+        auto* tech = materials[i]->getTechnique(0);
+        if (tech && tech->getNumPasses() > 0)
+        {
+            auto* pass = tech->getPass(0);
+            auto d = pass->getDiffuse();
+            aiColor4D diffuse(d.r, d.g, d.b, d.a);
+            aiMat->AddProperty(&diffuse, 1, AI_MATKEY_COLOR_DIFFUSE);
+
+            auto s = pass->getSpecular();
+            aiColor4D specular(s.r, s.g, s.b, s.a);
+            aiMat->AddProperty(&specular, 1, AI_MATKEY_COLOR_SPECULAR);
+
+            auto a = pass->getAmbient();
+            aiColor4D ambient(a.r, a.g, a.b, a.a);
+            aiMat->AddProperty(&ambient, 1, AI_MATKEY_COLOR_AMBIENT);
+
+            auto e = pass->getSelfIllumination();
+            aiColor4D emissive(e.r, e.g, e.b, e.a);
+            aiMat->AddProperty(&emissive, 1, AI_MATKEY_COLOR_EMISSIVE);
+
+            float shininess = pass->getShininess();
+            aiMat->AddProperty(&shininess, 1, AI_MATKEY_SHININESS);
+
+            unsigned short diffuseIdx = 0;
+            unsigned short normalIdx = 0;
+            for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
+            {
+                auto* tus = pass->getTextureUnitState(ti);
+                if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
+                {
+                    aiString texPath(tus->getTextureName());
+                    const auto& tusName = tus->getName();
+                    if (tusName == "normal_map" || tusName == "NormalMap")
+                    {
+                        aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
+                        ++normalIdx;
+                    }
+                    else
+                    {
+                        aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
+                        ++diffuseIdx;
+                    }
+                }
+            }
+        }
+        scene->mMaterials[i] = aiMat;
+    }
+
+    // --- Count total meshes and build child nodes ---
+    unsigned int totalMeshes = 0;
+    for (const auto& [sn, entity] : nodeEntities)
+        totalMeshes += entity->getMesh()->getNumSubMeshes();
+
+    scene->mNumMeshes = totalMeshes;
+    scene->mMeshes = new aiMesh*[totalMeshes];
+
+    // Root node children: one per scene node
+    scene->mRootNode->mNumChildren = static_cast<unsigned int>(nodeEntities.size());
+    scene->mRootNode->mChildren = new aiNode*[scene->mRootNode->mNumChildren];
+
+    unsigned int globalMeshIdx = 0;
+    std::set<Ogre::Skeleton*> processedSkeletons;
+    std::vector<aiAnimation*> allAnimations;
+
+    for (unsigned int ni = 0; ni < nodeEntities.size(); ++ni)
+    {
+        auto* sn = nodeEntities[ni].sceneNode;
+        auto* entity = nodeEntities[ni].entity;
+        const Ogre::MeshPtr mesh = entity->getMesh();
+        const unsigned int numSub = mesh->getNumSubMeshes();
+        const bool hasSkeleton = entity->hasSkeleton();
+        Ogre::Skeleton* skeleton = hasSkeleton ? mesh->getSkeleton().get() : nullptr;
+
+        // Build bone handle→name map for this entity
+        // Prefix bone names with entity name to ensure uniqueness across entities
+        std::map<unsigned short, std::string> boneHandleToName;
+        std::string bonePrefix = (nodeEntities.size() > 1 && hasSkeleton)
+            ? std::string(sn->getName()) + "_" : "";
+
+        // Create the scene node's aiNode
+        aiNode* entityNode;
+        if (hasSkeleton)
+        {
+            // For skeletal meshes: create entity node with bone hierarchy + mesh child
+            entityNode = new aiNode(std::string(sn->getName()));
+            entityNode->mParent = scene->mRootNode;
+
+            // Prefixed bone node builder
+            std::function<aiNode*(Ogre::Bone*, aiNode*)> buildPrefixedBoneNode;
+            buildPrefixedBoneNode = [&](Ogre::Bone* bone, aiNode* parent) -> aiNode* {
+                auto* node = new aiNode(bonePrefix + std::string(bone->getName()));
+                node->mParent = parent;
+                Ogre::Matrix4 localTransform;
+                localTransform.makeTransform(bone->getPosition(), bone->getScale(), bone->getOrientation());
+                node->mTransformation = toAiMatrix(localTransform);
+                const auto& children = bone->getChildren();
+                if (!children.empty()) {
+                    node->mNumChildren = static_cast<unsigned int>(children.size());
+                    node->mChildren = new aiNode*[node->mNumChildren];
+                    unsigned int ci = 0;
+                    for (auto* child : children) {
+                        auto* childBone = dynamic_cast<Ogre::Bone*>(child);
+                        if (childBone)
+                            node->mChildren[ci++] = buildPrefixedBoneNode(childBone, node);
+                    }
+                    node->mNumChildren = ci;
+                }
+                return node;
+            };
+
+            auto numBones = skeleton->getNumBones();
+            std::vector<aiNode*> rootBoneNodes;
+            for (unsigned short bi = 0; bi < numBones; ++bi)
+            {
+                auto* bone = skeleton->getBone(bi);
+                boneHandleToName[bone->getHandle()] = bonePrefix + std::string(bone->getName());
+                if (!bone->getParent())
+                    rootBoneNodes.push_back(buildPrefixedBoneNode(bone, entityNode));
+            }
+
+            auto* meshNode = new aiNode(std::string(sn->getName()) + "_mesh");
+            meshNode->mParent = entityNode;
+            meshNode->mNumMeshes = numSub;
+            meshNode->mMeshes = new unsigned int[numSub];
+            for (unsigned int si = 0; si < numSub; ++si)
+                meshNode->mMeshes[si] = globalMeshIdx + si;
+
+            entityNode->mNumChildren = static_cast<unsigned int>(rootBoneNodes.size()) + 1;
+            entityNode->mChildren = new aiNode*[entityNode->mNumChildren];
+            for (unsigned int i = 0; i < rootBoneNodes.size(); ++i)
+                entityNode->mChildren[i] = rootBoneNodes[i];
+            entityNode->mChildren[rootBoneNodes.size()] = meshNode;
+        }
+        else
+        {
+            // Non-skeletal: meshes directly on node
+            entityNode = new aiNode(std::string(sn->getName()));
+            entityNode->mParent = scene->mRootNode;
+            entityNode->mNumMeshes = numSub;
+            entityNode->mMeshes = new unsigned int[numSub];
+            for (unsigned int si = 0; si < numSub; ++si)
+                entityNode->mMeshes[si] = globalMeshIdx + si;
+        }
+
+        // Set transform from scene node position/orientation/scale
+        Ogre::Matrix4 nodeTransform;
+        nodeTransform.makeTransform(sn->getPosition(), sn->getScale(), sn->getOrientation());
+        entityNode->mTransformation = toAiMatrix(nodeTransform);
+
+        scene->mRootNode->mChildren[ni] = entityNode;
+
+        // --- Build meshes for this entity ---
+        for (unsigned int si = 0; si < numSub; ++si)
+        {
+            const Ogre::SubMesh* subMesh = mesh->getSubMesh(si);
+            const Ogre::VertexData* vData = subMesh->useSharedVertices
+                ? mesh->sharedVertexData : subMesh->vertexData;
+            if (!vData) { scene->mMeshes[globalMeshIdx + si] = new aiMesh(); continue; }
+
+            auto* aiM = new aiMesh();
+            scene->mMeshes[globalMeshIdx + si] = aiM;
+            aiM->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
+            aiM->mNumVertices = static_cast<unsigned int>(vData->vertexCount);
+            aiM->mVertices = new aiVector3D[aiM->mNumVertices];
+
+            // Material index
+            const auto* subEnt = entity->getSubEntity(si);
+            auto matIt = matIndexMap.find(subEnt->getMaterial()->getName());
+            aiM->mMaterialIndex = (matIt != matIndexMap.end()) ? matIt->second : 0;
+
+            // Read positions
+            const auto* posElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+            if (posElem)
+            {
+                auto vbuf = vData->vertexBufferBinding->getBuffer(posElem->getSource());
+                auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+                {
+                    const Ogre::Real* p;
+                    posElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+                    aiM->mVertices[j] = aiVector3D(p[0], p[1], p[2]);
+                }
+                vbuf->unlock();
+            }
+
+            // Read normals
+            const auto* normElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
+            if (normElem)
+            {
+                aiM->mNormals = new aiVector3D[aiM->mNumVertices];
+                auto vbuf = vData->vertexBufferBinding->getBuffer(normElem->getSource());
+                auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+                {
+                    const Ogre::Real* p;
+                    normElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+                    aiM->mNormals[j] = aiVector3D(p[0], p[1], p[2]);
+                }
+                vbuf->unlock();
+            }
+
+            // Read texture coordinates
+            const auto* tcElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
+            if (tcElem)
+            {
+                aiM->mTextureCoords[0] = new aiVector3D[aiM->mNumVertices];
+                aiM->mNumUVComponents[0] = 2;
+                auto vbuf = vData->vertexBufferBinding->getBuffer(tcElem->getSource());
+                auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+                {
+                    const Ogre::Real* p;
+                    tcElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+                    aiM->mTextureCoords[0][j] = aiVector3D(p[0], p[1], 0.0f);
+                }
+                vbuf->unlock();
+            }
+
+            // Read indices
+            const Ogre::IndexData* iData = subMesh->indexData;
+            if (iData && iData->indexCount > 0)
+            {
+                aiM->mNumFaces = static_cast<unsigned int>(iData->indexCount / 3);
+                aiM->mFaces = new aiFace[aiM->mNumFaces];
+                auto ibuf = iData->indexBuffer;
+                auto* ibase = static_cast<const unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
+
+                for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
+                {
+                    aiM->mFaces[f].mNumIndices = 3;
+                    aiM->mFaces[f].mIndices = new unsigned int[3];
+                    for (unsigned int v = 0; v < 3; ++v)
+                    {
+                        unsigned int idx = use32
+                            ? reinterpret_cast<const uint32_t*>(ibase)[f * 3 + v]
+                            : reinterpret_cast<const uint16_t*>(ibase)[f * 3 + v];
+                        aiM->mFaces[f].mIndices[v] = idx;
+                    }
+                }
+                ibuf->unlock();
+            }
+
+            // Bone weights
+            if (hasSkeleton)
+            {
+                const auto& boneAssignments = subMesh->useSharedVertices
+                    ? mesh->getBoneAssignments() : subMesh->getBoneAssignments();
+                std::map<unsigned short, std::vector<aiVertexWeight>> boneWeightsMap;
+                for (const auto& [vertIdx, vba] : boneAssignments)
+                {
+                    aiVertexWeight w;
+                    w.mVertexId = vba.vertexIndex;
+                    w.mWeight = vba.weight;
+                    boneWeightsMap[vba.boneIndex].push_back(w);
+                }
+
+                if (!boneWeightsMap.empty())
+                {
+                    aiM->mNumBones = static_cast<unsigned int>(boneWeightsMap.size());
+                    aiM->mBones = new aiBone*[aiM->mNumBones];
+                    unsigned int bi = 0;
+                    for (const auto& [handle, weights] : boneWeightsMap)
+                    {
+                        auto* aiBoneObj = new aiBone();
+                        auto nameIt = boneHandleToName.find(handle);
+                        if (nameIt != boneHandleToName.end())
+                            aiBoneObj->mName = aiString(nameIt->second);
+
+                        auto* bone = skeleton->getBone(handle);
+                        Ogre::Matrix4 globalTransform = bone->_getFullTransform();
+                        aiBoneObj->mOffsetMatrix = toAiMatrix(globalTransform.inverse());
+
+                        aiBoneObj->mNumWeights = static_cast<unsigned int>(weights.size());
+                        aiBoneObj->mWeights = new aiVertexWeight[aiBoneObj->mNumWeights];
+                        for (unsigned int wi = 0; wi < aiBoneObj->mNumWeights; ++wi)
+                            aiBoneObj->mWeights[wi] = weights[wi];
+
+                        aiM->mBones[bi++] = aiBoneObj;
+                    }
+                }
+            }
+        }
+
+        // --- Animations ---
+        // When bone names are prefixed, each entity needs its own animations
+        // Only dedup when there's no prefix (single entity)
+        if (hasSkeleton && skeleton->getNumAnimations() > 0
+            && (bonePrefix.empty() ? processedSkeletons.insert(skeleton).second : true))
+        {
+            for (unsigned short ai = 0; ai < skeleton->getNumAnimations(); ++ai)
+            {
+                auto* ogreAnim = skeleton->getAnimation(ai);
+                auto* anim = new aiAnimation();
+                anim->mName = aiString(bonePrefix + ogreAnim->getName());
+                anim->mTicksPerSecond = 1.0;
+                anim->mDuration = ogreAnim->getLength();
+
+                std::vector<aiNodeAnim*> channels;
+                for (const auto& [handle, track] : ogreAnim->_getNodeTrackList())
+                {
+                    auto* bone = dynamic_cast<Ogre::Bone*>(track->getAssociatedNode());
+                    if (!bone) continue;
+
+                    auto* nodeAnim = new aiNodeAnim();
+                    nodeAnim->mNodeName = aiString(bonePrefix + std::string(bone->getName()));
+
+                    auto numKeyFrames = track->getNumKeyFrames();
+                    nodeAnim->mNumPositionKeys = numKeyFrames;
+                    nodeAnim->mNumRotationKeys = numKeyFrames;
+                    nodeAnim->mNumScalingKeys = numKeyFrames;
+                    nodeAnim->mPositionKeys = new aiVectorKey[numKeyFrames];
+                    nodeAnim->mRotationKeys = new aiQuatKey[numKeyFrames];
+                    nodeAnim->mScalingKeys = new aiVectorKey[numKeyFrames];
+
+                    Ogre::Vector3 bindPos = bone->getPosition();
+                    Ogre::Quaternion bindRot = bone->getOrientation();
+
+                    for (unsigned short ki = 0; ki < numKeyFrames; ++ki)
+                    {
+                        auto* kf = track->getNodeKeyFrame(ki);
+                        double time = kf->getTime();
+
+                        Ogre::Vector3 pos = bindPos + kf->getTranslate();
+                        nodeAnim->mPositionKeys[ki].mTime = time;
+                        nodeAnim->mPositionKeys[ki].mValue = aiVector3D(pos.x, pos.y, pos.z);
+
+                        Ogre::Quaternion rot = bindRot * kf->getRotation();
+                        rot.normalise();
+                        nodeAnim->mRotationKeys[ki].mTime = time;
+                        nodeAnim->mRotationKeys[ki].mValue = aiQuaternion(rot.w, rot.x, rot.y, rot.z);
+
+                        Ogre::Vector3 scl = kf->getScale();
+                        nodeAnim->mScalingKeys[ki].mTime = time;
+                        nodeAnim->mScalingKeys[ki].mValue = aiVector3D(scl.x, scl.y, scl.z);
+                    }
+                    channels.push_back(nodeAnim);
+                }
+                anim->mNumChannels = static_cast<unsigned int>(channels.size());
+                anim->mChannels = new aiNodeAnim*[anim->mNumChannels];
+                for (unsigned int ci = 0; ci < anim->mNumChannels; ++ci)
+                    anim->mChannels[ci] = channels[ci];
+                allAnimations.push_back(anim);
+            }
+        }
+
+        globalMeshIdx += numSub;
+    }
+
+    // Assign animations to scene
+    if (!allAnimations.empty())
+    {
+        scene->mNumAnimations = static_cast<unsigned int>(allAnimations.size());
+        scene->mAnimations = new aiAnimation*[scene->mNumAnimations];
+        for (unsigned int i = 0; i < scene->mNumAnimations; ++i)
+            scene->mAnimations[i] = allAnimations[i];
+    }
+
+    return scene;
+}
+
+int MeshImporterExporter::sceneExporter(const QString &_uri)
+{
+    if (_uri.isEmpty()) return -1;
+
+    QFileInfo file(_uri);
+
+    try {
+        // Export textures for all entities
+        auto* manager = Manager::getSingleton();
+        for (auto* sn : manager->getSceneNodes())
+        {
+            if (!manager->getSceneMgr()->hasEntity(sn->getName()))
+                continue;
+            auto* entity = manager->getSceneMgr()->getEntity(sn->getName());
+            if (entity)
+                exportMaterial(entity, file);
+        }
+
+        aiScene* scene = buildSceneAiScene();
+        if (!scene)
+        {
+            Ogre::LogManager::getSingleton().logError("Failed to build scene aiScene");
+            return -1;
+        }
+
+        // Determine format from extension
+        // Strip .scene prefix if present (e.g., "model.scene.glb" → use "glb2")
+        QString suffix = file.suffix().toLower();
+        QString formatId = (suffix == "glb") ? "glb2" : "gltf2";
+
+        Assimp::Exporter exporter;
+
+        // Both Ogre and glTF are right-handed — no ConvertToLeftHanded
+        aiReturn result = exporter.Export(scene, formatId.toStdString().c_str(),
+                                         file.filePath().toStdString().c_str(), 0);
+        if (result != AI_SUCCESS)
+        {
+            auto msg = QString("Scene export failed (code %1): %2")
+                .arg(result).arg(exporter.GetErrorString());
+            qWarning() << msg;
+            Ogre::LogManager::getSingleton().logError(msg.toStdString());
+            SentryReporter::captureMessage(msg, "error");
+            delete scene;
+            return -1;
+        }
+
+        delete scene;
+    } catch (std::exception& ex) {
+        auto msg = QString("Scene export failed: %1").arg(ex.what());
+        Ogre::LogManager::getSingleton().logError(msg.toStdString());
+        SentryReporter::captureMessage(msg, "error");
+        return -1;
+    } catch (...) {
+        Ogre::LogManager::getSingleton().logError("Scene export failed with unknown exception");
+        return -1;
+    }
+
+    return 0;
+}
+
+// ─── Scene-level import: glTF → multiple scene nodes ────────────────
+void MeshImporterExporter::sceneImporter(const QString &_uri)
+{
+    if (_uri.isEmpty()) return;
+
+    QFileInfo file(_uri);
+    if (!file.exists()) return;
+
+    ensureResourceGroup(file.path());
+
+    // Clear existing scene
+    SelectionSet::getSingleton()->clearList();
+    auto* manager = Manager::getSingleton();
+    auto sceneNodesCopy = manager->getSceneNodes();
+    for (auto* sn : sceneNodesCopy)
+        manager->destroySceneNode(sn);
+
+    try {
+        Assimp::Importer assimpImporter;
+        assimpImporter.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+
+        // Same flags as AssimpToOgreImporter BUT without aiProcess_OptimizeGraph
+        // (it flattens the hierarchy we need to preserve)
+        unsigned int flags = aiProcess_CalcTangentSpace |
+                             aiProcess_JoinIdenticalVertices |
+                             aiProcess_Triangulate |
+                             aiProcess_RemoveComponent |
+                             aiProcess_GenSmoothNormals |
+                             aiProcess_ValidateDataStructure |
+                             aiProcess_LimitBoneWeights |
+                             aiProcess_SortByPType |
+                             aiProcess_ImproveCacheLocality |
+                             aiProcess_FixInfacingNormals |
+                             aiProcess_PopulateArmatureData |
+                             aiProcess_OptimizeMeshes |
+                             aiProcess_GlobalScale;
+
+        const aiScene* scene = assimpImporter.ReadFile(file.filePath().toStdString(), flags);
+        if (!scene || !scene->mRootNode)
+        {
+            Ogre::LogManager::getSingleton().logError(
+                "Scene import failed: " + std::string(assimpImporter.GetErrorString()));
+            return;
+        }
+
+        // Process materials
+        MaterialProcessor materialProcessor;
+        materialProcessor.loadScene(scene);
+
+        // Build set of bone names to distinguish bones from scene nodes
+        std::set<std::string> boneNames;
+        for (unsigned int mi = 0; mi < scene->mNumMeshes; ++mi)
+        {
+            const aiMesh* mesh = scene->mMeshes[mi];
+            for (unsigned int bi = 0; bi < mesh->mNumBones; ++bi)
+                boneNames.insert(mesh->mBones[bi]->mName.C_Str());
+        }
+
+        // Helper: decompose aiMatrix4x4 into position, orientation, scale
+        auto decomposeTransform = [](const aiMatrix4x4& m,
+                                     Ogre::Vector3& pos, Ogre::Quaternion& orient, Ogre::Vector3& scale)
+        {
+            aiVector3D aiPos, aiScale;
+            aiQuaternion aiRot;
+            m.Decompose(aiScale, aiRot, aiPos);
+            pos = Ogre::Vector3(aiPos.x, aiPos.y, aiPos.z);
+            orient = Ogre::Quaternion(aiRot.w, aiRot.x, aiRot.y, aiRot.z);
+            scale = Ogre::Vector3(aiScale.x, aiScale.y, aiScale.z);
+        };
+
+        // Collect all mesh-bearing nodes with their world transforms
+        struct NodeEntry {
+            const aiNode* node;
+            aiMatrix4x4 worldTransform;
+        };
+        std::vector<NodeEntry> meshNodes;
+
+        std::function<void(const aiNode*, const aiMatrix4x4&)> collectNodes;
+        collectNodes = [&](const aiNode* node, const aiMatrix4x4& parentTransform)
+        {
+            aiMatrix4x4 worldTransform = parentTransform * node->mTransformation;
+            bool isBone = boneNames.count(node->mName.C_Str()) > 0 && node->mNumMeshes == 0;
+
+            if (node->mNumMeshes > 0 && !isBone)
+                meshNodes.push_back({node, worldTransform});
+
+            if (!isBone)
+            {
+                for (unsigned int ci = 0; ci < node->mNumChildren; ++ci)
+                    collectNodes(node->mChildren[ci], worldTransform);
+            }
+        };
+        collectNodes(scene->mRootNode, aiMatrix4x4());
+
+        // Create one Ogre entity per mesh-bearing node
+        for (const auto& entry : meshNodes)
+        {
+            const aiNode* node = entry.node;
+
+            QString nodeName = QString::fromUtf8(node->mName.C_Str());
+            if (nodeName.isEmpty())
+                nodeName = QString("SceneNode_%1").arg(manager->getSceneNodes().size());
+
+            // Make unique name
+            QString baseName = nodeName;
+            int counter = 1;
+            while (manager->hasSceneNode(nodeName) || manager->isForbiddenNodeName(nodeName))
+                nodeName = QString("%1_%2").arg(baseName).arg(counter++);
+
+            std::string meshName = (nodeName + "_mesh").toStdString();
+            if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+                Ogre::MeshManager::getSingleton().remove(old);
+
+            // Determine entity prefix for bone/animation filtering.
+            // During export with multiple entities, bones are prefixed
+            // with "entityName_". Detect this from the parent node name.
+            std::string entityPrefix;
+            if (meshNodes.size() > 1 && node->mParent
+                && node->mParent != scene->mRootNode)
+            {
+                entityPrefix = std::string(node->mParent->mName.C_Str()) + "_";
+            }
+
+            // Check if any of this node's meshes have bones
+            bool hasBones = false;
+            for (unsigned int mi = 0; mi < node->mNumMeshes && !hasBones; ++mi)
+            {
+                if (scene->mMeshes[node->mMeshes[mi]]->mNumBones > 0)
+                    hasBones = true;
+            }
+
+            // Create per-entity skeleton scoped to only this node's meshes
+            Ogre::SkeletonPtr skeleton;
+            if (hasBones)
+            {
+                std::string skelName = meshName + ".skeleton";
+                if (auto old = Ogre::SkeletonManager::getSingleton().getByName(skelName))
+                    Ogre::SkeletonManager::getSingleton().remove(old);
+
+                skeleton = Ogre::SkeletonManager::getSingleton().create(
+                    skelName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
+
+                std::vector<aiMesh*> nodeMeshPtrs;
+                for (unsigned int mi = 0; mi < node->mNumMeshes; ++mi)
+                    nodeMeshPtrs.push_back(scene->mMeshes[node->mMeshes[mi]]);
+
+                // Build skeleton directly from mesh bone data.
+                // When a shared glTF skin merges bones from multiple entities,
+                // use the entity prefix to include only this entity's bones.
+
+                // Step 1: Create all bones and compute global transforms
+                std::map<std::string, Ogre::Matrix4> boneGlobalTransforms;
+                for (auto* m : nodeMeshPtrs)
+                {
+                    for (unsigned int bi = 0; bi < m->mNumBones; ++bi)
+                    {
+                        aiBone* bone = m->mBones[bi];
+                        std::string name = bone->mName.C_Str();
+
+                        // Filter: only include bones matching this entity's prefix
+                        if (!entityPrefix.empty()
+                            && name.rfind(entityPrefix, 0) != 0)
+                            continue;
+
+                        if (skeleton->hasBone(name))
+                            continue;
+
+                        skeleton->createBone(name);
+
+                        // Global transform = inverse of offset matrix
+                        aiMatrix4x4 off = bone->mOffsetMatrix;
+                        aiMatrix4x4 global = off;
+                        global.Inverse();
+                        Ogre::Matrix4 ogreGlobal(
+                            global.a1, global.a2, global.a3, global.a4,
+                            global.b1, global.b2, global.b3, global.b4,
+                            global.c1, global.c2, global.c3, global.c4,
+                            global.d1, global.d2, global.d3, global.d4);
+                        boneGlobalTransforms[name] = ogreGlobal;
+                    }
+                }
+
+                // Step 2: Set parent-child relationships using mNode hierarchy
+                // (only between bones that both exist in this skeleton)
+                for (auto* m : nodeMeshPtrs)
+                {
+                    for (unsigned int bi = 0; bi < m->mNumBones; ++bi)
+                    {
+                        aiBone* bone = m->mBones[bi];
+                        if (!bone->mNode || !bone->mNode->mParent)
+                            continue;
+
+                        // Walk up the node tree to find a parent that's in this skeleton
+                        aiNode* parentNode = bone->mNode->mParent;
+                        while (parentNode)
+                        {
+                            std::string parentName = parentNode->mName.C_Str();
+                            if (skeleton->hasBone(parentName))
+                            {
+                                Ogre::Bone* parentBone = skeleton->getBone(parentName);
+                                Ogre::Bone* childBone = skeleton->getBone(bone->mName.C_Str());
+                                if (!childBone->getParent())
+                                    parentBone->addChild(childBone);
+                                break;
+                            }
+                            parentNode = parentNode->mParent;
+                        }
+                    }
+                }
+
+                // Step 3: Apply transforms (convert global to local)
+                for (auto& [name, globalTf] : boneGlobalTransforms)
+                {
+                    Ogre::Bone* bone = skeleton->getBone(name);
+                    Ogre::Matrix4 localTf = globalTf;
+                    if (bone->getParent())
+                    {
+                        auto parentIt = boneGlobalTransforms.find(bone->getParent()->getName());
+                        if (parentIt != boneGlobalTransforms.end())
+                            localTf = parentIt->second.inverse() * globalTf;
+                    }
+                    Ogre::Affine3 affine(localTf);
+                    Ogre::Vector3 pos, scale;
+                    Ogre::Quaternion orient;
+                    affine.decomposition(pos, scale, orient);
+                    bone->setPosition(pos);
+                    bone->setOrientation(orient);
+                    bone->setScale(scale);
+                }
+
+                skeleton->setBindingPose();
+
+                // Filter animations: use entity prefix if available,
+                // otherwise fall back to bone name matching
+                if (scene->HasAnimations())
+                {
+                    std::vector<aiAnimation*> relevantAnims;
+                    for (unsigned int ai = 0; ai < scene->mNumAnimations; ++ai)
+                    {
+                        aiAnimation* anim = scene->mAnimations[ai];
+                        if (!entityPrefix.empty())
+                        {
+                            // Match by animation name prefix (e.g., "Hip Hop Dancing_mixamo.com")
+                            std::string animName = anim->mName.C_Str();
+                            if (animName.rfind(entityPrefix, 0) == 0)
+                                relevantAnims.push_back(anim);
+                        }
+                        else
+                        {
+                            // No prefix: match by bone names in channels
+                            for (unsigned int ci = 0; ci < anim->mNumChannels; ++ci)
+                            {
+                                if (skeleton->hasBone(anim->mChannels[ci]->mNodeName.C_Str()))
+                                {
+                                    relevantAnims.push_back(anim);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    if (!relevantAnims.empty())
+                    {
+                        // Non-owning temp scene for AnimationProcessor
+                        aiScene tempScene;
+                        tempScene.mAnimations = relevantAnims.data();
+                        tempScene.mNumAnimations = static_cast<unsigned int>(relevantAnims.size());
+                        AnimationProcessor animationProcessor(skeleton);
+                        animationProcessor.processAnimations(&tempScene);
+                        tempScene.mAnimations = nullptr;
+                        tempScene.mNumAnimations = 0;
+                    }
+
+                    // Remove empty animations (channels for other entities' bones
+                    // got skipped, leaving zero tracks)
+                    std::vector<Ogre::String> emptyAnims;
+                    for (unsigned short ai = 0; ai < skeleton->getNumAnimations(); ++ai)
+                    {
+                        auto* anim = skeleton->getAnimation(ai);
+                        if (anim->getNumNodeTracks() == 0)
+                            emptyAnims.push_back(anim->getName());
+                    }
+                    for (const auto& name : emptyAnims)
+                        skeleton->removeAnimation(name);
+                }
+            }
+
+            // Use MeshProcessor: temporarily suppress children to process
+            // only this node's meshes (not descendants).
+            unsigned int savedNumChildren = node->mNumChildren;
+            aiNode** savedChildren = node->mChildren;
+            const_cast<aiNode*>(node)->mNumChildren = 0;
+            const_cast<aiNode*>(node)->mChildren = nullptr;
+
+            // When entity prefix filtering is active, strip foreign bones
+            // from meshes so MeshProcessor doesn't try to look them up
+            // in this entity's skeleton (they would cause getBone() to throw).
+            struct SavedBones {
+                aiMesh* mesh;
+                aiBone** origBones;
+                unsigned int origNumBones;
+                std::vector<aiBone*> filteredBones;
+            };
+            std::vector<SavedBones> savedBones;
+
+            if (!entityPrefix.empty() && skeleton)
+            {
+                for (unsigned int mi = 0; mi < node->mNumMeshes; ++mi)
+                {
+                    aiMesh* mesh = scene->mMeshes[node->mMeshes[mi]];
+                    if (mesh->mNumBones == 0) continue;
+
+                    SavedBones sb;
+                    sb.mesh = mesh;
+                    sb.origBones = mesh->mBones;
+                    sb.origNumBones = mesh->mNumBones;
+                    for (unsigned int bi = 0; bi < mesh->mNumBones; ++bi)
+                    {
+                        std::string bname = mesh->mBones[bi]->mName.C_Str();
+                        if (bname.rfind(entityPrefix, 0) == 0)
+                            sb.filteredBones.push_back(mesh->mBones[bi]);
+                    }
+                    mesh->mBones = sb.filteredBones.data();
+                    mesh->mNumBones = static_cast<unsigned int>(sb.filteredBones.size());
+                    savedBones.push_back(std::move(sb));
+                }
+            }
+
+            MeshProcessor meshProcessor(skeleton);
+            meshProcessor.processNode(const_cast<aiNode*>(node), const_cast<aiScene*>(scene));
+
+            // Restore original bone arrays
+            for (auto& sb : savedBones)
+            {
+                sb.mesh->mBones = sb.origBones;
+                sb.mesh->mNumBones = sb.origNumBones;
+            }
+
+            const_cast<aiNode*>(node)->mNumChildren = savedNumChildren;
+            const_cast<aiNode*>(node)->mChildren = savedChildren;
+
+            Ogre::MeshPtr ogreMesh = meshProcessor.createMesh(
+                meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+                materialProcessor);
+
+            // Create scene node with decomposed world transform
+            Ogre::SceneNode* sn = manager->addSceneNode(nodeName);
+
+            Ogre::Vector3 pos;
+            Ogre::Quaternion orient;
+            Ogre::Vector3 scale;
+            decomposeTransform(entry.worldTransform, pos, orient, scale);
+            sn->setPosition(pos);
+            sn->setOrientation(orient);
+            sn->setScale(scale);
+
+            manager->createEntity(sn, ogreMesh);
+        }
+
+    } catch (Ogre::Exception& e) {
+        Ogre::LogManager::getSingleton().logError("Scene import failed: " + e.getFullDescription());
+        SentryReporter::captureMessage(
+            QString("Scene import failed: %1").arg(e.getFullDescription().c_str()), "error");
+    } catch (std::exception& ex) {
+        auto msg = QString("Scene import failed: %1").arg(ex.what());
+        Ogre::LogManager::getSingleton().logError(msg.toStdString());
+        SentryReporter::captureMessage(msg, "error");
+    }
 }

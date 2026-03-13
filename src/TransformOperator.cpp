@@ -314,7 +314,8 @@ void TransformOperator::setActiveWidget(OgreWidget* ogreWidget)
 
 Ogre::Ray TransformOperator::rayFromScreenPoint(const QPoint& pos)
 {
-    if(m_pActiveWidget)
+    if(m_pActiveWidget && m_pActiveWidget->getViewport()
+       && m_pActiveWidget->getViewport()->getCamera())
     {
         int width = m_pActiveWidget->getViewport()->getActualWidth() / mWindowSizeModifier;
         int height = m_pActiveWidget->getViewport()->getActualHeight() / mWindowSizeModifier;

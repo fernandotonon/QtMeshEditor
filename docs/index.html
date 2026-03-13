@@ -573,9 +573,15 @@
                 </div>
 
                 <div class="feature-card">
+                    <div class="feature-icon">💾</div>
+                    <h3 class="feature-title">Scene Save &amp; Load</h3>
+                    <p class="feature-desc">Save your entire scene &mdash; multiple meshes with positions, rotations, scales, materials, skeletons, and animations &mdash; to a single glTF file. Reopen later to pick up where you left off.</p>
+                </div>
+
+                <div class="feature-card">
                     <div class="feature-icon">🔌</div>
                     <h3 class="feature-title">MCP Server (AI Agents)</h3>
-                    <p class="feature-desc">Built-in Model Context Protocol server lets AI agents like Claude or Cursor control the editor. 25 tools for materials, meshes, transforms, and animations via HTTP API.</p>
+                    <p class="feature-desc">Built-in Model Context Protocol server lets AI agents like Claude or Cursor control the editor. 27 tools for materials, meshes, scenes, transforms, and animations via HTTP API.</p>
                 </div>
             </div>
         </section>
@@ -615,6 +621,17 @@
                         &bull; Verify bone weight painting<br>
                         &bull; Test animations at different speeds<br>
                         &bull; Multi-viewport split view
+                    </p>
+                </div>
+
+                <div class="feature-card">
+                    <h3 class="feature-title">Scene Persistence</h3>
+                    <p class="feature-desc">
+                        1. Import multiple meshes into the scene<br>
+                        2. Position, rotate, and scale each object<br>
+                        3. File &rarr; Save Scene as .scene.glb<br>
+                        4. Reopen anytime to restore everything<br>
+                        5. Skeletons, animations, and materials preserved
                     </p>
                 </div>
 
@@ -785,16 +802,20 @@ claude mcp add --transport stdio qtmeshEditor -- /path/to/QtMeshEditor --with-mc
                 </div>
 
                 <div class="install-step">
-                    <h3>25 Tools Available</h3>
+                    <h3>27 Tools Available</h3>
                     <div class="code-wrapper">
                         <div class="code-block">
+# Save and load entire scenes (meshes, transforms, animations)
+curl -X POST localhost:8080/api/tools/save_scene \
+  -d '{"file_path":"/tmp/my_scene.scene.glb"}'
+curl -X POST localhost:8080/api/tools/open_scene \
+  -d '{"file_path":"/tmp/my_scene.scene.glb"}'
+
 # Create a sphere and apply a red material
 curl -X POST localhost:8080/api/tools/create_primitive \
   -d '{"type":"sphere","name":"MySphere"}'
 curl -X POST localhost:8080/api/tools/create_material \
   -d '{"name":"RedMat","colors":{"diffuse":[1,0,0]}}'
-curl -X POST localhost:8080/api/tools/apply_material \
-  -d '{"material":"RedMat","mesh":"MySphere"}'
 
 # List all available tools
 curl localhost:8080/api/tools</div>
