@@ -52,6 +52,10 @@ class SpaceCamera : Ogre::FrameListener
         const Ogre::Quaternion& getOrientation() const;
         const Ogre::Real&       getCameraSpeed() const;
 
+        // Smooth camera animation
+        void animateToOrientation(const Ogre::Quaternion& target, float duration = 0.5f);
+        bool isAnimating() const { return mAnimating; }
+
         // Mutators
         void setCameraSpeed(const Ogre::Real& newSpeed);
         void setCameraPosition(const Ogre::Vector3 &pos);
@@ -91,6 +95,13 @@ class SpaceCamera : Ogre::FrameListener
         QMap<int, Ogre::Vector2> mKeyRotationMapping;
         QMap<int, Ogre::Vector2> mKeyTranslationMapping;
         QMap<int, Ogre::Real>    mKeyRollingMapping;
+
+        // Animation state
+        bool mAnimating = false;
+        Ogre::Quaternion mAnimStartOrientation;
+        Ogre::Quaternion mAnimTargetOrientation;
+        float mAnimElapsed = 0.0f;
+        float mAnimDuration = 0.5f;
 
         void setKeyMapping();
         void zoom(const int delta);

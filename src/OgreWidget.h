@@ -54,6 +54,7 @@ class OgreWidget : public QWidget, public Ogre::FrameListener
   QColor getBackgroundColor() const;
   const Ogre::Viewport* getViewport() const;
   void setBackgroundColor(const QColor& c);
+  SpaceCamera* getSpaceCamera() const { return mCamera.get(); }
 
 protected:
   /*virtual*/ void initOgreWindow(void);

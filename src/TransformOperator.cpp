@@ -296,13 +296,19 @@ void TransformOperator::onSelectionChanged()
 
 void TransformOperator::setActiveWidget(OgreWidget* ogreWidget)
 {
-    if(m_pActiveWidget)
+    if(m_pActiveWidget) {
         m_pActiveWidget->setMouseTracking(false);
+        disconnect(m_pActiveWidget, &QObject::destroyed, this, nullptr);
+    }
 
     m_pActiveWidget = ogreWidget;
 
-    if(m_pActiveWidget)
+    if(m_pActiveWidget) {
         m_pActiveWidget->setMouseTracking(mTrackingEnable);
+        connect(m_pActiveWidget, &QObject::destroyed, this, [this]() {
+            m_pActiveWidget = nullptr;
+        });
+    }
 
 }
 

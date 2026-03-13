@@ -87,6 +87,13 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - **MeshInfoOverlay** (`src/MeshInfoOverlay.h/cpp`): Floating overlay showing mesh statistics (vertices, triangles, submeshes, materials, bones, animations) on the active viewport. Shows stats for selected entities or aggregated scene stats. Toggled via Options → Show Mesh Info menu or MCP `toggle_mesh_info` tool. Implemented as a top-level `Qt::Tool` window to avoid ghost-text artifacts from Ogre's direct-to-native rendering (`WA_PaintOnScreen`).
 - **BoneWeightOverlay** (`src/BoneWeightOverlay.h/cpp`): Per-entity bone weight heat-map overlay.
 
+### ViewCube
+
+- **ViewCubeController** (`src/ViewCube/ViewCubeController.h/cpp`): QML_SINGLETON that bridges the 3D navigation cube overlay with the active OgreWidget/SpaceCamera. Tracks camera orientation quaternion, manages overlay positioning, and provides snap-to-face/corner/direction + arcball drag rotation.
+- **ViewCubeWindow.qml** (`qml/ViewCubeWindow.qml`): QML Canvas2D rendering a 3D cube with face/edge/corner hit-testing. Uses quaternion-to-rotation-matrix conversion with negated qx to match Ogre's camera rig convention.
+- Visibility requires both the toggle (`setVisible`) and an active widget — hides automatically when viewports are closed and reappears when a new viewport gets focus.
+- The QML window uses `Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint` and software rendering (`QQuickWindow::setSceneGraphBackend("software")`) to avoid GL conflicts with Ogre.
+
 ### MCP Server
 
 - **MCPServer** (`src/MCPServer.h/cpp`): JSON-RPC 2.0 over stdio + HTTP REST API on configurable port.
