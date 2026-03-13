@@ -2067,24 +2067,21 @@ QJsonObject MCPServer::toolOpenScene(const QJsonObject &args)
             QString nodeName = QString::fromStdString(node->getName());
             result += QString("  - %1").arg(nodeName);
 
-            auto it = node->getAttachedObjectIterator();
-            while (it.hasMoreElements()) {
-                auto* obj = it.getNext();
-                if (obj->getMovableType() == "Entity") {
-                    auto* entity = static_cast<Ogre::Entity*>(obj);
-                    result += QString(" (entity: %1").arg(QString::fromStdString(entity->getName()));
-                    if (entity->hasSkeleton()) {
-                        auto* skel = entity->getMesh()->getSkeleton().get();
-                        result += QString(", %1 animation(s)").arg(skel->getNumAnimations());
-                        for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
-                            result += QString("\n      anim[%1]: '%2' (%3s)")
-                                .arg(ai)
-                                .arg(QString::fromStdString(skel->getAnimation(ai)->getName()))
-                                .arg(skel->getAnimation(ai)->getLength(), 0, 'f', 2);
-                        }
+            for (auto* obj : node->getAttachedObjects()) {
+                if (obj->getMovableType() != "Entity") continue;
+                auto* entity = static_cast<Ogre::Entity*>(obj);
+                result += QString(" (entity: %1").arg(QString::fromStdString(entity->getName()));
+                if (entity->hasSkeleton()) {
+                    auto* skel = entity->getMesh()->getSkeleton().get();
+                    result += QString(", %1 animation(s)").arg(skel->getNumAnimations());
+                    for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+                        result += QString("\n      anim[%1]: '%2' (%3s)")
+                            .arg(ai)
+                            .arg(QString::fromStdString(skel->getAnimation(ai)->getName()))
+                            .arg(skel->getAnimation(ai)->getLength(), 0, 'f', 2);
                     }
-                    result += ")";
                 }
+                result += ")";
             }
             result += "\n";
         }

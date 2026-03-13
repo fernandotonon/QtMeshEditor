@@ -1577,6 +1577,7 @@ bool MeshImporterExporter::sceneImporter(const QString &_uri)
     // File is valid — now clear existing scene
     SelectionSet::getSingleton()->clearList();
     auto* manager = Manager::getSingleton();
+    emit manager->sceneClearing();  // let listeners clean up before nodes are destroyed
     auto sceneNodesCopy = manager->getSceneNodes();
     for (auto* sn : sceneNodesCopy)
         manager->destroySceneNode(sn);

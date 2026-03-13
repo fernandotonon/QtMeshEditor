@@ -227,12 +227,14 @@ TEST_F(ManagerHeadlessTest, IsForbiddenNodeName)
     EXPECT_TRUE(mgr->isForbiddenNodeName("Unnamed_0"));
     EXPECT_TRUE(mgr->isForbiddenNodeName("Unnamed_camera"));
 
+    // Empty/unnamed are forbidden
+    EXPECT_TRUE(mgr->isForbiddenNodeName(""));
+
     // Non-forbidden names
     EXPECT_FALSE(mgr->isForbiddenNodeName("Cube"));
     EXPECT_FALSE(mgr->isForbiddenNodeName("Sphere"));
     EXPECT_FALSE(mgr->isForbiddenNodeName("MyObject"));
     EXPECT_FALSE(mgr->isForbiddenNodeName("TPCameraChildSceneNode_0"));
-    EXPECT_FALSE(mgr->isForbiddenNodeName(""));
 }
 
 TEST_F(ManagerHeadlessTest, IsValidFileExtention)

@@ -10,7 +10,7 @@ Window {
     maximumWidth: 64
     minimumHeight: 64
     maximumHeight: 64
-    flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+    flags: Qt.Tool | Qt.FramelessWindowHint
     color: "transparent"
     visible: ViewCubeController.visible
     x: ViewCubeController.windowX
