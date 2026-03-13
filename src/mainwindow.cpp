@@ -1397,7 +1397,10 @@ void MainWindow::openRecentFile()
     QString filePath = action->data().toString();
     if (QFileInfo::exists(filePath)) {
         addToRecentFiles(filePath);
-        mUriList.append(filePath);
+        if (filePath.endsWith(".scene.glb") || filePath.endsWith(".scene.gltf"))
+            MeshImporterExporter::sceneImporter(filePath);
+        else
+            mUriList.append(filePath);
     } else {
         QMessageBox::warning(this, tr("File Not Found"),
             tr("The file \"%1\" no longer exists.").arg(filePath));

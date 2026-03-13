@@ -52,7 +52,7 @@ public:
     static QString exportFileDialogFilter();
 
     static int sceneExporter(const QString &_uri);
-    static void sceneImporter(const QString &_uri);
+    static bool sceneImporter(const QString &_uri);
 };
 
 #endif // MESHIMPORTEREXPORTER_H

@@ -9,6 +9,9 @@
 #include <QThread>
 #include <QDir>
 #include <QTemporaryDir>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "SelectionSet.h"
@@ -1617,12 +1620,15 @@ protected:
 TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
     auto* manager = Manager::getSingleton();
 
-    // Create two entities with different positions
+    // Create two entities with different transforms (position, rotation, scale)
     auto mesh1 = createInMemoryTriangleMesh("scene_rt_mesh1");
     auto* sn1 = manager->addSceneNode("SceneNode1");
     manager->createEntity(sn1, mesh1);
     sn1->setPosition(Ogre::Vector3(1.0f, 2.0f, 3.0f));
-    sn1->setScale(Ogre::Vector3(1.5f, 1.5f, 1.5f));
+    sn1->setScale(Ogre::Vector3(1.5f, 2.0f, 0.5f));
+    // 45-degree rotation around Y
+    Ogre::Quaternion rot1(Ogre::Degree(45), Ogre::Vector3::UNIT_Y);
+    sn1->setOrientation(rot1);
 
     auto mesh2 = createInMemoryTriangleMesh("scene_rt_mesh2");
     auto* sn2 = manager->addSceneNode("SceneNode2");
@@ -1631,7 +1637,6 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
 
     ASSERT_EQ(manager->getSceneNodes().size(), 2);
 
-    // Export to temp file
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
     QString sceneFile = tmpDir.path() + "/test_scene.scene.gltf";
@@ -1640,14 +1645,11 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
     ASSERT_EQ(exportResult, 0);
     ASSERT_TRUE(QFileInfo::exists(sceneFile));
 
-    // Clear scene and reimport
-    MeshImporterExporter::sceneImporter(sceneFile);
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
 
-    // Verify 2 scene nodes were restored
     auto& nodes = manager->getSceneNodes();
     ASSERT_EQ(nodes.size(), 2);
 
-    // Find nodes and verify transforms (order may differ)
     bool foundNode1 = false, foundNode2 = false;
     for (auto* sn : nodes)
     {
@@ -1657,6 +1659,14 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
             foundNode1 = true;
             EXPECT_NEAR(pos.z, 3.0f, 0.1f);
             EXPECT_NEAR(sn->getScale().x, 1.5f, 0.1f);
+            EXPECT_NEAR(sn->getScale().y, 2.0f, 0.1f);
+            EXPECT_NEAR(sn->getScale().z, 0.5f, 0.1f);
+            // Verify rotation preserved (45 degrees around Y)
+            auto orient = sn->getOrientation();
+            EXPECT_NEAR(orient.w, rot1.w, 0.05f);
+            EXPECT_NEAR(orient.x, rot1.x, 0.05f);
+            EXPECT_NEAR(orient.y, rot1.y, 0.05f);
+            EXPECT_NEAR(orient.z, rot1.z, 0.05f);
         }
         else if (std::abs(pos.x - (-1.0f)) < 0.1f)
         {
@@ -1695,8 +1705,17 @@ TEST_F(SceneSaveLoadTest, MaterialDedup_SharedMaterial_ExportedOnce) {
     int result = MeshImporterExporter::sceneExporter(sceneFile);
     EXPECT_EQ(result, 0);
 
+    // Read the exported glTF text and verify only one material entry
+    QFile gltfFile(sceneFile);
+    ASSERT_TRUE(gltfFile.open(QIODevice::ReadOnly));
+    QByteArray gltfData = gltfFile.readAll();
+    QJsonDocument doc = QJsonDocument::fromJson(gltfData);
+    ASSERT_TRUE(doc.isObject());
+    QJsonArray materials = doc.object()["materials"].toArray();
+    EXPECT_EQ(materials.size(), 1) << "Shared material should be deduplicated to 1 entry";
+
     // Reimport to verify both entities load correctly
-    MeshImporterExporter::sceneImporter(sceneFile);
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
     EXPECT_EQ(manager->getSceneNodes().size(), 2);
 }
 
@@ -1721,8 +1740,8 @@ TEST_F(SceneSaveLoadTest, RoundTrip_SkeletonEntity_PreservesAnimations) {
     ASSERT_NE(entity, nullptr);
     ASSERT_TRUE(entity->hasSkeleton());
     ASSERT_EQ(entity->getMesh()->getSkeleton()->getNumAnimations(), 1);
+    EXPECT_EQ(entity->getMesh()->getSkeleton()->getAnimation(static_cast<unsigned short>(0))->getName(), "TestAnim");
 
-    // Export to temp .scene.gltf
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
     QString sceneFile = tmpDir.path() + "/test_anim_roundtrip.scene.gltf";
@@ -1731,19 +1750,19 @@ TEST_F(SceneSaveLoadTest, RoundTrip_SkeletonEntity_PreservesAnimations) {
     ASSERT_EQ(exportResult, 0);
     ASSERT_TRUE(QFileInfo::exists(sceneFile));
 
-    // Clear scene and reimport
-    MeshImporterExporter::sceneImporter(sceneFile);
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
 
-    // Verify 1 scene node was restored
     auto& nodes = manager->getSceneNodes();
     ASSERT_EQ(nodes.size(), 1);
 
-    // Get the reimported entity and verify skeleton with animation
     auto* reimportedNode = nodes.first();
     auto* sceneMgr = manager->getSceneMgr();
     ASSERT_TRUE(sceneMgr->hasEntity(reimportedNode->getName()));
 
     auto* reimportedEntity = sceneMgr->getEntity(reimportedNode->getName());
     ASSERT_TRUE(reimportedEntity->hasSkeleton());
-    EXPECT_GE(reimportedEntity->getMesh()->getSkeleton()->getNumAnimations(), 1);
+    auto* skel = reimportedEntity->getMesh()->getSkeleton().get();
+    EXPECT_EQ(skel->getNumAnimations(), 1) << "Expected exactly 1 animation after round-trip";
+    if (skel->getNumAnimations() > 0)
+        EXPECT_EQ(skel->getAnimation(static_cast<unsigned short>(0))->getName(), "TestAnim");
 }

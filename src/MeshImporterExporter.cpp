@@ -1538,16 +1538,43 @@ int MeshImporterExporter::sceneExporter(const QString &_uri)
 }
 
 // ─── Scene-level import: glTF → multiple scene nodes ────────────────
-void MeshImporterExporter::sceneImporter(const QString &_uri)
+bool MeshImporterExporter::sceneImporter(const QString &_uri)
 {
-    if (_uri.isEmpty()) return;
+    if (_uri.isEmpty()) return false;
 
     QFileInfo file(_uri);
-    if (!file.exists()) return;
+    if (!file.exists()) return false;
 
     ensureResourceGroup(file.path());
 
-    // Clear existing scene
+    // Parse the file BEFORE clearing the scene so we don't destroy
+    // the user's work if the file is invalid.
+    Assimp::Importer assimpImporter;
+    assimpImporter.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+
+    unsigned int flags = aiProcess_CalcTangentSpace |
+                         aiProcess_JoinIdenticalVertices |
+                         aiProcess_Triangulate |
+                         aiProcess_RemoveComponent |
+                         aiProcess_GenSmoothNormals |
+                         aiProcess_ValidateDataStructure |
+                         aiProcess_LimitBoneWeights |
+                         aiProcess_SortByPType |
+                         aiProcess_ImproveCacheLocality |
+                         aiProcess_FixInfacingNormals |
+                         aiProcess_PopulateArmatureData |
+                         aiProcess_OptimizeMeshes |
+                         aiProcess_GlobalScale;
+
+    const aiScene* scene = assimpImporter.ReadFile(file.filePath().toStdString(), flags);
+    if (!scene || !scene->mRootNode)
+    {
+        Ogre::LogManager::getSingleton().logError(
+            "Scene import failed: " + std::string(assimpImporter.GetErrorString()));
+        return false;
+    }
+
+    // File is valid — now clear existing scene
     SelectionSet::getSingleton()->clearList();
     auto* manager = Manager::getSingleton();
     auto sceneNodesCopy = manager->getSceneNodes();
@@ -1555,32 +1582,6 @@ void MeshImporterExporter::sceneImporter(const QString &_uri)
         manager->destroySceneNode(sn);
 
     try {
-        Assimp::Importer assimpImporter;
-        assimpImporter.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
-
-        // Same flags as AssimpToOgreImporter BUT without aiProcess_OptimizeGraph
-        // (it flattens the hierarchy we need to preserve)
-        unsigned int flags = aiProcess_CalcTangentSpace |
-                             aiProcess_JoinIdenticalVertices |
-                             aiProcess_Triangulate |
-                             aiProcess_RemoveComponent |
-                             aiProcess_GenSmoothNormals |
-                             aiProcess_ValidateDataStructure |
-                             aiProcess_LimitBoneWeights |
-                             aiProcess_SortByPType |
-                             aiProcess_ImproveCacheLocality |
-                             aiProcess_FixInfacingNormals |
-                             aiProcess_PopulateArmatureData |
-                             aiProcess_OptimizeMeshes |
-                             aiProcess_GlobalScale;
-
-        const aiScene* scene = assimpImporter.ReadFile(file.filePath().toStdString(), flags);
-        if (!scene || !scene->mRootNode)
-        {
-            Ogre::LogManager::getSingleton().logError(
-                "Scene import failed: " + std::string(assimpImporter.GetErrorString()));
-            return;
-        }
 
         // Process materials
         MaterialProcessor materialProcessor;
@@ -1637,6 +1638,21 @@ void MeshImporterExporter::sceneImporter(const QString &_uri)
             const aiNode* node = entry.node;
 
             QString nodeName = QString::fromUtf8(node->mName.C_Str());
+
+            // Detect the synthetic "<parent>/<parent>_mesh" pattern produced
+            // by our scene exporter for skeletal entities. Only strip the suffix
+            // and enable prefix-based bone filtering when this exact pattern is present.
+            bool isSyntheticMeshNode = false;
+            if (node->mParent && node->mParent != scene->mRootNode)
+            {
+                QString parentName = QString::fromUtf8(node->mParent->mName.C_Str());
+                if (!parentName.isEmpty() && nodeName == parentName + "_mesh")
+                {
+                    isSyntheticMeshNode = true;
+                    nodeName = parentName;
+                }
+            }
+
             if (nodeName.isEmpty())
                 nodeName = QString("SceneNode_%1").arg(manager->getSceneNodes().size());
 
@@ -1650,14 +1666,13 @@ void MeshImporterExporter::sceneImporter(const QString &_uri)
             if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
                 Ogre::MeshManager::getSingleton().remove(old);
 
-            // Determine entity prefix for bone/animation filtering.
-            // During export with multiple entities, bones are prefixed
-            // with "entityName_". Detect this from the parent node name.
+            // Entity prefix for bone/animation filtering.
+            // Only applied when we detected our synthetic export pattern AND
+            // there are multiple entities (shared skin scenario).
             std::string entityPrefix;
-            if (meshNodes.size() > 1 && node->mParent
-                && node->mParent != scene->mRootNode)
+            if (isSyntheticMeshNode && meshNodes.size() > 1)
             {
-                entityPrefix = std::string(node->mParent->mName.C_Str()) + "_";
+                entityPrefix = nodeName.toStdString() + "_";
             }
 
             // Check if any of this node's meshes have bones
@@ -1896,13 +1911,16 @@ void MeshImporterExporter::sceneImporter(const QString &_uri)
             manager->createEntity(sn, ogreMesh);
         }
 
+        return true;
     } catch (Ogre::Exception& e) {
         Ogre::LogManager::getSingleton().logError("Scene import failed: " + e.getFullDescription());
         SentryReporter::captureMessage(
             QString("Scene import failed: %1").arg(e.getFullDescription().c_str()), "error");
+        return false;
     } catch (std::exception& ex) {
         auto msg = QString("Scene import failed: %1").arg(ex.what());
         Ogre::LogManager::getSingleton().logError(msg.toStdString());
         SentryReporter::captureMessage(msg, "error");
+        return false;
     }
 }

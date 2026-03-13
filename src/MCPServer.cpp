@@ -2050,7 +2050,9 @@ QJsonObject MCPServer::toolOpenScene(const QJsonObject &args)
         if (!QFile::exists(filePath))
             return makeErrorResult("Error: File not found: " + filePath);
 
-        MeshImporterExporter::sceneImporter(filePath);
+        bool ok = MeshImporterExporter::sceneImporter(filePath);
+        if (!ok)
+            return makeErrorResult("Error: Failed to import scene from " + filePath);
 
         // Report what was loaded
         Manager* mgr = Manager::getSingletonPtr();
@@ -2608,7 +2610,7 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "open_scene",
             "Open a scene file, replacing the current scene. Loads all meshes with their transforms, materials, skeletons, and animations. "
-            "Reports what was loaded including entity names, positions, and animation counts.",
+            "Reports what was loaded including entity names and animation counts.",
             inputSchema
         ));
     }
