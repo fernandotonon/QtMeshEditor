@@ -15,6 +15,8 @@ class LLMSettingsWidget;
 class MCPServer;
 class NormalVisualizer;
 class MeshInfoOverlay;
+class ViewCubeController;
+class QQmlApplicationEngine;
 
 namespace Ui {
 class MainWindow;
@@ -115,6 +117,7 @@ protected:
     bool frameRenderingQueued(const Ogre::FrameEvent &evt) override;
     bool frameEnded(const Ogre::FrameEvent& evt) override;
 
+    void closeEvent(QCloseEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
 
@@ -125,6 +128,8 @@ private:
 
     NormalVisualizer* m_normalVisualizer = nullptr;
     MeshInfoOverlay* m_meshInfoOverlay = nullptr;
+    ViewCubeController* m_viewCubeController = nullptr;
+    QQmlApplicationEngine* m_viewCubeEngine = nullptr;
     MCPServer* m_mcpServer = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;

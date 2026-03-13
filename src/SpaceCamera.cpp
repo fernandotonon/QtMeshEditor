@@ -140,8 +140,26 @@ void SpaceCamera::setAspectRatio(const Ogre::Real& ratio)
 //////////////////////////////////////////////////////////////////////////////////
 //Frame listener
 
+void SpaceCamera::animateToOrientation(const Ogre::Quaternion& target, float duration)
+{
+    if (duration <= 0.0f) {
+        // Instant snap
+        mTarget->setOrientation(target);
+        mAnimating = false;
+        return;
+    }
+    mAnimStartOrientation = mTarget->getOrientation();
+    mAnimTargetOrientation = target;
+    mAnimElapsed = 0.0f;
+    mAnimDuration = duration;
+    mAnimating = true;
+}
+
 void SpaceCamera::mousePressEvent(QMouseEvent *event)
 {
+    // Cancel animation on mouse press for immediate user control
+    mAnimating = false;
+
     if ((event->button()==Qt::RightButton)
         ||(event->button()==Qt::MiddleButton))
     {
@@ -215,6 +233,20 @@ bool SpaceCamera::frameEnded(const Ogre::FrameEvent& event)
 
 bool SpaceCamera::frameStarted(const Ogre::FrameEvent& event)
 {
+    // Smooth orientation animation
+    if (mAnimating) {
+        mAnimElapsed += event.timeSinceLastFrame;
+        float t = mAnimElapsed / mAnimDuration;
+        if (t >= 1.0f) {
+            t = 1.0f;
+            mAnimating = false;
+        }
+        // Smoothstep interpolation
+        t = t * t * (3.0f - 2.0f * t);
+        Ogre::Quaternion q = Ogre::Quaternion::Slerp(t, mAnimStartOrientation, mAnimTargetOrientation, true);
+        mTarget->setOrientation(q);
+        return true; // Skip keyboard-driven motion during animation
+    }
 
     if(!mRotation.isZeroLength())
         arcBall(mRotation);

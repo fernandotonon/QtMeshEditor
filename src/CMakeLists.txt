@@ -47,6 +47,7 @@ AnimationMerger.cpp
 CLIPipeline.cpp
 MeshInfoOverlay.cpp
 RTShaderHelper.cpp
+ViewCube/ViewCubeController.cpp
 )
 
 set(HEADER_FILES
@@ -97,6 +98,7 @@ AnimationMerger.h
 CLIPipeline.h
 MeshInfoOverlay.h
 RTShaderHelper.h
+ViewCube/ViewCubeController.h
 )
 
 set(TEST_SOURCES "")

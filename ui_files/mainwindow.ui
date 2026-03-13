@@ -81,6 +81,7 @@
     <addaction name="actionShow_Grid"/>
     <addaction name="actionShow_Normals"/>
     <addaction name="actionShow_Mesh_Info"/>
+    <addaction name="actionShow_View_Cube"/>
     <addaction name="actionChange_Ambient_Light"/>
     <addaction name="actionChange_BG_Color"/>
     <addaction name="menuView"/>
@@ -461,6 +462,17 @@
    </property>
    <property name="toolTip">
     <string>Merge animations from selected objects into one</string>
+   </property>
+  </action>
+  <action name="actionShow_View_Cube">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Show View Cube</string>
    </property>
   </action>
  </widget>

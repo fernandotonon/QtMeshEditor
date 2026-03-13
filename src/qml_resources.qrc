@@ -13,4 +13,7 @@
     <file alias="ThemedTextField.qml">../qml/ThemedTextField.qml</file>
     <file alias="ThemedTextArea.qml">../qml/ThemedTextArea.qml</file>
   </qresource>
-</RCC> 
+  <qresource prefix="/ViewCube">
+    <file alias="ViewCubeWindow.qml">../qml/ViewCubeWindow.qml</file>
+  </qresource>
+</RCC>

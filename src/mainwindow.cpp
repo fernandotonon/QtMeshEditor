@@ -43,6 +43,7 @@
 #include "MCPServer.h"
 #include "NormalVisualizer.h"
 #include "MeshInfoOverlay.h"
+#include "ViewCube/ViewCubeController.h"
 #include "LLMManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
@@ -143,6 +144,11 @@ MainWindow::~MainWindow()
 {
     // Destroy overlays early — they connect to Manager signals and
     // access Ogre resources, so they must be deleted while Manager is alive.
+    delete m_viewCubeEngine;
+    m_viewCubeEngine = nullptr;
+    // ViewCubeController is parented to this, no manual delete needed
+    m_viewCubeController = nullptr;
+
     delete m_meshInfoOverlay;
     m_meshInfoOverlay = nullptr;
     delete m_normalVisualizer;
@@ -358,6 +364,40 @@ void MainWindow::initToolBar()
     for (EditorViewport* vp : mDockWidgetList)
         connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
 
+    // ViewCube (3D navigation gizmo)
+    m_viewCubeController = new ViewCubeController(this, this);
+    // Force software rendering for the ViewCube QML window (avoid GL conflicts with Ogre)
+    qputenv("QSG_RHI_BACKEND", "software");
+    qputenv("QT_QUICK_BACKEND", "software");
+    QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
+
+    m_viewCubeEngine = new QQmlApplicationEngine(this);
+    m_viewCubeEngine->addImportPath(QCoreApplication::applicationDirPath() + "/qml");
+    m_viewCubeEngine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+
+    qmlRegisterSingletonType<ViewCubeController>("ViewCubeModule", 1, 0, "ViewCubeController",
+        [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+            auto* inst = ViewCubeController::instance();
+            engine->setObjectOwnership(inst, QQmlEngine::CppOwnership);
+            return inst;
+        });
+
+    m_viewCubeEngine->load(QUrl("qrc:/ViewCube/ViewCubeWindow.qml"));
+
+    connect(ui->actionShow_View_Cube, &QAction::toggled, m_viewCubeController, &ViewCubeController::setVisible);
+    connect(m_viewCubeController, &ViewCubeController::visibilityChanged, ui->actionShow_View_Cube, &QAction::setChecked);
+
+    // Connect viewports created before the ViewCube existed
+    for (EditorViewport* vp : mDockWidgetList)
+        connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, this, [this](OgreWidget* w) {
+            m_viewCubeController->setActiveWidget(w);
+        });
+
+    // Default to visible and activate the first viewport
+    m_viewCubeController->setVisible(true);
+    if (!mDockWidgetList.isEmpty())
+        m_viewCubeController->setActiveWidget(mDockWidgetList.first()->getOgreWidget());
+
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
     QAction* aiSettingsAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Model Settings..."));
@@ -458,6 +498,10 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
     for(EditorViewport* editorViewport: mDockWidgetList )
         editorViewport->getOgreWidget()->update();
 
+    // Update ViewCube orientation from camera
+    if (m_viewCubeController)
+        m_viewCubeController->updateOrientation();
+
     //Update the status bar
     QString statusMessage = "Status ";
     if(SelectionSet::getSingleton()->hasNodes())
@@ -511,6 +555,12 @@ void MainWindow::dropEvent(QDropEvent *event)
     for (const QString& f : validFiles)
         addToRecentFiles(f);
     mUriList.append(validFiles);
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    QApplication::quit();
+    QMainWindow::closeEvent(event);
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
@@ -845,6 +895,10 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     connect(pOgreViewport->getOgreWidget(), SIGNAL(focusOnWidget(OgreWidget*)), TransformOperator::getSingleton(), SLOT(setActiveWidget(OgreWidget*)));
     if (m_meshInfoOverlay)
         connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
+    if (m_viewCubeController)
+        connect(pOgreViewport->getOgreWidget(), &OgreWidget::focusOnWidget, this, [this](OgreWidget* w) {
+            m_viewCubeController->setActiveWidget(w);
+        });
 
     if(!mDockWidgetList.isEmpty())
     {
@@ -890,14 +944,20 @@ void MainWindow::onWidgetClosing(EditorViewport* const& widget)
     {
         m_pTimer->stop();
     }
-    
+
     bool result = mDockWidgetList.removeOne(widget);
 
     if(result)
-        delete widget;
+    {
+        // Disconnect signals before deletion to prevent callbacks during destruction
+        disconnect(widget, nullptr, this, nullptr);
+        disconnect(widget->getOgreWidget(), nullptr, this, nullptr);
+        // Use deleteLater to avoid use-after-free: closeEvent is still on the call stack
+        widget->deleteLater();
+    }
     else
         qDebug()<<"Unable to remove viewport "<<widget->getIndex();
-    
+
     // Safety check: don't restart timer if MainWindow is being destroyed
     if(m_pTimer)
     {
