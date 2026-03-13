@@ -38,6 +38,11 @@ ViewCubeController* ViewCubeController::qmlInstance(QQmlEngine* engine, QJSEngin
     return s_instance;
 }
 
+bool ViewCubeController::isVisible() const
+{
+    return m_visible && m_activeWidget && m_activeWidget->isVisible();
+}
+
 SpaceCamera* ViewCubeController::activeCamera() const
 {
     if (!m_activeWidget)
@@ -181,7 +186,8 @@ bool ViewCubeController::eventFilter(QObject* obj, QEvent* event)
     auto type = event->type();
 
     if (obj == m_activeWidget &&
-        (type == QEvent::Hide || type == QEvent::Close || type == QEvent::Destroy)) {
+        (type == QEvent::Show || type == QEvent::Hide ||
+         type == QEvent::Close || type == QEvent::Destroy)) {
         if (type == QEvent::Close || type == QEvent::Destroy)
             m_activeWidget = nullptr;
         emit visibilityChanged(isVisible());

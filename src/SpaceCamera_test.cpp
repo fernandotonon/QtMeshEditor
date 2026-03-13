@@ -645,7 +645,10 @@ TEST(SpaceCamera, GetCameraReturnsNullForDefaultConstructed)
 TEST(SpaceCamera, MousePressSetsAnimatingFalse)
 {
     MockSpaceCamera spaceCamera;
-    // mousePressEvent always sets mAnimating = false (cancels animation)
+    // mousePressEvent always sets mAnimating = false (cancels animation).
+    // Note: we cannot set mAnimating=true first via animateToOrientation()
+    // because that method dereferences mTarget which is null in MockSpaceCamera.
+    // Full animation cancellation is tested in SpaceCameraOgreTest fixtures.
     QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(50, 50),
                           Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
     spaceCamera.mousePressEvent(&pressEvent);

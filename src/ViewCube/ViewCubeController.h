@@ -36,7 +36,7 @@ public:
     qreal qz() const { return m_qz; }
     int windowX() const { return m_windowX; }
     int windowY() const { return m_windowY; }
-    bool isVisible() const { return m_visible && m_activeWidget; }
+    bool isVisible() const;
 
     Q_INVOKABLE void snapToView(const QString& face);
     Q_INVOKABLE void snapToDirection(qreal dx, qreal dy, qreal dz);
