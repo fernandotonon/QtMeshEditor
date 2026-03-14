@@ -97,6 +97,7 @@ signals:
     void sceneNodeCreated(Ogre::SceneNode* const& newNode);
     void sceneNodeDestroyed(Ogre::SceneNode* const& node);
     void entityCreated(Ogre::Entity* const& newEntity);
+    void sceneClearing();
 
 private:
     explicit Manager(MainWindow *parent);

@@ -8,8 +8,13 @@
 #include <QCoreApplication>
 #include <QThread>
 #include <QDir>
+#include <QTemporaryDir>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QJsonArray>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
+#include "SelectionSet.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include <OgreException.h>
 #include "TestHelpers.h"
@@ -1583,3 +1588,181 @@ TEST_F(MeshImporterExporterTest, ImportOgreXML_PositionsOnly_NoNormalsNoUVs) {
     QFile::remove(xmlPath);
 }
 
+// ─── Scene Save/Load Tests ──────────────────────────────────────────
+
+class SceneSaveLoadTest : public ::testing::Test {
+protected:
+    QApplication* app = nullptr;
+
+    void SetUp() override {
+        Manager::kill();
+        QThread::msleep(50);
+
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
+        }
+        if (!canLoadMeshFiles()) {
+            GTEST_SKIP() << "Skipping: Cannot load mesh files (no GL context)";
+        }
+        createStandardOgreMaterials();
+    }
+
+    void TearDown() override {
+        Manager::kill();
+        if (app) app->processEvents();
+        QThread::msleep(50);
+    }
+};
+
+TEST_F(SceneSaveLoadTest, RoundTrip_TwoEntities_PreservesTransforms) {
+    auto* manager = Manager::getSingleton();
+
+    // Create two entities with different transforms (position, rotation, scale)
+    auto mesh1 = createInMemoryTriangleMesh("scene_rt_mesh1");
+    auto* sn1 = manager->addSceneNode("SceneNode1");
+    manager->createEntity(sn1, mesh1);
+    sn1->setPosition(Ogre::Vector3(1.0f, 2.0f, 3.0f));
+    sn1->setScale(Ogre::Vector3(1.5f, 2.0f, 0.5f));
+    // 45-degree rotation around Y
+    Ogre::Quaternion rot1(Ogre::Degree(45), Ogre::Vector3::UNIT_Y);
+    sn1->setOrientation(rot1);
+
+    auto mesh2 = createInMemoryTriangleMesh("scene_rt_mesh2");
+    auto* sn2 = manager->addSceneNode("SceneNode2");
+    manager->createEntity(sn2, mesh2);
+    sn2->setPosition(Ogre::Vector3(-1.0f, 0.0f, 5.0f));
+
+    ASSERT_EQ(manager->getSceneNodes().size(), 2);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/test_scene.scene.gltf";
+
+    int exportResult = MeshImporterExporter::sceneExporter(sceneFile);
+    ASSERT_EQ(exportResult, 0);
+    ASSERT_TRUE(QFileInfo::exists(sceneFile));
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+
+    auto& nodes = manager->getSceneNodes();
+    ASSERT_EQ(nodes.size(), 2);
+
+    bool foundNode1 = false, foundNode2 = false;
+    for (auto* sn : nodes)
+    {
+        auto pos = sn->getPosition();
+        if (std::abs(pos.x - 1.0f) < 0.1f && std::abs(pos.y - 2.0f) < 0.1f)
+        {
+            foundNode1 = true;
+            EXPECT_NEAR(pos.z, 3.0f, 0.1f);
+            EXPECT_NEAR(sn->getScale().x, 1.5f, 0.1f);
+            EXPECT_NEAR(sn->getScale().y, 2.0f, 0.1f);
+            EXPECT_NEAR(sn->getScale().z, 0.5f, 0.1f);
+            // Verify rotation preserved (45 degrees around Y)
+            auto orient = sn->getOrientation();
+            EXPECT_NEAR(orient.w, rot1.w, 0.05f);
+            EXPECT_NEAR(orient.x, rot1.x, 0.05f);
+            EXPECT_NEAR(orient.y, rot1.y, 0.05f);
+            EXPECT_NEAR(orient.z, rot1.z, 0.05f);
+        }
+        else if (std::abs(pos.x - (-1.0f)) < 0.1f)
+        {
+            foundNode2 = true;
+            EXPECT_NEAR(pos.y, 0.0f, 0.1f);
+            EXPECT_NEAR(pos.z, 5.0f, 0.1f);
+        }
+    }
+    EXPECT_TRUE(foundNode1) << "First node with position (1,2,3) not found";
+    EXPECT_TRUE(foundNode2) << "Second node with position (-1,0,5) not found";
+}
+
+TEST_F(SceneSaveLoadTest, MaterialDedup_SharedMaterial_ExportedOnce) {
+    auto* manager = Manager::getSingleton();
+
+    // Create a shared material
+    auto sharedMat = Ogre::MaterialManager::getSingleton().create(
+        "SharedTestMat", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    sharedMat->getTechnique(0)->getPass(0)->setDiffuse(1, 0, 0, 1);
+
+    // Create two entities sharing the same material
+    auto mesh1 = createInMemoryTriangleMesh("dedup_mesh1");
+    auto* sn1 = manager->addSceneNode("DedupNode1");
+    auto* e1 = manager->createEntity(sn1, mesh1);
+    e1->setMaterialName("SharedTestMat");
+
+    auto mesh2 = createInMemoryTriangleMesh("dedup_mesh2");
+    auto* sn2 = manager->addSceneNode("DedupNode2");
+    auto* e2 = manager->createEntity(sn2, mesh2);
+    e2->setMaterialName("SharedTestMat");
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/test_dedup.scene.gltf";
+
+    int result = MeshImporterExporter::sceneExporter(sceneFile);
+    EXPECT_EQ(result, 0);
+
+    // Read the exported glTF text and verify only one material entry
+    QFile gltfFile(sceneFile);
+    ASSERT_TRUE(gltfFile.open(QIODevice::ReadOnly));
+    QByteArray gltfData = gltfFile.readAll();
+    QJsonDocument doc = QJsonDocument::fromJson(gltfData);
+    ASSERT_TRUE(doc.isObject());
+    QJsonArray materials = doc.object()["materials"].toArray();
+    EXPECT_EQ(materials.size(), 1) << "Shared material should be deduplicated to 1 entry";
+
+    // Reimport to verify both entities load correctly
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+    EXPECT_EQ(manager->getSceneNodes().size(), 2);
+}
+
+TEST_F(SceneSaveLoadTest, EmptyScene_ExportsValidFile) {
+    auto* manager = Manager::getSingleton();
+    ASSERT_EQ(manager->getSceneNodes().size(), 0);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/empty_scene.scene.gltf";
+
+    int result = MeshImporterExporter::sceneExporter(sceneFile);
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(sceneFile));
+}
+
+TEST_F(SceneSaveLoadTest, RoundTrip_SkeletonEntity_PreservesAnimations) {
+    auto* manager = Manager::getSingleton();
+
+    // Create an animated entity with skeleton and "TestAnim" animation
+    auto* entity = createAnimatedTestEntity("SceneAnimRT");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(entity->getMesh()->getSkeleton()->getNumAnimations(), 1);
+    EXPECT_EQ(entity->getMesh()->getSkeleton()->getAnimation(static_cast<unsigned short>(0))->getName(), "TestAnim");
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/test_anim_roundtrip.scene.gltf";
+
+    int exportResult = MeshImporterExporter::sceneExporter(sceneFile);
+    ASSERT_EQ(exportResult, 0);
+    ASSERT_TRUE(QFileInfo::exists(sceneFile));
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+
+    auto& nodes = manager->getSceneNodes();
+    ASSERT_EQ(nodes.size(), 1);
+
+    auto* reimportedNode = nodes.first();
+    auto* sceneMgr = manager->getSceneMgr();
+    ASSERT_TRUE(sceneMgr->hasEntity(reimportedNode->getName()));
+
+    auto* reimportedEntity = sceneMgr->getEntity(reimportedNode->getName());
+    ASSERT_TRUE(reimportedEntity->hasSkeleton());
+    auto* skel = reimportedEntity->getMesh()->getSkeleton().get();
+    EXPECT_EQ(skel->getNumAnimations(), 1) << "Expected exactly 1 animation after round-trip";
+    if (skel->getNumAnimations() > 0)
+        EXPECT_EQ(skel->getAnimation(static_cast<unsigned short>(0))->getName(), "TestAnim");
+}

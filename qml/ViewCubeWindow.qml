@@ -1,20 +1,11 @@
 import QtQuick
-import QtQuick.Window
 import ViewCubeModule 1.0
 
-Window {
+Rectangle {
     id: root
     width: 64
     height: 64
-    minimumWidth: 64
-    maximumWidth: 64
-    minimumHeight: 64
-    maximumHeight: 64
-    flags: Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
     color: "transparent"
-    visible: ViewCubeController.visible
-    x: ViewCubeController.windowX
-    y: ViewCubeController.windowY
 
     // Internal state
     property string hoveredZone: ""  // face name, corner name, or ""

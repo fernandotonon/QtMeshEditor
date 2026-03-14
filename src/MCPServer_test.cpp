@@ -8,6 +8,7 @@
 #include <QSignalSpy>
 #include <QElapsedTimer>
 #include <QDir>
+#include <QTemporaryDir>
 #include <memory>
 #include <QMainWindow>
 #include "MCPServer.h"
@@ -3463,4 +3464,87 @@ TEST_F(MCPServerTest, AnimSuccPath_NavigatePrevAtStart)
     EXPECT_FALSE(isError(result));
     // When at first keyframe, "prev" should stay at first keyframe (t=0.0)
     EXPECT_TRUE(getResultText(result).contains("Navigated to keyframe"));
+}
+
+// --- Scene save/load tools ---
+
+TEST_F(MCPServerTest, SaveScene_EmptyPath_ReturnsError)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    QJsonObject args;
+    args["file_path"] = "";
+    QJsonObject result = server->callTool("save_scene", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("file_path"));
+}
+
+TEST_F(MCPServerTest, OpenScene_MissingFile_ReturnsError)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    QJsonObject args;
+    args["file_path"] = "/tmp/nonexistent_scene_file_12345.scene.glb";
+    QJsonObject result = server->callTool("open_scene", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found") || getResultText(result).contains("Error"));
+}
+
+TEST_F(MCPServerTest, SaveScene_ValidScene_Succeeds)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto mesh1 = createInMemoryTriangleMesh("SaveSceneMesh1");
+    auto mesh2 = createInMemoryTriangleMesh("SaveSceneMesh2");
+
+    auto* node1 = Manager::getSingleton()->addSceneNode("SaveSceneNode1");
+    Manager::getSingleton()->createEntity(node1, mesh1);
+
+    auto* node2 = Manager::getSingleton()->addSceneNode("SaveSceneNode2");
+    Manager::getSingleton()->createEntity(node2, mesh2);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString filePath = tmpDir.path() + "/test_save.scene.glb";
+
+    QJsonObject args;
+    args["file_path"] = filePath;
+    QJsonObject result = server->callTool("save_scene", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Scene saved"));
+    EXPECT_TRUE(QFile::exists(filePath));
+}
+
+TEST_F(MCPServerTest, OpenScene_ValidFile_LoadsEntities)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    // Create entities and save the scene
+    auto mesh1 = createInMemoryTriangleMesh("OpenSceneMesh1");
+    auto mesh2 = createInMemoryTriangleMesh("OpenSceneMesh2");
+
+    auto* node1 = Manager::getSingleton()->addSceneNode("OpenSceneNode1");
+    Manager::getSingleton()->createEntity(node1, mesh1);
+
+    auto* node2 = Manager::getSingleton()->addSceneNode("OpenSceneNode2");
+    Manager::getSingleton()->createEntity(node2, mesh2);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString filePath = tmpDir.path() + "/test_open.scene.glb";
+
+    QJsonObject saveArgs;
+    saveArgs["file_path"] = filePath;
+    QJsonObject saveResult = server->callTool("save_scene", saveArgs);
+    ASSERT_FALSE(isError(saveResult));
+    ASSERT_TRUE(QFile::exists(filePath));
+
+    // Open the saved scene
+    QJsonObject openArgs;
+    openArgs["file_path"] = filePath;
+    QJsonObject openResult = server->callTool("open_scene", openArgs);
+    EXPECT_FALSE(isError(openResult));
+    QString resultText = getResultText(openResult);
+    EXPECT_TRUE(resultText.contains("Scene loaded"));
+    EXPECT_TRUE(resultText.contains("scene node(s)"));
 }

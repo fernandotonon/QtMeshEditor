@@ -112,7 +112,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 
 ### Mesh Import/Export
 
-- **MeshImporterExporter** (`src/MeshImporterExporter.h/cpp`): Static methods. Supports .mesh, .obj, .dae, .gltf, .fbx via custom Assimp processors in `src/Assimp/`.
+- **MeshImporterExporter** (`src/MeshImporterExporter.h/cpp`): Static methods. Supports .mesh, .obj, .dae, .gltf, .fbx via custom Assimp processors in `src/Assimp/`. Also provides `sceneExporter()`/`sceneImporter()` for saving/loading entire scenes (multiple entities with transforms, materials, skeletons, and animations) as glTF files. Multi-entity scenes use entity-name-prefixed bones to avoid cross-entity skeleton contamination when Assimp merges skins.
 - **FBXExporter** (`src/FBX/FBXExporter.h/cpp`): Custom FBX Binary v7300 exporter that writes directly from Ogre data. Handles geometry, skeleton, skin deformers, animations, and materials. Replaces Assimp's broken FBX exporter.
 
 ### Local LLM

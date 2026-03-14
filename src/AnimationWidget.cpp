@@ -32,25 +32,26 @@ AnimationWidget::AnimationWidget(QWidget *parent) :
     connect(SelectionSet::getSingleton(),&SelectionSet::entitySelectionChanged,this,updateTables);
     connect(SelectionSet::getSingleton(),&SelectionSet::nodeSelectionChanged,this,updateTables);
 
+    // Clean up ALL skeleton debug/weight overlays before scene is cleared.
+    // This must happen before any nodes are destroyed so that SkeletonDebug
+    // timers don't fire with dangling entity pointers during teardown.
+    connect(Manager::getSingleton(), &Manager::sceneClearing, this, [this]() {
+        disableAllSkeletonDebug();
+    });
+
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, [this](Ogre::SceneNode* const& node) {
-        // Clean up any SkeletonDebug and BoneWeightOverlay instances for entities attached to this node
-        // Signal fires before entities are destroyed, so we can safely access them
-        const auto& attachedObjects = node->getAttachedObjects();
-        for(auto* obj : attachedObjects)
+        // Clean up any remaining SkeletonDebug and BoneWeightOverlay instances
+        // for entities attached to this node (e.g. single-node deletion).
+        QList<Ogre::Entity*> entities;
+        for(auto* obj : node->getAttachedObjects())
         {
-            if(obj->getMovableType() != "Entity")
-                continue;
-            auto* entity = static_cast<Ogre::Entity*>(obj);
-            if(mWeightOverlays.contains(entity))
-            {
-                mWeightOverlays.value(entity)->deleteLater();
-                mWeightOverlays.remove(entity);
-            }
-            if(mShowSkeleton.contains(entity))
-            {
-                mShowSkeleton.value(entity)->deleteLater();
-                mShowSkeleton.remove(entity);
-            }
+            if(obj->getMovableType() == "Entity")
+                entities.append(static_cast<Ogre::Entity*>(obj));
+        }
+        for(auto* entity : entities)
+        {
+            delete mWeightOverlays.take(entity);
+            delete mShowSkeleton.take(entity);
         }
     });
 

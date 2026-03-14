@@ -438,7 +438,8 @@ QList<Ogre::Entity *> &Manager::getEntities()
 
 bool Manager::isForbiddenNodeName(const QString &_name)
 {
-    return (_name=="TPCameraChildSceneNode" //TODO add a define for TPCameraChildSceneNode
+    return (_name.isEmpty() //Ogre 14 creates unnamed nodes with empty string (e.g. SpaceCamera nodes)
+            ||_name=="TPCameraChildSceneNode" //TODO add a define for TPCameraChildSceneNode
             ||_name=="GridLine_node" //TODO add a define for GridLine_node
             ||_name==SELECTIONBOX_OBJECT_NAME
             ||_name==TRANSFORM_OBJECT_NAME

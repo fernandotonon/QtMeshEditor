@@ -114,14 +114,17 @@ MainWindow::MainWindow(QWidget *parent) :
             try {
                 m_pRoot->renderOneFrame();
             } catch (Ogre::Exception& e) {
+                fprintf(stderr, "RENDER ERROR (Ogre): %s\n", e.getFullDescription().c_str());
                 SentryReporter::captureMessage(
                     QString("Render error (Ogre): %1").arg(e.getFullDescription().c_str()), "error");
                 if(m_pTimer) m_pTimer->stop();
             } catch (std::exception& e) {
+                fprintf(stderr, "RENDER ERROR (std): %s\n", e.what());
                 SentryReporter::captureMessage(
                     QString("Render error (std): %1").arg(e.what()), "error");
                 if(m_pTimer) m_pTimer->stop();
             } catch (...) {
+                fprintf(stderr, "RENDER ERROR (unknown)\n");
                 SentryReporter::captureMessage("Render error (unknown)", "error");
                 if(m_pTimer) m_pTimer->stop();
             }
@@ -144,8 +147,6 @@ MainWindow::~MainWindow()
 {
     // Destroy overlays early — they connect to Manager signals and
     // access Ogre resources, so they must be deleted while Manager is alive.
-    delete m_viewCubeEngine;
-    m_viewCubeEngine = nullptr;
     // ViewCubeController is parented to this, no manual delete needed
     m_viewCubeController = nullptr;
 
@@ -364,25 +365,13 @@ void MainWindow::initToolBar()
     for (EditorViewport* vp : mDockWidgetList)
         connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
 
-    // ViewCube (3D navigation gizmo)
-    m_viewCubeController = new ViewCubeController(this, this);
-    // Force software rendering for the ViewCube QML window (avoid GL conflicts with Ogre)
+    // ViewCube (3D navigation gizmo) — top-level window positioned over the active viewport
+    m_viewCubeController = new ViewCubeController(this);
+    // Force software rendering for the ViewCube QML widget (avoid GL conflicts with Ogre)
     qputenv("QSG_RHI_BACKEND", "software");
     qputenv("QT_QUICK_BACKEND", "software");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
-
-    m_viewCubeEngine = new QQmlApplicationEngine(this);
-    m_viewCubeEngine->addImportPath(QCoreApplication::applicationDirPath() + "/qml");
-    m_viewCubeEngine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
-
-    qmlRegisterSingletonType<ViewCubeController>("ViewCubeModule", 1, 0, "ViewCubeController",
-        [](QQmlEngine* engine, QJSEngine*) -> QObject* {
-            auto* inst = ViewCubeController::instance();
-            engine->setObjectOwnership(inst, QQmlEngine::CppOwnership);
-            return inst;
-        });
-
-    m_viewCubeEngine->load(QUrl("qrc:/ViewCube/ViewCubeWindow.qml"));
+    m_viewCubeController->initWidget();
 
     connect(ui->actionShow_View_Cube, &QAction::toggled, m_viewCubeController, &ViewCubeController::setVisible);
     connect(m_viewCubeController, &ViewCubeController::visibilityChanged, ui->actionShow_View_Cube, &QAction::setChecked);
@@ -393,10 +382,12 @@ void MainWindow::initToolBar()
             m_viewCubeController->setActiveWidget(w);
         });
 
-    // Default to visible and activate the first viewport
-    m_viewCubeController->setVisible(true);
+    // Activate the first viewport, then set visible
+    // (setActiveWidget emits visibilityChanged which checks isVisible(),
+    //  so m_visible must be true AND the widget must be visible)
     if (!mDockWidgetList.isEmpty())
         m_viewCubeController->setActiveWidget(mDockWidgetList.first()->getOgreWidget());
+    m_viewCubeController->setVisible(true);
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
@@ -588,6 +579,49 @@ void MainWindow::importMeshs(const QStringList &_uriList)
     auto txn = SentryReporter::startTransaction("ui.import", "file.import");
     try {
         MeshImporterExporter::importer(_uriList/*, &lastImported*/);
+    } catch (...) {
+        SentryReporter::finishTransaction(txn);
+        throw;
+    }
+    SentryReporter::finishTransaction(txn);
+}
+
+void MainWindow::on_actionOpen_Scene_triggered()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Open scene file");
+
+    QString fileName = QFileDialog::getOpenFileName(this, tr("Open Scene"),
+                                                    "",
+                                                    tr("Scene Files (*.scene.glb *.scene.gltf);;glTF Files (*.gltf *.glb);;All Files (*)"),
+                                                    nullptr, QFileDialog::DontUseNativeDialog);
+    if (fileName.isEmpty()) return;
+
+    auto txn = SentryReporter::startTransaction("ui.import", "scene.import");
+    try {
+        MeshImporterExporter::sceneImporter(fileName);
+    } catch (...) {
+        SentryReporter::finishTransaction(txn);
+        throw;
+    }
+    SentryReporter::finishTransaction(txn);
+    addToRecentFiles(fileName);
+}
+
+void MainWindow::on_actionSave_Scene_triggered()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Save scene file");
+
+    QString fileName = QFileDialog::getSaveFileName(this, tr("Save Scene"),
+                                                    "scene.scene.glb",
+                                                    tr("Scene glTF Binary (*.scene.glb);;Scene glTF (*.scene.gltf)"),
+                                                    nullptr, QFileDialog::DontUseNativeDialog);
+    if (fileName.isEmpty()) return;
+
+    auto txn = SentryReporter::startTransaction("ui.export", "scene.export");
+    try {
+        int result = MeshImporterExporter::sceneExporter(fileName);
+        if (result != 0)
+            QMessageBox::warning(this, tr("Save Scene"), tr("Failed to save scene."));
     } catch (...) {
         SentryReporter::finishTransaction(txn);
         throw;
@@ -1349,7 +1383,10 @@ void MainWindow::openRecentFile()
     QString filePath = action->data().toString();
     if (QFileInfo::exists(filePath)) {
         addToRecentFiles(filePath);
-        mUriList.append(filePath);
+        if (filePath.endsWith(".scene.glb") || filePath.endsWith(".scene.gltf"))
+            MeshImporterExporter::sceneImporter(filePath);
+        else
+            mUriList.append(filePath);
     } else {
         QMessageBox::warning(this, tr("File Not Found"),
             tr("The file \"%1\" no longer exists.").arg(filePath));

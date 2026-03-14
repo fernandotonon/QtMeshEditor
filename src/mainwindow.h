@@ -16,7 +16,6 @@ class MCPServer;
 class NormalVisualizer;
 class MeshInfoOverlay;
 class ViewCubeController;
-class QQmlApplicationEngine;
 
 namespace Ui {
 class MainWindow;
@@ -50,6 +49,8 @@ public:
     
 private slots:
     void on_actionImport_triggered();
+    void on_actionOpen_Scene_triggered();
+    void on_actionSave_Scene_triggered();
     void on_actionMaterial_Editor_triggered();
     void on_actionAbout_triggered();
     void on_actionMerge_Animations_triggered();
@@ -129,7 +130,6 @@ private:
     NormalVisualizer* m_normalVisualizer = nullptr;
     MeshInfoOverlay* m_meshInfoOverlay = nullptr;
     ViewCubeController* m_viewCubeController = nullptr;
-    QQmlApplicationEngine* m_viewCubeEngine = nullptr;
     MCPServer* m_mcpServer = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
