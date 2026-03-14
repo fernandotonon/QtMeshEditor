@@ -37,8 +37,6 @@ TEST_F(ViewCubeControllerTest, DefaultState)
     EXPECT_DOUBLE_EQ(controller->qx(), 0.0);
     EXPECT_DOUBLE_EQ(controller->qy(), 0.0);
     EXPECT_DOUBLE_EQ(controller->qz(), 0.0);
-    EXPECT_EQ(controller->windowX(), 0);
-    EXPECT_EQ(controller->windowY(), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -243,10 +241,6 @@ TEST(ViewCubeControllerMainWindow, ConstructorInstallsEventFilter)
     QResizeEvent resizeEvt(QSize(400, 300), QSize(300, 200));
     QCoreApplication::sendEvent(&mainWindow, &resizeEvt);
 
-    // Position unchanged (no active widget)
-    EXPECT_EQ(ctrl->windowX(), 0);
-    EXPECT_EQ(ctrl->windowY(), 0);
-
     delete ctrl;
 }
 
@@ -262,9 +256,6 @@ TEST(ViewCubeControllerMainWindow, EventFilterPassesThroughNonMoveResizeEvents)
     QEvent focusEvt(QEvent::FocusIn);
     QCoreApplication::sendEvent(&mainWindow, &focusEvt);
 
-    EXPECT_EQ(ctrl->windowX(), 0);
-    EXPECT_EQ(ctrl->windowY(), 0);
-
     delete ctrl;
 }
 
@@ -274,11 +265,9 @@ TEST(ViewCubeControllerMainWindow, EventFilterMoveWithVisibleButNoActiveWidget)
     auto* ctrl = new ViewCubeController(&mainWindow);
     ctrl->setVisible(true);
 
-    // Move event: visible=true but no activeWidget → inner check short-circuits
+    // Move event: visible=true but no activeWidget → reposition short-circuits
     QMoveEvent moveEvt(QPoint(100, 100), QPoint(0, 0));
     QCoreApplication::sendEvent(&mainWindow, &moveEvt);
-
-    EXPECT_EQ(ctrl->windowX(), 0);
 
     delete ctrl;
 }
@@ -343,18 +332,5 @@ TEST_F(ViewCubeControllerTest, UpdateOrientationDoesNotEmitWhenOrientationUnchan
     controller->updateOrientation();
     controller->updateOrientation();
 
-    EXPECT_EQ(spy.count(), 0);
-}
-
-TEST_F(ViewCubeControllerTest, WindowPositionDefaultsToZero)
-{
-    QSignalSpy spy(controller, &ViewCubeController::positionChanged);
-
-    // Without active widget, reposition is a no-op
-    controller->setVisible(true);
-    controller->updateOrientation(); // calls reposition internally
-
-    EXPECT_EQ(controller->windowX(), 0);
-    EXPECT_EQ(controller->windowY(), 0);
     EXPECT_EQ(spy.count(), 0);
 }

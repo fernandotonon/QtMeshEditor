@@ -2,9 +2,18 @@
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
 
+#include <QCoreApplication>
 #include <QEvent>
+#include <QLibraryInfo>
+#include <QQuickWidget>
+#include <QQmlEngine>
 #include <QWidget>
 #include <cmath>
+
+#ifdef Q_OS_MACOS
+#include <objc/message.h>
+#include <objc/runtime.h>
+#endif
 
 ViewCubeController* ViewCubeController::s_instance = nullptr;
 
@@ -36,6 +45,51 @@ ViewCubeController* ViewCubeController::qmlInstance(QQmlEngine* engine, QJSEngin
     if (!s_instance)
         s_instance = new ViewCubeController(nullptr);
     return s_instance;
+}
+
+void ViewCubeController::initWidget()
+{
+    m_cubeWidget = new QQuickWidget();
+    m_cubeWidget->setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
+    m_cubeWidget->setAttribute(Qt::WA_TranslucentBackground);
+    m_cubeWidget->setClearColor(Qt::transparent);
+    m_cubeWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+    m_cubeWidget->setFixedSize(64, 64);
+
+    qmlRegisterSingletonType<ViewCubeController>("ViewCubeModule", 1, 0, "ViewCubeController",
+        [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+            auto* inst = ViewCubeController::instance();
+            engine->setObjectOwnership(inst, QQmlEngine::CppOwnership);
+            return inst;
+        });
+
+    m_cubeWidget->engine()->addImportPath(QCoreApplication::applicationDirPath() + "/qml");
+    m_cubeWidget->engine()->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
+
+    m_cubeWidget->setSource(QUrl("qrc:/ViewCube/ViewCubeWindow.qml"));
+
+    // Show briefly to create the native window, then hide
+    m_cubeWidget->show();
+
+#ifdef Q_OS_MACOS
+    // Qt::Tool creates an NSPanel at NSFloatingWindowLevel on macOS, causing
+    // it to float above ALL app windows (including material editor, dialogs).
+    // Lower to NSNormalWindowLevel (0) so other windows can appear above the
+    // cube when focused, while still keeping Qt::Tool benefits (no Dock icon,
+    // groups with parent app, auto-hides when app loses focus).
+    {
+        using GetWindowFn = id (*)(id, SEL);
+        using SetLevelFn = void (*)(id, SEL, long);
+
+        auto nsView = reinterpret_cast<id>(m_cubeWidget->winId());
+        auto nsWindow = reinterpret_cast<GetWindowFn>(objc_msgSend)(
+            nsView, sel_registerName("window"));
+        reinterpret_cast<SetLevelFn>(objc_msgSend)(
+            nsWindow, sel_registerName("setLevel:"), 0L);
+    }
+#endif
+
+    m_cubeWidget->hide();
 }
 
 bool ViewCubeController::isVisible() const
@@ -114,9 +168,6 @@ void ViewCubeController::rotateByDelta(qreal dx, qreal dy)
     Ogre::Radian pitch(scaledDy * 0.05f);
 
     // Apply arcball rotation (same logic as SpaceCamera::arcBall)
-    // We access the orientation through animateToOrientation with 0 duration
-    // to avoid needing to expose the target node directly.
-    // Instead, compute the new orientation ourselves.
     Ogre::Quaternion current = cam->getOrientation();
     Ogre::Quaternion yawQ(yaw, Ogre::Vector3::UNIT_Y);
     Ogre::Quaternion pitchQ(pitch, Ogre::Vector3::UNIT_X);
@@ -128,8 +179,12 @@ void ViewCubeController::rotateByDelta(qreal dx, qreal dy)
 
 void ViewCubeController::setActiveWidget(OgreWidget* widget)
 {
-    if (m_activeWidget == widget)
+    if (m_activeWidget == widget) {
+        // Same widget got focus again — raise the cube above the main window
+        if (m_cubeWidget && isVisible())
+            m_cubeWidget->raise();
         return;
+    }
 
     if (m_activeWidget) {
         m_activeWidget->removeEventFilter(this);
@@ -142,12 +197,11 @@ void ViewCubeController::setActiveWidget(OgreWidget* widget)
         m_activeWidget->installEventFilter(this);
         connect(m_activeWidget, &QObject::destroyed, this, [this]() {
             m_activeWidget = nullptr;
-            emit visibilityChanged(isVisible());
+            updateWidgetVisibility();
         });
     }
 
-    emit visibilityChanged(isVisible());
-    reposition();
+    updateWidgetVisibility();
     updateOrientation();
 }
 
@@ -176,47 +230,73 @@ void ViewCubeController::setVisible(bool visible)
     if (m_visible == visible)
         return;
     m_visible = visible;
+    updateWidgetVisibility();
     emit visibilityChanged(visible);
-    if (visible)
-        reposition();
 }
 
 bool ViewCubeController::eventFilter(QObject* obj, QEvent* event)
 {
     auto type = event->type();
 
-    if (obj == m_activeWidget &&
-        (type == QEvent::Show || type == QEvent::Hide ||
-         type == QEvent::Close || type == QEvent::Destroy)) {
-        if (type == QEvent::Close || type == QEvent::Destroy)
+    if (obj == m_activeWidget) {
+        if (type == QEvent::Close || type == QEvent::Destroy) {
             m_activeWidget = nullptr;
-        emit visibilityChanged(isVisible());
-        return QObject::eventFilter(obj, event);
+            updateWidgetVisibility();
+            return QObject::eventFilter(obj, event);
+        }
+        if (type == QEvent::Show) {
+            updateWidgetVisibility();
+            return QObject::eventFilter(obj, event);
+        }
+
+        // Reposition when active widget moves/resizes
+        if (type == QEvent::Move || type == QEvent::Resize) {
+            if (m_visible)
+                reposition();
+        }
+
+        // Any mouse interaction with the viewport brings the main window to
+        // front at NSNormalWindowLevel, pushing the cube behind it.  Re-raise
+        // the cube so it stays visible over the viewport.
+        if (type == QEvent::MouseButtonPress || type == QEvent::Wheel) {
+            if (m_cubeWidget && isVisible())
+                m_cubeWidget->raise();
+        }
     }
 
-    // Reposition when active widget or main window moves/resizes
-    if (type == QEvent::Move || type == QEvent::Resize) {
-        if (m_visible && m_activeWidget &&
-            (obj == m_activeWidget || obj == m_mainWindow))
-            reposition();
+    // Raise cube when main window regains focus (e.g. switching back from material editor)
+    if (obj == m_mainWindow && type == QEvent::WindowActivate) {
+        if (m_cubeWidget && isVisible())
+            m_cubeWidget->raise();
     }
+
     return QObject::eventFilter(obj, event);
 }
 
 void ViewCubeController::reposition()
 {
-    if (!m_activeWidget)
+    if (!m_activeWidget || !m_cubeWidget)
         return;
 
-    // Position in top-right corner with a margin
+    // Position in top-right corner of the active viewport
     const int cubeSize = 64;
     const int margin = 4;
     QPoint topRight = m_activeWidget->mapToGlobal(
         QPoint(m_activeWidget->width() - cubeSize - margin, margin));
 
-    if (m_windowX != topRight.x() || m_windowY != topRight.y()) {
-        m_windowX = topRight.x();
-        m_windowY = topRight.y();
-        emit positionChanged();
+    m_cubeWidget->move(topRight);
+}
+
+void ViewCubeController::updateWidgetVisibility()
+{
+    if (!m_cubeWidget)
+        return;
+
+    if (isVisible()) {
+        reposition();
+        m_cubeWidget->show();
+        m_cubeWidget->raise();
+    } else {
+        m_cubeWidget->hide();
     }
 }

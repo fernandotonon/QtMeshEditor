@@ -16,7 +16,6 @@ class MCPServer;
 class NormalVisualizer;
 class MeshInfoOverlay;
 class ViewCubeController;
-class QQmlApplicationEngine;
 
 namespace Ui {
 class MainWindow;
@@ -131,7 +130,6 @@ private:
     NormalVisualizer* m_normalVisualizer = nullptr;
     MeshInfoOverlay* m_meshInfoOverlay = nullptr;
     ViewCubeController* m_viewCubeController = nullptr;
-    QQmlApplicationEngine* m_viewCubeEngine = nullptr;
     MCPServer* m_mcpServer = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;

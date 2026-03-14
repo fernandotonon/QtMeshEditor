@@ -7,6 +7,7 @@
 
 class OgreWidget;
 class SpaceCamera;
+class QQuickWidget;
 class QWidget;
 
 class ViewCubeController : public QObject
@@ -19,8 +20,6 @@ class ViewCubeController : public QObject
     Q_PROPERTY(qreal qx READ qx NOTIFY orientationChanged)
     Q_PROPERTY(qreal qy READ qy NOTIFY orientationChanged)
     Q_PROPERTY(qreal qz READ qz NOTIFY orientationChanged)
-    Q_PROPERTY(int windowX READ windowX NOTIFY positionChanged)
-    Q_PROPERTY(int windowY READ windowY NOTIFY positionChanged)
     Q_PROPERTY(bool visible READ isVisible NOTIFY visibilityChanged)
 
 public:
@@ -34,8 +33,6 @@ public:
     qreal qx() const { return m_qx; }
     qreal qy() const { return m_qy; }
     qreal qz() const { return m_qz; }
-    int windowX() const { return m_windowX; }
-    int windowY() const { return m_windowY; }
     bool isVisible() const;
 
     Q_INVOKABLE void snapToView(const QString& face);
@@ -45,10 +42,10 @@ public:
     void setActiveWidget(OgreWidget* widget);
     void updateOrientation();
     void setVisible(bool visible);
+    void initWidget();
 
 signals:
     void orientationChanged();
-    void positionChanged();
     void visibilityChanged(bool visible);
 
 protected:
@@ -56,6 +53,7 @@ protected:
 
 private:
     void reposition();
+    void updateWidgetVisibility();
     SpaceCamera* activeCamera() const;
 
     static ViewCubeController* s_instance;
@@ -65,10 +63,9 @@ private:
     qreal m_qx = 0.0;
     qreal m_qy = 0.0;
     qreal m_qz = 0.0;
-    int m_windowX = 0;
-    int m_windowY = 0;
     bool m_visible = false;
     QPointer<OgreWidget> m_activeWidget;
+    QQuickWidget* m_cubeWidget = nullptr;
 };
 
 #endif // VIEWCUBECONTROLLER_H

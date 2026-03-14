@@ -147,8 +147,6 @@ MainWindow::~MainWindow()
 {
     // Destroy overlays early — they connect to Manager signals and
     // access Ogre resources, so they must be deleted while Manager is alive.
-    delete m_viewCubeEngine;
-    m_viewCubeEngine = nullptr;
     // ViewCubeController is parented to this, no manual delete needed
     m_viewCubeController = nullptr;
 
@@ -367,25 +365,13 @@ void MainWindow::initToolBar()
     for (EditorViewport* vp : mDockWidgetList)
         connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
 
-    // ViewCube (3D navigation gizmo)
-    m_viewCubeController = new ViewCubeController(this, this);
-    // Force software rendering for the ViewCube QML window (avoid GL conflicts with Ogre)
+    // ViewCube (3D navigation gizmo) — top-level window positioned over the active viewport
+    m_viewCubeController = new ViewCubeController(this);
+    // Force software rendering for the ViewCube QML widget (avoid GL conflicts with Ogre)
     qputenv("QSG_RHI_BACKEND", "software");
     qputenv("QT_QUICK_BACKEND", "software");
     QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
-
-    m_viewCubeEngine = new QQmlApplicationEngine(this);
-    m_viewCubeEngine->addImportPath(QCoreApplication::applicationDirPath() + "/qml");
-    m_viewCubeEngine->addImportPath(QLibraryInfo::path(QLibraryInfo::QmlImportsPath));
-
-    qmlRegisterSingletonType<ViewCubeController>("ViewCubeModule", 1, 0, "ViewCubeController",
-        [](QQmlEngine* engine, QJSEngine*) -> QObject* {
-            auto* inst = ViewCubeController::instance();
-            engine->setObjectOwnership(inst, QQmlEngine::CppOwnership);
-            return inst;
-        });
-
-    m_viewCubeEngine->load(QUrl("qrc:/ViewCube/ViewCubeWindow.qml"));
+    m_viewCubeController->initWidget();
 
     connect(ui->actionShow_View_Cube, &QAction::toggled, m_viewCubeController, &ViewCubeController::setVisible);
     connect(m_viewCubeController, &ViewCubeController::visibilityChanged, ui->actionShow_View_Cube, &QAction::setChecked);
