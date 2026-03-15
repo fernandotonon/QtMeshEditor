@@ -167,23 +167,38 @@ TEST(MeshImporterExporterStandaloneTest, ExportTextureName_CaseInsensitive) {
     EXPECT_EQ(MeshImporterExporter::exportTextureName("texture.PNG"), "texture.PNG");
 }
 
-TEST(MeshImporterExporterStandaloneTest, ExportTextureName_WithPath) {
-    // QFileInfo strips the directory — exportTextureName returns just the filename
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_WithPath_Unsupported) {
+    // Directory is stripped for both supported and unsupported formats
     EXPECT_EQ(MeshImporterExporter::exportTextureName("textures/diffuse.jpg"), "diffuse.png");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_WithPath_Supported) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("textures/diffuse.png"), "diffuse.png");
 }
 
 TEST(MeshImporterExporterStandaloneTest, ExportTextureName_MultipleDots) {
     EXPECT_EQ(MeshImporterExporter::exportTextureName("my.texture.file.jpg"), "my.texture.file.png");
 }
 
-// ─── sceneExporter progress callback Tests ──────────────────────────
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_Empty) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName(""), ".png");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_NoExtension) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("texture"), "texture.png");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_TIF_ConvertedToPNG) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("texture.tif"), "texture.png");
+}
+
+// ─── sceneExporter edge case Tests ──────────────────────────────────
 
 TEST(MeshImporterExporterStandaloneTest, SceneExporter_EmptyURI_ReturnsMinusOne) {
     EXPECT_EQ(MeshImporterExporter::sceneExporter(""), -1);
 }
 
 TEST(MeshImporterExporterStandaloneTest, SceneExporter_NullProgress_DoesNotCrash) {
-    // Empty URI returns early before callback is invoked — ensures nullptr is safe
     EXPECT_EQ(MeshImporterExporter::sceneExporter("", nullptr), -1);
 }
 
@@ -1855,4 +1870,63 @@ TEST_F(SceneSaveLoadTest, RoundTrip_SkeletonEntity_PreservesAnimations) {
     EXPECT_EQ(skel->getNumAnimations(), 1) << "Expected exactly 1 animation after round-trip";
     if (skel->getNumAnimations() > 0)
         EXPECT_EQ(skel->getAnimation(static_cast<unsigned short>(0))->getName(), "TestAnim");
+}
+
+TEST_F(SceneSaveLoadTest, SceneExporter_NullProgress_FullExport) {
+    auto* manager = Manager::getSingleton();
+
+    auto mesh = createInMemoryTriangleMesh("null_progress_mesh");
+    auto* sn = manager->addSceneNode("NullProgressNode");
+    manager->createEntity(sn, mesh);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/null_progress.scene.gltf";
+
+    // nullptr progress callback should not crash during real export
+    int result = MeshImporterExporter::sceneExporter(sceneFile, nullptr);
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(sceneFile));
+}
+
+TEST_F(SceneSaveLoadTest, RoundTrip_MixedSkeletalAndNonSkeletal) {
+    auto* manager = Manager::getSingleton();
+
+    // Create a skeletal entity
+    auto* skelEntity = createAnimatedTestEntity("MixedSkelEntity");
+    ASSERT_NE(skelEntity, nullptr);
+    ASSERT_TRUE(skelEntity->hasSkeleton());
+
+    // Create a non-skeletal entity
+    auto mesh2 = createInMemoryTriangleMesh("mixed_plain_mesh");
+    auto* sn2 = manager->addSceneNode("MixedPlainNode");
+    manager->createEntity(sn2, mesh2);
+    sn2->setPosition(Ogre::Vector3(5.0f, 0.0f, 0.0f));
+
+    ASSERT_EQ(manager->getSceneNodes().size(), 2);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/mixed_scene.scene.gltf";
+
+    int exportResult = MeshImporterExporter::sceneExporter(sceneFile);
+    ASSERT_EQ(exportResult, 0);
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+    EXPECT_EQ(manager->getSceneNodes().size(), 2);
+
+    // Verify both entities reimported
+    bool foundSkeletal = false, foundPlain = false;
+    for (auto* sn : manager->getSceneNodes())
+    {
+        if (!manager->getSceneMgr()->hasEntity(sn->getName()))
+            continue;
+        auto* e = manager->getSceneMgr()->getEntity(sn->getName());
+        if (e->hasSkeleton())
+            foundSkeletal = true;
+        else
+            foundPlain = true;
+    }
+    EXPECT_TRUE(foundSkeletal) << "Skeletal entity not found after round-trip";
+    EXPECT_TRUE(foundPlain) << "Non-skeletal entity not found after round-trip";
 }

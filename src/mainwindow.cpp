@@ -618,8 +618,9 @@ void MainWindow::on_actionSave_Scene_triggered()
                                                     nullptr, QFileDialog::DontUseNativeDialog);
     if (fileName.isEmpty()) return;
 
-    QProgressDialog progressDialog(tr("Saving scene..."), tr("Cancel"), 0, 100, this);
+    QProgressDialog progressDialog(tr("Saving scene..."), QString(), 0, 100, this);
     progressDialog.setWindowModality(Qt::WindowModal);
+    progressDialog.setCancelButton(nullptr);
     progressDialog.setMinimumDuration(0);
     progressDialog.setValue(0);
 

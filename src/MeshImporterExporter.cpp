@@ -110,7 +110,7 @@ QString MeshImporterExporter::exportTextureName(const QString& originalName)
     // For anything else (jpg, jpeg, dds, etc.), convert to png
     static const QStringList supported = {"png", "bmp", "tga", "hdr"};
     if (supported.contains(ext))
-        return originalName;
+        return fi.fileName();
     return fi.completeBaseName() + ".png";
 }
 
@@ -131,7 +131,12 @@ void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, con
                     Ogre::Image img;
                     tex->convertToImage(img, true);
                     QString saveName = exportTextureName(QString::fromStdString(tex->getName()));
-                    img.save((file.path() + "/" + saveName).toStdString());
+                    try {
+                        img.save((file.path() + "/" + saveName).toStdString());
+                    } catch (Ogre::Exception& ex) {
+                        Ogre::LogManager::getSingleton().logError(
+                            "Failed to save texture '" + saveName.toStdString() + "': " + ex.what());
+                    }
                 }
             }
         }
@@ -149,18 +154,16 @@ static aiMatrix4x4 toAiMatrix(const Ogre::Matrix4& m)
     );
 }
 
-// Build bone node hierarchy recursively
-static aiNode* buildBoneNode(Ogre::Bone* bone, aiNode* parent)
+// Build bone node hierarchy recursively, with optional name prefix for multi-entity scenes
+static aiNode* buildBoneNode(Ogre::Bone* bone, aiNode* parent, const std::string& bonePrefix = "")
 {
-    auto* node = new aiNode(std::string(bone->getName()));
+    auto* node = new aiNode(bonePrefix + std::string(bone->getName()));
     node->mParent = parent;
 
-    // Set local transform from bone bind pose
     Ogre::Matrix4 localTransform;
     localTransform.makeTransform(bone->getPosition(), bone->getScale(), bone->getOrientation());
     node->mTransformation = toAiMatrix(localTransform);
 
-    // Process children
     const auto& children = bone->getChildren();
     if (!children.empty())
     {
@@ -171,12 +174,263 @@ static aiNode* buildBoneNode(Ogre::Bone* bone, aiNode* parent)
         {
             auto* childBone = dynamic_cast<Ogre::Bone*>(child);
             if (childBone)
-                node->mChildren[ci++] = buildBoneNode(childBone, node);
+                node->mChildren[ci++] = buildBoneNode(childBone, node, bonePrefix);
         }
         node->mNumChildren = ci;
     }
 
     return node;
+}
+
+// Convert an Ogre material to an aiMaterial (colors + textures)
+static aiMaterial* buildAiMaterialFromOgre(const Ogre::MaterialPtr& mat)
+{
+    auto* aiMat = new aiMaterial();
+    aiString matName(mat->getName());
+    aiMat->AddProperty(&matName, AI_MATKEY_NAME);
+
+    auto* tech = mat->getTechnique(0);
+    if (tech && tech->getNumPasses() > 0)
+    {
+        auto* pass = tech->getPass(0);
+        auto d = pass->getDiffuse();
+        aiColor4D diffuse(d.r, d.g, d.b, d.a);
+        aiMat->AddProperty(&diffuse, 1, AI_MATKEY_COLOR_DIFFUSE);
+
+        auto s = pass->getSpecular();
+        aiColor4D specular(s.r, s.g, s.b, s.a);
+        aiMat->AddProperty(&specular, 1, AI_MATKEY_COLOR_SPECULAR);
+
+        auto a = pass->getAmbient();
+        aiColor4D ambient(a.r, a.g, a.b, a.a);
+        aiMat->AddProperty(&ambient, 1, AI_MATKEY_COLOR_AMBIENT);
+
+        auto e = pass->getSelfIllumination();
+        aiColor4D emissive(e.r, e.g, e.b, e.a);
+        aiMat->AddProperty(&emissive, 1, AI_MATKEY_COLOR_EMISSIVE);
+
+        float shininess = pass->getShininess();
+        aiMat->AddProperty(&shininess, 1, AI_MATKEY_SHININESS);
+
+        unsigned short diffuseIdx = 0;
+        unsigned short normalIdx = 0;
+        for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
+        {
+            auto* tus = pass->getTextureUnitState(ti);
+            if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
+            {
+                QString safeName = MeshImporterExporter::exportTextureName(
+                    QString::fromStdString(tus->getTextureName()));
+                aiString texPath(safeName.toStdString());
+                const auto& tusName = tus->getName();
+                if (tusName == "normal_map" || tusName == "NormalMap")
+                {
+                    aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
+                    ++normalIdx;
+                }
+                else
+                {
+                    aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
+                    ++diffuseIdx;
+                }
+            }
+        }
+    }
+    return aiMat;
+}
+
+// Read vertex/index data from an Ogre submesh into a pre-allocated aiMesh
+static void readSubmeshGeometry(
+    aiMesh* aiM,
+    const Ogre::VertexData* vData,
+    const Ogre::SubMesh* subMesh,
+    const Ogre::Entity* entity,
+    unsigned int subIndex,
+    const std::map<std::string, unsigned int, std::less<>>& matIndexMap)
+{
+    aiM->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
+    aiM->mNumVertices = static_cast<unsigned int>(vData->vertexCount);
+    aiM->mVertices = new aiVector3D[aiM->mNumVertices];
+
+    // Material index
+    const auto* subEnt = entity->getSubEntity(subIndex);
+    auto matIt = matIndexMap.find(subEnt->getMaterial()->getName());
+    aiM->mMaterialIndex = (matIt != matIndexMap.end()) ? matIt->second : 0;
+
+    // Read positions
+    const auto* posElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+    if (posElem)
+    {
+        auto vbuf = vData->vertexBufferBinding->getBuffer(posElem->getSource());
+        auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+        {
+            const Ogre::Real* p;
+            posElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+            aiM->mVertices[j] = aiVector3D(p[0], p[1], p[2]);
+        }
+        vbuf->unlock();
+    }
+
+    // Read normals
+    const auto* normElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
+    if (normElem)
+    {
+        aiM->mNormals = new aiVector3D[aiM->mNumVertices];
+        auto vbuf = vData->vertexBufferBinding->getBuffer(normElem->getSource());
+        auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+        {
+            const Ogre::Real* p;
+            normElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+            aiM->mNormals[j] = aiVector3D(p[0], p[1], p[2]);
+        }
+        vbuf->unlock();
+    }
+
+    // Read texture coordinates
+    const auto* tcElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
+    if (tcElem)
+    {
+        aiM->mTextureCoords[0] = new aiVector3D[aiM->mNumVertices];
+        aiM->mNumUVComponents[0] = 2;
+        auto vbuf = vData->vertexBufferBinding->getBuffer(tcElem->getSource());
+        auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+        {
+            const Ogre::Real* p;
+            tcElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+            aiM->mTextureCoords[0][j] = aiVector3D(p[0], p[1], 0.0f);
+        }
+        vbuf->unlock();
+    }
+
+    // Read indices
+    const Ogre::IndexData* iData = subMesh->indexData;
+    if (iData && iData->indexCount > 0)
+    {
+        aiM->mNumFaces = static_cast<unsigned int>(iData->indexCount / 3);
+        aiM->mFaces = new aiFace[aiM->mNumFaces];
+        auto ibuf = iData->indexBuffer;
+        auto* ibase = static_cast<const unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
+
+        for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
+        {
+            aiM->mFaces[f].mNumIndices = 3;
+            aiM->mFaces[f].mIndices = new unsigned int[3];
+            for (unsigned int v = 0; v < 3; ++v)
+            {
+                unsigned int idx = use32
+                    ? reinterpret_cast<const uint32_t*>(ibase)[f * 3 + v]
+                    : reinterpret_cast<const uint16_t*>(ibase)[f * 3 + v];
+                aiM->mFaces[f].mIndices[v] = idx;
+            }
+        }
+        ibuf->unlock();
+    }
+}
+
+// Assign bone weights from Ogre bone assignments to an aiMesh
+static void assignBoneWeights(
+    aiMesh* aiM,
+    const Ogre::SubMesh* subMesh,
+    const Ogre::MeshPtr& mesh,
+    Ogre::Skeleton* skeleton,
+    const std::map<unsigned short, std::string>& boneHandleToName)
+{
+    const auto& boneAssignments = subMesh->useSharedVertices
+        ? mesh->getBoneAssignments() : subMesh->getBoneAssignments();
+    std::map<unsigned short, std::vector<aiVertexWeight>> boneWeightsMap;
+    for (const auto& [vertIdx, vba] : boneAssignments)
+    {
+        aiVertexWeight w;
+        w.mVertexId = vba.vertexIndex;
+        w.mWeight = vba.weight;
+        boneWeightsMap[vba.boneIndex].push_back(w);
+    }
+
+    if (!boneWeightsMap.empty())
+    {
+        aiM->mNumBones = static_cast<unsigned int>(boneWeightsMap.size());
+        aiM->mBones = new aiBone*[aiM->mNumBones];
+        unsigned int bi = 0;
+        for (const auto& [handle, weights] : boneWeightsMap)
+        {
+            auto* aiBoneObj = new aiBone();
+            auto nameIt = boneHandleToName.find(handle);
+            if (nameIt != boneHandleToName.end())
+                aiBoneObj->mName = aiString(nameIt->second);
+
+            auto* bone = skeleton->getBone(handle);
+            Ogre::Matrix4 globalTransform = bone->_getFullTransform();
+            aiBoneObj->mOffsetMatrix = toAiMatrix(globalTransform.inverse());
+
+            aiBoneObj->mNumWeights = static_cast<unsigned int>(weights.size());
+            aiBoneObj->mWeights = new aiVertexWeight[aiBoneObj->mNumWeights];
+            for (unsigned int wi = 0; wi < aiBoneObj->mNumWeights; ++wi)
+                aiBoneObj->mWeights[wi] = weights[wi];
+
+            aiM->mBones[bi++] = aiBoneObj;
+        }
+    }
+}
+
+// Convert an Ogre skeleton animation to an aiAnimation
+static aiAnimation* buildAiAnimation(Ogre::Animation* ogreAnim, const std::string& bonePrefix = "")
+{
+    auto* anim = new aiAnimation();
+    anim->mName = aiString(bonePrefix + ogreAnim->getName());
+    anim->mTicksPerSecond = 1.0;
+    anim->mDuration = ogreAnim->getLength();
+
+    std::vector<aiNodeAnim*> channels;
+    for (const auto& [handle, track] : ogreAnim->_getNodeTrackList())
+    {
+        auto* bone = dynamic_cast<Ogre::Bone*>(track->getAssociatedNode());
+        if (!bone) continue;
+
+        auto* nodeAnim = new aiNodeAnim();
+        nodeAnim->mNodeName = aiString(bonePrefix + std::string(bone->getName()));
+
+        auto numKeyFrames = track->getNumKeyFrames();
+        nodeAnim->mNumPositionKeys = numKeyFrames;
+        nodeAnim->mNumRotationKeys = numKeyFrames;
+        nodeAnim->mNumScalingKeys = numKeyFrames;
+        nodeAnim->mPositionKeys = new aiVectorKey[numKeyFrames];
+        nodeAnim->mRotationKeys = new aiQuatKey[numKeyFrames];
+        nodeAnim->mScalingKeys = new aiVectorKey[numKeyFrames];
+
+        Ogre::Vector3 bindPos = bone->getPosition();
+        Ogre::Quaternion bindRot = bone->getOrientation();
+
+        for (unsigned short ki = 0; ki < numKeyFrames; ++ki)
+        {
+            auto* kf = track->getNodeKeyFrame(ki);
+            double time = kf->getTime();
+
+            Ogre::Vector3 pos = bindPos + kf->getTranslate();
+            nodeAnim->mPositionKeys[ki].mTime = time;
+            nodeAnim->mPositionKeys[ki].mValue = aiVector3D(pos.x, pos.y, pos.z);
+
+            Ogre::Quaternion rot = bindRot * kf->getRotation();
+            rot.normalise();
+            nodeAnim->mRotationKeys[ki].mTime = time;
+            nodeAnim->mRotationKeys[ki].mValue = aiQuaternion(rot.w, rot.x, rot.y, rot.z);
+
+            Ogre::Vector3 scl = kf->getScale();
+            nodeAnim->mScalingKeys[ki].mTime = time;
+            nodeAnim->mScalingKeys[ki].mValue = aiVector3D(scl.x, scl.y, scl.z);
+        }
+        channels.push_back(nodeAnim);
+    }
+
+    anim->mNumChannels = static_cast<unsigned int>(channels.size());
+    anim->mChannels = new aiNodeAnim*[anim->mNumChannels];
+    for (unsigned int ci = 0; ci < anim->mNumChannels; ++ci)
+        anim->mChannels[ci] = channels[ci];
+
+    return anim;
 }
 
 // Build an aiScene directly from an Ogre Entity, bypassing the XML round-trip
@@ -207,57 +461,7 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
     scene->mNumMaterials = static_cast<unsigned int>(materials.size());
     scene->mMaterials = new aiMaterial*[scene->mNumMaterials];
     for (unsigned int i = 0; i < scene->mNumMaterials; ++i)
-    {
-        auto* aiMat = new aiMaterial();
-        aiString matName(materials[i]->getName());
-        aiMat->AddProperty(&matName, AI_MATKEY_NAME);
-
-        auto* tech = materials[i]->getTechnique(0);
-        if (tech && tech->getNumPasses() > 0)
-        {
-            auto* pass = tech->getPass(0);
-            auto d = pass->getDiffuse();
-            aiColor4D diffuse(d.r, d.g, d.b, d.a);
-            aiMat->AddProperty(&diffuse, 1, AI_MATKEY_COLOR_DIFFUSE);
-
-            auto s = pass->getSpecular();
-            aiColor4D specular(s.r, s.g, s.b, s.a);
-            aiMat->AddProperty(&specular, 1, AI_MATKEY_COLOR_SPECULAR);
-
-            auto a = pass->getAmbient();
-            aiColor4D ambient(a.r, a.g, a.b, a.a);
-            aiMat->AddProperty(&ambient, 1, AI_MATKEY_COLOR_AMBIENT);
-
-            auto e = pass->getSelfIllumination();
-            aiColor4D emissive(e.r, e.g, e.b, e.a);
-            aiMat->AddProperty(&emissive, 1, AI_MATKEY_COLOR_EMISSIVE);
-
-            float shininess = pass->getShininess();
-            aiMat->AddProperty(&shininess, 1, AI_MATKEY_SHININESS);
-
-            // Add texture references
-            unsigned short diffuseIdx = 0;
-            unsigned short normalIdx = 0;
-            for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
-            {
-                auto* tus = pass->getTextureUnitState(ti);
-                if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
-                {
-                    QString safeName = MeshImporterExporter::exportTextureName(
-                        QString::fromStdString(tus->getTextureName()));
-                    aiString texPath(safeName.toStdString());
-                    if (tus->getName() == "normal_map") {
-                        aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
-                        ++normalIdx;
-                    } else {
-                        aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
-                        ++diffuseIdx;
-                    }
-                }
-            }
-        }
-        scene->mMaterials[i] = aiMat;
-    }
+        scene->mMaterials[i] = buildAiMaterialFromOgre(materials[i]);
 
     // Build material name→index map
     std::map<std::string, unsigned int, std::less<>> matIndexMap;
@@ -318,132 +522,10 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
 
         auto* aiM = new aiMesh();
         scene->mMeshes[si] = aiM;
-        aiM->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
-        aiM->mNumVertices = static_cast<unsigned int>(vData->vertexCount);
-        aiM->mVertices = new aiVector3D[aiM->mNumVertices];
+        readSubmeshGeometry(aiM, vData, subMesh, entity, si, matIndexMap);
 
-        // Assign material index
-        const auto* subEnt = entity->getSubEntity(si);
-        auto matIt = matIndexMap.find(subEnt->getMaterial()->getName());
-        aiM->mMaterialIndex = (matIt != matIndexMap.end()) ? matIt->second : 0;
-
-        // Read positions
-        const auto* posElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-        if (posElem)
-        {
-            auto vbuf = vData->vertexBufferBinding->getBuffer(posElem->getSource());
-            auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-            for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
-            {
-                const Ogre::Real* p;
-                posElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
-                aiM->mVertices[j] = aiVector3D(p[0], p[1], p[2]);
-            }
-            vbuf->unlock();
-        }
-
-        // Read normals
-        const auto* normElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
-        if (normElem)
-        {
-            aiM->mNormals = new aiVector3D[aiM->mNumVertices];
-            auto vbuf = vData->vertexBufferBinding->getBuffer(normElem->getSource());
-            auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-            for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
-            {
-                const Ogre::Real* p;
-                normElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
-                aiM->mNormals[j] = aiVector3D(p[0], p[1], p[2]);
-            }
-            vbuf->unlock();
-        }
-
-        // Read texture coordinates
-        const auto* tcElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
-        if (tcElem)
-        {
-            aiM->mTextureCoords[0] = new aiVector3D[aiM->mNumVertices];
-            aiM->mNumUVComponents[0] = 2;
-            auto vbuf = vData->vertexBufferBinding->getBuffer(tcElem->getSource());
-            auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-            for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
-            {
-                const Ogre::Real* p;
-                tcElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
-                aiM->mTextureCoords[0][j] = aiVector3D(p[0], p[1], 0.0f);
-            }
-            vbuf->unlock();
-        }
-
-        // Read indices
-        const Ogre::IndexData* iData = subMesh->indexData;
-        if (iData && iData->indexCount > 0)
-        {
-            aiM->mNumFaces = static_cast<unsigned int>(iData->indexCount / 3);
-            aiM->mFaces = new aiFace[aiM->mNumFaces];
-            auto ibuf = iData->indexBuffer;
-            auto* ibase = static_cast<const unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-            bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
-
-            for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
-            {
-                aiM->mFaces[f].mNumIndices = 3;
-                aiM->mFaces[f].mIndices = new unsigned int[3];
-                for (unsigned int v = 0; v < 3; ++v)
-                {
-                    unsigned int idx = use32
-                        ? reinterpret_cast<const uint32_t*>(ibase)[f * 3 + v]
-                        : reinterpret_cast<const uint16_t*>(ibase)[f * 3 + v];
-                    aiM->mFaces[f].mIndices[v] = idx;
-                }
-            }
-            ibuf->unlock();
-        }
-
-        // Bone weights for this submesh
         if (hasSkeleton)
-        {
-            // Group bone assignments by bone handle.
-            // Use submesh-level assignments first; fall back to mesh-level
-            // assignments for submeshes that use shared vertices.
-            const auto& boneAssignments = subMesh->useSharedVertices
-                ? mesh->getBoneAssignments() : subMesh->getBoneAssignments();
-            std::map<unsigned short, std::vector<aiVertexWeight>> boneWeightsMap;
-            for (const auto& [vertIdx, vba] : boneAssignments)
-            {
-                aiVertexWeight w;
-                w.mVertexId = vba.vertexIndex;
-                w.mWeight = vba.weight;
-                boneWeightsMap[vba.boneIndex].push_back(w);
-            }
-
-            if (!boneWeightsMap.empty())
-            {
-                aiM->mNumBones = static_cast<unsigned int>(boneWeightsMap.size());
-                aiM->mBones = new aiBone*[aiM->mNumBones];
-                unsigned int bi = 0;
-                for (const auto& [handle, weights] : boneWeightsMap)
-                {
-                    auto* aiBoneObj = new aiBone();
-                    auto nameIt = boneHandleToName.find(handle);
-                    if (nameIt != boneHandleToName.end())
-                        aiBoneObj->mName = aiString(nameIt->second);
-
-                    // Offset matrix = inverse of the bone's global bind pose
-                    auto* bone = skeleton->getBone(handle);
-                    Ogre::Matrix4 globalTransform = bone->_getFullTransform();
-                    aiBoneObj->mOffsetMatrix = toAiMatrix(globalTransform.inverse());
-
-                    // Copy vertex weights
-                    aiBoneObj->mNumWeights = static_cast<unsigned int>(weights.size());
-                    aiBoneObj->mWeights = new aiVertexWeight[aiBoneObj->mNumWeights];
-                    for (unsigned int wi = 0; wi < aiBoneObj->mNumWeights; ++wi)
-                        aiBoneObj->mWeights[wi] = weights[wi];
-
-                    aiM->mBones[bi++] = aiBoneObj;
-                }
-            }
-        }
+            assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
     }
 
     // --- Animations ---
@@ -451,70 +533,8 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
     {
         scene->mNumAnimations = skeleton->getNumAnimations();
         scene->mAnimations = new aiAnimation*[scene->mNumAnimations];
-
         for (unsigned short ai = 0; ai < skeleton->getNumAnimations(); ++ai)
-        {
-            auto* ogreAnim = skeleton->getAnimation(ai);
-            auto* anim = new aiAnimation();
-            scene->mAnimations[ai] = anim;
-
-            anim->mName = aiString(ogreAnim->getName());
-            anim->mTicksPerSecond = 1.0;
-            anim->mDuration = ogreAnim->getLength();
-
-            std::vector<aiNodeAnim*> channels;
-
-            for (const auto& [handle, track] : ogreAnim->_getNodeTrackList())
-            {
-                auto* bone = dynamic_cast<Ogre::Bone*>(track->getAssociatedNode());
-                if (!bone) continue;
-
-                auto* nodeAnim = new aiNodeAnim();
-                nodeAnim->mNodeName = aiString(bone->getName());
-
-                auto numKeyFrames = track->getNumKeyFrames();
-                nodeAnim->mNumPositionKeys = numKeyFrames;
-                nodeAnim->mNumRotationKeys = numKeyFrames;
-                nodeAnim->mNumScalingKeys = numKeyFrames;
-                nodeAnim->mPositionKeys = new aiVectorKey[numKeyFrames];
-                nodeAnim->mRotationKeys = new aiQuatKey[numKeyFrames];
-                nodeAnim->mScalingKeys = new aiVectorKey[numKeyFrames];
-
-                // Ogre stores keyframes as deltas from bind pose
-                // Convert back to absolute bone-local transforms for Assimp
-                Ogre::Vector3 bindPos = bone->getPosition();
-                Ogre::Quaternion bindRot = bone->getOrientation();
-
-                for (unsigned short ki = 0; ki < numKeyFrames; ++ki)
-                {
-                    auto* kf = track->getNodeKeyFrame(ki);
-                    double time = kf->getTime();
-
-                    // Position: absolute = bind + delta
-                    Ogre::Vector3 pos = bindPos + kf->getTranslate();
-                    nodeAnim->mPositionKeys[ki].mTime = time;
-                    nodeAnim->mPositionKeys[ki].mValue = aiVector3D(pos.x, pos.y, pos.z);
-
-                    // Rotation: absolute = bind * delta
-                    Ogre::Quaternion rot = bindRot * kf->getRotation();
-                    rot.normalise();
-                    nodeAnim->mRotationKeys[ki].mTime = time;
-                    nodeAnim->mRotationKeys[ki].mValue = aiQuaternion(rot.w, rot.x, rot.y, rot.z);
-
-                    // Scale: stored as-is in Ogre
-                    Ogre::Vector3 scl = kf->getScale();
-                    nodeAnim->mScalingKeys[ki].mTime = time;
-                    nodeAnim->mScalingKeys[ki].mValue = aiVector3D(scl.x, scl.y, scl.z);
-                }
-
-                channels.push_back(nodeAnim);
-            }
-
-            anim->mNumChannels = static_cast<unsigned int>(channels.size());
-            anim->mChannels = new aiNodeAnim*[anim->mNumChannels];
-            for (unsigned int ci = 0; ci < anim->mNumChannels; ++ci)
-                anim->mChannels[ci] = channels[ci];
-        }
+            scene->mAnimations[ai] = buildAiAnimation(skeleton->getAnimation(ai));
     }
 
     return scene;
@@ -1126,60 +1146,7 @@ static aiScene* buildSceneAiScene()
     scene->mNumMaterials = static_cast<unsigned int>(materials.size());
     scene->mMaterials = new aiMaterial*[scene->mNumMaterials];
     for (unsigned int i = 0; i < scene->mNumMaterials; ++i)
-    {
-        auto* aiMat = new aiMaterial();
-        aiString matName(materials[i]->getName());
-        aiMat->AddProperty(&matName, AI_MATKEY_NAME);
-
-        auto* tech = materials[i]->getTechnique(0);
-        if (tech && tech->getNumPasses() > 0)
-        {
-            auto* pass = tech->getPass(0);
-            auto d = pass->getDiffuse();
-            aiColor4D diffuse(d.r, d.g, d.b, d.a);
-            aiMat->AddProperty(&diffuse, 1, AI_MATKEY_COLOR_DIFFUSE);
-
-            auto s = pass->getSpecular();
-            aiColor4D specular(s.r, s.g, s.b, s.a);
-            aiMat->AddProperty(&specular, 1, AI_MATKEY_COLOR_SPECULAR);
-
-            auto a = pass->getAmbient();
-            aiColor4D ambient(a.r, a.g, a.b, a.a);
-            aiMat->AddProperty(&ambient, 1, AI_MATKEY_COLOR_AMBIENT);
-
-            auto e = pass->getSelfIllumination();
-            aiColor4D emissive(e.r, e.g, e.b, e.a);
-            aiMat->AddProperty(&emissive, 1, AI_MATKEY_COLOR_EMISSIVE);
-
-            float shininess = pass->getShininess();
-            aiMat->AddProperty(&shininess, 1, AI_MATKEY_SHININESS);
-
-            unsigned short diffuseIdx = 0;
-            unsigned short normalIdx = 0;
-            for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
-            {
-                auto* tus = pass->getTextureUnitState(ti);
-                if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
-                {
-                    QString safeName = MeshImporterExporter::exportTextureName(
-                        QString::fromStdString(tus->getTextureName()));
-                    aiString texPath(safeName.toStdString());
-                    const auto& tusName = tus->getName();
-                    if (tusName == "normal_map" || tusName == "NormalMap")
-                    {
-                        aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
-                        ++normalIdx;
-                    }
-                    else
-                    {
-                        aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_DIFFUSE, diffuseIdx));
-                        ++diffuseIdx;
-                    }
-                }
-            }
-        }
-        scene->mMaterials[i] = aiMat;
-    }
+        scene->mMaterials[i] = buildAiMaterialFromOgre(materials[i]);
 
     // --- Count total meshes and build child nodes ---
     unsigned int totalMeshes = 0;
@@ -1216,32 +1183,8 @@ static aiScene* buildSceneAiScene()
         aiNode* entityNode;
         if (hasSkeleton)
         {
-            // For skeletal meshes: create entity node with bone hierarchy + mesh child
             entityNode = new aiNode(std::string(sn->getName()));
             entityNode->mParent = scene->mRootNode;
-
-            // Prefixed bone node builder
-            std::function<aiNode*(Ogre::Bone*, aiNode*)> buildPrefixedBoneNode;
-            buildPrefixedBoneNode = [&](Ogre::Bone* bone, aiNode* parent) -> aiNode* {
-                auto* node = new aiNode(bonePrefix + std::string(bone->getName()));
-                node->mParent = parent;
-                Ogre::Matrix4 localTransform;
-                localTransform.makeTransform(bone->getPosition(), bone->getScale(), bone->getOrientation());
-                node->mTransformation = toAiMatrix(localTransform);
-                const auto& children = bone->getChildren();
-                if (!children.empty()) {
-                    node->mNumChildren = static_cast<unsigned int>(children.size());
-                    node->mChildren = new aiNode*[node->mNumChildren];
-                    unsigned int ci = 0;
-                    for (auto* child : children) {
-                        auto* childBone = dynamic_cast<Ogre::Bone*>(child);
-                        if (childBone)
-                            node->mChildren[ci++] = buildPrefixedBoneNode(childBone, node);
-                    }
-                    node->mNumChildren = ci;
-                }
-                return node;
-            };
 
             auto numBones = skeleton->getNumBones();
             std::vector<aiNode*> rootBoneNodes;
@@ -1250,7 +1193,7 @@ static aiScene* buildSceneAiScene()
                 auto* bone = skeleton->getBone(bi);
                 boneHandleToName[bone->getHandle()] = bonePrefix + std::string(bone->getName());
                 if (!bone->getParent())
-                    rootBoneNodes.push_back(buildPrefixedBoneNode(bone, entityNode));
+                    rootBoneNodes.push_back(buildBoneNode(bone, entityNode, bonePrefix));
             }
 
             auto* meshNode = new aiNode(std::string(sn->getName()) + "_mesh");
@@ -1268,7 +1211,6 @@ static aiScene* buildSceneAiScene()
         }
         else
         {
-            // Non-skeletal: meshes directly on node
             entityNode = new aiNode(std::string(sn->getName()));
             entityNode->mParent = scene->mRootNode;
             entityNode->mNumMeshes = numSub;
@@ -1277,7 +1219,6 @@ static aiScene* buildSceneAiScene()
                 entityNode->mMeshes[si] = globalMeshIdx + si;
         }
 
-        // Set transform from scene node position/orientation/scale
         Ogre::Matrix4 nodeTransform;
         nodeTransform.makeTransform(sn->getPosition(), sn->getScale(), sn->getOrientation());
         entityNode->mTransformation = toAiMatrix(nodeTransform);
@@ -1294,127 +1235,10 @@ static aiScene* buildSceneAiScene()
 
             auto* aiM = new aiMesh();
             scene->mMeshes[globalMeshIdx + si] = aiM;
-            aiM->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
-            aiM->mNumVertices = static_cast<unsigned int>(vData->vertexCount);
-            aiM->mVertices = new aiVector3D[aiM->mNumVertices];
+            readSubmeshGeometry(aiM, vData, subMesh, entity, si, matIndexMap);
 
-            // Material index
-            const auto* subEnt = entity->getSubEntity(si);
-            auto matIt = matIndexMap.find(subEnt->getMaterial()->getName());
-            aiM->mMaterialIndex = (matIt != matIndexMap.end()) ? matIt->second : 0;
-
-            // Read positions
-            const auto* posElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-            if (posElem)
-            {
-                auto vbuf = vData->vertexBufferBinding->getBuffer(posElem->getSource());
-                auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-                for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
-                {
-                    const Ogre::Real* p;
-                    posElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
-                    aiM->mVertices[j] = aiVector3D(p[0], p[1], p[2]);
-                }
-                vbuf->unlock();
-            }
-
-            // Read normals
-            const auto* normElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
-            if (normElem)
-            {
-                aiM->mNormals = new aiVector3D[aiM->mNumVertices];
-                auto vbuf = vData->vertexBufferBinding->getBuffer(normElem->getSource());
-                auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-                for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
-                {
-                    const Ogre::Real* p;
-                    normElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
-                    aiM->mNormals[j] = aiVector3D(p[0], p[1], p[2]);
-                }
-                vbuf->unlock();
-            }
-
-            // Read texture coordinates
-            const auto* tcElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
-            if (tcElem)
-            {
-                aiM->mTextureCoords[0] = new aiVector3D[aiM->mNumVertices];
-                aiM->mNumUVComponents[0] = 2;
-                auto vbuf = vData->vertexBufferBinding->getBuffer(tcElem->getSource());
-                auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-                for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
-                {
-                    const Ogre::Real* p;
-                    tcElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
-                    aiM->mTextureCoords[0][j] = aiVector3D(p[0], p[1], 0.0f);
-                }
-                vbuf->unlock();
-            }
-
-            // Read indices
-            const Ogre::IndexData* iData = subMesh->indexData;
-            if (iData && iData->indexCount > 0)
-            {
-                aiM->mNumFaces = static_cast<unsigned int>(iData->indexCount / 3);
-                aiM->mFaces = new aiFace[aiM->mNumFaces];
-                auto ibuf = iData->indexBuffer;
-                auto* ibase = static_cast<const unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-                bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
-
-                for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
-                {
-                    aiM->mFaces[f].mNumIndices = 3;
-                    aiM->mFaces[f].mIndices = new unsigned int[3];
-                    for (unsigned int v = 0; v < 3; ++v)
-                    {
-                        unsigned int idx = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase)[f * 3 + v]
-                            : reinterpret_cast<const uint16_t*>(ibase)[f * 3 + v];
-                        aiM->mFaces[f].mIndices[v] = idx;
-                    }
-                }
-                ibuf->unlock();
-            }
-
-            // Bone weights
             if (hasSkeleton)
-            {
-                const auto& boneAssignments = subMesh->useSharedVertices
-                    ? mesh->getBoneAssignments() : subMesh->getBoneAssignments();
-                std::map<unsigned short, std::vector<aiVertexWeight>> boneWeightsMap;
-                for (const auto& [vertIdx, vba] : boneAssignments)
-                {
-                    aiVertexWeight w;
-                    w.mVertexId = vba.vertexIndex;
-                    w.mWeight = vba.weight;
-                    boneWeightsMap[vba.boneIndex].push_back(w);
-                }
-
-                if (!boneWeightsMap.empty())
-                {
-                    aiM->mNumBones = static_cast<unsigned int>(boneWeightsMap.size());
-                    aiM->mBones = new aiBone*[aiM->mNumBones];
-                    unsigned int bi = 0;
-                    for (const auto& [handle, weights] : boneWeightsMap)
-                    {
-                        auto* aiBoneObj = new aiBone();
-                        auto nameIt = boneHandleToName.find(handle);
-                        if (nameIt != boneHandleToName.end())
-                            aiBoneObj->mName = aiString(nameIt->second);
-
-                        auto* bone = skeleton->getBone(handle);
-                        Ogre::Matrix4 globalTransform = bone->_getFullTransform();
-                        aiBoneObj->mOffsetMatrix = toAiMatrix(globalTransform.inverse());
-
-                        aiBoneObj->mNumWeights = static_cast<unsigned int>(weights.size());
-                        aiBoneObj->mWeights = new aiVertexWeight[aiBoneObj->mNumWeights];
-                        for (unsigned int wi = 0; wi < aiBoneObj->mNumWeights; ++wi)
-                            aiBoneObj->mWeights[wi] = weights[wi];
-
-                        aiM->mBones[bi++] = aiBoneObj;
-                    }
-                }
-            }
+                assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
         }
 
         // --- Animations ---
@@ -1424,59 +1248,7 @@ static aiScene* buildSceneAiScene()
             && (bonePrefix.empty() ? processedSkeletons.insert(skeleton).second : true))
         {
             for (unsigned short ai = 0; ai < skeleton->getNumAnimations(); ++ai)
-            {
-                auto* ogreAnim = skeleton->getAnimation(ai);
-                auto* anim = new aiAnimation();
-                anim->mName = aiString(bonePrefix + ogreAnim->getName());
-                anim->mTicksPerSecond = 1.0;
-                anim->mDuration = ogreAnim->getLength();
-
-                std::vector<aiNodeAnim*> channels;
-                for (const auto& [handle, track] : ogreAnim->_getNodeTrackList())
-                {
-                    auto* bone = dynamic_cast<Ogre::Bone*>(track->getAssociatedNode());
-                    if (!bone) continue;
-
-                    auto* nodeAnim = new aiNodeAnim();
-                    nodeAnim->mNodeName = aiString(bonePrefix + std::string(bone->getName()));
-
-                    auto numKeyFrames = track->getNumKeyFrames();
-                    nodeAnim->mNumPositionKeys = numKeyFrames;
-                    nodeAnim->mNumRotationKeys = numKeyFrames;
-                    nodeAnim->mNumScalingKeys = numKeyFrames;
-                    nodeAnim->mPositionKeys = new aiVectorKey[numKeyFrames];
-                    nodeAnim->mRotationKeys = new aiQuatKey[numKeyFrames];
-                    nodeAnim->mScalingKeys = new aiVectorKey[numKeyFrames];
-
-                    Ogre::Vector3 bindPos = bone->getPosition();
-                    Ogre::Quaternion bindRot = bone->getOrientation();
-
-                    for (unsigned short ki = 0; ki < numKeyFrames; ++ki)
-                    {
-                        auto* kf = track->getNodeKeyFrame(ki);
-                        double time = kf->getTime();
-
-                        Ogre::Vector3 pos = bindPos + kf->getTranslate();
-                        nodeAnim->mPositionKeys[ki].mTime = time;
-                        nodeAnim->mPositionKeys[ki].mValue = aiVector3D(pos.x, pos.y, pos.z);
-
-                        Ogre::Quaternion rot = bindRot * kf->getRotation();
-                        rot.normalise();
-                        nodeAnim->mRotationKeys[ki].mTime = time;
-                        nodeAnim->mRotationKeys[ki].mValue = aiQuaternion(rot.w, rot.x, rot.y, rot.z);
-
-                        Ogre::Vector3 scl = kf->getScale();
-                        nodeAnim->mScalingKeys[ki].mTime = time;
-                        nodeAnim->mScalingKeys[ki].mValue = aiVector3D(scl.x, scl.y, scl.z);
-                    }
-                    channels.push_back(nodeAnim);
-                }
-                anim->mNumChannels = static_cast<unsigned int>(channels.size());
-                anim->mChannels = new aiNodeAnim*[anim->mNumChannels];
-                for (unsigned int ci = 0; ci < anim->mNumChannels; ++ci)
-                    anim->mChannels[ci] = channels[ci];
-                allAnimations.push_back(anim);
-            }
+                allAnimations.push_back(buildAiAnimation(skeleton->getAnimation(ai), bonePrefix));
         }
 
         globalMeshIdx += numSub;
