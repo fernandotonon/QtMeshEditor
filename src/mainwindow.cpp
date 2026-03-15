@@ -15,6 +15,7 @@
 #include <QFileInfo>
 #include "SentryReporter.h"
 #include <QDialog>
+#include <QProgressDialog>
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -617,9 +618,20 @@ void MainWindow::on_actionSave_Scene_triggered()
                                                     nullptr, QFileDialog::DontUseNativeDialog);
     if (fileName.isEmpty()) return;
 
+    QProgressDialog progressDialog(tr("Saving scene..."), QString(), 0, 100, this);
+    progressDialog.setWindowModality(Qt::WindowModal);
+    progressDialog.setCancelButton(nullptr);
+    progressDialog.setMinimumDuration(0);
+    progressDialog.setValue(0);
+
     auto txn = SentryReporter::startTransaction("ui.export", "scene.export");
     try {
-        int result = MeshImporterExporter::sceneExporter(fileName);
+        int result = MeshImporterExporter::sceneExporter(fileName,
+            [&progressDialog](int progress, const QString& status) {
+                progressDialog.setLabelText(status);
+                progressDialog.setValue(progress);
+                QApplication::processEvents();
+            });
         if (result != 0)
             QMessageBox::warning(this, tr("Save Scene"), tr("Failed to save scene."));
     } catch (...) {
