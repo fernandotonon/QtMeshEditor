@@ -1930,3 +1930,46 @@ TEST_F(SceneSaveLoadTest, RoundTrip_MixedSkeletalAndNonSkeletal) {
     EXPECT_TRUE(foundSkeletal) << "Skeletal entity not found after round-trip";
     EXPECT_TRUE(foundPlain) << "Non-skeletal entity not found after round-trip";
 }
+
+TEST_F(SceneSaveLoadTest, RoundTrip_TwoSkeletalEntities_BonePrefixing) {
+    auto* manager = Manager::getSingleton();
+
+    // Create two skeletal entities — exercises bone name prefixing
+    auto* entityA = createAnimatedTestEntity("SkelEntityA");
+    ASSERT_NE(entityA, nullptr);
+    ASSERT_TRUE(entityA->hasSkeleton());
+
+    auto* entityB = createAnimatedTestEntity("SkelEntityB");
+    ASSERT_NE(entityB, nullptr);
+    ASSERT_TRUE(entityB->hasSkeleton());
+
+    // Place them apart
+    auto* snA = manager->getSceneNodes().at(0);
+    auto* snB = manager->getSceneNodes().at(1);
+    snA->setPosition(Ogre::Vector3(-2.0f, 0.0f, 0.0f));
+    snB->setPosition(Ogre::Vector3(2.0f, 0.0f, 0.0f));
+
+    ASSERT_EQ(manager->getSceneNodes().size(), 2);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/two_skel.scene.gltf";
+
+    int exportResult = MeshImporterExporter::sceneExporter(sceneFile);
+    ASSERT_EQ(exportResult, 0);
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+    EXPECT_EQ(manager->getSceneNodes().size(), 2);
+
+    // Verify both reimported entities have skeletons
+    int skelCount = 0;
+    for (auto* sn : manager->getSceneNodes())
+    {
+        if (!manager->getSceneMgr()->hasEntity(sn->getName()))
+            continue;
+        auto* e = manager->getSceneMgr()->getEntity(sn->getName());
+        if (e->hasSkeleton())
+            ++skelCount;
+    }
+    EXPECT_EQ(skelCount, 2) << "Both skeletal entities should survive round-trip";
+}
