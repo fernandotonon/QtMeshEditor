@@ -102,6 +102,18 @@ void MeshImporterExporter::exportMaterial(const Ogre::Entity* e, const QFileInfo
     ms.exportQueued((file.path() + "/" + file.baseName() + ".material").toStdString());
 }
 
+QString MeshImporterExporter::exportTextureName(const QString& originalName)
+{
+    QFileInfo fi(originalName);
+    QString ext = fi.suffix().toLower();
+    // STBI codec supports writing: png, bmp, tga, hdr
+    // For anything else (jpg, jpeg, dds, etc.), convert to png
+    static const QStringList supported = {"png", "bmp", "tga", "hdr"};
+    if (supported.contains(ext))
+        return originalName;
+    return fi.completeBaseName() + ".png";
+}
+
 void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, const QFileInfo& file)
 {
     for (const auto &technique : material->getTechniques())
@@ -118,7 +130,8 @@ void MeshImporterExporter::exportTextures(const Ogre::MaterialPtr& material, con
                 {
                     Ogre::Image img;
                     tex->convertToImage(img, true);
-                    img.save((file.path() + "/" + tex->getName().c_str()).toStdString());
+                    QString saveName = exportTextureName(QString::fromStdString(tex->getName()));
+                    img.save((file.path() + "/" + saveName).toStdString());
                 }
             }
         }
@@ -230,7 +243,9 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
                 auto* tus = pass->getTextureUnitState(ti);
                 if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
                 {
-                    aiString texPath(tus->getTextureName());
+                    QString safeName = MeshImporterExporter::exportTextureName(
+                        QString::fromStdString(tus->getTextureName()));
+                    aiString texPath(safeName.toStdString());
                     if (tus->getName() == "normal_map") {
                         aiMat->AddProperty(&texPath, AI_MATKEY_TEXTURE(aiTextureType_NORMALS, normalIdx));
                         ++normalIdx;
@@ -1146,7 +1161,9 @@ static aiScene* buildSceneAiScene()
                 auto* tus = pass->getTextureUnitState(ti);
                 if (tus->getContentType() == Ogre::TextureUnitState::CONTENT_NAMED)
                 {
-                    aiString texPath(tus->getTextureName());
+                    QString safeName = MeshImporterExporter::exportTextureName(
+                        QString::fromStdString(tus->getTextureName()));
+                    aiString texPath(safeName.toStdString());
                     const auto& tusName = tus->getName();
                     if (tusName == "normal_map" || tusName == "NormalMap")
                     {
@@ -1477,30 +1494,49 @@ static aiScene* buildSceneAiScene()
     return scene;
 }
 
-int MeshImporterExporter::sceneExporter(const QString &_uri)
+int MeshImporterExporter::sceneExporter(const QString &_uri, const ProgressCallback& progress)
 {
     if (_uri.isEmpty()) return -1;
 
     QFileInfo file(_uri);
 
+    auto reportProgress = [&](int pct, const QString& status) {
+        if (progress) progress(pct, status);
+    };
+
     try {
         // Export textures for all entities
         auto* manager = Manager::getSingleton();
-        for (auto* sn : manager->getSceneNodes())
+        const auto& sceneNodes = manager->getSceneNodes();
+
+        // Count entities for progress tracking
+        std::vector<std::pair<Ogre::SceneNode*, Ogre::Entity*>> entities;
+        for (auto* sn : sceneNodes)
         {
             if (!manager->getSceneMgr()->hasEntity(sn->getName()))
                 continue;
             auto* entity = manager->getSceneMgr()->getEntity(sn->getName());
             if (entity)
-                exportMaterial(entity, file);
+                entities.emplace_back(sn, entity);
         }
 
+        int totalEntities = static_cast<int>(entities.size());
+        for (int i = 0; i < totalEntities; ++i)
+        {
+            int pct = totalEntities > 0 ? (i * 30 / totalEntities) : 0;
+            reportProgress(pct, QString("Exporting textures (%1/%2)...").arg(i + 1).arg(totalEntities));
+            exportMaterial(entities[i].second, file);
+        }
+
+        reportProgress(30, QStringLiteral("Building scene data..."));
         aiScene* scene = buildSceneAiScene();
         if (!scene)
         {
             Ogre::LogManager::getSingleton().logError("Failed to build scene aiScene");
             return -1;
         }
+
+        reportProgress(60, QStringLiteral("Writing file..."));
 
         // Determine format from extension
         // Strip .scene prefix if present (e.g., "model.scene.glb" → use "glb2")
@@ -1524,6 +1560,7 @@ int MeshImporterExporter::sceneExporter(const QString &_uri)
         }
 
         delete scene;
+        reportProgress(100, QStringLiteral("Done."));
     } catch (std::exception& ex) {
         auto msg = QString("Scene export failed: %1").arg(ex.what());
         Ogre::LogManager::getSingleton().logError(msg.toStdString());

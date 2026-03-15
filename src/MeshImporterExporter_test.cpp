@@ -132,6 +132,61 @@ TEST(MeshImporterExporterStandaloneTest, Exporter_NullSceneNode_ReturnMinusOne) 
     EXPECT_EQ(MeshImporterExporter::exporter(nullptr, "", ""), -1);
 }
 
+// ─── exportTextureName Tests ────────────────────────────────────────
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_PNG_Unchanged) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("diffuse.png"), "diffuse.png");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_BMP_Unchanged) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("diffuse.bmp"), "diffuse.bmp");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_TGA_Unchanged) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("diffuse.tga"), "diffuse.tga");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_HDR_Unchanged) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("diffuse.hdr"), "diffuse.hdr");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_JPG_ConvertedToPNG) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("texture.jpg"), "texture.png");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_JPEG_ConvertedToPNG) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("texture.jpeg"), "texture.png");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_DDS_ConvertedToPNG) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("normal.dds"), "normal.png");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_CaseInsensitive) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("texture.JPG"), "texture.png");
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("texture.PNG"), "texture.PNG");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_WithPath) {
+    // QFileInfo strips the directory — exportTextureName returns just the filename
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("textures/diffuse.jpg"), "diffuse.png");
+}
+
+TEST(MeshImporterExporterStandaloneTest, ExportTextureName_MultipleDots) {
+    EXPECT_EQ(MeshImporterExporter::exportTextureName("my.texture.file.jpg"), "my.texture.file.png");
+}
+
+// ─── sceneExporter progress callback Tests ──────────────────────────
+
+TEST(MeshImporterExporterStandaloneTest, SceneExporter_EmptyURI_ReturnsMinusOne) {
+    EXPECT_EQ(MeshImporterExporter::sceneExporter(""), -1);
+}
+
+TEST(MeshImporterExporterStandaloneTest, SceneExporter_NullProgress_DoesNotCrash) {
+    // Empty URI returns early before callback is invoked — ensures nullptr is safe
+    EXPECT_EQ(MeshImporterExporter::sceneExporter("", nullptr), -1);
+}
+
 TEST_F(MeshImporterExporterTest, Exporter_EmptyUri_ReturnMinusOne) {
     QString uri = "";
     auto sceneNodeName = "MeshImporterExporterTestSceneNode";
@@ -1730,6 +1785,41 @@ TEST_F(SceneSaveLoadTest, EmptyScene_ExportsValidFile) {
     int result = MeshImporterExporter::sceneExporter(sceneFile);
     EXPECT_EQ(result, 0);
     EXPECT_TRUE(QFileInfo::exists(sceneFile));
+}
+
+TEST_F(SceneSaveLoadTest, SceneExporter_ProgressCallback_ReportsProgress) {
+    auto* manager = Manager::getSingleton();
+
+    auto mesh = createInMemoryTriangleMesh("progress_test_mesh");
+    auto* sn = manager->addSceneNode("ProgressTestNode");
+    manager->createEntity(sn, mesh);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/progress_test.scene.gltf";
+
+    std::vector<int> progressValues;
+    std::vector<QString> statusMessages;
+
+    int result = MeshImporterExporter::sceneExporter(sceneFile,
+        [&](int progress, const QString& status) {
+            progressValues.push_back(progress);
+            statusMessages.push_back(status);
+        });
+
+    EXPECT_EQ(result, 0);
+
+    // Should have received progress updates
+    ASSERT_FALSE(progressValues.empty());
+    // First progress should be for textures (0-30 range)
+    EXPECT_GE(progressValues.front(), 0);
+    // Last progress should be 100
+    EXPECT_EQ(progressValues.back(), 100);
+    // Progress should be non-decreasing
+    for (size_t i = 1; i < progressValues.size(); ++i)
+        EXPECT_GE(progressValues[i], progressValues[i - 1]);
+    // Should have status messages for each phase
+    ASSERT_FALSE(statusMessages.empty());
 }
 
 TEST_F(SceneSaveLoadTest, RoundTrip_SkeletonEntity_PreservesAnimations) {
