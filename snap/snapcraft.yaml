@@ -93,18 +93,39 @@ parts:
           "$CRAFT_PART_INSTALL/usr/share/qtmesheditor/cfg/plugins.cfg"
       fi
     stage-packages:
-      - libxcb-cursor0
-      - libxcb-xinerama0
-      - libgl1-mesa-dri
+      # GL / EGL / Vulkan (Qt + Ogre)
+      - libegl1
       - libgl1
+      - libgles2
       - libglu1-mesa
-      - libfreetype6
-      - libfontconfig1
+      - libgl1-mesa-dri
+      - libglx-mesa0
+      # X11 / XCB
       - libx11-6
+      - libx11-xcb1
+      - libxcb1
+      - libxcb-cursor0
+      - libxcb-glx0
+      - libxcb-icccm4
+      - libxcb-image0
+      - libxcb-keysyms1
+      - libxcb-randr0
+      - libxcb-render0
+      - libxcb-render-util0
+      - libxcb-shape0
+      - libxcb-shm0
+      - libxcb-sync1
+      - libxcb-util1
+      - libxcb-xfixes0
+      - libxcb-xinerama0
+      - libxcb-xkb1
       - libxext6
       - libxrender1
       - libxkbcommon0
       - libxkbcommon-x11-0
+      # Core system libs
+      - libfreetype6
+      - libfontconfig1
       - libgomp1
       - libcurl4t64
       - libzstd1
