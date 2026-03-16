@@ -93,8 +93,15 @@ parts:
           "$CRAFT_PART_INSTALL/usr/share/qtmesheditor/cfg/plugins.cfg"
       fi
     stage-packages:
-      # GL/EGL/Mesa are NOT bundled — the 'opengl' plug provides
-      # access to the host GPU drivers at runtime.
+      # GL/EGL loaders (libglvnd) — stable API dispatchers, safe to bundle.
+      # Mesa implementations (libgl1-mesa-dri, libglx-mesa0) are NOT bundled;
+      # the 'opengl' plug provides access to the host GPU driver at runtime.
+      - libglvnd0
+      - libglx0
+      - libegl1
+      - libgl1
+      - libgles2
+      - libglu1-mesa
       # X11 / XCB
       - libx11-6
       - libx11-xcb1
