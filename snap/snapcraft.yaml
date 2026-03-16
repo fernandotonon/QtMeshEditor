@@ -36,12 +36,6 @@ plugs:
     target: $SNAP/gpu-2404
     default-provider: mesa-2404
 
-layout:
-  /usr/share/libdrm:
-    symlink: $SNAP/gpu-2404/libdrm
-  /usr/share/drirc.d:
-    symlink: $SNAP/gpu-2404/drirc.d
-
 apps:
   qtmesheditor:
     command: usr/share/qtmesheditor/qtmesheditor
