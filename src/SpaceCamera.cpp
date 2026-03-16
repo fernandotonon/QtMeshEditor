@@ -218,10 +218,27 @@ void SpaceCamera::mouseMoveEvent(QMouseEvent *event)
 
 void SpaceCamera::wheelEvent(QWheelEvent *event)
 {
-    int delta = event->angleDelta().y() * 10 / 60 * getCameraSpeed();
-    zoom(delta);
+    Ogre::Real xDelta = event->angleDelta().x() / 120.0f;
+    Ogre::Real yDelta = event->angleDelta().y() / 120.0f;
 
-    pan(Ogre::Vector2 ( event->angleDelta().x() * 10 / 60 * getCameraSpeed() , 0.0  ));
+    if (event->modifiers().testFlag(Qt::ControlModifier))
+    {
+        // Ctrl + scroll = zoom (for mouse wheel users)
+        zoom(yDelta);
+    }
+    else if (event->source() == Qt::MouseEventSynthesizedBySystem)
+    {
+        // Trackpad two-finger swipe = pan in both axes
+        Ogre::Real panScale = 3.0f;
+        pan(Ogre::Vector2(xDelta * panScale, yDelta * panScale));
+    }
+    else
+    {
+        // Mouse scroll wheel = zoom
+        zoom(yDelta);
+        if (std::abs(xDelta) > 0.01f)
+            pan(Ogre::Vector2(xDelta * 3.0f, 0.0f));
+    }
 
     event->accept();
 }
@@ -331,20 +348,37 @@ void SpaceCamera::keyReleaseEvent(QKeyEvent *event)
 //////////////////////////////////////////////////////////////////////////////////
 //Private Methods
 
-void SpaceCamera::zoomByDelta(int delta)
+void SpaceCamera::zoomByDelta(Ogre::Real delta)
 {
     zoom(delta);
 }
 
-void SpaceCamera::zoom(const int delta)
+void SpaceCamera::zoom(Ogre::Real delta)
 {
-    Ogre::Vector3 zTranslation(0, 0, delta);
-    mCameraNode->translate(zTranslation,Ogre::Node::TS_PARENT);
+    // Proportional zoom: step size scales with distance to target,
+    // so zooming feels consistent regardless of model size.
+    Ogre::Real distance = std::abs(mCameraNode->getPosition().z);
+    Ogre::Real minDistance = 0.01f;
+    Ogre::Real zoomFactor = 0.15f; // 15% of distance per scroll tick
+
+    Ogre::Real step = delta * std::max(distance, minDistance) * zoomFactor;
+
+    Ogre::Vector3 newPos = mCameraNode->getPosition();
+    newPos.z += step;
+
+    // Don't pass through the target
+    if (newPos.z > -minDistance)
+        newPos.z = -minDistance;
+
+    mCameraNode->setPosition(newPos);
 }
 
 void SpaceCamera::pan(const Ogre::Real& deltaX, const Ogre::Real& deltaY)
 {
-    mTarget->translate(deltaX,deltaY,0,Ogre::Node::TS_LOCAL );
+    // Proportional pan: step scales with distance to target
+    Ogre::Real distance = std::abs(mCameraNode->getPosition().z);
+    Ogre::Real scale = std::max(distance, 0.01f) * 0.01f;
+    mTarget->translate(deltaX * scale, deltaY * scale, 0, Ogre::Node::TS_LOCAL);
 }
 
 void SpaceCamera::pan(const Ogre::Vector2& translation)
