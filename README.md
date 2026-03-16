@@ -150,6 +150,12 @@ Upgrade with
 sudo snap install qtmesheditor
 ```
 
+##### Ubuntu App Center
+Search for QtMeshEditor, and install it directly from the Ubuntu App Center
+
+<img width="1318" height="842" alt="image" src="https://github.com/user-attachments/assets/fbaa9a4e-becb-4b38-9f5a-ecda5898e8ea" />
+
+
 ##### .deb package (Ubuntu/Debian)
 Download the .deb file from the [releases page](https://github.com/fernandotonon/QtMeshEditor/releases), then:
 * Using apt:
