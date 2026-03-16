@@ -511,7 +511,7 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
 
     // --- Meshes with bone weights ---
     scene->mNumMeshes = numSub;
-    scene->mMeshes = new aiMesh*[numSub];
+    scene->mMeshes = numSub > 0 ? new aiMesh*[numSub] : nullptr;
 
     for (unsigned int si = 0; si < numSub; ++si)
     {
@@ -1154,7 +1154,7 @@ static aiScene* buildSceneAiScene()
         totalMeshes += entity->getMesh()->getNumSubMeshes();
 
     scene->mNumMeshes = totalMeshes;
-    scene->mMeshes = new aiMesh*[totalMeshes];
+    scene->mMeshes = totalMeshes > 0 ? new aiMesh*[totalMeshes] : nullptr;
 
     // Root node children: one per scene node
     scene->mRootNode->mNumChildren = static_cast<unsigned int>(nodeEntities.size());
