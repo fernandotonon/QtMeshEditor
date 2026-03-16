@@ -1,11 +1,17 @@
 name: qtmesheditor
 adopt-info: qtmesheditor
+title: QtMeshEditor
 summary: Free 3D asset tool for indie game developers
 description: |
   Merge Mixamo animations, convert between 40+ 3D formats, edit materials
   with AI assistance, and inspect skeletons and bone weights. Supports FBX,
   glTF, OBJ, Collada, STL and more. Includes CLI for batch processing and
   an MCP server for AI agent integration.
+license: MIT
+contact: https://github.com/fernandotonon/QtMeshEditor/issues
+issues: https://github.com/fernandotonon/QtMeshEditor/issues
+source-code: https://github.com/fernandotonon/QtMeshEditor
+website: https://fernandotonon.github.io/QtMeshEditor
 
 grade: stable
 confinement: strict
@@ -16,10 +22,16 @@ platforms:
     build-on: [amd64]
     build-for: [amd64]
 
+# Suppress lint warnings for optional Qt QML style plugins whose
+# style-specific libraries are not bundled (we only use Basic style)
+lint:
+  ignore:
+    - library:
+      - usr/share/qtmesheditor/qml/**
+
 apps:
   qtmesheditor:
     command: usr/share/qtmesheditor/qtmesheditor
-    extensions: [gnome]
     plugs:
       - opengl
       - x11
@@ -30,9 +42,10 @@ apps:
       - network
       - removable-media
     environment:
-      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$LD_LIBRARY_PATH
+      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$LD_LIBRARY_PATH
       QML2_IMPORT_PATH: $SNAP/usr/share/qtmesheditor/qml:$QML2_IMPORT_PATH
       QT_QPA_PLATFORM: xcb
+      QT_PLUGIN_PATH: $SNAP/usr/share/qtmesheditor
       OGRE_PLUGIN_DIR: $SNAP/usr/lib/qtmesheditor
 
   qtmesh:
@@ -41,8 +54,9 @@ apps:
       - home
       - removable-media
     environment:
-      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$LD_LIBRARY_PATH
+      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$LD_LIBRARY_PATH
       QT_QPA_PLATFORM: offscreen
+      QT_PLUGIN_PATH: $SNAP/usr/share/qtmesheditor
 
 parts:
   qtmesheditor:
@@ -89,3 +103,5 @@ parts:
       - libx11-6
       - libxext6
       - libxrender1
+      - libxkbcommon0
+      - libxkbcommon-x11-0
