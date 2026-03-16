@@ -120,7 +120,14 @@ parts:
       - libxcb-xinerama0
       - libxcb-xkb1
       - libxext6
+      - libxrandr2
       - libxrender1
+      - libxi6
+      - libxfixes3
+      - libxdamage1
+      - libxcomposite1
+      - libxcursor1
+      - libxtst6
       - libxkbcommon0
       - libxkbcommon-x11-0
       # Core system libs
