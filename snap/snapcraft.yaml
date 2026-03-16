@@ -1,0 +1,89 @@
+name: qtmesheditor
+adopt-info: qtmesheditor
+summary: Free 3D asset tool for indie game developers
+description: |
+  Merge Mixamo animations, convert between 40+ 3D formats, edit materials
+  with AI assistance, and inspect skeletons and bone weights. Supports FBX,
+  glTF, OBJ, Collada, STL and more. Includes CLI for batch processing and
+  an MCP server for AI agent integration.
+
+grade: stable
+confinement: strict
+base: core24
+
+architectures:
+  - build-on: amd64
+
+apps:
+  qtmesheditor:
+    command: usr/share/qtmesheditor/qtmesheditor
+    extensions: [gnome]
+    plugs:
+      - opengl
+      - x11
+      - wayland
+      - desktop
+      - desktop-legacy
+      - home
+      - network
+      - removable-media
+    environment:
+      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$LD_LIBRARY_PATH
+      QML2_IMPORT_PATH: $SNAP/usr/share/qtmesheditor/qml:$QML2_IMPORT_PATH
+      QT_QPA_PLATFORM: xcb
+      OGRE_PLUGIN_DIR: $SNAP/usr/lib/qtmesheditor
+
+  qtmesh:
+    command: usr/share/qtmesheditor/qtmesheditor --cli
+    plugs:
+      - home
+      - removable-media
+    environment:
+      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$LD_LIBRARY_PATH
+      QT_QPA_PLATFORM: offscreen
+
+parts:
+  qtmesheditor:
+    plugin: dump
+    source: .
+    override-build: |
+      # If a local .deb is provided (CI), use it; otherwise download from GitHub
+      if [ -f "$CRAFT_PART_SRC/qtmesheditor_amd64.deb" ]; then
+        echo "Using local .deb from CI"
+        dpkg-deb -x "$CRAFT_PART_SRC/qtmesheditor_amd64.deb" "$CRAFT_PART_INSTALL"
+      else
+        echo "Downloading .deb from latest GitHub release"
+        DEB_URL=$(curl -s https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest \
+          | grep "browser_download_url.*\.deb" | cut -d '"' -f 4)
+        if [ -z "$DEB_URL" ]; then
+          echo "ERROR: Could not find .deb in latest release" >&2
+          exit 1
+        fi
+        curl -L -o /tmp/qtmesheditor.deb "$DEB_URL"
+        dpkg-deb -x /tmp/qtmesheditor.deb "$CRAFT_PART_INSTALL"
+      fi
+
+      # Extract version from the .deb control metadata
+      DEB_PATH="$CRAFT_PART_SRC/qtmesheditor_amd64.deb"
+      if [ ! -f "$DEB_PATH" ]; then
+        DEB_PATH="/tmp/qtmesheditor.deb"
+      fi
+      VERSION=$(dpkg-deb -f "$DEB_PATH" Version)
+      craftctl set version="$VERSION"
+
+      # Fix plugins.cfg to use snap-relative path
+      if [ -f "$CRAFT_PART_INSTALL/usr/share/qtmesheditor/cfg/plugins.cfg" ]; then
+        sed -i 's|^PluginFolder=.*|PluginFolder=|' \
+          "$CRAFT_PART_INSTALL/usr/share/qtmesheditor/cfg/plugins.cfg"
+      fi
+    stage-packages:
+      - libxcb-cursor0
+      - libxcb-xinerama0
+      - libgl1-mesa-dri
+      - libgl1
+      - libglu1-mesa
+      - libfreetype6
+      - libfontconfig1
+      - libx11-6
+      - libxext6
+      - libxrender1
