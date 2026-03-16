@@ -1,5 +1,5 @@
 name: qtmesheditor
-version: '2.14.1'
+adopt-info: qtmesheditor
 summary: Free 3D asset tool for indie game developers
 description: |
   Merge Mixamo animations, convert between 40+ 3D formats, edit materials
@@ -62,6 +62,14 @@ parts:
         curl -L -o /tmp/qtmesheditor.deb "$DEB_URL"
         dpkg-deb -x /tmp/qtmesheditor.deb "$CRAFT_PART_INSTALL"
       fi
+
+      # Extract version from the .deb control metadata
+      DEB_PATH="$CRAFT_PART_SRC/qtmesheditor_amd64.deb"
+      if [ ! -f "$DEB_PATH" ]; then
+        DEB_PATH="/tmp/qtmesheditor.deb"
+      fi
+      VERSION=$(dpkg-deb -f "$DEB_PATH" Version)
+      craftctl set version="$VERSION"
 
       # Fix plugins.cfg to use snap-relative path
       if [ -f "$CRAFT_PART_INSTALL/usr/share/qtmesheditor/cfg/plugins.cfg" ]; then
