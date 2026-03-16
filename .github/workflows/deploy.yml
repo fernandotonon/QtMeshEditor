@@ -1552,6 +1552,37 @@ jobs:
         git push
 
 ####################################################################
+# Snap Store Publish (after Linux .deb is built)
+####################################################################
+
+ snap-publish:
+    needs: build-linux
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3.5.3
+
+    - uses: actions/download-artifact@v4
+      with:
+        name: linux-binaries
+        path: .
+
+    - name: Prepare snap build
+      run: |
+        # Place the .deb where snapcraft.yaml expects it
+        cp qtmesheditor_amd64.deb snap/../qtmesheditor_amd64.deb
+
+    - uses: snapcore/action-build@v1
+      id: build
+
+    - uses: snapcore/action-publish@v1
+      env:
+        SNAPCRAFT_STORE_CREDENTIALS: ${{ secrets.SNAP_STORE_TOKEN }}
+      with:
+        snap: ${{ steps.build.outputs.snap }}
+        release: stable
+
+####################################################################
 # Docker Image Publish (after Linux .deb is built)
 ####################################################################
 
