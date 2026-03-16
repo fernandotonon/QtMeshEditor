@@ -6,6 +6,7 @@ A free, open-source 3D asset tool for indie game developers — merge animations
 
 [![Github All Releases](https://img.shields.io/github/downloads/fernandotonon/QtMeshEditor/total.svg)]()
 [![Deploy](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml/badge.svg)](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml)
+[![qtmesheditor](https://snapcraft.io/qtmesheditor/badge.svg)](https://snapcraft.io/qtmesheditor)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=coverage)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
@@ -143,26 +144,21 @@ Upgrade with
 
 ![install_macOS](https://user-images.githubusercontent.com/996529/216797862-2592a40b-5f3d-4907-bcad-dc1feae4ff2f.gif)
 
-#### :penguin: Linux (ubuntu)
+#### :penguin: Linux
+##### Snap Store (recommended)
+```bash
+sudo snap install qtmesheditor
+```
 
-Download the .deb file;
-Then there are a few options for installing it:
-* Using apt
+##### .deb package (Ubuntu/Debian)
+Download the .deb file from the [releases page](https://github.com/fernandotonon/QtMeshEditor/releases), then:
+* Using apt:
 `sudo apt install ./qtmesheditor_amd64.deb`
 
-* Using dpkg
+* Using dpkg:
 `sudo dpkg -i qtmesheditor_amd64.deb`
 
-* Using the Software Install:
-<img width="600" src="https://user-images.githubusercontent.com/996529/216799515-51494c16-c420-4535-a898-5b915a340c88.png">
-
-Remove with
-
-`sudo apt remove qtmesheditor`
-
-or
-
-`sudo dpkg -r qtmesheditor`
+Remove with `sudo apt remove qtmesheditor` or `sudo snap remove qtmesheditor`
 
 Run it calling `qtmesheditor`
 
