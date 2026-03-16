@@ -29,25 +29,26 @@ lint:
     - library:
       - usr/share/qtmesheditor/qml/**
 
-# GPU driver access via mesa-core24 content snap
+# GPU driver access via mesa-2404 content snap
 plugs:
   gpu-2404:
     interface: content
     target: $SNAP/gpu-2404
-    default-provider: mesa-core24
+    default-provider: mesa-2404
 
 layout:
   /usr/share/libdrm:
-    bind: $SNAP/gpu-2404/libdrm
+    symlink: $SNAP/gpu-2404/libdrm
   /usr/share/drirc.d:
-    bind: $SNAP/gpu-2404/drirc.d
+    symlink: $SNAP/gpu-2404/drirc.d
 
 apps:
   qtmesheditor:
     command: usr/share/qtmesheditor/qtmesheditor
+    command-chain:
+      - bin/gpu-2404-wrapper
     plugs:
       - opengl
-      - gpu-2404
       - x11
       - wayland
       - desktop
@@ -56,27 +57,24 @@ apps:
       - network
       - removable-media
     environment:
-      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$SNAP/gpu-2404/lib:$SNAP/gpu-2404/lib/${CRAFT_ARCH_TRIPLET_BUILD_FOR}:$LD_LIBRARY_PATH
+      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$LD_LIBRARY_PATH
       QML2_IMPORT_PATH: $SNAP/usr/share/qtmesheditor/qml:$QML2_IMPORT_PATH
       QT_QPA_PLATFORM: xcb
       QT_PLUGIN_PATH: $SNAP/usr/share/qtmesheditor
       OGRE_PLUGIN_DIR: $SNAP/usr/lib/qtmesheditor
-      LIBGL_DRIVERS_PATH: $SNAP/gpu-2404/lib/${CRAFT_ARCH_TRIPLET_BUILD_FOR}/dri
-      __EGL_VENDOR_LIBRARY_DIRS: $SNAP/gpu-2404/share/glvnd/egl_vendor.d
 
   qtmesh:
     command: usr/share/qtmesheditor/qtmesheditor --cli
+    command-chain:
+      - bin/gpu-2404-wrapper
     plugs:
       - home
       - removable-media
       - opengl
-      - gpu-2404
     environment:
-      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$SNAP/gpu-2404/lib:$SNAP/gpu-2404/lib/${CRAFT_ARCH_TRIPLET_BUILD_FOR}:$LD_LIBRARY_PATH
+      LD_LIBRARY_PATH: $SNAP/usr/lib/qtmesheditor:$SNAP/usr/share/qtmesheditor/platforms:$LD_LIBRARY_PATH
       QT_QPA_PLATFORM: offscreen
       QT_PLUGIN_PATH: $SNAP/usr/share/qtmesheditor
-      LIBGL_DRIVERS_PATH: $SNAP/gpu-2404/lib/${CRAFT_ARCH_TRIPLET_BUILD_FOR}/dri
-      __EGL_VENDOR_LIBRARY_DIRS: $SNAP/gpu-2404/share/glvnd/egl_vendor.d
 
 parts:
   qtmesheditor:
@@ -114,7 +112,7 @@ parts:
       fi
     stage-packages:
       # GL/EGL loaders (libglvnd) — stable API dispatchers.
-      # GPU implementations come from mesa-core24 content snap at runtime.
+      # GPU implementations come from mesa-2404 content snap at runtime.
       - libglvnd0
       - libglx0
       - libegl1
@@ -162,3 +160,14 @@ parts:
       - libdbus-1-3
       - libsm6
       - libice6
+
+  # GPU support: provides gpu-2404-wrapper and cleans up mesa-2404 dupes
+  gpu-2404:
+    after: [qtmesheditor]
+    source: https://github.com/canonical/gpu-snap.git
+    plugin: dump
+    override-prime: |
+      craftctl default
+      ${CRAFT_PART_SRC}/bin/gpu-2404-cleanup mesa-2404
+    prime:
+      - bin/gpu-2404-wrapper
