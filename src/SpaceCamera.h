@@ -74,7 +74,7 @@ class SpaceCamera : Ogre::FrameListener
         virtual void mouseMoveEvent(QMouseEvent *event);
         virtual void wheelEvent(QWheelEvent *event);
 
-        void zoomByDelta(int delta);
+        void zoomByDelta(Ogre::Real delta);
 
     protected:
         SpaceCamera(){} // for testing purposes
@@ -104,7 +104,7 @@ class SpaceCamera : Ogre::FrameListener
         float mAnimDuration = 0.5f;
 
         void setKeyMapping();
-        void zoom(const int delta);
+        void zoom(Ogre::Real delta);
         void pan(const Ogre::Real& deltaX, const Ogre::Real& deltaY);
         void pan(const Ogre::Vector2& translation);
         void arcBall(const Ogre::Vector2& rotation);

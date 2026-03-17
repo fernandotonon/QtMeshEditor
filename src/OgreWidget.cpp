@@ -268,7 +268,8 @@ bool OgreWidget::event(QEvent *e)
     if (e->type() == QEvent::NativeGesture) {
         auto *gestureEvent = static_cast<QNativeGestureEvent*>(e);
         if (gestureEvent->gestureType() == Qt::ZoomNativeGesture) {
-            int delta = static_cast<int>(gestureEvent->value() * 200 * mCamera->getCameraSpeed());
+            // value() is typically ±0.01..0.1 per gesture event; scale to usable range
+            Ogre::Real delta = static_cast<Ogre::Real>(gestureEvent->value() * 5.0);
             mCamera->zoomByDelta(delta);
             e->accept();
             return true;
