@@ -1,3 +1,4 @@
+// LCOV_EXCL_START — SD feature is not enabled in CI; requires GPU + model files
 #include "SDWorker.h"
 #include <QDebug>
 #include <QThread>
@@ -409,3 +410,4 @@ void SDWorker::progressCallback(int step, int steps, float time, void *data)
     }
 }
 #endif
+// LCOV_EXCL_STOP

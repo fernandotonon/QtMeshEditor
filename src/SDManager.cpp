@@ -1,3 +1,4 @@
+// LCOV_EXCL_START — SD feature is not enabled in CI; requires GPU + model files
 #include "SDManager.h"
 #include <QCoreApplication>
 #include <QStandardPaths>

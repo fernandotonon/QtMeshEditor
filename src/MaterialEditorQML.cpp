@@ -2776,6 +2776,7 @@ void MaterialEditorQML::onLLMGenerationCompleted(const QString &generatedText)
 
     emit aiGenerationCompleted(cleanedText);
 
+    // LCOV_EXCL_START — SD auto-trigger requires SD enabled with loaded model
     // Auto-trigger SD texture generation if the material references textures
     // and SD is available with a loaded model
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -2816,6 +2817,7 @@ void MaterialEditorQML::onLLMGenerationCompleted(const QString &generatedText)
         }
     }
 #endif
+    // LCOV_EXCL_STOP
 }
 
 void MaterialEditorQML::onLLMGenerationError(const QString &error)
@@ -2832,6 +2834,7 @@ void MaterialEditorQML::onLLMModelLoadedChanged()
 }
 // LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — SD texture generation requires GPU + model files not available in CI
 // Stable Diffusion getters
 bool MaterialEditorQML::stableDiffusionEnabled() const
 {
