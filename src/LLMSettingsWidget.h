@@ -14,6 +14,7 @@
 #include <QGroupBox>
 #include <QTabWidget>
 #include "LLMManager.h"
+#include "SDManager.h"
 #include "ModelDownloader.h"
 
 class LLMSettingsWidget : public QDialog
@@ -44,15 +45,31 @@ private slots:
     void onApplySettings();
     void onResetDefaults();
 
+    // SD slots
+    void onSDLoadModelClicked();
+    void onSDUnloadModelClicked();
+    void onSDRefreshModelsClicked();
+    void onSDDownloadModelClicked();
+    void onSDModelLoadCompleted(const QString &modelName);
+    void onSDModelLoadError(const QString &error);
+    void onSDModelUnloaded();
+    void onSDSettingsChanged();
+    void onSDApplySettings();
+
 private:
     void setupUI();
     void setupModelsTab(QWidget *parent);
     void setupSettingsTab(QWidget *parent);
     void setupDownloadTab(QWidget *parent);
+    void setupSDModelsTab(QWidget *parent);
+    void setupSDSettingsTab(QWidget *parent);
 
     void updateModelList();
     void updateRecommendedModelsList();
     void updateStatus();
+    void updateSDModelList();
+    void updateSDRecommendedModelsList();
+    void updateSDStatus();
     void loadCurrentSettings();
 
     QString formatFileSize(qint64 bytes) const;
@@ -89,6 +106,24 @@ private:
     QProgressBar *m_downloadProgressBar;
     QLabel *m_downloadStatusLabel;
     QLabel *m_downloadSpeedLabel;
+
+    // SD Models tab
+    QComboBox *m_sdModelCombo;
+    QPushButton *m_sdLoadButton;
+    QPushButton *m_sdUnloadButton;
+    QPushButton *m_sdRefreshButton;
+    QLineEdit *m_sdDirectoryEdit;
+    QLabel *m_sdStatusLabel;
+    QListWidget *m_sdRecommendedModelsList;
+    QPushButton *m_sdDownloadButton;
+
+    // SD Settings tab
+    QSpinBox *m_sdStepsSpinBox;
+    QDoubleSpinBox *m_sdCfgScaleSpinBox;
+    QLineEdit *m_sdNegativePromptEdit;
+    QSpinBox *m_sdWidthSpinBox;
+    QSpinBox *m_sdHeightSpinBox;
+    QPushButton *m_sdApplyButton;
 };
 
 #endif // LLMSETTINGSWIDGET_H

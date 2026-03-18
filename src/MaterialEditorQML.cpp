@@ -2,9 +2,11 @@
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "LLMManager.h"
+#include "SDManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "RTShaderHelper.h"
+#include <OgreRTShaderSystem.h>
 #include <QDebug>
 #include <QFileDialog>
 #include <QColorDialog>
@@ -15,6 +17,8 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QStandardPaths>
+#include <QUrl>
+#include <QFile>
 #include <QPalette>
 #include <QQuickWindow>
 #include <QWindow>
@@ -75,6 +79,14 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     connect(llmManager, &LLMManager::generationCompleted, this, &MaterialEditorQML::onLLMGenerationCompleted);
     connect(llmManager, &LLMManager::generationError, this, &MaterialEditorQML::onLLMGenerationError);
     connect(llmManager, &LLMManager::modelLoadedChanged, this, &MaterialEditorQML::onLLMModelLoadedChanged);
+
+    // Connect to SDManager signals
+    SDManager *sdManager = SDManager::instance();
+    connect(sdManager, &SDManager::generationStarted, this, &MaterialEditorQML::onSDGenerationStarted);
+    connect(sdManager, &SDManager::generationProgressChanged, this, &MaterialEditorQML::onSDGenerationProgress);
+    connect(sdManager, &SDManager::generationCompleted, this, &MaterialEditorQML::onSDGenerationCompleted);
+    connect(sdManager, &SDManager::generationError, this, &MaterialEditorQML::onSDGenerationError);
+    connect(sdManager, &SDManager::modelLoadedChanged, this, &MaterialEditorQML::onSDModelLoadedChanged);
 }
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -1524,6 +1536,35 @@ void MaterialEditorQML::updateMaterialText()
     } catch (const std::exception& e) {
         qDebug() << "Error updating material text:" << e.what();
     }
+
+    // Force the model to show updated material properties immediately
+    try {
+        // Remove all RTSS-generated techniques so they get recreated from
+        // the modified source pass on the next render frame
+        auto *shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+        if (shaderGen) {
+            shaderGen->removeAllShaderBasedTechniques(m_ogreMaterial->getName(),
+                Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+        }
+
+        // Recompile the material
+        m_ogreMaterial->compile();
+
+        // Re-apply material to all sub-entities that use it
+        std::string matName = m_materialName.toStdString();
+        for (Ogre::SceneNode* sn : Manager::getSingleton()->getSceneNodes()) {
+            if (sn->getName().empty() || sn->getAttachedObjects().empty())
+                continue;
+            for (auto* obj : sn->getAttachedObjects()) {
+                if (obj->getMovableType() != "Entity") continue;
+                auto* entity = static_cast<Ogre::Entity*>(obj);
+                for (unsigned int si = 0; si < entity->getNumSubEntities(); ++si) {
+                    if (entity->getSubEntity(si)->getMaterialName() == matName)
+                        entity->getSubEntity(si)->setMaterialName(matName);
+                }
+            }
+        }
+    } catch (...) {}
 }
 
 Ogre::Pass* MaterialEditorQML::getCurrentPass() const
@@ -1588,30 +1629,59 @@ QString MaterialEditorQML::getTexturePreviewPath() const
     if (texName.isEmpty() || texName == "*Select a texture*" || texName.trimmed().isEmpty()) {
         return "";
     }
-    
-    // Construct relative path from working directory
-    // Try common texture locations
+
+    // 1. Ask Ogre where the texture was actually loaded from (most accurate)
+    if (isOgreAvailable()) {
+        try {
+            auto texPtr = Ogre::TextureManager::getSingleton().getByName(texName.toStdString());
+            if (texPtr) {
+                // Check origin (absolute path)
+                QString origin = QString::fromStdString(texPtr->getOrigin());
+                if (!origin.isEmpty() && QFileInfo::exists(origin)) {
+                    return QUrl::fromLocalFile(QFileInfo(origin).absoluteFilePath()).toString();
+                }
+
+                // The resource group name is often the directory the model was loaded from
+                QString group = QString::fromStdString(texPtr->getGroup());
+                if (!group.isEmpty()) {
+                    // Group name IS the directory path for imported models
+                    QString groupPath = group + "/" + texName;
+                    if (QFileInfo::exists(groupPath)) {
+                        return QUrl::fromLocalFile(QFileInfo(groupPath).absoluteFilePath()).toString();
+                    }
+                    // Also try origin relative to group
+                    if (!origin.isEmpty()) {
+                        QString combined = group + "/" + origin;
+                        if (QFileInfo::exists(combined)) {
+                            return QUrl::fromLocalFile(QFileInfo(combined).absoluteFilePath()).toString();
+                        }
+                    }
+                }
+            }
+        } catch (...) {}
+    }
+
+    // 2. Check generated textures directory
+    QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+    QString genTexPath = QDir(dataPath).filePath("generated_textures/" + texName);
+    if (QFileInfo::exists(genTexPath)) {
+        return QUrl::fromLocalFile(QFileInfo(genTexPath).absoluteFilePath()).toString();
+    }
+
+    // 3. Try common texture locations
     QStringList possiblePaths = {
         QString("media/materials/textures/%1").arg(texName),
         QString("../media/materials/textures/%1").arg(texName),
         QString("../../media/materials/textures/%1").arg(texName)
     };
-    
-    for (const QString& path : possiblePaths) {
+    for (const QString &path : possiblePaths) {
         QFileInfo fileInfo(path);
         if (fileInfo.exists() && fileInfo.isFile()) {
-            return QString("file:///%1").arg(fileInfo.absoluteFilePath());
+            return QUrl::fromLocalFile(fileInfo.absoluteFilePath()).toString();
         }
     }
-    
-    // If not found in expected locations, try working directory relative
-    QString workingDirPath = QString("media/materials/textures/%1").arg(texName);
-    QFileInfo workingDirFile(workingDirPath);
-    if (workingDirFile.exists()) {
-        return QString("file:///%1").arg(workingDirFile.absoluteFilePath());
-    }
-    
-    // Return empty if texture file not found
+
+    // Return empty if texture file not found (may only exist in GPU memory)
     return "";
 }
 
@@ -2701,6 +2771,47 @@ void MaterialEditorQML::onLLMGenerationCompleted(const QString &generatedText)
     setMaterialText(cleanedText);
 
     emit aiGenerationCompleted(cleanedText);
+
+    // Auto-trigger SD texture generation if the material references textures
+    // and SD is available with a loaded model
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager *sdManager = SDManager::instance();
+    if (sdManager->isModelLoaded()) {
+        // Look for texture_unit blocks with texture references that look like AI placeholders
+        QRegularExpression texRegex(R"(texture\s+["\']?([^"'\s]+)["\']?)");
+        QRegularExpressionMatchIterator it = texRegex.globalMatch(cleanedText);
+        while (it.hasNext()) {
+            QRegularExpressionMatch match = it.next();
+            QString texName = match.captured(1).trimmed();
+            // Skip if the texture file already exists on disk
+            bool existsOnDisk = false;
+            // Check generated textures dir
+            QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+            QString genPath = QDir(dataPath).filePath("generated_textures/" + texName);
+            if (QFileInfo::exists(genPath)) existsOnDisk = true;
+            // Check media textures dirs
+            QStringList searchDirs = {
+                "media/materials/textures/" + texName,
+                "../media/materials/textures/" + texName,
+            };
+            for (const auto &p : searchDirs) {
+                if (QFileInfo::exists(p)) { existsOnDisk = true; break; }
+            }
+            if (existsOnDisk) continue;
+            // This texture doesn't exist — generate it with SD using the texture name as prompt
+            // Convert underscores/hyphens to spaces for a better prompt
+            QString prompt = texName;
+            prompt.replace(QRegularExpression(R"(\.\w+$)"), ""); // remove extension
+            QString cleanPrompt = prompt;
+            cleanPrompt.replace('_', ' ').replace('-', ' ');
+            if (!cleanPrompt.isEmpty()) {
+                qDebug() << "MaterialEditorQML: Auto-triggering SD for missing texture:" << texName << "prompt:" << cleanPrompt;
+                sdManager->generateTexture(cleanPrompt, 0, 0, texName);
+                break; // Generate one texture at a time
+            }
+        }
+    }
+#endif
 }
 
 void MaterialEditorQML::onLLMGenerationError(const QString &error)
@@ -2714,6 +2825,218 @@ void MaterialEditorQML::onLLMModelLoadedChanged()
 {
     emit llmModelLoadedChanged();
     emit llmCurrentModelChanged();
+}
+// LCOV_EXCL_STOP
+
+// Stable Diffusion getters
+bool MaterialEditorQML::stableDiffusionEnabled() const
+{
+#ifdef ENABLE_STABLE_DIFFUSION
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool MaterialEditorQML::sdModelLoaded() const
+{
+    return SDManager::instance()->isModelLoaded();
+}
+
+bool MaterialEditorQML::sdIsGenerating() const
+{
+    return SDManager::instance()->isGenerating();
+}
+
+// Stable Diffusion texture generation
+void MaterialEditorQML::generateTextureFromPrompt(const QString &prompt, int width, int height)
+{
+    if (prompt.isEmpty()) {
+        emit sdGenerationError("Please enter a texture prompt");
+        return;
+    }
+
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager *sdManager = SDManager::instance();
+    if (!sdManager->isModelLoaded()) {
+        emit sdGenerationError("No SD model loaded. Please download and load a model from AI Settings.");
+        return;
+    }
+
+    // LCOV_EXCL_START — requires a loaded SD model
+    m_sdGenerationProgress = 0.0f;
+    emit sdGenerationProgressChanged();
+    sdManager->generateTexture(prompt, width, height);
+    // LCOV_EXCL_STOP
+#else
+    Q_UNUSED(width);
+    Q_UNUSED(height);
+    emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
+#endif
+}
+
+void MaterialEditorQML::editTextureFromPrompt(const QString &prompt, float strength)
+{
+    if (prompt.isEmpty()) {
+        emit sdGenerationError("Please enter an edit prompt");
+        return;
+    }
+
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager *sdManager = SDManager::instance();
+    if (!sdManager->isModelLoaded()) {
+        emit sdGenerationError("No SD model loaded. Please load a model from AI Settings.");
+        return;
+    }
+
+    // Find the current texture's file path
+    QString inputPath;
+
+    // First try getTexturePreviewPath
+    QString texPreviewPath = getTexturePreviewPath();
+    if (!texPreviewPath.isEmpty()) {
+        inputPath = QUrl(texPreviewPath).toLocalFile();
+    }
+
+    // If not found via preview path, check generated textures dir directly
+    if (inputPath.isEmpty() && !m_textureName.isEmpty() && m_textureName != "*Select a texture*") {
+        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+        QString genPath = QDir(dataPath).filePath("generated_textures/" + m_textureName);
+        if (QFileInfo::exists(genPath)) {
+            inputPath = genPath;
+        }
+    }
+
+    if (inputPath.isEmpty() || !QFileInfo::exists(inputPath)) {
+        // Texture only exists in GPU memory — fall back to txt2img
+        QString outputName = m_textureName;
+        if (outputName.isEmpty() || outputName == "*Select a texture*") {
+            outputName = "edited_texture.png";
+        }
+        sdManager->generateTexture(prompt, 0, 0, outputName);
+        return;
+    }
+
+    m_sdGenerationProgress = 0.0f;
+    emit sdGenerationProgressChanged();
+
+    // Use current texture name as output, or generate a new name
+    QString outputName = m_textureName;
+    if (outputName.isEmpty() || outputName == "*Select a texture*") {
+        outputName = "edited_texture.png";
+    }
+
+    sdManager->editTexture(prompt, inputPath, strength, outputName);
+#else
+    Q_UNUSED(strength);
+    emit sdGenerationError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
+#endif
+}
+
+void MaterialEditorQML::stopTextureGeneration()
+{
+    SDManager::instance()->stopGeneration();
+}
+
+// LCOV_EXCL_START — SD signal handlers require a loaded SD model
+void MaterialEditorQML::onSDGenerationStarted()
+{
+    m_sdGenerationProgress = 0.0f;
+    emit sdGenerationProgressChanged();
+    emit sdIsGeneratingChanged();
+}
+
+void MaterialEditorQML::onSDGenerationProgress()
+{
+    SDManager *sdManager = SDManager::instance();
+    int step = sdManager->generationStep();
+    int total = sdManager->generationTotalSteps();
+    m_sdGenerationProgress = (total > 0) ? static_cast<float>(step) / total : 0.0f;
+    emit sdGenerationProgressChanged();
+}
+
+void MaterialEditorQML::onSDGenerationCompleted(const QString &outputPath)
+{
+    m_sdGenerationProgress = 1.0f;
+    emit sdGenerationProgressChanged();
+    emit sdIsGeneratingChanged();
+
+    QFileInfo fileInfo(outputPath);
+    QString dirPath = fileInfo.absolutePath();
+    QString fileName = fileInfo.fileName();
+
+    if (!isOgreAvailable()) {
+        // Update texture name for preview even without Ogre
+        m_textureName = fileName;
+        emit textureNameChanged();
+        emit sdTextureGenerated(outputPath);
+        return;
+    }
+
+    // Register the directory and apply texture — all in a single try block
+    // to catch any Ogre segfault-like exceptions
+    try {
+        auto *root = Ogre::Root::getSingletonPtr();
+        if (!root) {
+            m_textureName = fileName;
+            emit textureNameChanged();
+            emit sdTextureGenerated(outputPath);
+            return;
+        }
+
+        auto &rgm = Ogre::ResourceGroupManager::getSingleton();
+
+        // Add resource location (Ogre handles duplicates)
+        try {
+            rgm.addResourceLocation(dirPath.toStdString(), "FileSystem",
+                                    Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            rgm.initialiseResourceGroup(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        } catch (...) {}
+
+        // Remove any previously loaded texture with the same name so Ogre reloads from new file
+        try {
+            auto existingTex = Ogre::TextureManager::getSingleton().getByName(fileName.toStdString());
+            if (existingTex) {
+                Ogre::TextureManager::getSingleton().remove(existingTex);
+            }
+        } catch (...) {}
+
+        // Apply texture to current material
+        Ogre::Pass *pass = getCurrentPass();
+        if (pass) {
+            Ogre::TextureUnitState *texUnit = getCurrentTextureUnit();
+            if (!texUnit) {
+                texUnit = pass->createTextureUnitState();
+                updateTextureUnitList();
+                if (m_textureUnitList.size() > 0) {
+                    setSelectedTextureUnitIndex(m_textureUnitList.size() - 1);
+                }
+            }
+            if (texUnit) {
+                texUnit->setTextureName(fileName.toStdString());
+            }
+        }
+    } catch (...) {
+        // If Ogre calls fail, still update the UI
+    }
+
+    m_textureName = fileName;
+    emit textureNameChanged();
+    updateMaterialText();
+    emit sdTextureGenerated(outputPath);
+}
+
+void MaterialEditorQML::onSDGenerationError(const QString &error)
+{
+    m_sdGenerationProgress = 0.0f;
+    emit sdGenerationProgressChanged();
+    emit sdIsGeneratingChanged();
+    emit sdGenerationError(error);
+}
+
+void MaterialEditorQML::onSDModelLoadedChanged()
+{
+    emit sdModelLoadedChanged();
 }
 // LCOV_EXCL_STOP
 

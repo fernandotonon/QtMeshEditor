@@ -128,6 +128,12 @@ class MaterialEditorQML : public QObject
     Q_PROPERTY(QString llmCurrentModel READ llmCurrentModel NOTIFY llmCurrentModelChanged)
     Q_PROPERTY(float llmGenerationProgress READ llmGenerationProgress NOTIFY llmGenerationProgressChanged)
 
+    // Stable Diffusion properties
+    Q_PROPERTY(bool stableDiffusionEnabled READ stableDiffusionEnabled CONSTANT)
+    Q_PROPERTY(bool sdModelLoaded READ sdModelLoaded NOTIFY sdModelLoadedChanged)
+    Q_PROPERTY(bool sdIsGenerating READ sdIsGenerating NOTIFY sdIsGeneratingChanged)
+    Q_PROPERTY(float sdGenerationProgress READ sdGenerationProgress NOTIFY sdGenerationProgressChanged)
+
 public:
     explicit MaterialEditorQML(QObject *parent = nullptr);
     virtual ~MaterialEditorQML() = default;
@@ -231,6 +237,12 @@ public:
     bool llmModelLoaded() const;
     QString llmCurrentModel() const;
     float llmGenerationProgress() const { return m_llmGenerationProgress; }
+
+    // Stable Diffusion getters
+    bool stableDiffusionEnabled() const;
+    bool sdModelLoaded() const;
+    bool sdIsGenerating() const;
+    float sdGenerationProgress() const { return m_sdGenerationProgress; }
 
     // Static factory for QML singleton
     static MaterialEditorQML* qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine);
@@ -374,6 +386,11 @@ public slots:
     Q_INVOKABLE void generateMaterialFromPrompt(const QString &prompt);
     Q_INVOKABLE void stopAIGeneration();
 
+    // AI Texture Generation
+    Q_INVOKABLE void generateTextureFromPrompt(const QString &prompt, int width = 0, int height = 0);
+    Q_INVOKABLE void editTextureFromPrompt(const QString &prompt, float strength = 0.5f);
+    Q_INVOKABLE void stopTextureGeneration();
+
     // Undo/Redo functionality
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
@@ -476,6 +493,13 @@ signals:
     void llmModelLoadedChanged();
     void llmCurrentModelChanged();
     void llmGenerationProgressChanged();
+
+    // Stable Diffusion signals
+    void sdModelLoadedChanged();
+    void sdIsGeneratingChanged();
+    void sdGenerationProgressChanged();
+    void sdTextureGenerated(const QString &filePath);
+    void sdGenerationError(const QString &error);
 
 private:
     void updateTechniqueList();
@@ -584,6 +608,9 @@ private:
     QNetworkAccessManager* m_networkManager;
     float m_llmGenerationProgress = 0.0f;
 
+    // Stable Diffusion
+    float m_sdGenerationProgress = 0.0f;
+
     // Undo/Redo stacks
     QStringList m_undoStack;
     QStringList m_redoStack;
@@ -596,6 +623,13 @@ private slots:
     void onLLMGenerationCompleted(const QString &generatedText);
     void onLLMGenerationError(const QString &error);
     void onLLMModelLoadedChanged();
+
+    // SD slots
+    void onSDGenerationStarted();
+    void onSDGenerationProgress();
+    void onSDGenerationCompleted(const QString &outputPath);
+    void onSDGenerationError(const QString &error);
+    void onSDModelLoadedChanged();
 
 private:
     // Theme color properties

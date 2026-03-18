@@ -25,8 +25,8 @@ TEST_F(LLMSettingsWidgetTest, Constructor)
 {
     LLMSettingsWidget widget;
     EXPECT_EQ(widget.windowTitle(), "AI Model Settings");
-    EXPECT_GE(widget.minimumWidth(), 500);
-    EXPECT_GE(widget.minimumHeight(), 450);
+    EXPECT_GE(widget.minimumWidth(), 550);
+    EXPECT_GE(widget.minimumHeight(), 500);
 }
 
 TEST_F(LLMSettingsWidgetTest, HasTabWidget)
@@ -34,7 +34,11 @@ TEST_F(LLMSettingsWidgetTest, HasTabWidget)
     LLMSettingsWidget widget;
     QTabWidget* tabWidget = widget.findChild<QTabWidget*>();
     ASSERT_NE(tabWidget, nullptr);
+#ifdef ENABLE_STABLE_DIFFUSION
+    EXPECT_EQ(tabWidget->count(), 5); // LLM Models, LLM Settings, LLM Download, SD Models, SD Settings
+#else
     EXPECT_EQ(tabWidget->count(), 3);
+#endif
 }
 
 TEST_F(LLMSettingsWidgetTest, TabNames)
@@ -42,9 +46,13 @@ TEST_F(LLMSettingsWidgetTest, TabNames)
     LLMSettingsWidget widget;
     QTabWidget* tabWidget = widget.findChild<QTabWidget*>();
     ASSERT_NE(tabWidget, nullptr);
-    EXPECT_EQ(tabWidget->tabText(0), "Models");
-    EXPECT_EQ(tabWidget->tabText(1), "Settings");
-    EXPECT_EQ(tabWidget->tabText(2), "Download");
+    EXPECT_EQ(tabWidget->tabText(0), "LLM Models");
+    EXPECT_EQ(tabWidget->tabText(1), "LLM Settings");
+    EXPECT_EQ(tabWidget->tabText(2), "LLM Download");
+#ifdef ENABLE_STABLE_DIFFUSION
+    EXPECT_EQ(tabWidget->tabText(3), "SD Models");
+    EXPECT_EQ(tabWidget->tabText(4), "SD Settings");
+#endif
 }
 
 TEST_F(LLMSettingsWidgetTest, HasModelCombo)

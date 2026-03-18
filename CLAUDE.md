@@ -58,6 +58,7 @@ If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and
 - **Ogre3D 14.5.x**: 3D rendering engine
 - **Assimp 6.0.4**: 3D model import/export
 - **llama.cpp**: Optional local LLM inference (enabled by default, disable with `-DENABLE_LOCAL_LLM=OFF`)
+- **stable-diffusion.cpp**: Optional AI texture generation (disabled by default, enable with `-DENABLE_STABLE_DIFFUSION=ON`)
 - **Google Test**: Test framework (enabled with `-DBUILD_TESTS=ON`)
 - **ogre-procedural**: Bundled in `src/dependencies/ogre-procedural/` for procedural mesh generation
 
@@ -120,6 +121,15 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - **LLMManager** (`src/LLMManager.h/cpp`): QML_SINGLETON wrapping llama.cpp for local inference.
 - **LLMWorker**: Runs inference in a worker thread.
 - **ModelDownloader**: Downloads GGUF models from HuggingFace.
+
+### AI Texture Generation
+
+- **SDManager** (`src/SDManager.h/cpp`): QML_SINGLETON managing stable-diffusion.cpp for AI texture generation. Mirrors LLMManager pattern with worker thread, model management, QSettings persistence.
+- **SDWorker** (`src/SDWorker.h/cpp`): Worker thread wrapping stable-diffusion.cpp C API. Handles model loading (`new_sd_ctx`), image generation (`generate_image`), and progress callbacks.
+- Integration: `MaterialEditorQML` connects to SDManager signals. Generated textures are saved as PNG, registered as Ogre resource locations, and applied to the current material's texture unit.
+- Models stored in `<AppData>/sd_models/`. Supports `.safetensors`, `.ckpt`, `.gguf` formats.
+- `#ifdef ENABLE_STABLE_DIFFUSION` guards all sd.cpp includes/calls. Feature is OFF by default.
+- sd.cpp has `if (NOT TARGET ggml)` guard, so it reuses llama.cpp's ggml when both features are enabled.
 
 ## Development Guidelines
 

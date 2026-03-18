@@ -48,6 +48,8 @@ CLIPipeline.cpp
 MeshInfoOverlay.cpp
 RTShaderHelper.cpp
 ViewCube/ViewCubeController.cpp
+SDWorker.cpp
+SDManager.cpp
 )
 
 set(HEADER_FILES
@@ -99,6 +101,8 @@ CLIPipeline.h
 MeshInfoOverlay.h
 RTShaderHelper.h
 ViewCube/ViewCubeController.h
+SDWorker.h
+SDManager.h
 )
 
 set(TEST_SOURCES "")
@@ -356,6 +360,11 @@ if(ENABLE_LOCAL_LLM)
     endif()
 endif()
 
+# Link stable-diffusion.cpp if enabled
+if(ENABLE_STABLE_DIFFUSION)
+    target_link_libraries(${CMAKE_PROJECT_NAME} stable-diffusion)
+endif()
+
 # Link Sentry if enabled
 if(ENABLE_SENTRY)
     target_link_libraries(${CMAKE_PROJECT_NAME} sentry)
@@ -402,6 +411,11 @@ if(BUILD_TESTS)
     # Link llama.cpp for tests if enabled
     if(ENABLE_LOCAL_LLM)
         target_link_libraries(UnitTests llama ggml)
+    endif()
+
+    # Link stable-diffusion.cpp for tests if enabled
+    if(ENABLE_STABLE_DIFFUSION)
+        target_link_libraries(UnitTests stable-diffusion)
     endif()
 
     # Link Sentry for tests if enabled

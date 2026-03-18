@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 2.14.2 LANGUAGES CXX)
+project(QtMeshEditor VERSION 2.15.0 LANGUAGES C CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -212,6 +212,48 @@ if(ENABLE_LOCAL_LLM)
 
     add_definitions(-DENABLE_LOCAL_LLM)
     message(STATUS "Local LLM support enabled with llama.cpp")
+endif()
+##############################################################
+#  stable-diffusion.cpp for AI texture generation
+##############################################################
+option(ENABLE_STABLE_DIFFUSION "Enable AI texture generation with stable-diffusion.cpp" OFF)
+
+if(ENABLE_STABLE_DIFFUSION)
+    include(FetchContent)
+
+    # Configure stable-diffusion.cpp build options
+    set(SD_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    set(SD_BUILD_SERVER OFF CACHE BOOL "" FORCE)
+
+    # Enable Metal on macOS for GPU acceleration
+    if(APPLE)
+        set(SD_METAL ON CACHE BOOL "" FORCE)
+        message(STATUS "Enabling Metal acceleration for stable-diffusion.cpp on macOS")
+    endif()
+
+    # Enable CUDA on systems with NVIDIA GPUs
+    find_package(CUDAToolkit QUIET)
+    if(CUDAToolkit_FOUND)
+        set(SD_CUDA ON CACHE BOOL "" FORCE)
+        message(STATUS "CUDA found - enabling GPU acceleration for stable-diffusion.cpp")
+    endif()
+
+    FetchContent_Declare(
+        stable_diffusion_cpp
+        GIT_REPOSITORY https://github.com/leejet/stable-diffusion.cpp.git
+        GIT_TAG master
+        GIT_SHALLOW TRUE
+    )
+
+    FetchContent_MakeAvailable(stable_diffusion_cpp)
+
+    # Include stable-diffusion.cpp headers
+    include_directories(
+        ${stable_diffusion_cpp_SOURCE_DIR}
+    )
+
+    add_definitions(-DENABLE_STABLE_DIFFUSION)
+    message(STATUS "AI texture generation enabled with stable-diffusion.cpp")
 endif()
 ##############################################################
 #  Sentry crash reporting and analytics

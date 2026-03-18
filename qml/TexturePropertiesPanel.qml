@@ -607,6 +607,262 @@ GroupBox {
             }
         }
         
+        // SD Error Display
+        Rectangle {
+            id: sdErrorRect
+            Layout.fillWidth: true
+            height: sdErrorText.implicitHeight + 20
+            color: "#ffebee"
+            border.color: "#ef5350"
+            border.width: 1
+            radius: 4
+            visible: false
+
+            Text {
+                id: sdErrorText
+                anchors.fill: parent
+                anchors.margins: 10
+                wrapMode: Text.WordWrap
+                color: "#c62828"
+                font.pointSize: 9
+            }
+
+            Timer {
+                id: sdErrorTimer
+                interval: 5000
+                onTriggered: sdErrorRect.visible = false
+            }
+
+            Connections {
+                target: MaterialEditorQML
+                function onSdGenerationError(error) {
+                    sdErrorText.text = error
+                    sdErrorRect.visible = true
+                    sdErrorTimer.restart()
+                }
+            }
+        }
+
+        // AI Texture Edit (img2img)
+        GroupBox {
+            title: "AI Texture Edit"
+            visible: MaterialEditorQML.stableDiffusionEnabled
+            Layout.fillWidth: true
+
+            background: Rectangle {
+                color: MaterialEditorQML.panelColor
+                border.color: MaterialEditorQML.borderColor
+                border.width: 1
+                radius: 4
+            }
+            label: ThemedLabel {
+                text: parent.title
+                font.bold: true
+            }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
+
+                ThemedLabel {
+                    text: "Edit the current texture with AI"
+                    font.pointSize: 9
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    ThemedTextField {
+                        id: sdEditPromptField
+                        Layout.fillWidth: true
+                        placeholderText: "Describe the change (e.g., 'change eyes to blue')..."
+                        enabled: MaterialEditorQML.sdModelLoaded && !MaterialEditorQML.sdIsGenerating
+
+                        Keys.onReturnPressed: {
+                            if (text.length > 0 && MaterialEditorQML.sdModelLoaded && !MaterialEditorQML.sdIsGenerating) {
+                                MaterialEditorQML.editTextureFromPrompt(text, sdStrengthSlider.value / 100.0)
+                            }
+                        }
+                    }
+
+                    ThemedButton {
+                        text: MaterialEditorQML.sdIsGenerating ? "Stop" : "Edit"
+                        enabled: MaterialEditorQML.sdModelLoaded &&
+                                 (MaterialEditorQML.sdIsGenerating || sdEditPromptField.text.length > 0)
+                        onClicked: {
+                            if (MaterialEditorQML.sdIsGenerating) {
+                                MaterialEditorQML.stopTextureGeneration()
+                            } else {
+                                MaterialEditorQML.editTextureFromPrompt(sdEditPromptField.text, sdStrengthSlider.value / 100.0)
+                            }
+                        }
+                    }
+                }
+
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    ThemedLabel { text: "Strength:" }
+                    Slider {
+                        id: sdStrengthSlider
+                        Layout.fillWidth: true
+                        from: 10
+                        to: 100
+                        stepSize: 5
+                        value: 50
+
+                        background: Rectangle {
+                            x: sdStrengthSlider.leftPadding
+                            y: sdStrengthSlider.topPadding + sdStrengthSlider.availableHeight / 2 - height / 2
+                            implicitWidth: 200
+                            implicitHeight: 4
+                            width: sdStrengthSlider.availableWidth
+                            height: implicitHeight
+                            radius: 2
+                            color: MaterialEditorQML.borderColor
+                        }
+                        handle: Rectangle {
+                            x: sdStrengthSlider.leftPadding + sdStrengthSlider.visualPosition * (sdStrengthSlider.availableWidth - width)
+                            y: sdStrengthSlider.topPadding + sdStrengthSlider.availableHeight / 2 - height / 2
+                            implicitWidth: 16
+                            implicitHeight: 16
+                            radius: 8
+                            color: MaterialEditorQML.accentColor
+                            border.color: MaterialEditorQML.borderColor
+                        }
+                    }
+                    ThemedLabel {
+                        text: Math.round(sdStrengthSlider.value) + "%"
+                        Layout.minimumWidth: 35
+                    }
+                }
+
+                ThemedLabel {
+                    text: "Low = subtle changes, High = major changes"
+                    font.pointSize: 8
+                    opacity: 0.6
+                }
+
+                ProgressBar {
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 1
+                    value: MaterialEditorQML.sdGenerationProgress
+                    visible: MaterialEditorQML.sdIsGenerating
+                }
+            }
+        }
+
+        // AI Texture Generation
+        GroupBox {
+            title: "AI Texture Generation"
+            visible: MaterialEditorQML.stableDiffusionEnabled
+            Layout.fillWidth: true
+
+            background: Rectangle {
+                color: MaterialEditorQML.panelColor
+                border.color: MaterialEditorQML.borderColor
+                border.width: 1
+                radius: 4
+            }
+            label: ThemedLabel {
+                text: parent.title
+                font.bold: true
+            }
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: 10
+                spacing: 8
+
+                // SD Model Status
+                RowLayout {
+                    spacing: 8
+
+                    Rectangle {
+                        width: 10
+                        height: 10
+                        radius: 5
+                        color: MaterialEditorQML.sdModelLoaded ? "#4caf50" : "#9e9e9e"
+                    }
+
+                    ThemedLabel {
+                        text: MaterialEditorQML.sdModelLoaded ?
+                              "SD Model loaded" : "No SD model loaded"
+                        font.pointSize: 9
+                    }
+                }
+
+                // Prompt input
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    ThemedTextField {
+                        id: sdPromptField
+                        Layout.fillWidth: true
+                        placeholderText: "Describe the texture (e.g., 'rusty metal surface')..."
+                        enabled: MaterialEditorQML.sdModelLoaded && !MaterialEditorQML.sdIsGenerating
+
+                        Keys.onReturnPressed: {
+                            if (text.length > 0 && MaterialEditorQML.sdModelLoaded && !MaterialEditorQML.sdIsGenerating) {
+                                MaterialEditorQML.generateTextureFromPrompt(text, sdWidthSpin.value, sdHeightSpin.value)
+                            }
+                        }
+                    }
+
+                    ThemedButton {
+                        text: MaterialEditorQML.sdIsGenerating ? "Stop" : "Generate"
+                        enabled: MaterialEditorQML.sdModelLoaded &&
+                                 (MaterialEditorQML.sdIsGenerating || sdPromptField.text.length > 0)
+                        onClicked: {
+                            if (MaterialEditorQML.sdIsGenerating) {
+                                MaterialEditorQML.stopTextureGeneration()
+                            } else {
+                                MaterialEditorQML.generateTextureFromPrompt(sdPromptField.text, sdWidthSpin.value, sdHeightSpin.value)
+                            }
+                        }
+                    }
+                }
+
+                // Size controls
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 8
+
+                    ThemedLabel { text: "Width:" }
+                    ThemedSpinBox {
+                        id: sdWidthSpin
+                        from: 256
+                        to: 1024
+                        stepSize: 128
+                        value: 512
+                    }
+
+                    ThemedLabel { text: "Height:" }
+                    ThemedSpinBox {
+                        id: sdHeightSpin
+                        from: 256
+                        to: 1024
+                        stepSize: 128
+                        value: 512
+                    }
+                }
+
+                // Progress bar
+                ProgressBar {
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 1
+                    value: MaterialEditorQML.sdGenerationProgress
+                    visible: MaterialEditorQML.sdIsGenerating
+                }
+            }
+        }
+
         // Texture Information
         GroupBox {
             title: "Information"

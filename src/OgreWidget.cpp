@@ -179,7 +179,7 @@ void OgreWidget::initOgreWindow(void)
     mCamera = std::make_unique<SpaceCamera>(this);
 
     mViewport = mOgreWindow->addViewport( mCamera->getCamera() );
-    mViewport->setBackgroundColour( Ogre::ColourValue( 0,0,0 ) );
+    mViewport->setBackgroundColour( Ogre::ColourValue( 0.18f, 0.18f, 0.18f ) );
     mViewport->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
     mViewport->setMaterialScheme(Ogre::MSN_SHADERGEN);
 

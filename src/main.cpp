@@ -16,6 +16,7 @@
 #include "MaterialEditorQML.h"
 #include "QMLMaterialHighlighter.h"
 #include "LLMManager.h"
+#include "SDManager.h"
 #include "ModelDownloader.h"
 #include "MCPServer.h"
 #include "SentryReporter.h"
@@ -186,6 +187,15 @@ int main(int argc, char *argv[])
         [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
             return ModelDownloader::qmlInstance(engine, scriptEngine);
         });
+
+    // Register SDManager singleton for QML
+    qmlRegisterSingletonType<SDManager>("MaterialEditorQML", 1, 0, "SDManager",
+        [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+            return SDManager::qmlInstance(engine, scriptEngine);
+        });
+
+    // Eagerly create SDManager so it scans for models at startup
+    SDManager::instance();
 
     // Register QMLMaterialHighlighter for QML use
     qmlRegisterType<QMLMaterialHighlighter>("MaterialEditorQML", 1, 0, "MaterialHighlighter");
