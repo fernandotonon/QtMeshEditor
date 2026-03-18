@@ -129,7 +129,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - Integration: `MaterialEditorQML` connects to SDManager signals. Generated textures are saved as PNG, registered as Ogre resource locations, and applied to the current material's texture unit.
 - Models stored in `<AppData>/sd_models/`. Supports `.safetensors`, `.ckpt`, `.gguf` formats.
 - `#ifdef ENABLE_STABLE_DIFFUSION` guards all sd.cpp includes/calls. Feature is OFF by default.
-- sd.cpp has `if (NOT TARGET ggml)` guard, so it reuses llama.cpp's ggml when both features are enabled.
+- When both features are enabled, sd.cpp and llama.cpp share the same ggml dependency managed by CMake.
 
 ## Development Guidelines
 

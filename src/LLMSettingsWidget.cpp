@@ -20,9 +20,11 @@ LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     updateModelList();
     updateRecommendedModelsList();
     updateStatus();
+#ifdef ENABLE_STABLE_DIFFUSION
     updateSDModelList();
     updateSDRecommendedModelsList();
     updateSDStatus();
+#endif
 
     // Connect to LLMManager signals
     LLMManager *manager = LLMManager::instance();
@@ -31,12 +33,14 @@ LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     connect(manager, &LLMManager::modelUnloaded, this, &LLMSettingsWidget::onModelUnloaded);
     connect(manager, &LLMManager::availableModelsChanged, this, &LLMSettingsWidget::updateModelList);
 
+#ifdef ENABLE_STABLE_DIFFUSION
     // Connect to SDManager signals
     SDManager *sdManager = SDManager::instance();
     connect(sdManager, &SDManager::modelLoadCompleted, this, &LLMSettingsWidget::onSDModelLoadCompleted);
     connect(sdManager, &SDManager::modelLoadError, this, &LLMSettingsWidget::onSDModelLoadError);
     connect(sdManager, &SDManager::modelUnloaded, this, &LLMSettingsWidget::onSDModelUnloaded);
     connect(sdManager, &SDManager::availableModelsChanged, this, &LLMSettingsWidget::updateSDModelList);
+#endif
 
     // Connect to ModelDownloader signals
     ModelDownloader *downloader = ModelDownloader::instance();
@@ -571,9 +575,9 @@ void LLMSettingsWidget::onResetDefaults()
 
 // ============ SD Models Tab ============
 
+#ifdef ENABLE_STABLE_DIFFUSION
 void LLMSettingsWidget::setupSDModelsTab(QWidget *parent)
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     QVBoxLayout *layout = new QVBoxLayout(parent);
 
     // Status
@@ -645,14 +649,10 @@ void LLMSettingsWidget::setupSDModelsTab(QWidget *parent)
     connect(m_sdUnloadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onSDUnloadModelClicked);
     connect(m_sdRefreshButton, &QPushButton::clicked, this, &LLMSettingsWidget::onSDRefreshModelsClicked);
     connect(m_sdDownloadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onSDDownloadModelClicked);
-#else
-    Q_UNUSED(parent);
-#endif
 }
 
 void LLMSettingsWidget::setupSDSettingsTab(QWidget *parent)
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     QVBoxLayout *layout = new QVBoxLayout(parent);
 
     QGroupBox *genGroup = new QGroupBox("Generation Settings", parent);
@@ -711,14 +711,10 @@ void LLMSettingsWidget::setupSDSettingsTab(QWidget *parent)
     connect(m_sdHeightSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &LLMSettingsWidget::onSDSettingsChanged);
     connect(m_sdNegativePromptEdit, &QLineEdit::textChanged, this, &LLMSettingsWidget::onSDSettingsChanged);
     connect(m_sdApplyButton, &QPushButton::clicked, this, &LLMSettingsWidget::onSDApplySettings);
-#else
-    Q_UNUSED(parent);
-#endif
 }
 
 void LLMSettingsWidget::updateSDModelList()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     m_sdModelCombo->clear();
     m_sdDirectoryEdit->setText(SDManager::instance()->modelsDirectory());
 
@@ -730,12 +726,10 @@ void LLMSettingsWidget::updateSDModelList()
         m_sdModelCombo->addItems(models);
         m_sdLoadButton->setEnabled(true);
     }
-#endif
 }
 
 void LLMSettingsWidget::updateSDRecommendedModelsList()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     m_sdRecommendedModelsList->clear();
 
     QVariantList models = SDManager::instance()->getRecommendedModelsInfo();
@@ -756,12 +750,10 @@ void LLMSettingsWidget::updateSDRecommendedModelsList()
             item->setForeground(QColor(0, 128, 0));
         }
     }
-#endif
 }
 
 void LLMSettingsWidget::updateSDStatus()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     SDManager *manager = SDManager::instance();
 
     if (manager->isModelLoaded()) {
@@ -774,12 +766,10 @@ void LLMSettingsWidget::updateSDStatus()
         m_sdStatusLabel->setStyleSheet("color: gray;");
         m_sdUnloadButton->setEnabled(false);
     }
-#endif
 }
 
 void LLMSettingsWidget::onSDLoadModelClicked()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     QString modelName = m_sdModelCombo->currentText();
     if (modelName.isEmpty() || modelName.startsWith("No SD")) return;
 
@@ -788,27 +778,21 @@ void LLMSettingsWidget::onSDLoadModelClicked()
     m_sdStatusLabel->setStyleSheet("color: orange;");
 
     SDManager::instance()->loadModel(modelName);
-#endif
 }
 
 void LLMSettingsWidget::onSDUnloadModelClicked()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     SDManager::instance()->unloadModel();
-#endif
 }
 
 void LLMSettingsWidget::onSDRefreshModelsClicked()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     SDManager::instance()->scanForModels();
     updateSDRecommendedModelsList();
-#endif
 }
 
 void LLMSettingsWidget::onSDDownloadModelClicked()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     QListWidgetItem *item = m_sdRecommendedModelsList->currentItem();
     if (!item) {
         QMessageBox::information(this, "No Model Selected", "Please select an SD model to download.");
@@ -834,50 +818,36 @@ void LLMSettingsWidget::onSDDownloadModelClicked()
     m_downloadStatusLabel->setText(QString("Downloading %1...").arg(modelName));
 
     ModelDownloader::instance()->startDownload(url, destPath, modelName);
-#endif
 }
 
 void LLMSettingsWidget::onSDModelLoadCompleted(const QString &modelName)
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     m_sdStatusLabel->setText(QString("SD Model loaded: %1").arg(modelName));
     m_sdStatusLabel->setStyleSheet("color: green;");
     m_sdLoadButton->setEnabled(true);
     m_sdUnloadButton->setEnabled(true);
-#else
-    Q_UNUSED(modelName);
-#endif
 }
 
 void LLMSettingsWidget::onSDModelLoadError(const QString &error)
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     m_sdStatusLabel->setText(QString("Error: %1").arg(error));
     m_sdStatusLabel->setStyleSheet("color: red;");
     m_sdLoadButton->setEnabled(true);
     QMessageBox::warning(this, "SD Model Load Error", error);
-#else
-    Q_UNUSED(error);
-#endif
 }
 
 void LLMSettingsWidget::onSDModelUnloaded()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     updateSDStatus();
-#endif
 }
 
 void LLMSettingsWidget::onSDSettingsChanged()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     m_sdApplyButton->setEnabled(true);
-#endif
 }
 
 void LLMSettingsWidget::onSDApplySettings()
 {
-#ifdef ENABLE_STABLE_DIFFUSION
     SDSettings settings = SDManager::instance()->getSettings();
     settings.steps = m_sdStepsSpinBox->value();
     settings.cfgScale = static_cast<float>(m_sdCfgScaleSpinBox->value());
@@ -889,5 +859,5 @@ void LLMSettingsWidget::onSDApplySettings()
     m_sdApplyButton->setEnabled(false);
 
     QMessageBox::information(this, "Settings Applied", "SD settings have been saved.");
-#endif
 }
+#endif // ENABLE_STABLE_DIFFUSION

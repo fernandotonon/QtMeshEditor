@@ -624,12 +624,14 @@ private slots:
     void onLLMGenerationError(const QString &error);
     void onLLMModelLoadedChanged();
 
+#ifdef ENABLE_STABLE_DIFFUSION
     // SD slots
     void onSDGenerationStarted();
     void onSDGenerationProgress();
     void onSDGenerationCompleted(const QString &outputPath);
     void onSDGenerationError(const QString &error);
     void onSDModelLoadedChanged();
+#endif
 
 private:
     // Theme color properties

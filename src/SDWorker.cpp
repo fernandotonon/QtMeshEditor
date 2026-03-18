@@ -16,6 +16,7 @@ SDWorker::~SDWorker()
 bool SDWorker::loadModel(const QString &modelPath)
 {
 #ifdef ENABLE_STABLE_DIFFUSION
+    // LCOV_EXCL_START — requires a real SD model file to exercise success paths
     // Stop any ongoing generation first
     if (m_isGenerating.load()) {
         m_stopRequested.store(true);
@@ -90,6 +91,7 @@ bool SDWorker::loadModel(const QString &modelPath)
     }
 
     return success;
+    // LCOV_EXCL_STOP
 #else
     Q_UNUSED(modelPath);
     emit modelLoadError("Stable Diffusion support is not enabled. Rebuild with ENABLE_STABLE_DIFFUSION=ON");
@@ -97,6 +99,7 @@ bool SDWorker::loadModel(const QString &modelPath)
 #endif
 }
 
+// LCOV_EXCL_START — requires a previously loaded SD model
 void SDWorker::unloadModel()
 {
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -151,6 +154,8 @@ void SDWorker::requestStop()
     m_stopRequested.store(true);
 }
 
+// LCOV_EXCL_STOP
+
 void SDWorker::generateTexture(const QString &prompt, const QString &outputPath)
 {
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -165,6 +170,7 @@ void SDWorker::generateTexture(const QString &prompt, const QString &outputPath)
         return;
     }
 
+    // LCOV_EXCL_START — requires a loaded SD model for generation
     m_stopRequested.store(false);
     m_isGenerating.store(true);
 
@@ -256,6 +262,7 @@ void SDWorker::generateTexture(const QString &prompt, const QString &outputPath)
     } else {
         emit generationError(QString("Failed to save texture to: %1").arg(outputPath));
     }
+    // LCOV_EXCL_STOP
 #else
     Q_UNUSED(prompt);
     Q_UNUSED(outputPath);
@@ -276,6 +283,7 @@ void SDWorker::generateFromImage(const QString &prompt, const QString &inputImag
         return;
     }
 
+    // LCOV_EXCL_START — requires a loaded SD model and input image
     // Load input image
     QImage inputImg(inputImagePath);
     if (inputImg.isNull()) {
@@ -376,6 +384,7 @@ void SDWorker::generateFromImage(const QString &prompt, const QString &inputImag
     } else {
         emit generationError(QString("Failed to save img2img texture to: %1").arg(outputPath));
     }
+    // LCOV_EXCL_STOP
 #else
     Q_UNUSED(prompt);
     Q_UNUSED(inputImagePath);

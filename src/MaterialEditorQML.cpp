@@ -2,7 +2,9 @@
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "LLMManager.h"
+#ifdef ENABLE_STABLE_DIFFUSION
 #include "SDManager.h"
+#endif
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "RTShaderHelper.h"
@@ -80,6 +82,7 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     connect(llmManager, &LLMManager::generationError, this, &MaterialEditorQML::onLLMGenerationError);
     connect(llmManager, &LLMManager::modelLoadedChanged, this, &MaterialEditorQML::onLLMModelLoadedChanged);
 
+#ifdef ENABLE_STABLE_DIFFUSION
     // Connect to SDManager signals
     SDManager *sdManager = SDManager::instance();
     connect(sdManager, &SDManager::generationStarted, this, &MaterialEditorQML::onSDGenerationStarted);
@@ -87,6 +90,7 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     connect(sdManager, &SDManager::generationCompleted, this, &MaterialEditorQML::onSDGenerationCompleted);
     connect(sdManager, &SDManager::generationError, this, &MaterialEditorQML::onSDGenerationError);
     connect(sdManager, &SDManager::modelLoadedChanged, this, &MaterialEditorQML::onSDModelLoadedChanged);
+#endif
 }
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -2776,7 +2780,7 @@ void MaterialEditorQML::onLLMGenerationCompleted(const QString &generatedText)
     // and SD is available with a loaded model
 #ifdef ENABLE_STABLE_DIFFUSION
     SDManager *sdManager = SDManager::instance();
-    if (sdManager->isModelLoaded()) {
+    if (sdManager->isModelLoaded() && !sdManager->isGenerating()) {
         // Look for texture_unit blocks with texture references that look like AI placeholders
         QRegularExpression texRegex(R"(texture\s+["\']?([^"'\s]+)["\']?)");
         QRegularExpressionMatchIterator it = texRegex.globalMatch(cleanedText);
@@ -2840,12 +2844,20 @@ bool MaterialEditorQML::stableDiffusionEnabled() const
 
 bool MaterialEditorQML::sdModelLoaded() const
 {
+#ifdef ENABLE_STABLE_DIFFUSION
     return SDManager::instance()->isModelLoaded();
+#else
+    return false;
+#endif
 }
 
 bool MaterialEditorQML::sdIsGenerating() const
 {
+#ifdef ENABLE_STABLE_DIFFUSION
     return SDManager::instance()->isGenerating();
+#else
+    return false;
+#endif
 }
 
 // Stable Diffusion texture generation
@@ -2935,10 +2947,14 @@ void MaterialEditorQML::editTextureFromPrompt(const QString &prompt, float stren
 
 void MaterialEditorQML::stopTextureGeneration()
 {
+#ifdef ENABLE_STABLE_DIFFUSION
     SDManager::instance()->stopGeneration();
+    emit sdIsGeneratingChanged();
+#endif
 }
 
 // LCOV_EXCL_START — SD signal handlers require a loaded SD model
+#ifdef ENABLE_STABLE_DIFFUSION
 void MaterialEditorQML::onSDGenerationStarted()
 {
     m_sdGenerationProgress = 0.0f;
@@ -3038,6 +3054,7 @@ void MaterialEditorQML::onSDModelLoadedChanged()
 {
     emit sdModelLoadedChanged();
 }
+#endif // ENABLE_STABLE_DIFFUSION
 // LCOV_EXCL_STOP
 
 // Undo/Redo Implementation

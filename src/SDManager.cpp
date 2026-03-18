@@ -378,6 +378,7 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
             outputDir.mkpath(".");
         }
         QString fileName = outputFileName.trimmed();
+        fileName = QFileInfo(fileName).fileName(); // Strip path separators to prevent path traversal
         // If it already ends with .png, keep it; otherwise replace/add .png
         if (!fileName.endsWith(".png", Qt::CaseInsensitive) &&
             !fileName.endsWith(".jpg", Qt::CaseInsensitive)) {
@@ -422,6 +423,7 @@ void SDManager::editTexture(const QString &prompt, const QString &inputImagePath
             outputDir.mkpath(".");
         }
         QString fileName = outputFileName.trimmed();
+        fileName = QFileInfo(fileName).fileName(); // Strip path separators to prevent path traversal
         if (!fileName.endsWith(".png", Qt::CaseInsensitive) &&
             !fileName.endsWith(".jpg", Qt::CaseInsensitive)) {
             fileName.replace(QRegularExpression(R"(\.\w+$)"), "");

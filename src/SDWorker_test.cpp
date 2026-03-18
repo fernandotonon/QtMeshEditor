@@ -125,6 +125,7 @@ TEST_F(SDWorkerTest, GenerateWithoutModel)
     SDWorker worker;
     QSignalSpy errorSpy(&worker, &SDWorker::generationError);
     worker.generateTexture("test prompt", "/tmp/test.png");
+    QCoreApplication::processEvents();
     ASSERT_EQ(errorSpy.count(), 1);
     EXPECT_TRUE(errorSpy.first().first().toString().contains("No SD model loaded"));
 }
