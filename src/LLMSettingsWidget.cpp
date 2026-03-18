@@ -6,18 +6,25 @@
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDir>
+#include <QDesktopServices>
+#include <QUrl>
 
 LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle("AI Model Settings");
-    setMinimumSize(500, 450);
+    setMinimumSize(550, 500);
 
     setupUI();
     loadCurrentSettings();
     updateModelList();
     updateRecommendedModelsList();
     updateStatus();
+#ifdef ENABLE_STABLE_DIFFUSION
+    updateSDModelList();
+    updateSDRecommendedModelsList();
+    updateSDStatus();
+#endif
 
     // Connect to LLMManager signals
     LLMManager *manager = LLMManager::instance();
@@ -25,6 +32,15 @@ LLMSettingsWidget::LLMSettingsWidget(QWidget *parent)
     connect(manager, &LLMManager::modelLoadError, this, &LLMSettingsWidget::onModelLoadError);
     connect(manager, &LLMManager::modelUnloaded, this, &LLMSettingsWidget::onModelUnloaded);
     connect(manager, &LLMManager::availableModelsChanged, this, &LLMSettingsWidget::updateModelList);
+
+#ifdef ENABLE_STABLE_DIFFUSION
+    // Connect to SDManager signals
+    SDManager *sdManager = SDManager::instance();
+    connect(sdManager, &SDManager::modelLoadCompleted, this, &LLMSettingsWidget::onSDModelLoadCompleted);
+    connect(sdManager, &SDManager::modelLoadError, this, &LLMSettingsWidget::onSDModelLoadError);
+    connect(sdManager, &SDManager::modelUnloaded, this, &LLMSettingsWidget::onSDModelUnloaded);
+    connect(sdManager, &SDManager::availableModelsChanged, this, &LLMSettingsWidget::updateSDModelList);
+#endif
 
     // Connect to ModelDownloader signals
     ModelDownloader *downloader = ModelDownloader::instance();
@@ -47,9 +63,20 @@ void LLMSettingsWidget::setupUI()
     setupSettingsTab(settingsTab);
     setupDownloadTab(downloadTab);
 
-    m_tabWidget->addTab(modelsTab, "Models");
-    m_tabWidget->addTab(settingsTab, "Settings");
-    m_tabWidget->addTab(downloadTab, "Download");
+    m_tabWidget->addTab(modelsTab, "LLM Models");
+    m_tabWidget->addTab(settingsTab, "LLM Settings");
+    m_tabWidget->addTab(downloadTab, "LLM Download");
+
+#ifdef ENABLE_STABLE_DIFFUSION
+    QWidget *sdModelsTab = new QWidget();
+    QWidget *sdSettingsTab = new QWidget();
+
+    setupSDModelsTab(sdModelsTab);
+    setupSDSettingsTab(sdSettingsTab);
+
+    m_tabWidget->addTab(sdModelsTab, "SD Models");
+    m_tabWidget->addTab(sdSettingsTab, "SD Settings");
+#endif
 
     mainLayout->addWidget(m_tabWidget);
 
@@ -485,6 +512,13 @@ void LLMSettingsWidget::onDownloadCompleted(const QString &modelName, const QStr
     updateModelList();
     updateRecommendedModelsList();
 
+#ifdef ENABLE_STABLE_DIFFUSION
+    SDManager::instance()->scanForModels();
+    updateSDModelList();
+    updateSDRecommendedModelsList();
+    m_sdDownloadButton->setEnabled(true);
+#endif
+
     QMessageBox::information(this, "Download Complete",
                              QString("Model %1 has been downloaded successfully.").arg(modelName));
 }
@@ -538,3 +572,292 @@ void LLMSettingsWidget::onResetDefaults()
 
     m_applyButton->setEnabled(true);
 }
+
+// ============ SD Models Tab ============
+
+#ifdef ENABLE_STABLE_DIFFUSION
+void LLMSettingsWidget::setupSDModelsTab(QWidget *parent)
+{
+    QVBoxLayout *layout = new QVBoxLayout(parent);
+
+    // Status
+    QGroupBox *statusGroup = new QGroupBox("SD Model Status", parent);
+    QVBoxLayout *statusLayout = new QVBoxLayout(statusGroup);
+    m_sdStatusLabel = new QLabel("No SD model loaded", statusGroup);
+    m_sdStatusLabel->setWordWrap(true);
+    statusLayout->addWidget(m_sdStatusLabel);
+    layout->addWidget(statusGroup);
+
+    // Model selection
+    QGroupBox *modelGroup = new QGroupBox("Available SD Models", parent);
+    QVBoxLayout *modelLayout = new QVBoxLayout(modelGroup);
+
+    QHBoxLayout *comboLayout = new QHBoxLayout();
+    m_sdModelCombo = new QComboBox(modelGroup);
+    m_sdModelCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    comboLayout->addWidget(new QLabel("Select Model:", modelGroup));
+    comboLayout->addWidget(m_sdModelCombo);
+    modelLayout->addLayout(comboLayout);
+
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    m_sdLoadButton = new QPushButton("Load Model", modelGroup);
+    m_sdUnloadButton = new QPushButton("Unload", modelGroup);
+    m_sdUnloadButton->setEnabled(false);
+    m_sdRefreshButton = new QPushButton("Refresh", modelGroup);
+    buttonLayout->addWidget(m_sdLoadButton);
+    buttonLayout->addWidget(m_sdUnloadButton);
+    buttonLayout->addWidget(m_sdRefreshButton);
+    buttonLayout->addStretch();
+
+    QPushButton *openFolderBtn = new QPushButton("Open Folder", modelGroup);
+    connect(openFolderBtn, &QPushButton::clicked, [this]() {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(SDManager::instance()->modelsDirectory()));
+    });
+    buttonLayout->addWidget(openFolderBtn);
+    modelLayout->addLayout(buttonLayout);
+
+    // Directory
+    QHBoxLayout *dirLayout = new QHBoxLayout();
+    dirLayout->addWidget(new QLabel("Models Directory:", modelGroup));
+    m_sdDirectoryEdit = new QLineEdit(modelGroup);
+    m_sdDirectoryEdit->setReadOnly(true);
+    dirLayout->addWidget(m_sdDirectoryEdit);
+    modelLayout->addLayout(dirLayout);
+
+    layout->addWidget(modelGroup);
+
+    // Recommended models
+    QGroupBox *recommendedGroup = new QGroupBox("Recommended SD Models", parent);
+    QVBoxLayout *recLayout = new QVBoxLayout(recommendedGroup);
+
+    m_sdRecommendedModelsList = new QListWidget(recommendedGroup);
+    m_sdRecommendedModelsList->setSelectionMode(QAbstractItemView::SingleSelection);
+    recLayout->addWidget(m_sdRecommendedModelsList);
+
+    QHBoxLayout *dlLayout = new QHBoxLayout();
+    m_sdDownloadButton = new QPushButton("Download Selected", recommendedGroup);
+    dlLayout->addWidget(m_sdDownloadButton);
+    dlLayout->addStretch();
+    recLayout->addLayout(dlLayout);
+
+    layout->addWidget(recommendedGroup);
+
+    layout->addStretch();
+
+    // Connections
+    connect(m_sdLoadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onSDLoadModelClicked);
+    connect(m_sdUnloadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onSDUnloadModelClicked);
+    connect(m_sdRefreshButton, &QPushButton::clicked, this, &LLMSettingsWidget::onSDRefreshModelsClicked);
+    connect(m_sdDownloadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onSDDownloadModelClicked);
+}
+
+void LLMSettingsWidget::setupSDSettingsTab(QWidget *parent)
+{
+    QVBoxLayout *layout = new QVBoxLayout(parent);
+
+    QGroupBox *genGroup = new QGroupBox("Generation Settings", parent);
+    QFormLayout *formLayout = new QFormLayout(genGroup);
+
+    m_sdStepsSpinBox = new QSpinBox(genGroup);
+    m_sdStepsSpinBox->setRange(1, 100);
+    formLayout->addRow("Steps:", m_sdStepsSpinBox);
+
+    m_sdCfgScaleSpinBox = new QDoubleSpinBox(genGroup);
+    m_sdCfgScaleSpinBox->setRange(1.0, 20.0);
+    m_sdCfgScaleSpinBox->setSingleStep(0.5);
+    m_sdCfgScaleSpinBox->setDecimals(1);
+    formLayout->addRow("CFG Scale:", m_sdCfgScaleSpinBox);
+
+    m_sdWidthSpinBox = new QSpinBox(genGroup);
+    m_sdWidthSpinBox->setRange(256, 1024);
+    m_sdWidthSpinBox->setSingleStep(128);
+    m_sdWidthSpinBox->setSuffix(" px");
+    formLayout->addRow("Width:", m_sdWidthSpinBox);
+
+    m_sdHeightSpinBox = new QSpinBox(genGroup);
+    m_sdHeightSpinBox->setRange(256, 1024);
+    m_sdHeightSpinBox->setSingleStep(128);
+    m_sdHeightSpinBox->setSuffix(" px");
+    formLayout->addRow("Height:", m_sdHeightSpinBox);
+
+    m_sdNegativePromptEdit = new QLineEdit(genGroup);
+    m_sdNegativePromptEdit->setPlaceholderText("blurry, low quality...");
+    formLayout->addRow("Negative Prompt:", m_sdNegativePromptEdit);
+
+    layout->addWidget(genGroup);
+
+    // Apply button
+    QHBoxLayout *buttonLayout = new QHBoxLayout();
+    m_sdApplyButton = new QPushButton("Apply", parent);
+    m_sdApplyButton->setEnabled(false);
+    buttonLayout->addStretch();
+    buttonLayout->addWidget(m_sdApplyButton);
+    layout->addLayout(buttonLayout);
+
+    layout->addStretch();
+
+    // Load current settings
+    SDSettings sdSettings = SDManager::instance()->getSettings();
+    m_sdStepsSpinBox->setValue(sdSettings.steps);
+    m_sdCfgScaleSpinBox->setValue(static_cast<double>(sdSettings.cfgScale));
+    m_sdWidthSpinBox->setValue(sdSettings.width);
+    m_sdHeightSpinBox->setValue(sdSettings.height);
+    m_sdNegativePromptEdit->setText(sdSettings.negativePrompt);
+
+    // Track changes
+    connect(m_sdStepsSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &LLMSettingsWidget::onSDSettingsChanged);
+    connect(m_sdCfgScaleSpinBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &LLMSettingsWidget::onSDSettingsChanged);
+    connect(m_sdWidthSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &LLMSettingsWidget::onSDSettingsChanged);
+    connect(m_sdHeightSpinBox, QOverload<int>::of(&QSpinBox::valueChanged), this, &LLMSettingsWidget::onSDSettingsChanged);
+    connect(m_sdNegativePromptEdit, &QLineEdit::textChanged, this, &LLMSettingsWidget::onSDSettingsChanged);
+    connect(m_sdApplyButton, &QPushButton::clicked, this, &LLMSettingsWidget::onSDApplySettings);
+}
+
+void LLMSettingsWidget::updateSDModelList()
+{
+    m_sdModelCombo->clear();
+    m_sdDirectoryEdit->setText(SDManager::instance()->modelsDirectory());
+
+    QStringList models = SDManager::instance()->availableModels();
+    if (models.isEmpty()) {
+        m_sdModelCombo->addItem("No SD models found - download one first");
+        m_sdLoadButton->setEnabled(false);
+    } else {
+        m_sdModelCombo->addItems(models);
+        m_sdLoadButton->setEnabled(true);
+    }
+}
+
+void LLMSettingsWidget::updateSDRecommendedModelsList()
+{
+    m_sdRecommendedModelsList->clear();
+
+    QVariantList models = SDManager::instance()->getRecommendedModelsInfo();
+    for (const QVariant &v : models) {
+        QVariantMap model = v.toMap();
+        QString text = QString("%1\n%2 (%3)")
+                           .arg(model["name"].toString())
+                           .arg(model["description"].toString())
+                           .arg(formatFileSize(model["size"].toLongLong()));
+
+        QListWidgetItem *item = new QListWidgetItem(text, m_sdRecommendedModelsList);
+        item->setData(Qt::UserRole, model["url"]);
+        item->setData(Qt::UserRole + 1, model["fileName"]);
+        item->setData(Qt::UserRole + 2, model["name"]);
+
+        if (model["isDownloaded"].toBool()) {
+            item->setText(text + " [Downloaded]");
+            item->setForeground(QColor(0, 128, 0));
+        }
+    }
+}
+
+void LLMSettingsWidget::updateSDStatus()
+{
+    SDManager *manager = SDManager::instance();
+
+    if (manager->isModelLoaded()) {
+        m_sdStatusLabel->setText(QString("SD Model loaded: %1").arg(manager->currentModelName()));
+        m_sdStatusLabel->setStyleSheet("color: green;");
+        m_sdUnloadButton->setEnabled(true);
+        m_sdLoadButton->setEnabled(true);
+    } else {
+        m_sdStatusLabel->setText("No SD model loaded");
+        m_sdStatusLabel->setStyleSheet("color: gray;");
+        m_sdUnloadButton->setEnabled(false);
+    }
+}
+
+void LLMSettingsWidget::onSDLoadModelClicked()
+{
+    QString modelName = m_sdModelCombo->currentText();
+    if (modelName.isEmpty() || modelName.startsWith("No SD")) return;
+
+    m_sdLoadButton->setEnabled(false);
+    m_sdStatusLabel->setText("Loading SD model...");
+    m_sdStatusLabel->setStyleSheet("color: orange;");
+
+    SDManager::instance()->loadModel(modelName);
+}
+
+void LLMSettingsWidget::onSDUnloadModelClicked()
+{
+    SDManager::instance()->unloadModel();
+}
+
+void LLMSettingsWidget::onSDRefreshModelsClicked()
+{
+    SDManager::instance()->scanForModels();
+    updateSDRecommendedModelsList();
+}
+
+void LLMSettingsWidget::onSDDownloadModelClicked()
+{
+    QListWidgetItem *item = m_sdRecommendedModelsList->currentItem();
+    if (!item) {
+        QMessageBox::information(this, "No Model Selected", "Please select an SD model to download.");
+        return;
+    }
+
+    QString url = item->data(Qt::UserRole).toString();
+    QString fileName = item->data(Qt::UserRole + 1).toString();
+    QString modelName = item->data(Qt::UserRole + 2).toString();
+
+    QString destPath = QDir(SDManager::instance()->modelsDirectory()).filePath(fileName);
+
+    if (QFileInfo::exists(destPath)) {
+        QMessageBox::StandardButton reply = QMessageBox::question(
+            this, "File Exists",
+            QString("The SD model %1 already exists. Re-download?").arg(modelName),
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply == QMessageBox::No) return;
+        QFile::remove(destPath);
+    }
+
+    m_sdDownloadButton->setEnabled(false);
+    m_downloadStatusLabel->setText(QString("Downloading %1...").arg(modelName));
+
+    ModelDownloader::instance()->startDownload(url, destPath, modelName);
+}
+
+void LLMSettingsWidget::onSDModelLoadCompleted(const QString &modelName)
+{
+    m_sdStatusLabel->setText(QString("SD Model loaded: %1").arg(modelName));
+    m_sdStatusLabel->setStyleSheet("color: green;");
+    m_sdLoadButton->setEnabled(true);
+    m_sdUnloadButton->setEnabled(true);
+}
+
+void LLMSettingsWidget::onSDModelLoadError(const QString &error)
+{
+    m_sdStatusLabel->setText(QString("Error: %1").arg(error));
+    m_sdStatusLabel->setStyleSheet("color: red;");
+    m_sdLoadButton->setEnabled(true);
+    QMessageBox::warning(this, "SD Model Load Error", error);
+}
+
+void LLMSettingsWidget::onSDModelUnloaded()
+{
+    updateSDStatus();
+}
+
+void LLMSettingsWidget::onSDSettingsChanged()
+{
+    m_sdApplyButton->setEnabled(true);
+}
+
+void LLMSettingsWidget::onSDApplySettings()
+{
+    SDSettings settings = SDManager::instance()->getSettings();
+    settings.steps = m_sdStepsSpinBox->value();
+    settings.cfgScale = static_cast<float>(m_sdCfgScaleSpinBox->value());
+    settings.width = m_sdWidthSpinBox->value();
+    settings.height = m_sdHeightSpinBox->value();
+    settings.negativePrompt = m_sdNegativePromptEdit->text();
+
+    SDManager::instance()->setSettings(settings);
+    m_sdApplyButton->setEnabled(false);
+
+    QMessageBox::information(this, "Settings Applied", "SD settings have been saved.");
+}
+#endif // ENABLE_STABLE_DIFFUSION

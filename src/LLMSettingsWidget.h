@@ -14,6 +14,9 @@
 #include <QGroupBox>
 #include <QTabWidget>
 #include "LLMManager.h"
+#ifdef ENABLE_STABLE_DIFFUSION
+#include "SDManager.h"
+#endif
 #include "ModelDownloader.h"
 
 class LLMSettingsWidget : public QDialog
@@ -44,15 +47,37 @@ private slots:
     void onApplySettings();
     void onResetDefaults();
 
+#ifdef ENABLE_STABLE_DIFFUSION
+    // SD slots
+    void onSDLoadModelClicked();
+    void onSDUnloadModelClicked();
+    void onSDRefreshModelsClicked();
+    void onSDDownloadModelClicked();
+    void onSDModelLoadCompleted(const QString &modelName);
+    void onSDModelLoadError(const QString &error);
+    void onSDModelUnloaded();
+    void onSDSettingsChanged();
+    void onSDApplySettings();
+#endif
+
 private:
     void setupUI();
     void setupModelsTab(QWidget *parent);
     void setupSettingsTab(QWidget *parent);
     void setupDownloadTab(QWidget *parent);
+#ifdef ENABLE_STABLE_DIFFUSION
+    void setupSDModelsTab(QWidget *parent);
+    void setupSDSettingsTab(QWidget *parent);
+#endif
 
     void updateModelList();
     void updateRecommendedModelsList();
     void updateStatus();
+#ifdef ENABLE_STABLE_DIFFUSION
+    void updateSDModelList();
+    void updateSDRecommendedModelsList();
+    void updateSDStatus();
+#endif
     void loadCurrentSettings();
 
     QString formatFileSize(qint64 bytes) const;
@@ -89,6 +114,26 @@ private:
     QProgressBar *m_downloadProgressBar;
     QLabel *m_downloadStatusLabel;
     QLabel *m_downloadSpeedLabel;
+
+#ifdef ENABLE_STABLE_DIFFUSION
+    // SD Models tab
+    QComboBox *m_sdModelCombo;
+    QPushButton *m_sdLoadButton;
+    QPushButton *m_sdUnloadButton;
+    QPushButton *m_sdRefreshButton;
+    QLineEdit *m_sdDirectoryEdit;
+    QLabel *m_sdStatusLabel;
+    QListWidget *m_sdRecommendedModelsList;
+    QPushButton *m_sdDownloadButton;
+
+    // SD Settings tab
+    QSpinBox *m_sdStepsSpinBox;
+    QDoubleSpinBox *m_sdCfgScaleSpinBox;
+    QLineEdit *m_sdNegativePromptEdit;
+    QSpinBox *m_sdWidthSpinBox;
+    QSpinBox *m_sdHeightSpinBox;
+    QPushButton *m_sdApplyButton;
+#endif
 };
 
 #endif // LLMSETTINGSWIDGET_H
