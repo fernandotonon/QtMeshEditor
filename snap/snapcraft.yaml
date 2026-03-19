@@ -7,6 +7,9 @@ description: |
   with AI assistance, and inspect skeletons and bone weights. Supports FBX,
   glTF, OBJ, Collada, STL and more. Includes CLI for batch processing and
   an MCP server for AI agent integration.
+
+  CLI: Run 'qtmesheditor.qtmesh' or create a shortcut with:
+    sudo snap alias qtmesheditor.qtmesh qtmesh
 license: MIT
 contact: https://github.com/fernandotonon/QtMeshEditor/issues
 issues: https://github.com/fernandotonon/QtMeshEditor/issues
