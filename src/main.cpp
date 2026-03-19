@@ -63,7 +63,11 @@ int main(int argc, char *argv[])
         }
         for (int i = 1; i < argc; ++i) {
             QString arg(argv[i]);
-            if (arg == "--cli") { cliMode = true; break; }
+            if (arg == "--cli" || arg == "--help" || arg == "-h" ||
+                arg == "--version" || arg == "-v") {
+                cliMode = true;
+                break;
+            }
         }
         if (!cliMode) {
             for (int i = 1; i < argc; ++i) {

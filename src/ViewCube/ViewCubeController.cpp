@@ -50,7 +50,13 @@ ViewCubeController* ViewCubeController::qmlInstance(QQmlEngine* engine, QJSEngin
 void ViewCubeController::initWidget()
 {
     m_cubeWidget = new QQuickWidget();
+#if defined(Q_OS_LINUX) || defined(Q_OS_WIN)
+    // On Linux/Windows, Qt::Tool stays on top of all app windows.
+    // Use Qt::SubWindow to avoid taskbar entry without staying on top.
+    m_cubeWidget->setWindowFlags(Qt::FramelessWindowHint | Qt::SubWindow);
+#else
     m_cubeWidget->setWindowFlags(Qt::FramelessWindowHint | Qt::Tool);
+#endif
     m_cubeWidget->setAttribute(Qt::WA_TranslucentBackground);
     m_cubeWidget->setClearColor(Qt::transparent);
     m_cubeWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
