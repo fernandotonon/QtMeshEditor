@@ -239,8 +239,9 @@ RULES:
 1. Output ONLY the material script - no markdown, no explanations
 2. Keep the same material name if modifying an existing material
 3. All color values must be NUMBERS between 0.0 and 1.0
-4. Do NOT add texture_unit unless specifically asked for textures
-5. For simple color changes, only modify ambient/diffuse/specular/emissive values
+4. When the material needs a realistic look (e.g., wood, metal, stone, fabric) AND available textures are listed below, add a texture_unit with a descriptive filename like "oak_wood.png" or "rusty_metal.png"
+5. Do NOT add texture_unit if no available textures are listed — the system may not support texture generation
+6. For simple color changes, only modify ambient/diffuse/specular/emissive values
 
 BASIC STRUCTURE:
 material NAME

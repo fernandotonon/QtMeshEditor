@@ -50,14 +50,14 @@ ApplicationWindow {
             statusText.text = "AI generating material..."
             statusText.color = "orange"
         }
-        
+
         function onAiGenerationCompleted(generatedScript) {
             aiStatusIndicator.isGenerating = false
             aiStatusIndicator.hasError = false
-            
+
             // Update the text area with the new script
             materialTextArea.text = generatedScript
-            
+
             // Validate the script first
             if (MaterialEditorQML.validateMaterialScript(generatedScript)) {
                 // Auto-apply if valid
@@ -70,13 +70,20 @@ ApplicationWindow {
                 statusText.color = "orange"
             }
         }
-        
+
         function onAiGenerationError(error) {
             aiStatusIndicator.isGenerating = false
             aiStatusIndicator.hasError = true
             aiStatusIndicator.errorMessage = error
             statusText.text = "AI error: " + error
             statusText.color = "red"
+        }
+
+        function onSdPendingForMaterialChanged() {
+            if (MaterialEditorQML.sdPendingForMaterial) {
+                statusText.text = "Generating texture..."
+                statusText.color = "orange"
+            }
         }
     }
 
@@ -718,9 +725,9 @@ ApplicationWindow {
                                 }
                                 
                                 MenuItem {
-                                    text: "PBR Material"
+                                    text: "Normal Map Material"
                                     onTriggered: {
-                                        materialTextArea.text = "material PBRMaterial\n{\n    technique\n    {\n        pass\n        {\n            ambient 0.1 0.1 0.1 1.0\n            diffuse 0.8 0.8 0.8 1.0\n            specular 0.04 0.04 0.04 1.0\n            \n            texture_unit // Albedo\n            {\n                texture albedo.png\n            }\n            \n            texture_unit // Normal\n            {\n                texture normal.png\n            }\n            \n            texture_unit // Roughness\n            {\n                texture roughness.png\n            }\n        }\n    }\n}"
+                                        materialTextArea.text = "material NormalMapMaterial\n{\n    technique\n    {\n        pass\n        {\n            ambient 0.2 0.2 0.2 1.0\n            diffuse 0.8 0.8 0.8 1.0\n            specular 0.5 0.5 0.5 32.0\n            \n            texture_unit\n            {\n                texture diffuse.png\n            }\n            \n            texture_unit normal_map\n            {\n                texture normal.png\n            }\n        }\n    }\n}"
                                     }
                                 }
                             }
@@ -865,7 +872,7 @@ ApplicationWindow {
                                 ThemedTextField {
                                     id: aiPromptInput
                                     Layout.fillWidth: true
-                                    placeholderText: "Type a command like: 'add texture glow.png', 'make it transparent', 'create PBR material'"
+                                    placeholderText: "Describe the material (e.g., 'rusty metal', 'shiny glass', 'oak wood with normal map')"
                                     enabled: !aiStatusIndicator.isGenerating && LLMManager.modelLoaded
 
                                     background: Rectangle {
@@ -903,10 +910,10 @@ ApplicationWindow {
                                 }
                             }
 
-                            // Progress indicator for local LLM
+                            // Combined progress indicator for LLM + SD
                             RowLayout {
                                 Layout.fillWidth: true
-                                visible: aiStatusIndicator.isGenerating && LLMManager.modelLoaded
+                                visible: (aiStatusIndicator.isGenerating || MaterialEditorQML.sdPendingForMaterial || MaterialEditorQML.sdIsGenerating) && LLMManager.modelLoaded
                                 spacing: 8
 
                                 ProgressBar {
@@ -914,11 +921,17 @@ ApplicationWindow {
                                     Layout.fillWidth: true
                                     from: 0
                                     to: 1
-                                    value: MaterialEditorQML.llmGenerationProgress
+                                    value: MaterialEditorQML.sdPendingForMaterial || MaterialEditorQML.sdIsGenerating ?
+                                           MaterialEditorQML.sdGenerationProgress :
+                                           MaterialEditorQML.llmGenerationProgress
                                 }
 
                                 Text {
-                                    text: Math.round(MaterialEditorQML.llmGenerationProgress * 100) + "%"
+                                    property real displayProgress: MaterialEditorQML.sdPendingForMaterial || MaterialEditorQML.sdIsGenerating ?
+                                                                   MaterialEditorQML.sdGenerationProgress :
+                                                                   MaterialEditorQML.llmGenerationProgress
+                                    text: (MaterialEditorQML.sdPendingForMaterial || MaterialEditorQML.sdIsGenerating ? "Texture: " : "LLM: ") +
+                                          Math.round(displayProgress * 100) + "%"
                                     font.pointSize: 9
                                     color: textColor
                                 }

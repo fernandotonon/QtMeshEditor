@@ -44,7 +44,6 @@ public:
 
 public slots:
     void generateTexture(const QString &prompt, const QString &outputPath);
-    void generateFromImage(const QString &prompt, const QString &inputImagePath, const QString &outputPath, float strength);
 
 signals:
     void modelLoaded(const QString &modelPath);
@@ -70,6 +69,7 @@ private:
 #ifdef ENABLE_STABLE_DIFFUSION
     sd_ctx_t *m_ctx = nullptr;
 
+    void recreateContext();
     static void progressCallback(int step, int steps, float time, void *data);
 #endif
 };
