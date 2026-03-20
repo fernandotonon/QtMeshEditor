@@ -48,6 +48,16 @@ GroupBox {
         // Lighting and Depth Settings
         GroupBox {
             title: "Lighting & Depth"
+            background: Rectangle {
+                color: MaterialEditorQML.panelColor
+                border.color: MaterialEditorQML.borderColor
+                border.width: 1
+                radius: 4
+            }
+            label: ThemedLabel {
+                text: parent.title
+                font.bold: true
+            }
             Layout.fillWidth: true
 
             ColumnLayout {
@@ -60,19 +70,61 @@ GroupBox {
                     spacing: 15
 
                     CheckBox {
+
                         text: "Lighting"
+
+                        contentItem: Text {
+
+                            text: parent.text
+
+                            color: textColor
+
+                            leftPadding: parent.indicator.width + parent.spacing
+
+                            verticalAlignment: Text.AlignVCenter
+
+                        }
+
                         checked: MaterialEditorQML.lightingEnabled
                         onCheckedChanged: MaterialEditorQML.setLightingEnabled(checked)
                     }
 
                     CheckBox {
+
                         text: "Depth Write"
+
+                        contentItem: Text {
+
+                            text: parent.text
+
+                            color: textColor
+
+                            leftPadding: parent.indicator.width + parent.spacing
+
+                            verticalAlignment: Text.AlignVCenter
+
+                        }
+
                         checked: MaterialEditorQML.depthWriteEnabled
                         onCheckedChanged: MaterialEditorQML.setDepthWriteEnabled(checked)
                     }
 
                     CheckBox {
+
                         text: "Depth Check"
+
+                        contentItem: Text {
+
+                            text: parent.text
+
+                            color: textColor
+
+                            leftPadding: parent.indicator.width + parent.spacing
+
+                            verticalAlignment: Text.AlignVCenter
+
+                        }
+
                         checked: MaterialEditorQML.depthCheckEnabled
                         onCheckedChanged: MaterialEditorQML.setDepthCheckEnabled(checked)
                     }
@@ -118,6 +170,16 @@ GroupBox {
         // Colors
         GroupBox {
             title: "Colors"
+            background: Rectangle {
+                color: MaterialEditorQML.panelColor
+                border.color: MaterialEditorQML.borderColor
+                border.width: 1
+                radius: 4
+            }
+            label: ThemedLabel {
+                text: parent.title
+                font.bold: true
+            }
             Layout.fillWidth: true
 
             GridLayout {
@@ -149,7 +211,21 @@ GroupBox {
                     }
                 }
                 CheckBox {
+
                     text: "Use Vertex Color"
+
+                    contentItem: Text {
+
+                        text: parent.text
+
+                        color: textColor
+
+                        leftPadding: parent.indicator.width + parent.spacing
+
+                        verticalAlignment: Text.AlignVCenter
+
+                    }
+
                     checked: MaterialEditorQML.useVertexColorToAmbient
                     onCheckedChanged: MaterialEditorQML.setUseVertexColorToAmbient(checked)
                 }
@@ -177,7 +253,21 @@ GroupBox {
                     }
                 }
                 CheckBox {
+
                     text: "Use Vertex Color"
+
+                    contentItem: Text {
+
+                        text: parent.text
+
+                        color: textColor
+
+                        leftPadding: parent.indicator.width + parent.spacing
+
+                        verticalAlignment: Text.AlignVCenter
+
+                    }
+
                     checked: MaterialEditorQML.useVertexColorToDiffuse
                     onCheckedChanged: MaterialEditorQML.setUseVertexColorToDiffuse(checked)
                 }
@@ -205,7 +295,21 @@ GroupBox {
                     }
                 }
                 CheckBox {
+
                     text: "Use Vertex Color"
+
+                    contentItem: Text {
+
+                        text: parent.text
+
+                        color: textColor
+
+                        leftPadding: parent.indicator.width + parent.spacing
+
+                        verticalAlignment: Text.AlignVCenter
+
+                    }
+
                     checked: MaterialEditorQML.useVertexColorToSpecular
                     onCheckedChanged: MaterialEditorQML.setUseVertexColorToSpecular(checked)
                 }
@@ -233,7 +337,21 @@ GroupBox {
                     }
                 }
                 CheckBox {
+
                     text: "Use Vertex Color"
+
+                    contentItem: Text {
+
+                        text: parent.text
+
+                        color: textColor
+
+                        leftPadding: parent.indicator.width + parent.spacing
+
+                        verticalAlignment: Text.AlignVCenter
+
+                    }
+
                     checked: MaterialEditorQML.useVertexColorToEmissive
                     onCheckedChanged: MaterialEditorQML.setUseVertexColorToEmissive(checked)
                 }
@@ -243,6 +361,16 @@ GroupBox {
         // Alpha and Material Properties
         GroupBox {
             title: "Alpha & Material"
+            background: Rectangle {
+                color: MaterialEditorQML.panelColor
+                border.color: MaterialEditorQML.borderColor
+                border.width: 1
+                radius: 4
+            }
+            label: ThemedLabel {
+                text: parent.title
+                font.bold: true
+            }
             Layout.fillWidth: true
 
             GridLayout {
@@ -339,6 +467,16 @@ GroupBox {
         // Blending
         GroupBox {
             title: "Blending"
+            background: Rectangle {
+                color: MaterialEditorQML.panelColor
+                border.color: MaterialEditorQML.borderColor
+                border.width: 1
+                radius: 4
+            }
+            label: ThemedLabel {
+                text: parent.title
+                font.bold: true
+            }
             Layout.fillWidth: true
 
             GridLayout {

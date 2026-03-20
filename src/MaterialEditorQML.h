@@ -133,6 +133,7 @@ class MaterialEditorQML : public QObject
     Q_PROPERTY(bool sdModelLoaded READ sdModelLoaded NOTIFY sdModelLoadedChanged)
     Q_PROPERTY(bool sdIsGenerating READ sdIsGenerating NOTIFY sdIsGeneratingChanged)
     Q_PROPERTY(float sdGenerationProgress READ sdGenerationProgress NOTIFY sdGenerationProgressChanged)
+    Q_PROPERTY(bool sdPendingForMaterial READ sdPendingForMaterial NOTIFY sdPendingForMaterialChanged)
 
 public:
     explicit MaterialEditorQML(QObject *parent = nullptr);
@@ -243,6 +244,7 @@ public:
     bool sdModelLoaded() const;
     bool sdIsGenerating() const;
     float sdGenerationProgress() const { return m_sdGenerationProgress; }
+    bool sdPendingForMaterial() const { return m_sdPendingForMaterial; }
 
     // Static factory for QML singleton
     static MaterialEditorQML* qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine);
@@ -388,7 +390,6 @@ public slots:
 
     // AI Texture Generation
     Q_INVOKABLE void generateTextureFromPrompt(const QString &prompt, int width = 0, int height = 0);
-    Q_INVOKABLE void editTextureFromPrompt(const QString &prompt, float strength = 0.5f);
     Q_INVOKABLE void stopTextureGeneration();
 
     // Undo/Redo functionality
@@ -500,6 +501,7 @@ signals:
     void sdGenerationProgressChanged();
     void sdTextureGenerated(const QString &filePath);
     void sdGenerationError(const QString &error);
+    void sdPendingForMaterialChanged();
 
 private:
     void updateTechniqueList();
@@ -610,6 +612,8 @@ private:
 
     // Stable Diffusion
     float m_sdGenerationProgress = 0.0f;
+    bool m_sdPendingForMaterial = false; // True when SD is generating a texture triggered by LLM
+    QString m_pendingMaterialScript; // Deferred material script waiting for SD
 
     // Undo/Redo stacks
     QStringList m_undoStack;
@@ -630,6 +634,7 @@ private slots:
     void onSDGenerationProgress();
     void onSDGenerationCompleted(const QString &outputPath);
     void onSDGenerationError(const QString &error);
+    void onSDGenerationStopped();
     void onSDModelLoadedChanged();
 #endif
 

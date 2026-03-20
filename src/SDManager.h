@@ -104,7 +104,7 @@ public slots:
     Q_INVOKABLE void scanForModels();
 
     Q_INVOKABLE void generateTexture(const QString &prompt, int width = 0, int height = 0, const QString &outputFileName = QString());
-    Q_INVOKABLE void editTexture(const QString &prompt, const QString &inputImagePath, float strength = 0.5f, const QString &outputFileName = QString());
+    // img2img disabled — crashes on macOS Metal. Edits use txt2img with combined prompt.
     Q_INVOKABLE void stopGeneration();
     Q_INVOKABLE void tryAutoLoadModel();
 

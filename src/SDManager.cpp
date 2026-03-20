@@ -252,7 +252,7 @@ QString SDManager::enhanceTexturePrompt(const QString &prompt)
     }
 
     // Add 3D-specific keywords
-    enhanced += ", flat surface, top-down view, even lighting, PBR material";
+    enhanced += ", flat surface, top-down view, even lighting, normal map compatible";
 
     return enhanced;
 }
@@ -404,51 +404,6 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
     QMetaObject::invokeMethod(m_worker, [this, enhancedPrompt, outputPath, genSettings]() {
         m_worker->setSettings(genSettings);
         m_worker->generateTexture(enhancedPrompt, outputPath);
-    }, Qt::QueuedConnection);
-    // LCOV_EXCL_STOP
-}
-
-void SDManager::editTexture(const QString &prompt, const QString &inputImagePath, float strength, const QString &outputFileName)
-{
-    if (!isModelLoaded()) {
-        emit generationError("No SD model loaded. Please load a model first.");
-        return;
-    }
-
-    // LCOV_EXCL_START — requires a loaded SD model
-    QString outputPath;
-    if (!outputFileName.isEmpty()) {
-        QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
-        QDir outputDir(QDir(dataPath).filePath("generated_textures"));
-        if (!outputDir.exists()) {
-            outputDir.mkpath(".");
-        }
-        QString fileName = outputFileName.trimmed();
-        fileName = QFileInfo(fileName).fileName(); // Strip path separators to prevent path traversal
-        if (!fileName.endsWith(".png", Qt::CaseInsensitive) &&
-            !fileName.endsWith(".jpg", Qt::CaseInsensitive)) {
-            fileName.replace(QRegularExpression(R"(\.\w+$)"), "");
-            fileName += ".png";
-        }
-        outputPath = outputDir.filePath(fileName);
-    } else {
-        outputPath = generateOutputPath();
-    }
-
-    float clampedStrength = qBound(0.0f, strength, 1.0f);
-
-    // Enhance prompt for texture editing
-    QString enhancedPrompt = enhanceTexturePrompt(prompt);
-
-    SDSettings genSettings = m_settings;
-    if (genSettings.negativePrompt.isEmpty() ||
-        genSettings.negativePrompt == "blurry, low quality, distorted, simple, cartoon") {
-        genSettings.negativePrompt = getTextureNegativePrompt();
-    }
-
-    QMetaObject::invokeMethod(m_worker, [this, enhancedPrompt, inputImagePath, outputPath, clampedStrength, genSettings]() {
-        m_worker->setSettings(genSettings);
-        m_worker->generateFromImage(enhancedPrompt, inputImagePath, outputPath, clampedStrength);
     }, Qt::QueuedConnection);
     // LCOV_EXCL_STOP
 }
