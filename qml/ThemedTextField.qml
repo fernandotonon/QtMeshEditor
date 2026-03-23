@@ -5,7 +5,7 @@ TextField {
     color: MaterialEditorQML.textColor
     selectionColor: Qt.rgba(0.4, 0.4, 0.6, 1.0)
     selectedTextColor: MaterialEditorQML.textColor
-    placeholderTextColor: Qt.rgba(0.6, 0.6, 0.6, 1.0)
+    placeholderTextColor: MaterialEditorQML.disabledTextColor
     
     background: Rectangle {
         implicitWidth: 200
