@@ -299,6 +299,8 @@ Column {
                             item.treeModel = treeNode.treeModel
                             item.indentLevel = treeNode.indentLevel + 1
                             item.width = Qt.binding(function() { return treeNode.width })
+                            if (item.refreshSelected)
+                                item.refreshSelected()
                         }
                     }
                 }

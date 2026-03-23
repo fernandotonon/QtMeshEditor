@@ -597,13 +597,20 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         setTransformState(TransformOperator::TS_SCALE);
        break;
     case Qt::Key_F:
+    {
         // Frame selection: zoom camera to fit selected objects
-        if(!mDockWidgetList.isEmpty())
-        {
-            auto* cam = mDockWidgetList.first()->getOgreWidget()->getSpaceCamera();
-            if(cam) cam->frameSelection();
+        SpaceCamera* cam = nullptr;
+        for (auto* vp : mDockWidgetList) {
+            if (vp->getOgreWidget()->hasFocus()) {
+                cam = vp->getOgreWidget()->getSpaceCamera();
+                break;
+            }
         }
-       break;
+        if (!cam && !mDockWidgetList.isEmpty())
+            cam = mDockWidgetList.first()->getOgreWidget()->getSpaceCamera();
+        if (cam) cam->frameSelection();
+        break;
+    }
     case Qt::Key_X:
         TransformOperator::getSingleton()->toggleTransformSpace();
        break;
@@ -648,7 +655,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     // asserts if any compute pipeline sets remain, but there's no public API to
     // release them. CLIPipeline uses the same workaround. See:
     // https://github.com/ggml-org/llama.cpp/pull/17869
-#ifndef Q_OS_WIN
+#ifdef Q_OS_MACOS
     _exit(0);
 #endif
 }

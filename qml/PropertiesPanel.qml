@@ -59,11 +59,13 @@ Rectangle {
 
             property var treeModel: PropertiesPanelController.sceneTreeModel
             property int nodeCount: treeModel ? treeModel.rowCount() : 0
+            property bool delegatesActive: true
 
             Repeater {
                 model: outlinerColumn.nodeCount
 
                 Loader {
+                    active: outlinerColumn.delegatesActive
                     width: outlinerColumn.width
                     source: "qrc:/PropertiesPanel/SceneTreeNode.qml"
                     onLoaded: {
@@ -71,6 +73,8 @@ Rectangle {
                         item.treeModel = outlinerColumn.treeModel
                         item.indentLevel = 0
                         item.width = Qt.binding(function() { return outlinerColumn.width })
+                        if (item.refreshSelected)
+                            item.refreshSelected()
                     }
                 }
             }
@@ -78,8 +82,10 @@ Rectangle {
             Connections {
                 target: outlinerColumn.treeModel
                 function onModelReset() {
+                    outlinerColumn.delegatesActive = false
                     outlinerColumn.nodeCount = outlinerColumn.treeModel
                         ? outlinerColumn.treeModel.rowCount() : 0
+                    Qt.callLater(function() { outlinerColumn.delegatesActive = true })
                 }
             }
         }

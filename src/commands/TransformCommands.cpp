@@ -109,7 +109,8 @@ DeleteCommand::DeleteCommand(const QList<Ogre::SceneNode*>& nodes,
         snap.position = node->getPosition();
         snap.orientation = node->getOrientation();
         snap.scale = node->getScale();
-        snap.wasVisible = true;
+        snap.wasVisible = (node->numAttachedObjects() == 0)
+            || node->getAttachedObject(0)->getVisible();
         mSnapshots.append(snap);
     }
 }
@@ -121,7 +122,7 @@ void DeleteCommand::undo()
     {
         if (snap.node)
         {
-            snap.node->setVisible(true, true);
+            snap.node->setVisible(snap.wasVisible, true);
             snap.node->setPosition(snap.position);
             snap.node->setOrientation(snap.orientation);
             snap.node->setScale(snap.scale);

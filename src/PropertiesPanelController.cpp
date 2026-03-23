@@ -104,55 +104,55 @@ double PropertiesPanelController::scaleZ() const { return mScaleZ; }
 // Transform mutators - set absolute values
 void PropertiesPanelController::setPosX(double v) {
     if (mPosX != v) {
-        Ogre::Vector3 pos(v, mPosY, mPosZ);
+        Ogre::Vector3 pos(static_cast<Ogre::Real>(v), static_cast<Ogre::Real>(mPosY), static_cast<Ogre::Real>(mPosZ));
         TransformOperator::getSingleton()->setSelectedPosition(pos);
     }
 }
 void PropertiesPanelController::setPosY(double v) {
     if (mPosY != v) {
-        Ogre::Vector3 pos(mPosX, v, mPosZ);
+        Ogre::Vector3 pos(static_cast<Ogre::Real>(mPosX), static_cast<Ogre::Real>(v), static_cast<Ogre::Real>(mPosZ));
         TransformOperator::getSingleton()->setSelectedPosition(pos);
     }
 }
 void PropertiesPanelController::setPosZ(double v) {
     if (mPosZ != v) {
-        Ogre::Vector3 pos(mPosX, mPosY, v);
+        Ogre::Vector3 pos(static_cast<Ogre::Real>(mPosX), static_cast<Ogre::Real>(mPosY), static_cast<Ogre::Real>(v));
         TransformOperator::getSingleton()->setSelectedPosition(pos);
     }
 }
 void PropertiesPanelController::setRotX(double v) {
     if (mRotX != v) {
-        Ogre::Vector3 rot(v, mRotY, mRotZ);
+        Ogre::Vector3 rot(static_cast<Ogre::Real>(v), static_cast<Ogre::Real>(mRotY), static_cast<Ogre::Real>(mRotZ));
         TransformOperator::getSingleton()->setSelectedOrientation(rot);
     }
 }
 void PropertiesPanelController::setRotY(double v) {
     if (mRotY != v) {
-        Ogre::Vector3 rot(mRotX, v, mRotZ);
+        Ogre::Vector3 rot(static_cast<Ogre::Real>(mRotX), static_cast<Ogre::Real>(v), static_cast<Ogre::Real>(mRotZ));
         TransformOperator::getSingleton()->setSelectedOrientation(rot);
     }
 }
 void PropertiesPanelController::setRotZ(double v) {
     if (mRotZ != v) {
-        Ogre::Vector3 rot(mRotX, mRotY, v);
+        Ogre::Vector3 rot(static_cast<Ogre::Real>(mRotX), static_cast<Ogre::Real>(mRotY), static_cast<Ogre::Real>(v));
         TransformOperator::getSingleton()->setSelectedOrientation(rot);
     }
 }
 void PropertiesPanelController::setScaleX(double v) {
     if (mScaleX != v) {
-        Ogre::Vector3 scale(v, mScaleY, mScaleZ);
+        Ogre::Vector3 scale(static_cast<Ogre::Real>(v), static_cast<Ogre::Real>(mScaleY), static_cast<Ogre::Real>(mScaleZ));
         TransformOperator::getSingleton()->setSelectedScale(scale);
     }
 }
 void PropertiesPanelController::setScaleY(double v) {
     if (mScaleY != v) {
-        Ogre::Vector3 scale(mScaleX, v, mScaleZ);
+        Ogre::Vector3 scale(static_cast<Ogre::Real>(mScaleX), static_cast<Ogre::Real>(v), static_cast<Ogre::Real>(mScaleZ));
         TransformOperator::getSingleton()->setSelectedScale(scale);
     }
 }
 void PropertiesPanelController::setScaleZ(double v) {
     if (mScaleZ != v) {
-        Ogre::Vector3 scale(mScaleX, mScaleY, v);
+        Ogre::Vector3 scale(static_cast<Ogre::Real>(mScaleX), static_cast<Ogre::Real>(mScaleY), static_cast<Ogre::Real>(v));
         TransformOperator::getSingleton()->setSelectedScale(scale);
     }
 }

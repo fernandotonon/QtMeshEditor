@@ -48,7 +48,10 @@ Column {
             id: headerMouse
             anchors.fill: parent
             hoverEnabled: true
+            activeFocusOnTab: true
             onClicked: root.expanded = !root.expanded
+            Keys.onReturnPressed: root.expanded = !root.expanded
+            Keys.onSpacePressed: root.expanded = !root.expanded
         }
     }
 

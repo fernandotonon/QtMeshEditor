@@ -139,7 +139,7 @@ void AnimationTimelineController::setProgress(double p)
     auto* state = getCurrentAnimState();
     if (state)
     {
-        state->setTimePosition(p);
+        state->setTimePosition(static_cast<Ogre::Real>(p));
         emit progressChanged();
     }
 }

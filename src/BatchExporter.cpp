@@ -13,7 +13,7 @@ void BatchExporter::execute()
 {
     int success = 0, fail = 0;
 
-    for (int i = 0; i < mInputFiles.size(); ++i)
+    for (int i = 0; i < static_cast<int>(mInputFiles.size()); ++i)
     {
         const QString& file = mInputFiles[i];
         emit progressChanged(i + 1, mInputFiles.size(), file);
@@ -25,11 +25,13 @@ void BatchExporter::execute()
 
         // Build argv for CLIPipeline::run()
         QStringList args = {"qtmesh", "convert", file, "-o", outputPath};
-        std::vector<char*> argv;
         std::vector<std::string> storage;
+        std::vector<char*> argv;
         for (const auto& arg : args) {
             storage.push_back(arg.toStdString());
-            argv.push_back(const_cast<char*>(storage.back().c_str()));
+        }
+        for (auto& s : storage) {
+            argv.push_back(s.data());  // std::string::data() returns char* in C++17
         }
 
         int result = CLIPipeline::run(static_cast<int>(argv.size()), argv.data());
