@@ -8,6 +8,8 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "GlobalDefinitions.h"
+#include "UndoManager.h"
+#include "commands/TransformCommands.h"
 #include <QSignalSpy>
 #include "TestHelpers.h"
 
@@ -832,12 +834,15 @@ TEST_F(TransformOperatorTestFixture, RemoveSelectedClearsUndoStack) {
     ASSERT_NE(node, nullptr);
     SelectionSet::getSingleton()->selectOne(node);
 
-    // Perform a translate to push to undo stack
-    instance->setSelectedPosition(Ogre::Vector3(10, 20, 30));
+    // Manually push an undo command so the stack is non-empty
+    UndoManager::getSingleton()->push(
+        new TranslateCommand({node}, Ogre::Vector3(1, 0, 0)));
+    EXPECT_TRUE(UndoManager::getSingleton()->canUndo());
 
-    // Remove selected should work without crash
+    // Remove selected should clear the undo stack
     instance->removeSelected();
     EXPECT_TRUE(SelectionSet::getSingleton()->isEmpty());
+    EXPECT_FALSE(UndoManager::getSingleton()->canUndo());
 }
 
 // ---- Scale selected with signal emission ----

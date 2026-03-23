@@ -787,25 +787,25 @@ TEST(SpaceCamera, KeyPressShift)
 // Repeated frame events with movement keys held
 // ==========================================================================
 
-TEST(SpaceCamera, FrameStartedWithMovementKeys)
+TEST(SpaceCamera, FrameStartedWithArrowKeys)
 {
     MockSpaceCamera spaceCamera;
-    // Hold W and A
-    QKeyEvent pressW(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
-    QKeyEvent pressA(QEvent::KeyPress, Qt::Key_A, Qt::NoModifier);
-    spaceCamera.keyPressEvent(&pressW);
-    spaceCamera.keyPressEvent(&pressA);
+    // Hold arrow keys (still mapped for camera rotation)
+    QKeyEvent pressUp(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+    QKeyEvent pressLeft(QEvent::KeyPress, Qt::Key_Left, Qt::NoModifier);
+    spaceCamera.keyPressEvent(&pressUp);
+    spaceCamera.keyPressEvent(&pressLeft);
 
     Ogre::FrameEvent frameEvent;
     frameEvent.timeSinceLastFrame = 0.016f;
 
-    // Process multiple frames
+    // Process multiple frames — rotation accumulates
     for (int i = 0; i < 20; ++i) {
         EXPECT_TRUE(spaceCamera.frameStarted(frameEvent));
     }
 
-    QKeyEvent releaseW(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
-    QKeyEvent releaseA(QEvent::KeyRelease, Qt::Key_A, Qt::NoModifier);
-    spaceCamera.keyReleaseEvent(&releaseW);
-    spaceCamera.keyReleaseEvent(&releaseA);
+    QKeyEvent releaseUp(QEvent::KeyRelease, Qt::Key_Up, Qt::NoModifier);
+    QKeyEvent releaseLeft(QEvent::KeyRelease, Qt::Key_Left, Qt::NoModifier);
+    spaceCamera.keyReleaseEvent(&releaseUp);
+    spaceCamera.keyReleaseEvent(&releaseLeft);
 }

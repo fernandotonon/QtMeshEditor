@@ -329,9 +329,17 @@ TEST_F(TransformCommandsTests, DeleteCommand_FirstRedoIsNoop) {
 }
 
 TEST_F(TransformCommandsTests, DeleteCommand_UndoRestoresVisibility) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+
     Manager* mgr = Manager::getSingleton();
     Ogre::SceneNode* node = mgr->addSceneNode("DelCmdNode2");
     ASSERT_NE(node, nullptr);
+
+    // Attach entity so we can check visibility
+    auto mesh = createInMemoryTriangleMesh("DelVisTestMesh");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    node->attachObject(entity);
+    EXPECT_TRUE(entity->getVisible());
 
     QList<Ogre::SceneNode*> nodes = {node};
     auto* cmd = new DeleteCommand(nodes);
@@ -341,11 +349,11 @@ TEST_F(TransformCommandsTests, DeleteCommand_UndoRestoresVisibility) {
 
     // Hide the node manually (simulating what caller does)
     node->setVisible(false, true);
+    EXPECT_FALSE(entity->getVisible());
 
     // Undo should restore visibility
     cmd->undo();
-    // The node was visible=true originally
-    // After undo, wasVisible=true so node should be visible again
+    EXPECT_TRUE(entity->getVisible());
 
     delete cmd;
 }
