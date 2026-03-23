@@ -884,3 +884,360 @@ TEST_F(TransformOperatorTestFixture, SequentialTransformOperations) {
     instance->translateSelected(Ogre::Vector3(5, 5, 5));
     EXPECT_EQ(node->getPosition(), Ogre::Vector3(15, 5, 5));
 }
+
+// ============================================================================
+// updateGizmo / updateGizmoPosition coverage
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, UpdateGizmoWithNodeSelection) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("GizmoUpdateMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+    node->setPosition(Ogre::Vector3(10, 20, 30));
+
+    SelectionSet::getSingleton()->append(node);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+
+    // Cycle through all states to exercise updateGizmo branches
+    instance->onTransformStateChange(TransformOperator::TS_SELECT);
+    instance->onTransformStateChange(TransformOperator::TS_TRANSLATE);
+    instance->onTransformStateChange(TransformOperator::TS_ROTATE);
+    instance->onTransformStateChange(TransformOperator::TS_SCALE);
+    instance->onTransformStateChange(TransformOperator::TS_NONE);
+}
+
+TEST_F(TransformOperatorTestFixture, UpdateGizmoWithEntitySelection) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("GizmoEntityMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+
+    // Select entity instead of node
+    SelectionSet::getSingleton()->append(entity);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->onTransformStateChange(TransformOperator::TS_TRANSLATE);
+    instance->onTransformStateChange(TransformOperator::TS_ROTATE);
+    instance->onTransformStateChange(TransformOperator::TS_SCALE);
+}
+
+TEST_F(TransformOperatorTestFixture, UpdateGizmoLocalSpaceWithRotatedNode) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("LocalGizmoMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+    node->yaw(Ogre::Degree(45));
+
+    SelectionSet::getSingleton()->append(node);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
+
+    // In local mode with single rotated node, gizmo should orient to node
+    instance->onTransformStateChange(TransformOperator::TS_TRANSLATE);
+    instance->onTransformStateChange(TransformOperator::TS_ROTATE);
+    instance->onTransformStateChange(TransformOperator::TS_SCALE);
+
+    instance->setTransformSpace(TransformOperator::SPACE_WORLD);
+}
+
+TEST_F(TransformOperatorTestFixture, UpdateGizmoLocalSpaceMultipleNodes) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+
+    auto* node1 = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh1 = createInMemoryTriangleMesh("LocalMulti1");
+    node1->attachObject(sceneMgr->createEntity(mesh1));
+    node1->yaw(Ogre::Degree(30));
+
+    auto* node2 = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh2 = createInMemoryTriangleMesh("LocalMulti2");
+    node2->attachObject(sceneMgr->createEntity(mesh2));
+
+    SelectionSet::getSingleton()->append(node1);
+    SelectionSet::getSingleton()->append(node2);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
+
+    // With multiple nodes selected, local space falls back to world orientation
+    instance->onTransformStateChange(TransformOperator::TS_TRANSLATE);
+
+    instance->setTransformSpace(TransformOperator::SPACE_WORLD);
+}
+
+// ============================================================================
+// Signal emissions from updateGizmoPosition
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, UpdateGizmoPositionEmitsAllSignals) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+
+    Ogre::SceneNode* node = mgr->addSceneNode("SignalTestNode");
+    ASSERT_NE(node, nullptr);
+    node->setPosition(Ogre::Vector3(5, 10, 15));
+    SelectionSet::getSingleton()->selectOne(node);
+
+    QSignalSpy posSpy(instance, &TransformOperator::selectedPositionChanged);
+    QSignalSpy oriSpy(instance, &TransformOperator::selectedOrientationChanged);
+    QSignalSpy scaleSpy(instance, &TransformOperator::selectedScaleChanged);
+
+    // Trigger gizmo update
+    instance->onSelectionChanged();
+
+    EXPECT_GE(posSpy.count(), 1);
+    EXPECT_GE(oriSpy.count(), 1);
+    EXPECT_GE(scaleSpy.count(), 1);
+}
+
+TEST_F(TransformOperatorTestFixture, UpdateGizmoPositionWithEntityEmitsSignals) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("EntitySignalMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->append(entity);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    QSignalSpy posSpy(instance, &TransformOperator::selectedPositionChanged);
+
+    instance->onSelectionChanged();
+    EXPECT_GE(posSpy.count(), 1);
+}
+
+// ============================================================================
+// Entity-level transforms
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, TranslateMultipleEntities) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+
+    auto* node1 = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh1 = createInMemoryTriangleMesh("MultiEnt1");
+    auto* ent1 = sceneMgr->createEntity(mesh1);
+    node1->attachObject(ent1);
+
+    auto* node2 = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh2 = createInMemoryTriangleMesh("MultiEnt2");
+    auto* ent2 = sceneMgr->createEntity(mesh2);
+    node2->attachObject(ent2);
+
+    SelectionSet::getSingleton()->append(ent1);
+    SelectionSet::getSingleton()->append(ent2);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->translateSelected(Ogre::Vector3(1, 2, 3)));
+}
+
+TEST_F(TransformOperatorTestFixture, RotateMultipleEntities) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("RotEntMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->append(entity);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::Quaternion rot(Ogre::Degree(45), Ogre::Vector3::UNIT_Y);
+    EXPECT_NO_THROW(instance->rotateSelected(rot));
+}
+
+TEST_F(TransformOperatorTestFixture, SetSelectedOrientationEntity) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("OriEntMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->append(entity);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->setSelectedOrientation(Ogre::Vector3(45, 0, 0)));
+}
+
+TEST_F(TransformOperatorTestFixture, RotateSelectedVectorEntity) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("RotVecEntMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->append(entity);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->rotateSelected(Ogre::Vector3(30, 60, 0)));
+}
+
+// ============================================================================
+// onSelectionChanged with SubEntities
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, OnSelectionChangedWithSubEntity) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("SubEntMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+
+    if (entity->getNumSubEntities() > 0) {
+        SelectionSet::getSingleton()->append(entity->getSubEntity(0));
+        TransformOperator* instance = TransformOperator::getSingleton();
+        EXPECT_NO_THROW(instance->onSelectionChanged());
+    }
+}
+
+// ============================================================================
+// setSelectedPosition with entity selection
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, SetSelectedPositionEntity) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("PosEntMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->append(entity);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->setSelectedPosition(Ogre::Vector3(100, 200, 300)));
+}
+
+// ============================================================================
+// setSelectedScale with entity selection
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, SetSelectedScaleEntity) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs render window"; }
+
+    Manager* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("ScaleEntMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->append(entity);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->setSelectedScale(Ogre::Vector3(2, 2, 2)));
+}
+
+// ============================================================================
+// Rotate with multiple nodes (pivot behavior)
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, RotateMultipleNodesAroundPivot) {
+    Manager* mgr = Manager::getSingletonPtr();
+
+    Ogre::SceneNode* node1 = mgr->addSceneNode("PivotNode1");
+    Ogre::SceneNode* node2 = mgr->addSceneNode("PivotNode2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+    node1->setPosition(Ogre::Vector3(10, 0, 0));
+    node2->setPosition(Ogre::Vector3(-10, 0, 0));
+
+    SelectionSet::getSingleton()->append(node1);
+    SelectionSet::getSingleton()->append(node2);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::Quaternion rot(Ogre::Degree(90), Ogre::Vector3::UNIT_Y);
+    instance->rotateSelected(rot);
+
+    // Both nodes should have moved (rotated around selection center)
+    EXPECT_NE(node1->getPosition(), Ogre::Vector3(10, 0, 0));
+    EXPECT_NE(node2->getPosition(), Ogre::Vector3(-10, 0, 0));
+}
+
+// ============================================================================
+// Scale multiple nodes
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, ScaleMultipleNodes) {
+    Manager* mgr = Manager::getSingletonPtr();
+
+    Ogre::SceneNode* node1 = mgr->addSceneNode("ScaleMulti1");
+    Ogre::SceneNode* node2 = mgr->addSceneNode("ScaleMulti2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+
+    SelectionSet::getSingleton()->append(node1);
+    SelectionSet::getSingleton()->append(node2);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->scaleSelected(Ogre::Vector3(2, 3, 4));
+
+    EXPECT_EQ(node1->getScale(), Ogre::Vector3(2, 3, 4));
+    EXPECT_EQ(node2->getScale(), Ogre::Vector3(2, 3, 4));
+}
+
+// ============================================================================
+// setActiveWidget with non-null then null
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, SetActiveWidgetAndClear) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    // Setting null should not crash
+    EXPECT_NO_THROW(instance->setActiveWidget(nullptr));
+    // Setting null again
+    EXPECT_NO_THROW(instance->setActiveWidget(nullptr));
+}
+
+// ============================================================================
+// Selection box colour roundtrip
+// ============================================================================
+
+TEST_F(TransformOperatorTestFixture, SelectionBoxColourRoundtrip) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::ColourValue original = instance->getSelectionBoxColour();
+
+    instance->setSelectionBoxColour(Ogre::ColourValue::Red);
+    EXPECT_EQ(instance->getSelectionBoxColour(), Ogre::ColourValue::Red);
+
+    instance->setSelectionBoxColour(Ogre::ColourValue::Blue);
+    EXPECT_EQ(instance->getSelectionBoxColour(), Ogre::ColourValue::Blue);
+
+    // Restore
+    instance->setSelectionBoxColour(original);
+}
