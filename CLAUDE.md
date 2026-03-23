@@ -119,11 +119,6 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - **CollapsibleSection.qml**, **SceneTreeNode.qml**, **TransformField.qml** — reusable QML components.
 - Loaded as QQuickWidget directly in the right dock (replaces old tab widget with Transform/Material/Edit/Animation tabs).
 
-### Animation Timeline
-
-- **AnimationTimelineController** (`src/AnimationTimelineController.h/cpp`): QML_SINGLETON managing animation playback. Provides animation list, play/pause/stop, timeline scrubbing. Auto-detects animated entities from selection.
-- **AnimationTimeline.qml** (`qml/AnimationTimeline.qml`): Bottom dock panel with animation selector, playback controls, and timeline scrubber. Auto-shows/hides based on selection.
-
 ### Theme System
 
 - **ThemeManager** (`src/ThemeManager.h/cpp`): QML_SINGLETON providing canonical theme colors synced from QPalette. All colors (window, panel, header, text, button, highlight, border, accent) derived from the active QPalette.

@@ -55,7 +55,6 @@ UndoManager.cpp
 commands/TransformCommands.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
-AnimationTimelineController.cpp
 ThemeManager.cpp
 BatchExporter.cpp
 MaterialPresetLibrary.cpp
@@ -117,7 +116,6 @@ UndoManager.h
 commands/TransformCommands.h
 PropertiesPanelController.h
 SceneTreeModel.h
-AnimationTimelineController.h
 ThemeManager.h
 BatchExporter.h
 MaterialPresetLibrary.h

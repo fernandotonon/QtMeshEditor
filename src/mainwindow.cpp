@@ -53,7 +53,6 @@
 #include "ModelDownloader.h"
 #include "UndoManager.h"
 #include "PropertiesPanelController.h"
-#include "AnimationTimelineController.h"
 #include <QQuickWidget>
 #include <QQmlContext>
 

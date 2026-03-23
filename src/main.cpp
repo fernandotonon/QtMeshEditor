@@ -21,7 +21,6 @@
 #endif
 #include "ModelDownloader.h"
 #include "PropertiesPanelController.h"
-#include "AnimationTimelineController.h"
 #include "ThemeManager.h"
 #include "MCPServer.h"
 #include "SentryReporter.h"
@@ -215,12 +214,6 @@ int main(int argc, char *argv[])
     qmlRegisterSingletonType<PropertiesPanelController>("PropertiesPanel", 1, 0, "PropertiesPanelController",
         [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
             return PropertiesPanelController::qmlInstance(engine, scriptEngine);
-        });
-
-    // Register AnimationTimelineController singleton for QML
-    qmlRegisterSingletonType<AnimationTimelineController>("AnimationTimeline", 1, 0, "AnimationTimelineController",
-        [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
-            return AnimationTimelineController::qmlInstance(engine, scriptEngine);
         });
 
     // Register ThemeManager singleton for QML

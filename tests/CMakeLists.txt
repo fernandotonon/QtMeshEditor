@@ -65,7 +65,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PropertiesPanelController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneTreeModel.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationTimelineController.cpp
+
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ThemeManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.cpp
@@ -125,7 +125,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PropertiesPanelController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneTreeModel.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationTimelineController.h
+
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ThemeManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.h

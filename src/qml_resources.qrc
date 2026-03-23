@@ -16,9 +16,6 @@
   <qresource prefix="/ViewCube">
     <file alias="ViewCubeWindow.qml">../qml/ViewCubeWindow.qml</file>
   </qresource>
-  <qresource prefix="/AnimationTimeline">
-    <file alias="AnimationTimeline.qml">../qml/AnimationTimeline.qml</file>
-  </qresource>
   <qresource prefix="/PropertiesPanel">
     <file alias="PropertiesPanel.qml">../qml/PropertiesPanel.qml</file>
     <file alias="CollapsibleSection.qml">../qml/CollapsibleSection.qml</file>
