@@ -70,6 +70,7 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     connect(llmManager, &LLMManager::generationError, this, &MaterialEditorQML::onLLMGenerationError);
     connect(llmManager, &LLMManager::modelLoadedChanged, this, &MaterialEditorQML::onLLMModelLoadedChanged);
 
+    // LCOV_EXCL_START — SD requires ENABLE_STABLE_DIFFUSION build flag + GPU model files
 #ifdef ENABLE_STABLE_DIFFUSION
     // Connect to SDManager signals
     SDManager *sdManager = SDManager::instance();
@@ -95,6 +96,7 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
         }
     }
 #endif
+    // LCOV_EXCL_STOP
 }
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -953,6 +955,7 @@ void MaterialEditorQML::createNewTextureUnit(const QString &name)
     }
 }
 
+// LCOV_EXCL_START — opens native file dialog, requires user interaction
 void MaterialEditorQML::selectTexture()
 {
     QString filePath = QFileDialog::getOpenFileName(
@@ -992,6 +995,7 @@ void MaterialEditorQML::selectTexture()
     
     setTextureName(file.fileName());
 }
+// LCOV_EXCL_STOP
 
 void MaterialEditorQML::removeTexture()
 {
@@ -1706,6 +1710,7 @@ void MaterialEditorQML::exportMaterial(const QString &fileName)
     }
 }
 
+// LCOV_EXCL_START — modal dialog requires user interaction, cannot test headless
 void MaterialEditorQML::openColorPicker(const QString &colorType)
 {
     QColor currentColor;
@@ -1758,6 +1763,8 @@ void MaterialEditorQML::openColorPicker(const QString &colorType)
         }
     }
 }
+
+// LCOV_EXCL_STOP
 
 // Advanced Pass property setters
 void MaterialEditorQML::setShadingMode(int mode)
@@ -2893,6 +2900,7 @@ void MaterialEditorQML::stopTextureGeneration()
     emit sdIsGeneratingChanged();
 #endif
 }
+// LCOV_EXCL_STOP
 
 // LCOV_EXCL_START — SD signal handlers require a loaded SD model
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -3177,6 +3185,7 @@ void MaterialEditorQML::exportMaterial(const QString &fileName, const QString &m
     }
 }
 
+// LCOV_EXCL_START — opens QML window with QQmlApplicationEngine, requires display
 void MaterialEditorQML::openMaterialEditorWindow(const QString &materialName)
 {
     try {
@@ -3252,3 +3261,4 @@ void MaterialEditorQML::openMaterialEditorWindow(const QString &materialName)
         emit errorOccurred("Material Editor encountered an unknown error.");
     }
 }
+// LCOV_EXCL_STOP
