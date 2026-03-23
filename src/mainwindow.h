@@ -16,14 +16,14 @@ class MCPServer;
 class NormalVisualizer;
 class MeshInfoOverlay;
 class ViewCubeController;
+class PropertiesPanelController;
+class QQuickWidget;
 
 namespace Ui {
 class MainWindow;
 }
 class EditorViewport;
-class TransformWidget;
 class PrimitivesWidget;
-class MaterialWidget;
 
 namespace Ogre
 {
@@ -57,6 +57,7 @@ private slots:
 
     void on_actionObjects_Toolbar_toggled(bool arg1);
     void on_actionTools_Toolbar_toggled(bool arg1);
+    void on_actionView_Toolbar_toggled(bool arg1);
     void on_actionMeshEditor_toggled(bool arg1);
     void on_actionExport_Selected_triggered();
 
@@ -101,9 +102,8 @@ private:
     QList<EditorViewport*>      mDockWidgetList;
 
     QTimer*                     m_pTimer = nullptr;
-    TransformWidget*            m_pTransformWidget = nullptr;
+    // TransformWidget removed — replaced by QML Inspector panel
     PrimitivesWidget*           m_pPrimitivesWidget = nullptr;
-    MaterialWidget*             m_pMaterialWidget = nullptr;
 
     QStringList                 mUriList;
 
@@ -131,6 +131,7 @@ private:
     MeshInfoOverlay* m_meshInfoOverlay = nullptr;
     ViewCubeController* m_viewCubeController = nullptr;
     MCPServer* m_mcpServer = nullptr;
+    QQuickWidget* m_propertiesPanel = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
     void addToRecentFiles(const QString& filePath);

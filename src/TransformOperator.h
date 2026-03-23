@@ -10,6 +10,7 @@
 class OgreWidget;
 class RotationGizmo;
 class TranslationGizmo;
+class ScaleGizmo;
 class SelectionBoxObject;
 class SelectionSet;
 
@@ -34,6 +35,7 @@ public:
         TS_SELECT,
         TS_TRANSLATE,
         TS_ROTATE,
+        TS_SCALE,
     };
     enum SelectionMode
     {
@@ -41,8 +43,14 @@ public:
         ADD_SELECT    = 0x01,
         DEL_SELECT    = 0x02,
     };
+    enum TransformSpace
+    {
+        SPACE_WORLD,
+        SPACE_LOCAL,
+    };
 
     const Ogre::ColourValue& getSelectionBoxColour() const;
+    TransformSpace getTransformSpace() const { return mTransformSpace; }
 
     // Made public for testing
     static void swap(int& x, int& y);
@@ -60,13 +68,16 @@ private:
 signals:
     void objectsDeleted();
     void selectedPositionChanged(const Ogre::Vector3& newPosition);
-    void selectedScaleChanged(const Ogre::Vector3& newScale); //TODO emit this signal !!
+    void selectedScaleChanged(const Ogre::Vector3& newScale);
     void selectedOrientationChanged(const Ogre::Vector3& newOrientation);
+    void transformSpaceChanged(TransformSpace newSpace);
 
 public slots:
     void onSelectionChanged();
 
     void onTransformStateChange(const TransformState newState);
+    void setTransformSpace(TransformSpace space);
+    void toggleTransformSpace();
     void setActiveWidget(OgreWidget* ogreWidget);
     //void setSelectedNode(Ogre::SceneNode* newNode); //TODO it should not exist....
     void setSelectedPosition(const Ogre::Vector3& newPosition);
@@ -98,6 +109,7 @@ private:
     OgreWidget*                             m_pActiveWidget = nullptr;
     RotationGizmo*                          m_pRotationGizmo = nullptr;
     TranslationGizmo*                       m_pTranslationGizmo = nullptr;
+    ScaleGizmo*                             m_pScaleGizmo = nullptr;
     Ogre::SceneNode*                        m_pTransformNode = nullptr;
     //Ogre::SceneNode*                        m_pSelectedNode;
     Ogre::RaySceneQuery*                    m_pRayQuery  = nullptr;
@@ -105,6 +117,13 @@ private:
     Ogre::Vector3                           mStartPoint = Ogre::Vector3::ZERO;
     Ogre::Vector3                           mTransformVector = Ogre::Vector3::ZERO;
     TransformState                          mTransformState = TS_NONE;
+    TransformSpace                          mTransformSpace = SPACE_WORLD;
+    Ogre::Real                              mScaleStartDistance = 0.0f;
+
+    // Undo state: captured at mouse press, used to create command at mouse release
+    QList<Ogre::Vector3>                    mUndoStartPositions;
+    QList<Ogre::Quaternion>                 mUndoStartOrientations;
+    QList<Ogre::Vector3>                    mUndoStartScales;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;
 #else

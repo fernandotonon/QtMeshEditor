@@ -20,6 +20,8 @@
 #include "SDManager.h"
 #endif
 #include "ModelDownloader.h"
+#include "PropertiesPanelController.h"
+#include "ThemeManager.h"
 #include "MCPServer.h"
 #include "SentryReporter.h"
 #include "CLIPipeline.h"
@@ -207,6 +209,18 @@ int main(int argc, char *argv[])
 
     // Register QMLMaterialHighlighter for QML use
     qmlRegisterType<QMLMaterialHighlighter>("MaterialEditorQML", 1, 0, "MaterialHighlighter");
+
+    // Register PropertiesPanelController singleton for QML
+    qmlRegisterSingletonType<PropertiesPanelController>("PropertiesPanel", 1, 0, "PropertiesPanelController",
+        [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+            return PropertiesPanelController::qmlInstance(engine, scriptEngine);
+        });
+
+    // Register ThemeManager singleton for QML
+    qmlRegisterSingletonType<ThemeManager>("ThemeManager", 1, 0, "ThemeManager",
+        [](QQmlEngine *engine, QJSEngine *scriptEngine) -> QObject* {
+            return ThemeManager::qmlInstance(engine, scriptEngine);
+        });
 
     auto startupTxn = SentryReporter::startTransaction("app.startup", "app.load");
     auto startupTxnClose = qScopeGuard([&] { SentryReporter::finishTransaction(startupTxn); });

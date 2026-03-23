@@ -56,6 +56,9 @@ class SpaceCamera : Ogre::FrameListener
         void animateToOrientation(const Ogre::Quaternion& target, float duration = 0.5f);
         bool isAnimating() const { return mAnimating; }
 
+        // Frame selection: move camera to look at selection center, zoom to fit bounds
+        void frameSelection();
+
         // Mutators
         void setCameraSpeed(const Ogre::Real& newSpeed);
         void setCameraPosition(const Ogre::Vector3 &pos);

@@ -16,4 +16,10 @@
   <qresource prefix="/ViewCube">
     <file alias="ViewCubeWindow.qml">../qml/ViewCubeWindow.qml</file>
   </qresource>
+  <qresource prefix="/PropertiesPanel">
+    <file alias="PropertiesPanel.qml">../qml/PropertiesPanel.qml</file>
+    <file alias="CollapsibleSection.qml">../qml/CollapsibleSection.qml</file>
+    <file alias="TransformField.qml">../qml/TransformField.qml</file>
+    <file alias="SceneTreeNode.qml">../qml/SceneTreeNode.qml</file>
+  </qresource>
 </RCC>

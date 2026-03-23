@@ -682,3 +682,117 @@ TEST_F(TransformOperatorTestFixture, MultipleEntityNodesTranslate) {
     EXPECT_EQ(node1->getPosition(), Ogre::Vector3(-10, -20, -30));
     EXPECT_EQ(node2->getPosition(), Ogre::Vector3(90, 80, 70));
 }
+
+// ---- New tests for TS_SCALE state ----
+
+TEST_F(TransformOperatorTestFixture, OnTransformStateChange_Scale) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SCALE));
+}
+
+TEST_F(TransformOperatorTestFixture, CycleAllTransformStates_IncludingScale) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_TRANSLATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_ROTATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SCALE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_NONE));
+}
+
+// ---- Tests for TransformSpace ----
+
+TEST_F(TransformOperatorTestFixture, DefaultTransformSpaceIsWorld) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_EQ(instance->getTransformSpace(), TransformOperator::SPACE_WORLD);
+}
+
+TEST_F(TransformOperatorTestFixture, SetTransformSpace) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    EXPECT_EQ(instance->getTransformSpace(), TransformOperator::SPACE_LOCAL);
+
+    instance->setTransformSpace(TransformOperator::SPACE_WORLD);
+    EXPECT_EQ(instance->getTransformSpace(), TransformOperator::SPACE_WORLD);
+}
+
+TEST_F(TransformOperatorTestFixture, ToggleTransformSpace) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_EQ(instance->getTransformSpace(), TransformOperator::SPACE_WORLD);
+
+    instance->toggleTransformSpace();
+    EXPECT_EQ(instance->getTransformSpace(), TransformOperator::SPACE_LOCAL);
+
+    instance->toggleTransformSpace();
+    EXPECT_EQ(instance->getTransformSpace(), TransformOperator::SPACE_WORLD);
+}
+
+TEST_F(TransformOperatorTestFixture, TransformSpaceChangedSignal) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    QSignalSpy spy(instance, &TransformOperator::transformSpaceChanged);
+
+    instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    EXPECT_EQ(spy.count(), 1);
+
+    // Setting same value should not emit
+    instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    EXPECT_EQ(spy.count(), 1);
+
+    instance->toggleTransformSpace();
+    EXPECT_EQ(spy.count(), 2);
+}
+
+TEST_F(TransformOperatorTestFixture, ScaleStateWithSelection) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported"; }
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("ScaleTestMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+    SelectionSet::getSingleton()->append(node);
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SCALE));
+}
+
+TEST_F(TransformOperatorTestFixture, LocalSpaceTranslate) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported"; }
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("LocalSpaceTestMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+    SelectionSet::getSingleton()->append(node);
+
+    // Rotate node 90 degrees around Y
+    node->yaw(Ogre::Degree(90));
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    instance->onTransformStateChange(TransformOperator::TS_TRANSLATE);
+
+    // translateSelected always works in world space (local conversion is in mouse drag)
+    // Verify the translate applies correctly and transform space persists
+    Ogre::Vector3 startPos = node->getPosition();
+    instance->translateSelected(Ogre::Vector3(5, 0, 0));
+    Ogre::Vector3 endPos = node->getPosition();
+
+    // Should have moved exactly 5 units along world X
+    EXPECT_FLOAT_EQ(endPos.x - startPos.x, 5.0f);
+    EXPECT_FLOAT_EQ(endPos.y - startPos.y, 0.0f);
+    EXPECT_FLOAT_EQ(endPos.z - startPos.z, 0.0f);
+
+    // Transform space should still be LOCAL
+    EXPECT_EQ(instance->getTransformSpace(), TransformOperator::SPACE_LOCAL);
+    instance->setTransformSpace(TransformOperator::SPACE_WORLD);
+}
+
+TEST_F(TransformOperatorTestFixture, LocalSpaceWithAllStates) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_TRANSLATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_ROTATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SCALE));
+    instance->setTransformSpace(TransformOperator::SPACE_WORLD);
+}

@@ -32,6 +32,7 @@ THE SOFTWARE.
 
 #include "SpaceCamera.h"
 #include "Manager.h"
+#include "SelectionSet.h"
 #include "OgreWidget.h"
 #include <QDebug>
 
@@ -97,13 +98,9 @@ void SpaceCamera::setKeyMapping()
     mKeyRotationMapping[Qt::Key_Right] 	= Ogre::Vector2 ( getCameraSpeed() * 0.1f, 0.0  );
     mKeyRotationMapping[Qt::Key_Left]   = Ogre::Vector2 (-getCameraSpeed() * 0.1f, 0.0  );
 
-    mKeyTranslationMapping[Qt::Key_W]   = Ogre::Vector2 ( 0.0,  getCameraSpeed()  );
-    mKeyTranslationMapping[Qt::Key_S] 	= Ogre::Vector2 ( 0.0, -getCameraSpeed()  );
-    mKeyTranslationMapping[Qt::Key_A] 	= Ogre::Vector2 ( getCameraSpeed() , 0.0  );
-    mKeyTranslationMapping[Qt::Key_D]   = Ogre::Vector2 (-getCameraSpeed() , 0.0  );
-
-    mKeyRollingMapping[Qt::Key_Q]       =  getCameraSpeed();
-    mKeyRollingMapping[Qt::Key_E]       = -getCameraSpeed();
+    // Note: WASD/QE removed to avoid conflict with Unity-style transform shortcuts
+    // (Q=Select, W=Translate, E=Rotate, R=Scale).
+    // Camera movement via mouse (middle=orbit, right=pan, scroll=zoom) and arrow keys.
 }
 
 //////////////////////////////////////////////////////////////////////////////////
@@ -402,6 +399,64 @@ void SpaceCamera::roll(const Ogre::Real& delta)
     Ogre::Radian rotRoll( - delta  * 0.05f);
 
     mTarget->roll( rotRoll, Ogre::Node::TS_LOCAL );
+}
+
+void SpaceCamera::frameSelection()
+{
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel || sel->isEmpty())
+        return;
+
+    // Compute aggregate AABB from selection
+    Ogre::AxisAlignedBox aabb;
+    aabb.setNull();
+
+    if (sel->hasNodes())
+    {
+        for (Ogre::SceneNode* node : sel->getNodesSelectionList())
+        {
+            // Get world AABB of all attached objects
+            auto it = node->getAttachedObjectIterator();
+            while (it.hasMoreElements())
+            {
+                Ogre::MovableObject* obj = it.getNext();
+                aabb.merge(obj->getWorldBoundingBox(true));
+            }
+            // If node has no attached objects, at least include its position
+            if (!node->numAttachedObjects())
+                aabb.merge(node->_getDerivedPosition());
+        }
+    }
+    else if (sel->hasEntities())
+    {
+        for (Ogre::Entity* ent : sel->getEntitiesSelectionList())
+            aabb.merge(ent->getWorldBoundingBox(true));
+    }
+
+    if (aabb.isNull() || aabb.isInfinite())
+        return;
+
+    Ogre::Vector3 center = aabb.getCenter();
+    Ogre::Real radius = (aabb.getMaximum() - aabb.getMinimum()).length() * 0.5f;
+
+    // Ensure minimum radius for point-like selections
+    if (radius < 0.1f)
+        radius = 1.0f;
+
+    // Move camera target to selection center
+    mTarget->setPosition(center);
+
+    // Compute distance to fit bounding sphere in view
+    Ogre::Radian fovY = mCamera->getFOVy();
+    Ogre::Real aspectRatio = mCamera->getAspectRatio();
+    Ogre::Radian fovX = Ogre::Radian(2.0f * std::atan(std::tan(fovY.valueRadians() * 0.5f) * aspectRatio));
+    Ogre::Radian fov = std::min(fovX, fovY);
+    Ogre::Real distance = radius / std::sin(fov.valueRadians() * 0.5f);
+
+    // Add a bit of padding
+    distance *= 1.2f;
+
+    mCameraNode->setPosition(0, 0, -distance);
 }
 
 

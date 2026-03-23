@@ -76,7 +76,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 
 - **OgreWidget** (`src/OgreWidget.h/cpp`): QWidget subclass that creates an Ogre::RenderWindow from the native window handle.
 - **EditorViewport** (`src/EditorViewport.h/cpp`): Wraps OgreWidget, runs render loop via QTimer.
-- **MainWindow** (`src/mainwindow.h/cpp`): QMainWindow + Ogre::FrameListener. Contains viewports, toolbars, dock widgets.
+- **MainWindow** (`src/mainwindow.h/cpp`): QMainWindow + Ogre::FrameListener. Contains viewports, toolbars, dock widgets. Right sidebar hosts the QML Inspector panel directly (no tab widget). Animation Control dock at bottom auto-shows for animated entities.
 
 ### Material Editor (QML)
 
@@ -94,6 +94,39 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 - **ViewCubeWindow.qml** (`qml/ViewCubeWindow.qml`): QML Canvas2D rendering a 3D cube with face/edge/corner hit-testing. Uses quaternion-to-rotation-matrix conversion with negated qx to match Ogre's camera rig convention.
 - Visibility requires both the toggle (`setVisible`) and an active widget — hides automatically when viewports are closed and reappears when a new viewport gets focus.
 - The QML window uses `Qt::FramelessWindowHint | Qt::Tool | Qt::WindowStaysOnTopHint` and software rendering (`QQuickWindow::setSceneGraphBackend("software")`) to avoid GL conflicts with Ogre.
+
+### Transform System
+
+- **TransformOperator** (`src/TransformOperator.h/cpp`): Singleton implementing SELECT/TRANSLATE/ROTATE/SCALE modes. Owns three gizmos (TranslationGizmo, RotationGizmo, ScaleGizmo). Supports WORLD/LOCAL transform space. Mouse interaction: ray-cast gizmo for axis selection, plane intersection for drag transforms.
+- **ScaleGizmo** (`src/ScaleGizmo.h/cpp`): Scale gizmo with cube handles at axis endpoints. Follows TranslationGizmo pattern (ManualObject per axis, highlight/fade).
+- **Keyboard shortcuts** (Unity convention): `Q`=Select, `W`=Translate, `E`=Rotate, `R`=Scale, `F`=Frame selection, `X`=Toggle World/Local space.
+- **SpaceCamera::frameSelection()**: Computes bounding sphere of selection and positions camera to fit it in view.
+
+### Undo/Redo System
+
+- **UndoManager** (`src/UndoManager.h/cpp`): Singleton wrapping `QUndoStack`. Push commands, undo/redo via `Ctrl+Z`/`Ctrl+Shift+Z`.
+- **TransformCommands** (`src/commands/TransformCommands.h/cpp`): `TranslateCommand`, `RotateCommand`, `ScaleCommand`, `DeleteCommand`. Translate and Scale support command merging. State captured on mouse press, command pushed on mouse release in TransformOperator.
+
+### QML Inspector Panel
+
+- **PropertiesPanelController** (`src/PropertiesPanelController.h/cpp`): QML_SINGLETON providing transform values, selection state, scene tree model, primitive parameters, animation data (enable/loop/rename), skeleton debug toggles. Bridges all scene data to QML.
+- **SceneTreeModel** (`src/SceneTreeModel.h/cpp`): QAbstractItemModel exposing hierarchical scene tree (Nodes → Entities → SubEntities) to QML. Supports multi-select, material name get/set on submeshes, debounced rebuild on scene changes.
+- **PropertiesPanel.qml** (`qml/PropertiesPanel.qml`): Main inspector with collapsible sections:
+  - **Scene** — recursive tree view (SceneTreeNode.qml) with expand/collapse, Ctrl+click multi-select, material typeahead dropdown on submeshes
+  - **Transform** — position/rotation/scale spinbox fields with up/down arrow keys and buttons
+  - **Primitive** — context-sensitive fields per primitive type (size, radius, height, segments, UV)
+  - **Animations** — per-entity groups with enable/loop checkboxes, double-click rename, play/pause, skeleton/weights toggles
+- **CollapsibleSection.qml**, **SceneTreeNode.qml**, **TransformField.qml** — reusable QML components.
+- Loaded as QQuickWidget directly in the right dock (replaces old tab widget with Transform/Material/Edit/Animation tabs).
+
+### Theme System
+
+- **ThemeManager** (`src/ThemeManager.h/cpp`): QML_SINGLETON providing canonical theme colors synced from QPalette. All colors (window, panel, header, text, button, highlight, border, accent) derived from the active QPalette.
+
+### Indie Game Dev Features
+
+- **BatchExporter** (`src/BatchExporter.h/cpp`): Multi-file conversion wrapping CLIPipeline. Supports progress reporting.
+- **MaterialPresetLibrary** (`src/MaterialPresetLibrary.h/cpp`): QML_SINGLETON providing one-click material presets (Plastic, Metal, Wood, Glass, Unlit, Wireframe).
 
 ### MCP Server
 
@@ -133,7 +166,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 
 ## Development Guidelines
 
-- **UI: QML over Widgets.** New UI should be built in QML (Qt Quick), not Qt Widgets. The project is migrating from Widgets to QML. The Material Editor (`qml/`) is the reference for the QML approach. Existing Widget-based UI (`ui_files/`) remains but should not be extended.
+- **UI: QML over Widgets.** New UI should be built in QML (Qt Quick), not Qt Widgets. The Inspector panel (`qml/PropertiesPanel.qml`) and Material Editor (`qml/MaterialEditorWindow.qml`) are the reference for the QML approach. The old Transform/Material/Edit/Animation tabs have been replaced by the QML Inspector. AnimationWidget and PrimitivesWidget still exist as hidden backing widgets but are not user-visible tabs.
 - **Cross-platform: Windows, Linux (Ubuntu), macOS.** All code must compile and run on all three. Guard platform-specific APIs with `#ifdef Q_OS_WIN`, `#ifdef Q_OS_MACOS`, `#ifdef Q_OS_LINUX`. Test the CI build across all three platforms before merging.
 - **Unit tests.** Add Google Test unit tests for new functionality. Test files live alongside source in `src/` with the `_test.cpp` suffix (e.g., `Manager_test.cpp`). CI runs tests only on Linux to save budget, so:
   - Features that depend on optional components (e.g., local LLM / llama.cpp) may not be available in the test environment — guard with `#ifdef ENABLE_LOCAL_LLM` or skip gracefully.

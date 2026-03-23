@@ -32,6 +32,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorViewport.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformOperator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrimitivesWidget.cpp
@@ -60,6 +61,14 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewCube/ViewCubeController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UndoManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PropertiesPanelController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneTreeModel.cpp
+
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ThemeManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.cpp
     )
 
     set(TEST_HEADER_FILES
@@ -84,6 +93,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditorViewport.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformOperator.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrimitivesWidget.h
@@ -111,6 +121,14 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/CLIPipeline.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RTShaderHelper.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewCube/ViewCubeController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/UndoManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PropertiesPanelController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneTreeModel.h
+
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ThemeManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)

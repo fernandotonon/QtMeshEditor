@@ -71,6 +71,9 @@ void LLMManager::shutdownWorkerThread()
 {
     if (m_worker) {
         m_worker->requestStop();
+        // Unload model on worker thread before stopping to free Metal resources
+        if (m_workerThread && m_workerThread->isRunning())
+            QMetaObject::invokeMethod(m_worker, &LLMWorker::unloadModel, Qt::BlockingQueuedConnection);
     }
 
     if (m_workerThread) {

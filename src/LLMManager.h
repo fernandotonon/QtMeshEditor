@@ -138,12 +138,14 @@ signals:
     void generationError(const QString &error);
     void generationStopped();
 
+public:
+    void shutdownWorkerThread();
+
 private:
     explicit LLMManager(QObject *parent = nullptr);
     ~LLMManager();
 
     void initializeWorkerThread();
-    void shutdownWorkerThread();
     QString getDefaultModelsDirectory() const;
     void populateRecommendedModels();
     QString buildUserPrompt(const QString &prompt, const QString &currentMaterial, const QStringList &availableTextures) const;

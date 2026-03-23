@@ -1,4 +1,7 @@
 #include <QMessageBox>
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
 #include <QSettings>
 #include <QApplication>
 #include <QLibraryInfo>
@@ -32,8 +35,7 @@
 #include "MeshImporterExporter.h"
 #include "EditorViewport.h"
 #include "ViewportGrid.h"
-#include "TransformWidget.h"
-#include "MaterialWidget.h"
+// MaterialWidget removed — replaced by Inspector panel
 #include "AnimationWidget.h"
 #include "AnimationMerger.h"
 #include "SelectionSet.h"
@@ -44,10 +46,15 @@
 #include "MCPServer.h"
 #include "NormalVisualizer.h"
 #include "MeshInfoOverlay.h"
+#include "SpaceCamera.h"
 #include "ViewCube/ViewCubeController.h"
 #include "LLMManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
+#include "UndoManager.h"
+#include "PropertiesPanelController.h"
+#include <QQuickWidget>
+#include <QQmlContext>
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
@@ -60,6 +67,10 @@ MainWindow::MainWindow(QWidget *parent) :
     setDockNestingEnabled(true);
     setDockOptions(dockOptions() & (~QMainWindow::AllowTabbedDocks));
     setCentralWidget(nullptr);  // Explicitly define that there is no central widget so dockable widget will take the place
+
+    // Right dock (Inspector) takes full height — bottom dock stops at the right dock boundary
+    setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
+    setCorner(Qt::TopRightCorner, Qt::RightDockWidgetArea);
 
     Manager* manager = Manager::getSingleton(this); // init the Ogre Root/RenderSystem/SceneManager
 
@@ -201,21 +212,13 @@ MainWindow::~MainWindow()
     mDockWidgetList.clear();
 
     delete ui;
-    if(m_pTransformWidget)
-    {
-        delete m_pTransformWidget;
-        m_pTransformWidget = nullptr;
-    }
+    // m_pTransformWidget removed — replaced by QML Inspector panel
     if(m_pPrimitivesWidget)
     {
         delete m_pPrimitivesWidget;
         m_pPrimitivesWidget = nullptr;
     }
-    if(m_pMaterialWidget)
-    {
-        delete m_pMaterialWidget;
-        m_pMaterialWidget = nullptr;
-    }
+    // MaterialWidget removed — replaced by Inspector panel
     
     // CRITICAL: Destroy Manager AFTER all widgets that depend on it are destroyed
     // This ensures that OGRE resources are cleaned up in the correct order
@@ -251,23 +254,67 @@ void MainWindow::initToolBar()
 
     mUriList.append(uris);
 
-    // Transform Property tab
-    m_pTransformWidget = new TransformWidget(this->ui->tabWidget);
-    ui->tabWidget->addTab(m_pTransformWidget, tr("Transform"));
     setTransformState(TransformOperator::TS_SELECT);
     connect(ui->actionSelect_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_SELECT);});
     connect(ui->actionTranslate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_TRANSLATE);});
     connect(ui->actionRotate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_ROTATE);});
+    connect(ui->actionScale_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_SCALE);});
     connect(ui->actionRemove_Object, SIGNAL(triggered()), TransformOperator::getSingleton(), SLOT(removeSelected()));
+    connect(ui->actionToggle_Transform_Space, &QAction::toggled, this, [this](bool checked){
+        TransformOperator::getSingleton()->setTransformSpace(
+            checked ? TransformOperator::SPACE_LOCAL : TransformOperator::SPACE_WORLD);
+    });
+    connect(TransformOperator::getSingleton(), &TransformOperator::transformSpaceChanged, this, [this](TransformOperator::TransformSpace space){
+        ui->actionToggle_Transform_Space->setChecked(space == TransformOperator::SPACE_LOCAL);
+    });
 
-    // Material tab
-    m_pMaterialWidget = new MaterialWidget(this->ui->tabWidget);
-    ui->tabWidget->addTab(m_pMaterialWidget, tr("Material"));
+    // Undo/Redo
+    connect(ui->actionUndo, &QAction::triggered, UndoManager::getSingleton(), &UndoManager::undo);
+    connect(ui->actionRedo, &QAction::triggered, UndoManager::getSingleton(), &UndoManager::redo);
 
-    // Create Primitive Object Menu
-    // & PrimitivesWidget
-    m_pPrimitivesWidget = new PrimitivesWidget(this->ui->tabWidget);
-    ui->tabWidget->addTab(m_pPrimitivesWidget, tr("Edit"));
+    // Refresh gizmo position after undo/redo (deferred to avoid re-entrant scene access)
+    connect(UndoManager::getSingleton()->stack(), &QUndoStack::indexChanged, this, [](int) {
+        QTimer::singleShot(0, []() {
+            // Re-trigger selection to update gizmo position and Inspector values
+            auto* sel = SelectionSet::getSingleton();
+            if (!sel->isEmpty())
+                emit sel->selectionChanged();
+        });
+    });
+
+    // QML Properties Panel (replaces old Transform tab with modern collapsible inspector)
+    {
+        m_propertiesPanel = new QQuickWidget();
+        m_propertiesPanel->setResizeMode(QQuickWidget::SizeRootObjectToView);
+
+        // Register PropertiesPanelController in this widget's engine
+        qmlRegisterSingletonType<PropertiesPanelController>("PropertiesPanel", 1, 0, "PropertiesPanelController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return PropertiesPanelController::qmlInstance(engine, nullptr);
+            });
+
+        m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
+
+        // Replace the tab widget content with the Inspector panel directly
+        auto* dockContents = ui->meshEditorWidget->widget();
+        auto* layout = dockContents->layout();
+        // Remove old tab widget from layout
+        if (layout) {
+            QLayoutItem* item;
+            while ((item = layout->takeAt(0)) != nullptr) {
+                if (item->widget())
+                    item->widget()->hide();
+                delete item;
+            }
+            layout->addWidget(m_propertiesPanel);
+        }
+    }
+
+    // Animation Control dock is created below and auto-shown when animated entity is selected
+
+    // PrimitivesWidget (hidden — used by toolbar create menu and Inspector primitive editing)
+    m_pPrimitivesWidget = new PrimitivesWidget(this);
+    m_pPrimitivesWidget->hide();
 
     auto addPrimitiveButton = new QToolButton(ui->objectsToolbar);
     addPrimitiveButton->setIcon(QIcon(":/icones/cube.png"));
@@ -316,30 +363,43 @@ void MainWindow::initToolBar()
     connect(pAddRoundedBox, SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createRoundedBox()));
     connect(pAddSpring,     SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createSpring()));
 
-    // Animation tab
-    auto pAnimationWidget = new AnimationWidget(this->ui->tabWidget);
-    ui->tabWidget->addTab(pAnimationWidget, tr("Animation"));
+    // AnimationWidget (hidden — used by Inspector for skeleton/weight toggles)
+    auto pAnimationWidget = new AnimationWidget(this);
+    pAnimationWidget->hide();
 
-    // Add Animation Control Widget to the bottom of the main window
+    // Animation Control Widget — bottom dock, auto-shown for animated entities
     auto pAnimationControlWidget = new AnimationControlWidget(this);
+    addDockWidget(Qt::BottomDockWidgetArea, pAnimationControlWidget);
+    // Constrain height so it doesn't eat viewport space
+    resizeDocks({pAnimationControlWidget}, {180}, Qt::Vertical);
     pAnimationControlWidget->setVisible(false);
     connect(pAnimationWidget,SIGNAL(changeAnimationName(const std::string&)),pAnimationControlWidget,SLOT(updateAnimationTree()));
 
-    //connect(m_pTransformWidget, SIGNAL(selectionChanged(QString)), pAnimationWidget, SLOT(updateAnimationTable()));
     connect(pAnimationWidget,SIGNAL(changeAnimationState(bool)),this,SLOT(setPlaying(bool)));
-    connect(ui->tabWidget,&QTabWidget::currentChanged,this,[=](int index){
-        if(index==3){
-            // Add Animation Control Widget to the bottom of the main window
+
+    // Give PropertiesPanelController access to AnimationWidget for skeleton/weight toggles
+    PropertiesPanelController::instance()->setAnimationWidget(pAnimationWidget);
+
+    // Connect Inspector's playing state to MainWindow animation playback
+    connect(PropertiesPanelController::instance(), &PropertiesPanelController::playingChanged, this, [this]() {
+        setPlaying(PropertiesPanelController::instance()->isPlaying());
+    });
+
+    // Toggle Animation Control visibility from menu
+    connect(ui->actionAnimation_Control, &QAction::toggled, this, [pAnimationControlWidget, this](bool checked) {
+        if (checked && PropertiesPanelController::instance()->hasAnimations())
             pAnimationControlWidget->setVisible(true);
-            addDockWidget(Qt::BottomDockWidgetArea, pAnimationControlWidget);
-        } else {
-            // Remove Animation Control Widget from the bottom of the main window
-            auto dockWidget = findChild<QDockWidget*>("AnimationControlWidget");
-            if (dockWidget) {
-                pAnimationControlWidget->setVisible(false);
-                removeDockWidget(dockWidget);
-            }
-        }
+        else if (!checked)
+            pAnimationControlWidget->setVisible(false);
+    });
+
+    // Auto-show/hide Animation Control based on selection (respects menu toggle)
+    connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged, this, [pAnimationControlWidget, this]() {
+        QTimer::singleShot(0, pAnimationControlWidget, [pAnimationControlWidget, this]() {
+            bool hasAnims = PropertiesPanelController::instance()->hasAnimations();
+            bool toggled = ui->actionAnimation_Control->isChecked();
+            pAnimationControlWidget->setVisible(hasAnims && toggled);
+        });
     });
 
     // Merge Animations button — enable/disable based on selection
@@ -495,11 +555,25 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
         m_viewCubeController->updateOrientation();
 
     //Update the status bar
-    QString statusMessage = "Status ";
-    if(SelectionSet::getSingleton()->hasNodes())
-        statusMessage += "Working with Nodes - to change the mesh position, select only the mesh";
-    else if(SelectionSet::getSingleton()->hasEntities())
-        statusMessage += "Working with Mesh";
+    QString statusMessage;
+
+    // Transform mode
+    auto* tOp = TransformOperator::getSingleton();
+    switch (tOp->getTransformSpace()) {
+    case TransformOperator::SPACE_WORLD: statusMessage += "World | "; break;
+    case TransformOperator::SPACE_LOCAL: statusMessage += "Local | "; break;
+    }
+
+    // Selection info
+    auto* sel = SelectionSet::getSingleton();
+    if (sel->hasNodes())
+        statusMessage += QString("Nodes: %1").arg(sel->getNodesCount());
+    else if (sel->hasEntities())
+        statusMessage += QString("Entities: %1").arg(sel->getEntitiesCount());
+    else if (sel->hasSubEntities())
+        statusMessage += QString("Submeshes: %1").arg(sel->getSubEntitiesCount());
+    else
+        statusMessage += "No selection";
 
     ui->statusBar->showMessage(statusMessage);
 
@@ -511,20 +585,40 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
     QtInputManager::getInstance().keyPressEvent(event);
 
     switch(event->key()){
-    case Qt::Key_R:
-        setTransformState(TransformOperator::TS_ROTATE);
-       break;
-    case Qt::Key_Y:
+    case Qt::Key_Q:
         setTransformState(TransformOperator::TS_SELECT);
        break;
-    case Qt::Key_T:
+    case Qt::Key_W:
         setTransformState(TransformOperator::TS_TRANSLATE);
+       break;
+    case Qt::Key_E:
+        setTransformState(TransformOperator::TS_ROTATE);
+       break;
+    case Qt::Key_R:
+        setTransformState(TransformOperator::TS_SCALE);
+       break;
+    case Qt::Key_F:
+    {
+        // Frame selection: zoom camera to fit selected objects
+        SpaceCamera* cam = nullptr;
+        for (auto* vp : mDockWidgetList) {
+            if (vp->getOgreWidget()->hasFocus()) {
+                cam = vp->getOgreWidget()->getSpaceCamera();
+                break;
+            }
+        }
+        if (!cam && !mDockWidgetList.isEmpty())
+            cam = mDockWidgetList.first()->getOgreWidget()->getSpaceCamera();
+        if (cam) cam->frameSelection();
+        break;
+    }
+    case Qt::Key_X:
+        TransformOperator::getSingleton()->toggleTransformSpace();
        break;
     case Qt::Key_Delete:
         TransformOperator::getSingleton()->removeSelected();
        break;
     default:
-        // We hit a non mapped key !
        break;
     }
 
@@ -551,8 +645,20 @@ void MainWindow::dropEvent(QDropEvent *event)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    // Shut down LLM worker to release model resources
+    LLMManager::instance()->shutdownWorkerThread();
+
+    // Process pending deletions and let Ogre shut down cleanly
     QApplication::quit();
     QMainWindow::closeEvent(event);
+
+    // Use _exit() to skip static destructors — ggml-metal's global device cleanup
+    // asserts if any compute pipeline sets remain, but there's no public API to
+    // release them. CLIPipeline uses the same workaround. See:
+    // https://github.com/ggml-org/llama.cpp/pull/17869
+#ifdef Q_OS_MACOS
+    _exit(0);
+#endif
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
@@ -867,6 +973,9 @@ void MainWindow::on_actionObjects_Toolbar_toggled(bool arg1)
 void MainWindow::on_actionTools_Toolbar_toggled(bool arg1)
 {    ui->toolToolbar->setVisible(arg1); }
 
+void MainWindow::on_actionView_Toolbar_toggled(bool arg1)
+{    ui->viewToolbar->setVisible(arg1); }
+
 void MainWindow::on_actionMeshEditor_toggled(bool arg1)
 {    ui->meshEditorWidget->setVisible(arg1);    }
 
@@ -892,29 +1001,12 @@ void MainWindow::chooseBgColor()
 
 void MainWindow::setTransformState(TransformOperator::TransformState newState)
 {
-    switch ( newState ) {
-    case TransformOperator::TS_SELECT:
-        ui->actionSelect_Object->setChecked(true);
-        ui->actionTranslate_Object->setChecked(false);
-        ui->actionRotate_Object->setChecked(false);
-      break;
-    case TransformOperator::TS_TRANSLATE:
-        ui->actionSelect_Object->setChecked(false);
-        ui->actionTranslate_Object->setChecked(true);
-        ui->actionRotate_Object->setChecked(false);
-      break;
-    case TransformOperator::TS_ROTATE:
-        ui->actionSelect_Object->setChecked(false);
-        ui->actionTranslate_Object->setChecked(false);
-        ui->actionRotate_Object->setChecked(true);
-      break;
-    default:
-        ui->actionSelect_Object->setChecked(false);
-        ui->actionTranslate_Object->setChecked(false);
-        ui->actionRotate_Object->setChecked(false);
-      break;
-    }
-    TransformOperator::getSingleton()->onTransformStateChange(static_cast<TransformOperator::TransformState> (newState));
+    ui->actionSelect_Object->setChecked(newState == TransformOperator::TS_SELECT);
+    ui->actionTranslate_Object->setChecked(newState == TransformOperator::TS_TRANSLATE);
+    ui->actionRotate_Object->setChecked(newState == TransformOperator::TS_ROTATE);
+    ui->actionScale_Object->setChecked(newState == TransformOperator::TS_SCALE);
+
+    TransformOperator::getSingleton()->onTransformStateChange(newState);
 }
 
 void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, left,....*/)

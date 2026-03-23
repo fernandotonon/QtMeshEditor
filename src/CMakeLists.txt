@@ -21,6 +21,7 @@ MeshImporterExporter.cpp
 EditorViewport.cpp
 RotationGizmo.cpp
 TranslationGizmo.cpp
+ScaleGizmo.cpp
 TransformOperator.cpp
 TransformWidget.cpp
 PrimitivesWidget.cpp
@@ -50,6 +51,13 @@ RTShaderHelper.cpp
 ViewCube/ViewCubeController.cpp
 SDWorker.cpp
 SDManager.cpp
+UndoManager.cpp
+commands/TransformCommands.cpp
+PropertiesPanelController.cpp
+SceneTreeModel.cpp
+ThemeManager.cpp
+BatchExporter.cpp
+MaterialPresetLibrary.cpp
 )
 
 set(HEADER_FILES
@@ -74,6 +82,7 @@ MeshImporterExporter.h
 EditorViewport.h
 RotationGizmo.h
 TranslationGizmo.h
+ScaleGizmo.h
 TransformOperator.h
 TransformWidget.h
 PrimitivesWidget.h
@@ -103,6 +112,13 @@ RTShaderHelper.h
 ViewCube/ViewCubeController.h
 SDWorker.h
 SDManager.h
+UndoManager.h
+commands/TransformCommands.h
+PropertiesPanelController.h
+SceneTreeModel.h
+ThemeManager.h
+BatchExporter.h
+MaterialPresetLibrary.h
 )
 
 set(TEST_SOURCES "")

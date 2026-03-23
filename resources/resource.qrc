@@ -17,5 +17,6 @@
         <file>roundedbox.png</file>
         <file>addVertice.png</file>
         <file>spring.png</file>
+        <file>scale.png</file>
     </qresource>
 </RCC>
