@@ -639,16 +639,16 @@ private slots:
 #endif
 
 private:
-    // Theme color properties
-    QColor m_backgroundColor;
-    QColor m_panelColor;
-    QColor m_textColor;
-    QColor m_borderColor;
-    QColor m_highlightColor;
-    QColor m_buttonColor;
-    QColor m_buttonTextColor;
-    QColor m_disabledTextColor;
-    QColor m_accentColor;
+    // Theme color properties (defaults used if palette read fails or in tests)
+    QColor m_backgroundColor{240, 240, 240};
+    QColor m_panelColor{255, 255, 255};
+    QColor m_textColor{0, 0, 0};
+    QColor m_borderColor{128, 128, 128};
+    QColor m_highlightColor{0, 120, 215};
+    QColor m_buttonColor{225, 225, 225};
+    QColor m_buttonTextColor{0, 0, 0};
+    QColor m_disabledTextColor{128, 128, 128};
+    QColor m_accentColor{0, 120, 215};
 };
 
 #endif // MATERIALEDITORQML_H 

@@ -38,30 +38,18 @@
 MaterialEditorQML::MaterialEditorQML(QObject *parent)
     : QObject(parent)
 {
-    try {
-        // Initialize theme colors from system palette
-        QPalette palette = QApplication::palette();
-        m_backgroundColor = palette.color(QPalette::Window);
-        m_panelColor = palette.color(QPalette::Base);
-        m_textColor = palette.color(QPalette::WindowText);
-        m_borderColor = palette.color(QPalette::Mid);
-        m_highlightColor = palette.color(QPalette::Highlight);
-        m_buttonColor = palette.color(QPalette::Button);
-        m_buttonTextColor = palette.color(QPalette::ButtonText);
-        m_disabledTextColor = palette.color(QPalette::PlaceholderText);
-        m_accentColor = palette.color(QPalette::Highlight);
-    } catch (...) {
-        // Fallback to default colors if palette access fails
-        m_backgroundColor = QColor(240, 240, 240);
-        m_panelColor = QColor(255, 255, 255);
-        m_textColor = QColor(0, 0, 0);
-        m_borderColor = QColor(128, 128, 128);
-        m_highlightColor = QColor(0, 120, 215);
-        m_buttonColor = QColor(225, 225, 225);
-        m_buttonTextColor = QColor(0, 0, 0);
-        m_disabledTextColor = QColor(128, 128, 128);
-        m_accentColor = QColor(0, 120, 215);
-    }
+    // Initialize theme colors from system palette
+    // (member defaults in header provide fallback values)
+    QPalette palette = QApplication::palette();
+    m_backgroundColor = palette.color(QPalette::Window);
+    m_panelColor = palette.color(QPalette::Base);
+    m_textColor = palette.color(QPalette::WindowText);
+    m_borderColor = palette.color(QPalette::Mid);
+    m_highlightColor = palette.color(QPalette::Highlight);
+    m_buttonColor = palette.color(QPalette::Button);
+    m_buttonTextColor = palette.color(QPalette::ButtonText);
+    m_disabledTextColor = palette.color(QPalette::PlaceholderText);
+    m_accentColor = palette.color(QPalette::Highlight);
     
     // Initialize material color properties with defaults
     m_ambientColor = QColor(128, 128, 128);  // Gray
@@ -82,6 +70,7 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
     connect(llmManager, &LLMManager::generationError, this, &MaterialEditorQML::onLLMGenerationError);
     connect(llmManager, &LLMManager::modelLoadedChanged, this, &MaterialEditorQML::onLLMModelLoadedChanged);
 
+    // LCOV_EXCL_START — SD requires ENABLE_STABLE_DIFFUSION build flag + GPU model files
 #ifdef ENABLE_STABLE_DIFFUSION
     // Connect to SDManager signals
     SDManager *sdManager = SDManager::instance();
@@ -107,6 +96,7 @@ MaterialEditorQML::MaterialEditorQML(QObject *parent)
         }
     }
 #endif
+    // LCOV_EXCL_STOP
 }
 
 MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
@@ -116,19 +106,11 @@ MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine 
     
     static MaterialEditorQML* instance = nullptr;
     if (!instance) {
-        try {
-            instance = new MaterialEditorQML();
-        } catch (const std::exception& e) {
-            // Log error but don't let it crash
-            qDebug() << "Error creating MaterialEditorQML instance:" << e.what();
-            // Create a simple instance anyway
-            instance = new MaterialEditorQML();
-        } catch (...) {
-            qDebug() << "Unknown error creating MaterialEditorQML instance";
-            // Create a simple instance anyway
-            instance = new MaterialEditorQML();
-        }
+        instance = new MaterialEditorQML();
     }
+    // Must set CppOwnership on every call — each QQmlEngine tracks ownership
+    // independently, and without this a later engine could delete the shared instance
+    QQmlEngine::setObjectOwnership(instance, QQmlEngine::CppOwnership);
     return instance;
 }
 
@@ -976,6 +958,7 @@ void MaterialEditorQML::createNewTextureUnit(const QString &name)
     }
 }
 
+// LCOV_EXCL_START — opens native file dialog, requires user interaction
 void MaterialEditorQML::selectTexture()
 {
     QString filePath = QFileDialog::getOpenFileName(
@@ -1015,6 +998,7 @@ void MaterialEditorQML::selectTexture()
     
     setTextureName(file.fileName());
 }
+// LCOV_EXCL_STOP
 
 void MaterialEditorQML::removeTexture()
 {
@@ -1729,6 +1713,7 @@ void MaterialEditorQML::exportMaterial(const QString &fileName)
     }
 }
 
+// LCOV_EXCL_START — modal dialog requires user interaction, cannot test headless
 void MaterialEditorQML::openColorPicker(const QString &colorType)
 {
     QColor currentColor;
@@ -1781,6 +1766,8 @@ void MaterialEditorQML::openColorPicker(const QString &colorType)
         }
     }
 }
+
+// LCOV_EXCL_STOP
 
 // Advanced Pass property setters
 void MaterialEditorQML::setShadingMode(int mode)
@@ -2916,6 +2903,7 @@ void MaterialEditorQML::stopTextureGeneration()
     emit sdIsGeneratingChanged();
 #endif
 }
+// LCOV_EXCL_STOP
 
 // LCOV_EXCL_START — SD signal handlers require a loaded SD model
 #ifdef ENABLE_STABLE_DIFFUSION
@@ -3200,6 +3188,7 @@ void MaterialEditorQML::exportMaterial(const QString &fileName, const QString &m
     }
 }
 
+// LCOV_EXCL_START — opens QML window with QQmlApplicationEngine, requires display
 void MaterialEditorQML::openMaterialEditorWindow(const QString &materialName)
 {
     try {
@@ -3275,3 +3264,4 @@ void MaterialEditorQML::openMaterialEditorWindow(const QString &materialName)
         emit errorOccurred("Material Editor encountered an unknown error.");
     }
 }
+// LCOV_EXCL_STOP
