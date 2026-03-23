@@ -283,7 +283,7 @@ QVariantMap PropertiesPanelController::primFieldConfig() const
                        || t == PrimitiveObject::AP_ICOSPHERE || t == PrimitiveObject::AP_ROUNDEDBOX);
     cfg["showRadius2"] = (t == PrimitiveObject::AP_TORUS || t == PrimitiveObject::AP_TUBE);
     cfg["showHeight"]  = (t == PrimitiveObject::AP_CYLINDER || t == PrimitiveObject::AP_CONE || t == PrimitiveObject::AP_TUBE || t == PrimitiveObject::AP_CAPSULE);
-    cfg["showSegX"]    = (t != PrimitiveObject::AP_SPRING ? true : true); // all have at least segX
+    cfg["showSegX"]    = true; // all primitives have at least segX
     cfg["showSegY"]    = (t == PrimitiveObject::AP_CUBE || t == PrimitiveObject::AP_SPHERE || t == PrimitiveObject::AP_PLANE
                        || t == PrimitiveObject::AP_TORUS || t == PrimitiveObject::AP_CAPSULE || t == PrimitiveObject::AP_ROUNDEDBOX
                        || t == PrimitiveObject::AP_SPRING);
