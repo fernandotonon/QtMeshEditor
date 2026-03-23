@@ -754,3 +754,37 @@ TEST_F(TransformOperatorTestFixture, ScaleStateWithSelection) {
     TransformOperator* instance = TransformOperator::getSingleton();
     EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SCALE));
 }
+
+TEST_F(TransformOperatorTestFixture, LocalSpaceTranslate) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported"; }
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    auto mesh = createInMemoryTriangleMesh("LocalSpaceTestMesh");
+    auto* entity = sceneMgr->createEntity(mesh);
+    node->attachObject(entity);
+    SelectionSet::getSingleton()->append(node);
+
+    // Rotate node 90 degrees around Y
+    node->yaw(Ogre::Degree(90));
+
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    instance->onTransformStateChange(TransformOperator::TS_TRANSLATE);
+
+    Ogre::Vector3 startPos = node->getPosition();
+    instance->translateSelected(Ogre::Vector3(5, 0, 0));
+    Ogre::Vector3 endPos = node->getPosition();
+
+    EXPECT_NE(startPos, endPos);
+    instance->setTransformSpace(TransformOperator::SPACE_WORLD);
+}
+
+TEST_F(TransformOperatorTestFixture, LocalSpaceWithAllStates) {
+    TransformOperator* instance = TransformOperator::getSingleton();
+    instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_TRANSLATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_ROTATE));
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SCALE));
+    instance->setTransformSpace(TransformOperator::SPACE_WORLD);
+}

@@ -546,9 +546,22 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
             if(result.first)
             {
-                // Checking the ray intersection with a plane parallel to viewport & on the geometric center of selection
                 Ogre::Vector3 point = mouseRay.getPoint(result.second);
-                Ogre::Vector3 translation = (mouseRay.getPoint(result.second) - mStartPoint) * mTransformVector;
+                Ogre::Vector3 worldDelta = point - mStartPoint;
+                Ogre::Vector3 translation;
+
+                if (mTransformSpace == SPACE_LOCAL && !mTransformVector.isZeroLength())
+                {
+                    // Transform world delta into gizmo's local space, mask axis, transform back
+                    Ogre::Quaternion gizmoOrientation = m_pTransformNode->getOrientation();
+                    Ogre::Vector3 localDelta = gizmoOrientation.Inverse() * worldDelta;
+                    localDelta *= mTransformVector;
+                    translation = gizmoOrientation * localDelta;
+                }
+                else
+                {
+                    translation = worldDelta * mTransformVector;
+                }
 
                 translateSelected(translation);
                 mStartPoint = point;
@@ -585,11 +598,28 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                 Ogre::Vector3 vectorStart = mStartPoint - m_pTransformNode->getPosition();
                 Ogre::Vector3 vectorEnd = point - m_pTransformNode->getPosition();
 
-                Ogre::Quaternion rotation = vectorStart.getRotationTo(vectorEnd);
-                rotation.x = rotation.x * mTransformVector.x;
-                rotation.y = rotation.y * mTransformVector.y;
-                rotation.z = rotation.z * mTransformVector.z;
-                rotation.normalise();
+                Ogre::Quaternion rotation;
+                if (mTransformSpace == SPACE_LOCAL && !mTransformVector.isZeroLength())
+                {
+                    // Transform vectors into gizmo local space, compute rotation there, mask, transform back
+                    Ogre::Quaternion gizmoOri = m_pTransformNode->getOrientation();
+                    Ogre::Vector3 localStart = gizmoOri.Inverse() * vectorStart;
+                    Ogre::Vector3 localEnd = gizmoOri.Inverse() * vectorEnd;
+                    Ogre::Quaternion localRot = localStart.getRotationTo(localEnd);
+                    localRot.x *= mTransformVector.x;
+                    localRot.y *= mTransformVector.y;
+                    localRot.z *= mTransformVector.z;
+                    localRot.normalise();
+                    rotation = gizmoOri * localRot * gizmoOri.Inverse();
+                }
+                else
+                {
+                    rotation = vectorStart.getRotationTo(vectorEnd);
+                    rotation.x *= mTransformVector.x;
+                    rotation.y *= mTransformVector.y;
+                    rotation.z *= mTransformVector.z;
+                    rotation.normalise();
+                }
 
                 rotateSelected(rotation);
                 mStartPoint = point;
