@@ -108,6 +108,9 @@ MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine 
     if (!instance) {
         instance = new MaterialEditorQML();
     }
+    // Must set CppOwnership on every call — each QQmlEngine tracks ownership
+    // independently, and without this a later engine could delete the shared instance
+    QQmlEngine::setObjectOwnership(instance, QQmlEngine::CppOwnership);
     return instance;
 }
 
