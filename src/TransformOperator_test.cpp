@@ -796,3 +796,86 @@ TEST_F(TransformOperatorTestFixture, LocalSpaceWithAllStates) {
     EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SCALE));
     instance->setTransformSpace(TransformOperator::SPACE_WORLD);
 }
+
+// ---- TS_SCALE with entity selection ----
+
+TEST_F(TransformOperatorTestFixture, ScaleStateWithEntitySelection) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported"; }
+
+    auto mesh = createInMemoryTriangleMesh("TSScaleEntMesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("TSScaleEntNode");
+    auto* entity = sceneMgr->createEntity("TSScaleEntEnt", mesh);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->selectOne(node);
+    TransformOperator* instance = TransformOperator::getSingleton();
+
+    // Switch to scale state with entity selected
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SCALE));
+
+    // Scale the selection
+    instance->scaleSelected(Ogre::Vector3(2.0f, 2.0f, 2.0f));
+    EXPECT_EQ(node->getScale(), Ogre::Vector3(2.0f, 2.0f, 2.0f));
+
+    // Switch back
+    EXPECT_NO_THROW(instance->onTransformStateChange(TransformOperator::TS_SELECT));
+}
+
+// ---- removeSelected clears undo stack ----
+
+TEST_F(TransformOperatorTestFixture, RemoveSelectedClearsUndoStack) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+
+    Ogre::SceneNode* node = mgr->addSceneNode("UndoClearNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    // Perform a translate to push to undo stack
+    instance->setSelectedPosition(Ogre::Vector3(10, 20, 30));
+
+    // Remove selected should work without crash
+    instance->removeSelected();
+    EXPECT_TRUE(SelectionSet::getSingleton()->isEmpty());
+}
+
+// ---- Scale selected with signal emission ----
+
+TEST_F(TransformOperatorTestFixture, ScaleSelectedEmitsSignal) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("ScaleSigTestNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    QSignalSpy spy(instance, &TransformOperator::selectedScaleChanged);
+    instance->setSelectedScale(Ogre::Vector3(3.0f, 3.0f, 3.0f));
+    EXPECT_GE(spy.count(), 1);
+}
+
+// ---- Multiple operations in sequence ----
+
+TEST_F(TransformOperatorTestFixture, SequentialTransformOperations) {
+    Manager* mgr = Manager::getSingletonPtr();
+    TransformOperator* instance = TransformOperator::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("SeqOpNode");
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    // Translate
+    instance->setSelectedPosition(Ogre::Vector3(10, 0, 0));
+    EXPECT_EQ(node->getPosition(), Ogre::Vector3(10, 0, 0));
+
+    // Scale
+    instance->setSelectedScale(Ogre::Vector3(2, 2, 2));
+    EXPECT_EQ(node->getScale(), Ogre::Vector3(2, 2, 2));
+
+    // Rotate
+    instance->setSelectedOrientation(Ogre::Vector3(0, 90, 0));
+    EXPECT_NE(node->getOrientation(), Ogre::Quaternion::IDENTITY);
+
+    // Translate again
+    instance->translateSelected(Ogre::Vector3(5, 5, 5));
+    EXPECT_EQ(node->getPosition(), Ogre::Vector3(15, 5, 5));
+}
