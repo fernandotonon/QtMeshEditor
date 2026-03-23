@@ -1117,11 +1117,10 @@ TEST_F(TransformOperatorTestFixture, OnSelectionChangedWithSubEntity) {
     auto* entity = sceneMgr->createEntity(mesh);
     node->attachObject(entity);
 
-    if (entity->getNumSubEntities() > 0) {
-        SelectionSet::getSingleton()->append(entity->getSubEntity(0));
-        TransformOperator* instance = TransformOperator::getSingleton();
-        EXPECT_NO_THROW(instance->onSelectionChanged());
-    }
+    ASSERT_GT(entity->getNumSubEntities(), 0u) << "Triangle mesh should have at least one sub-entity";
+    SelectionSet::getSingleton()->append(entity->getSubEntity(0));
+    TransformOperator* instance = TransformOperator::getSingleton();
+    EXPECT_NO_THROW(instance->onSelectionChanged());
 }
 
 // ============================================================================
