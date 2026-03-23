@@ -3,6 +3,7 @@
 #include "SpaceCamera.h"
 #include "TestHelpers.h"
 #include "Manager.h"
+#include "SelectionSet.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -718,4 +719,93 @@ TEST(SpaceCamera, SetCameraSpeedExtremeValues)
 
     spaceCamera.setCameraSpeed(0.0001f);
     EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.0001f);
+}
+
+// ==========================================================================
+// frameSelection tests (requires empty selection check)
+// ==========================================================================
+
+TEST(SpaceCamera, FrameSelectionWithEmptySelection)
+{
+    MockSpaceCamera spaceCamera;
+    // frameSelection() should return early when selection is empty
+    // (it checks sel->isEmpty() and returns before dereferencing mTarget)
+    SelectionSet::getSingleton()->clear();
+    EXPECT_NO_THROW(spaceCamera.frameSelection());
+}
+
+// ==========================================================================
+// Multiple speed changes interleaved with control key
+// ==========================================================================
+
+TEST(SpaceCamera, SpeedChangesWithControlKey)
+{
+    MockSpaceCamera spaceCamera;
+    spaceCamera.setCameraSpeed(2.0f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 2.0f);
+
+    // Press control
+    QKeyEvent pressCtrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
+    spaceCamera.keyPressEvent(&pressCtrl);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
+
+    // Release control
+    QKeyEvent releaseCtrl(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
+    spaceCamera.keyReleaseEvent(&releaseCtrl);
+    // Speed restored to default (0.1f)
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
+}
+
+// ==========================================================================
+// Key F for frame selection (should be handled)
+// ==========================================================================
+
+TEST(SpaceCamera, KeyPressF)
+{
+    MockSpaceCamera spaceCamera;
+    // F key may trigger frame selection, but with empty selection
+    // and null mTarget it should bail out safely
+    SelectionSet::getSingleton()->clear();
+    QKeyEvent pressF(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
+    EXPECT_NO_THROW(spaceCamera.keyPressEvent(&pressF));
+}
+
+// ==========================================================================
+// Key press/release for keys that may have special handling
+// ==========================================================================
+
+TEST(SpaceCamera, KeyPressShift)
+{
+    MockSpaceCamera spaceCamera;
+    QKeyEvent pressShift(QEvent::KeyPress, Qt::Key_Shift, Qt::ShiftModifier);
+    EXPECT_NO_THROW(spaceCamera.keyPressEvent(&pressShift));
+    QKeyEvent releaseShift(QEvent::KeyRelease, Qt::Key_Shift, Qt::NoModifier);
+    EXPECT_NO_THROW(spaceCamera.keyReleaseEvent(&releaseShift));
+}
+
+// ==========================================================================
+// Repeated frame events with movement keys held
+// ==========================================================================
+
+TEST(SpaceCamera, FrameStartedWithArrowKeys)
+{
+    MockSpaceCamera spaceCamera;
+    // Hold arrow keys (still mapped for camera rotation)
+    QKeyEvent pressUp(QEvent::KeyPress, Qt::Key_Up, Qt::NoModifier);
+    QKeyEvent pressLeft(QEvent::KeyPress, Qt::Key_Left, Qt::NoModifier);
+    spaceCamera.keyPressEvent(&pressUp);
+    spaceCamera.keyPressEvent(&pressLeft);
+
+    Ogre::FrameEvent frameEvent;
+    frameEvent.timeSinceLastFrame = 0.016f;
+
+    // Process multiple frames — rotation accumulates
+    for (int i = 0; i < 20; ++i) {
+        EXPECT_TRUE(spaceCamera.frameStarted(frameEvent));
+    }
+
+    QKeyEvent releaseUp(QEvent::KeyRelease, Qt::Key_Up, Qt::NoModifier);
+    QKeyEvent releaseLeft(QEvent::KeyRelease, Qt::Key_Left, Qt::NoModifier);
+    spaceCamera.keyReleaseEvent(&releaseUp);
+    spaceCamera.keyReleaseEvent(&releaseLeft);
 }
