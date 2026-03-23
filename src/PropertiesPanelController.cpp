@@ -57,6 +57,11 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, &PropertiesPanelController::onSceneChanged);
 
     mSceneTreeModel = new SceneTreeModel(this);
+
+    // Refresh theme colors when the application palette changes (Light/Dark/Custom switch)
+    connect(qApp, &QApplication::paletteChanged, this, [this]() {
+        emit themeChanged();
+    });
 }
 
 // Theme colors from QPalette

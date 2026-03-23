@@ -772,11 +772,19 @@ TEST_F(TransformOperatorTestFixture, LocalSpaceTranslate) {
     instance->setTransformSpace(TransformOperator::SPACE_LOCAL);
     instance->onTransformStateChange(TransformOperator::TS_TRANSLATE);
 
+    // translateSelected always works in world space (local conversion is in mouse drag)
+    // Verify the translate applies correctly and transform space persists
     Ogre::Vector3 startPos = node->getPosition();
     instance->translateSelected(Ogre::Vector3(5, 0, 0));
     Ogre::Vector3 endPos = node->getPosition();
 
-    EXPECT_NE(startPos, endPos);
+    // Should have moved exactly 5 units along world X
+    EXPECT_FLOAT_EQ(endPos.x - startPos.x, 5.0f);
+    EXPECT_FLOAT_EQ(endPos.y - startPos.y, 0.0f);
+    EXPECT_FLOAT_EQ(endPos.z - startPos.z, 0.0f);
+
+    // Transform space should still be LOCAL
+    EXPECT_EQ(instance->getTransformSpace(), TransformOperator::SPACE_LOCAL);
     instance->setTransformSpace(TransformOperator::SPACE_WORLD);
 }
 

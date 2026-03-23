@@ -570,6 +570,8 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
         statusMessage += QString("Nodes: %1").arg(sel->getNodesCount());
     else if (sel->hasEntities())
         statusMessage += QString("Entities: %1").arg(sel->getEntitiesCount());
+    else if (sel->hasSubEntities())
+        statusMessage += QString("Submeshes: %1").arg(sel->getSubEntitiesCount());
     else
         statusMessage += "No selection";
 

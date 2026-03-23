@@ -9,7 +9,7 @@ Column {
     property var treeModel
     property int indentLevel: 0
 
-    property bool expanded: indentLevel > 0  // Nodes start collapsed, children expanded
+    property bool expanded: false  // All nodes start collapsed to avoid loading full subtree
     property int childCount: treeModel ? treeModel.rowCount(nodeIndex) : 0
     property bool hasChildren: childCount > 0
     property string nodeName: treeModel ? (treeModel.data(nodeIndex) || "") : ""

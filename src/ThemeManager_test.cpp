@@ -14,12 +14,14 @@ protected:
 };
 
 TEST_F(ThemeManagerTests, Singleton) {
-    ASSERT_NE(ThemeManager::instance(), nullptr);
-    EXPECT_EQ(ThemeManager::instance(), ThemeManager::instance());
+    auto* tm = ThemeManager::instance();
+    ASSERT_NE(tm, nullptr);
+    EXPECT_EQ(tm, ThemeManager::instance());
 }
 
 TEST_F(ThemeManagerTests, ColorsAreValid) {
     auto* tm = ThemeManager::instance();
+    ASSERT_NE(tm, nullptr);
     EXPECT_TRUE(tm->windowColor().isValid());
     EXPECT_TRUE(tm->panelColor().isValid());
     EXPECT_TRUE(tm->headerColor().isValid());
@@ -34,6 +36,7 @@ TEST_F(ThemeManagerTests, ColorsAreValid) {
 
 TEST_F(ThemeManagerTests, ThemeNameNotEmpty) {
     auto* tm = ThemeManager::instance();
+    ASSERT_NE(tm, nullptr);
     QString name = tm->themeName();
     EXPECT_FALSE(name.isEmpty());
     EXPECT_TRUE(name == "light" || name == "dark");
@@ -41,6 +44,7 @@ TEST_F(ThemeManagerTests, ThemeNameNotEmpty) {
 
 TEST_F(ThemeManagerTests, RefreshThemeEmitsSignal) {
     auto* tm = ThemeManager::instance();
+    ASSERT_NE(tm, nullptr);
     QSignalSpy spy(tm, &ThemeManager::themeChanged);
     tm->refreshTheme();
     EXPECT_EQ(spy.count(), 1);
