@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1010</width>
+    <width>1110</width>
     <height>660</height>
    </rect>
   </property>
@@ -59,7 +59,9 @@
      </property>
      <addaction name="actionObjects_Toolbar"/>
      <addaction name="actionTools_Toolbar"/>
+     <addaction name="actionView_Toolbar"/>
      <addaction name="actionMeshEditor"/>
+     <addaction name="actionAnimation_Control"/>
     </widget>
     <widget class="QMenu" name="menuViewport_Layout">
      <property name="title">
@@ -101,6 +103,13 @@
     <addaction name="actionExport_Selected"/>
     <addaction name="actionAdd_Resource_location"/>
    </widget>
+   <widget class="QMenu" name="menuEdit">
+    <property name="title">
+     <string>Edit</string>
+    </property>
+    <addaction name="actionUndo"/>
+    <addaction name="actionRedo"/>
+   </widget>
    <widget class="QMenu" name="menuHelp">
     <property name="title">
      <string>Help</string>
@@ -109,6 +118,7 @@
     <addaction name="actionVerify_Update"/>
    </widget>
    <addaction name="menuFile"/>
+   <addaction name="menuEdit"/>
    <addaction name="menuOp_es"/>
    <addaction name="menuHelp"/>
   </widget>
@@ -142,12 +152,31 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
+   <addaction name="actionSelect_Object"/>
    <addaction name="actionTranslate_Object"/>
    <addaction name="actionRotate_Object"/>
-   <addaction name="actionSelect_Object"/>
+   <addaction name="actionScale_Object"/>
+   <addaction name="separator"/>
+   <addaction name="actionToggle_Transform_Space"/>
+   <addaction name="separator"/>
    <addaction name="actionRemove_Object"/>
    <addaction name="actionMaterial_Editor"/>
    <addaction name="actionMerge_Animations"/>
+  </widget>
+  <widget class="QToolBar" name="viewToolbar">
+   <property name="windowTitle">
+    <string>View</string>
+   </property>
+   <attribute name="toolBarArea">
+    <enum>TopToolBarArea</enum>
+   </attribute>
+   <attribute name="toolBarBreak">
+    <bool>false</bool>
+   </attribute>
+   <addaction name="actionShow_Grid"/>
+   <addaction name="actionShow_Normals"/>
+   <addaction name="actionShow_Mesh_Info"/>
+   <addaction name="actionShow_View_Cube"/>
   </widget>
   <widget class="QDockWidget" name="meshEditorWidget">
    <property name="sizePolicy">
@@ -290,6 +319,28 @@
     <string>Tools</string>
    </property>
   </action>
+  <action name="actionAnimation_Control">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Animation Control</string>
+   </property>
+  </action>
+  <action name="actionView_Toolbar">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>View Toolbar</string>
+   </property>
+  </action>
   <action name="actionMeshEditor">
    <property name="checkable">
     <bool>true</bool>
@@ -313,7 +364,7 @@
     <string>Move Object</string>
    </property>
    <property name="toolTip">
-    <string>Move Object</string>
+    <string>Move Object (W)</string>
    </property>
    <property name="autoRepeat">
     <bool>true</bool>
@@ -331,7 +382,7 @@
     <string>Rotate Object</string>
    </property>
    <property name="toolTip">
-    <string>Rotate Object</string>
+    <string>Rotate Object (E)</string>
    </property>
   </action>
   <action name="actionSelect_Object">
@@ -349,7 +400,7 @@
     <string>Select Object</string>
    </property>
    <property name="toolTip">
-    <string>Select Object</string>
+    <string>Select Object (Q)</string>
    </property>
   </action>
   <action name="actionRemove_Object">
@@ -361,7 +412,7 @@
     <string>Remove Object</string>
    </property>
    <property name="toolTip">
-    <string>Remove Object</string>
+    <string>Remove Object (Del)</string>
    </property>
   </action>
   <action name="actionExport_Selected">
@@ -454,6 +505,48 @@
   <action name="actionVerify_Update">
    <property name="text">
     <string>Verify Update</string>
+   </property>
+  </action>
+  <action name="actionUndo">
+   <property name="text">
+    <string>Undo</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Z</string>
+   </property>
+  </action>
+  <action name="actionRedo">
+   <property name="text">
+    <string>Redo</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+Shift+Z</string>
+   </property>
+  </action>
+  <action name="actionScale_Object">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="icon">
+    <iconset>
+     <normaloff>:/icones/scale.png</normaloff>:/icones/scale.png</iconset>
+   </property>
+   <property name="text">
+    <string>Scale Object</string>
+   </property>
+   <property name="toolTip">
+    <string>Scale Object (R)</string>
+   </property>
+  </action>
+  <action name="actionToggle_Transform_Space">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>World/Local</string>
+   </property>
+   <property name="toolTip">
+    <string>Toggle World/Local Transform Space (X)</string>
    </property>
   </action>
   <action name="actionMerge_Animations">

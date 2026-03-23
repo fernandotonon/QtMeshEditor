@@ -78,6 +78,13 @@ void LLMManager::shutdownWorkerThread()
         m_workerThread->wait();
         qDebug() << "LLMManager: Worker thread stopped";
     }
+
+    // Unload model to free llama context and Metal resources before ggml-metal's
+    // static destructor runs at process exit. Worker object is left alive (leaked
+    // intentionally) because deleteLater crashes after event loop shutdown.
+    if (m_worker) {
+        m_worker->unloadModel();
+    }
 }
 
 QString LLMManager::getDefaultModelsDirectory() const

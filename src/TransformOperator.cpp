@@ -5,6 +5,7 @@
 #include "TransformOperator.h"
 #include "RotationGizmo.h"
 #include "TranslationGizmo.h"
+#include "ScaleGizmo.h"
 #include "SelectionBoxObject.h"
 #include "SelectionSet.h"
 #include "OgreWidget.h"
@@ -15,6 +16,8 @@
 #include "MeshTransform.h"
 #include "Euler.h"
 #include "ViewportGrid.h"
+#include "UndoManager.h"
+#include "commands/TransformCommands.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -61,6 +64,10 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     m_pTranslationGizmo->setQueryFlags(GIZMO_QUERY_FLAGS);
     m_pTranslationGizmo->setVisible(false);
 
+    m_pScaleGizmo = new ScaleGizmo(m_pTransformNode);
+    m_pScaleGizmo->setQueryFlags(GIZMO_QUERY_FLAGS);
+    m_pScaleGizmo->setVisible(false);
+
     // TODO move this node in the SelectionBoxObject class
     m_pSelectionBoxNode = pSceneMgr->getRootSceneNode()->createChildSceneNode(SELECTIONBOX_OBJECT_NAME);
     m_pSelectionBox = new SelectionBoxObject(SELECTIONBOX_OBJECT_NAME);
@@ -84,6 +91,8 @@ TransformOperator::~TransformOperator()
     m_pRotationGizmo = nullptr;
     delete m_pTranslationGizmo;
     m_pTranslationGizmo = nullptr;
+    delete m_pScaleGizmo;
+    m_pScaleGizmo = nullptr;
 
     if (auto manager = Manager::getSingletonPtr())
     {
@@ -148,6 +157,21 @@ void TransformOperator::onTransformStateChange(const TransformState newState)
     updateGizmo();
 }
 
+void TransformOperator::setTransformSpace(TransformSpace space)
+{
+    if (mTransformSpace != space)
+    {
+        mTransformSpace = space;
+        updateGizmo();
+        emit transformSpaceChanged(mTransformSpace);
+    }
+}
+
+void TransformOperator::toggleTransformSpace()
+{
+    setTransformSpace(mTransformSpace == SPACE_WORLD ? SPACE_LOCAL : SPACE_WORLD);
+}
+
 void TransformOperator::removeSelected()
 {
     SentryReporter::addBreadcrumb("ui.action", "Remove selected objects");
@@ -159,36 +183,61 @@ void TransformOperator::removeSelected()
             Manager::getSingleton()->destroySceneNode(node);
         }
         pCurrentSelection->clearList();
+
+        // Clear undo stack — destroyed nodes invalidate any stored commands
+        UndoManager::getSingleton()->clear();
     }
 }
 
 
-// TODO add scale gizmo
 void TransformOperator::updateGizmo()
 {
     updateGizmoPosition();
     if(SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities())
     {
+        // Determine gizmo orientation based on transform space
+        Ogre::Quaternion gizmoOrientation;
+        if (mTransformSpace == SPACE_LOCAL && SelectionSet::getSingleton()->hasNodes()
+            && SelectionSet::getSingleton()->getNodesCount() == 1)
+        {
+            gizmoOrientation = SelectionSet::getSingleton()->getSceneNode(0)->getOrientation();
+        }
+        else
+        {
+            gizmoOrientation = Manager::getSingleton()->getSceneMgr()->getRootSceneNode()->getOrientation();
+        }
+
         switch  (mTransformState) {
         case TransformOperator::TS_SELECT:
                 m_pRotationGizmo->setVisible(false);
                 m_pTranslationGizmo->setVisible(false);
+                m_pScaleGizmo->setVisible(false);
           break;
         case TransformOperator::TS_TRANSLATE:
-                m_pTransformNode->setOrientation(Manager::getSingleton()->getSceneMgr()->getRootSceneNode()->getOrientation());
+                m_pTransformNode->setOrientation(gizmoOrientation);
                 m_pRotationGizmo->setVisible(false);
                 m_pTranslationGizmo->setVisible(true);
+                m_pScaleGizmo->setVisible(false);
                 mTrackingEnable = true;
           break;
-        case TransformOperator::TS_ROTATE: // TODO change orientation when LOCAL mode is selected
-                m_pTransformNode->setOrientation(Manager::getSingleton()->getSceneMgr()->getRootSceneNode()->getOrientation());
+        case TransformOperator::TS_ROTATE:
+                m_pTransformNode->setOrientation(gizmoOrientation);
                 m_pRotationGizmo->setVisible(true);
                 m_pTranslationGizmo->setVisible(false);
+                m_pScaleGizmo->setVisible(false);
+                mTrackingEnable = true;
+          break;
+        case TransformOperator::TS_SCALE:
+                m_pTransformNode->setOrientation(gizmoOrientation);
+                m_pRotationGizmo->setVisible(false);
+                m_pTranslationGizmo->setVisible(false);
+                m_pScaleGizmo->setVisible(true);
                 mTrackingEnable = true;
           break;
         default:
                 m_pRotationGizmo->setVisible(false);
                 m_pTranslationGizmo->setVisible(false);
+                m_pScaleGizmo->setVisible(false);
           break;
         }
     }
@@ -196,6 +245,7 @@ void TransformOperator::updateGizmo()
     {
         m_pRotationGizmo->setVisible(false);
         m_pTranslationGizmo->setVisible(false);
+        m_pScaleGizmo->setVisible(false);
     }
     if(m_pActiveWidget)
         m_pActiveWidget->setMouseTracking(mTrackingEnable);
@@ -203,16 +253,6 @@ void TransformOperator::updateGizmo()
 
 void TransformOperator::updateGizmoPosition()
 {
-    //TODO add a parent or local transform (get the orientation of object node)
-/*
-    if(m_pSelectedNode)
-    {
-        m_pTransformNode->setPosition(m_pSelectedNode->getPosition());
-
-        if(mTransformState == TS_ROTATE)
-            m_pTransformNode->setOrientation(m_pSelectedNode->getOrientation());
-    }
-*/
     Ogre::Vector3 currentPosition = Ogre::Vector3::ZERO;
     Ogre::Vector3 currentOrientation = Ogre::Vector3::ZERO;
     Ogre::Vector3 currentScale = Ogre::Vector3::UNIT_SCALE;
@@ -434,13 +474,34 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 SentryReporter::addBreadcrumb("ui.transform", "Translate selected");
             else if(mTransformState == TS_ROTATE)
                 SentryReporter::addBreadcrumb("ui.transform", "Rotate selected");
+            else if(mTransformState == TS_SCALE)
+                SentryReporter::addBreadcrumb("ui.transform", "Scale selected");
 
-            // Checking the ray intersection with a plane parallele to viewport & on the geometric center of selection
+            // Capture undo state for scene nodes
+            mUndoStartPositions.clear();
+            mUndoStartOrientations.clear();
+            mUndoStartScales.clear();
+            if (SelectionSet::getSingleton()->hasNodes())
+            {
+                for (Ogre::SceneNode* node : SelectionSet::getSingleton()->getNodesSelectionList())
+                {
+                    mUndoStartPositions.append(node->getPosition());
+                    mUndoStartOrientations.append(node->getOrientation());
+                    mUndoStartScales.append(node->getScale());
+                }
+            }
+
+            // Checking the ray intersection with a plane parallel to viewport & on the geometric center of selection
             Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
             std::pair<bool, Ogre::Real> result = mouseRay.intersects(Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
 
             if(result.first)
+            {
                 mStartPoint = mouseRay.getPoint(result.second);
+                // For scale: record initial distance from gizmo center to start point
+                if(mTransformState == TS_SCALE)
+                    mScaleStartDistance = (mStartPoint - m_pTransformNode->getPosition()).length();
+            }
         }
     }
 }
@@ -492,7 +553,7 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                 translateSelected(translation);
                 mStartPoint = point;
 
-                emit selectedPositionChanged(SelectionSet::getSingleton()->getSelectionCenter()); //TODO connect this signal
+                emit selectedPositionChanged(SelectionSet::getSingleton()->getSelectionCenter());
 
                 updateGizmoPosition();
             }
@@ -533,7 +594,57 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                 rotateSelected(rotation);
                 mStartPoint = point;
 
-                emit selectedOrientationChanged(SelectionSet::getSingleton()->getSelectionOrientation()); //TODO connect this signal
+                emit selectedOrientationChanged(SelectionSet::getSingleton()->getSelectionOrientation());
+            }
+        }
+    }
+    else if(mTransformState == TS_SCALE && (!SelectionSet::getSingleton()->isEmpty()))
+    {
+        if(mStartPoint.isZeroLength())
+        {
+            // Survey gizmo hit for axis highlighting
+            Ogre::MovableObject* gizmoAxis = performRaySelection(e->pos(), true);
+            if(gizmoAxis)
+                mTransformVector = m_pScaleGizmo->highlightAxis(gizmoAxis);
+            else
+            {
+                m_pScaleGizmo->createAxis();
+                mTransformVector = Ogre::Vector3::ZERO;
+            }
+        }
+        else
+        {
+            // Dragging -> compute scale factor from distance ratio
+            Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
+            std::pair<bool, Ogre::Real> result = mouseRay.intersects(Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
+
+            if(result.first)
+            {
+                Ogre::Vector3 point = mouseRay.getPoint(result.second);
+                Ogre::Real currentDistance = (point - m_pTransformNode->getPosition()).length();
+
+                if(mScaleStartDistance > 0.001f)
+                {
+                    Ogre::Real ratio = currentDistance / mScaleStartDistance;
+                    Ogre::Vector3 scaleFactor = Ogre::Vector3::UNIT_SCALE;
+
+                    if(mTransformVector == Ogre::Vector3::ZERO)
+                    {
+                        // Uniform scale when no axis selected
+                        scaleFactor = Ogre::Vector3(ratio, ratio, ratio);
+                    }
+                    else
+                    {
+                        // Per-axis scale
+                        scaleFactor = Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
+                    }
+
+                    scaleSelected(scaleFactor);
+                    mScaleStartDistance = currentDistance;
+
+                    emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
+                    updateGizmoPosition();
+                }
             }
         }
     }
@@ -542,7 +653,86 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 {
     if((SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()) && (e->button() == Qt::LeftButton))
+    {
+        // Push undo command if a transform was performed on scene nodes
+        if (SelectionSet::getSingleton()->hasNodes() && !mUndoStartPositions.isEmpty())
+        {
+            auto nodes = SelectionSet::getSingleton()->getNodesSelectionList();
+            bool changed = false;
+
+            if (mTransformState == TS_TRANSLATE)
+            {
+                // Compute total delta from start positions
+                Ogre::Vector3 totalDelta = Ogre::Vector3::ZERO;
+                for (int i = 0; i < nodes.size() && i < mUndoStartPositions.size(); ++i)
+                {
+                    Ogre::Vector3 delta = nodes[i]->getPosition() - mUndoStartPositions[i];
+                    if (!delta.isZeroLength())
+                    {
+                        totalDelta = delta;
+                        changed = true;
+                    }
+                }
+                if (changed)
+                {
+                    // Revert to start, then push command (which will redo)
+                    for (int i = 0; i < nodes.size() && i < mUndoStartPositions.size(); ++i)
+                        nodes[i]->setPosition(mUndoStartPositions[i]);
+                    UndoManager::getSingleton()->push(new TranslateCommand(nodes, totalDelta));
+                }
+            }
+            else if (mTransformState == TS_ROTATE)
+            {
+                for (int i = 0; i < nodes.size() && i < mUndoStartOrientations.size(); ++i)
+                {
+                    if (nodes[i]->getOrientation() != mUndoStartOrientations[i])
+                    {
+                        changed = true;
+                        break;
+                    }
+                }
+                if (changed)
+                {
+                    Ogre::Quaternion totalRotation = Ogre::Quaternion::IDENTITY;
+                    if (!mUndoStartOrientations.isEmpty() && !nodes.isEmpty())
+                        totalRotation = nodes[0]->getOrientation() * mUndoStartOrientations[0].Inverse();
+
+                    // Revert to start, then push command
+                    for (int i = 0; i < nodes.size() && i < mUndoStartPositions.size(); ++i)
+                    {
+                        nodes[i]->setPosition(mUndoStartPositions[i]);
+                        nodes[i]->setOrientation(mUndoStartOrientations[i]);
+                    }
+                    UndoManager::getSingleton()->push(
+                        new RotateCommand(nodes, totalRotation, m_pTransformNode->getPosition()));
+                }
+            }
+            else if (mTransformState == TS_SCALE)
+            {
+                Ogre::Vector3 totalScale = Ogre::Vector3::UNIT_SCALE;
+                for (int i = 0; i < nodes.size() && i < mUndoStartScales.size(); ++i)
+                {
+                    if (nodes[i]->getScale() != mUndoStartScales[i])
+                    {
+                        totalScale = nodes[i]->getScale() / mUndoStartScales[i];
+                        changed = true;
+                    }
+                }
+                if (changed)
+                {
+                    for (int i = 0; i < nodes.size() && i < mUndoStartScales.size(); ++i)
+                        nodes[i]->setScale(mUndoStartScales[i]);
+                    UndoManager::getSingleton()->push(new ScaleCommand(nodes, totalScale));
+                }
+            }
+        }
+
+        mUndoStartPositions.clear();
+        mUndoStartOrientations.clear();
+        mUndoStartScales.clear();
         mStartPoint = Ogre::Vector3::ZERO;
+        mScaleStartDistance = 0.0f;
+    }
 
     if(m_pSelectionBox->isVisible())
     {
@@ -595,15 +785,12 @@ void TransformOperator::translateSelected(const Ogre::Vector3& translation)
     }
 }
 
-// TODO add a GUI scale by Vector length between mStartPoint & current pos on ground plane
-// to do this use scaleSelected instead of setSelectedScale
 void TransformOperator::setSelectedScale(const Ogre::Vector3& newScale)
 {
     if(SelectionSet::getSingleton()->hasNodes())
     {
         Ogre::Vector3 scaleFactor = newScale / SelectionSet::getSingleton()->getSelectionScale();
         scaleSelected(scaleFactor);
-        //TODO scaling in selection CS
     }
     else if(SelectionSet::getSingleton()->hasEntities())
     {
@@ -637,7 +824,7 @@ void TransformOperator::scaleSelected(const Ogre::Vector3& scaleFactor)
 void TransformOperator::setSelectedOrientation(const Ogre::Vector3& newOrientation)
 {
     if(SelectionSet::getSingleton()->hasNodes())
-    {  
+    {
        Ogre::Vector3 rotation = newOrientation - SelectionSet::getSingleton()->getSelectionOrientation();
 
        Ogre::Euler eulerAngle(Ogre::Degree(rotation.y),
