@@ -38,30 +38,18 @@
 MaterialEditorQML::MaterialEditorQML(QObject *parent)
     : QObject(parent)
 {
-    try {
-        // Initialize theme colors from system palette
-        QPalette palette = QApplication::palette();
-        m_backgroundColor = palette.color(QPalette::Window);
-        m_panelColor = palette.color(QPalette::Base);
-        m_textColor = palette.color(QPalette::WindowText);
-        m_borderColor = palette.color(QPalette::Mid);
-        m_highlightColor = palette.color(QPalette::Highlight);
-        m_buttonColor = palette.color(QPalette::Button);
-        m_buttonTextColor = palette.color(QPalette::ButtonText);
-        m_disabledTextColor = palette.color(QPalette::PlaceholderText);
-        m_accentColor = palette.color(QPalette::Highlight);
-    } catch (...) {
-        // Fallback to default colors if palette access fails
-        m_backgroundColor = QColor(240, 240, 240);
-        m_panelColor = QColor(255, 255, 255);
-        m_textColor = QColor(0, 0, 0);
-        m_borderColor = QColor(128, 128, 128);
-        m_highlightColor = QColor(0, 120, 215);
-        m_buttonColor = QColor(225, 225, 225);
-        m_buttonTextColor = QColor(0, 0, 0);
-        m_disabledTextColor = QColor(128, 128, 128);
-        m_accentColor = QColor(0, 120, 215);
-    }
+    // Initialize theme colors from system palette
+    // (member defaults in header provide fallback values)
+    QPalette palette = QApplication::palette();
+    m_backgroundColor = palette.color(QPalette::Window);
+    m_panelColor = palette.color(QPalette::Base);
+    m_textColor = palette.color(QPalette::WindowText);
+    m_borderColor = palette.color(QPalette::Mid);
+    m_highlightColor = palette.color(QPalette::Highlight);
+    m_buttonColor = palette.color(QPalette::Button);
+    m_buttonTextColor = palette.color(QPalette::ButtonText);
+    m_disabledTextColor = palette.color(QPalette::PlaceholderText);
+    m_accentColor = palette.color(QPalette::Highlight);
     
     // Initialize material color properties with defaults
     m_ambientColor = QColor(128, 128, 128);  // Gray
@@ -116,18 +104,7 @@ MaterialEditorQML* MaterialEditorQML::qmlInstance(QQmlEngine *engine, QJSEngine 
     
     static MaterialEditorQML* instance = nullptr;
     if (!instance) {
-        try {
-            instance = new MaterialEditorQML();
-        } catch (const std::exception& e) {
-            // Log error but don't let it crash
-            qDebug() << "Error creating MaterialEditorQML instance:" << e.what();
-            // Create a simple instance anyway
-            instance = new MaterialEditorQML();
-        } catch (...) {
-            qDebug() << "Unknown error creating MaterialEditorQML instance";
-            // Create a simple instance anyway
-            instance = new MaterialEditorQML();
-        }
+        instance = new MaterialEditorQML();
     }
     return instance;
 }
