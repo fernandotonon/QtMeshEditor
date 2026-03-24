@@ -309,8 +309,12 @@ if(APPLE)
         COMMENT "Creating qtmesh symlink -> app bundle binary"
     )
 elseif(WIN32)
-    file(WRITE "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/qtmesh.cmd"
-        "@echo off\n\"%~dp0${CMAKE_PROJECT_NAME}.exe\" --cli %*\n")
+    # Build a tiny qtmesh.exe launcher instead of a .cmd wrapper.
+    # WinGet portable manifests don't allow .cmd files.
+    add_executable(qtmesh qtmesh_launcher.cpp)
+    set_target_properties(qtmesh PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+    )
 else()
     add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E create_symlink
