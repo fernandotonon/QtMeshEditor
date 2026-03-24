@@ -86,9 +86,9 @@ PackageVersion: ${VERSION}
 InstallerType: zip
 NestedInstallerType: portable
 NestedInstallerFiles:
-  - RelativeFilePath: QtMeshEditor.exe
+  - RelativeFilePath: bin\\QtMeshEditor.exe
     PortableCommandAlias: qtmesheditor
-  - RelativeFilePath: qtmesh.exe
+  - RelativeFilePath: bin\\qtmesh.exe
     PortableCommandAlias: qtmesh
 Installers:
   - Architecture: x64
