@@ -15,8 +15,13 @@ TEST(MainTest, QApplicationExists)
     ASSERT_NE(app, nullptr);
 }
 
-// DISABLED: This test causes segfault during mesh import/cleanup (Ogre hardware buffer manager issues)
-// TODO: Fix Ogre render system initialization before mesh loading
+// DISABLED: Segfaults in Ogre hardware buffer manager during mesh import.
+// The MainWindow constructor creates an OgreWidget which requires a real GL
+// context and render window. On CI (even with Xvfb), the render system
+// initialization path differs from the test harness expectations, causing
+// crashes in HardwareBufferManager when meshes are loaded in frameEnded().
+// TODO: Refactor MainWindow to allow injecting a mock render system, or
+// create a dedicated integration test that runs in a separate process.
 TEST(MainTest, DISABLED_ImportMeshs) {
     if (!canLoadMeshFiles()) {
         GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";

@@ -559,31 +559,44 @@ TEST_F(LLMManagerTest, GetAndSetSettingsStruct)
 // Settings save/load persistence tests
 // =============================================================================
 
-// DISABLED: QSettings caching on macOS causes loadSettings() to not reflect saveSettings() within same process
-TEST_F(LLMManagerTest, DISABLED_SaveAndLoadSettingsPersistence)
+// Fixed: the original test was flawed because each setter (setContextSize etc.)
+// internally calls saveSettings(), so modifying in-memory values also overwrote
+// the saved values. The fix: write known values to QSettings directly, then
+// verify loadSettings() reads them back correctly.
+TEST_F(LLMManagerTest, SaveAndLoadSettingsPersistence)
 {
-    // Save known values
+    // Remember original values to restore later
     int origCtx = manager->contextSize();
     int origMax = manager->maxTokens();
     float origTemp = manager->temperature();
     int origGpu = manager->gpuLayers();
     bool origAuto = manager->autoLoadModel();
 
-    manager->setContextSize(1024);
-    manager->setMaxTokens(512);
-    manager->setTemperature(0.9f);
-    manager->setGpuLayers(8);
-    manager->setAutoLoadModel(true);
-    manager->saveSettings();
+    // Write known test values directly to QSettings (bypassing the setters
+    // which would also update in-memory state via saveSettings())
+    {
+        QSettings settings;
+        settings.beginGroup("LLM");
+        settings.setValue("contextSize", 1024);
+        settings.setValue("maxTokens", 512);
+        settings.setValue("temperature", 0.9);
+        settings.setValue("gpuLayers", 8);
+        settings.setValue("autoLoadModel", true);
+        settings.endGroup();
+        settings.sync();
+    }
 
-    // Now modify in-memory values
-    manager->setContextSize(9999);
-    manager->setMaxTokens(9999);
-    manager->setTemperature(0.1f);
-    manager->setGpuLayers(1);
-    manager->setAutoLoadModel(false);
+    // Set different in-memory values (use the internal settings struct directly
+    // is not possible via public API, so we just verify loadSettings overrides)
+    // First, put different values in memory by using setters. The setters will
+    // call saveSettings() which overwrites our QSettings values, so we need to
+    // re-write QSettings afterwards.
+    // Simpler approach: just call loadSettings() now and verify it reads the
+    // QSettings values we wrote above.
+    // But setters already called saveSettings with the original values...
+    // The cleanest approach: write to QSettings, then loadSettings().
 
-    // Reload from storage
+    // Load from the QSettings we just wrote
     manager->loadSettings();
 
     EXPECT_EQ(manager->contextSize(), 1024);
@@ -592,13 +605,29 @@ TEST_F(LLMManagerTest, DISABLED_SaveAndLoadSettingsPersistence)
     EXPECT_EQ(manager->gpuLayers(), 8);
     EXPECT_EQ(manager->autoLoadModel(), true);
 
+    // Now test the reverse direction: use setters (which call saveSettings),
+    // then loadSettings() should get those same values back.
+    manager->setContextSize(2048);
+    manager->setMaxTokens(1024);
+    manager->setTemperature(0.5f);
+    manager->setGpuLayers(4);
+    manager->setAutoLoadModel(false);
+
+    // Reload from storage — should match what the setters saved
+    manager->loadSettings();
+
+    EXPECT_EQ(manager->contextSize(), 2048);
+    EXPECT_EQ(manager->maxTokens(), 1024);
+    EXPECT_FLOAT_EQ(manager->temperature(), 0.5f);
+    EXPECT_EQ(manager->gpuLayers(), 4);
+    EXPECT_EQ(manager->autoLoadModel(), false);
+
     // Restore originals
     manager->setContextSize(origCtx);
     manager->setMaxTokens(origMax);
     manager->setTemperature(origTemp);
     manager->setGpuLayers(origGpu);
     manager->setAutoLoadModel(origAuto);
-    manager->saveSettings();
 }
 
 // =============================================================================

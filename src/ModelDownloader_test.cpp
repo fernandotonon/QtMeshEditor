@@ -77,11 +77,11 @@ TEST_F(ModelDownloaderTest, InitialModelNameIsEmpty) {
 }
 
 // --- startDownload state transitions ---
-// DISABLED: startDownload triggers real network I/O via QNetworkAccessManager on a singleton,
-// which causes segfaults during processEvents/cancelDownload cleanup on macOS.
-// These tests may work on Linux CI where the singleton lifecycle is more predictable.
+// Re-enabled: these tests use real network I/O but are safe on Linux CI where
+// the singleton lifecycle is predictable. On macOS, processEvents cleanup was
+// the issue but these pass reliably on Linux with Xvfb.
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadSetsIsDownloading) {
+TEST_F(ModelDownloaderTest, StartDownloadSetsIsDownloading) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -90,7 +90,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadSetsIsDownloading) {
     EXPECT_TRUE(downloader->isDownloading());
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadSetsModelName) {
+TEST_F(ModelDownloaderTest, StartDownloadSetsModelName) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "MyModel");
@@ -99,7 +99,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadSetsModelName) {
     EXPECT_EQ(downloader->currentModelName(), "MyModel");
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadEmitsIsDownloadingChanged) {
+TEST_F(ModelDownloaderTest, StartDownloadEmitsIsDownloadingChanged) {
     QSignalSpy spy(downloader, &ModelDownloader::isDownloadingChanged);
     QString dest = tempFilePath("test_model.gguf");
 
@@ -109,7 +109,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadEmitsIsDownloadingChanged) {
     EXPECT_GE(spy.count(), 1);
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadEmitsCurrentModelNameChanged) {
+TEST_F(ModelDownloaderTest, StartDownloadEmitsCurrentModelNameChanged) {
     QSignalSpy spy(downloader, &ModelDownloader::currentModelNameChanged);
     QString dest = tempFilePath("test_model.gguf");
 
@@ -119,7 +119,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadEmitsCurrentModelNameChanged) 
     EXPECT_GE(spy.count(), 1);
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadEmitsDownloadStarted) {
+TEST_F(ModelDownloaderTest, StartDownloadEmitsDownloadStarted) {
     QSignalSpy spy(downloader, &ModelDownloader::downloadStarted);
     QString dest = tempFilePath("test_model.gguf");
 
@@ -130,7 +130,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadEmitsDownloadStarted) {
     EXPECT_EQ(spy.at(0).at(0).toString(), "TestModel");
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadResetsProgress) {
+TEST_F(ModelDownloaderTest, StartDownloadResetsProgress) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -143,7 +143,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadResetsProgress) {
 
 // --- Duplicate download rejection ---
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadWhileAlreadyDownloadingEmitsError) {
+TEST_F(ModelDownloaderTest, StartDownloadWhileAlreadyDownloadingEmitsError) {
     QString dest1 = tempFilePath("model1.gguf");
     QString dest2 = tempFilePath("model2.gguf");
 
@@ -160,7 +160,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadWhileAlreadyDownloadingEmitsEr
     EXPECT_TRUE(errorSpy.at(0).at(1).toString().contains("already in progress"));
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadWhileAlreadyDownloadingDoesNotChangeModel) {
+TEST_F(ModelDownloaderTest, StartDownloadWhileAlreadyDownloadingDoesNotChangeModel) {
     QString dest1 = tempFilePath("model1.gguf");
     QString dest2 = tempFilePath("model2.gguf");
 
@@ -176,7 +176,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadWhileAlreadyDownloadingDoesNot
 
 // --- Temp file path construction ---
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadCreatesTempPartFile) {
+TEST_F(ModelDownloaderTest, StartDownloadCreatesTempPartFile) {
     QString dest = tempFilePath("test_model.gguf");
     QString expectedTempFile = dest + ".part";
 
@@ -188,7 +188,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadCreatesTempPartFile) {
 
 // --- Directory creation ---
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadCreatesDestinationDirectory) {
+TEST_F(ModelDownloaderTest, StartDownloadCreatesDestinationDirectory) {
     QString nestedDir = tempDir.path() + "/nested/deep/dir";
     QString dest = nestedDir + "/model.gguf";
 
@@ -200,7 +200,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadCreatesDestinationDirectory) {
 
 // --- cancelDownload ---
 
-TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadResetsIsDownloading) {
+TEST_F(ModelDownloaderTest, CancelDownloadResetsIsDownloading) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -213,7 +213,7 @@ TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadResetsIsDownloading) {
     EXPECT_FALSE(downloader->isDownloading());
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadClearsModelName) {
+TEST_F(ModelDownloaderTest, CancelDownloadClearsModelName) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -225,7 +225,7 @@ TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadClearsModelName) {
     EXPECT_TRUE(downloader->currentModelName().isEmpty());
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadResetsBytesReceived) {
+TEST_F(ModelDownloaderTest, CancelDownloadResetsBytesReceived) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -238,7 +238,7 @@ TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadResetsBytesReceived) {
     EXPECT_EQ(downloader->bytesTotal(), 0);
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadResetsProgress) {
+TEST_F(ModelDownloaderTest, CancelDownloadResetsProgress) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -250,7 +250,7 @@ TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadResetsProgress) {
     EXPECT_FLOAT_EQ(downloader->downloadProgress(), 0.0f);
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadResetsSpeed) {
+TEST_F(ModelDownloaderTest, CancelDownloadResetsSpeed) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -262,7 +262,7 @@ TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadResetsSpeed) {
     EXPECT_FLOAT_EQ(downloader->downloadSpeed(), 0.0f);
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadRemovesTempFile) {
+TEST_F(ModelDownloaderTest, CancelDownloadRemovesTempFile) {
     QString dest = tempFilePath("test_model.gguf");
     QString tempFile = dest + ".part";
 
@@ -276,7 +276,7 @@ TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadRemovesTempFile) {
     EXPECT_FALSE(QFile::exists(tempFile));
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadEmitsDownloadCanceled) {
+TEST_F(ModelDownloaderTest, CancelDownloadEmitsDownloadCanceled) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -291,7 +291,7 @@ TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadEmitsDownloadCanceled) {
     EXPECT_EQ(spy.at(0).at(0).toString(), "TestModel");
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadEmitsIsDownloadingChanged) {
+TEST_F(ModelDownloaderTest, CancelDownloadEmitsIsDownloadingChanged) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -317,7 +317,7 @@ TEST_F(ModelDownloaderTest, CancelDownloadWhenNotDownloadingDoesNotEmitCanceled)
 
 // --- pauseDownload ---
 
-TEST_F(ModelDownloaderTest, DISABLED_PauseDownloadEmitsDownloadPaused) {
+TEST_F(ModelDownloaderTest, PauseDownloadEmitsDownloadPaused) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -332,7 +332,7 @@ TEST_F(ModelDownloaderTest, DISABLED_PauseDownloadEmitsDownloadPaused) {
     EXPECT_EQ(spy.at(0).at(0).toString(), "TestModel");
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_PauseDownloadKeepsIsDownloadingTrue) {
+TEST_F(ModelDownloaderTest, PauseDownloadKeepsIsDownloadingTrue) {
     // After pausing, m_isDownloading stays true (only cancel/finish resets it)
     QString dest = tempFilePath("test_model.gguf");
 
@@ -354,7 +354,7 @@ TEST_F(ModelDownloaderTest, PauseWhenNotDownloadingIsNoOp) {
     EXPECT_EQ(spy.count(), 0);
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_PauseWhenAlreadyPausedIsNoOp) {
+TEST_F(ModelDownloaderTest, PauseWhenAlreadyPausedIsNoOp) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -373,7 +373,7 @@ TEST_F(ModelDownloaderTest, DISABLED_PauseWhenAlreadyPausedIsNoOp) {
 
 // --- resumeDownload ---
 
-TEST_F(ModelDownloaderTest, DISABLED_ResumeDownloadEmitsDownloadResumed) {
+TEST_F(ModelDownloaderTest, ResumeDownloadEmitsDownloadResumed) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -400,7 +400,7 @@ TEST_F(ModelDownloaderTest, ResumeWhenNotPausedIsNoOp) {
     EXPECT_EQ(spy.count(), 0);
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_ResumeAfterCancelIsNoOp) {
+TEST_F(ModelDownloaderTest, ResumeAfterCancelIsNoOp) {
     // Once canceled, m_isPaused is false and m_currentUrl is empty, so resume should be a no-op
     QString dest = tempFilePath("test_model.gguf");
 
@@ -420,7 +420,7 @@ TEST_F(ModelDownloaderTest, DISABLED_ResumeAfterCancelIsNoOp) {
 
 // --- Pause/Resume/Cancel lifecycle ---
 
-TEST_F(ModelDownloaderTest, DISABLED_PauseThenCancelResetsState) {
+TEST_F(ModelDownloaderTest, PauseThenCancelResetsState) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -440,7 +440,7 @@ TEST_F(ModelDownloaderTest, DISABLED_PauseThenCancelResetsState) {
     EXPECT_FLOAT_EQ(downloader->downloadSpeed(), 0.0f);
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_PauseThenResumeKeepsModelName) {
+TEST_F(ModelDownloaderTest, PauseThenResumeKeepsModelName) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -458,7 +458,7 @@ TEST_F(ModelDownloaderTest, DISABLED_PauseThenResumeKeepsModelName) {
 
 // --- Cancel emits all property changed signals ---
 
-TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadEmitsAllPropertySignals) {
+TEST_F(ModelDownloaderTest, CancelDownloadEmitsAllPropertySignals) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -484,7 +484,7 @@ TEST_F(ModelDownloaderTest, DISABLED_CancelDownloadEmitsAllPropertySignals) {
 
 // --- Network error handling (will fail to connect to example.com, testing error path) ---
 
-TEST_F(ModelDownloaderTest, DISABLED_DownloadToInvalidPathEmitsError) {
+TEST_F(ModelDownloaderTest, DownloadToInvalidPathEmitsError) {
     // Try to download to a path that cannot be opened for writing
     QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
 
@@ -504,7 +504,7 @@ TEST_F(ModelDownloaderTest, DISABLED_DownloadToInvalidPathEmitsError) {
 
 // --- Partial file resume detection ---
 
-TEST_F(ModelDownloaderTest, DISABLED_StartDownloadDetectsExistingPartFile) {
+TEST_F(ModelDownloaderTest, StartDownloadDetectsExistingPartFile) {
     QString dest = tempFilePath("resume_model.gguf");
     QString partFile = dest + ".part";
 
@@ -530,7 +530,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartDownloadDetectsExistingPartFile) {
 
 // --- Multiple cancel calls are safe ---
 
-TEST_F(ModelDownloaderTest, DISABLED_MultipleCancelCallsAreSafe) {
+TEST_F(ModelDownloaderTest, MultipleCancelCallsAreSafe) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");
@@ -548,7 +548,7 @@ TEST_F(ModelDownloaderTest, DISABLED_MultipleCancelCallsAreSafe) {
 
 // --- Start after cancel works ---
 
-TEST_F(ModelDownloaderTest, DISABLED_StartAfterCancelWorks) {
+TEST_F(ModelDownloaderTest, StartAfterCancelWorks) {
     QString dest1 = tempFilePath("model1.gguf");
     QString dest2 = tempFilePath("model2.gguf");
 
@@ -570,7 +570,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartAfterCancelWorks) {
 
 // --- Start after pause+cancel works ---
 
-TEST_F(ModelDownloaderTest, DISABLED_StartAfterPauseCancelWorks) {
+TEST_F(ModelDownloaderTest, StartAfterPauseCancelWorks) {
     QString dest1 = tempFilePath("model1.gguf");
     QString dest2 = tempFilePath("model2.gguf");
 
@@ -594,7 +594,7 @@ TEST_F(ModelDownloaderTest, DISABLED_StartAfterPauseCancelWorks) {
 
 // --- Q_PROPERTY values consistency ---
 
-TEST_F(ModelDownloaderTest, DISABLED_PropertiesAreConsistentAfterStart) {
+TEST_F(ModelDownloaderTest, PropertiesAreConsistentAfterStart) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "ConsistencyModel");
@@ -606,7 +606,7 @@ TEST_F(ModelDownloaderTest, DISABLED_PropertiesAreConsistentAfterStart) {
     EXPECT_FLOAT_EQ(downloader->downloadSpeed(), 0.0f);
 }
 
-TEST_F(ModelDownloaderTest, DISABLED_PropertiesAreConsistentAfterCancel) {
+TEST_F(ModelDownloaderTest, PropertiesAreConsistentAfterCancel) {
     QString dest = tempFilePath("test_model.gguf");
 
     downloader->startDownload("https://example.com/model.gguf", dest, "TestModel");

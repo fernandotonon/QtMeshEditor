@@ -65,9 +65,8 @@ TEST_F(TransformWidgetTests, Constructor)
     ASSERT_EQ(mainWindow, transformWidget->parentWidget());
 }
 
-// DISABLED: This test causes segfault in Ogre mesh loading (hardware buffer manager not initialized)
-// TODO: Fix Ogre render system initialization before mesh loading
-TEST_F(TransformWidgetTests, DISABLED_UpdateTreeViewFromSelection)
+// Re-enabled: guarded by canLoadMeshFiles() which skips when GL context is unavailable.
+TEST_F(TransformWidgetTests, UpdateTreeViewFromSelection)
 {
     if (!canLoadMeshFiles()) {
         GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
@@ -139,9 +138,8 @@ TEST_F(TransformWidgetTests, DISABLED_UpdateTreeViewFromSelection)
 }
 
 
-// DISABLED: This test causes segfault in Ogre mesh loading (hardware buffer manager not initialized)
-// TODO: Fix Ogre render system initialization before mesh loading
-TEST_F(TransformWidgetTests, DISABLED_UpdateSceneNodePositionScaleOrientation) {
+// Re-enabled: guarded by canLoadMeshFiles() which skips when GL context is unavailable.
+TEST_F(TransformWidgetTests, UpdateSceneNodePositionScaleOrientation) {
     if (!canLoadMeshFiles()) {
         GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
     }
@@ -314,10 +312,17 @@ TEST_F(TransformWidgetTests, RotationValueChangeTriggers)
     });
 }
 
-// DISABLED: This test requires entities to exist, which may cause segfault during mesh import
-// TODO: Fix Ogre render system initialization before mesh loading
-TEST_F(TransformWidgetTests, DISABLED_UpdateEntityPositionScaleOrientation) {
-    auto selectedEntity = Manager::getSingleton()->getEntities().last();
+// Re-enabled: guarded by canLoadMeshFiles() which skips when GL context is unavailable.
+TEST_F(TransformWidgetTests, UpdateEntityPositionScaleOrientation) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        GTEST_SKIP() << "Skipping: no entities available (mesh import may have failed)";
+    }
+    auto selectedEntity = entities.last();
     SelectionSet::getSingleton()->selectOne(selectedEntity);
 
     positionX->setValue(1.0);
