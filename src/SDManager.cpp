@@ -1,4 +1,3 @@
-// LCOV_EXCL_START — SD feature is not enabled in CI; requires GPU + model files
 #include "SDManager.h"
 #include <QCoreApplication>
 #include <QStandardPaths>
@@ -26,6 +25,7 @@ SDManager* SDManager::qmlInstance(QQmlEngine *engine, QJSEngine *scriptEngine)
     return instance();
 }
 
+// LCOV_EXCL_START — constructor/destructor require SDWorker which needs sd.cpp GPU backend
 SDManager::SDManager(QObject *parent)
     : QObject(parent)
 {
@@ -66,7 +66,9 @@ void SDManager::initializeWorkerThread()
     m_workerThread->start();
     qDebug() << "SDManager: Worker thread started";
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — worker thread requires sd.cpp GPU backend
 void SDManager::shutdownWorkerThread()
 {
     if (m_worker) {
@@ -79,6 +81,7 @@ void SDManager::shutdownWorkerThread()
         qDebug() << "SDManager: Worker thread stopped";
     }
 }
+// LCOV_EXCL_STOP
 
 QString SDManager::getDefaultModelsDirectory() const
 {
@@ -305,6 +308,7 @@ void SDManager::loadModel(const QString &modelName)
     // LCOV_EXCL_STOP
 }
 
+// LCOV_EXCL_START — requires sd.cpp worker thread with GPU backend
 void SDManager::unloadModel()
 {
     if (m_worker) {
@@ -313,6 +317,7 @@ void SDManager::unloadModel()
         }, Qt::QueuedConnection);
     }
 }
+// LCOV_EXCL_STOP
 
 void SDManager::scanForModels()
 {
@@ -408,12 +413,14 @@ void SDManager::generateTexture(const QString &prompt, int width, int height, co
     // LCOV_EXCL_STOP
 }
 
+// LCOV_EXCL_START — requires sd.cpp worker
 void SDManager::stopGeneration()
 {
     if (m_worker) {
         m_worker->requestStop();
     }
 }
+// LCOV_EXCL_STOP
 
 void SDManager::saveSettings()
 {

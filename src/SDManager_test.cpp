@@ -153,4 +153,136 @@ TEST_F(SDManagerTest, GenerationProgress)
     EXPECT_EQ(manager->generationTotalSteps(), 0);
 }
 
+// ---- enhanceTexturePrompt ----
+
+TEST_F(SDManagerTest, EnhanceTexturePrompt)
+{
+    QString enhanced = manager->enhanceTexturePrompt("wood");
+    EXPECT_FALSE(enhanced.isEmpty());
+    // Should contain the original prompt
+    EXPECT_TRUE(enhanced.contains("wood"));
+    // Should add texture-related terms
+    EXPECT_TRUE(enhanced.contains("texture") || enhanced.contains("seamless") || enhanced.contains("tileable"));
+}
+
+TEST_F(SDManagerTest, EnhanceTexturePromptEmpty)
+{
+    QString enhanced = manager->enhanceTexturePrompt("");
+    // Even empty prompt should get enhancement
+    EXPECT_FALSE(enhanced.isEmpty());
+}
+
+TEST_F(SDManagerTest, EnhanceTexturePromptAlreadyDetailed)
+{
+    QString prompt = "seamless wood texture high resolution tileable";
+    QString enhanced = manager->enhanceTexturePrompt(prompt);
+    EXPECT_FALSE(enhanced.isEmpty());
+}
+
+// ---- getTextureNegativePrompt ----
+
+TEST_F(SDManagerTest, GetTextureNegativePrompt)
+{
+    QString negative = manager->getTextureNegativePrompt();
+    EXPECT_FALSE(negative.isEmpty());
+}
+
+// ---- getAvailableModelsInfo ----
+
+TEST_F(SDManagerTest, GetAvailableModelsInfo)
+{
+    QVariantList models = manager->getAvailableModelsInfo();
+    // Might be empty if no models installed, but should not crash
+    EXPECT_GE(models.size(), 0);
+}
+
+// ---- setAutoLoadModel ----
+
+TEST_F(SDManagerTest, SetAutoLoadModel)
+{
+    bool original = manager->autoLoadModel();
+    manager->setAutoLoadModel(!original);
+    EXPECT_EQ(manager->autoLoadModel(), !original);
+    // Restore
+    manager->setAutoLoadModel(original);
+}
+
+// ---- getSettings / setSettings ----
+
+TEST_F(SDManagerTest, GetSettingsRoundtrip)
+{
+    SDSettings original = manager->getSettings();
+
+    SDSettings modified = original;
+    modified.width = 256;
+    modified.height = 256;
+    modified.steps = 10;
+    modified.cfgScale = 3.0f;
+    modified.negativePrompt = "test negative";
+
+    manager->setSettings(modified);
+    SDSettings retrieved = manager->getSettings();
+    EXPECT_EQ(retrieved.width, 256);
+    EXPECT_EQ(retrieved.height, 256);
+    EXPECT_EQ(retrieved.steps, 10);
+    EXPECT_FLOAT_EQ(retrieved.cfgScale, 3.0f);
+    EXPECT_EQ(retrieved.negativePrompt, "test negative");
+
+    // Restore
+    manager->setSettings(original);
+}
+
+// ---- setModelsDirectory ----
+
+TEST_F(SDManagerTest, SetModelsDirectorySignal)
+{
+    QString original = manager->modelsDirectory();
+    QSignalSpy spy(manager, &SDManager::modelsDirectoryChanged);
+
+    QString tempDir = QDir::temp().filePath("qtmesh_sd_test_models");
+    manager->setModelsDirectory(tempDir);
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(manager->modelsDirectory(), tempDir);
+
+    // Restore
+    manager->setModelsDirectory(original);
+
+    // Cleanup
+    QDir(tempDir).removeRecursively();
+}
+
+// ---- Same value doesn't emit ----
+
+TEST_F(SDManagerTest, SetImageWidthSameValueNoSignal)
+{
+    int current = manager->imageWidth();
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setImageWidth(current);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(SDManagerTest, SetStepsSameValueNoSignal)
+{
+    int current = manager->steps();
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setSteps(current);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(SDManagerTest, SetCfgScaleSameValueNoSignal)
+{
+    float current = manager->cfgScale();
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setCfgScale(current);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+// ---- qmlInstance ----
+
+TEST_F(SDManagerTest, QmlInstanceReturnsSameAsSingleton)
+{
+    SDManager* qmlInst = SDManager::qmlInstance(nullptr, nullptr);
+    EXPECT_EQ(qmlInst, manager);
+}
+
 #endif // ENABLE_STABLE_DIFFUSION
