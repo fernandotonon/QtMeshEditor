@@ -351,6 +351,7 @@ void TransformOperator::setActiveWidget(OgreWidget* ogreWidget)
 
 }
 
+// LCOV_EXCL_START — mouse/ray/viewport interaction requires active render window + camera
 Ogre::Ray TransformOperator::rayFromScreenPoint(const QPoint& pos)
 {
     if(m_pActiveWidget && m_pActiveWidget->getViewport()
@@ -780,6 +781,7 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         m_pSelectionBox->setVisible(false);
     }
 }
+// LCOV_EXCL_STOP
 
 void TransformOperator::setSelectedPosition(const Ogre::Vector3& newPosition)
 {
