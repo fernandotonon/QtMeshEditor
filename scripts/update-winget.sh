@@ -36,17 +36,17 @@ mkdir -p "${MANIFEST_DIR}"
 
 # Version manifest
 cat > "${MANIFEST_DIR}/${PKG_ID}.yaml" << EOF
-# yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
 PackageIdentifier: ${PKG_ID}
 PackageVersion: ${VERSION}
 DefaultLocale: en-US
 ManifestType: version
-ManifestVersion: 1.6.0
+ManifestVersion: 1.12.0
 EOF
 
 # Locale manifest
 cat > "${MANIFEST_DIR}/${PKG_ID}.locale.en-US.yaml" << EOF
-# yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
 PackageIdentifier: ${PKG_ID}
 PackageVersion: ${VERSION}
 PackageLocale: en-US
@@ -75,12 +75,12 @@ Tags:
 Moniker: qtmesheditor
 ReleaseNotesUrl: https://github.com/fernandotonon/QtMeshEditor/releases/tag/${VERSION}
 ManifestType: defaultLocale
-ManifestVersion: 1.6.0
+ManifestVersion: 1.12.0
 EOF
 
 # Installer manifest
 cat > "${MANIFEST_DIR}/${PKG_ID}.installer.yaml" << EOF
-# yaml-language-server: \$schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
+# yaml-language-server: \$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
 PackageIdentifier: ${PKG_ID}
 PackageVersion: ${VERSION}
 InstallerType: zip
@@ -95,7 +95,7 @@ Installers:
     InstallerUrl: ${ZIP_URL}
     InstallerSha256: ${SHA256}
 ManifestType: installer
-ManifestVersion: 1.6.0
+ManifestVersion: 1.12.0
 EOF
 
 echo ""
