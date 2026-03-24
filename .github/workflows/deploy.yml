@@ -771,6 +771,9 @@ jobs:
          LIBGL_ALWAYS_SOFTWARE: 1
          MESA_GL_VERSION_OVERRIDE: "3.3"
       run: |
+            # Disable errexit so test crashes (SIGSEGV=139) don't abort the step.
+            # We track failures/crashes manually and check at the end.
+            set +e
             export QT_QPA_PLATFORM="xcb"
             export QT_DEBUG_PLUGINS=0
             export LIBGL_ALWAYS_SOFTWARE=1
