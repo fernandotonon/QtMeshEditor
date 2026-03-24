@@ -56,7 +56,7 @@ PublisherSupportUrl: https://github.com/fernandotonon/QtMeshEditor/issues
 PackageName: QtMeshEditor
 PackageUrl: https://github.com/fernandotonon/QtMeshEditor
 License: MIT
-LicenseUrl: https://github.com/fernandotonon/QtMeshEditor/blob/master/LICENSE
+LicenseUrl: https://github.com/fernandotonon/QtMeshEditor/blob/master/License
 ShortDescription: Free 3D asset tool for indie game developers
 Description: |-
   QtMeshEditor is a free 3D asset tool for indie game developers.
