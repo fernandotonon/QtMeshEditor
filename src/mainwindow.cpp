@@ -35,7 +35,6 @@
 #include "MeshImporterExporter.h"
 #include "EditorViewport.h"
 #include "ViewportGrid.h"
-// MaterialWidget removed — replaced by Inspector panel
 #include "AnimationWidget.h"
 #include "AnimationMerger.h"
 #include "SelectionSet.h"
@@ -218,7 +217,6 @@ MainWindow::~MainWindow()
         delete m_pPrimitivesWidget;
         m_pPrimitivesWidget = nullptr;
     }
-    // MaterialWidget removed — replaced by Inspector panel
     
     // CRITICAL: Destroy Manager AFTER all widgets that depend on it are destroyed
     // This ensures that OGRE resources are cleaned up in the correct order
