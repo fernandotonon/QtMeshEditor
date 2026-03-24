@@ -47,6 +47,7 @@ ViewCubeController* ViewCubeController::qmlInstance(QQmlEngine* engine, QJSEngin
     return s_instance;
 }
 
+// LCOV_EXCL_START — QQuickWidget creation requires native window + display
 void ViewCubeController::initWidget()
 {
     m_cubeWidget = new QQuickWidget();
@@ -97,6 +98,7 @@ void ViewCubeController::initWidget()
 
     m_cubeWidget->hide();
 }
+// LCOV_EXCL_STOP
 
 bool ViewCubeController::isVisible() const
 {
@@ -183,6 +185,7 @@ void ViewCubeController::rotateByDelta(qreal dx, qreal dy)
     cam->animateToOrientation(newOrientation, 0.0f);
 }
 
+// LCOV_EXCL_START — widget positioning/visibility requires native window + display
 void ViewCubeController::setActiveWidget(OgreWidget* widget)
 {
     if (m_activeWidget == widget) {
@@ -306,3 +309,4 @@ void ViewCubeController::updateWidgetVisibility()
         m_cubeWidget->hide();
     }
 }
+// LCOV_EXCL_STOP

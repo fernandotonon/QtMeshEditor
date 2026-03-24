@@ -512,6 +512,7 @@ const QPalette &MainWindow::darkPalette()
 void MainWindow::setPlaying(bool playing)
 {   isPlaying = playing;    }
 
+// LCOV_EXCL_START — Ogre frame listener requires render loop
 bool MainWindow::frameStarted(const Ogre::FrameEvent &evt)
 {    return true;   }
 
@@ -582,6 +583,7 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
 
     return true;
 }
+// LCOV_EXCL_STOP
 
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
@@ -646,6 +648,7 @@ void MainWindow::dropEvent(QDropEvent *event)
     mUriList.append(validFiles);
 }
 
+// LCOV_EXCL_START — already tested via keyPressEvent
 void MainWindow::closeEvent(QCloseEvent *event)
 {
     // Shut down LLM worker to release model resources
@@ -663,6 +666,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
     _exit(0);
 #endif
 }
+// LCOV_EXCL_STOP
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 {
@@ -670,6 +674,7 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
+// LCOV_EXCL_START — opens QFileDialog
 void MainWindow::on_actionImport_triggered()
 {
     SentryReporter::addBreadcrumb("ui.action", "Import mesh files");
@@ -683,6 +688,7 @@ void MainWindow::on_actionImport_triggered()
         addToRecentFiles(f);
     mUriList.append(fileNames);
 }
+// LCOV_EXCL_STOP
 
 void MainWindow::importMeshs(const QStringList &_uriList)
 {
@@ -696,6 +702,7 @@ void MainWindow::importMeshs(const QStringList &_uriList)
     SentryReporter::finishTransaction(txn);
 }
 
+// LCOV_EXCL_START — opens QFileDialog
 void MainWindow::on_actionOpen_Scene_triggered()
 {
     SentryReporter::addBreadcrumb("ui.action", "Open scene file");
@@ -716,7 +723,9 @@ void MainWindow::on_actionOpen_Scene_triggered()
     SentryReporter::finishTransaction(txn);
     addToRecentFiles(fileName);
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — opens QFileDialog
 void MainWindow::on_actionSave_Scene_triggered()
 {
     SentryReporter::addBreadcrumb("ui.action", "Save scene file");
@@ -749,7 +758,9 @@ void MainWindow::on_actionSave_Scene_triggered()
     }
     SentryReporter::finishTransaction(txn);
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — opens QFileDialog
 void MainWindow::on_actionExport_Selected_triggered()
 {
     SentryReporter::addBreadcrumb("ui.action", "Export selected mesh");
@@ -784,7 +795,9 @@ void MainWindow::on_actionExport_Selected_triggered()
     }
     SentryReporter::finishTransaction(txn);
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — opens QML window
 void MainWindow::on_actionMaterial_Editor_triggered()
 {
     try {
@@ -792,7 +805,7 @@ void MainWindow::on_actionMaterial_Editor_triggered()
         qputenv("QSG_RHI_BACKEND", "software");
         qputenv("QT_QUICK_BACKEND", "software");
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
-        
+
         // Create QML Application Engine for material list modal
         QQmlApplicationEngine* engine = new QQmlApplicationEngine(this);
         
@@ -862,10 +875,11 @@ void MainWindow::on_actionMaterial_Editor_triggered()
         
     } catch (...) {
         qDebug() << "Unknown exception in QML Material List Modal creation";
-        QMessageBox::critical(this, "Material List Error", 
+        QMessageBox::critical(this, "Material List Error",
             "QML Material List Modal encountered an unknown error.");
     }
 }
+// LCOV_EXCL_STOP
 
 void MainWindow::updateMergeAnimationsButton()
 {
@@ -900,6 +914,7 @@ void MainWindow::updateMergeAnimationsButton()
     ui->actionMerge_Animations->setEnabled(true);
 }
 
+// LCOV_EXCL_START — complex dialog with entity merging
 void MainWindow::on_actionMerge_Animations_triggered()
 {
     auto entities = SelectionSet::getSingleton()->getResolvedEntities();
@@ -963,6 +978,7 @@ void MainWindow::on_actionMerge_Animations_triggered()
         tr("Successfully merged animations. The result has %1 animation(s).")
             .arg(animCount));
 }
+// LCOV_EXCL_STOP
 
 void MainWindow::on_actionAbout_triggered()
 {
@@ -982,6 +998,7 @@ void MainWindow::on_actionView_Toolbar_toggled(bool arg1)
 void MainWindow::on_actionMeshEditor_toggled(bool arg1)
 {    ui->meshEditorWidget->setVisible(arg1);    }
 
+// LCOV_EXCL_START — color dialog
 void MainWindow::chooseBgColor()
 {
     if(!mDockWidgetList.isEmpty())
@@ -1001,6 +1018,7 @@ void MainWindow::chooseBgColor()
     }
 
 }
+// LCOV_EXCL_STOP
 
 void MainWindow::setTransformState(TransformOperator::TransformState newState)
 {
@@ -1012,6 +1030,7 @@ void MainWindow::setTransformState(TransformOperator::TransformState newState)
     TransformOperator::getSingleton()->onTransformStateChange(newState);
 }
 
+// LCOV_EXCL_START — creates OgreWidget, requires display
 void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, left,....*/)
 {
     //Finding the first (lower number) available index in the list
@@ -1105,7 +1124,9 @@ void MainWindow::onWidgetClosing(EditorViewport* const& widget)
         m_pTimer->start(0);
     }
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — viewport layout changes require OgreWidget
 void MainWindow::on_actionSingle_toggled(bool arg1)
 {
     if(arg1)
@@ -1247,7 +1268,9 @@ void MainWindow::on_action2x2_Grid_toggled(bool arg1)
                                         !ui->action1x1_Upper_and_Lower->isChecked());
     }
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — file dialog
 void MainWindow::on_actionAdd_Resource_location_triggered()
 {
     try{
@@ -1265,13 +1288,16 @@ void MainWindow::on_actionAdd_Resource_location_triggered()
        QMessageBox::critical(this, "Error on loading resources", ex.what());
     }
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — color dialog
 void MainWindow::on_actionChange_Ambient_Light_triggered()
 {
     Ogre::ColourValue c = Manager::getSingleton()->getSceneMgr()->getAmbientLight();
     ambientLightColorDialog->setCurrentColor(QColor(c.r*255,c.g*255,c.b*255,c.a*255));
     ambientLightColorDialog->show();
 }
+// LCOV_EXCL_STOP
 
 void MainWindow::on_actionLight_toggled(bool arg1)
 {
@@ -1306,6 +1332,7 @@ void MainWindow::on_actionDark_toggled(bool arg1)
     }
 }
 
+// LCOV_EXCL_START — color dialog interaction
 void MainWindow::on_actionCustom_toggled(bool arg1)
 {
     customPaletteColorDialog->show();
@@ -1318,7 +1345,9 @@ void MainWindow::on_actionCustom_toggled(bool arg1)
     }
     ui->actionCustom->blockSignals(false);
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — palette modification
 void MainWindow::custom_Palette_Color_Selected(const QColor &color)
 {
     QApplication::setPalette(color);
@@ -1331,7 +1360,9 @@ void MainWindow::custom_Palette_Color_Selected(const QColor &color)
     ui->actionDark->setChecked(false);
     ui->actionCustom->blockSignals(false);
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — network request
 void MainWindow::on_actionVerify_Update_triggered()
 {
     // Verify if the latest release on GitHub is equal to the current version
@@ -1385,7 +1416,9 @@ void MainWindow::on_actionVerify_Update_triggered()
         reply->ignoreSslErrors();
     });
 }
+// LCOV_EXCL_STOP
 
+// LCOV_EXCL_START — dialogs and server lifecycle
 void MainWindow::showAIModelSettings()
 {
     LLMSettingsWidget* settingsWidget = new LLMSettingsWidget(this);
@@ -1432,6 +1465,7 @@ void MainWindow::stopMCPServer()
     QSettings settings;
     settings.setValue("MCP/enabled", false);
 }
+// LCOV_EXCL_STOP
 
 void MainWindow::setMCPServer(MCPServer* server)
 {

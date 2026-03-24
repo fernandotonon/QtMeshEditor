@@ -26,6 +26,8 @@ THE SOFTWARE.
 -----------------------------------------------------------------------------------
 */
 
+// LCOV_EXCL_START — wraps OgreWidget, requires Ogre render window + display
+
 #include <QtDebug>
 
 #include "EditorViewport.h"
@@ -100,3 +102,5 @@ void EditorViewport::closeEvent(QCloseEvent *e)
     emit widgetAboutToClose(this); // Alert Main Window to rearrange other widget
     e->accept();
 }
+
+// LCOV_EXCL_STOP
