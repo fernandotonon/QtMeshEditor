@@ -1554,6 +1554,30 @@ jobs:
         git push
 
 ####################################################################
+# WinGet Publish (after Windows build)
+####################################################################
+
+ winget-publish:
+    needs: build-windows
+    if: github.event_name == 'release' && github.event.action == 'published'
+    runs-on: windows-latest
+    steps:
+      - name: Install wingetcreate
+        run: |
+          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+
+      - name: Submit to WinGet
+        run: |
+          $version = "${{ github.event.release.tag_name }}"
+          $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${version}/QtMeshEditor-${version}-bin-Windows.zip"
+          .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
+            --version $version `
+            --urls $url `
+            --submit `
+            --token ${{ secrets.WINGET_TOKEN }}
+        continue-on-error: true
+
+####################################################################
 # Snap Store Publish (after Linux .deb is built)
 ####################################################################
 

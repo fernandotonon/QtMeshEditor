@@ -168,8 +168,13 @@ Remove with `sudo apt remove qtmesheditor` or `sudo snap remove qtmesheditor`
 
 Run it calling `qtmesheditor`
 
-#### :window: Windows
-Unpack the binaries and run the `QtMeshEditor.exe` file
+#### :window: Windows (WinGet)
+```
+winget install FernandoTonon.QtMeshEditor
+```
+Update with `winget upgrade FernandoTonon.QtMeshEditor`.
+
+Or download the `.zip` from the [releases page](https://github.com/fernandotonon/QtMeshEditor/releases), unpack, and run `QtMeshEditor.exe`.
 
 #### :hammer_and_wrench: GitHub Action
 

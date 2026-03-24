@@ -219,6 +219,20 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh convert model.
 - The entrypoint passes `--cli` explicitly because the launcher script's `exec` changes argv[0] to contain "editor", which breaks CLI mode detection by binary name.
 - The Docker base must be Ubuntu 24.04 (not 22.04) to match the CI build runner's GLIBC version.
 
+## WinGet (Windows Package Manager)
+
+QtMeshEditor is available via WinGet: `winget install FernandoTonon.QtMeshEditor`.
+
+**Key files:**
+- `winget/manifests/f/FernandoTonon/QtMeshEditor/` — local copy of the WinGet manifest (version, locale, installer YAML)
+- `scripts/update-winget.sh` — generates updated manifest files for a new release
+- `.github/workflows/deploy.yml` — `winget-publish` job auto-submits to microsoft/winget-pkgs on release
+
+**Updating for new release:**
+The `winget-publish` CI job uses `wingetcreate` to automatically submit a PR to microsoft/winget-pkgs when a GitHub Release is published. Requires a `WINGET_TOKEN` secret (GitHub PAT with `public_repo` scope for the winget-pkgs fork).
+
+Manual alternative: `./scripts/update-winget.sh <version>` generates the manifest locally.
+
 ## CI/CD
 
-GitHub Actions workflow in `.github/workflows/deploy.yml` builds for Windows (MinGW), macOS, and Linux. Tests run on Linux with SonarCloud coverage. Releases auto-update the Homebrew cask and publish the Docker image (via the `docker-publish` job in `deploy.yml`).
+GitHub Actions workflow in `.github/workflows/deploy.yml` builds for Windows (MinGW), macOS, and Linux. Tests run on Linux with SonarCloud coverage. Releases auto-update the Homebrew cask, WinGet package, Snap Store, and Docker image.
