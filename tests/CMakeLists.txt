@@ -34,7 +34,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformOperator.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformWidget.cpp
+
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrimitivesWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrimitiveObject.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportGrid.cpp
@@ -95,7 +95,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformOperator.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformWidget.h
+
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrimitivesWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrimitiveObject.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ViewportGrid.h

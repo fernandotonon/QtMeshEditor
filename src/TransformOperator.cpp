@@ -10,7 +10,6 @@
 #include "SelectionSet.h"
 #include "OgreWidget.h"
 #include "mainwindow.h"
-#include "TransformWidget.h"
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "MeshTransform.h"

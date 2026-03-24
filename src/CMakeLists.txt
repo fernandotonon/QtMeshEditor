@@ -23,7 +23,6 @@ RotationGizmo.cpp
 TranslationGizmo.cpp
 ScaleGizmo.cpp
 TransformOperator.cpp
-TransformWidget.cpp
 PrimitivesWidget.cpp
 PrimitiveObject.cpp
 ViewportGrid.cpp
@@ -84,7 +83,6 @@ RotationGizmo.h
 TranslationGizmo.h
 ScaleGizmo.h
 TransformOperator.h
-TransformWidget.h
 PrimitivesWidget.h
 PrimitiveObject.h
 ViewportGrid.h
@@ -446,6 +444,20 @@ if(BUILD_TESTS)
     # find them.  The app bundle has these in Contents/MacOS/ via INSTALL
     # commands, but UnitTests is a plain executable — not a bundle.
     gtest_discover_tests(UnitTests)
+
+    # Copy RTSS shader resources to the UnitTests binary directory so that
+    # RTSSResourcesTest can find them without requiring cmake --install.
+    # The test looks for media/RTShaderLib/ and media/Main/ relative to
+    # applicationDirPath().
+    add_custom_command(TARGET UnitTests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/media/RTShaderLib
+            $<TARGET_FILE_DIR:UnitTests>/media/RTShaderLib
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+            ${CMAKE_SOURCE_DIR}/media/Main
+            $<TARGET_FILE_DIR:UnitTests>/media/Main
+        COMMENT "Copying RTSS shader resources to test binary directory"
+    )
 endif()
 
 
