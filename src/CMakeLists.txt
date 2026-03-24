@@ -23,7 +23,6 @@ RotationGizmo.cpp
 TranslationGizmo.cpp
 ScaleGizmo.cpp
 TransformOperator.cpp
-TransformWidget.cpp
 PrimitivesWidget.cpp
 PrimitiveObject.cpp
 ViewportGrid.cpp
@@ -84,7 +83,6 @@ RotationGizmo.h
 TranslationGizmo.h
 ScaleGizmo.h
 TransformOperator.h
-TransformWidget.h
 PrimitivesWidget.h
 PrimitiveObject.h
 ViewportGrid.h
