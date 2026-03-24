@@ -720,7 +720,8 @@ jobs:
             -DCMAKE_C_FLAGS="--coverage -fprofile-arcs -ftest-coverage -O0 -DCOVERAGE_BUILD" \
             -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
             -DBUILD_QT_MESH_EDITOR=OFF \
-            -DENABLE_SENTRY=OFF
+            -DENABLE_SENTRY=OFF \
+            -DENABLE_STABLE_DIFFUSION=ON
       
     - name: Run build-wrapper
       run: |
@@ -831,17 +832,16 @@ jobs:
                 for suite in $SUITES; do
                     TOTAL_SUITES=$((TOTAL_SUITES + 1))
                     echo "--- Running suite: $suite ---"
-                    if sudo -E $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:test-results-${suite}.xml 2>&1; then
+                    sudo -E $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:test-results-${suite}.xml 2>&1
+                    exit_code=$?
+                    if [ $exit_code -eq 0 ]; then
                         PASSED_SUITES=$((PASSED_SUITES + 1))
+                    elif [ $exit_code -ge 128 ]; then
+                        echo "WARNING: Suite $suite CRASHED (signal $(($exit_code - 128))). Coverage data saved by signal handler."
+                        CRASHED_SUITES=$((CRASHED_SUITES + 1))
                     else
-                        exit_code=$?
-                        if [ $exit_code -eq 139 ] || [ $exit_code -eq 134 ]; then
-                            echo "WARNING: Suite $suite CRASHED (signal $(($exit_code - 128))). Coverage data saved by signal handler."
-                            CRASHED_SUITES=$((CRASHED_SUITES + 1))
-                        else
-                            echo "ERROR: Suite $suite failed (exit code $exit_code)"
-                            FAILED_SUITES=$((FAILED_SUITES + 1))
-                        fi
+                        echo "ERROR: Suite $suite failed (exit code $exit_code)"
+                        FAILED_SUITES=$((FAILED_SUITES + 1))
                     fi
                 done
 

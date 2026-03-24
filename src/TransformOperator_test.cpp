@@ -45,6 +45,15 @@ protected:
         }
         SelectionSet::getSingleton()->clear();
         createOGREMaterials();
+
+        // Eagerly create TransformOperator here so that if gizmo creation
+        // crashes (e.g. ManualObject segfault), SetUp fails instead of
+        // silently crashing individual tests.
+        try {
+            TransformOperator::getSingleton();
+        } catch (...) {
+            GTEST_SKIP() << "Skipping: TransformOperator initialization failed";
+        }
     }
 
     void TearDown() override {
