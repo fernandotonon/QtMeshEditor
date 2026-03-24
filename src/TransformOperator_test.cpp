@@ -46,14 +46,11 @@ protected:
         SelectionSet::getSingleton()->clear();
         createOGREMaterials();
 
-        // Eagerly create TransformOperator here so that if gizmo creation
-        // crashes (e.g. ManualObject segfault), SetUp fails instead of
-        // silently crashing individual tests.
-        try {
-            TransformOperator::getSingleton();
-        } catch (...) {
-            GTEST_SKIP() << "Skipping: TransformOperator initialization failed";
-        }
+        // Eagerly create TransformOperator here. If gizmo creation causes
+        // a SIGSEGV (e.g. ManualObject on Mesa/Xvfb), the signal handler in
+        // test_main.cpp will flush coverage and exit with 128+sig, which CI
+        // reports as CRASHED rather than silently passing.
+        TransformOperator::getSingleton();
     }
 
     void TearDown() override {

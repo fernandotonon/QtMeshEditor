@@ -23,15 +23,22 @@
 extern "C" void __gcov_dump(void);
 #endif
 
+// Set to true after RUN_ALL_TESTS() returns so the crash handler
+// can distinguish "crash during test" from "crash during teardown".
+static volatile bool g_testsCompleted = false;
+
 static void crashHandler(int sig)
 {
 #ifdef COVERAGE_BUILD
     __gcov_dump();
-    // Exit immediately — the crash is typically in Ogre/Mesa teardown
-    // after tests have passed. Re-raising would produce exit code 139,
-    // which the CI counts as a crash and loses the suite's pass status.
-    // Use gtest's failure count so real test failures still produce non-zero exit.
-    _exit(testing::UnitTest::GetInstance()->failed_test_count() > 0 ? 1 : 0);
+    if (g_testsCompleted) {
+        // Crash during teardown (Ogre/Mesa static destructors) — tests already
+        // ran, so preserve the pass/fail result instead of reporting a crash.
+        _exit(testing::UnitTest::GetInstance()->failed_test_count() > 0 ? 1 : 0);
+    } else {
+        // Crash during test execution — report as signal exit so CI detects it.
+        _exit(128 + sig);
+    }
 #else
     signal(sig, SIG_DFL);
     raise(sig);
@@ -70,6 +77,7 @@ int main(int argc, char **argv)
 
     testing::InitGoogleTest(&argc, argv);
     int result = RUN_ALL_TESTS();
+    g_testsCompleted = true;
 
     // Clean up Ogre before QApplication destruction to avoid
     // SIGSEGV during static destructor teardown (Ogre::Root vs QApp race).
