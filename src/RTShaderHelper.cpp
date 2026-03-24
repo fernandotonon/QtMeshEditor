@@ -1,3 +1,5 @@
+// LCOV_EXCL_START — requires initialized Ogre RTSS with GPU/render system
+
 #include "RTShaderHelper.h"
 #include <OgreRTShaderSystem.h>
 #include <QCoreApplication>
@@ -298,3 +300,5 @@ void RTShaderHelper::applyNormalMap(Ogre::MaterialPtr& mat, const std::string& n
             "RTShaderHelper: Exception applying normal map: " + std::string(e.what()));
     }
 }
+
+// LCOV_EXCL_STOP

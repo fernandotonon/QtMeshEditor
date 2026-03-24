@@ -42,7 +42,6 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionSet.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionBoxObject.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ObjectItemModel.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialWidget.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialHighlighter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.cpp
@@ -103,7 +102,6 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionSet.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SelectionBoxObject.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ObjectItemModel.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialWidget.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialComboDelegate.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialHighlighter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/QMLMaterialHighlighter.h

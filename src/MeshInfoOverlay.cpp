@@ -153,6 +153,7 @@ QString MeshInfoOverlay::formatStats(const QList<Ogre::Entity*>& entities, bool 
     return text;
 }
 
+// LCOV_EXCL_START — QLabel overlay requires parent OgreWidget + display
 void MeshInfoOverlay::ensureLabel()
 {
     if (mLabel)
@@ -222,3 +223,4 @@ void MeshInfoOverlay::refresh()
     repositionLabel();
     mLabel->show();
 }
+// LCOV_EXCL_STOP

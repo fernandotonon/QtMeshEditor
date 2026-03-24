@@ -1,3 +1,5 @@
+// LCOV_EXCL_START — QDialog subclass with complex UI widgets, requires display
+
 #include "LLMSettingsWidget.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -861,3 +863,5 @@ void LLMSettingsWidget::onSDApplySettings()
     QMessageBox::information(this, "Settings Applied", "SD settings have been saved.");
 }
 #endif // ENABLE_STABLE_DIFFUSION
+
+// LCOV_EXCL_STOP

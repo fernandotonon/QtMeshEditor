@@ -30,7 +30,6 @@ AnimationWidget.cpp
 SelectionSet.cpp
 SelectionBoxObject.cpp
 ObjectItemModel.cpp
-MaterialWidget.cpp
 MaterialComboDelegate.cpp
 MaterialHighlighter.cpp
 QMLMaterialHighlighter.cpp
@@ -90,7 +89,6 @@ AnimationWidget.h
 SelectionSet.h
 SelectionBoxObject.h
 ObjectItemModel.h
-MaterialWidget.h
 MaterialComboDelegate.h
 MaterialHighlighter.h
 QMLMaterialHighlighter.h
