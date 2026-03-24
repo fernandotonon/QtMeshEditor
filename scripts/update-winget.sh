@@ -88,6 +88,8 @@ NestedInstallerType: portable
 NestedInstallerFiles:
   - RelativeFilePath: QtMeshEditor.exe
     PortableCommandAlias: qtmesheditor
+  - RelativeFilePath: qtmesh.exe
+    PortableCommandAlias: qtmesh
 Installers:
   - Architecture: x64
     InstallerUrl: ${ZIP_URL}
