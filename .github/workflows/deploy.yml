@@ -283,6 +283,15 @@ jobs:
             Copy-Item -Recurse "$qtDir/qml/QtQml" "$qmlDest/" -ErrorAction SilentlyContinue
             Write-Host "QML modules copied to $qmlDest"
             Get-ChildItem $qmlDest -Directory
+            # Verify critical modules were copied
+            if (-not (Test-Path "$qmlDest/QtQuick")) {
+                Write-Error "Critical: QtQuick module not found after copy"
+                exit 1
+            }
+            if (-not (Test-Path "$qmlDest/QtQml")) {
+                Write-Error "Critical: QtQml module not found after copy"
+                exit 1
+            }
       shell: powershell
 
     - name: Copy Qt QML runtime libraries
