@@ -132,64 +132,15 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
         return nullptr;
     }
 
-    // --- Step 1: Rename base entity animations with prefix + cleanup ---
-    // Only prefix base animations that don't already start with the base slug
-    // (prevents re-prefixing on repeated merges: "test_jump" won't become "test_test_jump")
-    QSet<QString> existingNames;
-    {
-        QString baseRawName;
-        if (auto* parentNode = baseEntity->getParentSceneNode())
-            baseRawName = QString::fromStdString(parentNode->getName());
-        else
-            baseRawName = QString::fromStdString(baseEntity->getName());
-        QString baseSlug = slugify(baseRawName);
+    // Record which animations belong to the base (before merge)
+    QSet<QString> baseAnimNames;
+    for (unsigned short i = 0; i < baseSkel->getNumAnimations(); ++i)
+        baseAnimNames.insert(QString::fromStdString(baseSkel->getAnimation(i)->getName()));
 
-        // Collect renames needed (skip animations already prefixed)
-        QList<std::pair<std::string, std::string>> baseRenames;
-        for (unsigned short i = 0; i < baseSkel->getNumAnimations(); ++i)
-        {
-            std::string origName = baseSkel->getAnimation(i)->getName();
-            QString origSlug = slugify(QString::fromStdString(origName));
+    // Collect names to detect collisions during source merging
+    QSet<QString> existingNames = baseAnimNames;
 
-            // Skip if already prefixed with the base slug (from a previous merge)
-            if (origSlug.startsWith(baseSlug + "_") || origSlug == baseSlug) {
-                // Keep as-is, just clean Mixamo noise if present
-                QString cleaned = QString::fromStdString(origName);
-                if (cleaned.contains("mixamo.com", Qt::CaseInsensitive)) {
-                    QString desired = slugify(cleanMixamoNoise(cleaned));
-                    QString finalName = deduplicateName(desired, existingNames);
-                    baseRenames.append({origName, finalName.toStdString()});
-                } else {
-                    existingNames.insert(QString::fromStdString(origName));
-                }
-                continue;
-            }
-
-            QString desired = buildAnimName(baseRawName, QString::fromStdString(origName));
-            QString finalName = deduplicateName(desired, existingNames);
-            baseRenames.append({origName, finalName.toStdString()});
-        }
-
-        // Two-pass rename to avoid collisions: a new name might equal an old name
-        // that hasn't been renamed yet.
-        QList<std::pair<std::string, std::string>> tempToFinal;
-        for (int i = 0; i < baseRenames.size(); ++i)
-        {
-            std::string tempName = "__merge_temp_" + std::to_string(i);
-            renameAnimation(baseSkel.get(), baseRenames[i].first, tempName);
-            tempToFinal.append({tempName, baseRenames[i].second});
-        }
-        for (const auto& [tempName, finalName] : tempToFinal)
-            renameAnimation(baseSkel.get(), tempName, finalName);
-
-        // If no renames were needed, populate existingNames from current state
-        if (baseRenames.isEmpty()) {
-            for (unsigned short i = 0; i < baseSkel->getNumAnimations(); ++i)
-                existingNames.insert(QString::fromStdString(baseSkel->getAnimation(i)->getName()));
-        }
-    }
-
-    // --- Step 2: Merge source animations with prefix + cleanup ---
+    // --- Step 1: Merge source animations with prefix + cleanup ---
     int mergedCount = 0;
 
     for (Ogre::Entity* srcEntity : sourceEntities)
@@ -243,14 +194,65 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
         mergedCount += numAnims;
     }
 
-    // Refresh the entity's animation states to pick up new animations
-    baseEntity->refreshAvailableAnimationState();
-
     if (mergedCount == 0)
     {
         errorMsg = "No animations were merged (no valid source entities found)";
         return nullptr;
     }
+
+    // --- Step 2: Post-process ALL animations (base + merged) ---
+    // Rename base animations with their prefix, clean Mixamo noise from everything.
+    // This happens AFTER merge so we never conflict with Ogre's merge operation.
+    {
+        QString baseRawName;
+        if (auto* parentNode = baseEntity->getParentSceneNode())
+            baseRawName = QString::fromStdString(parentNode->getName());
+        else
+            baseRawName = QString::fromStdString(baseEntity->getName());
+        QString baseSlug = slugify(baseRawName);
+
+        // Collect all current animation names and compute final names
+        QSet<QString> finalNames;
+        QList<std::pair<std::string, std::string>> renames;
+
+        for (unsigned short i = 0; i < baseSkel->getNumAnimations(); ++i)
+        {
+            std::string origName = baseSkel->getAnimation(i)->getName();
+            QString origQName = QString::fromStdString(origName);
+
+            QString desired;
+            if (baseAnimNames.contains(origQName)) {
+                // This was a base animation — prefix it (unless already prefixed)
+                QString origSlug = slugify(origQName);
+                if (origSlug.startsWith(baseSlug + "_") || origSlug == baseSlug)
+                    desired = slugify(cleanMixamoNoise(origQName)); // already prefixed
+                else
+                    desired = buildAnimName(baseRawName, origQName); // needs prefix
+            } else {
+                // This was merged from a source — already has prefix, just clean
+                desired = slugify(cleanMixamoNoise(origQName));
+            }
+
+            QString finalName = deduplicateName(desired, finalNames);
+            if (finalName.toStdString() != origName)
+                renames.append({origName, finalName.toStdString()});
+            // If same name, already in finalNames via deduplicateName
+        }
+
+        // Two-pass rename to avoid old↔new name collisions
+        QList<std::pair<std::string, std::string>> tempToFinal;
+        for (int i = 0; i < renames.size(); ++i)
+        {
+            std::string tempName = "__merge_temp_" + std::to_string(i);
+            renameAnimation(baseSkel.get(), renames[i].first, tempName);
+            tempToFinal.append({tempName, renames[i].second});
+        }
+        for (const auto& [tempName, finalName] : tempToFinal)
+            renameAnimation(baseSkel.get(), tempName, finalName);
+    }
+
+    // Refresh the entity's animation states to pick up new animations
+    baseEntity->refreshAvailableAnimationState();
 
     return baseEntity;
 }
