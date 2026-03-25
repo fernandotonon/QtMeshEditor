@@ -34,13 +34,18 @@ static QString slugify(const QString& name)
 // already has a meaningful name (e.g. "jump", "idle"), just clean and return it.
 static QString buildAnimName(const QString& prefix, const QString& animName)
 {
+    QString slugPrefix = slugify(prefix);
     QString cleanAnim = cleanMixamoNoise(animName);
     QString slugAnim = slugify(cleanAnim);
+
+    // Both empty — shouldn't happen, but guard against it
+    if (slugAnim.isEmpty() && slugPrefix.isEmpty())
+        return QStringLiteral("animation");
 
     // If after cleanup the name is empty or just "mixamo_com" residue,
     // use the node/file name as the animation name
     if (slugAnim.isEmpty())
-        return slugify(prefix);
+        return slugPrefix;
 
     // Otherwise keep the meaningful animation name as-is
     return slugAnim;
@@ -197,8 +202,18 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
             renameList.append({origName, finalName.toStdString()});
         }
 
-        for (const auto& [oldName, newName] : renameList)
-            renameAnimation(srcSkel.get(), oldName, newName);
+        // Two-pass rename to avoid old↔new name collisions on source
+        QList<std::pair<std::string, std::string>> srcTempToFinal;
+        for (int i = 0; i < renameList.size(); ++i)
+        {
+            std::string tempName = "__merge_temp_src_" + std::to_string(i);
+            while (srcSkel->hasAnimation(tempName))
+                tempName += "_x";
+            renameAnimation(srcSkel.get(), renameList[i].first, tempName);
+            srcTempToFinal.append({tempName, renameList[i].second});
+        }
+        for (const auto& [tempName, finalName] : srcTempToFinal)
+            renameAnimation(srcSkel.get(), tempName, finalName);
 
         baseSkel->_mergeSkeletonAnimations(srcSkel.get(), boneHandleMap);
         mergedCount += numAnims;
@@ -254,6 +269,8 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
         for (int i = 0; i < renames.size(); ++i)
         {
             std::string tempName = "__merge_temp_" + std::to_string(i);
+            while (baseSkel->hasAnimation(tempName))
+                tempName += "_x";
             renameAnimation(baseSkel.get(), renames[i].first, tempName);
             tempToFinal.append({tempName, renames[i].second});
         }
