@@ -17,7 +17,7 @@ A free, open-source 3D asset tool for indie game developers — merge animations
 
 Download individual animations from [Mixamo](https://www.mixamo.com), drop them into QtMeshEditor, and merge them into a single mesh — export as glTF, Collada, OBJ, or Ogre Mesh for your game engine of choice.
 
-![Merge Animations Demo](https://github.com/user-attachments/assets/16e81f29-f64c-402d-aac4-dbb1bc2f3aef)
+![Merge Animations Demo](https://github.com/user-attachments/assets/441f90c5-1968-4838-8001-4ca24856a501)
 
 ### :movie_camera: More in Action
 
