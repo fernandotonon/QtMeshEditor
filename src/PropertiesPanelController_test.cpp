@@ -341,8 +341,6 @@ TEST_F(PropertiesPanelControllerTests, PrimitiveMetadataCoversAdditionalPrimitiv
 
 TEST_F(PropertiesPanelControllerTests, EmptySelectionReturnsNeutralValues)
 {
-    SelectionSet::getSingleton()->clear();
-
     EXPECT_FALSE(controller->hasSelection());
     EXPECT_FALSE(controller->hasEntitySelection());
     EXPECT_FALSE(controller->hasPrimitive());
