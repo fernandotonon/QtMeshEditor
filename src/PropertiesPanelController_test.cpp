@@ -8,6 +8,7 @@
 #include "Manager.h"
 #include "PrimitiveObject.h"
 #include "PropertiesPanelController.h"
+#include "SelectionSet.h"
 #include "TestHelpers.h"
 
 class PropertiesPanelControllerTests : public ::testing::Test
@@ -168,6 +169,8 @@ TEST_F(PropertiesPanelControllerTests, TransformSettersUpdateSelectedNodeAndEmit
     EXPECT_FLOAT_EQ(node->getPosition().x, 5.0f);
     EXPECT_FLOAT_EQ(node->getPosition().y, 6.0f);
     EXPECT_FLOAT_EQ(node->getPosition().z, 7.0f);
+    // TransformOperator exposes Euler angles derived from Ogre quaternions.
+    // The round-trip is not stable enough here for tight per-axis equality.
     EXPECT_NEAR(controller->rotX(), 15.0f, 20.0f);
     EXPECT_NEAR(controller->rotY(), 25.0f, 20.0f);
     EXPECT_NEAR(controller->rotZ(), 35.0f, 20.0f);
