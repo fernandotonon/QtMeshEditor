@@ -141,6 +141,11 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
         else
             baseRawName = QString::fromStdString(baseEntity->getName());
 
+        // Two-pass rename to avoid collisions: a new name might equal an old name
+        // that hasn't been renamed yet (e.g. "jump" → "test_jump" fails if
+        // "test_jump" already exists as another animation's original name).
+        // Pass 1: rename all to unique temporary names
+        // Pass 2: rename from temp to final names
         QList<std::pair<std::string, std::string>> baseRenames;
         for (unsigned short i = 0; i < baseSkel->getNumAnimations(); ++i)
         {
@@ -149,8 +154,17 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
             QString finalName = deduplicateName(desired, existingNames);
             baseRenames.append({origName, finalName.toStdString()});
         }
-        for (const auto& [oldName, newName] : baseRenames)
-            renameAnimation(baseSkel.get(), oldName, newName);
+        // Pass 1: old → temp
+        QList<std::pair<std::string, std::string>> tempToFinal;
+        for (int i = 0; i < baseRenames.size(); ++i)
+        {
+            std::string tempName = "__merge_temp_" + std::to_string(i);
+            renameAnimation(baseSkel.get(), baseRenames[i].first, tempName);
+            tempToFinal.append({tempName, baseRenames[i].second});
+        }
+        // Pass 2: temp → final
+        for (const auto& [tempName, finalName] : tempToFinal)
+            renameAnimation(baseSkel.get(), tempName, finalName);
     }
 
     // --- Step 2: Merge source animations with prefix + cleanup ---
