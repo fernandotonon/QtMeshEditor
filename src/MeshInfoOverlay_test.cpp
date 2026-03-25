@@ -80,14 +80,14 @@ protected:
     }
 
     void TearDown() override {
+        if (Manager::getSingletonPtr()) {
+            SelectionSet::getSingleton()->clear();
+        }
         delete overlay;
         overlay = nullptr;
         delete window;
         window = nullptr;
-        if (Manager::getSingletonPtr()) {
-            SelectionSet::getSingleton()->clear();
-            Manager::kill();
-        }
+        Manager::kill();
         if (app) app->processEvents();
         QThread::msleep(50);
     }

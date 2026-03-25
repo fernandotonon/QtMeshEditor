@@ -1014,7 +1014,8 @@ jobs:
           exit 1
         fi
         if [ "${CRASHED_SUITES:-0}" -gt 0 ]; then
-          echo "WARNING: $CRASHED_SUITES test suite(s) crashed (Ogre/Mesa teardown — coverage data preserved)"
+          echo "ERROR: $CRASHED_SUITES test suite(s) crashed"
+          exit 1
         fi
         echo "All test suites passed"
 

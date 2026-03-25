@@ -1,16 +1,35 @@
 #include <gtest/gtest.h>
 #include <QSignalSpy>
+#include <QApplication>
+#include <QCoreApplication>
+#include <QThread>
 #include "Manager.h"
 #include <QMap>
 #include "SelectionSet.h"
 #include "PrimitiveObject.h"
 #include "TestHelpers.h"
 
-TEST(SelectionSetTests, AppendSceneNode)
-{
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+class SelectionSetTests : public ::testing::Test {
+protected:
+    void SetUp() override {
+        Manager::kill();
+        SelectionSet::kill();
+        QThread::msleep(50);
+        if (!tryInitOgre()) {
+            GTEST_SKIP() << "Skipping: Ogre initialization failed";
+        }
     }
+    void TearDown() override {
+        SelectionSet::kill();
+        Manager::kill();
+        auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        if (app) app->processEvents();
+        QThread::msleep(50);
+    }
+};
+
+TEST_F(SelectionSetTests, AppendSceneNode)
+{
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     auto sceneNode = Manager::getSingleton()->addSceneNode("test");
 
@@ -31,11 +50,8 @@ TEST(SelectionSetTests, AppendSceneNode)
     Manager::getSingleton()->destroySceneNode(sceneNode2);
 }
 
-TEST(SelectionSetTests, RemoveSceneNode)
+TEST_F(SelectionSetTests, RemoveSceneNode)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     auto sceneNode = Manager::getSingleton()->addSceneNode("test");
 
@@ -47,14 +63,10 @@ TEST(SelectionSetTests, RemoveSceneNode)
     EXPECT_FALSE(selectionSet->contains(sceneNode));
 
     Manager::getSingleton()->destroySceneNode(sceneNode);
-    SelectionSet::kill();
 }
 
-TEST(SelectionSetTests, SelectSceneNode)
+TEST_F(SelectionSetTests, SelectSceneNode)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     auto sceneNode = Manager::getSingleton()->addSceneNode("test");
 
@@ -66,11 +78,8 @@ TEST(SelectionSetTests, SelectSceneNode)
     Manager::getSingleton()->destroySceneNode(sceneNode);
 }
 
-TEST(SelectionSetTests, Clear)
+TEST_F(SelectionSetTests, Clear)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     auto sceneNode = Manager::getSingleton()->addSceneNode("test");
 
@@ -83,11 +92,8 @@ TEST(SelectionSetTests, Clear)
     Manager::getSingleton()->destroySceneNode(sceneNode);
 }
 
-TEST(SelectionSetTests, ClearList)
+TEST_F(SelectionSetTests, ClearList)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     auto sceneNode = Manager::getSingleton()->addSceneNode("test");
 
@@ -99,11 +105,8 @@ TEST(SelectionSetTests, ClearList)
     Manager::getSingleton()->destroySceneNode(sceneNode);
 }
 
-TEST(SelectionSetTests, GetSelectionNodesCenterEmpty)
+TEST_F(SelectionSetTests, GetSelectionNodesCenterEmpty)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet::getSingleton()->clear();
     auto center = SelectionSet::getSingleton()->getSelectionNodesCenter();
 
@@ -112,11 +115,8 @@ TEST(SelectionSetTests, GetSelectionNodesCenterEmpty)
     EXPECT_EQ(center.z, 0.0f);
 }
 
-TEST(SelectionSetTests, GetSelectionNodesCenter)
+TEST_F(SelectionSetTests, GetSelectionNodesCenter)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     auto sceneNode = Manager::getSingleton()->addSceneNode("test");
     auto sceneNode2 = Manager::getSingleton()->addSceneNode("test2");
@@ -136,11 +136,8 @@ TEST(SelectionSetTests, GetSelectionNodesCenter)
     Manager::getSingleton()->destroySceneNode(sceneNode2);
 }
 
-TEST(SelectionSetTests, IsEmpty)
+TEST_F(SelectionSetTests, IsEmpty)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -157,11 +154,8 @@ TEST(SelectionSetTests, IsEmpty)
     Manager::getSingleton()->destroySceneNode(sceneNode);
 }
 
-TEST(SelectionSetTests, GetCount)
+TEST_F(SelectionSetTests, GetCount)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -193,11 +187,8 @@ TEST(SelectionSetTests, GetCount)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, HasNodes)
+TEST_F(SelectionSetTests, HasNodes)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -214,11 +205,8 @@ TEST(SelectionSetTests, HasNodes)
     Manager::getSingleton()->destroySceneNode(sceneNode);
 }
 
-TEST(SelectionSetTests, EntitySelection)
+TEST_F(SelectionSetTests, EntitySelection)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -261,11 +249,8 @@ TEST(SelectionSetTests, EntitySelection)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, EntityScaleRotationFactors)
+TEST_F(SelectionSetTests, EntityScaleRotationFactors)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -311,11 +296,8 @@ TEST(SelectionSetTests, EntityScaleRotationFactors)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, GetSelectionOrientationEmpty)
+TEST_F(SelectionSetTests, GetSelectionOrientationEmpty)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -326,11 +308,8 @@ TEST(SelectionSetTests, GetSelectionOrientationEmpty)
     EXPECT_EQ(orientation.z, 0.0f);
 }
 
-TEST(SelectionSetTests, GetSelectionScaleEmpty)
+TEST_F(SelectionSetTests, GetSelectionScaleEmpty)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -341,11 +320,8 @@ TEST(SelectionSetTests, GetSelectionScaleEmpty)
     EXPECT_EQ(scale.z, 0.0f);
 }
 
-TEST(SelectionSetTests, SubEntitySelection)
+TEST_F(SelectionSetTests, SubEntitySelection)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -391,11 +367,8 @@ TEST(SelectionSetTests, SubEntitySelection)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, IndexedAccessors)
+TEST_F(SelectionSetTests, IndexedAccessors)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -427,11 +400,8 @@ TEST(SelectionSetTests, IndexedAccessors)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, SelectionListGetters)
+TEST_F(SelectionSetTests, SelectionListGetters)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -458,11 +428,8 @@ TEST(SelectionSetTests, SelectionListGetters)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, GetSelectionOrientationWithNode)
+TEST_F(SelectionSetTests, GetSelectionOrientationWithNode)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -480,11 +447,8 @@ TEST(SelectionSetTests, GetSelectionOrientationWithNode)
     Manager::getSingleton()->destroySceneNode(node);
 }
 
-TEST(SelectionSetTests, GetSelectionOrientationWithEntity)
+TEST_F(SelectionSetTests, GetSelectionOrientationWithEntity)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -507,11 +471,8 @@ TEST(SelectionSetTests, GetSelectionOrientationWithEntity)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, GetSelectionScaleWithNode)
+TEST_F(SelectionSetTests, GetSelectionScaleWithNode)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -528,11 +489,8 @@ TEST(SelectionSetTests, GetSelectionScaleWithNode)
     Manager::getSingleton()->destroySceneNode(node);
 }
 
-TEST(SelectionSetTests, GetSelectionScaleWithEntity)
+TEST_F(SelectionSetTests, GetSelectionScaleWithEntity)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -555,11 +513,8 @@ TEST(SelectionSetTests, GetSelectionScaleWithEntity)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, GetSelectionCenterWithEntity)
+TEST_F(SelectionSetTests, GetSelectionCenterWithEntity)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -580,11 +535,8 @@ TEST(SelectionSetTests, GetSelectionCenterWithEntity)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, GetSelectionNodesCenterWithEntity)
+TEST_F(SelectionSetTests, GetSelectionNodesCenterWithEntity)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -604,11 +556,8 @@ TEST(SelectionSetTests, GetSelectionNodesCenterWithEntity)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, SignalEmission)
+TEST_F(SelectionSetTests, SignalEmission)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -629,11 +578,8 @@ TEST(SelectionSetTests, SignalEmission)
     Manager::getSingleton()->destroySceneNode(node);
 }
 
-TEST(SelectionSetTests, RemoveNonExistent)
+TEST_F(SelectionSetTests, RemoveNonExistent)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -652,11 +598,8 @@ TEST(SelectionSetTests, RemoveNonExistent)
 // NEW: SubEntity branch coverage for getSelectionCenter
 // ==========================================================================
 
-TEST(SelectionSetTests, GetSelectionCenterWithSubEntity)
+TEST_F(SelectionSetTests, GetSelectionCenterWithSubEntity)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -686,11 +629,8 @@ TEST(SelectionSetTests, GetSelectionCenterWithSubEntity)
 // NEW: SubEntity branch coverage for getSelectionNodesCenter
 // ==========================================================================
 
-TEST(SelectionSetTests, GetSelectionNodesCenterWithSubEntity)
+TEST_F(SelectionSetTests, GetSelectionNodesCenterWithSubEntity)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -722,11 +662,8 @@ TEST(SelectionSetTests, GetSelectionNodesCenterWithSubEntity)
 // NEW: getResolvedEntities branches
 // ==========================================================================
 
-TEST(SelectionSetTests, GetResolvedEntitiesWithEntitySelection)
+TEST_F(SelectionSetTests, GetResolvedEntitiesWithEntitySelection)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -748,11 +685,8 @@ TEST(SelectionSetTests, GetResolvedEntitiesWithEntitySelection)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, GetResolvedEntitiesWithNodeSelection)
+TEST_F(SelectionSetTests, GetResolvedEntitiesWithNodeSelection)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -771,11 +705,8 @@ TEST(SelectionSetTests, GetResolvedEntitiesWithNodeSelection)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, GetResolvedEntitiesEmpty)
+TEST_F(SelectionSetTests, GetResolvedEntitiesEmpty)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -783,11 +714,8 @@ TEST(SelectionSetTests, GetResolvedEntitiesEmpty)
     EXPECT_TRUE(resolved.isEmpty());
 }
 
-TEST(SelectionSetTests, GetResolvedEntitiesNodeWithoutEntity)
+TEST_F(SelectionSetTests, GetResolvedEntitiesNodeWithoutEntity)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -808,11 +736,8 @@ TEST(SelectionSetTests, GetResolvedEntitiesNodeWithoutEntity)
 // NEW: hideBoundingBox branch coverage (tested via removeOne)
 // ==========================================================================
 
-TEST(SelectionSetTests, HideBoundingBoxEntityContainsNode)
+TEST_F(SelectionSetTests, HideBoundingBoxEntityContainsNode)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -840,11 +765,8 @@ TEST(SelectionSetTests, HideBoundingBoxEntityContainsNode)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, HideBoundingBoxSubEntityContainsNode)
+TEST_F(SelectionSetTests, HideBoundingBoxSubEntityContainsNode)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -871,11 +793,8 @@ TEST(SelectionSetTests, HideBoundingBoxSubEntityContainsNode)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, HideBoundingBoxNotInSelection)
+TEST_F(SelectionSetTests, HideBoundingBoxNotInSelection)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -902,11 +821,8 @@ TEST(SelectionSetTests, HideBoundingBoxNotInSelection)
 // NEW: hideAllBoundingBox with mixed selection types
 // ==========================================================================
 
-TEST(SelectionSetTests, HideAllBoundingBoxMixed)
+TEST_F(SelectionSetTests, HideAllBoundingBoxMixed)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -949,11 +865,8 @@ TEST(SelectionSetTests, HideAllBoundingBoxMixed)
 // NEW: getSelectionCenter with multiple nodes (average)
 // ==========================================================================
 
-TEST(SelectionSetTests, GetSelectionCenterMultipleNodes)
+TEST_F(SelectionSetTests, GetSelectionCenterMultipleNodes)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -985,11 +898,8 @@ TEST(SelectionSetTests, GetSelectionCenterMultipleNodes)
 // NEW: getSelectionCenter with empty selection
 // ==========================================================================
 
-TEST(SelectionSetTests, GetSelectionCenterEmpty)
+TEST_F(SelectionSetTests, GetSelectionCenterEmpty)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -1003,11 +913,8 @@ TEST(SelectionSetTests, GetSelectionCenterEmpty)
 // NEW: selectOne cross-type clearing
 // ==========================================================================
 
-TEST(SelectionSetTests, SelectOneNodeClearsEntitiesAndSubEntities)
+TEST_F(SelectionSetTests, SelectOneNodeClearsEntitiesAndSubEntities)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -1036,11 +943,8 @@ TEST(SelectionSetTests, SelectOneNodeClearsEntitiesAndSubEntities)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, SelectOneSubEntityClearsNodesAndEntities)
+TEST_F(SelectionSetTests, SelectOneSubEntityClearsNodesAndEntities)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -1073,11 +977,8 @@ TEST(SelectionSetTests, SelectOneSubEntityClearsNodesAndEntities)
 // NEW: Signal emission for entity and subEntity selection changes
 // ==========================================================================
 
-TEST(SelectionSetTests, EntitySignalEmission)
+TEST_F(SelectionSetTests, EntitySignalEmission)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
@@ -1102,11 +1003,8 @@ TEST(SelectionSetTests, EntitySignalEmission)
     Manager::getSingleton()->destroySceneNode(cubeNode);
 }
 
-TEST(SelectionSetTests, SubEntitySignalEmission)
+TEST_F(SelectionSetTests, SubEntitySignalEmission)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
     if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();

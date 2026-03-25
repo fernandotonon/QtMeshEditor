@@ -28,6 +28,7 @@
 #include <OgreTextureUnitState.h>
 #include "FBXExporter.h"
 #include "../Manager.h"
+#include "../SelectionSet.h"
 #include "../MeshImporterExporter.h"
 #include "../TestHelpers.h"
 
@@ -253,6 +254,7 @@ protected:
     QApplication* app = nullptr;
 
     void SetUp() override {
+        SelectionSet::kill();
         Manager::kill();
         QThread::msleep(50);
 
@@ -266,6 +268,7 @@ protected:
     }
 
     void TearDown() override {
+        SelectionSet::kill();
         Manager::kill();
 
         if (app) {
@@ -609,6 +612,7 @@ protected:
     int meshCounter = 0;
 
     void SetUp() override {
+        SelectionSet::kill();
         Manager::kill();
         QThread::msleep(50);
 
@@ -622,6 +626,7 @@ protected:
     }
 
     void TearDown() override {
+        SelectionSet::kill();
         Manager::kill();
         if (app) app->processEvents();
         QThread::msleep(50);

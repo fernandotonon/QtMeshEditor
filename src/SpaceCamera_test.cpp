@@ -38,6 +38,7 @@ protected:
         if (!tryInitOgre()) {
             GTEST_SKIP() << "Skipping: Ogre initialization failed";
         }
+        createStandardOgreMaterials();
     }
 
     void TearDown() override

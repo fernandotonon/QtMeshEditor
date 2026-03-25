@@ -45,19 +45,16 @@ protected:
         }
         SelectionSet::getSingleton()->clear();
         createOGREMaterials();
-
-        // Eagerly create TransformOperator here. If gizmo creation causes
-        // a SIGSEGV (e.g. ManualObject on Mesa/Xvfb), the signal handler in
-        // test_main.cpp will flush coverage and exit with 128+sig, which CI
-        // reports as CRASHED rather than silently passing.
-        TransformOperator::getSingleton();
     }
 
     void TearDown() override {
         SelectionSet::getSingleton()->clear();
+        TransformOperator::kill();
+        Manager::kill();
         if (app) {
             app->processEvents();
         }
+        QThread::msleep(50);
     }
 };
 

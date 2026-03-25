@@ -30,6 +30,9 @@ protected:
         if (downloader) {
             downloader->cancelDownload();
             app->processEvents();
+            // Process events again to ensure all deferred deletions complete
+            QThread::msleep(10);
+            app->processEvents();
         }
     }
 

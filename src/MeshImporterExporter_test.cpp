@@ -24,6 +24,7 @@ protected:
     QApplication* app = nullptr;
 
     void SetUp() override {
+        SelectionSet::kill();
         Manager::kill();
         QThread::msleep(50);
 
@@ -37,6 +38,7 @@ protected:
     }
 
     void TearDown() override {
+        SelectionSet::kill();
         Manager::kill();
 
         if (app) {
