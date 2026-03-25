@@ -29,33 +29,43 @@ static QString slugify(const QString& name)
     return s;
 }
 
-// Build a clean animation name: slugify the prefix and the animation name separately,
-// then combine. Removes duplicated prefix (e.g. "idle" + "idle" → "idle", not "idle_idle").
+// Build a clean animation name. Only prepends the node/file prefix when the
+// animation name is generic (e.g. "mixamo.com" → use prefix). If the animation
+// already has a meaningful name (e.g. "jump", "idle"), just clean and return it.
 static QString buildAnimName(const QString& prefix, const QString& animName)
 {
     QString cleanAnim = cleanMixamoNoise(animName);
     QString slugAnim = slugify(cleanAnim);
-    QString slugPrefix = slugify(prefix);
 
-    // If the animation name equals the prefix, just use the prefix once
-    // e.g. node="idle", anim="idle" → "idle" (not "idle_idle")
-    if (slugAnim == slugPrefix || slugAnim.isEmpty())
-        return slugPrefix;
+    // If after cleanup the name is empty or just "mixamo_com" residue,
+    // use the node/file name as the animation name
+    if (slugAnim.isEmpty())
+        return slugify(prefix);
 
-    return slugPrefix + "_" + slugAnim;
+    // Otherwise keep the meaningful animation name as-is
+    return slugAnim;
 }
 
 // Deduplicate a name against an existing set, appending _2, _3, etc. if needed.
+// Strips any existing trailing _N suffix first so repeated merges produce
+// test_jump, test_jump_2, test_jump_3 (not test_jump_2_2, test_jump_2_2_2).
 static QString deduplicateName(const QString& desired, QSet<QString>& existingNames)
 {
-    if (!existingNames.contains(desired)) {
-        existingNames.insert(desired);
-        return desired;
+    // Strip existing _N suffix to find the base name
+    QString baseName = desired;
+    QRegularExpression trailingSuffix("_(\\d+)$");
+    auto match = trailingSuffix.match(baseName);
+    if (match.hasMatch())
+        baseName = baseName.left(match.capturedStart());
+
+    if (!existingNames.contains(baseName)) {
+        existingNames.insert(baseName);
+        return baseName;
     }
     int suffix = 2;
     QString candidate;
     do {
-        candidate = desired + "_" + QString::number(suffix++);
+        candidate = baseName + "_" + QString::number(suffix++);
     } while (existingNames.contains(candidate));
     existingNames.insert(candidate);
     return candidate;
@@ -251,8 +261,23 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
             renameAnimation(baseSkel.get(), tempName, finalName);
     }
 
-    // Refresh the entity's animation states to pick up new animations
-    baseEntity->refreshAvailableAnimationState();
+    // Rebuild animation states from scratch. refreshAvailableAnimationState() only
+    // adds new states but doesn't remove stale ones from renamed/removed animations.
+    {
+        auto* stateSet = baseEntity->getAllAnimationStates();
+        if (stateSet) {
+            // Collect stale state names (present in entity but not in skeleton)
+            std::vector<std::string> staleNames;
+            for (const auto& [name, state] : stateSet->getAnimationStates()) {
+                if (!baseSkel->hasAnimation(name))
+                    staleNames.push_back(name);
+            }
+            for (const auto& name : staleNames)
+                stateSet->removeAnimationState(name);
+        }
+        // Add any new animations from the skeleton
+        baseEntity->refreshAvailableAnimationState();
+    }
 
     return baseEntity;
 }

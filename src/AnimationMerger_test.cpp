@@ -158,10 +158,9 @@ TEST_F(AnimationMergerTest, MergeAnimationsBasic)
     ASSERT_NE(merged, nullptr) << err.toStdString();
     EXPECT_EQ(merged, entityA);
 
-    // Base "idle" is now prefixed: "basenode_idle"
-    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("basenode_idle"));
-    // walkNode's "walk" → "walknode_walk"
-    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("walknode_walk"));
+    // Meaningful names kept as-is (no prefix)
+    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("idle"));
+    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("walk"));
 
     // Cleanup
     nodeA->detachAllObjects();
@@ -200,12 +199,9 @@ TEST_F(AnimationMergerTest, MergeAnimationsNameCollision)
     auto* merged = AnimationMerger::mergeAnimations(entityA, sources, err);
 
     ASSERT_NE(merged, nullptr) << err.toStdString();
-    // Base node "collBaseNode" + anim "idle" → "collbasenode_idle"
-    // Source node "idle" + anim "idle" → "idle" (dedup: same slug, no duplication)
-    // But "idle" would collide if another had it, so it gets _2 if needed
-    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("collbasenode_idle"));
-    // Source node "idle" + anim "idle" → buildAnimName returns "idle" (no duplication)
+    // Both have meaningful name "idle" → base keeps "idle", source gets "idle_2"
     EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("idle"));
+    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("idle_2"));
 
     // Cleanup
     nodeA->detachAllObjects();
@@ -247,11 +243,11 @@ TEST_F(AnimationMergerTest, MergeAnimationsMixamoCleanup)
     ASSERT_NE(merged, nullptr) << err.toStdString();
     auto* skel = merged->getMesh()->getSkeleton().get();
 
-    // "Armature|mixamo.com|Layer0" → cleaned → "Armature|Layer0" → "character_armature_layer0"
-    EXPECT_TRUE(skel->hasAnimation("character_armature_layer0"))
+    // "Armature|mixamo.com|Layer0" → cleaned → "Armature|Layer0" → meaningful → "armature_layer0"
+    EXPECT_TRUE(skel->hasAnimation("armature_layer0"))
         << "Expected cleaned base animation";
-    // "mixamo.com|walk" → cleaned → "walk" → "walkanim_walk"
-    EXPECT_TRUE(skel->hasAnimation("walkanim_walk"))
+    // "mixamo.com|walk" → cleaned → "walk" → meaningful → "walk"
+    EXPECT_TRUE(skel->hasAnimation("walk"))
         << "Expected cleaned source animation";
 
     nodeA->detachAllObjects();
@@ -298,13 +294,10 @@ TEST_F(AnimationMergerTest, MergeAnimationsDeduplication)
     ASSERT_NE(merged, nullptr) << err.toStdString();
     auto* skel = merged->getMesh()->getSkeleton().get();
 
-    // Base: node="idle" + anim="idle" → "idle"
+    // All three have meaningful name "idle" → dedup: "idle", "idle_2", "idle_3"
     EXPECT_TRUE(skel->hasAnimation("idle"));
-    // Source 1: node="idle2" + anim="idle" → "idle2" (prefix != anim, but anim is subprefix)
-    // Actually: buildAnimName("idle2", "idle") → slugPrefix="idle2", slugAnim="idle" → "idle2_idle"
-    EXPECT_TRUE(skel->hasAnimation("idle2_idle"));
-    // Source 2: node="idle3" + anim="idle" → "idle3_idle"
-    EXPECT_TRUE(skel->hasAnimation("idle3_idle"));
+    EXPECT_TRUE(skel->hasAnimation("idle_2"));
+    EXPECT_TRUE(skel->hasAnimation("idle_3"));
 
     nodeA->detachAllObjects();
     nodeB->detachAllObjects();
