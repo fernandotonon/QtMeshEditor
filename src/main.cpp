@@ -7,6 +7,7 @@
 #include <QSettings>
 #include <QSysInfo>
 #include <QLibraryInfo>
+#include <QDir>
 #include <QCommandLineParser>
 #include <QScopeGuard>
 #include <QtQml/qqmlengine.h>
@@ -153,9 +154,9 @@ int main(int argc, char *argv[])
     }
     // Set environment variable as fallback for QML engines
     QByteArray existingPaths = qgetenv("QML2_IMPORT_PATH");
-    QByteArray newPaths = qmlImportPaths.join(":").toUtf8();
+    QByteArray newPaths = qmlImportPaths.join(QDir::listSeparator()).toUtf8();
     if (!existingPaths.isEmpty()) {
-        newPaths = newPaths + ":" + existingPaths;
+        newPaths = newPaths + QDir::listSeparator().toLatin1() + existingPaths;
     }
     qputenv("QML2_IMPORT_PATH", newPaths);
 
