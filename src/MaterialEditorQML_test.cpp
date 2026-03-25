@@ -2387,6 +2387,43 @@ TEST_F(MaterialEditorQMLWithOgreTest, OpenMaterialEditorWindow_WithGUIMaterial) 
 // NEW: Adding a pass to a new technique, then selecting it
 // ===========================================================================
 
+TEST_F(MaterialEditorQMLWithOgreTest, UpdateTextureUnitProperties_NoTextureUnit_ResetsDefaults) {
+    editor->loadMaterial("BaseWhite");
+    ASSERT_FALSE(editor->passList().isEmpty());
+
+    // Create a texture unit and select it to populate properties
+    editor->createNewTextureUnit("TestTU");
+    ASSERT_FALSE(editor->textureUnitList().isEmpty());
+    editor->setSelectedTextureUnitIndex(editor->textureUnitList().size() - 1);
+
+    // Modify some texture properties so we can verify they reset
+    editor->setTextureUScale(2.0f);
+    editor->setTextureVScale(3.0f);
+    editor->setTextureRotation(45.0f);
+    editor->setMaxAnisotropy(8);
+    editor->setTexCoordSet(2);
+
+    // Now deselect texture unit (index -1) to trigger the !textureUnit branch
+    editor->setSelectedTextureUnitIndex(-1);
+
+    // All texture properties should be reset to defaults
+    EXPECT_EQ(editor->textureName(), "*Select a texture*");
+    EXPECT_DOUBLE_EQ(editor->scrollAnimUSpeed(), 0.0);
+    EXPECT_DOUBLE_EQ(editor->scrollAnimVSpeed(), 0.0);
+    EXPECT_EQ(editor->texCoordSet(), 0);
+    EXPECT_EQ(editor->textureAddressMode(), 0);
+    EXPECT_EQ(editor->textureBorderColor(), QColor(0, 0, 0));
+    EXPECT_EQ(editor->textureFiltering(), 1);
+    EXPECT_EQ(editor->maxAnisotropy(), 1);
+    EXPECT_FLOAT_EQ(editor->textureUOffset(), 0.0f);
+    EXPECT_FLOAT_EQ(editor->textureVOffset(), 0.0f);
+    EXPECT_FLOAT_EQ(editor->textureUScale(), 1.0f);
+    EXPECT_FLOAT_EQ(editor->textureVScale(), 1.0f);
+    EXPECT_FLOAT_EQ(editor->textureRotation(), 0.0f);
+    EXPECT_EQ(editor->environmentMapping(), 0);
+    EXPECT_DOUBLE_EQ(editor->rotateAnimSpeed(), 0.0);
+}
+
 TEST_F(MaterialEditorQMLWithOgreTest, NewTechniqueAddPassAndSelectIt) {
     editor->loadMaterial("BaseWhite");
     int origTechCount = editor->techniqueList().size();
