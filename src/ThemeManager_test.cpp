@@ -2,14 +2,25 @@
 #include "ThemeManager.h"
 #include <QApplication>
 #include <QCoreApplication>
+#include <QPalette>
 #include <QSignalSpy>
 
 class ThemeManagerTests : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
+    QPalette originalPalette;
+
     void SetUp() override {
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
+        originalPalette = app->palette();
+    }
+
+    void TearDown() override {
+        if (app) {
+            app->setPalette(originalPalette);
+            app->processEvents();
+        }
     }
 };
 
@@ -32,6 +43,49 @@ TEST_F(ThemeManagerTests, ColorsAreValid) {
     EXPECT_TRUE(tm->buttonColor().isValid());
     EXPECT_TRUE(tm->borderColor().isValid());
     EXPECT_TRUE(tm->accentColor().isValid());
+}
+
+TEST_F(ThemeManagerTests, ColorsMatchCurrentPalette) {
+    auto* tm = ThemeManager::instance();
+    ASSERT_NE(tm, nullptr);
+
+    QPalette palette = app->palette();
+    const QColor window(245, 246, 247);
+    const QColor base(32, 42, 52);
+    const QColor text(12, 22, 32);
+    const QColor disabled(62, 72, 82);
+    const QColor placeholder(92, 102, 112);
+    const QColor highlight(122, 132, 142);
+    const QColor highlightedText(202, 212, 222);
+    const QColor button(152, 162, 172);
+    const QColor buttonText(182, 192, 202);
+    const QColor mid(111, 121, 131);
+
+    palette.setColor(QPalette::Window, window);
+    palette.setColor(QPalette::Base, base);
+    palette.setColor(QPalette::WindowText, text);
+    palette.setColor(QPalette::Disabled, QPalette::WindowText, disabled);
+    palette.setColor(QPalette::PlaceholderText, placeholder);
+    palette.setColor(QPalette::Highlight, highlight);
+    palette.setColor(QPalette::HighlightedText, highlightedText);
+    palette.setColor(QPalette::Button, button);
+    palette.setColor(QPalette::ButtonText, buttonText);
+    palette.setColor(QPalette::Mid, mid);
+    app->setPalette(palette);
+
+    EXPECT_EQ(tm->windowColor(), window);
+    EXPECT_EQ(tm->panelColor(), window);
+    EXPECT_EQ(tm->headerColor(), window.darker(110));
+    EXPECT_EQ(tm->inputColor(), base);
+    EXPECT_EQ(tm->textColor(), text);
+    EXPECT_EQ(tm->disabledTextColor(), disabled);
+    EXPECT_EQ(tm->placeholderTextColor(), placeholder);
+    EXPECT_EQ(tm->highlightColor(), highlight);
+    EXPECT_EQ(tm->highlightedTextColor(), highlightedText);
+    EXPECT_EQ(tm->buttonColor(), button);
+    EXPECT_EQ(tm->buttonTextColor(), buttonText);
+    EXPECT_EQ(tm->borderColor(), mid);
+    EXPECT_EQ(tm->accentColor(), highlight);
 }
 
 TEST_F(ThemeManagerTests, ThemeNameNotEmpty) {
@@ -133,4 +187,18 @@ TEST_F(ThemeManagerTests, ThemeNameIsLightOrDark) {
     ASSERT_NE(tm, nullptr);
     QString name = tm->themeName();
     EXPECT_TRUE(name == "light" || name == "dark");
+}
+
+TEST_F(ThemeManagerTests, ThemeNameTracksPaletteLightness) {
+    auto* tm = ThemeManager::instance();
+    ASSERT_NE(tm, nullptr);
+
+    QPalette palette = app->palette();
+    palette.setColor(QPalette::Window, QColor(250, 250, 250));
+    app->setPalette(palette);
+    EXPECT_EQ(tm->themeName(), QString("light"));
+
+    palette.setColor(QPalette::Window, QColor(20, 20, 20));
+    app->setPalette(palette);
+    EXPECT_EQ(tm->themeName(), QString("dark"));
 }

@@ -5,7 +5,6 @@ if(BUILD_TESTS)
     # Include MaterialEditorQML header and source directories
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/../src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../ui_files
         ${BUILD_INCLUDE_DIR}
         ${BUILD_UIH_DIR}
     )
@@ -268,7 +267,6 @@ if(BUILD_TESTS)
         
         target_include_directories(${target_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src
-            ${CMAKE_CURRENT_SOURCE_DIR}/../ui_files
             ${BUILD_INCLUDE_DIR}
             ${BUILD_UIH_DIR}
             ${OGRE_PROCEDURAL_LIB_DIR}include
@@ -298,7 +296,6 @@ if(BUILD_TESTS)
         
         target_include_directories(${target_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src
-            ${CMAKE_CURRENT_SOURCE_DIR}/../ui_files
             ${BUILD_INCLUDE_DIR}
             ${BUILD_UIH_DIR}
             ${OGRE_PROCEDURAL_LIB_DIR}include
