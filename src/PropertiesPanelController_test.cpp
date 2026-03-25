@@ -114,6 +114,7 @@ TEST_F(PropertiesPanelControllerTests, PaletteChangeEmitsThemeChanged)
     QPalette palette = app->palette();
     palette.setColor(QPalette::Window, QColor(10, 10, 10));
     app->setPalette(palette);
+    app->processEvents();
 
     EXPECT_GE(themeSpy.count(), 1);
 }
