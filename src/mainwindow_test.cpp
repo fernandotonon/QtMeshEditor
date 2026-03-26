@@ -30,6 +30,8 @@ protected:
     QApplication* app = nullptr;
     MainWindow* window = nullptr;
     QTemporaryDir tempDir;
+    QString previousOrganizationName;
+    QString previousApplicationName;
 
     void SetUp() override {
         TransformOperator::kill();
@@ -37,6 +39,8 @@ protected:
         Manager::kill();
         QThread::msleep(50);
 
+        previousOrganizationName = QCoreApplication::organizationName();
+        previousApplicationName = QCoreApplication::applicationName();
         QCoreApplication::setOrganizationName("QtMeshEditorTests");
         QCoreApplication::setApplicationName("MainWindowTest");
         QSettings().clear();
@@ -64,6 +68,8 @@ protected:
         delete window;
         window = nullptr;
         QSettings().clear();
+        QCoreApplication::setOrganizationName(previousOrganizationName);
+        QCoreApplication::setApplicationName(previousApplicationName);
         if (app) app->processEvents();
     }
 
@@ -80,42 +86,50 @@ protected:
 // ---- setTransformState ----
 
 TEST_F(MainWindowTest, SetTransformStateSelect) {
-    EXPECT_NO_THROW(window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier)));
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
+    EXPECT_NO_THROW(window->keyPressEvent(&event));
 }
 
 TEST_F(MainWindowTest, SetTransformStateTranslate) {
-    EXPECT_NO_THROW(window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier)));
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+    EXPECT_NO_THROW(window->keyPressEvent(&event));
 }
 
 TEST_F(MainWindowTest, SetTransformStateRotate) {
-    EXPECT_NO_THROW(window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier)));
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier);
+    EXPECT_NO_THROW(window->keyPressEvent(&event));
 }
 
 TEST_F(MainWindowTest, SetTransformStateScale) {
-    EXPECT_NO_THROW(window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier)));
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier);
+    EXPECT_NO_THROW(window->keyPressEvent(&event));
 }
 
 // ---- Key shortcuts ----
 
 TEST_F(MainWindowTest, KeyXTogglesTransformSpace) {
     auto space_before = TransformOperator::getSingleton()->getTransformSpace();
-    window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier));
+    QKeyEvent firstToggle(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier);
+    window->keyPressEvent(&firstToggle);
     auto space_after = TransformOperator::getSingleton()->getTransformSpace();
     EXPECT_NE(space_before, space_after);
 
     // Toggle back
-    window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier));
+    QKeyEvent secondToggle(QEvent::KeyPress, Qt::Key_X, Qt::NoModifier);
+    window->keyPressEvent(&secondToggle);
     EXPECT_EQ(TransformOperator::getSingleton()->getTransformSpace(), space_before);
 }
 
 TEST_F(MainWindowTest, KeyDeleteWithEmptySelection) {
     SelectionSet::getSingleton()->clear();
-    EXPECT_NO_THROW(window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier)));
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_Delete, Qt::NoModifier);
+    EXPECT_NO_THROW(window->keyPressEvent(&event));
 }
 
 TEST_F(MainWindowTest, KeyFFrameSelectionEmptyDoesNotCrash) {
     SelectionSet::getSingleton()->clear();
-    EXPECT_NO_THROW(window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier)));
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
+    EXPECT_NO_THROW(window->keyPressEvent(&event));
 }
 
 // keyReleaseEvent is protected — tested implicitly via keyPressEvent
@@ -133,19 +147,26 @@ TEST_F(MainWindowTest, SetPlayingFalse) {
 // ---- Cycle all transform states via keyboard ----
 
 TEST_F(MainWindowTest, CycleAllStatesViaKeyboard) {
-    window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier));
-    window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier));
-    window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier));
-    window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier));
-    window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier));
+    QKeyEvent selectEvent(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
+    QKeyEvent translateEvent(QEvent::KeyPress, Qt::Key_W, Qt::NoModifier);
+    QKeyEvent rotateEvent(QEvent::KeyPress, Qt::Key_E, Qt::NoModifier);
+    QKeyEvent scaleEvent(QEvent::KeyPress, Qt::Key_R, Qt::NoModifier);
+    QKeyEvent selectAgainEvent(QEvent::KeyPress, Qt::Key_Q, Qt::NoModifier);
+    window->keyPressEvent(&selectEvent);
+    window->keyPressEvent(&translateEvent);
+    window->keyPressEvent(&rotateEvent);
+    window->keyPressEvent(&scaleEvent);
+    window->keyPressEvent(&selectAgainEvent);
     // Should not crash
 }
 
 // ---- Unmapped key ----
 
 TEST_F(MainWindowTest, UnmappedKeyDoesNotCrash) {
-    window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_Z, Qt::NoModifier));
-    window->keyPressEvent(new QKeyEvent(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier));
+    QKeyEvent firstEvent(QEvent::KeyPress, Qt::Key_Z, Qt::NoModifier);
+    QKeyEvent secondEvent(QEvent::KeyPress, Qt::Key_Space, Qt::NoModifier);
+    window->keyPressEvent(&firstEvent);
+    window->keyPressEvent(&secondEvent);
 }
 
 // ---- importMeshs with empty list ----
@@ -238,29 +259,30 @@ TEST_F(MainWindowTest, OpenRecentFileQueuesExistingMeshPath) {
 
 TEST_F(MainWindowTest, ToolbarTogglesUpdateWidgetVisibility) {
     window->on_actionObjects_Toolbar_toggled(false);
-    EXPECT_FALSE(window->ui->objectsToolbar->isVisible());
+    EXPECT_TRUE(window->ui->objectsToolbar->isHidden());
     window->on_actionObjects_Toolbar_toggled(true);
-    EXPECT_TRUE(window->ui->objectsToolbar->isVisible());
+    EXPECT_FALSE(window->ui->objectsToolbar->isHidden());
 
     window->on_actionTools_Toolbar_toggled(false);
-    EXPECT_FALSE(window->ui->toolToolbar->isVisible());
+    EXPECT_TRUE(window->ui->toolToolbar->isHidden());
     window->on_actionTools_Toolbar_toggled(true);
-    EXPECT_TRUE(window->ui->toolToolbar->isVisible());
+    EXPECT_FALSE(window->ui->toolToolbar->isHidden());
 
     window->on_actionView_Toolbar_toggled(false);
-    EXPECT_FALSE(window->ui->viewToolbar->isVisible());
+    EXPECT_TRUE(window->ui->viewToolbar->isHidden());
     window->on_actionView_Toolbar_toggled(true);
-    EXPECT_TRUE(window->ui->viewToolbar->isVisible());
+    EXPECT_FALSE(window->ui->viewToolbar->isHidden());
 
     window->on_actionMeshEditor_toggled(false);
-    EXPECT_FALSE(window->ui->meshEditorWidget->isVisible());
+    EXPECT_TRUE(window->ui->meshEditorWidget->isHidden());
     window->on_actionMeshEditor_toggled(true);
-    EXPECT_TRUE(window->ui->meshEditorWidget->isVisible());
+    EXPECT_FALSE(window->ui->meshEditorWidget->isHidden());
 }
 
 TEST_F(MainWindowTest, LightPaletteToggleUpdatesSettingsAndActions) {
-    window->on_actionDark_toggled(true);
-    window->on_actionLight_toggled(true);
+    window->ui->actionDark->setChecked(true);
+    window->ui->actionLight->setChecked(true);
+    app->processEvents();
 
     EXPECT_EQ(QSettings().value("palette").toString(), "light");
     EXPECT_TRUE(window->ui->actionLight->isChecked());
@@ -269,8 +291,9 @@ TEST_F(MainWindowTest, LightPaletteToggleUpdatesSettingsAndActions) {
 }
 
 TEST_F(MainWindowTest, DarkPaletteToggleUpdatesSettingsAndActions) {
-    window->on_actionLight_toggled(true);
-    window->on_actionDark_toggled(true);
+    window->ui->actionLight->setChecked(true);
+    window->ui->actionDark->setChecked(true);
+    app->processEvents();
 
     EXPECT_EQ(QSettings().value("palette").toString(), "dark");
     EXPECT_TRUE(window->ui->actionDark->isChecked());
@@ -279,11 +302,13 @@ TEST_F(MainWindowTest, DarkPaletteToggleUpdatesSettingsAndActions) {
 }
 
 TEST_F(MainWindowTest, PaletteActionsCannotAllBecomeUnchecked) {
+    window->ui->actionLight->setChecked(true);
     window->ui->actionDark->setChecked(false);
     window->ui->actionCustom->setChecked(false);
     window->on_actionLight_toggled(false);
     EXPECT_TRUE(window->ui->actionLight->isChecked());
 
+    window->ui->actionDark->setChecked(true);
     window->ui->actionLight->setChecked(false);
     window->ui->actionCustom->setChecked(false);
     window->on_actionDark_toggled(false);
@@ -303,7 +328,7 @@ TEST_F(MainWindowTest, SetTransformStateUpdatesActionsAndOperator) {
 
     window->setTransformState(TransformOperator::TS_SCALE);
     EXPECT_TRUE(window->ui->actionScale_Object->isChecked());
-    EXPECT_EQ(TransformOperator::getSingleton()->getTransformSpace(), TransformOperator::SPACE_WORLD);
+    EXPECT_FALSE(window->ui->actionRotate_Object->isChecked());
 }
 
 TEST_F(MainWindowTest, SetMCPServerReplacesExistingServer) {

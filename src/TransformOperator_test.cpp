@@ -129,7 +129,7 @@ TEST_F(TransformOperatorTests, TransformSpaceChangesOnlyWhenValueDiffers)
     EXPECT_EQ(spy.count(), 2);
 }
 
-TEST_F(TransformOperatorTests, TransformStateChangeWithNoSelectionHidesAllGizmos)
+TEST_F(TransformOperatorTests, TransformStateChangeWithoutSelectionUpdatesStateAndTracking)
 {
     op->onTransformStateChange(TransformOperator::TS_TRANSLATE);
 
