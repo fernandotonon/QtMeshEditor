@@ -286,7 +286,13 @@ const Ogre::Vector3 SelectionSet::getSelectionCenter(void)   const
     {
         //Return the entity to mesh relative position
         foreach(Ogre::Entity* obj, mEntitiesSelected)
-            vResult += (obj->getWorldBoundingBox().getCenter() - Ogre::Vector3(0,obj->getWorldBoundingBox().getHalfSize().y,0));
+        {
+            const Ogre::AxisAlignedBox boundingBox = obj->getWorldBoundingBox(true);
+            if (boundingBox.isFinite())
+                vResult += (boundingBox.getCenter() - Ogre::Vector3(0, boundingBox.getHalfSize().y, 0));
+            else
+                vResult += obj->getParentSceneNode()->getPosition();
+        }
 
         vResult = vResult/getEntitiesCount();
     }
@@ -294,7 +300,13 @@ const Ogre::Vector3 SelectionSet::getSelectionCenter(void)   const
     {
         //Return the entity to mesh relative position
         foreach(Ogre::SubEntity* obj, mSubEntitiesSelected)
-            vResult += (obj->getParent()->getWorldBoundingBox().getCenter() - Ogre::Vector3(0,obj->getParent()->getWorldBoundingBox().getHalfSize().y,0));
+        {
+            const Ogre::AxisAlignedBox boundingBox = obj->getParent()->getWorldBoundingBox(true);
+            if (boundingBox.isFinite())
+                vResult += (boundingBox.getCenter() - Ogre::Vector3(0, boundingBox.getHalfSize().y, 0));
+            else
+                vResult += obj->getParent()->getParentSceneNode()->getPosition();
+        }
 
         vResult = vResult/getSubEntitiesCount();
     }
