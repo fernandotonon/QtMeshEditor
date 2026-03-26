@@ -3,6 +3,7 @@
 #include <gtest/gtest.h>
 #include <QApplication>
 #include <QCoreApplication>
+#include <QFile>
 #include <QSignalSpy>
 #include <QDir>
 #include <QStandardPaths>
@@ -17,6 +18,16 @@ protected:
         ASSERT_NE(app, nullptr);
         manager = SDManager::instance();
         ASSERT_NE(manager, nullptr);
+    }
+
+    QString createModelFile(const QString& directory, const QString& fileName)
+    {
+        QDir().mkpath(directory);
+        QFile file(QDir(directory).filePath(fileName));
+        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        file.write("stub");
+        file.close();
+        return file.fileName();
     }
 
     QApplication* app = nullptr;
@@ -110,6 +121,40 @@ TEST_F(SDManagerTest, ScanForModels)
     manager->scanForModels();
 }
 
+TEST_F(SDManagerTest, ScanForModelsFindsSupportedExtensionsAndMarksRecommendationsDownloaded)
+{
+    QString originalDir = manager->modelsDirectory();
+    QString tempDir = QDir::temp().filePath("qtmesh_sd_scan_models");
+
+    createModelFile(tempDir, "custom_a.safetensors");
+    createModelFile(tempDir, "custom_b.ckpt");
+    createModelFile(tempDir, "custom_c.gguf");
+    createModelFile(tempDir, "v1-5-pruned-emaonly.safetensors");
+
+    manager->setModelsDirectory(tempDir);
+    manager->scanForModels();
+
+    const QStringList models = manager->availableModels();
+    EXPECT_TRUE(models.contains("custom_a"));
+    EXPECT_TRUE(models.contains("custom_b"));
+    EXPECT_TRUE(models.contains("custom_c"));
+    EXPECT_TRUE(models.contains("v1-5-pruned-emaonly"));
+
+    const QVariantList recommended = manager->getRecommendedModelsInfo();
+    bool foundDownloadedRecommendation = false;
+    for (const QVariant& entry : recommended) {
+        const QVariantMap info = entry.toMap();
+        if (info.value("fileName").toString() == "v1-5-pruned-emaonly.safetensors") {
+            foundDownloadedRecommendation = true;
+            EXPECT_TRUE(info.value("isDownloaded").toBool());
+        }
+    }
+    EXPECT_TRUE(foundDownloadedRecommendation);
+
+    manager->setModelsDirectory(originalDir);
+    QDir(tempDir).removeRecursively();
+}
+
 TEST_F(SDManagerTest, LoadModelNotFound)
 {
     QSignalSpy errorSpy(manager, &SDManager::modelLoadError);
@@ -145,6 +190,39 @@ TEST_F(SDManagerTest, ModelFileExistsNonexistent)
 TEST_F(SDManagerTest, GetModelFilePathNonexistent)
 {
     EXPECT_TRUE(manager->getModelFilePath("nonexistent_model").isEmpty());
+}
+
+TEST_F(SDManagerTest, GetModelFilePathResolvesDirectFilenameAndBaseNameWithDots)
+{
+    QString originalDir = manager->modelsDirectory();
+    QString tempDir = QDir::temp().filePath("qtmesh_sd_path_models");
+
+    const QString directPath = createModelFile(tempDir, "direct-model.gguf");
+    const QString dottedPath = createModelFile(tempDir, "model.1.0.safetensors");
+
+    manager->setModelsDirectory(tempDir);
+
+    EXPECT_EQ(manager->getModelFilePath("direct-model.gguf"), directPath);
+    EXPECT_EQ(manager->getModelFilePath("model.1.0"), dottedPath);
+    EXPECT_TRUE(manager->modelFileExists("model.1.0"));
+
+    manager->setModelsDirectory(originalDir);
+    QDir(tempDir).removeRecursively();
+}
+
+TEST_F(SDManagerTest, GetModelFilePathResolvesRecommendedModelFilename)
+{
+    QString originalDir = manager->modelsDirectory();
+    QString tempDir = QDir::temp().filePath("qtmesh_sd_recommended_models");
+
+    const QString recommendedPath = createModelFile(tempDir, "sd_xl_turbo_1.0_fp16.safetensors");
+    manager->setModelsDirectory(tempDir);
+
+    EXPECT_EQ(manager->getModelFilePath("SDXL Turbo (FP16)"), recommendedPath);
+    EXPECT_TRUE(manager->modelFileExists("SDXL Turbo (FP16)"));
+
+    manager->setModelsDirectory(originalDir);
+    QDir(tempDir).removeRecursively();
 }
 
 TEST_F(SDManagerTest, GenerationProgress)
@@ -196,6 +274,28 @@ TEST_F(SDManagerTest, GetAvailableModelsInfo)
     EXPECT_GE(models.size(), 0);
 }
 
+TEST_F(SDManagerTest, GetAvailableModelsInfoIncludesFileMetadata)
+{
+    QString originalDir = manager->modelsDirectory();
+    QString tempDir = QDir::temp().filePath("qtmesh_sd_info_models");
+
+    createModelFile(tempDir, "metadata-model.ckpt");
+    manager->setModelsDirectory(tempDir);
+    manager->scanForModels();
+
+    const QVariantList models = manager->getAvailableModelsInfo();
+    ASSERT_EQ(models.size(), 1);
+
+    const QVariantMap info = models.first().toMap();
+    EXPECT_EQ(info.value("name").toString(), QString("metadata-model"));
+    EXPECT_EQ(info.value("fileName").toString(), QString("metadata-model.ckpt"));
+    EXPECT_GT(info.value("size").toLongLong(), 0);
+    EXPECT_TRUE(info.value("isDownloaded").toBool());
+
+    manager->setModelsDirectory(originalDir);
+    QDir(tempDir).removeRecursively();
+}
+
 // ---- setAutoLoadModel ----
 
 TEST_F(SDManagerTest, SetAutoLoadModel)
@@ -230,6 +330,46 @@ TEST_F(SDManagerTest, GetSettingsRoundtrip)
 
     // Restore
     manager->setSettings(original);
+}
+
+TEST_F(SDManagerTest, SaveAndLoadSettingsPersistsCoreFields)
+{
+    const QString originalDir = manager->modelsDirectory();
+    const bool originalAutoLoad = manager->autoLoadModel();
+    const SDSettings originalSettings = manager->getSettings();
+
+    const QString tempDir = QDir::temp().filePath("qtmesh_sd_settings_models");
+    manager->setModelsDirectory(tempDir);
+    manager->setImageWidth(768);
+    manager->setImageHeight(320);
+    manager->setSteps(14);
+    manager->setCfgScale(4.5f);
+    manager->setNegativePrompt("persist me");
+    manager->setAutoLoadModel(false);
+    manager->saveSettings();
+
+    manager->setImageWidth(123);
+    manager->setImageHeight(456);
+    manager->setSteps(7);
+    manager->setCfgScale(1.0f);
+    manager->setNegativePrompt("temporary");
+    manager->setAutoLoadModel(true);
+
+    manager->loadSettings();
+
+    EXPECT_EQ(manager->modelsDirectory(), tempDir);
+    EXPECT_EQ(manager->imageWidth(), 768);
+    EXPECT_EQ(manager->imageHeight(), 320);
+    EXPECT_EQ(manager->steps(), 14);
+    EXPECT_FLOAT_EQ(manager->cfgScale(), 4.5f);
+    EXPECT_EQ(manager->negativePrompt(), QString("persist me"));
+    EXPECT_FALSE(manager->autoLoadModel());
+
+    manager->setModelsDirectory(originalDir);
+    manager->setSettings(originalSettings);
+    manager->setAutoLoadModel(originalAutoLoad);
+    manager->saveSettings();
+    QDir(tempDir).removeRecursively();
 }
 
 // ---- setModelsDirectory ----
