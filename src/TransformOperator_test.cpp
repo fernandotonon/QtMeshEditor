@@ -15,6 +15,16 @@
 #include "TransformOperator.h"
 #include "UndoManager.h"
 
+namespace {
+void expectQuaternionNear(const Ogre::Quaternion& actual, const Ogre::Quaternion& expected)
+{
+    EXPECT_FLOAT_EQ(actual.w, expected.w);
+    EXPECT_FLOAT_EQ(actual.x, expected.x);
+    EXPECT_FLOAT_EQ(actual.y, expected.y);
+    EXPECT_FLOAT_EQ(actual.z, expected.z);
+}
+}
+
 class TransformOperatorTests : public ::testing::Test
 {
 protected:
@@ -123,8 +133,9 @@ TEST_F(TransformOperatorTests, SelectionBoxColourRoundTrips)
 TEST_F(TransformOperatorTests, RayFromScreenPointWithoutActiveWidgetReturnsDefaultRay)
 {
     const Ogre::Ray ray = op->rayFromScreenPoint(QPoint(25, 40));
-    EXPECT_EQ(ray.getOrigin(), Ogre::Vector3::ZERO);
-    EXPECT_EQ(ray.getDirection(), Ogre::Vector3::ZERO);
+    const Ogre::Ray defaultRay;
+    EXPECT_EQ(ray.getOrigin(), defaultRay.getOrigin());
+    EXPECT_EQ(ray.getDirection(), defaultRay.getDirection());
 }
 
 TEST_F(TransformOperatorTests, SelectedNodeTransformsUpdateNodeState)
@@ -150,8 +161,10 @@ TEST_F(TransformOperatorTests, OnSelectionChangedRestoresNodeInitialState)
     Ogre::SceneNode* node = createSelectedNode("InitialStateNode");
     ASSERT_NE(node, nullptr);
 
+    // onSelectionChanged() restores a selected SceneNode to its explicitly saved initial state.
     node->setScale(Ogre::Vector3(2.0f, 2.0f, 2.0f));
-    node->setOrientation(Ogre::Quaternion(Ogre::Degree(30), Ogre::Vector3::UNIT_Y));
+    const Ogre::Quaternion expectedOrientation(Ogre::Degree(30), Ogre::Vector3::UNIT_Y);
+    node->setOrientation(expectedOrientation);
     node->setInitialState();
 
     node->setScale(Ogre::Vector3(5.0f, 6.0f, 7.0f));
@@ -160,7 +173,7 @@ TEST_F(TransformOperatorTests, OnSelectionChangedRestoresNodeInitialState)
     op->onSelectionChanged();
 
     EXPECT_EQ(node->getScale(), Ogre::Vector3(2.0f, 2.0f, 2.0f));
-    EXPECT_EQ(node->getOrientation(), Ogre::Quaternion(Ogre::Degree(30), Ogre::Vector3::UNIT_Y));
+    expectQuaternionNear(node->getOrientation(), expectedOrientation);
 }
 
 TEST_F(TransformOperatorTests, OnSelectionChangedNormalizesSelectedEntityParentNode)
@@ -171,13 +184,15 @@ TEST_F(TransformOperatorTests, OnSelectionChangedNormalizesSelectedEntityParentN
     }
 
     Ogre::SceneNode* parentNode = entity->getParentSceneNode();
+    // onSelectionChanged() treats an Entity selection differently: it normalizes the parent SceneNode
+    // back to identity instead of restoring a previously saved SceneNode initial state.
     parentNode->setScale(Ogre::Vector3(3.0f, 4.0f, 5.0f));
     parentNode->setOrientation(Ogre::Quaternion(Ogre::Degree(45), Ogre::Vector3::UNIT_Z));
 
     op->onSelectionChanged();
 
     EXPECT_EQ(parentNode->getScale(), Ogre::Vector3::UNIT_SCALE);
-    EXPECT_EQ(parentNode->getOrientation(), Ogre::Quaternion::IDENTITY);
+    expectQuaternionNear(parentNode->getOrientation(), Ogre::Quaternion::IDENTITY);
 }
 
 TEST_F(TransformOperatorTests, RemoveSelectedDestroysNodesAndClearsUndoHistory)

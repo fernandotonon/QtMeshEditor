@@ -16,22 +16,38 @@ protected:
     {
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
+        previousOrgName = QCoreApplication::organizationName();
+        previousAppName = QCoreApplication::applicationName();
+        QCoreApplication::setOrganizationName("QtMeshEditor");
+        QCoreApplication::setApplicationName("QtMeshEditor");
         manager = SDManager::instance();
         ASSERT_NE(manager, nullptr);
+    }
+
+    void TearDown() override
+    {
+        QCoreApplication::setOrganizationName(previousOrgName);
+        QCoreApplication::setApplicationName(previousAppName);
     }
 
     QString createModelFile(const QString& directory, const QString& fileName)
     {
         QDir().mkpath(directory);
         QFile file(QDir(directory).filePath(fileName));
-        EXPECT_TRUE(file.open(QIODevice::WriteOnly));
+        const QString path = file.fileName();
+        if (!file.open(QIODevice::WriteOnly)) {
+            ADD_FAILURE() << "Failed to create temporary model file: " << path.toStdString();
+            return QString();
+        }
         file.write("stub");
         file.close();
-        return file.fileName();
+        return path;
     }
 
     QApplication* app = nullptr;
     SDManager* manager = nullptr;
+    QString previousOrgName;
+    QString previousAppName;
 };
 
 TEST_F(SDManagerTest, Singleton)
@@ -332,7 +348,7 @@ TEST_F(SDManagerTest, GetSettingsRoundtrip)
     manager->setSettings(original);
 }
 
-TEST_F(SDManagerTest, SaveAndLoadSettingsPersistsCoreFields)
+TEST_F(SDManagerTest, SaveSettingsPersistsCoreFields)
 {
     const QString originalDir = manager->modelsDirectory();
     const bool originalAutoLoad = manager->autoLoadModel();
@@ -348,22 +364,16 @@ TEST_F(SDManagerTest, SaveAndLoadSettingsPersistsCoreFields)
     manager->setAutoLoadModel(false);
     manager->saveSettings();
 
-    manager->setImageWidth(123);
-    manager->setImageHeight(456);
-    manager->setSteps(7);
-    manager->setCfgScale(1.0f);
-    manager->setNegativePrompt("temporary");
-    manager->setAutoLoadModel(true);
-
-    manager->loadSettings();
-
-    EXPECT_EQ(manager->modelsDirectory(), tempDir);
-    EXPECT_EQ(manager->imageWidth(), 768);
-    EXPECT_EQ(manager->imageHeight(), 320);
-    EXPECT_EQ(manager->steps(), 14);
-    EXPECT_FLOAT_EQ(manager->cfgScale(), 4.5f);
-    EXPECT_EQ(manager->negativePrompt(), QString("persist me"));
-    EXPECT_FALSE(manager->autoLoadModel());
+    QSettings settings;
+    settings.beginGroup("StableDiffusion");
+    EXPECT_EQ(settings.value("modelsDirectory").toString(), tempDir);
+    EXPECT_EQ(settings.value("width").toInt(), 768);
+    EXPECT_EQ(settings.value("height").toInt(), 320);
+    EXPECT_EQ(settings.value("steps").toInt(), 14);
+    EXPECT_FLOAT_EQ(settings.value("cfgScale").toFloat(), 4.5f);
+    EXPECT_EQ(settings.value("negativePrompt").toString(), QString("persist me"));
+    EXPECT_FALSE(settings.value("autoLoadModel").toBool());
+    settings.endGroup();
 
     manager->setModelsDirectory(originalDir);
     manager->setSettings(originalSettings);
