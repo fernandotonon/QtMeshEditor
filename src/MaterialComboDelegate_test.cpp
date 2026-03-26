@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QComboBox>
+#include <QSignalSpy>
 #include <QStandardItemModel>
 #include <QStyleOptionViewItem>
 #include <QThread>
@@ -124,4 +125,64 @@ TEST_F(MaterialComboDelegateTest, InitStyleOptionNonMaterialColumn)
     // Should delegate to parent
     delegate.initStyleOption(&option, index);
     // Should not crash
+}
+
+TEST_F(MaterialComboDelegateTest, CreateEditorIsReadOnlyAndSignalConnected)
+{
+    MaterialComboDelegate delegate;
+    QWidget parentWidget;
+    QStyleOptionViewItem option;
+    QStandardItemModel model(1, 3);
+
+    QWidget* editor = delegate.createEditor(&parentWidget, option, model.index(0, 2));
+    auto* comboBox = qobject_cast<QComboBox*>(editor);
+    ASSERT_NE(comboBox, nullptr);
+
+    EXPECT_FALSE(comboBox->isEditable());
+    EXPECT_FALSE(comboBox->hasFrame());
+
+    QSignalSpy commitSpy(&delegate, &QAbstractItemDelegate::commitData);
+    QSignalSpy closeSpy(&delegate, &QAbstractItemDelegate::closeEditor);
+    ASSERT_TRUE(commitSpy.isValid());
+    ASSERT_TRUE(closeSpy.isValid());
+
+    comboBox->setCurrentIndex(comboBox->count() > 1 ? 1 : 0);
+
+    EXPECT_EQ(commitSpy.count(), 1);
+    EXPECT_EQ(closeSpy.count(), 1);
+
+    delete editor;
+}
+
+TEST_F(MaterialComboDelegateTest, SetModelDataWritesSelectedMaterialForMaterialColumn)
+{
+    MaterialComboDelegate delegate;
+    QWidget parentWidget;
+    QStyleOptionViewItem option;
+    QStandardItemModel model(1, 3);
+    QModelIndex index = model.index(0, 2);
+
+    QWidget* editor = delegate.createEditor(&parentWidget, option, index);
+    auto* comboBox = qobject_cast<QComboBox*>(editor);
+    ASSERT_NE(comboBox, nullptr);
+    ASSERT_GT(comboBox->count(), 0);
+
+    comboBox->setCurrentIndex(0);
+    delegate.setModelData(editor, &model, index);
+
+    EXPECT_EQ(model.data(index, Qt::DisplayRole).toString(), comboBox->currentText());
+
+    delete editor;
+}
+
+TEST_F(MaterialComboDelegateTest, MaterialColumnWithoutSubEntityProducesEmptyStyleText)
+{
+    MaterialComboDelegate delegate;
+    QStyleOptionViewItem option;
+    QStandardItemModel model(1, 3);
+    QModelIndex index = model.index(0, 2);
+
+    delegate.initStyleOption(&option, index);
+
+    EXPECT_TRUE(option.text.isEmpty());
 }
