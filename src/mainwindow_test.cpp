@@ -12,6 +12,8 @@
 #include <QTemporaryDir>
 #include <QThread>
 
+// NOTE: These access-specifier redefinitions are a pragmatic test-only workaround
+// to cover MainWindow internals. Prefer dedicated test APIs or friend tests when feasible.
 #define private public
 #define protected public
 #include "mainwindow.h"
@@ -342,14 +344,14 @@ TEST_F(MainWindowTest, SetMCPServerReplacesExistingServer) {
 }
 
 TEST_F(MainWindowTest, StartAndStopMCPServerPersistSettings) {
-    ASSERT_TRUE(window->startMCPServer(0));
+    constexpr int requestedPort = 0;
+    ASSERT_TRUE(window->startMCPServer(requestedPort));
     EXPECT_NE(window->m_mcpServer, nullptr);
     EXPECT_TRUE(window->m_mcpServer->isHttpRunning());
     EXPECT_TRUE(QSettings().value("MCP/enabled").toBool());
 
-    const int port = window->m_mcpServer->httpPort();
-    EXPECT_GT(port, 0);
-    EXPECT_EQ(QSettings().value("MCP/port").toInt(), port);
+    EXPECT_GT(window->m_mcpServer->httpPort(), 0);
+    EXPECT_EQ(QSettings().value("MCP/port").toInt(), requestedPort);
 
     window->stopMCPServer();
 
