@@ -7,12 +7,21 @@
 
 #include <Ogre.h>
 
+#define private public
+#define protected public
+#include "TransformOperator.h"
+#undef protected
+#undef private
+
 #include "commands/TransformCommands.h"
 #include "GlobalDefinitions.h"
 #include "Manager.h"
+#include "RotationGizmo.h"
+#include "SelectionBoxObject.h"
 #include "SelectionSet.h"
+#include "ScaleGizmo.h"
 #include "TestHelpers.h"
-#include "TransformOperator.h"
+#include "TranslationGizmo.h"
 #include "UndoManager.h"
 
 namespace {
@@ -24,6 +33,8 @@ void expectQuaternionNear(const Ogre::Quaternion& actual, const Ogre::Quaternion
     EXPECT_FLOAT_EQ(actual.z, expected.z);
 }
 }
+
+Q_DECLARE_METATYPE(Ogre::Vector3)
 
 class TransformOperatorTests : public ::testing::Test
 {
@@ -118,6 +129,14 @@ TEST_F(TransformOperatorTests, TransformSpaceChangesOnlyWhenValueDiffers)
     EXPECT_EQ(spy.count(), 2);
 }
 
+TEST_F(TransformOperatorTests, TransformStateChangeWithNoSelectionHidesAllGizmos)
+{
+    op->onTransformStateChange(TransformOperator::TS_TRANSLATE);
+
+    EXPECT_FALSE(op->mTrackingEnable);
+    EXPECT_EQ(op->mTransformState, TransformOperator::TS_TRANSLATE);
+}
+
 TEST_F(TransformOperatorTests, SelectionBoxColourRoundTrips)
 {
     const Ogre::ColourValue colour(0.1f, 0.2f, 0.3f, 0.4f);
@@ -138,6 +157,26 @@ TEST_F(TransformOperatorTests, RayFromScreenPointWithoutActiveWidgetReturnsDefau
     EXPECT_EQ(ray.getDirection(), defaultRay.getDirection());
 }
 
+TEST_F(TransformOperatorTests, UpdateGizmoPositionForNodeSelectionEmitsCurrentValues)
+{
+    Ogre::SceneNode* node = createSelectedNode("SignalNode");
+    ASSERT_NE(node, nullptr);
+    node->setPosition(Ogre::Vector3(2.0f, 3.0f, 4.0f));
+    node->setScale(Ogre::Vector3(1.5f, 2.5f, 3.5f));
+
+    QSignalSpy positionSpy(op, &TransformOperator::selectedPositionChanged);
+    QSignalSpy scaleSpy(op, &TransformOperator::selectedScaleChanged);
+    ASSERT_TRUE(positionSpy.isValid());
+    ASSERT_TRUE(scaleSpy.isValid());
+
+    op->updateGizmoPosition();
+
+    ASSERT_FALSE(positionSpy.isEmpty());
+    ASSERT_FALSE(scaleSpy.isEmpty());
+    EXPECT_EQ(qvariant_cast<Ogre::Vector3>(positionSpy.takeLast().at(0)), Ogre::Vector3(2.0f, 3.0f, 4.0f));
+    EXPECT_EQ(qvariant_cast<Ogre::Vector3>(scaleSpy.takeLast().at(0)), Ogre::Vector3(1.5f, 2.5f, 3.5f));
+}
+
 TEST_F(TransformOperatorTests, SelectedNodeTransformsUpdateNodeState)
 {
     Ogre::SceneNode* node = createSelectedNode("TransformNode");
@@ -154,6 +193,17 @@ TEST_F(TransformOperatorTests, SelectedNodeTransformsUpdateNodeState)
 
     op->translateSelected(Ogre::Vector3(1.0f, 2.0f, 3.0f));
     EXPECT_EQ(node->getPosition(), Ogre::Vector3(6.0f, 8.0f, 10.0f));
+}
+
+TEST_F(TransformOperatorTests, EmptySelectionTransformMutatorsAreNoOps)
+{
+    EXPECT_NO_THROW(op->setSelectedPosition(Ogre::Vector3(1.0f, 2.0f, 3.0f)));
+    EXPECT_NO_THROW(op->translateSelected(Ogre::Vector3(1.0f, 0.0f, 0.0f)));
+    EXPECT_NO_THROW(op->setSelectedScale(Ogre::Vector3(2.0f, 2.0f, 2.0f)));
+    EXPECT_NO_THROW(op->scaleSelected(Ogre::Vector3(1.1f, 1.1f, 1.1f)));
+    EXPECT_NO_THROW(op->setSelectedOrientation(Ogre::Vector3(10.0f, 20.0f, 30.0f)));
+    EXPECT_NO_THROW(op->rotateSelected(Ogre::Quaternion::IDENTITY));
+    EXPECT_NO_THROW(op->rotateSelected(Ogre::Vector3(0.0f, 0.0f, 0.0f)));
 }
 
 TEST_F(TransformOperatorTests, OnSelectionChangedRestoresNodeInitialState)
@@ -193,6 +243,71 @@ TEST_F(TransformOperatorTests, OnSelectionChangedNormalizesSelectedEntityParentN
 
     EXPECT_EQ(parentNode->getScale(), Ogre::Vector3::UNIT_SCALE);
     expectQuaternionNear(parentNode->getOrientation(), Ogre::Quaternion::IDENTITY);
+}
+
+TEST_F(TransformOperatorTests, OnSelectionChangedNormalizesSelectedSubEntityParentNode)
+{
+    Ogre::Entity* entity = createSelectedEntity("SubEntityStateNode", "SubEntityStateEntity", "SubEntityStateMesh");
+    if (!entity) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+    ASSERT_NE(subEntity, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(subEntity);
+
+    Ogre::SceneNode* parentNode = entity->getParentSceneNode();
+    parentNode->setScale(Ogre::Vector3(6.0f, 7.0f, 8.0f));
+    parentNode->setOrientation(Ogre::Quaternion(Ogre::Degree(15), Ogre::Vector3::UNIT_X));
+
+    op->onSelectionChanged();
+
+    EXPECT_EQ(parentNode->getScale(), Ogre::Vector3::UNIT_SCALE);
+    expectQuaternionNear(parentNode->getOrientation(), Ogre::Quaternion::IDENTITY);
+}
+
+TEST_F(TransformOperatorTests, EntityRotationVectorSetterTracksAbsoluteRotation)
+{
+    Ogre::Entity* entity = createSelectedEntity("EntityRotateNode", "EntityRotateEntity", "EntityRotateMesh");
+    if (!entity) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    op->rotateSelected(Ogre::Vector3(10.0f, 20.0f, 30.0f));
+    EXPECT_EQ(SelectionSet::getSingleton()->getEntityRotation(entity), Ogre::Vector3(10.0f, 20.0f, 30.0f));
+
+    op->rotateSelected(Ogre::Vector3(15.0f, 25.0f, 35.0f));
+    EXPECT_EQ(SelectionSet::getSingleton()->getEntityRotation(entity), Ogre::Vector3(15.0f, 25.0f, 35.0f));
+}
+
+TEST_F(TransformOperatorTests, EntityScaleSetterTracksScaleFactor)
+{
+    Ogre::Entity* entity = createSelectedEntity("EntityScaleNode", "EntityScaleEntity", "EntityScaleMesh");
+    if (!entity) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    op->setSelectedScale(Ogre::Vector3(1.2f, 1.3f, 1.4f));
+
+    EXPECT_EQ(SelectionSet::getSingleton()->getEntityScaleFactor(entity), Ogre::Vector3(1.2f, 1.3f, 1.4f));
+}
+
+TEST_F(TransformOperatorTests, RemoveSelectedWithEmptySelectionKeepsUndoHistory)
+{
+    Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode("HistoryNode");
+    ASSERT_NE(node, nullptr);
+
+    QList<Ogre::SceneNode*> nodes;
+    nodes.append(node);
+    UndoManager::getSingleton()->push(new TranslateCommand(nodes, Ogre::Vector3(1.0f, 0.0f, 0.0f)));
+    ASSERT_TRUE(UndoManager::getSingleton()->canUndo());
+
+    SelectionSet::getSingleton()->clear();
+    op->removeSelected();
+
+    EXPECT_TRUE(UndoManager::getSingleton()->canUndo());
 }
 
 TEST_F(TransformOperatorTests, RemoveSelectedDestroysNodesAndClearsUndoHistory)

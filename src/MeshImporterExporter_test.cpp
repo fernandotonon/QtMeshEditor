@@ -22,6 +22,7 @@
 class MeshImporterExporterTest : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
+    QTemporaryDir tempDir;
 
     void SetUp() override {
         SelectionSet::kill();
@@ -204,6 +205,14 @@ TEST(MeshImporterExporterStandaloneTest, SceneExporter_NullProgress_DoesNotCrash
     EXPECT_EQ(MeshImporterExporter::sceneExporter("", nullptr), -1);
 }
 
+TEST(MeshImporterExporterStandaloneTest, SceneImporter_EmptyUri_ReturnsFalse) {
+    EXPECT_FALSE(MeshImporterExporter::sceneImporter(""));
+}
+
+TEST(MeshImporterExporterStandaloneTest, SceneImporter_MissingFile_ReturnsFalse) {
+    EXPECT_FALSE(MeshImporterExporter::sceneImporter("/path/to/missing.scene.glb"));
+}
+
 TEST_F(MeshImporterExporterTest, Exporter_EmptyUri_ReturnMinusOne) {
     QString uri = "";
     auto sceneNodeName = "MeshImporterExporterTestSceneNode";
@@ -219,6 +228,32 @@ TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndUri_ReturnMinusOne) {
     auto sn = Manager::getSingleton()->addSceneNode(sceneNodeName);
 
     EXPECT_EQ(MeshImporterExporter::exporter(sn, uri, format), -1);
+}
+
+TEST_F(MeshImporterExporterTest, Importer_EmptyList_DoesNotCreateSceneNodes) {
+    MeshImporterExporter::importer(QStringList());
+    EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
+}
+
+TEST_F(MeshImporterExporterTest, Importer_EmptyPathEntry_IsIgnored) {
+    MeshImporterExporter::importer(QStringList{""});
+    EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
+}
+
+TEST_F(MeshImporterExporterTest, SceneImporter_InvalidExistingFileDoesNotClearExistingScene) {
+    ASSERT_TRUE(tempDir.isValid());
+    const QString invalidScenePath = tempDir.filePath("invalid.scene.gltf");
+
+    QFile file(invalidScenePath);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("not valid gltf");
+    file.close();
+
+    Manager::getSingleton()->addSceneNode("ExistingNode");
+    ASSERT_TRUE(Manager::getSingleton()->getSceneMgr()->hasSceneNode("ExistingNode"));
+
+    EXPECT_FALSE(MeshImporterExporter::sceneImporter(invalidScenePath));
+    EXPECT_TRUE(Manager::getSingleton()->getSceneMgr()->hasSceneNode("ExistingNode"));
 }
 
 // NOTE: All MeshImporterExporterTest fixture tests from Importer_ValidMesh onward
