@@ -778,6 +778,99 @@ TEST_F(SceneSaveLoadTest, ConfigureCameraMovesCameraParentBasedOnEntitySize)
     EXPECT_LT(cameraPos.z, 0.0f);
 }
 
+TEST_F(SceneSaveLoadTest, ConfigureCameraUpdatesAllCameraNodes)
+{
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("camera_config_multi_mesh");
+    auto* sn = manager->addSceneNode("CameraConfigMultiNode");
+    auto* entity = manager->createEntity(sn, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::SceneManager* sceneMgr = manager->getSceneMgr();
+    Ogre::Camera* cameraA = sceneMgr->hasCamera("CoverageCameraA")
+        ? sceneMgr->getCamera("CoverageCameraA")
+        : sceneMgr->createCamera("CoverageCameraA");
+    Ogre::Camera* cameraB = sceneMgr->hasCamera("CoverageCameraB")
+        ? sceneMgr->getCamera("CoverageCameraB")
+        : sceneMgr->createCamera("CoverageCameraB");
+    ASSERT_NE(cameraA, nullptr);
+    ASSERT_NE(cameraB, nullptr);
+
+    if (!cameraA->getParentSceneNode()) {
+        auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("CoverageCameraNodeA");
+        node->attachObject(cameraA);
+    }
+    if (!cameraB->getParentSceneNode()) {
+        auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("CoverageCameraNodeB");
+        node->attachObject(cameraB);
+    }
+
+    cameraA->setFOVy(Ogre::Degree(45));
+    cameraB->setFOVy(Ogre::Degree(75));
+    cameraA->getParentSceneNode()->setPosition(10.0f, 20.0f, 30.0f);
+    cameraB->getParentSceneNode()->setPosition(-10.0f, -20.0f, -30.0f);
+
+    MeshImporterExporter::configureCameraForTesting(entity);
+
+    const Ogre::Vector3 posA = cameraA->getParentSceneNode()->getPosition();
+    const Ogre::Vector3 posB = cameraB->getParentSceneNode()->getPosition();
+    EXPECT_FLOAT_EQ(posA.x, 0.0f);
+    EXPECT_FLOAT_EQ(posA.y, 0.0f);
+    EXPECT_FLOAT_EQ(posB.x, 0.0f);
+    EXPECT_FLOAT_EQ(posB.y, 0.0f);
+    EXPECT_LT(posA.z, 0.0f);
+    EXPECT_LT(posB.z, 0.0f);
+    EXPECT_NE(posA.z, posB.z);
+}
+
+TEST_F(SceneSaveLoadTest, SceneExporter_TwoEntitiesReportBothTextureSteps)
+{
+    auto* manager = Manager::getSingleton();
+
+    auto meshA = createInMemoryTriangleMesh("progress_multi_mesh_a");
+    auto* nodeA = manager->addSceneNode("ProgressMultiNodeA");
+    ASSERT_NE(manager->createEntity(nodeA, meshA), nullptr);
+
+    auto meshB = createInMemoryTriangleMesh("progress_multi_mesh_b");
+    auto* nodeB = manager->addSceneNode("ProgressMultiNodeB");
+    ASSERT_NE(manager->createEntity(nodeB, meshB), nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString sceneFile = tmpDir.path() + "/progress_multi.scene.gltf";
+
+    QStringList statusMessages;
+    int result = MeshImporterExporter::sceneExporter(
+        sceneFile,
+        [&statusMessages](int, const QString& status) {
+            statusMessages.append(status);
+        });
+
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(sceneFile));
+    EXPECT_THAT(statusMessages, ::testing::Contains(QStringLiteral("Exporting textures (1/2)...")));
+    EXPECT_THAT(statusMessages, ::testing::Contains(QStringLiteral("Exporting textures (2/2)...")));
+    EXPECT_EQ(statusMessages.back(), QStringLiteral("Done."));
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_DirectColladaExport_WritesModelAndMaterialFiles)
+{
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("direct_collada_mesh");
+    auto* sn = manager->addSceneNode("DirectColladaNode");
+    auto* entity = manager->createEntity(sn, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString daeFile = tmpDir.path() + "/direct_export.dae";
+
+    const int result = MeshImporterExporter::exporter(sn, daeFile, "Collada (*.dae)");
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(daeFile));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/direct_export.material"));
+}
+
 TEST_F(SceneSaveLoadTest, RoundTrip_MixedSkeletalAndNonSkeletal) {
     auto* manager = Manager::getSingleton();
 
