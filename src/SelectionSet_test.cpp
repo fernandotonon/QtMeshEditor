@@ -619,6 +619,7 @@ TEST_F(SelectionSetTests, RemoveNonExistent)
 
 TEST_F(SelectionSetTests, GetResolvedEntitiesReturnsDirectEntitySelection)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -639,6 +640,7 @@ TEST_F(SelectionSetTests, GetResolvedEntitiesReturnsDirectEntitySelection)
 
 TEST_F(SelectionSetTests, GetResolvedEntitiesResolvesSelectedNodesWithEntities)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -659,6 +661,7 @@ TEST_F(SelectionSetTests, GetResolvedEntitiesResolvesSelectedNodesWithEntities)
 
 TEST_F(SelectionSetTests, GetResolvedEntitiesSkipsNodesWithoutAttachedEntities)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -707,6 +710,7 @@ TEST_F(SelectionSetTests, GetSelectionScaleAveragesMultipleNodes)
 
 TEST_F(SelectionSetTests, GetSelectionScaleAveragesMultipleEntitiesUsingStoredFactors)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -735,6 +739,7 @@ TEST_F(SelectionSetTests, GetSelectionScaleAveragesMultipleEntitiesUsingStoredFa
 
 TEST_F(SelectionSetTests, GetSelectionOrientationAveragesMultipleEntitiesUsingStoredRotations)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -763,6 +768,7 @@ TEST_F(SelectionSetTests, GetSelectionOrientationAveragesMultipleEntitiesUsingSt
 
 TEST_F(SelectionSetTests, GetSelectionCenterWithSubEntityUsesParentBoundingBox)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -792,6 +798,7 @@ TEST_F(SelectionSetTests, GetSelectionCenterWithSubEntityUsesParentBoundingBox)
 
 TEST_F(SelectionSetTests, RemoveNonExistentEntityAndSubEntityReturnFalse)
 {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
