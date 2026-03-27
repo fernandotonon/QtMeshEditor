@@ -13,9 +13,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include "Manager.h"
-#define private public
 #include "MeshImporterExporter.h"
-#undef private
 #include "SelectionSet.h"
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include <OgreException.h>
@@ -772,7 +770,7 @@ TEST_F(SceneSaveLoadTest, ConfigureCameraMovesCameraParentBasedOnEntitySize)
     ASSERT_NE(camera, nullptr);
     camera->setFOVy(Ogre::Degree(60));
 
-    MeshImporterExporter::configureCamera(entity);
+    MeshImporterExporter::configureCameraForTesting(entity);
 
     const Ogre::Vector3 cameraPos = camera->getParentSceneNode()->getPosition();
     EXPECT_FLOAT_EQ(cameraPos.x, 0.0f);

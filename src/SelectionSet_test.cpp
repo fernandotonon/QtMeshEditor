@@ -31,6 +31,10 @@ protected:
             return nullptr;
         }
 
+        // Manager::addSceneNode auto-selects newly created nodes; tests using this
+        // helper need to control the resulting selection state explicitly.
+        SelectionSet::getSingleton()->clear();
+
         return node;
     }
 
