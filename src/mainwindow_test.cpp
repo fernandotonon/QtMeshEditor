@@ -139,11 +139,14 @@ TEST_F(MainWindowTest, KeyFFrameSelectionEmptyDoesNotCrash) {
 // ---- setPlaying ----
 
 TEST_F(MainWindowTest, SetPlayingTrue) {
-    EXPECT_NO_THROW(window->setPlaying(true));
+    window->setPlaying(true);
+    EXPECT_TRUE(window->isPlaying);
 }
 
 TEST_F(MainWindowTest, SetPlayingFalse) {
-    EXPECT_NO_THROW(window->setPlaying(false));
+    window->setPlaying(true);
+    window->setPlaying(false);
+    EXPECT_FALSE(window->isPlaying);
 }
 
 // ---- Cycle all transform states via keyboard ----
@@ -357,6 +360,29 @@ TEST_F(MainWindowTest, StartAndStopMCPServerPersistSettings) {
 
     EXPECT_FALSE(window->m_mcpServer->isHttpRunning());
     EXPECT_FALSE(QSettings().value("MCP/enabled").toBool());
+}
+
+TEST_F(MainWindowTest, ConstructorAutostartsMCPServerWhenEnabledInSettings)
+{
+    delete window;
+    window = nullptr;
+
+    QSettings settings;
+    settings.setValue("MCP/enabled", true);
+    settings.setValue("MCP/port", 0);
+
+    try {
+        window = new MainWindow();
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "Skipping: MainWindow reconstruction failed in this environment: " << e.what();
+    } catch (...) {
+        GTEST_SKIP() << "Skipping: MainWindow reconstruction failed in this environment";
+    }
+
+    ASSERT_NE(window, nullptr);
+    ASSERT_NE(window->m_mcpServer, nullptr);
+    EXPECT_TRUE(window->m_mcpServer->isHttpRunning());
+    EXPECT_GT(window->m_mcpServer->httpPort(), 0);
 }
 
 TEST_F(MainWindowTest, UpdateMergeAnimationsButtonDisablesActionWhenSelectionHasNoSkeletons) {

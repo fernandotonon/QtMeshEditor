@@ -24,6 +24,27 @@ protected:
     QApplication* app = nullptr;
     QTemporaryDir tempDir;
 
+    Ogre::SceneNode* createSceneNodeWithEntity(const QString& nodeName,
+                                               const std::string& meshName)
+    {
+        Ogre::MeshPtr mesh = createInMemoryTriangleMesh(meshName);
+        EXPECT_NE(mesh, nullptr);
+        if (!mesh)
+            return nullptr;
+
+        Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode(nodeName);
+        EXPECT_NE(node, nullptr);
+        if (!node)
+            return nullptr;
+
+        Ogre::Entity* entity = Manager::getSingleton()->createEntity(node, mesh);
+        EXPECT_NE(entity, nullptr);
+        if (!entity)
+            return nullptr;
+
+        return node;
+    }
+
     void SetUp() override {
         SelectionSet::kill();
         Manager::kill();
@@ -254,6 +275,91 @@ TEST_F(MeshImporterExporterTest, SceneImporter_InvalidExistingFileDoesNotClearEx
 
     EXPECT_FALSE(MeshImporterExporter::sceneImporter(invalidScenePath));
     EXPECT_TRUE(Manager::getSingleton()->getSceneMgr()->hasSceneNode("ExistingNode"));
+}
+
+TEST_F(MeshImporterExporterTest, SceneExporter_EmptyScene_WritesFileAndReportsProgress)
+{
+    ASSERT_TRUE(tempDir.isValid());
+    const QString scenePath = tempDir.filePath("empty.scene.glb");
+
+    QList<int> progressValues;
+    QStringList progressMessages;
+    const int result = MeshImporterExporter::sceneExporter(
+        scenePath,
+        [&progressValues, &progressMessages](int progress, const QString& status) {
+            progressValues.append(progress);
+            progressMessages.append(status);
+        });
+
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(scenePath));
+    ASSERT_GE(progressValues.size(), 3);
+    EXPECT_EQ(progressValues.first(), 30);
+    EXPECT_EQ(progressValues.at(progressValues.size() - 2), 60);
+    EXPECT_EQ(progressValues.last(), 100);
+    EXPECT_THAT(progressMessages, ::testing::Contains(QStringLiteral("Building scene data...")));
+    EXPECT_THAT(progressMessages, ::testing::Contains(QStringLiteral("Writing file...")));
+    EXPECT_EQ(progressMessages.last(), QStringLiteral("Done."));
+}
+
+TEST_F(MeshImporterExporterTest, SceneExporter_NodeWithoutEntity_WritesEmptyScene)
+{
+    ASSERT_TRUE(tempDir.isValid());
+    const QString scenePath = tempDir.filePath("node_only.scene.gltf");
+    Manager::getSingleton()->addSceneNode("LonelyNode");
+
+    QList<int> progressValues;
+    const int result = MeshImporterExporter::sceneExporter(
+        scenePath,
+        [&progressValues](int progress, const QString&) {
+            progressValues.append(progress);
+        });
+
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(scenePath));
+    EXPECT_FALSE(progressValues.isEmpty());
+    EXPECT_EQ(progressValues.first(), 30);
+    EXPECT_EQ(progressValues.last(), 100);
+}
+
+TEST_F(MeshImporterExporterTest, SceneImporter_ExportedEmptySceneClearsExistingNodes)
+{
+    ASSERT_TRUE(tempDir.isValid());
+    const QString scenePath = tempDir.filePath("roundtrip_empty.scene.glb");
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(scenePath, nullptr), 0);
+
+    Manager::getSingleton()->addSceneNode("ExistingNode");
+    ASSERT_TRUE(Manager::getSingleton()->getSceneMgr()->hasSceneNode("ExistingNode"));
+
+    EXPECT_TRUE(MeshImporterExporter::sceneImporter(scenePath));
+    EXPECT_FALSE(Manager::getSingleton()->getSceneMgr()->hasSceneNode("ExistingNode"));
+    EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
+}
+
+TEST_F(MeshImporterExporterTest, SceneExporter_InMemoryMeshEntity_WritesSceneFile)
+{
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+
+    ASSERT_TRUE(tempDir.isValid());
+    const QString scenePath = tempDir.filePath("mesh_entity.scene.glb");
+    Ogre::SceneNode* node = createSceneNodeWithEntity("ExportNode", "ExportSceneMesh");
+    ASSERT_NE(node, nullptr);
+
+    QList<int> progressValues;
+    QStringList progressMessages;
+    const int result = MeshImporterExporter::sceneExporter(
+        scenePath,
+        [&progressValues, &progressMessages](int progress, const QString& status) {
+            progressValues.append(progress);
+            progressMessages.append(status);
+        });
+
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(scenePath));
+    EXPECT_THAT(progressMessages, ::testing::Contains(QStringLiteral("Exporting textures (1/1)...")));
+    EXPECT_THAT(progressMessages, ::testing::Contains(QStringLiteral("Building scene data...")));
+    EXPECT_EQ(progressValues.last(), 100);
 }
 
 // NOTE: All MeshImporterExporterTest fixture tests from Importer_ValidMesh onward
