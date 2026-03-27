@@ -21,12 +21,6 @@ protected:
         Manager::kill();
         QThread::msleep(50);
 
-        // EditorViewport.cpp is excluded from LCOV and the suite is unstable under
-        // GitHub's headless Ogre/X11 setup, where it intermittently crashes with SIGSEGV.
-        if (qEnvironmentVariableIsSet("GITHUB_ACTIONS") || qEnvironmentVariableIsSet("CI")) {
-            GTEST_SKIP() << "Skipping: EditorViewport tests are unstable in headless CI";
-        }
-
         try {
             mainWindow = new MainWindow();
         } catch (...) {
@@ -38,6 +32,9 @@ protected:
     void TearDown() override {
         delete mainWindow;
         mainWindow = nullptr;
+        if (app) {
+            app->processEvents();
+        }
         Manager::kill();
         QThread::msleep(50);
     }
