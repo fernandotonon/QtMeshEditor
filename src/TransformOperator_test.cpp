@@ -32,6 +32,34 @@ void expectQuaternionNear(const Ogre::Quaternion& actual, const Ogre::Quaternion
     EXPECT_FLOAT_EQ(actual.y, expected.y);
     EXPECT_FLOAT_EQ(actual.z, expected.z);
 }
+
+void expectVectorNear(const Ogre::Vector3& actual, const Ogre::Vector3& expected, float tolerance = 0.001f)
+{
+    EXPECT_NEAR(actual.x, expected.x, tolerance);
+    EXPECT_NEAR(actual.y, expected.y, tolerance);
+    EXPECT_NEAR(actual.z, expected.z, tolerance);
+}
+
+bool isRotationGizmoVisible(const RotationGizmo* gizmo)
+{
+    return gizmo->getXCircle().isVisible()
+        && gizmo->getYCircle().isVisible()
+        && gizmo->getZCircle().isVisible();
+}
+
+bool isTranslationGizmoVisible(const TranslationGizmo* gizmo)
+{
+    return gizmo->getXAxis().isVisible()
+        && gizmo->getYAxis().isVisible()
+        && gizmo->getZAxis().isVisible();
+}
+
+bool isScaleGizmoVisible(const ScaleGizmo* gizmo)
+{
+    return gizmo->getXAxis().isVisible()
+        && gizmo->getYAxis().isVisible()
+        && gizmo->getZAxis().isVisible();
+}
 }
 
 Q_DECLARE_METATYPE(Ogre::Vector3)
@@ -149,12 +177,72 @@ TEST_F(TransformOperatorTests, SelectionBoxColourRoundTrips)
     EXPECT_FLOAT_EQ(current.a, colour.a);
 }
 
+TEST_F(TransformOperatorTests, UpdateGizmoWithoutSelectionHidesEveryGizmo)
+{
+    op->m_pRotationGizmo->setVisible(true);
+    op->m_pTranslationGizmo->setVisible(true);
+    op->m_pScaleGizmo->setVisible(true);
+
+    op->updateGizmo();
+
+    EXPECT_FALSE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
+    EXPECT_FALSE(isScaleGizmoVisible(op->m_pScaleGizmo));
+}
+
 TEST_F(TransformOperatorTests, RayFromScreenPointWithoutActiveWidgetReturnsDefaultRay)
 {
     const Ogre::Ray ray = op->rayFromScreenPoint(QPoint(25, 40));
     const Ogre::Ray defaultRay;
     EXPECT_EQ(ray.getOrigin(), defaultRay.getOrigin());
     EXPECT_EQ(ray.getDirection(), defaultRay.getDirection());
+}
+
+TEST_F(TransformOperatorTests, TranslateStateShowsTranslationGizmoForNodeSelection)
+{
+    ASSERT_NE(createSelectedNode("TranslateGizmoNode"), nullptr);
+
+    op->onTransformStateChange(TransformOperator::TS_TRANSLATE);
+
+    EXPECT_TRUE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
+    EXPECT_FALSE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isScaleGizmoVisible(op->m_pScaleGizmo));
+    EXPECT_TRUE(op->mTrackingEnable);
+}
+
+TEST_F(TransformOperatorTests, RotateStateShowsRotationGizmoForNodeSelection)
+{
+    ASSERT_NE(createSelectedNode("RotateGizmoNode"), nullptr);
+
+    op->onTransformStateChange(TransformOperator::TS_ROTATE);
+
+    EXPECT_TRUE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
+    EXPECT_FALSE(isScaleGizmoVisible(op->m_pScaleGizmo));
+    EXPECT_TRUE(op->mTrackingEnable);
+}
+
+TEST_F(TransformOperatorTests, ScaleStateShowsScaleGizmoForNodeSelection)
+{
+    ASSERT_NE(createSelectedNode("ScaleGizmoNode"), nullptr);
+
+    op->onTransformStateChange(TransformOperator::TS_SCALE);
+
+    EXPECT_TRUE(isScaleGizmoVisible(op->m_pScaleGizmo));
+    EXPECT_FALSE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
+    EXPECT_TRUE(op->mTrackingEnable);
+}
+
+TEST_F(TransformOperatorTests, SelectStateHidesGizmosEvenWithSelection)
+{
+    ASSERT_NE(createSelectedNode("SelectStateNode"), nullptr);
+
+    op->onTransformStateChange(TransformOperator::TS_SELECT);
+
+    EXPECT_FALSE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
+    EXPECT_FALSE(isScaleGizmoVisible(op->m_pScaleGizmo));
 }
 
 TEST_F(TransformOperatorTests, UpdateGizmoPositionForNodeSelectionEmitsCurrentValues)
@@ -177,6 +265,62 @@ TEST_F(TransformOperatorTests, UpdateGizmoPositionForNodeSelectionEmitsCurrentVa
     EXPECT_EQ(qvariant_cast<Ogre::Vector3>(scaleSpy.takeLast().at(0)), Ogre::Vector3(1.5f, 2.5f, 3.5f));
 }
 
+TEST_F(TransformOperatorTests, UpdateGizmoUsesSingleNodeOrientationInLocalSpace)
+{
+    Ogre::SceneNode* node = createSelectedNode("LocalOrientationNode");
+    ASSERT_NE(node, nullptr);
+    const Ogre::Quaternion expected(Ogre::Degree(35), Ogre::Vector3::UNIT_Y);
+    node->setOrientation(expected);
+
+    op->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    op->onTransformStateChange(TransformOperator::TS_TRANSLATE);
+
+    expectQuaternionNear(op->m_pTransformNode->getOrientation(), expected);
+}
+
+TEST_F(TransformOperatorTests, UpdateGizmoUsesRootOrientationForMultipleLocalNodes)
+{
+    Ogre::SceneNode* nodeA = createSelectedNode("LocalMultiNodeA");
+    Ogre::SceneNode* nodeB = Manager::getSingleton()->addSceneNode("LocalMultiNodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(nodeA);
+    SelectionSet::getSingleton()->append(nodeB);
+    nodeA->setOrientation(Ogre::Quaternion(Ogre::Degree(15), Ogre::Vector3::UNIT_X));
+    nodeB->setOrientation(Ogre::Quaternion(Ogre::Degree(25), Ogre::Vector3::UNIT_Z));
+
+    op->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    op->onTransformStateChange(TransformOperator::TS_ROTATE);
+
+    expectQuaternionNear(op->m_pTransformNode->getOrientation(),
+                         Manager::getSingleton()->getSceneMgr()->getRootSceneNode()->getOrientation());
+}
+
+TEST_F(TransformOperatorTests, UpdateGizmoPositionForEntitySelectionUsesTrackedScaleAndOrientation)
+{
+    Ogre::Entity* entity = createSelectedEntity("TrackedEntityNode", "TrackedEntity", "TrackedEntityMesh");
+    if (!entity) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    SelectionSet::getSingleton()->setEntityScaleFactor(entity, Ogre::Vector3(1.4f, 1.5f, 1.6f));
+    SelectionSet::getSingleton()->setEntityRotation(entity, Ogre::Vector3(10.0f, 20.0f, 30.0f));
+
+    QSignalSpy orientationSpy(op, &TransformOperator::selectedOrientationChanged);
+    QSignalSpy scaleSpy(op, &TransformOperator::selectedScaleChanged);
+    ASSERT_TRUE(orientationSpy.isValid());
+    ASSERT_TRUE(scaleSpy.isValid());
+
+    op->updateGizmoPosition();
+
+    ASSERT_FALSE(orientationSpy.isEmpty());
+    ASSERT_FALSE(scaleSpy.isEmpty());
+    EXPECT_EQ(qvariant_cast<Ogre::Vector3>(orientationSpy.takeLast().at(0)), Ogre::Vector3(10.0f, 20.0f, 30.0f));
+    EXPECT_EQ(qvariant_cast<Ogre::Vector3>(scaleSpy.takeLast().at(0)), Ogre::Vector3(1.4f, 1.5f, 1.6f));
+}
+
 TEST_F(TransformOperatorTests, SelectedNodeTransformsUpdateNodeState)
 {
     Ogre::SceneNode* node = createSelectedNode("TransformNode");
@@ -193,6 +337,36 @@ TEST_F(TransformOperatorTests, SelectedNodeTransformsUpdateNodeState)
 
     op->translateSelected(Ogre::Vector3(1.0f, 2.0f, 3.0f));
     EXPECT_EQ(node->getPosition(), Ogre::Vector3(6.0f, 8.0f, 10.0f));
+}
+
+TEST_F(TransformOperatorTests, SetSelectedScaleForNodeUsesSelectionAverage)
+{
+    Ogre::SceneNode* nodeA = createSelectedNode("ScaleAverageNodeA");
+    Ogre::SceneNode* nodeB = Manager::getSingleton()->addSceneNode("ScaleAverageNodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(nodeA);
+    SelectionSet::getSingleton()->append(nodeB);
+    nodeA->setScale(Ogre::Vector3(1.0f, 1.0f, 1.0f));
+    nodeB->setScale(Ogre::Vector3(3.0f, 3.0f, 3.0f));
+
+    op->setSelectedScale(Ogre::Vector3(4.0f, 4.0f, 4.0f));
+
+    EXPECT_EQ(nodeA->getScale(), Ogre::Vector3(2.0f, 2.0f, 2.0f));
+    EXPECT_EQ(nodeB->getScale(), Ogre::Vector3(6.0f, 6.0f, 6.0f));
+}
+
+TEST_F(TransformOperatorTests, SetSelectedOrientationForNodeAppliesRequestedEulerAngles)
+{
+    Ogre::SceneNode* node = createSelectedNode("OrientationSetterNode");
+    ASSERT_NE(node, nullptr);
+
+    op->setSelectedOrientation(Ogre::Vector3(15.0f, 30.0f, 45.0f));
+
+    const Ogre::Vector3 current = SelectionSet::getSingleton()->getSelectionOrientation();
+    expectVectorNear(current, Ogre::Vector3(15.0f, 30.0f, 45.0f), 1.0f);
 }
 
 TEST_F(TransformOperatorTests, EmptySelectionTransformMutatorsAreNoOps)
@@ -292,6 +466,33 @@ TEST_F(TransformOperatorTests, EntityScaleSetterTracksScaleFactor)
     op->setSelectedScale(Ogre::Vector3(1.2f, 1.3f, 1.4f));
 
     EXPECT_EQ(SelectionSet::getSingleton()->getEntityScaleFactor(entity), Ogre::Vector3(1.2f, 1.3f, 1.4f));
+}
+
+TEST_F(TransformOperatorTests, EntityScaleSetterReplacesPreviousTrackedScale)
+{
+    Ogre::Entity* entity = createSelectedEntity("EntityScaleNode2", "EntityScaleEntity2", "EntityScaleMesh2");
+    if (!entity) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    op->setSelectedScale(Ogre::Vector3(1.2f, 1.3f, 1.4f));
+    op->setSelectedScale(Ogre::Vector3(2.0f, 2.5f, 3.0f));
+
+    EXPECT_EQ(SelectionSet::getSingleton()->getEntityScaleFactor(entity), Ogre::Vector3(2.0f, 2.5f, 3.0f));
+}
+
+TEST_F(TransformOperatorTests, EntityQuaternionRotationAccumulatesTrackedEulerDelta)
+{
+    Ogre::Entity* entity = createSelectedEntity("EntityQuatNode", "EntityQuatEntity", "EntityQuatMesh");
+    if (!entity) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    SelectionSet::getSingleton()->setEntityRotation(entity, Ogre::Vector3(0.0f, 10.0f, 0.0f));
+    op->rotateSelected(Ogre::Quaternion(Ogre::Degree(20), Ogre::Vector3::UNIT_Y));
+
+    const Ogre::Vector3 tracked = SelectionSet::getSingleton()->getEntityRotation(entity);
+    EXPECT_NEAR(tracked.y, 30.0f, 0.5f);
 }
 
 TEST_F(TransformOperatorTests, RemoveSelectedWithEmptySelectionKeepsUndoHistory)

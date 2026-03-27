@@ -83,6 +83,15 @@ protected:
         }
         return actions.at(index);
     }
+
+    Ogre::Entity* createAnimatedEntity(const char* name)
+    {
+        if (!canLoadMeshFiles()) {
+            return nullptr;
+        }
+
+        return createAnimatedTestEntity(name);
+    }
 };
 
 // ---- setTransformState ----
@@ -198,6 +207,34 @@ TEST_F(MainWindowTest, DropEventWithFbxFile) {
     delete mimeData;
 }
 
+TEST_F(MainWindowTest, DragEnterEventAcceptsProposedAction) {
+    auto* mimeData = new QMimeData();
+    QDragEnterEvent event(QPoint(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+
+    window->dragEnterEvent(&event);
+
+    EXPECT_TRUE(event.isAccepted());
+    delete mimeData;
+}
+
+TEST_F(MainWindowTest, DropEventKeepsOnlySupportedFiles) {
+    auto* mimeData = new QMimeData();
+    mimeData->setUrls({
+        QUrl::fromLocalFile("/tmp/first.mesh"),
+        QUrl::fromLocalFile("/tmp/second.obj"),
+        QUrl::fromLocalFile("/tmp/ignore.unsupported")
+    });
+    QDropEvent event(QPointF(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
+
+    window->dropEvent(&event);
+
+    EXPECT_EQ(window->mUriList.size(), 2);
+    EXPECT_TRUE(window->mUriList.contains("/tmp/first.mesh"));
+    EXPECT_TRUE(window->mUriList.contains("/tmp/second.obj"));
+    EXPECT_FALSE(window->mUriList.contains("/tmp/ignore.unsupported"));
+    delete mimeData;
+}
+
 TEST_F(MainWindowTest, RecentFilesMenuShowsPlaceholderWhenEmpty) {
     window->updateRecentFilesMenu();
 
@@ -227,6 +264,17 @@ TEST_F(MainWindowTest, AddToRecentFilesDeduplicatesAndLimitsToTenEntries) {
     ASSERT_EQ(files.size(), 10);
     EXPECT_EQ(files, expected);
     EXPECT_EQ(window->m_recentFilesMenu->actions().first()->data().toString(), "/tmp/file_5.mesh");
+}
+
+TEST_F(MainWindowTest, RecentFilesMenuUsesFileNameAsLabelAndFullPathAsTooltip) {
+    const QString path = "/tmp/assets/character.mesh";
+    window->addToRecentFiles(path);
+
+    QAction* action = recentFileAction(0);
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->text(), "character.mesh");
+    EXPECT_EQ(action->toolTip(), path);
+    EXPECT_EQ(action->data().toString(), path);
 }
 
 TEST_F(MainWindowTest, ClearRecentFilesActionRemovesStoredEntries) {
@@ -260,6 +308,14 @@ TEST_F(MainWindowTest, OpenRecentFileQueuesExistingMeshPath) {
 
     EXPECT_TRUE(window->mUriList.contains(meshPath));
     EXPECT_EQ(QSettings().value("RecentFiles/files").toStringList().first(), meshPath);
+}
+
+TEST_F(MainWindowTest, OpenRecentFileWithoutActionSenderDoesNothing) {
+    window->mUriList.clear();
+
+    window->openRecentFile();
+
+    EXPECT_TRUE(window->mUriList.isEmpty());
 }
 
 TEST_F(MainWindowTest, ToolbarTogglesUpdateWidgetVisibility) {
@@ -346,6 +402,15 @@ TEST_F(MainWindowTest, SetMCPServerReplacesExistingServer) {
     EXPECT_EQ(window->m_mcpServer, replacement);
 }
 
+TEST_F(MainWindowTest, SetMCPServerNullClearsExistingServer) {
+    auto* original = new MCPServer();
+    window->setMCPServer(original);
+
+    window->setMCPServer(nullptr);
+
+    EXPECT_EQ(window->m_mcpServer, nullptr);
+}
+
 TEST_F(MainWindowTest, StartAndStopMCPServerPersistSettings) {
     constexpr int requestedPort = 0;
     ASSERT_TRUE(window->startMCPServer(requestedPort));
@@ -359,6 +424,27 @@ TEST_F(MainWindowTest, StartAndStopMCPServerPersistSettings) {
     window->stopMCPServer();
 
     EXPECT_FALSE(window->m_mcpServer->isHttpRunning());
+    EXPECT_FALSE(QSettings().value("MCP/enabled").toBool());
+}
+
+TEST_F(MainWindowTest, StartMCPServerIsIdempotentWhenAlreadyRunning) {
+    ASSERT_TRUE(window->startMCPServer(0));
+    auto* server = window->m_mcpServer;
+    ASSERT_NE(server, nullptr);
+    const int actualPort = server->httpPort();
+
+    EXPECT_TRUE(window->startMCPServer(12345));
+    EXPECT_EQ(window->m_mcpServer, server);
+    EXPECT_EQ(window->m_mcpServer->httpPort(), actualPort);
+}
+
+TEST_F(MainWindowTest, StopMCPServerWithoutInstanceStillClearsSettings) {
+    delete window->m_mcpServer;
+    window->m_mcpServer = nullptr;
+
+    QSettings().setValue("MCP/enabled", true);
+    window->stopMCPServer();
+
     EXPECT_FALSE(QSettings().value("MCP/enabled").toBool());
 }
 
@@ -392,4 +478,50 @@ TEST_F(MainWindowTest, UpdateMergeAnimationsButtonDisablesActionWhenSelectionHas
     window->updateMergeAnimationsButton();
 
     EXPECT_FALSE(window->ui->actionMerge_Animations->isEnabled());
+}
+
+TEST_F(MainWindowTest, UpdateMergeAnimationsButtonDisablesActionForSingleSkeletonEntity) {
+    Ogre::Entity* entity = createAnimatedEntity("SingleSkeletonEntity");
+    if (!entity) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(entity);
+
+    window->updateMergeAnimationsButton();
+
+    EXPECT_FALSE(window->ui->actionMerge_Animations->isEnabled());
+}
+
+TEST_F(MainWindowTest, UpdateMergeAnimationsButtonEnablesActionForCompatibleSkeletonEntities) {
+    Ogre::Entity* entityA = createAnimatedEntity("MergeSkeletonEntityA");
+    Ogre::Entity* entityB = createAnimatedEntity("MergeSkeletonEntityB");
+    if (!entityA || !entityB) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(entityA);
+    SelectionSet::getSingleton()->append(entityB);
+
+    window->updateMergeAnimationsButton();
+
+    EXPECT_TRUE(window->ui->actionMerge_Animations->isEnabled());
+}
+
+TEST_F(MainWindowTest, UpdateMergeAnimationsButtonResolvesEntitiesFromSelectedNodes) {
+    Ogre::Entity* entityA = createAnimatedEntity("MergeNodeEntityA");
+    Ogre::Entity* entityB = createAnimatedEntity("MergeNodeEntityB");
+    if (!entityA || !entityB) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(entityA->getParentSceneNode());
+    SelectionSet::getSingleton()->append(entityB->getParentSceneNode());
+
+    window->updateMergeAnimationsButton();
+
+    EXPECT_TRUE(window->ui->actionMerge_Animations->isEnabled());
 }
