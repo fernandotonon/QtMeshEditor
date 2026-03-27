@@ -55,6 +55,7 @@ void Material::on_listMaterial_itemSelectionChanged()
     ui->buttonExport->setEnabled(true);
 }
 
+// LCOV_EXCL_START — opens QML windows and native dialogs that are not stable in headless CI
 void Material::on_buttonEdit_clicked()
 {
     try {
@@ -228,4 +229,4 @@ void Material::on_listMaterial_itemDoubleClicked(QListWidgetItem *item)
     // Use the QML editor when double-clicking a material
     on_buttonEdit_clicked();
 }
-
+// LCOV_EXCL_STOP

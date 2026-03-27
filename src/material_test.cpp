@@ -4,7 +4,9 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QThread>
+#define private public
 #include "material.h"
+#undef private
 #include "Manager.h"
 #include <OgreException.h>
 #include <OgreMaterialManager.h>
@@ -56,6 +58,23 @@ TEST_F(MaterialTest, UIElementsExist) {
 
     auto buttonNew = materialWidget.findChild<QPushButton*>("buttonNew");
     EXPECT_NE(buttonNew, nullptr);
+}
+
+TEST_F(MaterialTest, SelectionChangeEnablesEditAndExportButtons) {
+    Material materialWidget;
+    auto listWidget = materialWidget.findChild<QListWidget*>("listMaterial");
+    auto buttonEdit = materialWidget.findChild<QPushButton*>("buttonEdit");
+    auto buttonExport = materialWidget.findChild<QPushButton*>("buttonExport");
+    ASSERT_NE(listWidget, nullptr);
+    ASSERT_NE(buttonEdit, nullptr);
+    ASSERT_NE(buttonExport, nullptr);
+
+    materialWidget.SetMaterialList(QStringList() << "SelectableMaterial");
+    listWidget->setCurrentRow(0);
+    materialWidget.on_listMaterial_itemSelectionChanged();
+
+    EXPECT_TRUE(buttonEdit->isEnabled());
+    EXPECT_TRUE(buttonExport->isEnabled());
 }
 
 TEST_F(MaterialTest, SetMaterialListPopulatesList) {
@@ -115,4 +134,43 @@ TEST_F(MaterialTest, SetMaterialListWithOgreMaterials) {
     // Clean up
     Ogre::MaterialManager::getSingleton().remove(mat1);
     Ogre::MaterialManager::getSingleton().remove(mat2);
+}
+
+TEST_F(MaterialTest, UpdateMaterialListPullsFromOgreMaterialManager) {
+    Material materialWidget;
+    createStandardOgreMaterials();
+
+    auto mat1 = Ogre::MaterialManager::getSingleton().create(
+        "UpdateListMaterialA", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto mat2 = Ogre::MaterialManager::getSingleton().create(
+        "UpdateListMaterialB", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    materialWidget.UpdateMaterialList();
+
+    auto listWidget = materialWidget.findChild<QListWidget*>("listMaterial");
+    ASSERT_NE(listWidget, nullptr);
+
+    QStringList listedNames;
+    for (int i = 0; i < listWidget->count(); ++i)
+        listedNames << listWidget->item(i)->text();
+
+    EXPECT_TRUE(listedNames.contains("UpdateListMaterialA"));
+    EXPECT_TRUE(listedNames.contains("UpdateListMaterialB"));
+
+    Ogre::MaterialManager::getSingleton().remove(mat1);
+    Ogre::MaterialManager::getSingleton().remove(mat2);
+}
+
+TEST_F(MaterialTest, SetMaterialListReplacesPreviousEntries) {
+    Material materialWidget;
+    auto listWidget = materialWidget.findChild<QListWidget*>("listMaterial");
+    ASSERT_NE(listWidget, nullptr);
+
+    materialWidget.SetMaterialList(QStringList() << "OldMaterialA" << "OldMaterialB");
+    ASSERT_EQ(listWidget->count(), 2);
+
+    materialWidget.SetMaterialList(QStringList() << "FreshMaterial");
+
+    ASSERT_EQ(listWidget->count(), 1);
+    EXPECT_EQ(listWidget->item(0)->text(), QString("FreshMaterial"));
 }
