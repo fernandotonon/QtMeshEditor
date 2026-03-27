@@ -39,6 +39,27 @@ void expectVectorNear(const Ogre::Vector3& actual, const Ogre::Vector3& expected
     EXPECT_NEAR(actual.y, expected.y, tolerance);
     EXPECT_NEAR(actual.z, expected.z, tolerance);
 }
+
+bool isRotationGizmoVisible(const RotationGizmo* gizmo)
+{
+    return gizmo->getXCircle().isVisible()
+        && gizmo->getYCircle().isVisible()
+        && gizmo->getZCircle().isVisible();
+}
+
+bool isTranslationGizmoVisible(const TranslationGizmo* gizmo)
+{
+    return gizmo->getXAxis().isVisible()
+        && gizmo->getYAxis().isVisible()
+        && gizmo->getZAxis().isVisible();
+}
+
+bool isScaleGizmoVisible(const ScaleGizmo* gizmo)
+{
+    return gizmo->getXAxis().isVisible()
+        && gizmo->getYAxis().isVisible()
+        && gizmo->getZAxis().isVisible();
+}
 }
 
 Q_DECLARE_METATYPE(Ogre::Vector3)
@@ -164,9 +185,9 @@ TEST_F(TransformOperatorTests, UpdateGizmoWithoutSelectionHidesEveryGizmo)
 
     op->updateGizmo();
 
-    EXPECT_FALSE(op->m_pRotationGizmo->isVisible());
-    EXPECT_FALSE(op->m_pTranslationGizmo->isVisible());
-    EXPECT_FALSE(op->m_pScaleGizmo->isVisible());
+    EXPECT_FALSE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
+    EXPECT_FALSE(isScaleGizmoVisible(op->m_pScaleGizmo));
 }
 
 TEST_F(TransformOperatorTests, RayFromScreenPointWithoutActiveWidgetReturnsDefaultRay)
@@ -183,9 +204,9 @@ TEST_F(TransformOperatorTests, TranslateStateShowsTranslationGizmoForNodeSelecti
 
     op->onTransformStateChange(TransformOperator::TS_TRANSLATE);
 
-    EXPECT_TRUE(op->m_pTranslationGizmo->isVisible());
-    EXPECT_FALSE(op->m_pRotationGizmo->isVisible());
-    EXPECT_FALSE(op->m_pScaleGizmo->isVisible());
+    EXPECT_TRUE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
+    EXPECT_FALSE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isScaleGizmoVisible(op->m_pScaleGizmo));
     EXPECT_TRUE(op->mTrackingEnable);
 }
 
@@ -195,9 +216,9 @@ TEST_F(TransformOperatorTests, RotateStateShowsRotationGizmoForNodeSelection)
 
     op->onTransformStateChange(TransformOperator::TS_ROTATE);
 
-    EXPECT_TRUE(op->m_pRotationGizmo->isVisible());
-    EXPECT_FALSE(op->m_pTranslationGizmo->isVisible());
-    EXPECT_FALSE(op->m_pScaleGizmo->isVisible());
+    EXPECT_TRUE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
+    EXPECT_FALSE(isScaleGizmoVisible(op->m_pScaleGizmo));
     EXPECT_TRUE(op->mTrackingEnable);
 }
 
@@ -207,9 +228,9 @@ TEST_F(TransformOperatorTests, ScaleStateShowsScaleGizmoForNodeSelection)
 
     op->onTransformStateChange(TransformOperator::TS_SCALE);
 
-    EXPECT_TRUE(op->m_pScaleGizmo->isVisible());
-    EXPECT_FALSE(op->m_pRotationGizmo->isVisible());
-    EXPECT_FALSE(op->m_pTranslationGizmo->isVisible());
+    EXPECT_TRUE(isScaleGizmoVisible(op->m_pScaleGizmo));
+    EXPECT_FALSE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
     EXPECT_TRUE(op->mTrackingEnable);
 }
 
@@ -219,9 +240,9 @@ TEST_F(TransformOperatorTests, SelectStateHidesGizmosEvenWithSelection)
 
     op->onTransformStateChange(TransformOperator::TS_SELECT);
 
-    EXPECT_FALSE(op->m_pRotationGizmo->isVisible());
-    EXPECT_FALSE(op->m_pTranslationGizmo->isVisible());
-    EXPECT_FALSE(op->m_pScaleGizmo->isVisible());
+    EXPECT_FALSE(isRotationGizmoVisible(op->m_pRotationGizmo));
+    EXPECT_FALSE(isTranslationGizmoVisible(op->m_pTranslationGizmo));
+    EXPECT_FALSE(isScaleGizmoVisible(op->m_pScaleGizmo));
 }
 
 TEST_F(TransformOperatorTests, UpdateGizmoPositionForNodeSelectionEmitsCurrentValues)
