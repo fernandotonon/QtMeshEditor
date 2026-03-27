@@ -463,10 +463,11 @@ TEST_F(TransformOperatorTests, EntityQuaternionRotationAccumulatesTrackedEulerDe
         GTEST_SKIP() << "Skipping: entity creation not supported without render window";
     }
 
+    SelectionSet::getSingleton()->setEntityRotation(entity, Ogre::Vector3(0.0f, 10.0f, 0.0f));
     op->rotateSelected(Ogre::Quaternion(Ogre::Degree(20), Ogre::Vector3::UNIT_Y));
 
     const Ogre::Vector3 tracked = SelectionSet::getSingleton()->getEntityRotation(entity);
-    EXPECT_NEAR(tracked.y, 20.0f, 0.5f);
+    EXPECT_NEAR(tracked.y, 30.0f, 0.5f);
 }
 
 TEST_F(TransformOperatorTests, RemoveSelectedWithEmptySelectionKeepsUndoHistory)

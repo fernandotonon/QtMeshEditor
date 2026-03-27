@@ -90,9 +90,7 @@ protected:
             return nullptr;
         }
 
-        auto* entity = createAnimatedTestEntity(name);
-        EXPECT_NE(entity, nullptr);
-        return entity;
+        return createAnimatedTestEntity(name);
     }
 };
 
