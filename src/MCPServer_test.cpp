@@ -3661,7 +3661,7 @@ TEST_F(MCPServerProtocolTest, ProcessMessageInitializeRespondsWithCapabilities)
     EXPECT_TRUE(result["capabilities"].toObject().contains("resources"));
 }
 
-TEST_F(MCPServerProtocolTest, ProcessMessageUnknownNotificationProducesNoResponse)
+TEST_F(MCPServerProtocolTest, ProcessMessageUnknownNotificationLeavesServerStateUnchanged)
 {
     const QJsonObject request{
         {"jsonrpc", "2.0"},
@@ -3669,8 +3669,10 @@ TEST_F(MCPServerProtocolTest, ProcessMessageUnknownNotificationProducesNoRespons
         {"params", QJsonObject{{"value", 1}}}
     };
 
+    EXPECT_FALSE(server->m_initialized);
     server->processMessage(QJsonDocument(request).toJson(QJsonDocument::Compact));
-    EXPECT_TRUE(readTransportMessage(outputPipe[0]).isEmpty());
+    EXPECT_FALSE(server->m_initialized);
+    EXPECT_TRUE(server->m_buffer.isEmpty());
 }
 
 TEST_F(MCPServerProtocolTest, ProcessMessageUnknownMethodReturnsMethodNotFound)
