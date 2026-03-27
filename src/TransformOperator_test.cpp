@@ -285,6 +285,8 @@ TEST_F(TransformOperatorTests, UpdateGizmoUsesRootOrientationForMultipleLocalNod
     ASSERT_NE(nodeA, nullptr);
     ASSERT_NE(nodeB, nullptr);
 
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(nodeA);
     SelectionSet::getSingleton()->append(nodeB);
     nodeA->setOrientation(Ogre::Quaternion(Ogre::Degree(15), Ogre::Vector3::UNIT_X));
     nodeB->setOrientation(Ogre::Quaternion(Ogre::Degree(25), Ogre::Vector3::UNIT_Z));
@@ -344,6 +346,8 @@ TEST_F(TransformOperatorTests, SetSelectedScaleForNodeUsesSelectionAverage)
     ASSERT_NE(nodeA, nullptr);
     ASSERT_NE(nodeB, nullptr);
 
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(nodeA);
     SelectionSet::getSingleton()->append(nodeB);
     nodeA->setScale(Ogre::Vector3(1.0f, 1.0f, 1.0f));
     nodeB->setScale(Ogre::Vector3(3.0f, 3.0f, 3.0f));

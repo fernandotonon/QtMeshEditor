@@ -222,7 +222,7 @@ TEST_F(MainWindowTest, DropEventKeepsOnlySupportedFiles) {
     mimeData->setUrls({
         QUrl::fromLocalFile("/tmp/first.mesh"),
         QUrl::fromLocalFile("/tmp/second.obj"),
-        QUrl::fromLocalFile("/tmp/ignore.txt")
+        QUrl::fromLocalFile("/tmp/ignore.unsupported")
     });
     QDropEvent event(QPointF(0, 0), Qt::CopyAction, mimeData, Qt::LeftButton, Qt::NoModifier);
 
@@ -231,7 +231,7 @@ TEST_F(MainWindowTest, DropEventKeepsOnlySupportedFiles) {
     EXPECT_EQ(window->mUriList.size(), 2);
     EXPECT_TRUE(window->mUriList.contains("/tmp/first.mesh"));
     EXPECT_TRUE(window->mUriList.contains("/tmp/second.obj"));
-    EXPECT_FALSE(window->mUriList.contains("/tmp/ignore.txt"));
+    EXPECT_FALSE(window->mUriList.contains("/tmp/ignore.unsupported"));
     delete mimeData;
 }
 
