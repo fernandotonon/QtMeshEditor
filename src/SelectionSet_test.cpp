@@ -11,6 +11,33 @@
 
 class SelectionSetTests : public ::testing::Test {
 protected:
+    Ogre::SceneNode* createNodeWithEntity(const QString& nodeName, const std::string& meshName)
+    {
+        Ogre::MeshPtr mesh = createInMemoryTriangleMesh(meshName);
+        EXPECT_NE(mesh, nullptr);
+        if (!mesh) {
+            return nullptr;
+        }
+
+        Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode(nodeName);
+        EXPECT_NE(node, nullptr);
+        if (!node) {
+            return nullptr;
+        }
+
+        Ogre::Entity* entity = Manager::getSingleton()->createEntity(node, mesh);
+        EXPECT_NE(entity, nullptr);
+        if (!entity) {
+            return nullptr;
+        }
+
+        // Manager::addSceneNode auto-selects newly created nodes; tests using this
+        // helper need to control the resulting selection state explicitly.
+        SelectionSet::getSingleton()->clear();
+
+        return node;
+    }
+
     void SetUp() override {
         Manager::kill();
         SelectionSet::kill();
@@ -590,6 +617,204 @@ TEST_F(SelectionSetTests, RemoveNonExistent)
     bool removed = selectionSet->removeOne(node);
     EXPECT_FALSE(removed);
     EXPECT_EQ(selectionSet->getNodesCount(), 0);
+
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+TEST_F(SelectionSetTests, GetResolvedEntitiesReturnsDirectEntitySelection)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* node = createNodeWithEntity("resolved_direct", "resolved_direct_mesh");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+
+    selectionSet->append(entity);
+
+    const QList<Ogre::Entity*> resolved = selectionSet->getResolvedEntities();
+    ASSERT_EQ(resolved.size(), 1);
+    EXPECT_EQ(resolved.first(), entity);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+TEST_F(SelectionSetTests, GetResolvedEntitiesResolvesSelectedNodesWithEntities)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* node = createNodeWithEntity("resolved_node", "resolved_node_mesh");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+
+    selectionSet->append(node);
+
+    const QList<Ogre::Entity*> resolved = selectionSet->getResolvedEntities();
+    ASSERT_EQ(resolved.size(), 1);
+    EXPECT_EQ(resolved.first(), entity);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+TEST_F(SelectionSetTests, GetResolvedEntitiesSkipsNodesWithoutAttachedEntities)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* emptyNode = Manager::getSingleton()->addSceneNode("resolved_empty");
+    ASSERT_NE(emptyNode, nullptr);
+    Ogre::SceneNode* entityNode = createNodeWithEntity("resolved_with_entity", "resolved_with_entity_mesh");
+    ASSERT_NE(entityNode, nullptr);
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+
+    selectionSet->append(emptyNode);
+    selectionSet->append(entityNode);
+
+    const QList<Ogre::Entity*> resolved = selectionSet->getResolvedEntities();
+    ASSERT_EQ(resolved.size(), 1);
+    EXPECT_EQ(resolved.first(), entity);
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(emptyNode);
+    Manager::getSingleton()->destroySceneNode(entityNode);
+}
+
+TEST_F(SelectionSetTests, GetSelectionScaleAveragesMultipleNodes)
+{
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* node1 = Manager::getSingleton()->addSceneNode("scale_avg_1");
+    Ogre::SceneNode* node2 = Manager::getSingleton()->addSceneNode("scale_avg_2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+
+    node1->setScale(2.0f, 4.0f, 6.0f);
+    node2->setScale(4.0f, 6.0f, 8.0f);
+
+    selectionSet->append(node1);
+    selectionSet->append(node2);
+
+    const Ogre::Vector3 scale = selectionSet->getSelectionScale();
+    EXPECT_EQ(scale, Ogre::Vector3(3.0f, 5.0f, 7.0f));
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node1);
+    Manager::getSingleton()->destroySceneNode(node2);
+}
+
+TEST_F(SelectionSetTests, GetSelectionScaleAveragesMultipleEntitiesUsingStoredFactors)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* node1 = createNodeWithEntity("entity_scale_1", "entity_scale_mesh_1");
+    Ogre::SceneNode* node2 = createNodeWithEntity("entity_scale_2", "entity_scale_mesh_2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+
+    QList<Ogre::Entity*> entities = Manager::getSingleton()->getEntities();
+    ASSERT_GE(entities.size(), 2);
+    Ogre::Entity* entity1 = entities.at(entities.size() - 2);
+    Ogre::Entity* entity2 = entities.at(entities.size() - 1);
+
+    selectionSet->setEntityScaleFactor(entity1, Ogre::Vector3(2.0f, 3.0f, 4.0f));
+    selectionSet->setEntityScaleFactor(entity2, Ogre::Vector3(4.0f, 5.0f, 6.0f));
+    selectionSet->append(entity1);
+    selectionSet->append(entity2);
+
+    const Ogre::Vector3 scale = selectionSet->getSelectionScale();
+    EXPECT_EQ(scale, Ogre::Vector3(3.0f, 4.0f, 5.0f));
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node1);
+    Manager::getSingleton()->destroySceneNode(node2);
+}
+
+TEST_F(SelectionSetTests, GetSelectionOrientationAveragesMultipleEntitiesUsingStoredRotations)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* node1 = createNodeWithEntity("entity_rot_1", "entity_rot_mesh_1");
+    Ogre::SceneNode* node2 = createNodeWithEntity("entity_rot_2", "entity_rot_mesh_2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+
+    QList<Ogre::Entity*> entities = Manager::getSingleton()->getEntities();
+    ASSERT_GE(entities.size(), 2);
+    Ogre::Entity* entity1 = entities.at(entities.size() - 2);
+    Ogre::Entity* entity2 = entities.at(entities.size() - 1);
+
+    selectionSet->setEntityRotation(entity1, Ogre::Vector3(10.0f, 20.0f, 30.0f));
+    selectionSet->setEntityRotation(entity2, Ogre::Vector3(30.0f, 40.0f, 50.0f));
+    selectionSet->append(entity1);
+    selectionSet->append(entity2);
+
+    const Ogre::Vector3 orientation = selectionSet->getSelectionOrientation();
+    EXPECT_EQ(orientation, Ogre::Vector3(20.0f, 30.0f, 40.0f));
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node1);
+    Manager::getSingleton()->destroySceneNode(node2);
+}
+
+TEST_F(SelectionSetTests, GetSelectionCenterWithSubEntityUsesParentBoundingBox)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* node = createNodeWithEntity("subentity_center", "subentity_center_mesh");
+    ASSERT_NE(node, nullptr);
+    node->setPosition(Ogre::Vector3(8.0f, 9.0f, 10.0f));
+
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+    ASSERT_GT(entity->getNumSubEntities(), 0u);
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+    ASSERT_NE(subEntity, nullptr);
+
+    selectionSet->append(subEntity);
+
+    const Ogre::Vector3 center = selectionSet->getSelectionCenter();
+    EXPECT_TRUE(std::isfinite(center.x));
+    EXPECT_TRUE(std::isfinite(center.y));
+    EXPECT_TRUE(std::isfinite(center.z));
+
+    const Ogre::Vector3 nodesCenter = selectionSet->getSelectionNodesCenter();
+    EXPECT_EQ(nodesCenter, Ogre::Vector3(8.0f, 9.0f, 10.0f));
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+TEST_F(SelectionSetTests, RemoveNonExistentEntityAndSubEntityReturnFalse)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* node = createNodeWithEntity("remove_missing", "remove_missing_mesh");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = Manager::getSingleton()->getEntities().last();
+    ASSERT_NE(entity, nullptr);
+    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+    ASSERT_NE(subEntity, nullptr);
+
+    EXPECT_FALSE(selectionSet->removeOne(entity));
+    EXPECT_FALSE(selectionSet->removeOne(subEntity));
 
     Manager::getSingleton()->destroySceneNode(node);
 }

@@ -251,6 +251,16 @@ TEST_F(MeshImporterExporterTest, Exporter_ValidSceneNodeAndUri_ReturnMinusOne) {
     EXPECT_EQ(MeshImporterExporter::exporter(sn, uri, format), -1);
 }
 
+TEST_F(MeshImporterExporterTest, Exporter_SceneNodeWithoutEntity_ReturnsMinusOne)
+{
+    QString uri = tempDir.filePath("lonely.mesh");
+    QString format = "Ogre Mesh (*.mesh)";
+    Ogre::SceneNode* sn = Manager::getSingleton()->addSceneNode("LonelyExportNode");
+    ASSERT_NE(sn, nullptr);
+
+    EXPECT_EQ(MeshImporterExporter::exporter(sn, uri, format), -1);
+}
+
 TEST_F(MeshImporterExporterTest, Importer_EmptyList_DoesNotCreateSceneNodes) {
     MeshImporterExporter::importer(QStringList());
     EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
@@ -336,6 +346,23 @@ TEST_F(MeshImporterExporterTest, SceneImporter_ExportedEmptySceneClearsExistingN
     EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
 }
 
+TEST_F(MeshImporterExporterTest, SceneImporter_NodeOnlyExportBehavesAsValidEmptyScene)
+{
+    ASSERT_TRUE(tempDir.isValid());
+    const QString scenePath = tempDir.filePath("node_only_roundtrip.scene.gltf");
+    Manager::getSingleton()->addSceneNode("NodeWithoutEntity");
+
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(scenePath, nullptr), 0);
+    ASSERT_TRUE(QFileInfo::exists(scenePath));
+
+    Manager::getSingleton()->addSceneNode("ExistingNode");
+    ASSERT_TRUE(Manager::getSingleton()->getSceneMgr()->hasSceneNode("ExistingNode"));
+
+    EXPECT_TRUE(MeshImporterExporter::sceneImporter(scenePath));
+    EXPECT_FALSE(Manager::getSingleton()->getSceneMgr()->hasSceneNode("ExistingNode"));
+    EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
+}
+
 TEST_F(MeshImporterExporterTest, SceneExporter_InMemoryMeshEntity_WritesSceneFile)
 {
     if (!canLoadMeshFiles())
@@ -360,6 +387,32 @@ TEST_F(MeshImporterExporterTest, SceneExporter_InMemoryMeshEntity_WritesSceneFil
     EXPECT_THAT(progressMessages, ::testing::Contains(QStringLiteral("Exporting textures (1/1)...")));
     EXPECT_THAT(progressMessages, ::testing::Contains(QStringLiteral("Building scene data...")));
     EXPECT_EQ(progressValues.last(), 100);
+}
+
+TEST_F(MeshImporterExporterTest, SceneExporter_MixedEmptyAndEntityNodesOnlyCountsEntitiesInProgress)
+{
+    if (!canLoadMeshFiles())
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+
+    ASSERT_TRUE(tempDir.isValid());
+    const QString scenePath = tempDir.filePath("mixed_nodes.scene.gltf");
+
+    Manager::getSingleton()->addSceneNode("EmptyNodeA");
+    Ogre::SceneNode* entityNode = createSceneNodeWithEntity("EntityNode", "MixedSceneMesh");
+    ASSERT_NE(entityNode, nullptr);
+    Manager::getSingleton()->addSceneNode("EmptyNodeB");
+
+    QStringList progressMessages;
+    const int result = MeshImporterExporter::sceneExporter(
+        scenePath,
+        [&progressMessages](int, const QString& status) {
+            progressMessages.append(status);
+        });
+
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(scenePath));
+    EXPECT_THAT(progressMessages, ::testing::Contains(QStringLiteral("Exporting textures (1/1)...")));
+    EXPECT_THAT(progressMessages, ::testing::Not(::testing::Contains(QStringLiteral("Exporting textures (2/3)..."))));
 }
 
 // NOTE: All MeshImporterExporterTest fixture tests from Importer_ValidMesh onward
@@ -677,6 +730,52 @@ TEST_F(SceneSaveLoadTest, SceneExporter_NullProgress_FullExport) {
     int result = MeshImporterExporter::sceneExporter(sceneFile, nullptr);
     EXPECT_EQ(result, 0);
     EXPECT_TRUE(QFileInfo::exists(sceneFile));
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_DirectObjExport_WritesModelAndMaterialFiles)
+{
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("direct_obj_mesh");
+    auto* sn = manager->addSceneNode("DirectObjNode");
+    auto* entity = manager->createEntity(sn, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString objFile = tmpDir.path() + "/direct_export.obj";
+
+    const int result = MeshImporterExporter::exporter(sn, objFile, "OBJ (*.obj)");
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(objFile));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/direct_export.material"));
+}
+
+TEST_F(SceneSaveLoadTest, ConfigureCameraMovesCameraParentBasedOnEntitySize)
+{
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("camera_config_mesh");
+    auto* sn = manager->addSceneNode("CameraConfigNode");
+    auto* entity = manager->createEntity(sn, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::SceneManager* sceneMgr = manager->getSceneMgr();
+    Ogre::Camera* camera = nullptr;
+    if (sceneMgr->hasCamera("CoverageCamera")) {
+        camera = sceneMgr->getCamera("CoverageCamera");
+    } else {
+        camera = sceneMgr->createCamera("CoverageCamera");
+        Ogre::SceneNode* cameraNode = sceneMgr->getRootSceneNode()->createChildSceneNode("CoverageCameraNode");
+        cameraNode->attachObject(camera);
+    }
+    ASSERT_NE(camera, nullptr);
+    camera->setFOVy(Ogre::Degree(60));
+
+    MeshImporterExporter::configureCameraForTesting(entity);
+
+    const Ogre::Vector3 cameraPos = camera->getParentSceneNode()->getPosition();
+    EXPECT_FLOAT_EQ(cameraPos.x, 0.0f);
+    EXPECT_FLOAT_EQ(cameraPos.y, 0.0f);
+    EXPECT_LT(cameraPos.z, 0.0f);
 }
 
 TEST_F(SceneSaveLoadTest, RoundTrip_MixedSkeletalAndNonSkeletal) {

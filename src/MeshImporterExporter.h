@@ -48,6 +48,7 @@ private:
     static const QMap<QString, QString> exportFormats;
 
 public:
+    static void configureCameraForTesting(const Ogre::Entity *en) { configureCamera(en); }
     static QString exportTextureName(const QString& originalName);
     static void importer(const QStringList &_uriList, unsigned int additionalFlags = 0);
     static QString exporter(const Ogre::SceneNode *_sn);

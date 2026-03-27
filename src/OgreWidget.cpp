@@ -26,8 +26,6 @@ THE SOFTWARE.
 -----------------------------------------------------------------------------------
 */
 
-// LCOV_EXCL_START — requires Ogre render window + native display
-
 #include <QDebug>
 #include <QTimer>
 #include <QCoreApplication>
@@ -346,6 +344,3 @@ void OgreWidget::focusOutEvent(QFocusEvent* e)
     mViewport->setVisibilityMask(SCENE_VISIBILITY_FLAGS);
     e->accept();
 }
-
-// LCOV_EXCL_STOP
-
