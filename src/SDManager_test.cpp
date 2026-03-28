@@ -349,6 +349,7 @@ TEST_F(SDManagerTest, SetAutoLoadModelEmitsSignalOnlyOnChange)
     EXPECT_EQ(spy.count(), 1);
 
     manager->setAutoLoadModel(original);
+    EXPECT_EQ(spy.count(), 2);
 }
 
 // ---- getSettings / setSettings ----
@@ -415,6 +416,7 @@ TEST_F(SDManagerTest, LoadSettingsRestoresAdvancedFieldsAndLastModel)
     const QString originalDir = manager->modelsDirectory();
     const bool originalAutoLoad = manager->autoLoadModel();
     const SDSettings originalSettings = manager->getSettings();
+    const QString originalLastModel = manager->lastModelName();
 
     QSettings settings;
     settings.beginGroup("StableDiffusion");
@@ -451,6 +453,10 @@ TEST_F(SDManagerTest, LoadSettingsRestoresAdvancedFieldsAndLastModel)
     manager->setModelsDirectory(originalDir);
     manager->setSettings(originalSettings);
     manager->setAutoLoadModel(originalAutoLoad);
+    settings.beginGroup("StableDiffusion");
+    settings.setValue("lastModel", originalLastModel);
+    settings.endGroup();
+    manager->loadSettings();
     manager->saveSettings();
 }
 
@@ -558,6 +564,7 @@ TEST_F(SDManagerTest, TryAutoLoadModelWithMissingModelDoesNotStartLoading)
     const QString originalDir = manager->modelsDirectory();
     const bool originalAutoLoad = manager->autoLoadModel();
     const SDSettings originalSettings = manager->getSettings();
+    const QString originalLastModel = manager->lastModelName();
 
     QSettings settings;
     settings.beginGroup("StableDiffusion");
@@ -580,6 +587,10 @@ TEST_F(SDManagerTest, TryAutoLoadModelWithMissingModelDoesNotStartLoading)
     manager->setModelsDirectory(originalDir);
     manager->setSettings(originalSettings);
     manager->setAutoLoadModel(originalAutoLoad);
+    settings.beginGroup("StableDiffusion");
+    settings.setValue("lastModel", originalLastModel);
+    settings.endGroup();
+    manager->loadSettings();
     manager->saveSettings();
 }
 

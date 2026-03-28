@@ -4,9 +4,7 @@
 #include <QListWidget>
 #include <QPushButton>
 #include <QThread>
-#define private public
 #include "material.h"
-#undef private
 #include "Manager.h"
 #include <OgreException.h>
 #include <OgreMaterialManager.h>

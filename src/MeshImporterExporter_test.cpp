@@ -850,6 +850,7 @@ TEST_F(SceneSaveLoadTest, SceneExporter_TwoEntitiesReportBothTextureSteps)
     EXPECT_TRUE(QFileInfo::exists(sceneFile));
     EXPECT_THAT(statusMessages, ::testing::Contains(QStringLiteral("Exporting textures (1/2)...")));
     EXPECT_THAT(statusMessages, ::testing::Contains(QStringLiteral("Exporting textures (2/2)...")));
+    ASSERT_FALSE(statusMessages.isEmpty());
     EXPECT_EQ(statusMessages.back(), QStringLiteral("Done."));
 }
 

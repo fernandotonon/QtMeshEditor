@@ -85,6 +85,28 @@ Ogre::SceneNode* createPlainNode(const QString& nodeName, const std::string& mes
     SelectionSet::getSingleton()->clear();
     return node;
 }
+
+void driveModalInputDialogResponse(bool& handled, const QString& text, QDialog::DialogCode result)
+{
+    QTimer::singleShot(0, [&handled, text, result]() {
+        auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+        if (!dialog) {
+            const auto widgets = QApplication::topLevelWidgets();
+            for (QWidget* widget : widgets) {
+                dialog = qobject_cast<QInputDialog*>(widget);
+                if (dialog && dialog->isVisible())
+                    break;
+            }
+        }
+
+        if (!dialog)
+            return;
+
+        handled = true;
+        dialog->setTextValue(text);
+        dialog->done(result);
+    });
+}
 } // namespace
 
 TEST_F(PrimitivesWidgetTest, CreateCube)
@@ -1337,24 +1359,7 @@ TEST_F(PrimitivesWidgetTest, CreatePrimitiveSlotsUseDefaultNamesWhenAcceptedWith
 
     for (const auto& testCase : kPrimitiveDialogCases) {
         bool handled = false;
-        QTimer::singleShot(0, [&handled]() {
-            auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
-            if (!dialog) {
-                const auto widgets = QApplication::topLevelWidgets();
-                for (QWidget* widget : widgets) {
-                    dialog = qobject_cast<QInputDialog*>(widget);
-                    if (dialog && dialog->isVisible())
-                        break;
-                }
-            }
-
-            if (!dialog)
-                return;
-
-            handled = true;
-            dialog->setTextValue(QString());
-            dialog->done(QDialog::Accepted);
-        });
+        driveModalInputDialogResponse(handled, QString(), QDialog::Accepted);
 
         (widget.*(testCase.slot))();
 
@@ -1372,24 +1377,7 @@ TEST_F(PrimitivesWidgetTest, CreatePrimitiveSlotsUseCustomNamesWhenAccepted)
 
     for (const auto& testCase : kPrimitiveDialogCases) {
         bool handled = false;
-        QTimer::singleShot(0, [&handled, &testCase]() {
-            auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
-            if (!dialog) {
-                const auto widgets = QApplication::topLevelWidgets();
-                for (QWidget* widget : widgets) {
-                    dialog = qobject_cast<QInputDialog*>(widget);
-                    if (dialog && dialog->isVisible())
-                        break;
-                }
-            }
-
-            if (!dialog)
-                return;
-
-            handled = true;
-            dialog->setTextValue(testCase.customName);
-            dialog->done(QDialog::Accepted);
-        });
+        driveModalInputDialogResponse(handled, testCase.customName, QDialog::Accepted);
 
         (widget.*(testCase.slot))();
 
@@ -1407,23 +1395,7 @@ TEST_F(PrimitivesWidgetTest, CreatePrimitiveSlotsRejectDialogDoesNotCreateNodes)
 
     for (const auto& testCase : kPrimitiveDialogCases) {
         bool handled = false;
-        QTimer::singleShot(0, [&handled]() {
-            auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
-            if (!dialog) {
-                const auto widgets = QApplication::topLevelWidgets();
-                for (QWidget* widget : widgets) {
-                    dialog = qobject_cast<QInputDialog*>(widget);
-                    if (dialog && dialog->isVisible())
-                        break;
-                }
-            }
-
-            if (!dialog)
-                return;
-
-            handled = true;
-            dialog->done(QDialog::Rejected);
-        });
+        driveModalInputDialogResponse(handled, QString(), QDialog::Rejected);
 
         (widget.*(testCase.slot))();
 
@@ -1508,8 +1480,8 @@ TEST_F(PrimitivesWidgetTest, MixedPrimitiveAndPlainNodesStillTrackMatchingPrimit
 
     auto* selection = SelectionSet::getSingleton();
     selection->selectOne(plainNode);
-    selection->select(Manager::getSingleton()->getSceneMgr()->getSceneNode("MixedCubeA"));
-    selection->select(Manager::getSingleton()->getSceneMgr()->getSceneNode("MixedCubeB"));
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("MixedCubeA"));
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("MixedCubeB"));
 
     auto* edit_type = widget.findChild<QLineEdit*>("edit_type");
     ASSERT_NE(edit_type, nullptr);
@@ -1543,7 +1515,7 @@ TEST_F(PrimitivesWidgetTest, MultipleSelectedCubesShowDashValuesAndShareSizeEdit
 
     auto* selection = SelectionSet::getSingleton();
     selection->selectOne(Manager::getSingleton()->getSceneMgr()->getSceneNode("DashCubeA"));
-    selection->select(Manager::getSingleton()->getSceneMgr()->getSceneNode("DashCubeB"));
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("DashCubeB"));
 
     auto* edit_sizeX = widget.findChild<QDoubleSpinBox*>("edit_sizeX");
     ASSERT_NE(edit_sizeX, nullptr);
@@ -1574,7 +1546,7 @@ TEST_F(PrimitivesWidgetTest, MultipleSelectedTubesShareRadiusHeightAndUvEdits)
 
     auto* selection = SelectionSet::getSingleton();
     selection->selectOne(Manager::getSingleton()->getSceneMgr()->getSceneNode("TubeEditA"));
-    selection->select(Manager::getSingleton()->getSceneMgr()->getSceneNode("TubeEditB"));
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("TubeEditB"));
 
     auto* edit_radius2 = widget.findChild<QDoubleSpinBox*>("edit_radius2");
     auto* edit_height = widget.findChild<QDoubleSpinBox*>("edit_height");
@@ -1585,7 +1557,8 @@ TEST_F(PrimitivesWidgetTest, MultipleSelectedTubesShareRadiusHeightAndUvEdits)
 
     edit_radius2->setValue(0.25);
     edit_height->setValue(9.5);
-    toggle_uv->setChecked(true);
+    if (!toggle_uv->isChecked())
+        toggle_uv->click();
 
     EXPECT_FLOAT_EQ(tubeA->getInnerRadius(), 0.25f);
     EXPECT_FLOAT_EQ(tubeB->getInnerRadius(), 0.25f);
@@ -1613,7 +1586,7 @@ TEST_F(PrimitivesWidgetTest, MultipleSelectedSpringsShareSegmentEdits)
 
     auto* selection = SelectionSet::getSingleton();
     selection->selectOne(Manager::getSingleton()->getSceneMgr()->getSceneNode("SpringEditA"));
-    selection->select(Manager::getSingleton()->getSceneMgr()->getSceneNode("SpringEditB"));
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("SpringEditB"));
 
     auto* edit_numSegX = widget.findChild<QSpinBox*>("edit_numSegX");
     auto* edit_numSegY = widget.findChild<QSpinBox*>("edit_numSegY");
