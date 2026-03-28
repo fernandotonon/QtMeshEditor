@@ -31,8 +31,6 @@ private slots:
     void on_listMaterial_itemDoubleClicked(QListWidgetItem *item);
 
 private:
-    friend class MaterialTest;
-
     Ui::Material *ui;
 
     void UpdateMaterialList();
