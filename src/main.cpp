@@ -31,6 +31,11 @@
 #include <unistd.h>
 #endif
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#include <cstdio>
+#endif
+
 #ifdef Q_OS_LINUX
 static void forceX11PlatformIfNeeded()
 {
@@ -82,8 +87,17 @@ int main(int argc, char *argv[])
                 break;  // first non-flag arg determines mode
             }
         }
-        if (cliMode)
+        if (cliMode) {
+#ifdef Q_OS_WIN
+            // QtMeshEditor.exe is a WIN32 GUI subsystem executable — it has no
+            // console by default. Reattach to the parent console (PowerShell/cmd)
+            // so that CLI output (--version, --help, subcommands) is visible.
+            AttachConsole(ATTACH_PARENT_PROCESS);
+            freopen("CONOUT$", "w", stdout);
+            freopen("CONOUT$", "w", stderr);
+#endif
             return CLIPipeline::run(argc, argv);
+        }
     }
 
     // Check for MCP server mode before creating QApplication
