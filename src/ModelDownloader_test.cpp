@@ -142,8 +142,16 @@ TEST_F(ModelDownloaderTest, StartDownloadWhileAlreadyDownloadingEmitsError)
 TEST_F(ModelDownloaderTest, StartDownloadFileOpenFailureEmitsErrorAndKeepsIdleState)
 {
     QSignalSpy errorSpy(downloader, &ModelDownloader::downloadError);
+    const QString invalidParentPath = tempFilePath("not-a-directory");
+    QFile invalidParent(invalidParentPath);
+    ASSERT_TRUE(invalidParent.open(QIODevice::WriteOnly));
+    invalidParent.write("x");
+    invalidParent.close();
 
-    downloader->startDownload("https://example.invalid/model.bin", tempDir.path(), "BrokenModel");
+    downloader->startDownload(
+        "https://example.invalid/model.bin",
+        invalidParentPath + "/model.bin",
+        "BrokenModel");
 
     ASSERT_EQ(errorSpy.count(), 1);
     EXPECT_EQ(errorSpy.at(0).at(0).toString(), QString("BrokenModel"));
