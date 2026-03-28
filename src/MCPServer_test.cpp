@@ -11,7 +11,13 @@
 #include <QTemporaryDir>
 #include <memory>
 #include <QMainWindow>
+#include <unistd.h>
+#include <fcntl.h>
+
+#define private public
 #include "MCPServer.h"
+#undef private
+
 #include "Manager.h"
 #include "MeshInfoOverlay.h"
 #include "PrimitiveObject.h"
@@ -30,6 +36,54 @@ static QString getResultText(const QJsonObject &result)
 static bool isError(const QJsonObject &result)
 {
     return result["isError"].toBool(false);
+}
+
+static QByteArray readTransportMessage(int readFd)
+{
+    QByteArray response;
+    char buffer[4096];
+    ssize_t bytesRead = read(readFd, buffer, sizeof(buffer));
+    if (bytesRead > 0) {
+        response.append(buffer, bytesRead);
+    }
+    return response;
+}
+
+static QByteArray readTransportMessageNonBlocking(int readFd)
+{
+    const int flags = fcntl(readFd, F_GETFL, 0);
+    if (flags == -1) {
+        return {};
+    }
+
+    if (fcntl(readFd, F_SETFL, flags | O_NONBLOCK) == -1) {
+        return {};
+    }
+
+    QByteArray response;
+    char buffer[4096];
+    ssize_t bytesRead = read(readFd, buffer, sizeof(buffer));
+    if (bytesRead > 0) {
+        response.append(buffer, bytesRead);
+    }
+
+    fcntl(readFd, F_SETFL, flags);
+    return response;
+}
+
+static QJsonObject extractJsonBody(const QByteArray &transport)
+{
+    const int headerEnd = transport.indexOf("\r\n\r\n");
+    EXPECT_NE(headerEnd, -1);
+    if (headerEnd == -1) {
+        return QJsonObject();
+    }
+
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(transport.mid(headerEnd + 4), &error);
+    EXPECT_EQ(error.error, QJsonParseError::NoError);
+    EXPECT_TRUE(doc.isObject());
+    return doc.object();
 }
 
 class MCPServerTest : public ::testing::Test
@@ -63,6 +117,49 @@ protected:
 
     QApplication* app = nullptr;
     std::unique_ptr<MCPServer> server;
+};
+
+class MCPServerProtocolTest : public ::testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+        server = std::make_unique<MCPServer>();
+        ASSERT_EQ(pipe(outputPipe), 0);
+        server->setOutputFd(outputPipe[1]);
+    }
+
+    void TearDown() override
+    {
+        server.reset();
+        if (outputPipe[0] != -1) {
+            close(outputPipe[0]);
+        }
+        if (outputPipe[1] != -1) {
+            close(outputPipe[1]);
+        }
+        Manager::kill();
+        if (app) {
+            app->processEvents();
+        }
+    }
+
+    QJsonObject processAndRead(const QByteArray &payload)
+    {
+        server->processMessage(payload);
+        return extractJsonBody(readTransportMessage(outputPipe[0]));
+    }
+
+    QByteArray makeTransport(const QByteArray &json)
+    {
+        return QByteArray("Content-Length: ") + QByteArray::number(json.size()) + "\r\n\r\n" + json;
+    }
+
+    QApplication* app = nullptr;
+    std::unique_ptr<MCPServer> server;
+    int outputPipe[2] = {-1, -1};
 };
 
 // --- Material tools ---
@@ -2039,6 +2136,94 @@ TEST_F(MCPServerHttpTest, PostEmptyBody)
     EXPECT_EQ(getHttpStatus(response), 200);
 }
 
+TEST_F(MCPServerHttpTest, GetToolCallWithQueryStringStripsSuffix)
+{
+    server->setOgreInitFailed(true);
+
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    QByteArray request = "GET /api/tools/list_materials?format=json HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
+
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_TRUE(response.contains("application/json"));
+}
+
+TEST_F(MCPServerHttpTest, BusyToolRequestReturns503)
+{
+    server->setOgreInitFailed(true);
+
+    ASSERT_TRUE(server->startHttp(0));
+    server->m_httpBusy = true;
+    int port = server->httpPort();
+
+    QByteArray request = "GET /api/tools/list_materials HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\nConnection: close\r\n\r\n";
+
+    QByteArray response = sendHttpRequest(port, request);
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 503);
+    EXPECT_TRUE(response.contains("Server busy"));
+}
+
+TEST_F(MCPServerHttpTest, PartialPostBodyWaitsForCompletionBeforeResponding)
+{
+    server->setOgreInitFailed(true);
+
+    ASSERT_TRUE(server->startHttp(0));
+    int port = server->httpPort();
+
+    QTcpSocket socket;
+    socket.connectToHost("127.0.0.1", port);
+    ASSERT_TRUE(socket.waitForConnected(1000));
+
+    const QByteArray body = R"({"name":"PartialBodyMaterial"})";
+    const QByteArray partialBody = body.left(body.size() / 2);
+    QByteArray request = "POST /api/tools/create_material HTTP/1.1\r\n"
+                         "Host: 127.0.0.1\r\n"
+                         "Content-Type: application/json\r\n"
+                         "Content-Length: " + QByteArray::number(body.size()) + "\r\n"
+                         "Connection: close\r\n\r\n" + partialBody;
+
+    socket.write(request);
+    socket.flush();
+
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    QThread::msleep(25);
+    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+    EXPECT_EQ(socket.bytesAvailable(), 0);
+
+    socket.write(body.mid(partialBody.size()));
+    socket.flush();
+
+    QByteArray response;
+    QElapsedTimer timer;
+    timer.start();
+    while (timer.elapsed() < 5000) {
+        QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+        if (socket.bytesAvailable() > 0) {
+            response.append(socket.readAll());
+        }
+        if (socket.state() == QAbstractSocket::UnconnectedState && !response.isEmpty()) {
+            break;
+        }
+        QThread::msleep(10);
+    }
+
+    if (socket.bytesAvailable() > 0) {
+        response.append(socket.readAll());
+    }
+
+    ASSERT_FALSE(response.isEmpty());
+    EXPECT_EQ(getHttpStatus(response), 200);
+    EXPECT_TRUE(response.contains("application/json"));
+}
+
 // --- HTTP response contains CORS headers on all responses ---
 
 TEST_F(MCPServerHttpTest, CorsHeadersOnAllResponses)
@@ -3547,4 +3732,286 @@ TEST_F(MCPServerTest, OpenScene_ValidFile_LoadsEntities)
     QString resultText = getResultText(openResult);
     EXPECT_TRUE(resultText.contains("Scene loaded"));
     EXPECT_TRUE(resultText.contains("scene node(s)"));
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageRejectsInvalidJson)
+{
+    const QJsonObject response = processAndRead("not-json");
+    ASSERT_TRUE(response.contains("error"));
+    EXPECT_EQ(response["error"].toObject()["code"].toInt(), -32700);
+    EXPECT_TRUE(response["error"].toObject()["message"].toString().contains("Parse error"));
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageRejectsNonObjectRequest)
+{
+    const QByteArray payload = QJsonDocument(QJsonArray{1, 2, 3}).toJson(QJsonDocument::Compact);
+    const QJsonObject response = processAndRead(payload);
+    ASSERT_TRUE(response.contains("error"));
+    EXPECT_EQ(response["error"].toObject()["code"].toInt(), -32600);
+    EXPECT_TRUE(response["error"].toObject()["message"].toString().contains("Invalid Request"));
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageInitializeRespondsWithCapabilities)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 7},
+        {"method", "initialize"},
+        {"params", QJsonObject{}}
+    };
+
+    const QJsonObject response = processAndRead(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_TRUE(response.contains("result"));
+    EXPECT_EQ(response["id"].toInt(), 7);
+    EXPECT_TRUE(server->m_initialized);
+
+    const QJsonObject result = response["result"].toObject();
+    EXPECT_EQ(result["protocolVersion"].toString(), "2024-11-05");
+    EXPECT_EQ(result["serverInfo"].toObject()["name"].toString(), "QtMeshEditor");
+    EXPECT_TRUE(result["capabilities"].toObject().contains("tools"));
+    EXPECT_TRUE(result["capabilities"].toObject().contains("resources"));
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageUnknownNotificationLeavesServerStateUnchanged)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/custom"},
+        {"params", QJsonObject{{"value", 1}}}
+    };
+
+    EXPECT_FALSE(server->m_initialized);
+    server->processMessage(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    EXPECT_FALSE(server->m_initialized);
+    EXPECT_TRUE(server->m_buffer.isEmpty());
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageUnknownMethodReturnsMethodNotFound)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", "abc"},
+        {"method", "totally/unknown"},
+        {"params", QJsonObject{}}
+    };
+
+    const QJsonObject response = processAndRead(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_TRUE(response.contains("error"));
+    EXPECT_EQ(response["id"].toString(), "abc");
+    EXPECT_EQ(response["error"].toObject()["code"].toInt(), -32601);
+    EXPECT_TRUE(response["error"].toObject()["message"].toString().contains("Method not found"));
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessagePingReturnsEmptyResult)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 11},
+        {"method", "ping"},
+        {"params", QJsonObject{}}
+    };
+
+    const QJsonObject response = processAndRead(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_TRUE(response.contains("result"));
+    EXPECT_EQ(response["id"].toInt(), 11);
+    EXPECT_TRUE(response["result"].toObject().isEmpty());
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageInitializedNotificationDoesNotRespond)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/initialized"},
+        {"params", QJsonObject{}}
+    };
+
+    server->processMessage(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    EXPECT_TRUE(readTransportMessageNonBlocking(outputPipe[0]).isEmpty());
+    EXPECT_FALSE(server->m_initialized);
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageCancelledNotificationDoesNotRespond)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"method", "notifications/cancelled"},
+        {"params", QJsonObject{{"requestId", 5}}}
+    };
+
+    server->processMessage(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    EXPECT_TRUE(readTransportMessageNonBlocking(outputPipe[0]).isEmpty());
+}
+
+TEST_F(MCPServerProtocolTest, HandleResourcesListReturnsExpectedUris)
+{
+    const QJsonObject result = server->handleResourcesList();
+    const QJsonArray resources = result["resources"].toArray();
+    ASSERT_EQ(resources.size(), 2);
+    EXPECT_EQ(resources[0].toObject()["uri"].toString(), "qtmesheditor://material/current");
+    EXPECT_EQ(resources[1].toObject()["uri"].toString(), "qtmesheditor://scene/info");
+}
+
+TEST_F(MCPServerProtocolTest, HandleResourcesReadCurrentMaterialWithoutMainWindowReturnsPlaceholder)
+{
+    const QJsonObject result = server->handleResourcesRead(QJsonObject{{"uri", "qtmesheditor://material/current"}});
+    const QJsonArray contents = result["contents"].toArray();
+    ASSERT_EQ(contents.size(), 1);
+    EXPECT_EQ(contents[0].toObject()["mimeType"].toString(), "text/plain");
+    EXPECT_TRUE(contents[0].toObject()["text"].toString().contains("No material currently loaded"));
+}
+
+TEST_F(MCPServerProtocolTest, HandleResourcesReadSceneInfoReturnsSerializedText)
+{
+    ASSERT_TRUE(tryInitOgre());
+    createStandardOgreMaterials();
+
+    const QJsonObject result = server->handleResourcesRead(QJsonObject{{"uri", "qtmesheditor://scene/info"}});
+    const QJsonArray contents = result["contents"].toArray();
+    ASSERT_EQ(contents.size(), 1);
+    EXPECT_EQ(contents[0].toObject()["mimeType"].toString(), "application/json");
+    EXPECT_TRUE(contents[0].toObject()["text"].toString().contains("Scene Information"));
+}
+
+TEST_F(MCPServerProtocolTest, HandleResourcesReadUnknownUriReturnsEmptyContents)
+{
+    const QJsonObject result = server->handleResourcesRead(QJsonObject{{"uri", "qtmesheditor://unknown"}});
+    EXPECT_TRUE(result["contents"].toArray().isEmpty());
+}
+
+TEST_F(MCPServerProtocolTest, BuildToolsListContainsCoreToolDefinitions)
+{
+    const QJsonArray tools = server->buildToolsList();
+    EXPECT_GE(tools.size(), 25);
+
+    bool sawCreateMaterial = false;
+    bool sawOpenScene = false;
+    for (const QJsonValue &value : tools) {
+        const QJsonObject tool = value.toObject();
+        if (tool["name"].toString() == "create_material") {
+            sawCreateMaterial = true;
+            EXPECT_TRUE(tool.contains("inputSchema"));
+        }
+        if (tool["name"].toString() == "open_scene") {
+            sawOpenScene = true;
+        }
+    }
+
+    EXPECT_TRUE(sawCreateMaterial);
+    EXPECT_TRUE(sawOpenScene);
+}
+
+TEST_F(MCPServerProtocolTest, OnReadyReadRecoversAfterInvalidHeaderAndParsesMessage)
+{
+    int inputPipe[2] = {-1, -1};
+    ASSERT_EQ(pipe(inputPipe), 0);
+
+    server->m_stdinFd = inputPipe[0];
+    server->m_stdinNotifier = new QSocketNotifier(server->m_stdinFd, QSocketNotifier::Read, server.get());
+
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 3},
+        {"method", "ping"},
+        {"params", QJsonObject{}}
+    };
+    const QByteArray payload = QByteArray("garbage\r\n\r\n") + makeTransport(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_GT(write(inputPipe[1], payload.constData(), payload.size()), 0);
+
+    server->onReadyRead();
+
+    const QJsonObject response = extractJsonBody(readTransportMessage(outputPipe[0]));
+    EXPECT_EQ(response["id"].toInt(), 3);
+    EXPECT_TRUE(response["result"].toObject().isEmpty());
+
+    delete server->m_stdinNotifier;
+    server->m_stdinNotifier = nullptr;
+    close(inputPipe[0]);
+    close(inputPipe[1]);
+}
+
+TEST_F(MCPServerProtocolTest, OnReadyReadWaitsForCompleteTransportBody)
+{
+    int inputPipe[2] = {-1, -1};
+    ASSERT_EQ(pipe(inputPipe), 0);
+
+    server->m_stdinFd = inputPipe[0];
+    server->m_stdinNotifier = new QSocketNotifier(server->m_stdinFd, QSocketNotifier::Read, server.get());
+
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 9},
+        {"method", "ping"},
+        {"params", QJsonObject{}}
+    };
+    const QByteArray payload = QJsonDocument(request).toJson(QJsonDocument::Compact);
+    const QByteArray header = QByteArray("Content-Length: ") + QByteArray::number(payload.size()) + "\r\n\r\n";
+
+    ASSERT_GT(write(inputPipe[1], header.constData(), header.size()), 0);
+    server->onReadyRead();
+    EXPECT_TRUE(readTransportMessageNonBlocking(outputPipe[0]).isEmpty());
+    EXPECT_EQ(server->m_buffer, header);
+
+    ASSERT_GT(write(inputPipe[1], payload.constData(), payload.size()), 0);
+    server->onReadyRead();
+
+    const QJsonObject response = extractJsonBody(readTransportMessage(outputPipe[0]));
+    EXPECT_EQ(response["id"].toInt(), 9);
+    EXPECT_TRUE(response["result"].toObject().isEmpty());
+    EXPECT_TRUE(server->m_buffer.isEmpty());
+
+    delete server->m_stdinNotifier;
+    server->m_stdinNotifier = nullptr;
+    close(inputPipe[0]);
+    close(inputPipe[1]);
+}
+
+TEST_F(MCPServerProtocolTest, OnReadyReadSkipsInvalidContentLengthAndProcessesNextMessage)
+{
+    int inputPipe[2] = {-1, -1};
+    ASSERT_EQ(pipe(inputPipe), 0);
+
+    server->m_stdinFd = inputPipe[0];
+    server->m_stdinNotifier = new QSocketNotifier(server->m_stdinFd, QSocketNotifier::Read, server.get());
+
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 12},
+        {"method", "ping"},
+        {"params", QJsonObject{}}
+    };
+    const QByteArray payload = QByteArray("Content-Length: 0\r\n\r\n") + makeTransport(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_GT(write(inputPipe[1], payload.constData(), payload.size()), 0);
+
+    server->onReadyRead();
+
+    const QJsonObject response = extractJsonBody(readTransportMessage(outputPipe[0]));
+    EXPECT_EQ(response["id"].toInt(), 12);
+    EXPECT_TRUE(response["result"].toObject().isEmpty());
+
+    delete server->m_stdinNotifier;
+    server->m_stdinNotifier = nullptr;
+    close(inputPipe[0]);
+    close(inputPipe[1]);
+}
+
+TEST_F(MCPServerProtocolTest, SendNotificationSerializesMethodAndParams)
+{
+    server->sendNotification("notifications/test", QJsonObject{{"value", 42}});
+
+    const QJsonObject response = extractJsonBody(readTransportMessage(outputPipe[0]));
+    EXPECT_EQ(response["jsonrpc"].toString(), "2.0");
+    EXPECT_EQ(response["method"].toString(), "notifications/test");
+    EXPECT_EQ(response["params"].toObject()["value"].toInt(), 42);
+    EXPECT_FALSE(response.contains("id"));
+}
+
+TEST_F(MCPServerProtocolTest, SendErrorSerializesJsonRpcError)
+{
+    server->sendError(QJsonValue("req-1"), -32001, "custom failure");
+
+    const QJsonObject response = extractJsonBody(readTransportMessage(outputPipe[0]));
+    EXPECT_EQ(response["jsonrpc"].toString(), "2.0");
+    EXPECT_EQ(response["id"].toString(), "req-1");
+    EXPECT_EQ(response["error"].toObject()["code"].toInt(), -32001);
+    EXPECT_EQ(response["error"].toObject()["message"].toString(), "custom failure");
 }
