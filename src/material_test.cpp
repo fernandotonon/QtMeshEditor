@@ -71,7 +71,7 @@ TEST_F(MaterialTest, SelectionChangeEnablesEditAndExportButtons) {
 
     materialWidget.SetMaterialList(QStringList() << "SelectableMaterial");
     listWidget->setCurrentRow(0);
-    materialWidget.on_listMaterial_itemSelectionChanged();
+    QCoreApplication::processEvents();
 
     EXPECT_TRUE(buttonEdit->isEnabled());
     EXPECT_TRUE(buttonExport->isEnabled());
