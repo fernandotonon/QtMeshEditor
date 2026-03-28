@@ -317,6 +317,19 @@ jobs:
             Remove-Item "${{github.workspace}}/bin/media/models/Hip Hop Dancing.fbx" -ErrorAction SilentlyContinue
       shell: powershell
 
+    - name: Smoke-test CLI (bin directory)
+      shell: powershell
+      run: |
+        $exe = "${{github.workspace}}\bin\qtmesh.exe"
+        Write-Host "Running: $exe --version"
+        $output = & $exe --version
+        Write-Host "Output: $output"
+        if ($output -notmatch "qtmesh \d+\.\d+\.\d+") {
+          Write-Error "CLI smoke test FAILED: output '$output' does not match expected 'qtmesh X.Y.Z'"
+          exit 1
+        }
+        Write-Host "CLI smoke test PASSED"
+
     - name: Upload Artifact
       if: github.event_name == 'release' && github.event.action == 'published'
       uses: actions/upload-artifact@v4
@@ -328,7 +341,26 @@ jobs:
       if: github.event_name == 'release' && github.event.action == 'published'
       run: Compress-Archive ${{github.workspace}}/bin QtMeshEditor-${{github.ref_name}}-bin-Windows.zip
       shell: powershell
-      
+
+    - name: Smoke-test CLI from zip
+      if: github.event_name == 'release' && github.event.action == 'published'
+      shell: powershell
+      run: |
+        $zipFile = "QtMeshEditor-${{github.ref_name}}-bin-Windows.zip"
+        $testDir = "${{github.workspace}}\smoketest-zip"
+        New-Item -ItemType Directory -Force -Path $testDir | Out-Null
+        Expand-Archive -Path $zipFile -DestinationPath $testDir -Force
+        $version = "${{github.ref_name}}".TrimStart("v")
+        $exe = "$testDir\bin\qtmesh.exe"
+        Write-Host "Running: $exe --version"
+        $output = & $exe --version
+        Write-Host "Output: $output"
+        if ($output -notmatch [regex]::Escape($version)) {
+          Write-Error "Zip smoke test FAILED: expected version '$version' in output '$output'"
+          exit 1
+        }
+        Write-Host "Zip smoke test PASSED"
+
     - name: Uploadfile to release
       if: github.event_name == 'release' && github.event.action == 'published'
       uses: xresloader/upload-to-github-release@main
