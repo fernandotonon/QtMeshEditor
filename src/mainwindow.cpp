@@ -227,7 +227,9 @@ MainWindow::~MainWindow()
     Manager* manager = Manager::getSingletonPtr();
     if(manager && manager->getMainWindow() == this)
     {
-        // Only destroy if this MainWindow owns the Manager
+        // Destroy AnimationControlController before Manager: its poll timer holds
+        // raw Ogre pointers that become dangling once Manager is destroyed.
+        AnimationControlController::kill();
         Manager::kill();
     }
 }

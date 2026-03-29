@@ -71,7 +71,7 @@ Column {
                     border.color: AnimationControlController.borderColor; border.width: 1
                     Text { anchors.centerIn: parent; text: "\u25B2"; font.pixelSize: 6; color: AnimationControlController.textColor }
                     MouseArea { id: upMa; anchors.fill: parent; hoverEnabled: true; enabled: kfRoot.editable
-                        onClicked: { var v = parseFloat(kfIn.text) + kfRoot.step; kfIn.text = v.toFixed(kfRoot.decimals); kfRoot.committed(v) }
+                        onClicked: { var base = parseFloat(kfIn.text); if (!isNaN(base)) { var v = base + kfRoot.step; kfIn.text = v.toFixed(kfRoot.decimals); kfRoot.committed(v) } }
                     }
                 }
                 Rectangle {
@@ -82,7 +82,7 @@ Column {
                     border.color: AnimationControlController.borderColor; border.width: 1
                     Text { anchors.centerIn: parent; text: "\u25BC"; font.pixelSize: 6; color: AnimationControlController.textColor }
                     MouseArea { id: downMa; anchors.fill: parent; hoverEnabled: true; enabled: kfRoot.editable
-                        onClicked: { var v = parseFloat(kfIn.text) - kfRoot.step; kfIn.text = v.toFixed(kfRoot.decimals); kfRoot.committed(v) }
+                        onClicked: { var base = parseFloat(kfIn.text); if (!isNaN(base)) { var v = base - kfRoot.step; kfIn.text = v.toFixed(kfRoot.decimals); kfRoot.committed(v) } }
                     }
                 }
             }
@@ -479,6 +479,7 @@ Column {
                     function onKeyframeTicksChanged()  { tickCanvas.requestPaint() }
                     function onAnimationLengthChanged() { tickCanvas.requestPaint() }
                     function onThemeChanged()           { tickCanvas.requestPaint() }
+                    function onSliderValueChanged()     { tickCanvas.requestPaint() }
                 }
             }
         }

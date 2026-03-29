@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QSignalSpy>
+#include <QTest>
 #include <QThread>
 #include "AnimationControlController.h"
 #include "Manager.h"
@@ -225,6 +226,7 @@ TEST_F(AnimationControlControllerTest, SetSliderValueUpdatesValue) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
 
     ctrl->setSliderValue(500);
@@ -257,6 +259,7 @@ TEST_F(AnimationControlControllerTest, NextKeyframeAdvancesPosition) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
     ctrl->setSliderValue(0);
 
@@ -273,6 +276,7 @@ TEST_F(AnimationControlControllerTest, PrevKeyframeGoesBack) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
     ctrl->setSliderValue(1000);
 
@@ -289,6 +293,7 @@ TEST_F(AnimationControlControllerTest, HasNextKeyframeAtStart) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
     ctrl->setSliderValue(0);
 
@@ -304,6 +309,7 @@ TEST_F(AnimationControlControllerTest, HasPrevKeyframeAtEnd) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
     ctrl->setSliderValue(1000);
 
@@ -321,6 +327,7 @@ TEST_F(AnimationControlControllerTest, AddKeyframeIncreasesCount) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
 
     auto* skel  = entity->getSkeleton();
@@ -344,6 +351,7 @@ TEST_F(AnimationControlControllerTest, DeleteKeyframeDecreasesCount) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
 
     auto* skel  = entity->getSkeleton();
@@ -371,6 +379,7 @@ TEST_F(AnimationControlControllerTest, SetKfTransXUpdatesKeyframe) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
     ctrl->setSliderValue(500);
     app->processEvents();
@@ -400,6 +409,7 @@ TEST_F(AnimationControlControllerTest, SetKfScaleYUpdatesKeyframe) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
     ctrl->setSliderValue(500);
     app->processEvents();
@@ -428,6 +438,7 @@ TEST_F(AnimationControlControllerTest, SetKfRotWUpdatesKeyframe) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
     ctrl->setSliderValue(500);
     app->processEvents();
@@ -478,9 +489,8 @@ TEST_F(AnimationControlControllerTest, SetKfTransXWithNoKeyframeDoesNotCrash) {
 
 TEST_F(AnimationControlControllerTest, PollTimerDoesNotCrashWithNoAnimation) {
     auto* ctrl = AnimationControlController::instance();
-    // Let the 16ms poll timer fire several times
-    QThread::msleep(60);
-    app->processEvents();
+    // Let the 16ms poll timer fire several times via event-driven wait
+    QTest::qWait(100);
     SUCCEED();
 }
 
@@ -493,11 +503,10 @@ TEST_F(AnimationControlControllerTest, PollTimerDoesNotCrashWithAnimation) {
     auto* ctrl = AnimationControlController::instance();
     ctrl->updateAnimationTree();
     ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
     ctrl->selectBone(ctrl->boneNames().first());
 
-    QThread::msleep(60);
-    app->processEvents();
-    QThread::msleep(60);
-    app->processEvents();
+    // Let the poll timer fire several times via event-driven wait
+    QTest::qWait(100);
     SUCCEED();
 }
