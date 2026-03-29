@@ -4,8 +4,7 @@
 
 set(SRC_FILES
 about.cpp
-animationcontrolwidget.cpp
-animationcontrolslider.cpp
+AnimationControlController.cpp
 main.cpp
 Manager.cpp
 material.cpp
@@ -59,8 +58,7 @@ MaterialPresetLibrary.cpp
 )
 
 set(HEADER_FILES
-animationcontrolwidget.h
-animationcontrolslider.h
+AnimationControlController.h
 GlobalDefinitions.h
 Euler.h
 about.h

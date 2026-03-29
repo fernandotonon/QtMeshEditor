@@ -2,6 +2,7 @@ import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
 import PropertiesPanel 1.0
+import AnimationControl 1.0
 
 Rectangle {
     id: root
@@ -45,6 +46,15 @@ Rectangle {
                 sectionVisible: PropertiesPanelController.hasAnimations
 
                 Component.onCompleted: content = animationComponent
+            }
+
+            // ---- Animation Control (keyframe editor) ----
+            CollapsibleSection {
+                title: "Animation Control"
+                sectionVisible: AnimationControlController.hasAnimation
+                expanded: false
+
+                Component.onCompleted: content = animControlComponent
             }
         }
     }
@@ -260,6 +270,16 @@ Rectangle {
                 TransformField { label: "V"; value: PropertiesPanelController.primVTile; color: "#c040c0"; step: 0.1
                     onNewValue: function(val) { PropertiesPanelController.primVTile = val } }
             }
+        }
+    }
+
+    // ---- Animation Control Content (keyframe editor) ----
+    Component {
+        id: animControlComponent
+
+        Loader {
+            width: parent ? parent.width : 300
+            source: "qrc:/AnimationControl/AnimationControlPanel.qml"
         }
     }
 
