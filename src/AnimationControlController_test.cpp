@@ -57,9 +57,13 @@ TEST_F(AnimationControlControllerTest, InstanceReturnsSameObject) {
 
 TEST_F(AnimationControlControllerTest, KillResetsInstance) {
     auto* a = AnimationControlController::instance();
+    // Mutate state so we can verify the new instance starts fresh
+    a->setSliderValue(999);
+    EXPECT_EQ(a->sliderValue(), 999);
     AnimationControlController::kill();
+    // New instance must have default slider value (0), proving it was re-created
     auto* b = AnimationControlController::instance();
-    EXPECT_NE(a, b);
+    EXPECT_EQ(b->sliderValue(), 0);
 }
 
 // ── Theme colors ───────────────────────────────────────────────────────────────
