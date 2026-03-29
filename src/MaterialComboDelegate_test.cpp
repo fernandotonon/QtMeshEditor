@@ -5,6 +5,7 @@
 #include <QSignalSpy>
 #include <QStandardItemModel>
 #include <QStyleOptionViewItem>
+#include <QMetaObject>
 #include <QThread>
 #include "MaterialComboDelegate.h"
 #include "Manager.h"
@@ -185,4 +186,41 @@ TEST_F(MaterialComboDelegateTest, MaterialColumnWithoutSubEntityProducesEmptySty
     delegate.initStyleOption(&option, index);
 
     EXPECT_TRUE(option.text.isEmpty());
+}
+
+TEST_F(MaterialComboDelegateTest, SetEditorDataForMaterialColumnWithoutSubEntityDoesNotBreakSelection)
+{
+    MaterialComboDelegate delegate;
+    QWidget parentWidget;
+    QStyleOptionViewItem option;
+    QStandardItemModel model(1, 3);
+    QModelIndex index = model.index(0, 2);
+
+    QWidget* editor = delegate.createEditor(&parentWidget, option, index);
+    auto* comboBox = qobject_cast<QComboBox*>(editor);
+    ASSERT_NE(comboBox, nullptr);
+    ASSERT_GT(comboBox->count(), 0);
+
+    comboBox->setCurrentIndex(0);
+    const QString previousText = comboBox->currentText();
+    delegate.setEditorData(editor, index);
+
+    // For non-editable QComboBox, setting an absent text may preserve current selection.
+    EXPECT_TRUE(comboBox->currentText().isEmpty() || comboBox->currentText() == previousText);
+
+    delete editor;
+}
+
+TEST_F(MaterialComboDelegateTest, CommitAndCloseEditorWithoutSenderDoesNotEmitSignals)
+{
+    MaterialComboDelegate delegate;
+    QSignalSpy commitSpy(&delegate, &QAbstractItemDelegate::commitData);
+    QSignalSpy closeSpy(&delegate, &QAbstractItemDelegate::closeEditor);
+    ASSERT_TRUE(commitSpy.isValid());
+    ASSERT_TRUE(closeSpy.isValid());
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(&delegate, "commitAndCloseEditor", Qt::DirectConnection));
+
+    EXPECT_EQ(commitSpy.count(), 0);
+    EXPECT_EQ(closeSpy.count(), 0);
 }
