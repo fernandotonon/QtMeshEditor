@@ -38,7 +38,7 @@
 #include "AnimationWidget.h"
 #include "AnimationMerger.h"
 #include "SelectionSet.h"
-#include "animationcontrolwidget.h"
+#include "AnimationControlController.h"
 #include "MaterialEditorQML.h"
 #include "LLMSettingsWidget.h"
 #include "MCPSettingsDialog.h"
@@ -52,6 +52,7 @@
 #include "ModelDownloader.h"
 #include "UndoManager.h"
 #include "PropertiesPanelController.h"
+#include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
 
@@ -226,7 +227,9 @@ MainWindow::~MainWindow()
     Manager* manager = Manager::getSingletonPtr();
     if(manager && manager->getMainWindow() == this)
     {
-        // Only destroy if this MainWindow owns the Manager
+        // Destroy AnimationControlController before Manager: its poll timer holds
+        // raw Ogre pointers that become dangling once Manager is destroyed.
+        AnimationControlController::kill();
         Manager::kill();
     }
 }
@@ -290,10 +293,14 @@ void MainWindow::initToolBar()
         m_propertiesPanel = new QQuickWidget();
         m_propertiesPanel->setResizeMode(QQuickWidget::SizeRootObjectToView);
 
-        // Register PropertiesPanelController in this widget's engine
+        // Register QML singletons before setSource() so all imports resolve
         qmlRegisterSingletonType<PropertiesPanelController>("PropertiesPanel", 1, 0, "PropertiesPanelController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return PropertiesPanelController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AnimationControlController>("AnimationControl", 1, 0, "AnimationControlController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AnimationControlController::qmlInstance(engine, nullptr);
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
@@ -370,13 +377,9 @@ void MainWindow::initToolBar()
     auto pAnimationWidget = new AnimationWidget(this);
     pAnimationWidget->hide();
 
-    // Animation Control Widget — bottom dock, auto-shown for animated entities
-    auto pAnimationControlWidget = new AnimationControlWidget(this);
-    addDockWidget(Qt::BottomDockWidgetArea, pAnimationControlWidget);
-    // Constrain height so it doesn't eat viewport space
-    resizeDocks({pAnimationControlWidget}, {180}, Qt::Vertical);
-    pAnimationControlWidget->setVisible(false);
-    connect(pAnimationWidget,SIGNAL(changeAnimationName(const std::string&)),pAnimationControlWidget,SLOT(updateAnimationTree()));
+    // Rename signal from AnimationWidget still triggers a tree refresh
+    connect(pAnimationWidget, SIGNAL(changeAnimationName(const std::string&)),
+            AnimationControlController::instance(), SLOT(updateAnimationTree()));
 
     connect(pAnimationWidget,SIGNAL(changeAnimationState(bool)),this,SLOT(setPlaying(bool)));
 
@@ -386,23 +389,6 @@ void MainWindow::initToolBar()
     // Connect Inspector's playing state to MainWindow animation playback
     connect(PropertiesPanelController::instance(), &PropertiesPanelController::playingChanged, this, [this]() {
         setPlaying(PropertiesPanelController::instance()->isPlaying());
-    });
-
-    // Toggle Animation Control visibility from menu
-    connect(ui->actionAnimation_Control, &QAction::toggled, this, [pAnimationControlWidget, this](bool checked) {
-        if (checked && PropertiesPanelController::instance()->hasAnimations())
-            pAnimationControlWidget->setVisible(true);
-        else if (!checked)
-            pAnimationControlWidget->setVisible(false);
-    });
-
-    // Auto-show/hide Animation Control based on selection (respects menu toggle)
-    connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged, this, [pAnimationControlWidget, this]() {
-        QTimer::singleShot(0, pAnimationControlWidget, [pAnimationControlWidget, this]() {
-            bool hasAnims = PropertiesPanelController::instance()->hasAnimations();
-            bool toggled = ui->actionAnimation_Control->isChecked();
-            pAnimationControlWidget->setVisible(hasAnims && toggled);
-        });
     });
 
     // Merge Animations button — enable/disable based on selection

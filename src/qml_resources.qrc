@@ -22,4 +22,7 @@
     <file alias="TransformField.qml">../qml/TransformField.qml</file>
     <file alias="SceneTreeNode.qml">../qml/SceneTreeNode.qml</file>
   </qresource>
+  <qresource prefix="/AnimationControl">
+    <file alias="AnimationControlPanel.qml">../qml/AnimationControlPanel.qml</file>
+  </qresource>
 </RCC>
