@@ -61,7 +61,6 @@
      <addaction name="actionTools_Toolbar"/>
      <addaction name="actionView_Toolbar"/>
      <addaction name="actionMeshEditor"/>
-     <addaction name="actionAnimation_Control"/>
     </widget>
     <widget class="QMenu" name="menuViewport_Layout">
      <property name="title">
@@ -317,17 +316,6 @@
    </property>
    <property name="text">
     <string>Tools</string>
-   </property>
-  </action>
-  <action name="actionAnimation_Control">
-   <property name="checkable">
-    <bool>true</bool>
-   </property>
-   <property name="checked">
-    <bool>true</bool>
-   </property>
-   <property name="text">
-    <string>Animation Control</string>
    </property>
   </action>
   <action name="actionView_Toolbar">

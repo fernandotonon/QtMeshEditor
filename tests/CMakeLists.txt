@@ -5,7 +5,6 @@ if(BUILD_TESTS)
     # Include MaterialEditorQML header and source directories
     include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}/../src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../ui_files
         ${BUILD_INCLUDE_DIR}
         ${BUILD_UIH_DIR}
     )
@@ -16,8 +15,7 @@ if(BUILD_TESTS)
     # Basic source files (excluding main.cpp for tests)
     set(TEST_SRC_FILES 
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/about.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/animationcontrolwidget.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/animationcontrolslider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationControlController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/material.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialEditorQML.cpp
@@ -71,8 +69,7 @@ if(BUILD_TESTS)
     )
 
     set(TEST_HEADER_FILES
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/animationcontrolwidget.h
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/animationcontrolslider.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationControlController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GlobalDefinitions.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Euler.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/about.h
@@ -268,7 +265,6 @@ if(BUILD_TESTS)
         
         target_include_directories(${target_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src
-            ${CMAKE_CURRENT_SOURCE_DIR}/../ui_files
             ${BUILD_INCLUDE_DIR}
             ${BUILD_UIH_DIR}
             ${OGRE_PROCEDURAL_LIB_DIR}include
@@ -298,7 +294,6 @@ if(BUILD_TESTS)
         
         target_include_directories(${target_name} PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/../src
-            ${CMAKE_CURRENT_SOURCE_DIR}/../ui_files
             ${BUILD_INCLUDE_DIR}
             ${BUILD_UIH_DIR}
             ${OGRE_PROCEDURAL_LIB_DIR}include

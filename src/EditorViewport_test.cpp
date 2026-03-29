@@ -32,6 +32,9 @@ protected:
     void TearDown() override {
         delete mainWindow;
         mainWindow = nullptr;
+        if (app) {
+            app->processEvents();
+        }
         Manager::kill();
         QThread::msleep(50);
     }

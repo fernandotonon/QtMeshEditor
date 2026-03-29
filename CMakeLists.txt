@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 2.16.1 LANGUAGES C CXX)
+project(QtMeshEditor VERSION 2.18.0 LANGUAGES C CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -136,7 +136,6 @@ if(BUILD_TESTS)
     include_directories(
         ${gtest_SOURCE_DIR}/include
         ${gtest_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/ui_files
         ${CMAKE_CURRENT_SOURCE_DIR}/src
     )
 

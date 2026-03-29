@@ -276,6 +276,8 @@ void TransformOperator::updateGizmoPosition()
 }
 void TransformOperator::onSelectionChanged()
 {
+    auto* viewportGrid = Manager::getSingleton()->getViewportGrid();
+
     //Change the objects view between Node or Mesh aspects
     if(SelectionSet::getSingleton()->hasNodes())
     {
@@ -290,8 +292,8 @@ void TransformOperator::onSelectionChanged()
         }
 
         //TODO - Create a grid to the nodes
-        if(Manager::getSingleton()->getViewportGrid())
-            Manager::getSingleton()->getViewportGrid()->setPosition(Ogre::Vector3(0,0,0));
+        if(viewportGrid)
+            viewportGrid->setPosition(Ogre::Vector3(0,0,0));
     }
     else
     {
@@ -306,7 +308,8 @@ void TransformOperator::onSelectionChanged()
             obj->getParentSceneNode()->setOrientation(Ogre::Quaternion::IDENTITY);
 
             //TODO - Create a grid to the nodes
-            Manager::getSingleton()->getViewportGrid()->setPosition(obj->getParentSceneNode()->getPosition());
+            if(viewportGrid)
+                viewportGrid->setPosition(obj->getParentSceneNode()->getPosition());
         }
 
         foreach(Ogre::SubEntity* obj,SelectionSet::getSingleton()->getSubEntitiesSelectionList())
@@ -320,13 +323,15 @@ void TransformOperator::onSelectionChanged()
             obj->getParent()->getParentSceneNode()->setOrientation(Ogre::Quaternion::IDENTITY);
 
             //TODO - Create a grid to the nodes
-            Manager::getSingleton()->getViewportGrid()->setPosition(obj->getParent()->getParentSceneNode()->getPosition());
+            if(viewportGrid)
+                viewportGrid->setPosition(obj->getParent()->getParentSceneNode()->getPosition());
         }
 
         if(!SelectionSet::getSingleton()->hasEntities()&&!SelectionSet::getSingleton()->hasSubEntities())
         {
             //TODO - Create a grid to the nodes
-            Manager::getSingleton()->getViewportGrid()->setPosition(Ogre::Vector3::ZERO);
+            if(viewportGrid)
+                viewportGrid->setPosition(Ogre::Vector3::ZERO);
         }
     }
 

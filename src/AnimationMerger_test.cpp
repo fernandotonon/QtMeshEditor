@@ -158,10 +158,9 @@ TEST_F(AnimationMergerTest, MergeAnimationsBasic)
     ASSERT_NE(merged, nullptr) << err.toStdString();
     EXPECT_EQ(merged, entityA);
 
-    // Base should still have its "idle" animation
+    // Meaningful names kept as-is (no prefix)
     EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("idle"));
-    // walkNode's "walk" animation should be prepended with slugified node name
-    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("walknode_walk"));
+    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("walk"));
 
     // Cleanup
     nodeA->detachAllObjects();
@@ -200,10 +199,9 @@ TEST_F(AnimationMergerTest, MergeAnimationsNameCollision)
     auto* merged = AnimationMerger::mergeAnimations(entityA, sources, err);
 
     ASSERT_NE(merged, nullptr) << err.toStdString();
-    // Base keeps "idle". Source node is "idle", anim is "idle", so slug is "idle_idle".
-    // No collision with base's "idle", so no _2 suffix needed.
+    // Both have meaningful name "idle" → base keeps "idle", source gets "idle_2"
     EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("idle"));
-    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("idle_idle"));
+    EXPECT_TRUE(merged->getMesh()->getSkeleton()->hasAnimation("idle_2"));
 
     // Cleanup
     nodeA->detachAllObjects();
@@ -216,6 +214,106 @@ TEST_F(AnimationMergerTest, MergeAnimationsNameCollision)
     Ogre::MeshManager::getSingleton().remove(meshB);
     Ogre::SkeletonManager::getSingleton().remove(skelA);
     Ogre::SkeletonManager::getSingleton().remove(skelB);
+}
+
+TEST_F(AnimationMergerTest, MergeAnimationsMixamoCleanup)
+{
+    // Animations with "mixamo.com" in their names should be cleaned
+    auto skelA = createTestSkeleton("mixamo_skel_a", {"root", "spine"},
+                                     {"Armature|mixamo.com|Layer0"});
+    auto skelB = createTestSkeleton("mixamo_skel_b", {"root", "spine"},
+                                     {"mixamo.com|walk"});
+
+    auto meshA = createInMemoryMesh("mixamo_mesh_a", skelA);
+    auto meshB = createInMemoryMesh("mixamo_mesh_b", skelB);
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* nodeA = sceneMgr->getRootSceneNode()->createChildSceneNode("character");
+    auto* entityA = sceneMgr->createEntity("mixamoBaseEntity", meshA);
+    nodeA->attachObject(entityA);
+
+    auto* nodeB = sceneMgr->getRootSceneNode()->createChildSceneNode("walkAnim");
+    auto* entityB = sceneMgr->createEntity("mixamoWalkEntity", meshB);
+    nodeB->attachObject(entityB);
+
+    QList<Ogre::Entity*> sources = {entityA, entityB};
+    QString err;
+    auto* merged = AnimationMerger::mergeAnimations(entityA, sources, err);
+
+    ASSERT_NE(merged, nullptr) << err.toStdString();
+    auto* skel = merged->getMesh()->getSkeleton().get();
+
+    // "Armature|mixamo.com|Layer0" → cleaned → "Armature|Layer0" → meaningful → "armature_layer0"
+    EXPECT_TRUE(skel->hasAnimation("armature_layer0"))
+        << "Expected cleaned base animation";
+    // "mixamo.com|walk" → cleaned → "walk" → meaningful → "walk"
+    EXPECT_TRUE(skel->hasAnimation("walk"))
+        << "Expected cleaned source animation";
+
+    nodeA->detachAllObjects();
+    nodeB->detachAllObjects();
+    sceneMgr->destroyEntity(entityA);
+    sceneMgr->destroyEntity(entityB);
+    sceneMgr->destroySceneNode(nodeA);
+    sceneMgr->destroySceneNode(nodeB);
+    Ogre::MeshManager::getSingleton().remove(meshA);
+    Ogre::MeshManager::getSingleton().remove(meshB);
+    Ogre::SkeletonManager::getSingleton().remove(skelA);
+    Ogre::SkeletonManager::getSingleton().remove(skelB);
+}
+
+TEST_F(AnimationMergerTest, MergeAnimationsDeduplication)
+{
+    // When prefix == anim name, avoid "idle_idle" — just use "idle".
+    // When two sources produce the same final name, append _2.
+    auto skelA = createTestSkeleton("dedup_skel_a", {"root"}, {"idle"});
+    auto skelB = createTestSkeleton("dedup_skel_b", {"root"}, {"idle"});
+    auto skelC = createTestSkeleton("dedup_skel_c", {"root"}, {"idle"});
+
+    auto meshA = createInMemoryMesh("dedup_mesh_a", skelA);
+    auto meshB = createInMemoryMesh("dedup_mesh_b", skelB);
+    auto meshC = createInMemoryMesh("dedup_mesh_c", skelC);
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* nodeA = sceneMgr->getRootSceneNode()->createChildSceneNode("idle");
+    auto* entityA = sceneMgr->createEntity("dedupBaseEntity", meshA);
+    nodeA->attachObject(entityA);
+
+    auto* nodeB = sceneMgr->getRootSceneNode()->createChildSceneNode("idle2");
+    auto* entityB = sceneMgr->createEntity("dedupSrc1Entity", meshB);
+    nodeB->attachObject(entityB);
+
+    auto* nodeC = sceneMgr->getRootSceneNode()->createChildSceneNode("idle3");
+    auto* entityC = sceneMgr->createEntity("dedupSrc2Entity", meshC);
+    nodeC->attachObject(entityC);
+
+    QList<Ogre::Entity*> sources = {entityA, entityB, entityC};
+    QString err;
+    auto* merged = AnimationMerger::mergeAnimations(entityA, sources, err);
+
+    ASSERT_NE(merged, nullptr) << err.toStdString();
+    auto* skel = merged->getMesh()->getSkeleton().get();
+
+    // All three have meaningful name "idle" → dedup: "idle", "idle_2", "idle_3"
+    EXPECT_TRUE(skel->hasAnimation("idle"));
+    EXPECT_TRUE(skel->hasAnimation("idle_2"));
+    EXPECT_TRUE(skel->hasAnimation("idle_3"));
+
+    nodeA->detachAllObjects();
+    nodeB->detachAllObjects();
+    nodeC->detachAllObjects();
+    sceneMgr->destroyEntity(entityA);
+    sceneMgr->destroyEntity(entityB);
+    sceneMgr->destroyEntity(entityC);
+    sceneMgr->destroySceneNode(nodeA);
+    sceneMgr->destroySceneNode(nodeB);
+    sceneMgr->destroySceneNode(nodeC);
+    Ogre::MeshManager::getSingleton().remove(meshA);
+    Ogre::MeshManager::getSingleton().remove(meshB);
+    Ogre::MeshManager::getSingleton().remove(meshC);
+    Ogre::SkeletonManager::getSingleton().remove(skelA);
+    Ogre::SkeletonManager::getSingleton().remove(skelB);
+    Ogre::SkeletonManager::getSingleton().remove(skelC);
 }
 
 // Standalone test that doesn't need Ogre initialization

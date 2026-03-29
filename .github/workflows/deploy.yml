@@ -274,12 +274,61 @@ jobs:
             Copy-Item "${{github.workspace}}/src/dependencies/zlib1.dll" "${{github.workspace}}/bin/libzlib.dll" -ErrorAction SilentlyContinue
       shell: powershell
 
+    - name: Copy Qt QML modules for Inspector and Material Editor
+      run: |
+            $qtDir = "D:/a/QtMeshEditor/Qt/${{ env.QT_VERSION }}/mingw_64"
+            $qmlDest = "${{github.workspace}}/bin/qml"
+            New-Item -ItemType Directory -Force -Path $qmlDest | Out-Null
+            Copy-Item -Recurse "$qtDir/qml/QtQuick" "$qmlDest/" -ErrorAction SilentlyContinue
+            Copy-Item -Recurse "$qtDir/qml/QtQml" "$qmlDest/" -ErrorAction SilentlyContinue
+            Write-Host "QML modules copied to $qmlDest"
+            Get-ChildItem $qmlDest -Directory
+            # Verify critical modules were copied
+            if (-not (Test-Path "$qmlDest/QtQuick")) {
+                Write-Error "Critical: QtQuick module not found after copy"
+                exit 1
+            }
+            if (-not (Test-Path "$qmlDest/QtQml")) {
+                Write-Error "Critical: QtQml module not found after copy"
+                exit 1
+            }
+      shell: powershell
+
+    - name: Copy Qt QML runtime libraries
+      run: |
+            $qtDir = "D:/a/QtMeshEditor/Qt/${{ env.QT_VERSION }}/mingw_64"
+            $dest = "${{github.workspace}}/bin"
+            foreach ($lib in @("Qt6QuickControls2", "Qt6QuickControls2Impl", "Qt6QuickControls2Basic",
+                               "Qt6QuickControls2BasicStyleImpl", "Qt6QuickTemplates2", "Qt6QuickLayouts",
+                               "Qt6QuickDialogs2", "Qt6QuickDialogs2Utils", "Qt6QuickDialogs2QuickImpl",
+                               "Qt6OpenGL")) {
+                $dll = "$qtDir/bin/${lib}.dll"
+                if (Test-Path $dll) {
+                    Copy-Item $dll $dest
+                    Write-Host "Copied $lib.dll"
+                }
+            }
+      shell: powershell
+
     - name: Remove test-only dance models from package
       run: |
             Remove-Item "${{github.workspace}}/bin/media/models/Twist Dance.fbx" -ErrorAction SilentlyContinue
             Remove-Item "${{github.workspace}}/bin/media/models/Rumba Dancing.fbx" -ErrorAction SilentlyContinue
             Remove-Item "${{github.workspace}}/bin/media/models/Hip Hop Dancing.fbx" -ErrorAction SilentlyContinue
       shell: powershell
+
+    - name: Smoke-test CLI (bin directory)
+      shell: powershell
+      run: |
+        $exe = "${{github.workspace}}\bin\qtmesh.exe"
+        Write-Host "Running: $exe --version"
+        $output = & $exe --version
+        Write-Host "Output: $output"
+        if ($output -notmatch "qtmesh \d+\.\d+\.\d+") {
+          Write-Error "CLI smoke test FAILED: output '$output' does not match expected 'qtmesh X.Y.Z'"
+          exit 1
+        }
+        Write-Host "CLI smoke test PASSED"
 
     - name: Upload Artifact
       if: github.event_name == 'release' && github.event.action == 'published'
@@ -292,7 +341,26 @@ jobs:
       if: github.event_name == 'release' && github.event.action == 'published'
       run: Compress-Archive ${{github.workspace}}/bin QtMeshEditor-${{github.ref_name}}-bin-Windows.zip
       shell: powershell
-      
+
+    - name: Smoke-test CLI from zip
+      if: github.event_name == 'release' && github.event.action == 'published'
+      shell: powershell
+      run: |
+        $zipFile = "QtMeshEditor-${{github.ref_name}}-bin-Windows.zip"
+        $testDir = "${{github.workspace}}\smoketest-zip"
+        New-Item -ItemType Directory -Force -Path $testDir | Out-Null
+        Expand-Archive -Path $zipFile -DestinationPath $testDir -Force
+        $version = "${{github.ref_name}}".TrimStart("v")
+        $exe = "$testDir\bin\qtmesh.exe"
+        Write-Host "Running: $exe --version"
+        $output = & $exe --version
+        Write-Host "Output: $output"
+        if ($output -notmatch [regex]::Escape($version)) {
+          Write-Error "Zip smoke test FAILED: expected version '$version' in output '$output'"
+          exit 1
+        }
+        Write-Host "Zip smoke test PASSED"
+
     - name: Uploadfile to release
       if: github.event_name == 'release' && github.event.action == 'published'
       uses: xresloader/upload-to-github-release@main

@@ -2473,6 +2473,7 @@ bool MaterialEditorQML::pathExists(const QString &path)
     return QFileInfo::exists(path);
 }
 
+// LCOV_EXCL_START — modal file dialogs require interactive user input and are not stable in headless CI
 QString MaterialEditorQML::openFileDialog()
 {
     QString texturesPath = "./media/materials/textures";
@@ -2618,6 +2619,7 @@ QString MaterialEditorQML::showNativeFileDialog(QObject *parentWindow)
         return QString();
     }
 }
+// LCOV_EXCL_STOP
 
 QString MaterialEditorQML::testConnection()
 {

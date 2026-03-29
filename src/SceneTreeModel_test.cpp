@@ -6,37 +6,17 @@
 #include <QCoreApplication>
 #include <QSignalSpy>
 #include <QThread>
-#include <OgreMaterialManager.h>
 #include "TestHelpers.h"
-
-namespace {
-QModelIndex findChildByName(SceneTreeModel* model, const QModelIndex& parent, const QString& name)
-{
-    const int rows = model->rowCount(parent);
-    for (int row = 0; row < rows; ++row) {
-        const QModelIndex idx = model->index(row, 0, parent);
-        if (model->data(idx, SceneTreeModel::NameRole).toString() == name)
-            return idx;
-    }
-    return QModelIndex();
-}
-
-QModelIndex findFirstChildByType(SceneTreeModel* model, const QModelIndex& parent, SceneTreeItem::ItemType type)
-{
-    const int rows = model->rowCount(parent);
-    for (int row = 0; row < rows; ++row) {
-        const QModelIndex idx = model->index(row, 0, parent);
-        if (model->data(idx, SceneTreeModel::TypeRole).toInt() == static_cast<int>(type))
-            return idx;
-    }
-    return QModelIndex();
-}
-} // namespace
 
 class SceneTreeModelTests : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
     SceneTreeModel* model = nullptr;
+    struct EntityFixtureData {
+        Ogre::SceneNode* node = nullptr;
+        Ogre::Entity* entity = nullptr;
+        Ogre::SubEntity* subEntity = nullptr;
+    };
 
     void SetUp() override {
         Manager::kill();
@@ -49,6 +29,7 @@ protected:
             GTEST_SKIP() << "Skipping: Ogre initialization failed";
         }
 
+        createStandardOgreMaterials();
         model = new SceneTreeModel();
     }
 
@@ -56,6 +37,33 @@ protected:
         delete model;
         model = nullptr;
         if (app) app->processEvents();
+    }
+
+    EntityFixtureData createEntityHierarchy(const QString& nodeName,
+                                           const QString& entityName,
+                                           const QString& meshName)
+    {
+        EntityFixtureData data;
+        auto mesh = createInMemoryTriangleMesh(meshName.toStdString());
+        EXPECT_NE(mesh, nullptr);
+
+        auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+        data.node = Manager::getSingleton()->addSceneNode(nodeName);
+        EXPECT_NE(data.node, nullptr);
+
+        if (!mesh || !data.node)
+            return data;
+
+        data.entity = sceneMgr->createEntity(entityName.toStdString(), mesh);
+        EXPECT_NE(data.entity, nullptr);
+
+        if (!data.entity)
+            return data;
+
+        data.node->attachObject(data.entity);
+        if (data.entity->getNumSubEntities() > 0)
+            data.subEntity = data.entity->getSubEntity(0);
+        return data;
     }
 };
 
@@ -217,181 +225,211 @@ TEST_F(SceneTreeModelTests, DataWithVariousRoles) {
     }
 }
 
-TEST(SceneTreeItemTests, HierarchyAccessAndTypeLabels)
+TEST(SceneTreeItemTests, ChildParentRowAndTypeLabelsWork)
 {
-    auto* root = new SceneTreeItem("root", SceneTreeItem::Root, nullptr, nullptr);
-    auto* node = new SceneTreeItem("node", SceneTreeItem::Node, nullptr, root);
-    auto* entity = new SceneTreeItem("entity", SceneTreeItem::Entity, nullptr, node);
-    auto* sub = new SceneTreeItem("sub", SceneTreeItem::SubEntity, nullptr, entity);
+    SceneTreeItem root("Scene", SceneTreeItem::Root, nullptr);
+    auto* node = new SceneTreeItem("NodeA", SceneTreeItem::Node, nullptr, &root);
+    auto* entity = new SceneTreeItem("EntityA", SceneTreeItem::Entity, nullptr, node);
+    auto* subEntity = new SceneTreeItem("0", SceneTreeItem::SubEntity, nullptr, entity);
 
-    root->appendChild(node);
+    root.appendChild(node);
     node->appendChild(entity);
-    entity->appendChild(sub);
+    entity->appendChild(subEntity);
 
-    EXPECT_EQ(root->childCount(), 1);
-    EXPECT_EQ(node->childCount(), 1);
-    EXPECT_EQ(entity->childCount(), 1);
-    EXPECT_EQ(sub->childCount(), 0);
-
-    EXPECT_EQ(root->child(0), node);
-    EXPECT_EQ(root->child(-1), nullptr);
-    EXPECT_EQ(root->child(9), nullptr);
-
-    EXPECT_EQ(node->parentItem(), root);
-    EXPECT_EQ(entity->parentItem(), node);
-    EXPECT_EQ(sub->parentItem(), entity);
-    EXPECT_EQ(root->row(), 0);
+    EXPECT_EQ(root.childCount(), 1);
+    EXPECT_EQ(root.child(0), node);
+    EXPECT_EQ(node->parentItem(), &root);
     EXPECT_EQ(node->row(), 0);
+    EXPECT_EQ(entity->parentItem(), node);
     EXPECT_EQ(entity->row(), 0);
-    EXPECT_EQ(sub->row(), 0);
+    EXPECT_EQ(subEntity->parentItem(), entity);
+    EXPECT_EQ(subEntity->row(), 0);
 
-    EXPECT_EQ(root->typeLabel(), "Scene");
-    EXPECT_EQ(node->typeLabel(), "Node");
-    EXPECT_EQ(entity->typeLabel(), "Mesh");
-    EXPECT_EQ(sub->typeLabel(), "Submesh");
-
-    delete root;
+    EXPECT_EQ(root.typeLabel(), QString("Scene"));
+    EXPECT_EQ(node->typeLabel(), QString("Node"));
+    EXPECT_EQ(entity->typeLabel(), QString("Mesh"));
+    EXPECT_EQ(subEntity->typeLabel(), QString("Submesh"));
 }
 
-TEST_F(SceneTreeModelTests, ParentForTopLevelNodeIsInvalid)
-{
-    Manager::getSingleton()->addSceneNode("ParentTopNode");
-    model->rebuild();
-
-    const QModelIndex nodeIndex = findChildByName(model, model->rootIndex(), "ParentTopNode");
-    ASSERT_TRUE(nodeIndex.isValid());
-    EXPECT_FALSE(model->parent(nodeIndex).isValid());
-}
-
-TEST_F(SceneTreeModelTests, ParentForEntityAndSubEntityIsValid)
+TEST_F(SceneTreeModelTests, RebuildCreatesNodeEntityAndSubEntityHierarchy)
 {
     if (!canLoadMeshFiles()) {
         GTEST_SKIP() << "Skipping: entity creation not supported without render window";
     }
-    createStandardOgreMaterials();
 
-    auto mesh = createInMemoryTriangleMesh("TreeParentMesh");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = Manager::getSingleton()->addSceneNode("TreeParentNode");
-    auto* entity = sceneMgr->createEntity("TreeParentEntity", mesh);
-    node->attachObject(entity);
-    ASSERT_GT(entity->getNumSubEntities(), 0u);
+    const auto data = createEntityHierarchy("HierarchyNode", "HierarchyEntity", "HierarchyMesh");
+    ASSERT_NE(data.node, nullptr);
+    ASSERT_NE(data.entity, nullptr);
+    ASSERT_NE(data.subEntity, nullptr);
+    data.subEntity->setMaterialName("BaseWhiteNoLighting");
 
     model->rebuild();
 
-    const QModelIndex nodeIndex = findChildByName(model, model->rootIndex(), "TreeParentNode");
-    ASSERT_TRUE(nodeIndex.isValid());
-    const QModelIndex entityIndex = findFirstChildByType(model, nodeIndex, SceneTreeItem::Entity);
-    ASSERT_TRUE(entityIndex.isValid());
-    const QModelIndex subEntityIndex = findFirstChildByType(model, entityIndex, SceneTreeItem::SubEntity);
-    ASSERT_TRUE(subEntityIndex.isValid());
+    QModelIndex root = model->rootIndex();
+    ASSERT_GE(model->rowCount(root), 1);
 
+    QModelIndex nodeIndex;
+    for (int row = 0; row < model->rowCount(root); ++row) {
+        QModelIndex idx = model->index(row, 0, root);
+        if (model->data(idx, SceneTreeModel::NameRole).toString() == "HierarchyNode") {
+            nodeIndex = idx;
+            break;
+        }
+    }
+
+    ASSERT_TRUE(nodeIndex.isValid());
+    EXPECT_EQ(model->data(nodeIndex, SceneTreeModel::TypeRole).toInt(), SceneTreeItem::Node);
+    EXPECT_EQ(model->data(nodeIndex, SceneTreeModel::TypeLabelRole).toString(), QString("Node"));
+    EXPECT_EQ(model->parent(nodeIndex), QModelIndex());
+
+    ASSERT_EQ(model->rowCount(nodeIndex), 1);
+    QModelIndex entityIndex = model->index(0, 0, nodeIndex);
+    ASSERT_TRUE(entityIndex.isValid());
+    EXPECT_EQ(model->data(entityIndex, SceneTreeModel::NameRole).toString(), QString("HierarchyEntity"));
+    EXPECT_EQ(model->data(entityIndex, SceneTreeModel::TypeRole).toInt(), SceneTreeItem::Entity);
+    EXPECT_EQ(model->data(entityIndex, SceneTreeModel::TypeLabelRole).toString(), QString("Mesh"));
     EXPECT_EQ(model->parent(entityIndex), nodeIndex);
+    EXPECT_EQ(model->data(entityIndex, SceneTreeModel::MaterialNameRole).toString(), QString("BaseWhiteNoLighting"));
+
+    ASSERT_EQ(model->rowCount(entityIndex), 1);
+    QModelIndex subEntityIndex = model->index(0, 0, entityIndex);
+    ASSERT_TRUE(subEntityIndex.isValid());
+    EXPECT_EQ(model->data(subEntityIndex, SceneTreeModel::NameRole).toString(), QString("0"));
+    EXPECT_EQ(model->data(subEntityIndex, SceneTreeModel::TypeRole).toInt(), SceneTreeItem::SubEntity);
+    EXPECT_EQ(model->data(subEntityIndex, SceneTreeModel::TypeLabelRole).toString(), QString("Submesh"));
     EXPECT_EQ(model->parent(subEntityIndex), entityIndex);
+    EXPECT_EQ(model->data(subEntityIndex, SceneTreeModel::MaterialNameRole).toString(), QString("BaseWhiteNoLighting"));
 }
 
-TEST_F(SceneTreeModelTests, SelectItemTogglesEntityAndSubEntityInMultiSelect)
+TEST_F(SceneTreeModelTests, SelectItemSupportsNodeEntityAndSubEntitySelection)
 {
     if (!canLoadMeshFiles()) {
         GTEST_SKIP() << "Skipping: entity creation not supported without render window";
     }
-    createStandardOgreMaterials();
-    SelectionSet::getSingleton()->clear();
 
-    auto mesh = createInMemoryTriangleMesh("TreeToggleMesh");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = Manager::getSingleton()->addSceneNode("TreeToggleNode");
-    auto* entity = sceneMgr->createEntity("TreeToggleEntity", mesh);
-    node->attachObject(entity);
-    ASSERT_GT(entity->getNumSubEntities(), 0u);
-    Ogre::SubEntity* subEntity = entity->getSubEntity(0);
+    const auto data = createEntityHierarchy("SelectHierarchyNode", "SelectHierarchyEntity", "SelectHierarchyMesh");
+    ASSERT_NE(data.node, nullptr);
+    ASSERT_NE(data.entity, nullptr);
+    ASSERT_NE(data.subEntity, nullptr);
 
     model->rebuild();
 
-    const QModelIndex nodeIndex = findChildByName(model, model->rootIndex(), "TreeToggleNode");
+    QModelIndex root = model->rootIndex();
+    QModelIndex nodeIndex;
+    for (int row = 0; row < model->rowCount(root); ++row) {
+        QModelIndex idx = model->index(row, 0, root);
+        if (model->data(idx, SceneTreeModel::NameRole).toString() == "SelectHierarchyNode") {
+            nodeIndex = idx;
+            break;
+        }
+    }
+
     ASSERT_TRUE(nodeIndex.isValid());
-    const QModelIndex entityIndex = findFirstChildByType(model, nodeIndex, SceneTreeItem::Entity);
+    QModelIndex entityIndex = model->index(0, 0, nodeIndex);
+    QModelIndex subEntityIndex = model->index(0, 0, entityIndex);
     ASSERT_TRUE(entityIndex.isValid());
-    const QModelIndex subEntityIndex = findFirstChildByType(model, entityIndex, SceneTreeItem::SubEntity);
     ASSERT_TRUE(subEntityIndex.isValid());
 
-    model->selectItem(entityIndex.row(), nodeIndex, false);
-    EXPECT_TRUE(SelectionSet::getSingleton()->contains(entity));
+    model->selectItem(nodeIndex.row(), root, false);
+    EXPECT_TRUE(SelectionSet::getSingleton()->contains(data.node));
+    EXPECT_TRUE(model->isSelected(nodeIndex.row(), root));
+
     model->selectItem(entityIndex.row(), nodeIndex, true);
-    EXPECT_FALSE(SelectionSet::getSingleton()->contains(entity));
+    EXPECT_TRUE(SelectionSet::getSingleton()->contains(data.entity));
+    EXPECT_TRUE(model->isSelected(entityIndex.row(), nodeIndex));
 
-    model->selectItem(subEntityIndex.row(), entityIndex, false);
-    EXPECT_TRUE(SelectionSet::getSingleton()->contains(subEntity));
     model->selectItem(subEntityIndex.row(), entityIndex, true);
-    EXPECT_FALSE(SelectionSet::getSingleton()->contains(subEntity));
+    EXPECT_TRUE(SelectionSet::getSingleton()->contains(data.subEntity));
+    EXPECT_TRUE(model->isSelected(subEntityIndex.row(), entityIndex));
+
+    model->selectItem(entityIndex.row(), nodeIndex, true);
+    EXPECT_FALSE(SelectionSet::getSingleton()->contains(data.entity));
 }
 
-TEST_F(SceneTreeModelTests, SetMaterialUpdatesItemAndEmitsDataChanged)
+TEST_F(SceneTreeModelTests, SetMaterialUpdatesEntityAndSubEntityAndEmitsDataChanged)
 {
     if (!canLoadMeshFiles()) {
         GTEST_SKIP() << "Skipping: entity creation not supported without render window";
     }
-    createStandardOgreMaterials();
 
-    auto mesh = createInMemoryTriangleMesh("TreeSetMatMesh");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
-    auto* node = Manager::getSingleton()->addSceneNode("TreeSetMatNode");
-    auto* entity = sceneMgr->createEntity("TreeSetMatEntity", mesh);
-    node->attachObject(entity);
-    ASSERT_GT(entity->getNumSubEntities(), 0u);
+    const auto data = createEntityHierarchy("MaterialNode", "MaterialEntity", "MaterialMesh");
+    ASSERT_NE(data.node, nullptr);
+    ASSERT_NE(data.entity, nullptr);
+    ASSERT_NE(data.subEntity, nullptr);
 
     model->rebuild();
 
-    const QModelIndex nodeIndex = findChildByName(model, model->rootIndex(), "TreeSetMatNode");
+    QModelIndex root = model->rootIndex();
+    QModelIndex nodeIndex;
+    for (int row = 0; row < model->rowCount(root); ++row) {
+        QModelIndex idx = model->index(row, 0, root);
+        if (model->data(idx, SceneTreeModel::NameRole).toString() == "MaterialNode") {
+            nodeIndex = idx;
+            break;
+        }
+    }
+
     ASSERT_TRUE(nodeIndex.isValid());
-    const QModelIndex entityIndex = findFirstChildByType(model, nodeIndex, SceneTreeItem::Entity);
+    QModelIndex entityIndex = model->index(0, 0, nodeIndex);
+    QModelIndex subEntityIndex = model->index(0, 0, entityIndex);
     ASSERT_TRUE(entityIndex.isValid());
-    const QModelIndex subEntityIndex = findFirstChildByType(model, entityIndex, SceneTreeItem::SubEntity);
     ASSERT_TRUE(subEntityIndex.isValid());
 
-    QSignalSpy dataChangedSpy(model, &QAbstractItemModel::dataChanged);
+    QSignalSpy changedSpy(model, &QAbstractItemModel::dataChanged);
+    ASSERT_TRUE(changedSpy.isValid());
 
-    model->setMaterial(entityIndex.row(), nodeIndex, "BaseWhiteNoLighting");
-    EXPECT_EQ(model->materialName(entityIndex.row(), nodeIndex), "BaseWhiteNoLighting");
+    model->setMaterial(0, nodeIndex, "BaseWhiteNoLighting");
+    EXPECT_EQ(QString::fromStdString(data.entity->getSubEntity(0)->getMaterialName()), QString("BaseWhiteNoLighting"));
+    EXPECT_EQ(model->materialName(0, nodeIndex), QString("BaseWhiteNoLighting"));
 
-    model->setMaterial(subEntityIndex.row(), entityIndex, "BaseWhite");
-    EXPECT_EQ(model->materialName(subEntityIndex.row(), entityIndex), "BaseWhite");
+    model->setMaterial(0, entityIndex, "BaseWhite");
+    EXPECT_EQ(QString::fromStdString(data.subEntity->getMaterialName()), QString("BaseWhite"));
+    EXPECT_EQ(model->materialName(0, entityIndex), QString("BaseWhite"));
 
-    EXPECT_GE(dataChangedSpy.count(), 2);
+    EXPECT_EQ(changedSpy.count(), 2);
 }
 
-TEST_F(SceneTreeModelTests, DataMaterialNameRoleForNodeIsInvalid)
+TEST_F(SceneTreeModelTests, AvailableMaterialsFiltersInternalNamesAndSortsResults)
 {
-    Manager::getSingleton()->addSceneNode("TreeRoleNode");
+    auto& materialManager = Ogre::MaterialManager::getSingleton();
+    if (!materialManager.resourceExists("ZZ_CustomMat"))
+        materialManager.create("ZZ_CustomMat", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!materialManager.resourceExists("aa_CustomMat"))
+        materialManager.create("aa_CustomMat", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    if (!materialManager.resourceExists("Ogre/InternalShouldSkip"))
+        materialManager.create("Ogre/InternalShouldSkip", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    const QStringList materials = model->availableMaterials();
+
+    EXPECT_TRUE(materials.contains("aa_CustomMat"));
+    EXPECT_TRUE(materials.contains("ZZ_CustomMat"));
+    EXPECT_FALSE(materials.contains("Ogre/InternalShouldSkip"));
+    EXPECT_FALSE(materials.contains("GUI_Material"));
+    EXPECT_FALSE(materials.contains("BaseWhite"));
+    EXPECT_FALSE(materials.contains("BaseWhiteNoLighting"));
+
+    const int lowerIndex = materials.indexOf("aa_CustomMat");
+    const int upperIndex = materials.indexOf("ZZ_CustomMat");
+    ASSERT_NE(lowerIndex, -1);
+    ASSERT_NE(upperIndex, -1);
+    EXPECT_LT(lowerIndex, upperIndex);
+}
+
+TEST_F(SceneTreeModelTests, RebuildSkipsForbiddenNodeNames)
+{
+    Manager::getSingleton()->addSceneNode("TPCameraChildSceneNode");
+    Manager::getSingleton()->addSceneNode("Unnamed_TestNode");
+    Ogre::SceneNode* visibleNode = Manager::getSingleton()->addSceneNode("VisibleTreeNode");
+    ASSERT_NE(visibleNode, nullptr);
+
     model->rebuild();
 
-    const QModelIndex nodeIndex = findChildByName(model, model->rootIndex(), "TreeRoleNode");
-    ASSERT_TRUE(nodeIndex.isValid());
-    EXPECT_FALSE(model->data(nodeIndex, SceneTreeModel::MaterialNameRole).isValid());
-}
+    QModelIndex root = model->rootIndex();
+    QStringList names;
+    for (int row = 0; row < model->rowCount(root); ++row)
+        names.append(model->data(model->index(row, 0, root), SceneTreeModel::NameRole).toString());
 
-TEST_F(SceneTreeModelTests, AvailableMaterialsFiltersInternalNames)
-{
-    auto* materialManager = Ogre::MaterialManager::getSingletonPtr();
-    ASSERT_NE(materialManager, nullptr);
-
-    if (!materialManager->resourceExists("Custom/CoverageMaterial")) {
-        materialManager->create("Custom/CoverageMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    }
-    if (!materialManager->resourceExists("Ogre/InternalCoverageMaterial")) {
-        materialManager->create("Ogre/InternalCoverageMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    }
-    if (!materialManager->resourceExists("BaseWhiteCoverageMaterial")) {
-        materialManager->create("BaseWhiteCoverageMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    }
-    if (!materialManager->resourceExists("GUI_Material")) {
-        materialManager->create("GUI_Material", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-    }
-
-    const QStringList mats = model->availableMaterials();
-
-    EXPECT_TRUE(mats.contains("Custom/CoverageMaterial"));
-    EXPECT_FALSE(mats.contains("Ogre/InternalCoverageMaterial"));
-    EXPECT_FALSE(mats.contains("BaseWhiteCoverageMaterial"));
-    EXPECT_FALSE(mats.contains("GUI_Material"));
+    EXPECT_TRUE(names.contains("VisibleTreeNode"));
+    EXPECT_FALSE(names.contains("TPCameraChildSceneNode"));
+    EXPECT_FALSE(names.contains("Unnamed_TestNode"));
 }

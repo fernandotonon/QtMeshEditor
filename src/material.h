@@ -11,12 +11,12 @@ class Material;
 class Material : public QMainWindow
 {
     Q_OBJECT
-    
+
 public:
     explicit Material(QWidget *parent = nullptr);
     virtual ~Material();
     void SetMaterialList(const QStringList &_list);
-    
+
 private slots:
     void on_listMaterial_itemSelectionChanged();
 

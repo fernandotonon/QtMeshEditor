@@ -57,12 +57,7 @@ EditorViewport::EditorViewport(MainWindow* parent, int index)
 
 EditorViewport::~EditorViewport()
 {
-    if(m_pOgreWidget)
-    {
-        delete m_pOgreWidget;
-        m_pOgreWidget = nullptr;
-    }
-
+    m_pOgreWidget = nullptr;
     destroy();
 }
 
