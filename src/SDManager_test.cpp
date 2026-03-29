@@ -198,6 +198,20 @@ TEST_F(SDManagerTest, RecommendedModels)
     EXPECT_GT(first["size"].toLongLong(), 0);
 }
 
+TEST_F(SDManagerTest, RecommendedModelsInfoIncludesExpectedMetadata)
+{
+    const QVariantList models = manager->getRecommendedModelsInfo();
+    ASSERT_FALSE(models.isEmpty());
+
+    const QVariantMap info = models.first().toMap();
+    EXPECT_TRUE(info.contains("name"));
+    EXPECT_TRUE(info.contains("fileName"));
+    EXPECT_TRUE(info.contains("url"));
+    EXPECT_TRUE(info.contains("description"));
+    EXPECT_TRUE(info.contains("size"));
+    EXPECT_TRUE(info.contains("isDownloaded"));
+}
+
 TEST_F(SDManagerTest, ModelFileExistsNonexistent)
 {
     EXPECT_FALSE(manager->modelFileExists("nonexistent_model"));
@@ -323,6 +337,21 @@ TEST_F(SDManagerTest, SetAutoLoadModel)
     manager->setAutoLoadModel(original);
 }
 
+TEST_F(SDManagerTest, SetAutoLoadModelEmitsSignalOnlyOnChange)
+{
+    const bool original = manager->autoLoadModel();
+    QSignalSpy spy(manager, &SDManager::autoLoadModelChanged);
+
+    manager->setAutoLoadModel(original);
+    EXPECT_EQ(spy.count(), 0);
+
+    manager->setAutoLoadModel(!original);
+    EXPECT_EQ(spy.count(), 1);
+
+    manager->setAutoLoadModel(original);
+    EXPECT_EQ(spy.count(), 2);
+}
+
 // ---- getSettings / setSettings ----
 
 TEST_F(SDManagerTest, GetSettingsRoundtrip)
@@ -382,6 +411,55 @@ TEST_F(SDManagerTest, SaveSettingsPersistsCoreFields)
     QDir(tempDir).removeRecursively();
 }
 
+TEST_F(SDManagerTest, LoadSettingsRestoresAdvancedFieldsAndLastModel)
+{
+    const QString originalDir = manager->modelsDirectory();
+    const bool originalAutoLoad = manager->autoLoadModel();
+    const SDSettings originalSettings = manager->getSettings();
+    const QString originalLastModel = manager->lastModelName();
+
+    QSettings settings;
+    settings.beginGroup("StableDiffusion");
+    settings.setValue("modelsDirectory", "/tmp/sdmanager-load-settings");
+    settings.setValue("width", 704);
+    settings.setValue("height", 448);
+    settings.setValue("steps", 11);
+    settings.setValue("cfgScale", 6.25);
+    settings.setValue("seed", static_cast<qlonglong>(123456789));
+    settings.setValue("negativePrompt", "loaded negative");
+    settings.setValue("sampleMethod", 3);
+    settings.setValue("threads", 7);
+    settings.setValue("gpuLayers", 12);
+    settings.setValue("autoLoadModel", false);
+    settings.setValue("lastModel", "loaded-model");
+    settings.endGroup();
+
+    manager->loadSettings();
+
+    const SDSettings loaded = manager->getSettings();
+    EXPECT_EQ(manager->modelsDirectory(), QString("/tmp/sdmanager-load-settings"));
+    EXPECT_EQ(loaded.width, 704);
+    EXPECT_EQ(loaded.height, 448);
+    EXPECT_EQ(loaded.steps, 11);
+    EXPECT_FLOAT_EQ(loaded.cfgScale, 6.25f);
+    EXPECT_EQ(loaded.seed, 123456789);
+    EXPECT_EQ(loaded.negativePrompt, QString("loaded negative"));
+    EXPECT_EQ(loaded.sampleMethod, 3);
+    EXPECT_EQ(loaded.threads, 7);
+    EXPECT_EQ(loaded.gpuLayers, 12);
+    EXPECT_FALSE(manager->autoLoadModel());
+    EXPECT_EQ(manager->lastModelName(), QString("loaded-model"));
+
+    manager->setModelsDirectory(originalDir);
+    manager->setSettings(originalSettings);
+    manager->setAutoLoadModel(originalAutoLoad);
+    settings.beginGroup("StableDiffusion");
+    settings.setValue("lastModel", originalLastModel);
+    settings.endGroup();
+    manager->loadSettings();
+    manager->saveSettings();
+}
+
 // ---- setModelsDirectory ----
 
 TEST_F(SDManagerTest, SetModelsDirectorySignal)
@@ -399,6 +477,28 @@ TEST_F(SDManagerTest, SetModelsDirectorySignal)
 
     // Cleanup
     QDir(tempDir).removeRecursively();
+}
+
+TEST_F(SDManagerTest, SetModelsDirectorySameValueDoesNotEmitSignal)
+{
+    QSignalSpy spy(manager, &SDManager::modelsDirectoryChanged);
+    manager->setModelsDirectory(manager->modelsDirectory());
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(SDManagerTest, ScanForModelsCreatesMissingDirectory)
+{
+    const QString originalDir = manager->modelsDirectory();
+    const QString missingDir = QDir::temp().filePath("qtmesh_sd_missing_dir");
+    QDir(missingDir).removeRecursively();
+
+    manager->setModelsDirectory(missingDir);
+    manager->scanForModels();
+
+    EXPECT_TRUE(QDir(missingDir).exists());
+
+    manager->setModelsDirectory(originalDir);
+    QDir(missingDir).removeRecursively();
 }
 
 // ---- Same value doesn't emit ----
@@ -425,6 +525,73 @@ TEST_F(SDManagerTest, SetCfgScaleSameValueNoSignal)
     QSignalSpy spy(manager, &SDManager::settingsChanged);
     manager->setCfgScale(current);
     EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(SDManagerTest, SetImageHeightSameValueNoSignal)
+{
+    const int current = manager->imageHeight();
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setImageHeight(current);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(SDManagerTest, SetNegativePromptSameValueNoSignal)
+{
+    const QString current = manager->negativePrompt();
+    QSignalSpy spy(manager, &SDManager::settingsChanged);
+    manager->setNegativePrompt(current);
+    EXPECT_EQ(spy.count(), 0);
+}
+
+TEST_F(SDManagerTest, TryAutoLoadModelDoesNothingWhenDisabled)
+{
+    const bool originalAutoLoad = manager->autoLoadModel();
+    QSignalSpy startedSpy(manager, &SDManager::modelLoadStarted);
+    QSignalSpy loadingSpy(manager, &SDManager::isLoadingChanged);
+
+    manager->setAutoLoadModel(false);
+    manager->tryAutoLoadModel();
+
+    EXPECT_EQ(startedSpy.count(), 0);
+    EXPECT_EQ(loadingSpy.count(), 0);
+    EXPECT_FALSE(manager->isLoading());
+
+    manager->setAutoLoadModel(originalAutoLoad);
+}
+
+TEST_F(SDManagerTest, TryAutoLoadModelWithMissingModelDoesNotStartLoading)
+{
+    const QString originalDir = manager->modelsDirectory();
+    const bool originalAutoLoad = manager->autoLoadModel();
+    const SDSettings originalSettings = manager->getSettings();
+    const QString originalLastModel = manager->lastModelName();
+
+    QSettings settings;
+    settings.beginGroup("StableDiffusion");
+    settings.setValue("modelsDirectory", QDir::temp().filePath("qtmesh_sd_autoload_missing"));
+    settings.setValue("lastModel", "missing-model");
+    settings.setValue("autoLoadModel", true);
+    settings.endGroup();
+
+    manager->loadSettings();
+
+    QSignalSpy startedSpy(manager, &SDManager::modelLoadStarted);
+    QSignalSpy loadingSpy(manager, &SDManager::isLoadingChanged);
+    manager->tryAutoLoadModel();
+
+    EXPECT_EQ(startedSpy.count(), 0);
+    EXPECT_EQ(loadingSpy.count(), 0);
+    EXPECT_FALSE(manager->isLoading());
+    EXPECT_FALSE(manager->isModelLoaded());
+
+    manager->setModelsDirectory(originalDir);
+    manager->setSettings(originalSettings);
+    manager->setAutoLoadModel(originalAutoLoad);
+    settings.beginGroup("StableDiffusion");
+    settings.setValue("lastModel", originalLastModel);
+    settings.endGroup();
+    manager->loadSettings();
+    manager->saveSettings();
 }
 
 // ---- qmlInstance ----

@@ -5,10 +5,13 @@
 #include <QSignalSpy>
 #include <QKeyEvent>
 #include <QInputDialog>
+#include <QDialog>
 #include <QCoreApplication>
 #include <QLabel>
 #include <QGroupBox>
 #include <QPushButton>
+#include <QTimer>
+#include <array>
 #include "PrimitivesWidget.h"
 #include "Manager.h"
 #include "SelectionSet.h"
@@ -44,6 +47,67 @@ protected:
 private:
     QApplication* app = nullptr;
 };
+
+namespace {
+struct PrimitiveDialogCase {
+    QString defaultName;
+    QString customName;
+    void (PrimitivesWidget::*slot)();
+};
+
+const std::array<PrimitiveDialogCase, 11> kPrimitiveDialogCases{{
+    {QStringLiteral("Cube"), QStringLiteral("DialogCube"), &PrimitivesWidget::createCube},
+    {QStringLiteral("Sphere"), QStringLiteral("DialogSphere"), &PrimitivesWidget::createSphere},
+    {QStringLiteral("Plane"), QStringLiteral("DialogPlane"), &PrimitivesWidget::createPlane},
+    {QStringLiteral("Cylinder"), QStringLiteral("DialogCylinder"), &PrimitivesWidget::createCylinder},
+    {QStringLiteral("Cone"), QStringLiteral("DialogCone"), &PrimitivesWidget::createCone},
+    {QStringLiteral("Torus"), QStringLiteral("DialogTorus"), &PrimitivesWidget::createTorus},
+    {QStringLiteral("Tube"), QStringLiteral("DialogTube"), &PrimitivesWidget::createTube},
+    {QStringLiteral("Capsule"), QStringLiteral("DialogCapsule"), &PrimitivesWidget::createCapsule},
+    {QStringLiteral("IcoSphere"), QStringLiteral("DialogIcoSphere"), &PrimitivesWidget::createIcoSphere},
+    {QStringLiteral("RoundedBox"), QStringLiteral("DialogRoundedBox"), &PrimitivesWidget::createRoundedBox},
+    {QStringLiteral("Spring"), QStringLiteral("DialogSpring"), &PrimitivesWidget::createSpring},
+}};
+
+Ogre::SceneNode* createPlainNode(const QString& nodeName, const std::string& meshName)
+{
+    auto* node = Manager::getSingleton()->addSceneNode(nodeName);
+    if (!node)
+        return nullptr;
+
+    auto mesh = createInMemoryTriangleMesh(meshName);
+    if (!mesh)
+        return nullptr;
+
+    if (!Manager::getSingleton()->createEntity(node, mesh))
+        return nullptr;
+
+    SelectionSet::getSingleton()->clear();
+    return node;
+}
+
+void driveModalInputDialogResponse(bool& handled, const QString& text, QDialog::DialogCode result)
+{
+    QTimer::singleShot(0, [&handled, text, result]() {
+        auto* dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
+        if (!dialog) {
+            const auto widgets = QApplication::topLevelWidgets();
+            for (QWidget* widget : widgets) {
+                dialog = qobject_cast<QInputDialog*>(widget);
+                if (dialog && dialog->isVisible())
+                    break;
+            }
+        }
+
+        if (!dialog)
+            return;
+
+        handled = true;
+        dialog->setTextValue(text);
+        dialog->done(result);
+    });
+}
+} // namespace
 
 TEST_F(PrimitivesWidgetTest, CreateCube)
 {
@@ -1286,4 +1350,253 @@ TEST_F(PrimitivesWidgetTest, PlaneUiShowsTwoSizeFieldsAndTwoSegments)
     EXPECT_TRUE(edit_numSegZ->isHidden());
 
     Manager::getSingleton()->destroySceneNode("UiPlane");
+}
+
+TEST_F(PrimitivesWidgetTest, CreatePrimitiveSlotsUseDefaultNamesWhenAcceptedWithoutText)
+{
+    PrimitivesWidget widget;
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+
+    for (const auto& testCase : kPrimitiveDialogCases) {
+        bool handled = false;
+        driveModalInputDialogResponse(handled, QString(), QDialog::Accepted);
+
+        (widget.*(testCase.slot))();
+
+        EXPECT_TRUE(handled) << testCase.defaultName.toStdString();
+        ASSERT_TRUE(sceneMgr->hasSceneNode(testCase.defaultName.toStdString()))
+            << testCase.defaultName.toStdString();
+        Manager::getSingleton()->destroySceneNode(testCase.defaultName);
+    }
+}
+
+TEST_F(PrimitivesWidgetTest, CreatePrimitiveSlotsUseCustomNamesWhenAccepted)
+{
+    PrimitivesWidget widget;
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+
+    for (const auto& testCase : kPrimitiveDialogCases) {
+        bool handled = false;
+        driveModalInputDialogResponse(handled, testCase.customName, QDialog::Accepted);
+
+        (widget.*(testCase.slot))();
+
+        EXPECT_TRUE(handled) << testCase.customName.toStdString();
+        ASSERT_TRUE(sceneMgr->hasSceneNode(testCase.customName.toStdString()))
+            << testCase.customName.toStdString();
+        Manager::getSingleton()->destroySceneNode(testCase.customName);
+    }
+}
+
+TEST_F(PrimitivesWidgetTest, CreatePrimitiveSlotsRejectDialogDoesNotCreateNodes)
+{
+    PrimitivesWidget widget;
+    const int initialNodeCount = Manager::getSingleton()->getSceneNodes().count();
+
+    for (const auto& testCase : kPrimitiveDialogCases) {
+        bool handled = false;
+        driveModalInputDialogResponse(handled, QString(), QDialog::Rejected);
+
+        (widget.*(testCase.slot))();
+
+        EXPECT_TRUE(handled) << testCase.defaultName.toStdString();
+        EXPECT_EQ(Manager::getSingleton()->getSceneNodes().count(), initialNodeCount);
+        EXPECT_FALSE(Manager::getSingleton()->getSceneMgr()->hasSceneNode(testCase.defaultName.toStdString()));
+        EXPECT_FALSE(Manager::getSingleton()->getSceneMgr()->hasSceneNode(testCase.customName.toStdString()));
+    }
+}
+
+TEST_F(PrimitivesWidgetTest, ConeUiShowsRadiusHeightAndBaseHeightSegments)
+{
+    PrimitivesWidget widget;
+    PrimitiveObject::createCone("UiCone");
+    SelectionSet::getSingleton()->selectOne(
+        Manager::getSingleton()->getSceneMgr()->getSceneNode("UiCone"));
+
+    auto* edit_type = widget.findChild<QLineEdit*>("edit_type");
+    auto* edit_radius = widget.findChild<QDoubleSpinBox*>("edit_radius");
+    auto* edit_height = widget.findChild<QDoubleSpinBox*>("edit_height");
+    auto* edit_numSegX = widget.findChild<QSpinBox*>("edit_numSegX");
+    auto* edit_numSegY = widget.findChild<QSpinBox*>("edit_numSegY");
+    auto* edit_numSegZ = widget.findChild<QSpinBox*>("edit_numSegZ");
+    auto* label_numSegX = widget.findChild<QLabel*>("label_numSegX");
+    auto* label_numSegZ = widget.findChild<QLabel*>("label_numSegZ");
+
+    EXPECT_EQ(edit_type->text(), "Cone");
+    EXPECT_FALSE(edit_radius->isHidden());
+    EXPECT_FALSE(edit_height->isHidden());
+    EXPECT_FALSE(edit_numSegX->isHidden());
+    EXPECT_TRUE(edit_numSegY->isHidden());
+    EXPECT_FALSE(edit_numSegZ->isHidden());
+    EXPECT_EQ(label_numSegX->text(), "Seg Base");
+    EXPECT_EQ(label_numSegZ->text(), "Seg Height");
+
+    Manager::getSingleton()->destroySceneNode("UiCone");
+}
+
+TEST_F(PrimitivesWidgetTest, SpringUiShowsOnlyMeshSegmentControls)
+{
+    PrimitivesWidget widget;
+    PrimitiveObject::createSpring("UiSpring");
+    SelectionSet::getSingleton()->selectOne(
+        Manager::getSingleton()->getSceneMgr()->getSceneNode("UiSpring"));
+
+    auto* edit_type = widget.findChild<QLineEdit*>("edit_type");
+    auto* gb_Geometry = widget.findChild<QGroupBox*>("gb_Geometry");
+    auto* gb_Mesh = widget.findChild<QGroupBox*>("gb_Mesh");
+    auto* edit_radius = widget.findChild<QDoubleSpinBox*>("edit_radius");
+    auto* edit_height = widget.findChild<QDoubleSpinBox*>("edit_height");
+    auto* edit_numSegX = widget.findChild<QSpinBox*>("edit_numSegX");
+    auto* edit_numSegY = widget.findChild<QSpinBox*>("edit_numSegY");
+    auto* edit_numSegZ = widget.findChild<QSpinBox*>("edit_numSegZ");
+    auto* edit_UTile = widget.findChild<QDoubleSpinBox*>("edit_UTile");
+    auto* edit_VTile = widget.findChild<QDoubleSpinBox*>("edit_VTile");
+    auto* label_numSegX = widget.findChild<QLabel*>("label_numSegX");
+    auto* label_numSegY = widget.findChild<QLabel*>("label_numSegY");
+
+    EXPECT_EQ(edit_type->text(), "Spring");
+    EXPECT_TRUE(gb_Geometry->isHidden());
+    EXPECT_FALSE(gb_Mesh->isHidden());
+    EXPECT_TRUE(edit_radius->isHidden());
+    EXPECT_TRUE(edit_height->isHidden());
+    EXPECT_FALSE(edit_numSegX->isHidden());
+    EXPECT_FALSE(edit_numSegY->isHidden());
+    EXPECT_TRUE(edit_numSegZ->isHidden());
+    EXPECT_TRUE(edit_UTile->isHidden());
+    EXPECT_TRUE(edit_VTile->isHidden());
+    EXPECT_EQ(label_numSegX->text(), "Circle Segments");
+    EXPECT_EQ(label_numSegY->text(), "Path Segments");
+
+    Manager::getSingleton()->destroySceneNode("UiSpring");
+}
+
+TEST_F(PrimitivesWidgetTest, MixedPrimitiveAndPlainNodesStillTrackMatchingPrimitiveSelection)
+{
+    PrimitivesWidget widget;
+    PrimitiveObject::createCube("MixedCubeA");
+    PrimitiveObject::createCube("MixedCubeB");
+    auto* plainNode = createPlainNode("MixedPlainNode", "mixed_plain_node_mesh");
+    ASSERT_NE(plainNode, nullptr);
+
+    auto* selection = SelectionSet::getSingleton();
+    selection->selectOne(plainNode);
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("MixedCubeA"));
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("MixedCubeB"));
+
+    auto* edit_type = widget.findChild<QLineEdit*>("edit_type");
+    ASSERT_NE(edit_type, nullptr);
+    EXPECT_EQ(edit_type->text(), "Cube");
+
+    const auto& selectedPrimitives = widget.getSelectedPrimitiveList();
+    ASSERT_EQ(selectedPrimitives.count(), 2);
+    EXPECT_EQ(selectedPrimitives[0]->getType(), PrimitiveObject::AP_CUBE);
+    EXPECT_EQ(selectedPrimitives[1]->getType(), PrimitiveObject::AP_CUBE);
+
+    Manager::getSingleton()->destroySceneNode("MixedCubeA");
+    Manager::getSingleton()->destroySceneNode("MixedCubeB");
+    Manager::getSingleton()->destroySceneNode("MixedPlainNode");
+}
+
+TEST_F(PrimitivesWidgetTest, MultipleSelectedCubesShowDashValuesAndShareSizeEdits)
+{
+    PrimitivesWidget widget;
+    PrimitiveObject::createCube("DashCubeA");
+    PrimitiveObject::createCube("DashCubeB");
+
+    auto* cubeA = PrimitiveObject::getPrimitiveFromSceneNode(
+        Manager::getSingleton()->getSceneMgr()->getSceneNode("DashCubeA"));
+    auto* cubeB = PrimitiveObject::getPrimitiveFromSceneNode(
+        Manager::getSingleton()->getSceneMgr()->getSceneNode("DashCubeB"));
+    ASSERT_NE(cubeA, nullptr);
+    ASSERT_NE(cubeB, nullptr);
+
+    cubeA->setSizeX(2.5f);
+    cubeB->setSizeX(5.5f);
+
+    auto* selection = SelectionSet::getSingleton();
+    selection->selectOne(Manager::getSingleton()->getSceneMgr()->getSceneNode("DashCubeA"));
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("DashCubeB"));
+
+    auto* edit_sizeX = widget.findChild<QDoubleSpinBox*>("edit_sizeX");
+    ASSERT_NE(edit_sizeX, nullptr);
+
+    EXPECT_EQ(edit_sizeX->specialValueText(), "-");
+    EXPECT_DOUBLE_EQ(edit_sizeX->value(), edit_sizeX->minimum());
+
+    edit_sizeX->setValue(7.25);
+    EXPECT_FLOAT_EQ(cubeA->getSizeX(), 7.25f);
+    EXPECT_FLOAT_EQ(cubeB->getSizeX(), 7.25f);
+
+    Manager::getSingleton()->destroySceneNode("DashCubeA");
+    Manager::getSingleton()->destroySceneNode("DashCubeB");
+}
+
+TEST_F(PrimitivesWidgetTest, MultipleSelectedTubesShareRadiusHeightAndUvEdits)
+{
+    PrimitivesWidget widget;
+    PrimitiveObject::createTube("TubeEditA");
+    PrimitiveObject::createTube("TubeEditB");
+
+    auto* tubeA = PrimitiveObject::getPrimitiveFromSceneNode(
+        Manager::getSingleton()->getSceneMgr()->getSceneNode("TubeEditA"));
+    auto* tubeB = PrimitiveObject::getPrimitiveFromSceneNode(
+        Manager::getSingleton()->getSceneMgr()->getSceneNode("TubeEditB"));
+    ASSERT_NE(tubeA, nullptr);
+    ASSERT_NE(tubeB, nullptr);
+
+    auto* selection = SelectionSet::getSingleton();
+    selection->selectOne(Manager::getSingleton()->getSceneMgr()->getSceneNode("TubeEditA"));
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("TubeEditB"));
+
+    auto* edit_radius2 = widget.findChild<QDoubleSpinBox*>("edit_radius2");
+    auto* edit_height = widget.findChild<QDoubleSpinBox*>("edit_height");
+    auto* toggle_uv = widget.findChild<QPushButton*>("pb_switchUV");
+    ASSERT_NE(edit_radius2, nullptr);
+    ASSERT_NE(edit_height, nullptr);
+    ASSERT_NE(toggle_uv, nullptr);
+
+    edit_radius2->setValue(0.25);
+    edit_height->setValue(9.5);
+    if (!toggle_uv->isChecked())
+        toggle_uv->click();
+    QCoreApplication::processEvents();
+
+    EXPECT_FLOAT_EQ(tubeA->getInnerRadius(), 0.25f);
+    EXPECT_FLOAT_EQ(tubeB->getInnerRadius(), 0.25f);
+
+    Manager::getSingleton()->destroySceneNode("TubeEditA");
+    Manager::getSingleton()->destroySceneNode("TubeEditB");
+}
+
+TEST_F(PrimitivesWidgetTest, MultipleSelectedSpringsShareSegmentEdits)
+{
+    PrimitivesWidget widget;
+    PrimitiveObject::createSpring("SpringEditA");
+    PrimitiveObject::createSpring("SpringEditB");
+
+    auto* springA = PrimitiveObject::getPrimitiveFromSceneNode(
+        Manager::getSingleton()->getSceneMgr()->getSceneNode("SpringEditA"));
+    auto* springB = PrimitiveObject::getPrimitiveFromSceneNode(
+        Manager::getSingleton()->getSceneMgr()->getSceneNode("SpringEditB"));
+    ASSERT_NE(springA, nullptr);
+    ASSERT_NE(springB, nullptr);
+
+    auto* selection = SelectionSet::getSingleton();
+    selection->selectOne(Manager::getSingleton()->getSceneMgr()->getSceneNode("SpringEditA"));
+    selection->append(Manager::getSingleton()->getSceneMgr()->getSceneNode("SpringEditB"));
+
+    auto* edit_numSegX = widget.findChild<QSpinBox*>("edit_numSegX");
+    auto* edit_numSegY = widget.findChild<QSpinBox*>("edit_numSegY");
+    ASSERT_NE(edit_numSegX, nullptr);
+    ASSERT_NE(edit_numSegY, nullptr);
+
+    edit_numSegX->setValue(12);
+    edit_numSegY->setValue(42);
+    QCoreApplication::processEvents();
+
+    EXPECT_EQ(springA->getNumSegX(), 12);
+    EXPECT_EQ(springB->getNumSegX(), 12);
+
+    Manager::getSingleton()->destroySceneNode("SpringEditA");
+    Manager::getSingleton()->destroySceneNode("SpringEditB");
 }
