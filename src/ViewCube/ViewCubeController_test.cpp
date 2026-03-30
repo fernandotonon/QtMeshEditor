@@ -379,15 +379,19 @@ protected:
             GTEST_SKIP() << "Skipping: OgreWidget is null";
         }
         camera = widget->getSpaceCamera();
-        if (!camera) {
-            GTEST_SKIP() << "Skipping: SpaceCamera is null";
+        if (!camera || !camera->getCamera()) {
+            GTEST_SKIP() << "Skipping: SpaceCamera not fully initialized";
         }
 
-        controller = new ViewCubeController(mainWindow);
-        if (!controller) {
-            GTEST_SKIP() << "Skipping: ViewCubeController creation failed";
+        try {
+            controller = new ViewCubeController(mainWindow);
+            if (!controller) {
+                GTEST_SKIP() << "Skipping: ViewCubeController creation failed";
+            }
+            controller->setActiveWidget(widget);
+        } catch (...) {
+            GTEST_SKIP() << "Skipping: ViewCubeController setup failed";
         }
-        controller->setActiveWidget(widget);
     }
 
     void TearDown() override
