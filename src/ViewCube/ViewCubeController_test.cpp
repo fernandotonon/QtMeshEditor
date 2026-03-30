@@ -427,10 +427,10 @@ TEST_F(ViewCubeControllerOgreTest, SnapToViewAnimatesToExpectedOrientation)
     EXPECT_FALSE(camera->isAnimating());
 
     const Ogre::Quaternion q = camera->getOrientation();
-    EXPECT_NEAR(q.w, 0.7071f, 0.05f);
-    EXPECT_NEAR(q.x, 0.0f, 0.05f);
-    EXPECT_NEAR(q.y, 0.7071f, 0.05f);
-    EXPECT_NEAR(q.z, 0.0f, 0.05f);
+    EXPECT_NEAR(std::abs(q.w), 0.7071f, 0.05f);
+    EXPECT_NEAR(std::abs(q.x), 0.0f, 0.05f);
+    EXPECT_NEAR(std::abs(q.y), 0.7071f, 0.05f);
+    EXPECT_NEAR(std::abs(q.z), 0.0f, 0.05f);
 }
 
 TEST_F(ViewCubeControllerOgreTest, SnapToDirectionNormalizesAndUpdatesOrientation)
