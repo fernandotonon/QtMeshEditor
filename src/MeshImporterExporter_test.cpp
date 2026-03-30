@@ -89,11 +89,13 @@ static Ogre::TexturePtr createSolidTexture2D(const std::string& name, uint32_t a
     }
 
     Ogre::HardwarePixelBufferSharedPtr pixelBuffer = texture->getBuffer(0, 0);
-    if (pixelBuffer.isNull()) {
+    if (!pixelBuffer) {
         return {};
     }
-    const Ogre::PixelBox pixelBox = pixelBuffer->lock(Ogre::HardwareBuffer::HBL_DISCARD);
-    auto* pixelData = static_cast<uint32_t*>(pixelBox.data);
+
+    const Ogre::PixelBox& pixelBox =
+        pixelBuffer->lock(Ogre::Box(0, 0, 1, 1), Ogre::HardwareBuffer::HBL_DISCARD);
+    auto* pixelData = reinterpret_cast<uint32_t*>(pixelBox.data);
     pixelData[0] = argb;
     pixelBuffer->unlock();
     texture->load();
@@ -1001,8 +1003,8 @@ TEST_F(SceneSaveLoadTest, Exporter_TexturedColladaExportWritesConvertedTextureFi
         Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     auto* pass = mat->getTechnique(0)->getPass(0);
 
-    ASSERT_TRUE(!createSolidTexture2D("textured_collada_diffuse.jpg", 0xFF00AAFF).isNull());
-    ASSERT_TRUE(!createSolidTexture2D("textured_collada_normal.png", 0xFF8080FF).isNull());
+    ASSERT_TRUE(static_cast<bool>(createSolidTexture2D("textured_collada_diffuse.jpg", 0xFF00AAFF)));
+    ASSERT_TRUE(static_cast<bool>(createSolidTexture2D("textured_collada_normal.png", 0xFF8080FF)));
 
     pass->createTextureUnitState("textured_collada_diffuse.jpg");
     auto* normalTus = pass->createTextureUnitState("textured_collada_normal.png");
