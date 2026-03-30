@@ -819,5 +819,48 @@ TEST_F(SelectionSetTests, RemoveNonExistentEntityAndSubEntityReturnFalse)
     Manager::getSingleton()->destroySceneNode(node);
 }
 
+TEST_F(SelectionSetTests, SingletonKillAndRecreateProducesValidInstance)
+{
+    SelectionSet* first = SelectionSet::getSingleton();
+    ASSERT_NE(first, nullptr);
+
+    SelectionSet::kill();
+
+    SelectionSet* second = SelectionSet::getSingleton();
+    ASSERT_NE(second, nullptr);
+}
+
+TEST_F(SelectionSetTests, GetResolvedEntitiesWithEmptySelectionReturnsEmptyList)
+{
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    const QList<Ogre::Entity*> resolved = selectionSet->getResolvedEntities();
+    EXPECT_TRUE(resolved.isEmpty());
+}
+
+TEST_F(SelectionSetTests, GetSelectionCenterWithMultipleNodesAveragesPositions)
+{
+    SelectionSet* selectionSet = SelectionSet::getSingleton();
+    selectionSet->clear();
+
+    Ogre::SceneNode* node1 = Manager::getSingleton()->addSceneNode("center_nodes_1");
+    Ogre::SceneNode* node2 = Manager::getSingleton()->addSceneNode("center_nodes_2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+
+    node1->setPosition(1.0f, 2.0f, 3.0f);
+    node2->setPosition(5.0f, 6.0f, 7.0f);
+    selectionSet->append(node1);
+    selectionSet->append(node2);
+
+    const Ogre::Vector3 center = selectionSet->getSelectionCenter();
+    EXPECT_EQ(center, Ogre::Vector3(3.0f, 4.0f, 5.0f));
+
+    selectionSet->clear();
+    Manager::getSingleton()->destroySceneNode(node1);
+    Manager::getSingleton()->destroySceneNode(node2);
+}
+
 // NOTE: GetSelectionCenterWithSubEntity and all subsequent tests were removed
 // because they crash in CI (PrimitiveObject::createCube requires GL context).
