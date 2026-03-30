@@ -5,6 +5,10 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSettings>
+#include <vector>
+#include <OgreMeshManager.h>
+#include <OgreHardwareBufferManager.h>
+#include <OgreMaterialManager.h>
 #include "CLIPipeline.h"
 #include "MeshImporterExporter.h"
 #include "SentryReporter.h"
@@ -19,6 +23,50 @@ QString testDataDir()
     dir.cdUp(); // bin -> build_local
     dir.cdUp(); // build_local -> project root
     return dir.absoluteFilePath("media/models");
+}
+
+Ogre::MeshPtr createTwoSubmeshSharedMesh(const std::string& name)
+{
+    Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* decl = mesh->sharedVertexData->vertexDeclaration;
+    decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+
+    mesh->sharedVertexData->vertexCount = 4;
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl->getVertexSize(0), mesh->sharedVertexData->vertexCount,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    const float verts[] = {
+        0.0f, 0.0f, 0.0f,
+        1.0f, 0.0f, 0.0f,
+        1.0f, 1.0f, 0.0f,
+        0.0f, 1.0f, 0.0f
+    };
+    vbuf->writeData(0, sizeof(verts), verts, true);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf);
+
+    auto makeSubMesh = [&](const std::string& subName, std::initializer_list<uint16_t> indices) {
+        Ogre::SubMesh* sub = mesh->createSubMesh(subName);
+        sub->useSharedVertices = true;
+        auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+            Ogre::HardwareIndexBuffer::IT_16BIT,
+            static_cast<size_t>(indices.size()),
+            Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+        std::vector<uint16_t> data(indices);
+        ibuf->writeData(0, sizeof(uint16_t) * data.size(), data.data(), true);
+        sub->indexData->indexBuffer = ibuf;
+        sub->indexData->indexCount = data.size();
+    };
+
+    makeSubMesh("sub0", {0, 1, 2});
+    makeSubMesh("sub1", {0, 2, 3});
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1, -1, -1, 2, 2, 1));
+    mesh->_setBoundingSphereRadius(3.0f);
+    mesh->load();
+    return mesh;
 }
 } // anonymous namespace
 
@@ -177,6 +225,38 @@ TEST_F(CLIPipelineOgreTest, ExtractMeshInfo_AnimatedEntity)
     EXPECT_EQ(info.animations.size(), 1);
     EXPECT_EQ(info.animations[0].name, "TestAnim");
     EXPECT_FLOAT_EQ(info.animations[0].duration, 1.0f);
+}
+
+TEST_F(CLIPipelineOgreTest, ExtractMeshInfo_DeduplicatesMaterialAndTextureNames)
+{
+    auto mesh = createTwoSubmeshSharedMesh("cli_test_two_submesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("cli_test_two_submesh_node");
+    auto* entity = sceneMgr->createEntity("cli_test_two_submesh_entity", mesh);
+    ASSERT_NE(entity, nullptr);
+    node->attachObject(entity);
+    ASSERT_EQ(entity->getNumSubEntities(), 2u);
+
+    Ogre::MaterialPtr material = Ogre::MaterialManager::getSingleton().create(
+        "cli_test_mat_with_textures",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* pass = material->getTechnique(0)->getPass(0);
+    pass->createTextureUnitState("albedo.png");
+    pass->createTextureUnitState("albedo.png"); // duplicate name
+    pass->createTextureUnitState("normal.png");
+
+    entity->getSubEntity(0)->setMaterial(material);
+    entity->getSubEntity(1)->setMaterial(material);
+
+    MeshInfo info = CLIPipeline::extractMeshInfo(entity, "multi.mesh");
+
+    EXPECT_EQ(info.submeshes, 2u);
+    EXPECT_EQ(info.triangles, 2u);
+    EXPECT_EQ(info.materials.size(), 1);
+    EXPECT_EQ(info.materials[0], QString::fromStdString(material->getName()));
+    EXPECT_EQ(info.textures.size(), 2);
+    EXPECT_TRUE(info.textures.contains("albedo.png"));
+    EXPECT_TRUE(info.textures.contains("normal.png"));
 }
 
 TEST_F(CLIPipelineOgreTest, ExtractMeshInfo_NullEntity)
