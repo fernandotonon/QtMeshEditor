@@ -12,6 +12,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <cstdint>
+#include <OgreTextureManager.h>
+#include <OgreHardwarePixelBuffer.h>
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "SelectionSet.h"
@@ -69,6 +72,27 @@ protected:
         QThread::msleep(50);
     }
 };
+
+static Ogre::TexturePtr createSolidTexture2D(const std::string& name, uint32_t argb = 0xFFFFFFFF)
+{
+    Ogre::TexturePtr texture = Ogre::TextureManager::getSingleton().createManual(
+        name,
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+        Ogre::TEX_TYPE_2D,
+        1,
+        1,
+        0,
+        Ogre::PF_A8R8G8B8,
+        Ogre::TU_STATIC_WRITE_ONLY);
+
+    Ogre::HardwarePixelBufferSharedPtr pixelBuffer = texture->getBuffer(0, 0);
+    const Ogre::PixelBox pixelBox = pixelBuffer->lock(Ogre::HardwareBuffer::HBL_DISCARD);
+    auto* pixelData = static_cast<uint32_t*>(pixelBox.data);
+    pixelData[0] = argb;
+    pixelBuffer->unlock();
+    texture->load();
+    return texture;
+}
 
 TEST(MeshImporterExporterStandaloneTest, FormatFileURI_ValidURIAndFormat_ReturnsFormattedURI) {
     QString uri = "/path/to/file.obj";
@@ -955,4 +979,58 @@ TEST_F(SceneSaveLoadTest, RoundTrip_TwoSkeletalEntities_BonePrefixing) {
             ++skelCount;
     }
     EXPECT_EQ(skelCount, 2) << "Both skeletal entities should survive round-trip";
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_TexturedColladaExportWritesConvertedTextureFiles)
+{
+    auto* manager = Manager::getSingleton();
+
+    auto mesh = createInMemoryTriangleMesh("textured_collada_mesh");
+    auto* sn = manager->addSceneNode("TexturedColladaNode");
+    auto* entity = manager->createEntity(sn, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
+        "TexturedColladaMaterial",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* pass = mat->getTechnique(0)->getPass(0);
+
+    createSolidTexture2D("textured_collada_diffuse.jpg", 0xFF00AAFF);
+    createSolidTexture2D("textured_collada_normal.png", 0xFF8080FF);
+
+    pass->createTextureUnitState("textured_collada_diffuse.jpg");
+    auto* normalTus = pass->createTextureUnitState("textured_collada_normal.png");
+    normalTus->setName("normal_map");
+
+    entity->setMaterialName(mat->getName());
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString daeFile = tmpDir.path() + "/textured_export.dae";
+
+    const int result = MeshImporterExporter::exporter(sn, daeFile, "Collada (*.dae)");
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(daeFile));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/textured_export.material"));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/textured_collada_diffuse.png"));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/textured_collada_normal.png"));
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_ObjFromSkeletalEntitySucceeds)
+{
+    auto* entity = createAnimatedTestEntity("skeletal_obj_export_entity");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString objFile = tmpDir.path() + "/skeletal_export.obj";
+
+    const int result = MeshImporterExporter::exporter(node, objFile, "OBJ (*.obj)");
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(objFile));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/skeletal_export.material"));
 }

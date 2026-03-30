@@ -3817,6 +3817,81 @@ TEST_F(MCPServerProtocolTest, ProcessMessagePingReturnsEmptyResult)
     EXPECT_TRUE(response["result"].toObject().isEmpty());
 }
 
+TEST_F(MCPServerProtocolTest, ProcessMessageToolsListDispatchesToHandler)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 21},
+        {"method", "tools/list"},
+        {"params", QJsonObject{}}
+    };
+
+    const QJsonObject response = processAndRead(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_TRUE(response.contains("result"));
+    EXPECT_EQ(response["id"].toInt(), 21);
+    EXPECT_TRUE(response["result"].toObject()["tools"].isArray());
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageResourcesListDispatchesToHandler)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 22},
+        {"method", "resources/list"},
+        {"params", QJsonObject{}}
+    };
+
+    const QJsonObject response = processAndRead(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_TRUE(response.contains("result"));
+    EXPECT_EQ(response["id"].toInt(), 22);
+    EXPECT_TRUE(response["result"].toObject()["resources"].isArray());
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageResourcesReadDispatchesToHandler)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 23},
+        {"method", "resources/read"},
+        {"params", QJsonObject{{"uri", "qtmesheditor://material/current"}}}
+    };
+
+    const QJsonObject response = processAndRead(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_TRUE(response.contains("result"));
+    EXPECT_EQ(response["id"].toInt(), 23);
+    EXPECT_TRUE(response["result"].toObject()["contents"].isArray());
+}
+
+TEST_F(MCPServerProtocolTest, ProcessMessageToolsCallDispatchesToHandler)
+{
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 24},
+        {"method", "tools/call"},
+        {"params", QJsonObject{
+            {"name", "totally_fake_tool"},
+            {"arguments", QJsonObject{}}
+        }}
+    };
+
+    const QJsonObject response = processAndRead(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_TRUE(response.contains("result"));
+    EXPECT_EQ(response["id"].toInt(), 24);
+    EXPECT_TRUE(response["result"].toObject()["content"].isArray());
+}
+
+TEST_F(MCPServerProtocolTest, HandleToolsCallForwardsNameAndArguments)
+{
+    const QJsonObject result = server->handleToolsCall(QJsonObject{
+        {"name", "totally_fake_tool"},
+        {"arguments", QJsonObject{{"foo", "bar"}}}
+    });
+
+    EXPECT_TRUE(result["content"].isArray());
+    EXPECT_TRUE(getResultText(result).contains("Unknown tool") ||
+                getResultText(result).contains("could not be initialized"));
+}
+
 TEST_F(MCPServerProtocolTest, ProcessMessageInitializedNotificationDoesNotRespond)
 {
     const QJsonObject request{
@@ -3992,6 +4067,27 @@ TEST_F(MCPServerProtocolTest, OnReadyReadSkipsInvalidContentLengthAndProcessesNe
     server->m_stdinNotifier = nullptr;
     close(inputPipe[0]);
     close(inputPipe[1]);
+}
+
+TEST_F(MCPServerProtocolTest, OnReadyReadEofDisablesNotifierAndReturns)
+{
+    int inputPipe[2] = {-1, -1};
+    ASSERT_EQ(pipe(inputPipe), 0);
+
+    server->m_stdinFd = inputPipe[0];
+    server->m_stdinNotifier = new QSocketNotifier(server->m_stdinFd, QSocketNotifier::Read, server.get());
+
+    // Force EOF on read end
+    close(inputPipe[1]);
+    inputPipe[1] = -1;
+
+    server->onReadyRead();
+    ASSERT_NE(server->m_stdinNotifier, nullptr);
+    EXPECT_FALSE(server->m_stdinNotifier->isEnabled());
+
+    delete server->m_stdinNotifier;
+    server->m_stdinNotifier = nullptr;
+    close(inputPipe[0]);
 }
 
 TEST_F(MCPServerProtocolTest, SendNotificationSerializesMethodAndParams)

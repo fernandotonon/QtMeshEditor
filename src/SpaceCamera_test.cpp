@@ -4,6 +4,9 @@
 #include "TestHelpers.h"
 #include "Manager.h"
 #include "SelectionSet.h"
+#include "EditorViewport.h"
+#include "mainwindow.h"
+#include "OgreWidget.h"
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -11,6 +14,7 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QThread>
+#include <cmath>
 
 using ::testing::Mock;
 
@@ -663,4 +667,206 @@ TEST(SpaceCamera, FrameStartedWithArrowKeys)
     QKeyEvent releaseLeft(QEvent::KeyRelease, Qt::Key_Left, Qt::NoModifier);
     spaceCamera.keyReleaseEvent(&releaseUp);
     spaceCamera.keyReleaseEvent(&releaseLeft);
+}
+
+class SpaceCameraWidgetIntegrationTest : public ::testing::Test
+{
+protected:
+    QApplication* app = nullptr;
+    MainWindow* mainWindow = nullptr;
+    EditorViewport* viewport = nullptr;
+    OgreWidget* widget = nullptr;
+    SpaceCamera* camera = nullptr;
+
+    void SetUp() override
+    {
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+
+        Manager::kill();
+        QThread::msleep(50);
+
+        try {
+            mainWindow = new MainWindow();
+        } catch (...) {
+            GTEST_SKIP() << "Skipping: MainWindow creation failed";
+        }
+        ASSERT_NE(mainWindow, nullptr);
+
+        viewport = new EditorViewport(mainWindow, 31);
+        ASSERT_NE(viewport, nullptr);
+
+        widget = viewport->getOgreWidget();
+        ASSERT_NE(widget, nullptr);
+
+        camera = widget->getSpaceCamera();
+        ASSERT_NE(camera, nullptr);
+        ASSERT_NE(camera->getCamera(), nullptr);
+    }
+
+    void TearDown() override
+    {
+        SelectionSet::getSingleton()->clear();
+
+        delete viewport;
+        viewport = nullptr;
+        widget = nullptr;
+        camera = nullptr;
+
+        delete mainWindow;
+        mainWindow = nullptr;
+
+        if (app) {
+            app->processEvents();
+        }
+
+        Manager::kill();
+        QThread::msleep(50);
+    }
+};
+
+TEST_F(SpaceCameraWidgetIntegrationTest, AnimateToOrientationImmediateSnap)
+{
+    Ogre::Quaternion target(Ogre::Degree(90), Ogre::Vector3::UNIT_Y);
+    camera->animateToOrientation(target, 0.0f);
+
+    EXPECT_FALSE(camera->isAnimating());
+    const Ogre::Quaternion& current = camera->getOrientation();
+    EXPECT_NEAR(current.w, target.w, 0.001f);
+    EXPECT_NEAR(current.x, target.x, 0.001f);
+    EXPECT_NEAR(current.y, target.y, 0.001f);
+    EXPECT_NEAR(current.z, target.z, 0.001f);
+}
+
+TEST_F(SpaceCameraWidgetIntegrationTest, AnimateToOrientationCompletesAfterFrameUpdate)
+{
+    Ogre::Quaternion target(Ogre::Degree(45), Ogre::Vector3::UNIT_X);
+    camera->animateToOrientation(target, 0.2f);
+    EXPECT_TRUE(camera->isAnimating());
+
+    Ogre::FrameEvent frameEvent;
+    frameEvent.timeSinceLastFrame = 0.25f;
+    EXPECT_TRUE(camera->frameStarted(frameEvent));
+    EXPECT_FALSE(camera->isAnimating());
+}
+
+TEST_F(SpaceCameraWidgetIntegrationTest, SetCameraPositionAdjustsCameraNodeDistance)
+{
+    Ogre::SceneNode* cameraNode = camera->getCamera()->getParentSceneNode();
+    ASSERT_NE(cameraNode, nullptr);
+    const Ogre::Real beforeZ = cameraNode->getPosition().z;
+
+    camera->setCameraPosition(Ogre::Vector3(0.0f, 1.0f, 40.0f));
+    const Ogre::Real afterZ = cameraNode->getPosition().z;
+
+    EXPECT_NE(afterZ, beforeZ);
+    EXPECT_LT(afterZ, 0.0f);
+}
+
+TEST_F(SpaceCameraWidgetIntegrationTest, WheelEventControlModifierUsesZoomPath)
+{
+    Ogre::SceneNode* cameraNode = camera->getCamera()->getParentSceneNode();
+    ASSERT_NE(cameraNode, nullptr);
+    const Ogre::Real originalZ = cameraNode->getPosition().z;
+
+    QWheelEvent event(
+        QPointF(10.0, 10.0),
+        QPointF(10.0, 10.0),
+        QPoint(0, 0),
+        QPoint(0, 120),
+        Qt::NoButton,
+        Qt::ControlModifier,
+        Qt::NoScrollPhase,
+        false);
+
+    camera->wheelEvent(&event);
+    EXPECT_TRUE(event.isAccepted());
+    EXPECT_GT(cameraNode->getPosition().z, originalZ);
+}
+
+TEST_F(SpaceCameraWidgetIntegrationTest, WheelEventTrackpadPathPansCamera)
+{
+    Ogre::SceneNode* cameraNode = camera->getCamera()->getParentSceneNode();
+    ASSERT_NE(cameraNode, nullptr);
+    const Ogre::Vector3 before = cameraNode->_getDerivedPosition();
+
+    QWheelEvent event(
+        QPointF(12.0, 12.0),
+        QPointF(12.0, 12.0),
+        QPoint(0, 0),
+        QPoint(120, 120),
+        Qt::NoButton,
+        Qt::NoModifier,
+        Qt::NoScrollPhase,
+        false,
+        Qt::MouseEventSynthesizedBySystem);
+
+    camera->wheelEvent(&event);
+    EXPECT_TRUE(event.isAccepted());
+
+    const Ogre::Vector3 after = cameraNode->_getDerivedPosition();
+    EXPECT_GT((after - before).length(), 0.0001f);
+}
+
+TEST_F(SpaceCameraWidgetIntegrationTest, MouseMoveMiddleShiftAppliesRoll)
+{
+    const Ogre::Quaternion before = camera->getOrientation();
+
+    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(100.0, 100.0),
+                           Qt::MiddleButton, Qt::MiddleButton, Qt::NoModifier);
+    camera->mousePressEvent(&pressEvent);
+
+    QMouseEvent moveEvent(QEvent::MouseMove, QPointF(140.0, 100.0),
+                          Qt::NoButton, Qt::MiddleButton, Qt::ShiftModifier);
+    camera->mouseMoveEvent(&moveEvent);
+    EXPECT_TRUE(moveEvent.isAccepted());
+
+    const Ogre::Quaternion after = camera->getOrientation();
+    EXPECT_GT(std::abs(after.w - before.w) +
+              std::abs(after.x - before.x) +
+              std::abs(after.y - before.y) +
+              std::abs(after.z - before.z), 0.0001f);
+}
+
+TEST_F(SpaceCameraWidgetIntegrationTest, MouseMoveRightButtonPansCamera)
+{
+    Ogre::SceneNode* cameraNode = camera->getCamera()->getParentSceneNode();
+    ASSERT_NE(cameraNode, nullptr);
+    const Ogre::Vector3 before = cameraNode->_getDerivedPosition();
+
+    QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(80.0, 80.0),
+                           Qt::RightButton, Qt::RightButton, Qt::NoModifier);
+    camera->mousePressEvent(&pressEvent);
+
+    QMouseEvent moveEvent(QEvent::MouseMove, QPointF(120.0, 95.0),
+                          Qt::NoButton, Qt::RightButton, Qt::NoModifier);
+    camera->mouseMoveEvent(&moveEvent);
+    EXPECT_TRUE(moveEvent.isAccepted());
+
+    const Ogre::Vector3 after = cameraNode->_getDerivedPosition();
+    EXPECT_GT((after - before).length(), 0.0001f);
+}
+
+TEST_F(SpaceCameraWidgetIntegrationTest, FrameSelectionWithEntitySelectionRepositionsCamera)
+{
+    auto mesh = createInMemoryTriangleMesh("space_cam_frame_selection_mesh");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("space_cam_frame_selection_node");
+    auto* entity = sceneMgr->createEntity("space_cam_frame_selection_entity", mesh);
+    ASSERT_NE(entity, nullptr);
+    node->attachObject(entity);
+    node->setPosition(15.0f, 4.0f, -8.0f);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    Ogre::SceneNode* cameraNode = camera->getCamera()->getParentSceneNode();
+    ASSERT_NE(cameraNode, nullptr);
+    const Ogre::Real beforeZ = cameraNode->getPosition().z;
+
+    camera->frameSelection();
+    const Ogre::Real afterZ = cameraNode->getPosition().z;
+
+    EXPECT_NE(afterZ, beforeZ);
+    EXPECT_LT(afterZ, 0.0f);
 }

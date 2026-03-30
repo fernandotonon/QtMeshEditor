@@ -5,7 +5,14 @@
 #include <QWidget>
 #include <QMoveEvent>
 #include <QResizeEvent>
+#include <QThread>
+#include <cmath>
 #include "ViewCubeController.h"
+#include "Manager.h"
+#include "EditorViewport.h"
+#include "mainwindow.h"
+#include "OgreWidget.h"
+#include "SpaceCamera.h"
 
 // ===========================================================================
 // Unit tests (no Ogre required)
@@ -333,4 +340,129 @@ TEST_F(ViewCubeControllerTest, UpdateOrientationDoesNotEmitWhenOrientationUnchan
     controller->updateOrientation();
 
     EXPECT_EQ(spy.count(), 0);
+}
+
+class ViewCubeControllerOgreTest : public ::testing::Test {
+protected:
+    QApplication* app = nullptr;
+    MainWindow* mainWindow = nullptr;
+    EditorViewport* viewport = nullptr;
+    OgreWidget* widget = nullptr;
+    SpaceCamera* camera = nullptr;
+    ViewCubeController* controller = nullptr;
+
+    void SetUp() override
+    {
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+
+        Manager::kill();
+        QThread::msleep(50);
+
+        try {
+            mainWindow = new MainWindow();
+        } catch (...) {
+            GTEST_SKIP() << "Skipping: MainWindow creation failed";
+        }
+        ASSERT_NE(mainWindow, nullptr);
+
+        viewport = new EditorViewport(mainWindow, 41);
+        ASSERT_NE(viewport, nullptr);
+        widget = viewport->getOgreWidget();
+        ASSERT_NE(widget, nullptr);
+        camera = widget->getSpaceCamera();
+        ASSERT_NE(camera, nullptr);
+
+        controller = new ViewCubeController(mainWindow);
+        ASSERT_NE(controller, nullptr);
+        controller->setActiveWidget(widget);
+    }
+
+    void TearDown() override
+    {
+        delete controller;
+        controller = nullptr;
+
+        delete viewport;
+        viewport = nullptr;
+        widget = nullptr;
+        camera = nullptr;
+
+        delete mainWindow;
+        mainWindow = nullptr;
+
+        if (app) {
+            app->processEvents();
+        }
+
+        Manager::kill();
+        QThread::msleep(50);
+    }
+};
+
+TEST_F(ViewCubeControllerOgreTest, SnapToViewAnimatesToExpectedOrientation)
+{
+    controller->snapToView("Right");
+    EXPECT_TRUE(camera->isAnimating());
+
+    Ogre::FrameEvent frameEvent;
+    frameEvent.timeSinceLastFrame = 1.0f;
+    camera->frameStarted(frameEvent);
+    EXPECT_FALSE(camera->isAnimating());
+
+    const Ogre::Quaternion q = camera->getOrientation();
+    EXPECT_NEAR(q.w, 0.7071f, 0.05f);
+    EXPECT_NEAR(q.x, 0.0f, 0.05f);
+    EXPECT_NEAR(q.y, 0.7071f, 0.05f);
+    EXPECT_NEAR(q.z, 0.0f, 0.05f);
+}
+
+TEST_F(ViewCubeControllerOgreTest, SnapToDirectionNormalizesAndUpdatesOrientation)
+{
+    const Ogre::Quaternion before = camera->getOrientation();
+
+    controller->snapToDirection(10.0, 0.0, 0.0);
+    EXPECT_TRUE(camera->isAnimating());
+
+    Ogre::FrameEvent frameEvent;
+    frameEvent.timeSinceLastFrame = 1.0f;
+    camera->frameStarted(frameEvent);
+
+    const Ogre::Quaternion after = camera->getOrientation();
+    const Ogre::Real delta = std::abs(after.w - before.w) +
+        std::abs(after.x - before.x) +
+        std::abs(after.y - before.y) +
+        std::abs(after.z - before.z);
+    EXPECT_GT(delta, 0.0001f);
+}
+
+TEST_F(ViewCubeControllerOgreTest, RotateByDeltaCancelsAnimationAndAppliesImmediateRotation)
+{
+    camera->animateToOrientation(Ogre::Quaternion(Ogre::Degree(30), Ogre::Vector3::UNIT_Y), 0.5f);
+    ASSERT_TRUE(camera->isAnimating());
+    const Ogre::Quaternion before = camera->getOrientation();
+
+    controller->rotateByDelta(5.0, -3.0);
+    EXPECT_FALSE(camera->isAnimating());
+
+    const Ogre::Quaternion after = camera->getOrientation();
+    const Ogre::Real delta = std::abs(after.w - before.w) +
+        std::abs(after.x - before.x) +
+        std::abs(after.y - before.y) +
+        std::abs(after.z - before.z);
+    EXPECT_GT(delta, 0.0001f);
+}
+
+TEST_F(ViewCubeControllerOgreTest, UpdateOrientationReflectsActiveCameraQuaternion)
+{
+    camera->animateToOrientation(Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_X), 0.0f);
+
+    QSignalSpy spy(controller, &ViewCubeController::orientationChanged);
+    controller->updateOrientation();
+
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_NEAR(controller->qw(), camera->getOrientation().w, 0.001f);
+    EXPECT_NEAR(controller->qx(), camera->getOrientation().x, 0.001f);
+    EXPECT_NEAR(controller->qy(), camera->getOrientation().y, 0.001f);
+    EXPECT_NEAR(controller->qz(), camera->getOrientation().z, 0.001f);
 }
