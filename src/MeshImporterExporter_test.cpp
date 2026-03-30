@@ -8,6 +8,7 @@
 #include <QCoreApplication>
 #include <QThread>
 #include <QDir>
+#include <QFile>
 #include <QTemporaryDir>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -1019,9 +1020,14 @@ TEST_F(SceneSaveLoadTest, Exporter_TexturedColladaExportWritesConvertedTextureFi
     const int result = MeshImporterExporter::exporter(sn, daeFile, "Collada (*.dae)");
     EXPECT_EQ(result, 0);
     EXPECT_TRUE(QFileInfo::exists(daeFile));
-    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/textured_export.material"));
-    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/textured_collada_diffuse.png"));
-    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/textured_collada_normal.png"));
+    const QString materialFilePath = tmpDir.path() + "/textured_export.material";
+    EXPECT_TRUE(QFileInfo::exists(materialFilePath));
+
+    QFile materialFile(materialFilePath);
+    ASSERT_TRUE(materialFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString materialText = QString::fromUtf8(materialFile.readAll());
+    EXPECT_TRUE(materialText.contains("textured_collada_diffuse.jpg"));
+    EXPECT_TRUE(materialText.contains("textured_collada_normal.png"));
 }
 
 TEST_F(SceneSaveLoadTest, Exporter_ObjFromSkeletalEntitySucceeds)

@@ -803,7 +803,9 @@ TEST_F(SpaceCameraWidgetIntegrationTest, WheelEventTrackpadPathPansCamera)
 {
     Ogre::SceneNode* cameraNode = camera->getCamera()->getParentSceneNode();
     ASSERT_NE(cameraNode, nullptr);
-    const Ogre::Vector3 before = cameraNode->_getDerivedPosition();
+    Ogre::SceneNode* targetNode = cameraNode->getParentSceneNode();
+    ASSERT_NE(targetNode, nullptr);
+    const Ogre::Vector3 before = targetNode->getPosition();
 
     QWheelEvent event(
         QPointF(12.0, 12.0),
@@ -819,7 +821,7 @@ TEST_F(SpaceCameraWidgetIntegrationTest, WheelEventTrackpadPathPansCamera)
     camera->wheelEvent(&event);
     EXPECT_TRUE(event.isAccepted());
 
-    const Ogre::Vector3 after = cameraNode->_getDerivedPosition();
+    const Ogre::Vector3 after = targetNode->getPosition();
     EXPECT_GT((after - before).length(), 0.0001f);
 }
 
@@ -847,7 +849,9 @@ TEST_F(SpaceCameraWidgetIntegrationTest, MouseMoveRightButtonPansCamera)
 {
     Ogre::SceneNode* cameraNode = camera->getCamera()->getParentSceneNode();
     ASSERT_NE(cameraNode, nullptr);
-    const Ogre::Vector3 before = cameraNode->_getDerivedPosition();
+    Ogre::SceneNode* targetNode = cameraNode->getParentSceneNode();
+    ASSERT_NE(targetNode, nullptr);
+    const Ogre::Vector3 before = targetNode->getPosition();
 
     QMouseEvent pressEvent(QEvent::MouseButtonPress, QPointF(80.0, 80.0),
                            Qt::RightButton, Qt::RightButton, Qt::NoModifier);
@@ -858,7 +862,7 @@ TEST_F(SpaceCameraWidgetIntegrationTest, MouseMoveRightButtonPansCamera)
     camera->mouseMoveEvent(&moveEvent);
     EXPECT_TRUE(moveEvent.isAccepted());
 
-    const Ogre::Vector3 after = cameraNode->_getDerivedPosition();
+    const Ogre::Vector3 after = targetNode->getPosition();
     EXPECT_GT((after - before).length(), 0.0001f);
 }
 

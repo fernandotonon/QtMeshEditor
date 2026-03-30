@@ -42,10 +42,48 @@ static QByteArray readTransportMessage(int readFd)
 {
     QByteArray response;
     char buffer[4096];
-    ssize_t bytesRead = read(readFd, buffer, sizeof(buffer));
-    if (bytesRead > 0) {
+    int expectedTotalBytes = -1;
+
+    while (true) {
+        ssize_t bytesRead = read(readFd, buffer, sizeof(buffer));
+        if (bytesRead <= 0) {
+            break;
+        }
+
         response.append(buffer, bytesRead);
+
+        if (expectedTotalBytes < 0) {
+            const int headerEnd = response.indexOf("\r\n\r\n");
+            if (headerEnd != -1) {
+                const QList<QByteArray> headerLines = response.left(headerEnd).split('\n');
+                for (const QByteArray& rawLine : headerLines) {
+                    const QByteArray line = rawLine.trimmed();
+                    if (!line.toLower().startsWith("content-length:")) {
+                        continue;
+                    }
+
+                    bool ok = false;
+                    const int contentLength = line.mid(sizeof("content-length:") - 1).trimmed().toInt(&ok);
+                    if (ok && contentLength >= 0) {
+                        expectedTotalBytes = headerEnd + 4 + contentLength;
+                    }
+                    break;
+                }
+
+                // If a full header was received but no valid length was found,
+                // stop here and let downstream assertions fail with context.
+                if (expectedTotalBytes < 0) {
+                    break;
+                }
+            }
+        }
+
+        if (expectedTotalBytes >= 0 && response.size() >= expectedTotalBytes) {
+            response.truncate(expectedTotalBytes);
+            break;
+        }
     }
+
     return response;
 }
 
