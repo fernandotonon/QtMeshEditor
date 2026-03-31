@@ -1644,11 +1644,18 @@ jobs:
         run: |
           $version = "${{ github.event.release.tag_name }}"
           $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${version}/QtMeshEditor-${version}-bin-Windows.zip"
-          .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
+          # Try 'update' first (package already in winget-pkgs); fall back to 'new' for first submission
+          $result = .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
             --version $version `
             --urls $url `
             --submit `
             --token ${{ secrets.WINGET_TOKEN }}
+          if ($LASTEXITCODE -ne 0) {
+            .\wingetcreate.exe new $url `
+              --version $version `
+              --submit `
+              --token ${{ secrets.WINGET_TOKEN }}
+          }
         continue-on-error: true
 
 ####################################################################
