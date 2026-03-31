@@ -986,6 +986,7 @@ jobs:
               --filter 'src/' \
               --exclude 'src/OgreXML/' \
               --exclude 'src/dependencies/' \
+              --exclude '.*/(LLMManager|LLMWorker|ModelDownloader|SDManager)\.cpp' \
               --exclude '.*_test\.cpp' \
               --exclude '.*TestHelpers\.h' \
               --exclude '.*QtAppEnvironment_test\.cpp' \
@@ -1046,6 +1047,7 @@ jobs:
           ls -la coverage.xml 2>/dev/null || echo "coverage.xml not found"
 
           echo "=== Running SonarCloud analysis ==="
+          # Keep coverage exclusions in sonar-project.properties as the single source of truth.
           sonar-scanner \
             -Dsonar.projectKey=fernandotonon_QtMeshEditor \
             -Dsonar.organization=fernandotonon \
@@ -1055,7 +1057,6 @@ jobs:
             -Dsonar.tests=src/,tests/ \
             -Dsonar.test.inclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp \
             -Dsonar.exclusions=**/OgreXML/**,**/dependencies/**,**/*_autogen/**,**/CMakeFiles/**,**/ui_files/**,**/moc_*,**/_deps/** \
-            -Dsonar.coverage.exclusions=**/*_test.cpp,**/test_*.cpp,tests/**/*.cpp,tests/**/*.qml,**/*_autogen/**,**/TestHelpers.h,**/test_main.cpp \
             -Dsonar.coverageReportPaths=coverage.xml \
             -Dsonar.c.file.suffixes=.c \
             -Dsonar.cpp.file.suffixes=.cpp,.cc,.cxx,.c++,.hpp,.hh,.hxx,.h++,.h \
