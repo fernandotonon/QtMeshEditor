@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <QFileDialog>
+#include <QMessageBox>
 #include <QDebug>
 #include <set>
 
