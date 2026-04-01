@@ -170,11 +170,6 @@ bool AnimationMerger::areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const O
     // An entry equal to a->getNumBones() means "no match found" for that source bone.
     unsigned short numBaseBones = a->getNumBones();
 
-    // Tolerances for bind-pose comparison.
-    const float posTol   = 0.01f;  // 1 cm
-    const float rotTol   = 0.01f;  // quaternion dot deviation
-    const float scaleTol = 0.01f;
-
     for (unsigned short srcHandle = 0;
          srcHandle < static_cast<unsigned short>(boneHandleMap.size());
          ++srcHandle)
@@ -188,20 +183,15 @@ bool AnimationMerger::areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const O
 
         // Validate parent chain: the parent bone name must match between both skeletons.
         // Only consider parents that are themselves bones in their respective skeleton.
+        // This catches skeletons that share bone names but have different hierarchies.
+        // Note: bind-pose values are intentionally NOT compared here — retargeted animation
+        // FBX files (e.g. Unreal Engine exports) may have numerically different bind transforms
+        // for the same logical skeleton, which would cause false incompatibility rejections.
         auto* srcParentNode  = srcBone->getParent();
         auto* baseParentNode = baseBone->getParent();
         std::string srcParentName  = (srcParentNode  && b->hasBone(srcParentNode->getName()))  ? srcParentNode->getName()  : "";
         std::string baseParentName = (baseParentNode && a->hasBone(baseParentNode->getName())) ? baseParentNode->getName() : "";
         if (srcParentName != baseParentName)
-            return false;
-
-        // Validate bind-pose: local transforms must be equivalent within tolerance.
-        if ((srcBone->getPosition() - baseBone->getPosition()).length() > posTol)
-            return false;
-        // |dot| == 1 means identical (or antipodal) quaternion — both represent the same rotation.
-        if (std::abs(srcBone->getOrientation().Dot(baseBone->getOrientation())) < 1.0f - rotTol)
-            return false;
-        if ((srcBone->getScale() - baseBone->getScale()).length() > scaleTol)
             return false;
     }
     return true;
