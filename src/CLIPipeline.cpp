@@ -264,8 +264,11 @@ QString CLIPipeline::formatMeshInfoText(const MeshInfo& info)
     QTextStream s(&result);
 
     s << "File: " << info.file << "\n";
-    if (info.upAxis != 1)
-        s << "Coordinate system: " << (info.upAxis == 2 ? "Z-up (Unreal Engine)" : "unknown") << "\n";
+    s << "Coordinate system: "
+      << (info.upAxis == 1 ? "Y-up (Mixamo/default)"
+                           : info.upAxis == 2 ? "Z-up (Unreal Engine)"
+                                              : "unknown")
+      << "\n";
     s << "Vertices: " << info.vertices << "\n";
     s << "Triangles: " << info.triangles << "\n";
     s << "Submeshes: " << info.submeshes << "\n";

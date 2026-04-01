@@ -161,7 +161,7 @@ TEST_F(CLIPipelineFormatTest, FormatMeshInfoJson_WithAnimations)
     QJsonObject obj = doc.object();
 
     EXPECT_TRUE(obj.contains("skeleton"));
-    EXPECT_EQ(obj["skeleton"].toObject()["bones"].toInt(), 5);
+    EXPECT_EQ(obj["skeleton"].toObject()["boneCount"].toInt(), 5);
     EXPECT_TRUE(obj.contains("animations"));
     EXPECT_EQ(obj["animations"].toArray().size(), 1);
     EXPECT_EQ(obj["animations"].toArray()[0].toObject()["name"].toString(), "idle");

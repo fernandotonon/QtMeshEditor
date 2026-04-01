@@ -5,6 +5,7 @@
 #include <QSet>
 #include <QRegularExpression>
 #include <unordered_map>
+#include <cmath>
 
 // Remove common Mixamo noise from animation names before slugifying.
 // e.g. "Armature|mixamo.com|Layer0" → "Armature|Layer0"
@@ -168,9 +169,39 @@ bool AnimationMerger::areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const O
     // The map has one entry per bone in 'b'.
     // An entry equal to a->getNumBones() means "no match found" for that source bone.
     unsigned short numBaseBones = a->getNumBones();
-    for (auto handle : boneHandleMap)
+
+    // Tolerances for bind-pose comparison.
+    const float posTol   = 0.01f;  // 1 cm
+    const float rotTol   = 0.01f;  // quaternion dot deviation
+    const float scaleTol = 0.01f;
+
+    for (unsigned short srcHandle = 0;
+         srcHandle < static_cast<unsigned short>(boneHandleMap.size());
+         ++srcHandle)
     {
-        if (handle == numBaseBones)
+        unsigned short baseHandle = boneHandleMap[srcHandle];
+        if (baseHandle == numBaseBones)
+            return false;
+
+        Ogre::Bone* srcBone  = b->getBone(srcHandle);
+        Ogre::Bone* baseBone = a->getBone(baseHandle);
+
+        // Validate parent chain: the parent bone name must match between both skeletons.
+        // Only consider parents that are themselves bones in their respective skeleton.
+        auto* srcParentNode  = srcBone->getParent();
+        auto* baseParentNode = baseBone->getParent();
+        std::string srcParentName  = (srcParentNode  && b->hasBone(srcParentNode->getName()))  ? srcParentNode->getName()  : "";
+        std::string baseParentName = (baseParentNode && a->hasBone(baseParentNode->getName())) ? baseParentNode->getName() : "";
+        if (srcParentName != baseParentName)
+            return false;
+
+        // Validate bind-pose: local transforms must be equivalent within tolerance.
+        if ((srcBone->getPosition() - baseBone->getPosition()).length() > posTol)
+            return false;
+        // |dot| == 1 means identical (or antipodal) quaternion — both represent the same rotation.
+        if (std::abs(srcBone->getOrientation().Dot(baseBone->getOrientation())) < 1.0f - rotTol)
+            return false;
+        if ((srcBone->getScale() - baseBone->getScale()).length() > scaleTol)
             return false;
     }
     return true;

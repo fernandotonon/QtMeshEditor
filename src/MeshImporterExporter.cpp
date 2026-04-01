@@ -31,7 +31,6 @@ THE SOFTWARE.
 #include <assimp/Exporter.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
-#include <QMessageBox>
 #include <QFileDialog>
 #include <QDebug>
 #include <set>
@@ -42,7 +41,6 @@ THE SOFTWARE.
 
 #include "Manager.h"
 #include "SelectionSet.h"
-#include "AnimationMerger.h"
 #include "SentryReporter.h"
 #include "Assimp/Importer.h"
 #include "Assimp/MaterialProcessor.h"
@@ -866,49 +864,11 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
                 if (!mesh) {
                     // Animation-only file: skeleton/animations were loaded, but there is no mesh.
+                    // Collect into the caller-provided list; callers that want UI notifications
+                    // should pass outAnimOnlySkeletons and handle presentation themselves.
                     Ogre::SkeletonPtr skel = importer.getLoadedSkeleton();
-                    if (skel) {
-                        if (outAnimOnlySkeletons) {
-                            outAnimOnlySkeletons->append(skel);
-                        } else {
-                            unsigned short numAnims = skel->getNumAnimations();
-                            QString animList;
-                            for (unsigned short i = 0; i < numAnims; ++i)
-                                animList += "\n  \u2022 " + QString::fromStdString(skel->getAnimation(i)->getName());
-
-                            // If there is a selected entity with a skeleton, offer to merge immediately.
-                            Ogre::Entity* baseEntity = nullptr;
-                            auto selected = SelectionSet::getSingleton()->getResolvedEntities();
-                            for (Ogre::Entity* e : selected) {
-                                if (e && e->hasSkeleton()) { baseEntity = e; break; }
-                            }
-
-                            if (baseEntity) {
-                                auto btn = QMessageBox::question(nullptr, "Animation-only file",
-                                    QString("'%1' contains no mesh geometry \u2014 %2 animation(s) were found:%3\n\n"
-                                            "Merge these animations into '%4'?")
-                                        .arg(file.fileName())
-                                        .arg(numAnims)
-                                        .arg(animList)
-                                        .arg(baseEntity->getName().c_str()),
-                                    QMessageBox::Yes | QMessageBox::No);
-                                if (btn == QMessageBox::Yes) {
-                                    QString errMsg;
-                                    AnimationMerger::mergeAnimations(baseEntity, {}, {skel}, errMsg);
-                                    if (!errMsg.isEmpty())
-                                        QMessageBox::warning(nullptr, "Merge failed", errMsg);
-                                }
-                            } else {
-                                QMessageBox::information(nullptr, "Animation-only file",
-                                    QString("'%1' contains no mesh geometry \u2014 %2 animation(s) were imported:%3\n\n"
-                                            "To use these animations: import the target mesh, select it, "
-                                            "then import this file again.")
-                                        .arg(file.fileName())
-                                        .arg(numAnims)
-                                        .arg(animList));
-                            }
-                        }
-                    }
+                    if (skel && outAnimOnlySkeletons)
+                        outAnimOnlySkeletons->append(skel);
                     continue;
                 }
 

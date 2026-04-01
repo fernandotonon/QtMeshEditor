@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include <algorithm>
 
 Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded, unsigned int additionalFlags) {
+    skeleton.reset();  // Clear any skeleton from a previous import
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
     unsigned int flags = aiProcess_CalcTangentSpace |
@@ -65,16 +66,15 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         scene->mMetaData->Get("UpAxis", m_sceneUpAxis);
 
     // A null scene or missing root node is always fatal.
-    // AI_SCENE_FLAGS_INCOMPLETE means "no meshes", which is fine for animation-only files.
     if(!scene || !scene->mRootNode) {
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));
         return {};
     }
-    // animationOnly: no meshes in scene (AI_SCENE_FLAGS_INCOMPLETE is set). Note: the flag can
-    // also appear on scenes that still have meshes (e.g. partial loads), so only treat it as
-    // animation-only when there are genuinely zero meshes.
-    const bool animationOnly = (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0
-                               && scene->mNumMeshes == 0;
+    // animationOnly: the scene has no geometry (e.g. Unreal Engine retarget FBX).
+    // AI_SCENE_FLAGS_INCOMPLETE does NOT reliably indicate "no meshes" — it can also be set on
+    // scenes that have valid geometry but missing materials or other partial data.  Use the actual
+    // mesh count as the authoritative check.
+    const bool animationOnly = (scene->mNumMeshes == 0);
     if(animationOnly && !scene->HasAnimations()) {
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP:: Scene has no meshes and no animations.");
         return {};
