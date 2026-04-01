@@ -873,7 +873,8 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                                 animList += "\n  \u2022 " + QString::fromStdString(skel->getAnimation(i)->getName());
                             QMessageBox::information(nullptr, "Animation-only file",
                                 QString("'%1' contains no mesh geometry \u2014 %2 animation(s) were imported:%3\n\n"
-                                        "Use File \u2192 Merge Animations to apply them to an existing mesh.")
+                                        "Import the target mesh, select it, then click the "
+                                        "\u201cMerge Animations\u201d button in the toolbar.")
                                     .arg(file.fileName())
                                     .arg(numAnims)
                                     .arg(animList));
