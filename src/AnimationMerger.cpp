@@ -5,7 +5,6 @@
 #include <QSet>
 #include <QRegularExpression>
 #include <unordered_map>
-#include <cmath>
 
 // Remove common Mixamo noise from animation names before slugifying.
 // e.g. "Armature|mixamo.com|Layer0" → "Armature|Layer0"
@@ -169,33 +168,10 @@ bool AnimationMerger::areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const O
     // The map has one entry per bone in 'b'.
     // An entry equal to a->getNumBones() means "no match found" for that source bone.
     unsigned short numBaseBones = a->getNumBones();
-
-    for (unsigned short srcHandle = 0;
-         srcHandle < static_cast<unsigned short>(boneHandleMap.size());
-         ++srcHandle)
+    for (auto handle : boneHandleMap)
     {
-        unsigned short baseHandle = boneHandleMap[srcHandle];
-        if (baseHandle == numBaseBones)
+        if (handle == numBaseBones)
             return false;
-
-        Ogre::Bone* srcBone  = b->getBone(srcHandle);
-        Ogre::Bone* baseBone = a->getBone(baseHandle);
-
-        // Log a warning when parent names differ — the mismatch may indicate
-        // different importer paths (e.g. mesh FBX promotes "Armature" to a bone,
-        // animation-only FBX skips non-animated ancestors) rather than a truly
-        // incompatible hierarchy, so this is advisory only.
-        auto* srcParentNode  = srcBone->getParent();
-        auto* baseParentNode = baseBone->getParent();
-        std::string srcParentName  = (srcParentNode  && b->hasBone(srcParentNode->getName()))  ? srcParentNode->getName()  : "";
-        std::string baseParentName = (baseParentNode && a->hasBone(baseParentNode->getName())) ? baseParentNode->getName() : "";
-        if (srcParentName != baseParentName) {
-            Ogre::LogManager::getSingleton().logMessage(
-                "AnimationMerger: bone '" + srcBone->getName() +
-                "' has different parent in source ('" + srcParentName +
-                "') vs base ('" + baseParentName + "') skeleton — proceeding anyway",
-                Ogre::LML_NORMAL);
-        }
     }
     return true;
 }
