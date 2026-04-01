@@ -18,16 +18,18 @@ public:
                                 const std::string& oldName,
                                 const std::string& newName);
 
-    /// Merge animations from sourceEntities (and optional standalone sourceSkeletons)
-    /// into baseEntity's skeleton. Base entity's own animations are kept as-is.
-    /// Source animations are named after their scene node / skeleton name.
-    /// Returns the base entity on success, nullptr on error.
+    /// Merge animations from sourceEntities into baseEntity's skeleton.
+    /// Convenience wrapper; forwards an empty skeleton list to the 4-argument overload.
     static Ogre::Entity* mergeAnimations(
         Ogre::Entity* baseEntity,
         const QList<Ogre::Entity*>& sourceEntities,
         QString& errorMsg);
 
-    /// Overload that also accepts standalone skeletons (e.g. from animation-only files).
+    /// Full overload: merges from entity sources AND standalone skeletons
+    /// (e.g. from animation-only files that produce no mesh entity).
+    /// Base entity's own animations are kept as-is. Source animations are named
+    /// after their scene node / skeleton name.
+    /// Returns the base entity on success, nullptr on error.
     static Ogre::Entity* mergeAnimations(
         Ogre::Entity* baseEntity,
         const QList<Ogre::Entity*>& sourceEntities,

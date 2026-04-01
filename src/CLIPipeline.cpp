@@ -468,6 +468,7 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
     if (entities.isEmpty() && !animOnlySkeletons.isEmpty()) {
         QList<MeshInfo> infos;
         for (const Ogre::SkeletonPtr& skel : animOnlySkeletons) {
+            if (!skel) continue;
             MeshInfo info;
             info.file = fi.fileName();
             info.skeletonName = QString::fromStdString(skel->getName());
@@ -883,10 +884,9 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
 
         auto& allEntities = Manager::getSingleton()->getEntities();
-        if (allEntities.isEmpty()) {
-            err() << "Error: Base file has no mesh/entity." << Qt::endl;
-            return 1;
-        }
+        // allEntities includes the base entity (already validated above) plus any
+        // mesh entities from merge files. If no additional mesh entities AND no
+        // animation-only skeletons were collected, there is nothing to merge.
         if (allEntities.size() < 2 && animOnlySkeletons.isEmpty()) {
             err() << "Error: Need at least one source file to merge (got none)." << Qt::endl;
             return 1;

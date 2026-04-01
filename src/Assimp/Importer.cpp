@@ -64,7 +64,11 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));
         return {};
     }
-    const bool animationOnly = (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0;
+    // animationOnly: no meshes in scene (AI_SCENE_FLAGS_INCOMPLETE is set). Note: the flag can
+    // also appear on scenes that still have meshes (e.g. partial loads), so only treat it as
+    // animation-only when there are genuinely zero meshes.
+    const bool animationOnly = (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0
+                               && scene->mNumMeshes == 0;
     if(animationOnly && !scene->HasAnimations()) {
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP:: Scene has no meshes and no animations.");
         return {};

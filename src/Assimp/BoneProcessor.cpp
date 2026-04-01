@@ -31,10 +31,24 @@ void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scen
 
     // For animation-only files (no mesh bones), create bones from animation channels.
     if (skeleton->getNumBones() == 0 && scene->HasAnimations()) {
+        // Collect directly animated nodes.
         std::set<std::string> animatedNodes;
         for (unsigned i = 0; i < scene->mNumAnimations; ++i)
             for (unsigned j = 0; j < scene->mAnimations[i]->mNumChannels; ++j)
                 animatedNodes.insert(scene->mAnimations[i]->mChannels[j]->mNodeName.C_Str());
+
+        // Extend the set to include all ancestors of animated nodes so that the
+        // full parent chain exists in the skeleton before a child bone is created.
+        std::function<void(aiNode*)> markAncestors = [&](aiNode* node) {
+            if (animatedNodes.count(node->mName.C_Str()) > 0) {
+                for (aiNode* p = node->mParent; p && p->mParent; p = p->mParent)
+                    animatedNodes.insert(p->mName.C_Str());
+            }
+            for (unsigned i = 0; i < node->mNumChildren; ++i)
+                markAncestors(node->mChildren[i]);
+        };
+        markAncestors(scene->mRootNode);
+
         processAnimationOnlyHierarchy(scene->mRootNode, animatedNodes);
     }
 }

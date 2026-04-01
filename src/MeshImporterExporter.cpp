@@ -879,7 +879,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                                     .arg(animList));
                         }
                     }
-                    return;
+                    continue;
                 }
 
                 auto meshName = file.baseName();
