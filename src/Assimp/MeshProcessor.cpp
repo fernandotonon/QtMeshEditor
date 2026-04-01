@@ -74,6 +74,7 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
     // Load blend weights and blend indices
     for(auto i = 0u; i < mesh->mNumBones; i++) {
         aiBone* bone = mesh->mBones[i];
+        if(!skeleton || !skeleton->hasBone(bone->mName.C_Str())) continue;
         // Retrieve the bone (it should already exist)
         Ogre::Bone* ogreBone = skeleton->getBone(bone->mName.C_Str());
         for(auto j = 0u; j < bone->mNumWeights; j++) {

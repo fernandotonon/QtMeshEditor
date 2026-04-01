@@ -75,8 +75,13 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     // Process materials
     materialProcessor.loadScene(scene);
 
-    // Process the skeleton
-    if(scene->HasAnimations()) {
+    // Process the skeleton whenever the scene has bones (skinned mesh) or animations.
+    // A mesh can be skinned without having any animations (e.g. a rigged bind-pose).
+    bool hasBones = false;
+    for(unsigned i = 0; i < scene->mNumMeshes && !hasBones; ++i)
+        hasBones = scene->mMeshes[i]->mNumBones > 0;
+
+    if(hasBones || scene->HasAnimations()) {
         skeleton = Ogre::SkeletonManager::getSingleton().create(modelName+".skeleton", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
         BoneProcessor boneProcessor;
         boneProcessor.processBones(skeleton, scene);
@@ -87,9 +92,11 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         // explicitly before creating animations.
         skeleton->setBindingPose();
 
-        // Process animations
-        AnimationProcessor animationProcessor(skeleton);
-        animationProcessor.processAnimations(scene);
+        if(scene->HasAnimations()) {
+            // Process animations
+            AnimationProcessor animationProcessor(skeleton);
+            animationProcessor.processAnimations(scene);
+        }
     }
 
     // Process the root node recursively (meshes)
