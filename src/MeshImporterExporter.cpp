@@ -824,7 +824,8 @@ static void ensureResourceGroup(const QString &path)
     }
 }
 
-void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags)
+void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
+                                     QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons)
 {
     try{
         foreach(const QString &fileName,_uriList)
@@ -859,7 +860,27 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 // to avoid double-flipping geometry and UVs.
                 bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
                 Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString(), convertLH, additionalFlags);
-                if (!mesh) return;
+                if (!mesh) {
+                    // Animation-only file: skeleton/animations were loaded, but there is no mesh.
+                    Ogre::SkeletonPtr skel = importer.getLoadedSkeleton();
+                    if (skel) {
+                        if (outAnimOnlySkeletons) {
+                            outAnimOnlySkeletons->append(skel);
+                        } else {
+                            unsigned short numAnims = skel->getNumAnimations();
+                            QString animList;
+                            for (unsigned short i = 0; i < numAnims; ++i)
+                                animList += "\n  \u2022 " + QString::fromStdString(skel->getAnimation(i)->getName());
+                            QMessageBox::information(nullptr, "Animation-only file",
+                                QString("'%1' contains no mesh geometry \u2014 %2 animation(s) were imported:%3\n\n"
+                                        "Use File \u2192 Merge Animations to apply them to an existing mesh.")
+                                    .arg(file.fileName())
+                                    .arg(numAnims)
+                                    .arg(animList));
+                        }
+                    }
+                    return;
+                }
 
                 auto meshName = file.baseName();
                 sn = Manager::getSingleton()->addSceneNode(QString(meshName));

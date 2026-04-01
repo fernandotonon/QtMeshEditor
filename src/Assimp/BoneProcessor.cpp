@@ -1,4 +1,5 @@
 #include "BoneProcessor.h"
+#include <set>
 
 void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scene) {
     this->skeleton = skeleton;
@@ -27,6 +28,15 @@ void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scen
 
     // Start from the root node and process the hierarchy
     processBoneHierarchy(scene->mRootNode);
+
+    // For animation-only files (no mesh bones), create bones from animation channels.
+    if (skeleton->getNumBones() == 0 && scene->HasAnimations()) {
+        std::set<std::string> animatedNodes;
+        for (unsigned i = 0; i < scene->mNumAnimations; ++i)
+            for (unsigned j = 0; j < scene->mAnimations[i]->mNumChannels; ++j)
+                animatedNodes.insert(scene->mAnimations[i]->mChannels[j]->mNodeName.C_Str());
+        processAnimationOnlyHierarchy(scene->mRootNode, animatedNodes);
+    }
 }
 
 void BoneProcessor::processBoneHierarchy(aiNode* node) {
@@ -147,5 +157,27 @@ void BoneProcessor::processBoneNode(aiBone* bone) {
                 parentBone->addChild(ogreBone);
             }
         }
+    }
+}
+
+void BoneProcessor::processAnimationOnlyHierarchy(aiNode* node, const std::set<std::string>& animatedNodes)
+{
+    bool isAnimated = animatedNodes.count(node->mName.C_Str()) > 0;
+    bool isExistingBone = skeleton->hasBone(node->mName.C_Str());
+
+    if (isAnimated && !isExistingBone) {
+        processNonSkinnedBone(node);
+        isExistingBone = true;
+    }
+
+    for (unsigned i = 0; i < node->mNumChildren; ++i) {
+        aiNode* child = node->mChildren[i];
+        // Also pull in non-animated children of bone nodes (leaf/tip bones)
+        if (isExistingBone && child->mNumMeshes == 0 &&
+            !skeleton->hasBone(child->mName.C_Str()))
+        {
+            processNonSkinnedBone(child);
+        }
+        processAnimationOnlyHierarchy(child, animatedNodes);
     }
 }

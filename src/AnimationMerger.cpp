@@ -134,6 +134,15 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
     const QList<Ogre::Entity*>& sourceEntities,
     QString& errorMsg)
 {
+    return mergeAnimations(baseEntity, sourceEntities, {}, errorMsg);
+}
+
+Ogre::Entity* AnimationMerger::mergeAnimations(
+    Ogre::Entity* baseEntity,
+    const QList<Ogre::Entity*>& sourceEntities,
+    const QList<Ogre::SkeletonPtr>& sourceSkeletons,
+    QString& errorMsg)
+{
     if (!baseEntity || !baseEntity->hasSkeleton())
     {
         errorMsg = "Base entity has no skeleton";
@@ -219,9 +228,58 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
         mergedCount += numAnims;
     }
 
+    // --- Step 1b: Merge from standalone skeletons (animation-only files) ---
+    for (const Ogre::SkeletonPtr& srcSkel : sourceSkeletons)
+    {
+        if (!srcSkel || srcSkel.get() == baseSkel.get())
+            continue;
+
+        if (!areSkeletonsCompatible(baseSkel, srcSkel))
+        {
+            errorMsg = QString("Skeleton '%1' is incompatible with base skeleton")
+                .arg(srcSkel->getName().c_str());
+            return nullptr;
+        }
+
+        Ogre::Skeleton::BoneHandleMap boneHandleMap;
+        baseSkel->_buildMapBoneByName(srcSkel.get(), boneHandleMap);
+
+        // Use skeleton name (strip ".skeleton" suffix) as the naming prefix
+        QString rawName = QString::fromStdString(srcSkel->getName());
+        if (rawName.endsWith(".skeleton", Qt::CaseInsensitive))
+            rawName.chop(9);
+
+        unsigned short numAnims = srcSkel->getNumAnimations();
+
+        QList<std::pair<std::string, std::string>> renameList;
+        for (unsigned short i = 0; i < numAnims; ++i)
+        {
+            Ogre::Animation* anim = srcSkel->getAnimation(i);
+            std::string origName = anim->getName();
+            QString desired = buildAnimName(rawName, QString::fromStdString(origName));
+            QString finalName = deduplicateName(desired, existingNames);
+            renameList.append({origName, finalName.toStdString()});
+        }
+
+        QList<std::pair<std::string, std::string>> srcTempToFinal;
+        for (int i = 0; i < renameList.size(); ++i)
+        {
+            std::string tempName = "__merge_temp_src_" + std::to_string(i);
+            while (srcSkel->hasAnimation(tempName))
+                tempName += "_x";
+            renameAnimation(srcSkel.get(), renameList[i].first, tempName);
+            srcTempToFinal.append({tempName, renameList[i].second});
+        }
+        for (const auto& [tempName, finalName] : srcTempToFinal)
+            renameAnimation(srcSkel.get(), tempName, finalName);
+
+        baseSkel->_mergeSkeletonAnimations(srcSkel.get(), boneHandleMap);
+        mergedCount += numAnims;
+    }
+
     if (mergedCount == 0)
     {
-        errorMsg = "No animations were merged (no valid source entities found)";
+        errorMsg = "No animations were merged (no valid source entities or skeletons found)";
         return nullptr;
     }
 

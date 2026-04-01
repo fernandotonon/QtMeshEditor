@@ -39,6 +39,9 @@ public:
 
     Ogre::MeshPtr loadModel(const std::string& path, bool convertToLeftHanded = true, unsigned int additionalFlags = 0);
 
+    // Non-null only when loadModel() processed an animation-only file (no mesh geometry).
+    Ogre::SkeletonPtr getLoadedSkeleton() const { return skeleton; }
+
 private:
     Assimp::Importer importer;
     Ogre::SkeletonPtr skeleton;

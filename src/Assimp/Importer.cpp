@@ -58,8 +58,15 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
 
     const aiScene* scene = importer.ReadFile(path, flags);
 
-    if(!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
+    // A null scene or missing root node is always fatal.
+    // AI_SCENE_FLAGS_INCOMPLETE means "no meshes", which is fine for animation-only files.
+    if(!scene || !scene->mRootNode) {
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));
+        return {};
+    }
+    const bool animationOnly = (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) != 0;
+    if(animationOnly && !scene->HasAnimations()) {
+        Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP:: Scene has no meshes and no animations.");
         return {};
     }
 
@@ -98,6 +105,10 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
             animationProcessor.processAnimations(scene);
         }
     }
+
+    // For animation-only files there is no geometry to process.
+    if(animationOnly)
+        return {};
 
     // Process the root node recursively (meshes)
     MeshProcessor meshProcessor(skeleton);
