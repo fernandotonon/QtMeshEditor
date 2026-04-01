@@ -58,6 +58,12 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
 
     const aiScene* scene = importer.ReadFile(path, flags);
 
+    // Read coordinate system from FBX metadata (1=Y-up, 2=Z-up).
+    // Do this immediately after ReadFile while the scene is still valid.
+    m_sceneUpAxis = 1; // default: Y-up
+    if (scene && scene->mMetaData)
+        scene->mMetaData->Get("UpAxis", m_sceneUpAxis);
+
     // A null scene or missing root node is always fatal.
     // AI_SCENE_FLAGS_INCOMPLETE means "no meshes", which is fine for animation-only files.
     if(!scene || !scene->mRootNode) {

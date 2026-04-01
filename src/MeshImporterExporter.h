@@ -51,7 +51,8 @@ public:
     static void configureCameraForTesting(const Ogre::Entity *en) { configureCamera(en); }
     static QString exportTextureName(const QString& originalName);
     static void importer(const QStringList &_uriList, unsigned int additionalFlags = 0,
-                         QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons = nullptr);
+                         QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons = nullptr,
+                         int* outUpAxis = nullptr);
     static QString exporter(const Ogre::SceneNode *_sn);
     static int exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format);
     static QString formatFileURI(const QString &_uri, const QString &_format);

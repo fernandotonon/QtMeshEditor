@@ -264,6 +264,8 @@ QString CLIPipeline::formatMeshInfoText(const MeshInfo& info)
     QTextStream s(&result);
 
     s << "File: " << info.file << "\n";
+    if (info.upAxis != 1)
+        s << "Coordinate system: " << (info.upAxis == 2 ? "Z-up (Unreal Engine)" : "unknown") << "\n";
     s << "Vertices: " << info.vertices << "\n";
     s << "Triangles: " << info.triangles << "\n";
     s << "Submeshes: " << info.submeshes << "\n";
@@ -305,6 +307,7 @@ QString CLIPipeline::formatMeshInfoJson(const MeshInfo& info)
 {
     QJsonObject obj;
     obj["file"] = info.file;
+    obj["upAxis"] = info.upAxis == 1 ? "Y-up" : (info.upAxis == 2 ? "Z-up" : "unknown");
     obj["vertices"] = static_cast<int>(info.vertices);
     obj["triangles"] = static_cast<int>(info.triangles);
     obj["submeshes"] = static_cast<int>(info.submeshes);
@@ -471,7 +474,8 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
 
     // Load the file; animation-only files produce no entity but populate animOnlySkeletons.
     QList<Ogre::SkeletonPtr> animOnlySkeletons;
-    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0, &animOnlySkeletons);
+    int upAxis = 1;
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0, &animOnlySkeletons, &upAxis);
 
     auto& entities = Manager::getSingleton()->getEntities();
 
@@ -482,6 +486,7 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
             if (!skel) continue;
             MeshInfo info;
             info.file = fi.fileName();
+            info.upAxis = upAxis;
             info.skeletonName = QString::fromStdString(skel->getName());
             info.boneCount = skel->getNumBones();
             for (unsigned short b = 0; b < skel->getNumBones(); ++b)
@@ -519,6 +524,7 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
         QJsonArray arr;
         for (Ogre::Entity* entity : entities) {
             MeshInfo info = extractMeshInfo(entity, fi.fileName());
+            info.upAxis = upAxis;
             QJsonDocument doc = QJsonDocument::fromJson(formatMeshInfoJson(info).toUtf8());
             arr.append(doc.object());
         }
@@ -530,6 +536,7 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
     } else {
         for (Ogre::Entity* entity : entities) {
             MeshInfo info = extractMeshInfo(entity, fi.fileName());
+            info.upAxis = upAxis;
             cliWrite(formatMeshInfoText(info));
         }
     }

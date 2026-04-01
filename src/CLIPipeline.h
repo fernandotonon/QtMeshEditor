@@ -15,6 +15,7 @@ struct MeshInfo {
     unsigned int submeshes = 0;
     QStringList materials;
     QStringList textures;
+    int upAxis = 1; // 1=Y-up (default/Mixamo), 2=Z-up (Unreal Engine)
     QString skeletonName;
     unsigned short boneCount = 0;
     QStringList bones;
