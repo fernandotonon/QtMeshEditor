@@ -4,6 +4,7 @@
 #include <OgreAnimation.h>
 #include <QSet>
 #include <QRegularExpression>
+#include <unordered_map>
 
 // Remove common Mixamo noise from animation names before slugifying.
 // e.g. "Armature|mixamo.com|Layer0" → "Armature|Layer0"
@@ -76,6 +77,51 @@ static QString deduplicateName(const QString& desired, QSet<QString>& existingNa
     return candidate;
 }
 
+// Copy all animations from srcSkel into baseSkel, remapping bone handles by name.
+// This bypasses Ogre's _mergeSkeletonAnimations hierarchy check, which rejects skeletons
+// that are structurally compatible (same bone names) but differ in their root chain
+// (e.g. a mesh skeleton wrapping 'root' under a mesh-name bone that the animation lacks).
+static void mergeAnimationsByName(Ogre::Skeleton* baseSkel, const Ogre::Skeleton* srcSkel)
+{
+    // Build name→handle map for the base skeleton
+    std::unordered_map<std::string, unsigned short> baseHandleByName;
+    for (unsigned short i = 0; i < baseSkel->getNumBones(); ++i)
+        baseHandleByName[baseSkel->getBone(i)->getName()] = i;
+
+    unsigned short numAnims = srcSkel->getNumAnimations();
+    for (unsigned short a = 0; a < numAnims; ++a)
+    {
+        const Ogre::Animation* srcAnim = srcSkel->getAnimation(a);
+        Ogre::Animation* dstAnim = baseSkel->createAnimation(srcAnim->getName(), srcAnim->getLength());
+        dstAnim->setInterpolationMode(srcAnim->getInterpolationMode());
+        dstAnim->setRotationInterpolationMode(srcAnim->getRotationInterpolationMode());
+
+        for (const auto& [srcHandle, srcTrack] : srcAnim->_getNodeTrackList())
+        {
+            if (srcHandle >= srcSkel->getNumBones())
+                continue;
+            const std::string& boneName = srcSkel->getBone(srcHandle)->getName();
+            auto it = baseHandleByName.find(boneName);
+            if (it == baseHandleByName.end())
+                continue; // bone not in base — skip track
+
+            unsigned short baseHandle = it->second;
+            auto* dstTrack = dstAnim->createNodeTrack(baseHandle);
+            dstTrack->setAssociatedNode(baseSkel->getBone(baseHandle));
+            dstTrack->setUseShortestRotationPath(srcTrack->getUseShortestRotationPath());
+
+            for (unsigned short k = 0; k < srcTrack->getNumKeyFrames(); ++k)
+            {
+                const auto* kf = srcTrack->getNodeKeyFrame(k);
+                auto* dstKf = dstTrack->createNodeKeyFrame(kf->getTime());
+                dstKf->setTranslate(kf->getTranslate());
+                dstKf->setRotation(kf->getRotation());
+                dstKf->setScale(kf->getScale());
+            }
+        }
+    }
+}
+
 void AnimationMerger::renameAnimation(Ogre::Skeleton* skel,
                                        const std::string& oldName,
                                        const std::string& newName)
@@ -114,16 +160,17 @@ bool AnimationMerger::areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const O
     if (!a || !b)
         return false;
 
-    // Use Ogre's built-in bone name mapping to check compatibility
+    // Check that every bone in 'b' (source/animation) has a matching bone in 'a' (base/mesh).
+    // The base is allowed to have extra bones (e.g. IK targets) that the animation doesn't touch.
     Ogre::Skeleton::BoneHandleMap boneHandleMap;
-    a->_buildMapBoneByName(b.get(), boneHandleMap);
+    b->_buildMapBoneByName(a.get(), boneHandleMap);
 
-    // The map has one entry per bone in skeleton 'a'.
-    // An entry equal to b->getNumBones() means "no match found" for that bone.
-    unsigned short numBonesSrc = b->getNumBones();
+    // The map has one entry per bone in 'b'.
+    // An entry equal to a->getNumBones() means "no match found" for that source bone.
+    unsigned short numBaseBones = a->getNumBones();
     for (auto handle : boneHandleMap)
     {
-        if (handle == numBonesSrc)
+        if (handle == numBaseBones)
             return false;
     }
     return true;
@@ -189,9 +236,6 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
             return nullptr;
         }
 
-        Ogre::Skeleton::BoneHandleMap boneHandleMap;
-        baseSkel->_buildMapBoneByName(srcSkel.get(), boneHandleMap);
-
         QString rawName;
         if (auto* parentNode = srcEntity->getParentSceneNode())
             rawName = QString::fromStdString(parentNode->getName());
@@ -224,7 +268,7 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
         for (const auto& [tempName, finalName] : srcTempToFinal)
             renameAnimation(srcSkel.get(), tempName, finalName);
 
-        baseSkel->_mergeSkeletonAnimations(srcSkel.get(), boneHandleMap);
+        mergeAnimationsByName(baseSkel.get(), srcSkel.get());
         mergedCount += numAnims;
     }
 
@@ -240,9 +284,6 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
                 .arg(srcSkel->getName().c_str());
             return nullptr;
         }
-
-        Ogre::Skeleton::BoneHandleMap boneHandleMap;
-        baseSkel->_buildMapBoneByName(srcSkel.get(), boneHandleMap);
 
         // Use skeleton name (strip ".skeleton" suffix) as the naming prefix
         QString rawName = QString::fromStdString(srcSkel->getName());
@@ -273,7 +314,7 @@ Ogre::Entity* AnimationMerger::mergeAnimations(
         for (const auto& [tempName, finalName] : srcTempToFinal)
             renameAnimation(srcSkel.get(), tempName, finalName);
 
-        baseSkel->_mergeSkeletonAnimations(srcSkel.get(), boneHandleMap);
+        mergeAnimationsByName(baseSkel.get(), srcSkel.get());
         mergedCount += numAnims;
     }
 

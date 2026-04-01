@@ -238,6 +238,8 @@ MeshInfo CLIPipeline::extractMeshInfo(const Ogre::Entity* entity, const QString&
         if (skel) {
             info.skeletonName = QString::fromStdString(skel->getName());
             info.boneCount = skel->getNumBones();
+            for (unsigned short b = 0; b < skel->getNumBones(); ++b)
+                info.bones << QString::fromStdString(skel->getBone(b)->getName());
             for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
                 auto* anim = skel->getAnimation(a);
                 info.animations.append({
@@ -273,6 +275,12 @@ QString CLIPipeline::formatMeshInfoText(const MeshInfo& info)
     if (!info.skeletonName.isEmpty()) {
         s << "Skeleton: " << info.skeletonName
           << " (" << info.boneCount << " bones)\n";
+
+        if (!info.bones.isEmpty()) {
+            s << "Bones:\n";
+            for (const auto& bone : info.bones)
+                s << "  " << bone << "\n";
+        }
 
         if (!info.animations.isEmpty()) {
             s << "Animations:\n";
@@ -314,7 +322,10 @@ QString CLIPipeline::formatMeshInfoJson(const MeshInfo& info)
     if (!info.skeletonName.isEmpty()) {
         QJsonObject skel;
         skel["name"] = info.skeletonName;
-        skel["bones"] = info.boneCount;
+        skel["boneCount"] = info.boneCount;
+        QJsonArray boneArr;
+        for (const auto& b : info.bones) boneArr.append(b);
+        skel["bones"] = boneArr;
         obj["skeleton"] = skel;
 
         QJsonArray anims;
@@ -473,6 +484,8 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
             info.file = fi.fileName();
             info.skeletonName = QString::fromStdString(skel->getName());
             info.boneCount = skel->getNumBones();
+            for (unsigned short b = 0; b < skel->getNumBones(); ++b)
+                info.bones << QString::fromStdString(skel->getBone(b)->getName());
             for (unsigned short i = 0; i < skel->getNumAnimations(); ++i) {
                 auto* anim = skel->getAnimation(i);
                 info.animations.append({QString::fromStdString(anim->getName()), anim->getLength()});

@@ -17,6 +17,7 @@ struct MeshInfo {
     QStringList textures;
     QString skeletonName;
     unsigned short boneCount = 0;
+    QStringList bones;
     struct AnimInfo {
         QString name;
         float duration = 0.0f;
