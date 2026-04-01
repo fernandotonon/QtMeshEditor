@@ -184,14 +184,21 @@ bool AnimationMerger::areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const O
         // Validate parent chain: the parent bone name must match between both skeletons.
         // Only consider parents that are themselves bones in their respective skeleton.
         // This catches skeletons that share bone names but have different hierarchies.
-        // Note: bind-pose values are intentionally NOT compared here — retargeted animation
-        // FBX files (e.g. Unreal Engine exports) may have numerically different bind transforms
-        // for the same logical skeleton, which would cause false incompatibility rejections.
+        //
+        // Important asymmetry: we only enforce the check when the SOURCE (animation-only)
+        // bone has a bone parent.  If the source bone has no bone parent (it is a root in
+        // the animation FBX), we let it pass — the base skeleton may have a scene-grouping
+        // node (e.g. "Armature") promoted to a bone above it, but that node is absent from
+        // animation-only FBX files that skip non-animated ancestors.
+        //
+        // Note: bind-pose values are intentionally NOT compared — retargeted animation FBX
+        // files (e.g. Unreal Engine exports) may have numerically different bind transforms
+        // for the same logical skeleton, causing false incompatibility rejections.
         auto* srcParentNode  = srcBone->getParent();
         auto* baseParentNode = baseBone->getParent();
         std::string srcParentName  = (srcParentNode  && b->hasBone(srcParentNode->getName()))  ? srcParentNode->getName()  : "";
         std::string baseParentName = (baseParentNode && a->hasBone(baseParentNode->getName())) ? baseParentNode->getName() : "";
-        if (srcParentName != baseParentName)
+        if (!srcParentName.empty() && srcParentName != baseParentName)
             return false;
     }
     return true;
