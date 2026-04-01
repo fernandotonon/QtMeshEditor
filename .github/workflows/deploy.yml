@@ -1645,16 +1645,17 @@ jobs:
         run: |
           $version = "${{ github.event.release.tag_name }}"
           $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${version}/QtMeshEditor-${version}-bin-Windows.zip"
-          # Try 'update' first (package already in winget-pkgs); fall back to 'new' for first submission
+          # Try 'update' first (package already in winget-pkgs); fall back to 'new' for first submission.
+          # Note: 'update' supports --submit; 'new' does not — providing --token is enough to auto-submit.
           $result = .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
             --version $version `
             --urls $url `
             --submit `
             --token ${{ secrets.WINGET_TOKEN }}
           if ($LASTEXITCODE -ne 0) {
-            # 'new' does not support --version or --urls; pass URL positionally
+            # 'new' does not support --version, --urls, or --submit; pass URL positionally.
+            # --token alone triggers automatic PR submission.
             .\wingetcreate.exe new $url `
-              --submit `
               --token ${{ secrets.WINGET_TOKEN }}
           }
         continue-on-error: true
