@@ -42,6 +42,7 @@ THE SOFTWARE.
 
 #include "Manager.h"
 #include "SelectionSet.h"
+#include "AnimationMerger.h"
 #include "SentryReporter.h"
 #include "Assimp/Importer.h"
 #include "Assimp/MaterialProcessor.h"
@@ -871,13 +872,38 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                             QString animList;
                             for (unsigned short i = 0; i < numAnims; ++i)
                                 animList += "\n  \u2022 " + QString::fromStdString(skel->getAnimation(i)->getName());
-                            QMessageBox::information(nullptr, "Animation-only file",
-                                QString("'%1' contains no mesh geometry \u2014 %2 animation(s) were imported:%3\n\n"
-                                        "Import the target mesh, select it, then click the "
-                                        "\u201cMerge Animations\u201d button in the toolbar.")
-                                    .arg(file.fileName())
-                                    .arg(numAnims)
-                                    .arg(animList));
+
+                            // If there is a selected entity with a skeleton, offer to merge immediately.
+                            Ogre::Entity* baseEntity = nullptr;
+                            auto selected = SelectionSet::getSingleton()->getResolvedEntities();
+                            for (Ogre::Entity* e : selected) {
+                                if (e && e->hasSkeleton()) { baseEntity = e; break; }
+                            }
+
+                            if (baseEntity) {
+                                auto btn = QMessageBox::question(nullptr, "Animation-only file",
+                                    QString("'%1' contains no mesh geometry \u2014 %2 animation(s) were found:%3\n\n"
+                                            "Merge these animations into '%4'?")
+                                        .arg(file.fileName())
+                                        .arg(numAnims)
+                                        .arg(animList)
+                                        .arg(baseEntity->getName().c_str()),
+                                    QMessageBox::Yes | QMessageBox::No);
+                                if (btn == QMessageBox::Yes) {
+                                    QString errMsg;
+                                    AnimationMerger::mergeAnimations(baseEntity, {}, {skel}, errMsg);
+                                    if (!errMsg.isEmpty())
+                                        QMessageBox::warning(nullptr, "Merge failed", errMsg);
+                                }
+                            } else {
+                                QMessageBox::information(nullptr, "Animation-only file",
+                                    QString("'%1' contains no mesh geometry \u2014 %2 animation(s) were imported:%3\n\n"
+                                            "To use these animations: import the target mesh, select it, "
+                                            "then import this file again.")
+                                        .arg(file.fileName())
+                                        .arg(numAnims)
+                                        .arg(animList));
+                            }
                         }
                     }
                     continue;
