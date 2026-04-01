@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include <algorithm>
 
 Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded, unsigned int additionalFlags) {
+    skeleton.reset();  // Clear any skeleton from a previous import
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
     unsigned int flags = aiProcess_CalcTangentSpace |
@@ -58,8 +59,24 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
 
     const aiScene* scene = importer.ReadFile(path, flags);
 
-    if(!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE) || !scene->mRootNode) {
+    // Read coordinate system from FBX metadata (1=Y-up, 2=Z-up).
+    // Do this immediately after ReadFile while the scene is still valid.
+    m_sceneUpAxis = 1; // default: Y-up
+    if (scene && scene->mMetaData)
+        scene->mMetaData->Get("UpAxis", m_sceneUpAxis);
+
+    // A null scene or missing root node is always fatal.
+    if(!scene || !scene->mRootNode) {
         Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));
+        return {};
+    }
+    // animationOnly: the scene has no geometry (e.g. Unreal Engine retarget FBX).
+    // AI_SCENE_FLAGS_INCOMPLETE does NOT reliably indicate "no meshes" — it can also be set on
+    // scenes that have valid geometry but missing materials or other partial data.  Use the actual
+    // mesh count as the authoritative check.
+    const bool animationOnly = (scene->mNumMeshes == 0);
+    if(animationOnly && !scene->HasAnimations()) {
+        Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP:: Scene has no meshes and no animations.");
         return {};
     }
 
@@ -98,6 +115,10 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
             animationProcessor.processAnimations(scene);
         }
     }
+
+    // For animation-only files there is no geometry to process.
+    if(animationOnly)
+        return {};
 
     // Process the root node recursively (meshes)
     MeshProcessor meshProcessor(skeleton);

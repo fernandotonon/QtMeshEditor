@@ -238,6 +238,8 @@ MeshInfo CLIPipeline::extractMeshInfo(const Ogre::Entity* entity, const QString&
         if (skel) {
             info.skeletonName = QString::fromStdString(skel->getName());
             info.boneCount = skel->getNumBones();
+            for (unsigned short b = 0; b < skel->getNumBones(); ++b)
+                info.bones << QString::fromStdString(skel->getBone(b)->getName());
             for (unsigned short a = 0; a < skel->getNumAnimations(); ++a) {
                 auto* anim = skel->getAnimation(a);
                 info.animations.append({
@@ -262,6 +264,11 @@ QString CLIPipeline::formatMeshInfoText(const MeshInfo& info)
     QTextStream s(&result);
 
     s << "File: " << info.file << "\n";
+    s << "Coordinate system: "
+      << (info.upAxis == 1 ? "Y-up (Mixamo/default)"
+                           : info.upAxis == 2 ? "Z-up (Unreal Engine)"
+                                              : "unknown")
+      << "\n";
     s << "Vertices: " << info.vertices << "\n";
     s << "Triangles: " << info.triangles << "\n";
     s << "Submeshes: " << info.submeshes << "\n";
@@ -273,6 +280,12 @@ QString CLIPipeline::formatMeshInfoText(const MeshInfo& info)
     if (!info.skeletonName.isEmpty()) {
         s << "Skeleton: " << info.skeletonName
           << " (" << info.boneCount << " bones)\n";
+
+        if (!info.bones.isEmpty()) {
+            s << "Bones:\n";
+            for (const auto& bone : info.bones)
+                s << "  " << bone << "\n";
+        }
 
         if (!info.animations.isEmpty()) {
             s << "Animations:\n";
@@ -297,6 +310,7 @@ QString CLIPipeline::formatMeshInfoJson(const MeshInfo& info)
 {
     QJsonObject obj;
     obj["file"] = info.file;
+    obj["upAxis"] = info.upAxis == 1 ? "Y-up" : (info.upAxis == 2 ? "Z-up" : "unknown");
     obj["vertices"] = static_cast<int>(info.vertices);
     obj["triangles"] = static_cast<int>(info.triangles);
     obj["submeshes"] = static_cast<int>(info.submeshes);
@@ -314,7 +328,10 @@ QString CLIPipeline::formatMeshInfoJson(const MeshInfo& info)
     if (!info.skeletonName.isEmpty()) {
         QJsonObject skel;
         skel["name"] = info.skeletonName;
-        skel["bones"] = info.boneCount;
+        skel["boneCount"] = info.boneCount;
+        QJsonArray boneArr;
+        for (const auto& b : info.bones) boneArr.append(b);
+        skel["bones"] = boneArr;
         obj["skeleton"] = skel;
 
         QJsonArray anims;
@@ -458,10 +475,47 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
 
     SentryReporter::addBreadcrumb("cli.info", QString("Inspect .%1%2").arg(fi.suffix(), jsonOutput ? " json=true" : ""));
 
-    // Load the file
-    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    // Load the file; animation-only files produce no entity but populate animOnlySkeletons.
+    QList<Ogre::SkeletonPtr> animOnlySkeletons;
+    int upAxis = 1;
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0, &animOnlySkeletons, &upAxis);
 
     auto& entities = Manager::getSingleton()->getEntities();
+
+    // Animation-only file: no entities, but skeleton was loaded.
+    if (entities.isEmpty() && !animOnlySkeletons.isEmpty()) {
+        QList<MeshInfo> infos;
+        for (const Ogre::SkeletonPtr& skel : animOnlySkeletons) {
+            if (!skel) continue;
+            MeshInfo info;
+            info.file = fi.fileName();
+            info.upAxis = upAxis;
+            info.skeletonName = QString::fromStdString(skel->getName());
+            info.boneCount = skel->getNumBones();
+            for (unsigned short b = 0; b < skel->getNumBones(); ++b)
+                info.bones << QString::fromStdString(skel->getBone(b)->getName());
+            for (unsigned short i = 0; i < skel->getNumAnimations(); ++i) {
+                auto* anim = skel->getAnimation(i);
+                info.animations.append({QString::fromStdString(anim->getName()), anim->getLength()});
+            }
+            infos.append(info);
+        }
+        if (jsonOutput) {
+            QJsonArray arr;
+            for (const auto& info : infos) {
+                QJsonDocument doc = QJsonDocument::fromJson(formatMeshInfoJson(info).toUtf8());
+                arr.append(doc.object());
+            }
+            cliWrite(QString::fromUtf8((arr.size() == 1
+                ? QJsonDocument(arr[0].toObject())
+                : QJsonDocument(arr)).toJson(QJsonDocument::Indented)));
+        } else {
+            for (const auto& info : infos)
+                cliWrite(formatMeshInfoText(info));
+        }
+        return 0;
+    }
+
     if (entities.isEmpty()) {
         SentryReporter::captureMessage(QString("CLI info: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << filePath << Qt::endl;
@@ -473,6 +527,7 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
         QJsonArray arr;
         for (Ogre::Entity* entity : entities) {
             MeshInfo info = extractMeshInfo(entity, fi.fileName());
+            info.upAxis = upAxis;
             QJsonDocument doc = QJsonDocument::fromJson(formatMeshInfoJson(info).toUtf8());
             arr.append(doc.object());
         }
@@ -484,6 +539,7 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
     } else {
         for (Ogre::Entity* entity : entities) {
             MeshInfo info = extractMeshInfo(entity, fi.fileName());
+            info.upAxis = upAxis;
             cliWrite(formatMeshInfoText(info));
         }
     }
@@ -835,12 +891,15 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     // Merge mode
     if (mergeMode) {
-        // Load animation files, verifying each import succeeds
+        // Load animation files; animation-only files (no mesh) produce a skeleton instead of entity.
+        QList<Ogre::SkeletonPtr> animOnlySkeletons;
         for (const auto& f : mergeFiles) {
-            int countBefore = Manager::getSingleton()->getEntities().size();
-            MeshImporterExporter::importer({f});
-            int countAfter = Manager::getSingleton()->getEntities().size();
-            if (countAfter <= countBefore) {
+            int entityCountBefore = Manager::getSingleton()->getEntities().size();
+            int skelCountBefore = animOnlySkeletons.size();
+            MeshImporterExporter::importer({f}, 0, &animOnlySkeletons);
+            bool gotEntity = Manager::getSingleton()->getEntities().size() > entityCountBefore;
+            bool gotSkeleton = animOnlySkeletons.size() > skelCountBefore;
+            if (!gotEntity && !gotSkeleton) {
                 SentryReporter::captureMessage(QString("CLI anim: merge input import failed (.%1)").arg(QFileInfo(f).suffix()), "error");
                 err() << "Error: Failed to load animation file: " << f << Qt::endl;
                 return 1;
@@ -848,13 +907,16 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
 
         auto& allEntities = Manager::getSingleton()->getEntities();
-        if (allEntities.size() < 2) {
-            err() << "Error: Need at least 2 loaded entities to merge (got " << allEntities.size() << ")" << Qt::endl;
+        // allEntities includes the base entity (already validated above) plus any
+        // mesh entities from merge files. If no additional mesh entities AND no
+        // animation-only skeletons were collected, there is nothing to merge.
+        if (allEntities.size() < 2 && animOnlySkeletons.isEmpty()) {
+            err() << "Error: Need at least one source file to merge (got none)." << Qt::endl;
             return 1;
         }
 
         QString mergeErr;
-        Ogre::Entity* merged = AnimationMerger::mergeAnimations(allEntities.first(), allEntities, mergeErr);
+        Ogre::Entity* merged = AnimationMerger::mergeAnimations(allEntities.first(), allEntities, animOnlySkeletons, mergeErr);
         if (!merged) {
             SentryReporter::captureMessage("CLI anim: merge failed", "error");
             err() << "Error: Merge failed: " << mergeErr << Qt::endl;

@@ -31,8 +31,8 @@ THE SOFTWARE.
 #include <assimp/Exporter.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
-#include <QMessageBox>
 #include <QFileDialog>
+#include <QMessageBox>
 #include <QDebug>
 #include <set>
 
@@ -824,7 +824,9 @@ static void ensureResourceGroup(const QString &path)
     }
 }
 
-void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags)
+void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
+                                     QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
+                                     int* outUpAxis)
 {
     try{
         foreach(const QString &fileName,_uriList)
@@ -859,11 +861,28 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 // to avoid double-flipping geometry and UVs.
                 bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
                 Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString(), convertLH, additionalFlags);
-                if (!mesh) return;
+                // Read coordinate system from metadata immediately — valid for both mesh and animation-only files.
+                if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
+                if (!mesh) {
+                    // Animation-only file: skeleton/animations were loaded, but there is no mesh.
+                    // Collect into the caller-provided list; callers that want UI notifications
+                    // should pass outAnimOnlySkeletons and handle presentation themselves.
+                    Ogre::SkeletonPtr skel = importer.getLoadedSkeleton();
+                    if (skel && outAnimOnlySkeletons)
+                        outAnimOnlySkeletons->append(skel);
+                    continue;
+                }
 
                 auto meshName = file.baseName();
                 sn = Manager::getSingleton()->addSceneNode(QString(meshName));
                 en = Manager::getSingleton()->createEntity(sn, mesh);
+
+                // Auto-correct Z-up coordinate systems (e.g. Unreal Engine FBX exports).
+                // Rotate the scene node so the mesh stands upright in Ogre's Y-up world.
+                // Bone data and animations remain in their native space — the node rotation
+                // is purely a display correction and does not affect animation playback.
+                if (importer.getSceneUpAxis() == 2)
+                    sn->rotate(Ogre::Vector3::UNIT_X, Ogre::Degree(90));
             }
 
             sn->setPosition(0,0,0);

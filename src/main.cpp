@@ -1,5 +1,6 @@
 #include <QApplication>
 #include <QCoreApplication>
+#include <QMessageBox>
 #include <QPalette>
 #include <QDebug>
 #include <QTimer>
@@ -92,9 +93,13 @@ int main(int argc, char *argv[])
             // QtMeshEditor.exe is a WIN32 GUI subsystem executable — it has no
             // console by default. Reattach to the parent console (PowerShell/cmd)
             // so that CLI output (--version, --help, subcommands) is visible.
-            AttachConsole(ATTACH_PARENT_PROCESS);
-            freopen("CONOUT$", "w", stdout);
-            freopen("CONOUT$", "w", stderr);
+            // Only redirect stdout/stderr if AttachConsole succeeded; otherwise
+            // freopen("CONOUT$") fails and leaves stdout in an invalid state,
+            // causing a crash on any subsequent write.
+            if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+                freopen("CONOUT$", "w", stdout);
+                freopen("CONOUT$", "w", stderr);
+            }
 #endif
             return CLIPipeline::run(argc, argv);
         }
@@ -237,23 +242,37 @@ int main(int argc, char *argv[])
             return ThemeManager::qmlInstance(engine, scriptEngine);
         });
 
-    auto startupTxn = SentryReporter::startTransaction("app.startup", "app.load");
-    auto startupTxnClose = qScopeGuard([&] { SentryReporter::finishTransaction(startupTxn); });
-    MainWindow w;
-    w.show();
+    int result = 0;
+    try {
+        auto startupTxn = SentryReporter::startTransaction("app.startup", "app.load");
+        auto startupTxnClose = qScopeGuard([&] { SentryReporter::finishTransaction(startupTxn); });
+        MainWindow w;
+        w.show();
 
-    // Start MCP server alongside GUI if requested
-    if (mcpWithGuiMode) {
-        auto *mcpServer = new MCPServer(&w);
-        mcpServer->setMainWindow(&w);
-        mcpServer->setOutputFd(savedStdoutFd);
-        mcpServer->start();
-        mcpServer->startHttp(httpPort);
-        w.setMCPServer(mcpServer);  // MainWindow takes ownership
-        qDebug() << "MCP Server started alongside GUI";
+        // Start MCP server alongside GUI if requested
+        if (mcpWithGuiMode) {
+            auto *mcpServer = new MCPServer(&w);
+            mcpServer->setMainWindow(&w);
+            mcpServer->setOutputFd(savedStdoutFd);
+            mcpServer->start();
+            mcpServer->startHttp(httpPort);
+            w.setMCPServer(mcpServer);  // MainWindow takes ownership
+            qDebug() << "MCP Server started alongside GUI";
+        }
+
+        result = a.exec();
+    } catch (const std::exception& e) {
+        QMessageBox::critical(nullptr, "QtMeshEditor - Startup Error",
+            QString("QtMeshEditor failed to start:\n\n%1\n\n"
+                    "Please ensure your GPU drivers are up to date and OpenGL is available.")
+                .arg(QString::fromStdString(e.what())));
+        result = 1;
+    } catch (...) {
+        QMessageBox::critical(nullptr, "QtMeshEditor - Startup Error",
+            "QtMeshEditor failed to start due to an unexpected error.\n\n"
+            "Please ensure your GPU drivers are up to date and OpenGL is available.");
+        result = 1;
     }
-
-    int result = a.exec();
 
     // SentryReporter::shutdown() is called automatically via qScopeGuard
 
