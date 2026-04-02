@@ -1643,83 +1643,89 @@ jobs:
 
       - name: Generate manifests and submit to WinGet
         run: |
-          $version = "${{ github.event.release.tag_name }}"
-          $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${version}/QtMeshEditor-${version}-bin-Windows.zip"
+          $rawTag = "${{ github.event.release.tag_name }}"
+          # Strip leading "v" so manifest PackageVersion and directory are always bare numbers.
+          # GitHub download URLs and ReleaseNotesUrl still use the raw tag.
+          $ver = $rawTag.TrimStart("v")
+          $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${rawTag}/QtMeshEditor-${rawTag}-bin-Windows.zip"
 
-          # Download ZIP and compute SHA256 without interactive inspection
+          # Download ZIP and compute SHA256 without interactive inspection.
+          # Using wingetcreate submit (not update) so it never needs to inspect
+          # the ZIP interactively, which fails in CI (Sharprompt requires a terminal).
           Write-Host "Downloading $url ..."
           Invoke-WebRequest -Uri $url -OutFile installer.zip
           $sha256 = (Get-FileHash -Algorithm SHA256 installer.zip).Hash.ToUpper()
           Write-Host "SHA256: $sha256"
 
           # Build manifest directory structure
-          $manifestDir = "manifests\f\FernandoTonon\QtMeshEditor\$version"
+          $manifestDir = "manifests\f\FernandoTonon\QtMeshEditor\$ver"
           New-Item -ItemType Directory -Force -Path $manifestDir | Out-Null
 
-          # installer.yaml — specify NestedInstallerFiles directly so wingetcreate submit
-          # never needs to inspect the ZIP interactively (avoids Sharprompt failure in CI).
-          @"
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json
-PackageIdentifier: FernandoTonon.QtMeshEditor
-PackageVersion: $version
-InstallerType: zip
-NestedInstallerType: portable
-NestedInstallerFiles:
-  - RelativeFilePath: bin\QtMeshEditor.exe
-    PortableCommandAlias: qtmesheditor
-  - RelativeFilePath: bin\qtmesh.exe
-    PortableCommandAlias: qtmesh
-Installers:
-  - Architecture: x64
-    InstallerUrl: $url
-    InstallerSha256: $sha256
-ManifestType: installer
-ManifestVersion: 1.12.0
-"@ | Set-Content "$manifestDir\FernandoTonon.QtMeshEditor.installer.yaml" -Encoding UTF8
+          # Write installer.yaml using array-join to avoid here-string YAML ambiguity.
+          # NestedInstallerFiles are specified explicitly — this is the whole point:
+          # wingetcreate submit validates without re-inspecting the ZIP.
+          @(
+            "# yaml-language-server: `$schema=https://aka.ms/winget-manifest.installer.1.12.0.schema.json",
+            "PackageIdentifier: FernandoTonon.QtMeshEditor",
+            "PackageVersion: $ver",
+            "InstallerType: zip",
+            "NestedInstallerType: portable",
+            "NestedInstallerFiles:",
+            "  - RelativeFilePath: bin\QtMeshEditor.exe",
+            "    PortableCommandAlias: qtmesheditor",
+            "  - RelativeFilePath: bin\qtmesh.exe",
+            "    PortableCommandAlias: qtmesh",
+            "Installers:",
+            "  - Architecture: x64",
+            "    InstallerUrl: $url",
+            "    InstallerSha256: $sha256",
+            "ManifestType: installer",
+            "ManifestVersion: 1.12.0"
+          ) -join "`n" | Set-Content "$manifestDir\FernandoTonon.QtMeshEditor.installer.yaml" -Encoding UTF8
 
-          # locale.en-US.yaml
-          @"
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
-PackageIdentifier: FernandoTonon.QtMeshEditor
-PackageVersion: $version
-PackageLocale: en-US
-Publisher: Fernando Tonon
-PublisherUrl: https://github.com/fernandotonon
-PublisherSupportUrl: https://github.com/fernandotonon/QtMeshEditor/issues
-PackageName: QtMeshEditor
-PackageUrl: https://github.com/fernandotonon/QtMeshEditor
-License: MIT
-LicenseUrl: https://github.com/fernandotonon/QtMeshEditor/blob/master/License
-ShortDescription: Free 3D asset tool for indie game developers
-Description: |-
-  QtMeshEditor is a free 3D asset tool for indie game developers.
-  Merge animations from multiple files, convert between 40+ formats,
-  edit materials with AI, and inspect skeletons and bone weights.
-  Supports GUI, CLI (qtmesh), and REST API via MCP server.
-Tags:
-  - 3d
-  - mesh-editor
-  - animation
-  - fbx
-  - gltf
-  - ogre3d
-  - game-development
-  - material-editor
-Moniker: qtmesheditor
-ReleaseNotesUrl: https://github.com/fernandotonon/QtMeshEditor/releases/tag/$version
-ManifestType: defaultLocale
-ManifestVersion: 1.12.0
-"@ | Set-Content "$manifestDir\FernandoTonon.QtMeshEditor.locale.en-US.yaml" -Encoding UTF8
+          # Write locale.en-US.yaml
+          @(
+            "# yaml-language-server: `$schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json",
+            "PackageIdentifier: FernandoTonon.QtMeshEditor",
+            "PackageVersion: $ver",
+            "PackageLocale: en-US",
+            "Publisher: Fernando Tonon",
+            "PublisherUrl: https://github.com/fernandotonon",
+            "PublisherSupportUrl: https://github.com/fernandotonon/QtMeshEditor/issues",
+            "PackageName: QtMeshEditor",
+            "PackageUrl: https://github.com/fernandotonon/QtMeshEditor",
+            "License: MIT",
+            "LicenseUrl: https://github.com/fernandotonon/QtMeshEditor/blob/master/License",
+            "ShortDescription: Free 3D asset tool for indie game developers",
+            "Description: |-",
+            "  QtMeshEditor is a free 3D asset tool for indie game developers.",
+            "  Merge animations from multiple files, convert between 40+ formats,",
+            "  edit materials with AI, and inspect skeletons and bone weights.",
+            "  Supports GUI, CLI (qtmesh), and REST API via MCP server.",
+            "Tags:",
+            "  - 3d",
+            "  - mesh-editor",
+            "  - animation",
+            "  - fbx",
+            "  - gltf",
+            "  - ogre3d",
+            "  - game-development",
+            "  - material-editor",
+            "Moniker: qtmesheditor",
+            "ReleaseNotesUrl: https://github.com/fernandotonon/QtMeshEditor/releases/tag/$rawTag",
+            "ManifestType: defaultLocale",
+            "ManifestVersion: 1.12.0"
+          ) -join "`n" | Set-Content "$manifestDir\FernandoTonon.QtMeshEditor.locale.en-US.yaml" -Encoding UTF8
 
-          # version.yaml
-          @"
-# yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json
-PackageIdentifier: FernandoTonon.QtMeshEditor
-PackageVersion: $version
-DefaultLocale: en-US
-ManifestType: version
-ManifestVersion: 1.12.0
-"@ | Set-Content "$manifestDir\FernandoTonon.QtMeshEditor.yaml" -Encoding UTF8
+          # Write version.yaml
+          @(
+            "# yaml-language-server: `$schema=https://aka.ms/winget-manifest.version.1.12.0.schema.json",
+            "PackageIdentifier: FernandoTonon.QtMeshEditor",
+            "PackageVersion: $ver",
+            "DefaultLocale: en-US",
+            "ManifestType: version",
+            "ManifestVersion: 1.12.0"
+          ) -join "`n" | Set-Content "$manifestDir\FernandoTonon.QtMeshEditor.yaml" -Encoding UTF8
 
           Write-Host "Submitting manifests from $manifestDir ..."
           .\wingetcreate.exe submit $manifestDir --token ${{ secrets.WINGET_TOKEN }}
