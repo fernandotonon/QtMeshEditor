@@ -43,6 +43,22 @@ void BoneProcessor::processBones(Ogre::SkeletonPtr skeleton, const aiScene *scen
 
         processAnimationOnlyHierarchy(scene->mRootNode, animatedNodes);
     }
+
+}
+
+void BoneProcessor::bakeZupToYup(const Ogre::SkeletonPtr& skeleton)
+{
+    // Bake Z-up → Y-up into root bone rest poses so no scene-node rotation is needed.
+    // Only root bones (no parent in the Ogre skeleton) need to be rotated; child bones'
+    // local transforms are relative to their parent and are correct as-is.
+    const Ogre::Quaternion R_x90(Ogre::Degree(90), Ogre::Vector3::UNIT_X);
+    for (unsigned short i = 0; i < skeleton->getNumBones(); ++i) {
+        Ogre::Bone* bone = skeleton->getBone(i);
+        if (bone->getParent() == nullptr) {
+            bone->setPosition(R_x90 * bone->getPosition());
+            bone->setOrientation(R_x90 * bone->getOrientation());
+        }
+    }
 }
 
 void BoneProcessor::processBoneHierarchy(aiNode* node) {

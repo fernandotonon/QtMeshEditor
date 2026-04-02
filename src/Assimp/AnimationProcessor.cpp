@@ -31,14 +31,20 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
     // Create a map to store keyframes by time
     std::map<double, std::tuple<Ogre::Vector3, Ogre::Quaternion, Ogre::Vector3>> keyframes;
 
-    // Get the bone's T-pose position
+    // Get the bone's T-pose position and orientation
     auto boneTPosePosition = bone->getPosition();
-    // Process the position keys
+    Ogre::Quaternion boneTPoseInverseRotation = bone->getOrientation().Inverse();
+
+    // Process the position keys.
+    // Ogre applies translation keyframes in bone-local space (TS_LOCAL):
+    //   mPosition += mOrientation * delta
+    // So we must store the delta in bone-local space by pre-multiplying with the
+    // inverse of the bone's T-pose orientation.
     for(auto i = 0u; i < nodeAnim->mNumPositionKeys; i++) {
         aiVectorKey positionKey = nodeAnim->mPositionKeys[i];
         Ogre::Vector3 position(positionKey.mValue.x, positionKey.mValue.y, positionKey.mValue.z);
-        // Convert the position from local space to model space
-        position = position - boneTPosePosition;
+        // Compute delta in parent-local space, then rotate into bone-local space
+        position = boneTPoseInverseRotation * (position - boneTPosePosition);
 
         keyframes[positionKey.mTime] = std::make_tuple(
             position,
@@ -48,7 +54,6 @@ void AnimationProcessor::processAnimationChannel(aiNodeAnim* nodeAnim, Ogre::Ani
     }
 
     // Process the rotation keys
-    Ogre::Quaternion boneTPoseInverseRotation = bone->getOrientation().Inverse();
     for(auto i = 0u; i < nodeAnim->mNumRotationKeys; i++) {
         aiQuatKey rotationKey = nodeAnim->mRotationKeys[i];
         Ogre::Quaternion rot(rotationKey.mValue.w, rotationKey.mValue.x, rotationKey.mValue.y, rotationKey.mValue.z);

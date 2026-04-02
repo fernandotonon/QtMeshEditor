@@ -80,8 +80,21 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         return {};
     }
 
-    modelName = scene->mName.C_Str();
-    if(modelName.empty()) modelName = path.substr(path.find_last_of("/\\") + 1);
+    // Always prefer the path-based filename — FBX metadata names (scene->mName) are
+    // often generic ("unreal_take", "RootNode", "Scene", etc.) and don't reflect the
+    // actual file the user imported.
+    {
+        std::string filename = path.substr(path.find_last_of("/\\") + 1);
+        auto dot = filename.find_last_of('.');
+        std::string pathName = (dot != std::string::npos) ? filename.substr(0, dot) : filename;
+        if (!pathName.empty())
+            modelName = pathName;
+        else {
+            modelName = scene->mName.C_Str();
+            if (modelName.empty())
+                modelName = "model";
+        }
+    }
 
     // Remove stale resources from a previous import of the same file
     if (auto oldMesh = Ogre::MeshManager::getSingleton().getByName(modelName))
@@ -98,21 +111,34 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     for(unsigned i = 0; i < scene->mNumMeshes && !hasBones; ++i)
         hasBones = scene->mMeshes[i]->mNumBones > 0;
 
+    const bool isZup = (m_sceneUpAxis == 2);
+
     if(hasBones || scene->HasAnimations()) {
         skeleton = Ogre::SkeletonManager::getSingleton().create(modelName+".skeleton", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
         BoneProcessor boneProcessor;
+        // Create bones at their native FBX-space positions (no Z-up bake yet).
         boneProcessor.processBones(skeleton, scene);
 
-        // Save the bind pose so that animation deltas are applied relative to
-        // the correct base transforms.  Binary SkeletonSerializer calls this
-        // automatically on load, but for in-memory skeletons we must do it
-        // explicitly before creating animations.
+        // Save the bind pose BEFORE processing animations so that animation
+        // deltas are computed relative to the original (unbaked) T-pose.
+        // This avoids a basis mismatch for Z-up files that have embedded animations:
+        // if we baked first, AnimationProcessor would measure deltas against the
+        // already-baked bone orientations while the keyframe data is still in Z-up.
         skeleton->setBindingPose();
 
         if(scene->HasAnimations()) {
-            // Process animations
             AnimationProcessor animationProcessor(skeleton);
             animationProcessor.processAnimations(scene);
+        }
+
+        // Now bake Z-up → Y-up into root bone rest poses — mesh skeletons only.
+        // Animation-only skeletons stay in native Z-up so AnimationMerger's
+        // boneCorrection can apply the single correct conversion on merge.
+        if (isZup && !animationOnly) {
+            BoneProcessor::bakeZupToYup(skeleton);
+            // Re-snapshot the binding pose after baking so Ogre's reset() returns
+            // to the correct Y-up rest pose.
+            skeleton->setBindingPose();
         }
     }
 
@@ -121,7 +147,7 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         return {};
 
     // Process the root node recursively (meshes)
-    MeshProcessor meshProcessor(skeleton);
+    MeshProcessor meshProcessor(skeleton, isZup);
     meshProcessor.processNode(scene->mRootNode, scene);
     Ogre::MeshPtr ogreMesh = meshProcessor.createMesh(modelName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, materialProcessor);
 
