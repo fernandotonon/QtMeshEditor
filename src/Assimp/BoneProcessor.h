@@ -5,7 +5,7 @@
 
 class BoneProcessor {
     public:
-        void processBones(Ogre::SkeletonPtr skeleton, const aiScene* scene);
+        void processBones(Ogre::SkeletonPtr skeleton, const aiScene* scene, bool isZup = false);
 
     private:
         void createBone(const std::string& boneName);

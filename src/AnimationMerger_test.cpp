@@ -316,6 +316,75 @@ TEST_F(AnimationMergerTest, MergeAnimationsDeduplication)
     Ogre::SkeletonManager::getSingleton().remove(skelC);
 }
 
+TEST_F(AnimationMergerTest, MergeAnimationsUnrealTakeCleanup)
+{
+    // Animation-only FBX from Unreal Engine retarget: animation is named "Unreal Take"
+    // (with a space). After cleanup it should fall back to the skeleton/file name.
+    auto skelBase = createTestSkeleton("ue_base_skel", {"root", "spine"}, {"idle"});
+    auto skelAnim = createTestSkeleton("mm_attack_03.skeleton", {"root", "spine"}, {"Unreal Take"});
+
+    auto meshBase = createInMemoryMesh("ue_base_mesh", skelBase);
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* nodeBase = sceneMgr->getRootSceneNode()->createChildSceneNode("ueBaseNode");
+    auto* entityBase = sceneMgr->createEntity("ueBaseEntity", meshBase);
+    nodeBase->attachObject(entityBase);
+
+    QString err;
+    auto* merged = AnimationMerger::mergeAnimations(entityBase, {}, {skelAnim}, err);
+
+    ASSERT_NE(merged, nullptr) << err.toStdString();
+    auto* skel = merged->getMesh()->getSkeleton().get();
+
+    // "Unreal Take" cleaned to "" → falls back to skeleton name "mm_attack_03"
+    EXPECT_TRUE(skel->hasAnimation("mm_attack_03"))
+        << "Expected animation named after source file, not 'Unreal Take' or empty";
+    EXPECT_FALSE(skel->hasAnimation("unreal_take"))
+        << "Noise token should have been removed";
+    EXPECT_FALSE(skel->hasAnimation(""))
+        << "Animation name must not be empty";
+
+    nodeBase->detachAllObjects();
+    sceneMgr->destroyEntity(entityBase);
+    sceneMgr->destroySceneNode(nodeBase);
+    Ogre::MeshManager::getSingleton().remove(meshBase);
+    Ogre::SkeletonManager::getSingleton().remove(skelBase);
+    Ogre::SkeletonManager::getSingleton().remove(skelAnim);
+}
+
+TEST_F(AnimationMergerTest, MergeAnimationsNumericSuffixPreserved)
+{
+    // Intentional numeric suffix in file name must not be stripped by deduplication.
+    // "mm_attack_03.skeleton" → animation should be "mm_attack_03", not "mm_attack".
+    auto skelBase = createTestSkeleton("numsfx_base_skel", {"root"}, {"idle"});
+    auto skelAnim = createTestSkeleton("mm_attack_03.skeleton", {"root"}, {"Unreal Take"});
+
+    auto meshBase = createInMemoryMesh("numsfx_base_mesh", skelBase);
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* nodeBase = sceneMgr->getRootSceneNode()->createChildSceneNode("numsfxBaseNode");
+    auto* entityBase = sceneMgr->createEntity("numsfxBaseEntity", meshBase);
+    nodeBase->attachObject(entityBase);
+
+    QString err;
+    auto* merged = AnimationMerger::mergeAnimations(entityBase, {}, {skelAnim}, err);
+
+    ASSERT_NE(merged, nullptr) << err.toStdString();
+    auto* skel = merged->getMesh()->getSkeleton().get();
+
+    EXPECT_TRUE(skel->hasAnimation("mm_attack_03"))
+        << "Numeric suffix _03 should be preserved (not stripped to mm_attack)";
+    EXPECT_FALSE(skel->hasAnimation("mm_attack"))
+        << "Deduplication must not preemptively strip intentional _N suffixes";
+
+    nodeBase->detachAllObjects();
+    sceneMgr->destroyEntity(entityBase);
+    sceneMgr->destroySceneNode(nodeBase);
+    Ogre::MeshManager::getSingleton().remove(meshBase);
+    Ogre::SkeletonManager::getSingleton().remove(skelBase);
+    Ogre::SkeletonManager::getSingleton().remove(skelAnim);
+}
+
 // Standalone test that doesn't need Ogre initialization
 TEST(AnimationMergerStandaloneTest, MergeNoSkeletonError)
 {

@@ -12,6 +12,12 @@ public:
     /// Check if two skeletons have compatible bone hierarchies (matched by name).
     static bool areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const Ogre::SkeletonPtr& b);
 
+    /// Register the coordinate-system up-axis for a named skeleton.
+    /// 1 = Y-up (Mixamo/default), 2 = Z-up (Unreal Engine).
+    /// Must be called by the importer immediately after loading so that
+    /// mergeAnimations() can apply the correct coordinate transform.
+    static void registerSkeletonUpAxis(const std::string& skeletonName, int upAxis);
+
     /// Rename an animation on a skeleton by cloning with a new name and removing the old.
     /// Ogre::Animation has no setName(), so this clone-and-remove pattern is the only way.
     static void renameAnimation(Ogre::Skeleton* skel,

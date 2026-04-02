@@ -717,8 +717,12 @@ void MainWindow::importMeshs(const QStringList &_uriList)
             if (btn == QMessageBox::Yes) {
                 QString errMsg;
                 AnimationMerger::mergeAnimations(baseEntity, {}, {skel}, errMsg);
-                if (!errMsg.isEmpty())
+                if (!errMsg.isEmpty()) {
                     QMessageBox::warning(this, "Merge failed", errMsg);
+                } else {
+                    // Re-select so the inspector panel refreshes its animation list.
+                    SelectionSet::getSingleton()->append(baseEntity);
+                }
             }
         } else {
             QMessageBox::information(this, "Animation-only file",

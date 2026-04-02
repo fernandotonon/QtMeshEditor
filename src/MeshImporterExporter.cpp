@@ -40,6 +40,7 @@ THE SOFTWARE.
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include "OgreXML/pugixml.hpp"
 
+#include "AnimationMerger.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -844,6 +845,8 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             {
                 sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
                 en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(), file.path().toStdString().data()));
+                if (en->getMesh() && en->getMesh()->getSkeleton())
+                    AnimationMerger::registerSkeletonUpAxis(en->getMesh()->getSkeleton()->getName(), 1);
             }
             else if(!file.suffix().compare("xml",Qt::CaseInsensitive))
             {
@@ -853,6 +856,8 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 
                 sn = Manager::getSingleton()->addSceneNode(meshName);
                 en = Manager::getSingleton()->createEntity(sn, mesh);
+                if (en->getMesh() && en->getMesh()->getSkeleton())
+                    AnimationMerger::registerSkeletonUpAxis(en->getMesh()->getSkeleton()->getName(), 1);
             }
             else
             {
@@ -868,8 +873,14 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     // Collect into the caller-provided list; callers that want UI notifications
                     // should pass outAnimOnlySkeletons and handle presentation themselves.
                     Ogre::SkeletonPtr skel = importer.getLoadedSkeleton();
-                    if (skel && outAnimOnlySkeletons)
-                        outAnimOnlySkeletons->append(skel);
+                    if (skel) {
+                        // Animation-only skeletons are NOT baked — register native up-axis
+                        // so AnimationMerger can apply the correct Z-up → Y-up conversion
+                        // when merging into a baked (Y-up) mesh skeleton.
+                        AnimationMerger::registerSkeletonUpAxis(skel->getName(), importer.getSceneUpAxis());
+                        if (outAnimOnlySkeletons)
+                            outAnimOnlySkeletons->append(skel);
+                    }
                     continue;
                 }
 
@@ -877,12 +888,13 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 sn = Manager::getSingleton()->addSceneNode(QString(meshName));
                 en = Manager::getSingleton()->createEntity(sn, mesh);
 
-                // Auto-correct Z-up coordinate systems (e.g. Unreal Engine FBX exports).
-                // Rotate the scene node so the mesh stands upright in Ogre's Y-up world.
-                // Bone data and animations remain in their native space — the node rotation
-                // is purely a display correction and does not affect animation playback.
-                if (importer.getSceneUpAxis() == 2)
-                    sn->rotate(Ogre::Vector3::UNIT_X, Ogre::Degree(90));
+                // Register the original coordinate system. Baking is purely a display
+                // fix (vertices + root-bone rest poses rotated); it does not change the
+                // bone-orientation relationships that AnimationMerger relies on for the
+                // per-bone boneCorrection, so the native upAxis is still correct here.
+                if (en->getMesh() && en->getMesh()->getSkeleton())
+                    AnimationMerger::registerSkeletonUpAxis(
+                        en->getMesh()->getSkeleton()->getName(), importer.getSceneUpAxis());
             }
 
             sn->setPosition(0,0,0);
