@@ -1652,8 +1652,21 @@ jobs:
           # Download ZIP and compute SHA256 without interactive inspection.
           # Using wingetcreate submit (not update) so it never needs to inspect
           # the ZIP interactively, which fails in CI (Sharprompt requires a terminal).
+          # Retry up to 5 times with backoff — the asset may not yet be propagated
+          # when this job starts (mirrors the DMG retry logic in the homebrew job).
           Write-Host "Downloading $url ..."
-          Invoke-WebRequest -Uri $url -OutFile installer.zip
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+              Invoke-WebRequest -Uri $url -OutFile installer.zip
+              break
+            } catch {
+              Remove-Item installer.zip -ErrorAction SilentlyContinue
+              if ($attempt -eq 5) { throw }
+              $delay = $attempt * 15
+              Write-Host "Download attempt $attempt failed. Retrying in $delay seconds..."
+              Start-Sleep -Seconds $delay
+            }
+          }
           $sha256 = (Get-FileHash -Algorithm SHA256 installer.zip).Hash.ToUpper()
           Write-Host "SHA256: $sha256"
 
