@@ -109,9 +109,9 @@ static QString deduplicateName(const QString& desired, QSet<QString>& existingNa
 // Additionally, AnimationProcessor stores translations in bone-local space (pre-multiplied
 // by the inverse binding-pose orientation).  If the source and target skeletons have
 // different binding-pose orientations for the same bone — e.g. an animation-only FBX has
-// identity root while a mesh FBX has R_x(-90°) root — the stored delta must be
-// re-expressed in the target bone's local space via:
-//   correction = q_dst.Inverse() * q_src
+// identity root while a mesh FBX has a baked R_x(+90°) root — the stored delta must be
+// re-expressed in the target bone's local space.
+// We apply: corrected = (q_src⁻¹ * q_dst) * stored
 static void mergeAnimationsByName(Ogre::Skeleton* baseSkel, const Ogre::Skeleton* srcSkel,
                                    int srcUpAxis = 1, int baseUpAxis = 1)
 {
