@@ -116,21 +116,29 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     if(hasBones || scene->HasAnimations()) {
         skeleton = Ogre::SkeletonManager::getSingleton().create(modelName+".skeleton", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
         BoneProcessor boneProcessor;
-        // Only bake Z-up into mesh skeletons. Animation-only files stay in their native
-        // space so AnimationMerger's needsZupToYup path can apply the single correct
-        // coordinate conversion when merging into the already-baked mesh skeleton.
-        boneProcessor.processBones(skeleton, scene, isZup && !animationOnly);
+        // Create bones at their native FBX-space positions (no Z-up bake yet).
+        boneProcessor.processBones(skeleton, scene);
 
-        // Save the bind pose so that animation deltas are applied relative to
-        // the correct base transforms.  Binary SkeletonSerializer calls this
-        // automatically on load, but for in-memory skeletons we must do it
-        // explicitly before creating animations.
+        // Save the bind pose BEFORE processing animations so that animation
+        // deltas are computed relative to the original (unbaked) T-pose.
+        // This avoids a basis mismatch for Z-up files that have embedded animations:
+        // if we baked first, AnimationProcessor would measure deltas against the
+        // already-baked bone orientations while the keyframe data is still in Z-up.
         skeleton->setBindingPose();
 
         if(scene->HasAnimations()) {
-            // Process animations
             AnimationProcessor animationProcessor(skeleton);
             animationProcessor.processAnimations(scene);
+        }
+
+        // Now bake Z-up → Y-up into root bone rest poses — mesh skeletons only.
+        // Animation-only skeletons stay in native Z-up so AnimationMerger's
+        // boneCorrection can apply the single correct conversion on merge.
+        if (isZup && !animationOnly) {
+            BoneProcessor::bakeZupToYup(skeleton);
+            // Re-snapshot the binding pose after baking so Ogre's reset() returns
+            // to the correct Y-up rest pose.
+            skeleton->setBindingPose();
         }
     }
 
