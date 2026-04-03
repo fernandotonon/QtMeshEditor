@@ -52,6 +52,8 @@
 #include "ModelDownloader.h"
 #include "UndoManager.h"
 #include "PropertiesPanelController.h"
+#include "MeshLodController.h"
+#include "MeshValidator.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -230,6 +232,8 @@ MainWindow::~MainWindow()
         // Destroy AnimationControlController before Manager: its poll timer holds
         // raw Ogre pointers that become dangling once Manager is destroyed.
         AnimationControlController::kill();
+        MeshLodController::kill();
+        MeshValidator::kill();
         Manager::kill();
     }
 }
@@ -301,6 +305,14 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<AnimationControlController>("AnimationControl", 1, 0, "AnimationControlController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AnimationControlController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<MeshLodController>("PropertiesPanel", 1, 0, "MeshLodController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return MeshLodController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<MeshValidator>("PropertiesPanel", 1, 0, "MeshValidator",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return MeshValidator::qmlInstance(engine, nullptr);
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
