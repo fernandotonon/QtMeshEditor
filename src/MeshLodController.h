@@ -30,11 +30,15 @@ public:
     Q_INVOKABLE void generateLods(int count, QVariantList reductions);
     Q_INVOKABLE void generateAutoLods();
     Q_INVOKABLE void removeLods();
+    // Exports each LOD level as a separate file: <name>_lod1.<ext>, _lod2, …
+    // format: "mesh", "fbx", "gltf2", "obj" — opens a directory picker first.
+    Q_INVOKABLE void exportLods(const QString& format);
 
 signals:
     void selectionChanged();
     void lodChanged();
     void generationSucceeded(int levels);
+    void exportSucceeded(int count, const QString& directory);
     void error(const QString& message);
 
 private:

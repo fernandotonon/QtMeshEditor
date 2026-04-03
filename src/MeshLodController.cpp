@@ -1,9 +1,13 @@
 #include "MeshLodController.h"
 #include "Manager.h"
 #include "SelectionSet.h"
+#include "MeshImporterExporter.h"
 #include <Ogre.h>
+#include <OgreSubMesh.h>
 #include <OgreMeshLodGenerator.h>
 #include <OgreLodConfig.h>
+#include <QFileDialog>
+#include <QDir>
 
 MeshLodController* MeshLodController::m_pSingleton = nullptr;
 
@@ -135,4 +139,70 @@ void MeshLodController::removeLods()
     }
 
     emit lodChanged();
+}
+
+void MeshLodController::exportLods(const QString& format)
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities()) {
+        emit error("No mesh selected.");
+        return;
+    }
+
+    auto entities = sel->getEntitiesSelectionList();
+    Ogre::Entity* entity = entities.empty() ? nullptr : entities.front();
+    if (!entity) return;
+
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return;
+
+    const unsigned int totalLods = mesh->getNumLodLevels();
+    if (totalLods <= 1) {
+        emit error("No LOD levels generated yet. Use Generate or Auto first.");
+        return;
+    }
+
+    QString dir = QFileDialog::getExistingDirectory(
+        nullptr, "Choose export directory for LOD levels", QDir::homePath());
+    if (dir.isEmpty()) return;
+
+    const QString baseName = QString::fromStdString(mesh->getName());
+    const QString ext = format.isEmpty() ? "gltf2" : format;
+
+    // Determine the scene node for exporting
+    Ogre::SceneNode* sn = entity->getParentSceneNode();
+    if (!sn) {
+        emit error("Entity has no scene node.");
+        return;
+    }
+
+    int exported = 0;
+
+    // LOD 0 = original full mesh (always present); LOD 1..N are the reduced levels.
+    // Export LOD level i by temporarily swapping each submesh's indexData with its
+    // mLodFaceList[i-1] entry, exporting, then restoring.
+    for (unsigned int lod = 1; lod < totalLods; ++lod) {
+        // Collect and swap index data for every submesh
+        const unsigned int numSubs = mesh->getNumSubMeshes();
+        std::vector<Ogre::IndexData*> savedIndex(numSubs, nullptr);
+
+        for (unsigned int s = 0; s < numSubs; ++s) {
+            Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            savedIndex[s] = sub->indexData;
+            if ((lod - 1) < sub->mLodFaceList.size())
+                sub->indexData = sub->mLodFaceList[lod - 1];
+        }
+
+        const QString outPath = QDir(dir).filePath(
+            QString("%1_lod%2.%3").arg(baseName).arg(lod).arg(ext));
+
+        MeshImporterExporter::exporter(sn, outPath, ext);
+        ++exported;
+
+        // Restore original index data
+        for (unsigned int s = 0; s < numSubs; ++s)
+            mesh->getSubMesh(s)->indexData = savedIndex[s];
+    }
+
+    emit exportSucceeded(exported, dir);
 }

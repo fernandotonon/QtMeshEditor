@@ -429,6 +429,52 @@ Rectangle {
                 }
             }
 
+            // Persistence note
+            Text {
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                font.italic: true
+                color: Qt.lighter(PropertiesPanelController.textColor, 0.7)
+                text: "LOD levels persist only when exporting as Ogre .mesh.\nFor other engines, use Export LODs below."
+            }
+
+            // Export LODs row
+            Row {
+                spacing: 6
+                width: parent.width - 16
+                visible: MeshLodController.currentLodLevels > 0
+
+                ComboBox {
+                    id: exportFormatCombo
+                    width: 90; height: 26
+                    model: ["gltf2", "fbx", "obj", "mesh"]
+                    background: Rectangle {
+                        color: PropertiesPanelController.headerColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 3
+                    }
+                    contentItem: Text {
+                        leftPadding: 6
+                        text: exportFormatCombo.displayText
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                Rectangle {
+                    height: 26; width: parent.width - exportFormatCombo.width - 6; radius: 3
+                    color: exportMouse.pressed ? Qt.darker(PropertiesPanelController.headerColor, 1.3)
+                         : exportMouse.containsMouse ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
+                         : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { anchors.centerIn: parent; text: "Export LODs…"; color: PropertiesPanelController.textColor; font.pixelSize: 11 }
+                    MouseArea {
+                        id: exportMouse; anchors.fill: parent; hoverEnabled: true
+                        onClicked: MeshLodController.exportLods(exportFormatCombo.currentText)
+                    }
+                }
+            }
+
             // Feedback
             Text {
                 id: lodFeedback
@@ -445,6 +491,10 @@ Rectangle {
                         lodFeedback.text = levels < 0
                             ? "Auto LOD applied."
                             : levels + " LOD level(s) generated."
+                    }
+                    function onExportSucceeded(count, directory) {
+                        lodFeedback.color = "#60c060"
+                        lodFeedback.text = count + " LOD file(s) saved to " + directory
                     }
                     function onError(msg) {
                         lodFeedback.color = "#c06060"
