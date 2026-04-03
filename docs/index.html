@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>QtMeshEditor - Free 3D Asset Tool for Indie Game Developers</title>
-    <meta name="description" content="Free 3D asset tool for indie game developers. Merge Mixamo animations, convert between 40+ formats, edit materials with AI. GUI, CLI, and REST API.">
+    <meta name="description" content="Free 3D asset tool for indie game developers. Merge Mixamo and Unreal Engine animations, convert between 40+ formats, edit materials with AI. GUI, CLI, and REST API.">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Source+Code+Pro:wght@400;600&display=swap');
 
@@ -530,8 +530,8 @@
 
         <!-- Hero: Animation Merging Demo -->
         <section class="section">
-            <h2 class="section-title">Merge Mixamo Animations in Seconds</h2>
-            <p class="section-subtitle">Download individual animations from <strong style="color: var(--neon-cyan);">Mixamo</strong>, drop them into QtMeshEditor, and merge them into a single mesh &mdash; export as glTF, Collada, OBJ, or Ogre Mesh.</p>
+            <h2 class="section-title">Merge Animations from Mixamo &amp; Unreal Engine</h2>
+            <p class="section-subtitle">Download individual animations from <strong style="color: var(--neon-cyan);">Mixamo</strong> or export retargeted animations from <strong style="color: var(--neon-cyan);">Unreal Engine</strong>, drop them into QtMeshEditor, and merge them into a single mesh &mdash; export as glTF, Collada, OBJ, or Ogre Mesh.</p>
             <div class="hero-demo">
                 <img src="https://github.com/user-attachments/assets/16e81f29-f64c-402d-aac4-dbb1bc2f3aef" alt="Merge animations demo - combining multiple FBX files into one mesh">
                 <p class="hero-demo-caption">Load animation files &rarr; Select all &rarr; Click Merge &rarr; Export to your engine</p>
@@ -545,7 +545,7 @@
                 <div class="feature-card">
                     <div class="feature-icon">🔀</div>
                     <h3 class="feature-title">Animation Merging</h3>
-                    <p class="feature-desc">Combine skeletal animations from multiple files into one mesh. Works with any source where each animation is a separate file. GUI, CLI, and API support.</p>
+                    <p class="feature-desc">Combine skeletal animations from multiple files into one mesh. Works with Mixamo, Unreal Engine retargets, and any source where each animation is a separate FBX file. GUI, CLI, and API support.</p>
                 </div>
 
                 <div class="feature-card">
@@ -594,11 +594,17 @@
                 <div class="feature-card">
                     <h3 class="feature-title">Animation Pipeline</h3>
                     <p class="feature-desc">
-                        1. Download animations as FBX (e.g. from Mixamo)<br>
+                        <strong style="color: var(--neon-cyan);">Mixamo workflow:</strong><br>
+                        1. Download animations as FBX from Mixamo<br>
                         2. Drag all files into QtMeshEditor<br>
                         3. Select all entities and click Merge<br>
-                        4. Export as glTF, Collada, or OBJ<br>
-                        5. Import into your game engine
+                        4. Export as glTF, Collada, or OBJ<br><br>
+                        <strong style="color: var(--neon-cyan);">Unreal Engine workflow:</strong><br>
+                        1. Export your UE skeletal mesh as FBX<br>
+                        2. Export retargeted animations as FBX<br>
+                        3. Load the mesh, then import each animation<br>
+                        &nbsp;&nbsp;&nbsp;(auto-detected as animation-only &rarr; instant merge)<br>
+                        4. Export to glTF or any supported format
                     </p>
                 </div>
 
@@ -701,6 +707,7 @@
                 <div class="install-step">
                     <h3>GUI &mdash; Drag, Select, Merge</h3>
                     <p>Load all your animation files, select all entities in the scene, then click the <strong style="color: var(--neon-cyan);">Merge Animations</strong> button in the toolbar. All animations are combined into the first entity.</p>
+                    <p style="margin-top: 0.8em;">For <strong style="color: var(--neon-cyan);">Unreal Engine retarget FBX</strong> files (mesh-less, animation-only exports): load your UE skeletal mesh first, then import the retarget FBX. QtMeshEditor auto-detects it as animation-only and offers an instant merge dialog &mdash; no extra steps needed. Z-up / Y-up coordinate conversion is handled automatically.</p>
                 </div>
 
                 <div class="install-step">

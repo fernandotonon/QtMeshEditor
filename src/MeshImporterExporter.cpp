@@ -31,8 +31,8 @@ THE SOFTWARE.
 #include <assimp/Exporter.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
-#include <QMessageBox>
 #include <QFileDialog>
+#include <QMessageBox>
 #include <QDebug>
 #include <set>
 
@@ -40,6 +40,7 @@ THE SOFTWARE.
 #include "OgreXML/OgreXMLSkeletonSerializer.h"
 #include "OgreXML/pugixml.hpp"
 
+#include "AnimationMerger.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
@@ -824,7 +825,9 @@ static void ensureResourceGroup(const QString &path)
     }
 }
 
-void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags)
+void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
+                                     QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
+                                     int* outUpAxis)
 {
     try{
         foreach(const QString &fileName,_uriList)
@@ -842,6 +845,8 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             {
                 sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
                 en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(), file.path().toStdString().data()));
+                if (en->getMesh() && en->getMesh()->getSkeleton())
+                    AnimationMerger::registerSkeletonUpAxis(en->getMesh()->getSkeleton()->getName(), 1);
             }
             else if(!file.suffix().compare("xml",Qt::CaseInsensitive))
             {
@@ -851,6 +856,8 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 
                 sn = Manager::getSingleton()->addSceneNode(meshName);
                 en = Manager::getSingleton()->createEntity(sn, mesh);
+                if (en->getMesh() && en->getMesh()->getSkeleton())
+                    AnimationMerger::registerSkeletonUpAxis(en->getMesh()->getSkeleton()->getName(), 1);
             }
             else
             {
@@ -859,11 +866,35 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 // to avoid double-flipping geometry and UVs.
                 bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
                 Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString(), convertLH, additionalFlags);
-                if (!mesh) return;
+                // Read coordinate system from metadata immediately — valid for both mesh and animation-only files.
+                if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
+                if (!mesh) {
+                    // Animation-only file: skeleton/animations were loaded, but there is no mesh.
+                    // Collect into the caller-provided list; callers that want UI notifications
+                    // should pass outAnimOnlySkeletons and handle presentation themselves.
+                    Ogre::SkeletonPtr skel = importer.getLoadedSkeleton();
+                    if (skel) {
+                        // Animation-only skeletons are NOT baked — register native up-axis
+                        // so AnimationMerger can apply the correct Z-up → Y-up conversion
+                        // when merging into a baked (Y-up) mesh skeleton.
+                        AnimationMerger::registerSkeletonUpAxis(skel->getName(), importer.getSceneUpAxis());
+                        if (outAnimOnlySkeletons)
+                            outAnimOnlySkeletons->append(skel);
+                    }
+                    continue;
+                }
 
                 auto meshName = file.baseName();
                 sn = Manager::getSingleton()->addSceneNode(QString(meshName));
                 en = Manager::getSingleton()->createEntity(sn, mesh);
+
+                // Register the original coordinate system. Baking is purely a display
+                // fix (vertices + root-bone rest poses rotated); it does not change the
+                // bone-orientation relationships that AnimationMerger relies on for the
+                // per-bone boneCorrection, so the native upAxis is still correct here.
+                if (en->getMesh() && en->getMesh()->getSkeleton())
+                    AnimationMerger::registerSkeletonUpAxis(
+                        en->getMesh()->getSkeleton()->getName(), importer.getSceneUpAxis());
             }
 
             sn->setPosition(0,0,0);

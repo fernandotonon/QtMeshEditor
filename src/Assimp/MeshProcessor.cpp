@@ -37,7 +37,8 @@ static void bindVector4Buffer(Ogre::VertexData* vertexData, unsigned short sourc
     vertexData->vertexBufferBinding->setBinding(source, buf);
 }
 
-MeshProcessor::MeshProcessor(Ogre::SkeletonPtr skeleton):skeleton(skeleton) {}
+MeshProcessor::MeshProcessor(Ogre::SkeletonPtr skeleton, bool isZup)
+    : skeleton(skeleton), m_isZup(isZup) {}
 
 void MeshProcessor::processNode(aiNode* node, const aiScene* scene) {
     // Process each mesh located at the current node
@@ -55,14 +56,21 @@ void MeshProcessor::processNode(aiNode* node, const aiScene* scene) {
 SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
     SubMeshData* subMeshData = new SubMeshData();
 
+    // Rotation applied to vertex data when the source file uses a Z-up coordinate system.
+    // Baking it here avoids a scene-node rotation and keeps the entity in its natural pose.
+    const Ogre::Quaternion R_x90(m_isZup ? Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_X)
+                                         : Ogre::Quaternion::IDENTITY);
+
     // Initialize blend indices and blend weights
     for(auto i = 0u; i < mesh->mNumVertices; i++) {
         // Process vertices
-        subMeshData->vertices.push_back(Ogre::Vector3(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z));
+        Ogre::Vector3 v(mesh->mVertices[i].x, mesh->mVertices[i].y, mesh->mVertices[i].z);
+        subMeshData->vertices.push_back(m_isZup ? R_x90 * v : v);
 
         // Process normals
         if(mesh->HasNormals()) {
-            subMeshData->normals.push_back(Ogre::Vector3(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z));
+            Ogre::Vector3 n(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z);
+            subMeshData->normals.push_back(m_isZup ? R_x90 * n : n);
         }
 
         // Process texture coordinates
@@ -74,6 +82,7 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
     // Load blend weights and blend indices
     for(auto i = 0u; i < mesh->mNumBones; i++) {
         aiBone* bone = mesh->mBones[i];
+        if(!skeleton || !skeleton->hasBone(bone->mName.C_Str())) continue;
         // Retrieve the bone (it should already exist)
         Ogre::Bone* ogreBone = skeleton->getBone(bone->mName.C_Str());
         for(auto j = 0u; j < bone->mNumWeights; j++) {
@@ -105,6 +114,7 @@ SubMeshData* MeshProcessor::processMesh(aiMesh* mesh, const aiScene* scene) {
             Ogre::Vector3 T(mesh->mTangents[i].x, mesh->mTangents[i].y, mesh->mTangents[i].z);
             Ogre::Vector3 B(mesh->mBitangents[i].x, mesh->mBitangents[i].y, mesh->mBitangents[i].z);
             Ogre::Vector3 N(mesh->mNormals[i].x, mesh->mNormals[i].y, mesh->mNormals[i].z);
+            if (m_isZup) { T = R_x90 * T; B = R_x90 * B; N = R_x90 * N; }
             // Compute handedness: if cross(N,T) is opposite to B, the tangent space is left-handed
             float handedness = (N.crossProduct(T).dotProduct(B) < 0.0f) ? -1.0f : 1.0f;
             subMeshData->tangents.push_back(Ogre::Vector4(T.x, T.y, T.z, handedness));

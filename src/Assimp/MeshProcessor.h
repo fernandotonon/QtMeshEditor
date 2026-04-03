@@ -18,16 +18,17 @@ struct SubMeshData {
 
 class MeshProcessor {
 public:
-    MeshProcessor(Ogre::SkeletonPtr skeleton);
+    MeshProcessor(Ogre::SkeletonPtr skeleton, bool isZup = false);
     void processNode(aiNode* node, const aiScene* scene);
     Ogre::MeshPtr createMesh(const Ogre::String& name, const Ogre::String& group, MaterialProcessor &materialProcessor);
 
 protected:
     // Protected for testing purposes
     SubMeshData* processMesh(aiMesh* mesh, const aiScene* scene);
-    
+
 private:
     std::vector<SubMeshData*> subMeshesData;
     std::vector<Ogre::VertexBoneAssignment> boneAssignments;
     Ogre::SkeletonPtr skeleton;
+    bool m_isZup;
 };

@@ -679,13 +679,60 @@ void MainWindow::on_actionImport_triggered()
 void MainWindow::importMeshs(const QStringList &_uriList)
 {
     auto txn = SentryReporter::startTransaction("ui.import", "file.import");
+    QList<Ogre::SkeletonPtr> animOnlySkeletons;
     try {
-        MeshImporterExporter::importer(_uriList/*, &lastImported*/);
+        MeshImporterExporter::importer(_uriList, 0, &animOnlySkeletons);
     } catch (...) {
         SentryReporter::finishTransaction(txn);
         throw;
     }
     SentryReporter::finishTransaction(txn);
+
+    // Handle animation-only files: show a notification and offer an immediate merge
+    // if a compatible entity is already selected.
+    for (const Ogre::SkeletonPtr& skel : animOnlySkeletons) {
+        if (!skel) continue;
+        unsigned short numAnims = skel->getNumAnimations();
+        QString animList;
+        for (unsigned short i = 0; i < numAnims; ++i)
+            animList += "\n  \u2022 " + QString::fromStdString(skel->getAnimation(i)->getName());
+
+        QString displayName = QString::fromStdString(skel->getName());
+        if (displayName.endsWith(".skeleton", Qt::CaseInsensitive))
+            displayName.chop(9);
+
+        Ogre::Entity* baseEntity = nullptr;
+        auto selected = SelectionSet::getSingleton()->getResolvedEntities();
+        for (Ogre::Entity* e : selected) {
+            if (e && e->hasSkeleton()) { baseEntity = e; break; }
+        }
+
+        if (baseEntity) {
+            auto btn = QMessageBox::question(this, "Animation-only file",
+                QString("'%1' contains no mesh geometry \u2014 %2 animation(s) were found:%3\n\n"
+                        "Merge these animations into '%4'?")
+                    .arg(displayName).arg(numAnims).arg(animList)
+                    .arg(baseEntity->getName().c_str()),
+                QMessageBox::Yes | QMessageBox::No);
+            if (btn == QMessageBox::Yes) {
+                QString errMsg;
+                Ogre::Entity* merged = AnimationMerger::mergeAnimations(baseEntity, {}, {skel}, errMsg);
+                if (!merged) {
+                    QMessageBox::warning(this, "Merge failed",
+                        errMsg.isEmpty() ? "Merge failed (unknown error)" : errMsg);
+                } else {
+                    // Re-select so the inspector panel refreshes its animation list.
+                    SelectionSet::getSingleton()->append(baseEntity);
+                }
+            }
+        } else {
+            QMessageBox::information(this, "Animation-only file",
+                QString("'%1' contains no mesh geometry \u2014 %2 animation(s) were imported:%3\n\n"
+                        "To use these animations: import the target mesh, select it, "
+                        "then import this file again.")
+                    .arg(displayName).arg(numAnims).arg(animList));
+        }
+    }
 }
 
 // LCOV_EXCL_START — opens QFileDialog
