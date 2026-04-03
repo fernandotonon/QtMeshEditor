@@ -418,6 +418,7 @@ if(BUILD_TESTS)
     ${QML_RESOURCE_SRCS}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp
     )
+    target_compile_definitions(UnitTests PRIVATE BATCH_EXPORTER_TEST_SEAM)
 
     # Link against Google Test libraries (no gtest_main - we provide our own main)
     target_link_libraries(UnitTests

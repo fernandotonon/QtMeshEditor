@@ -2,6 +2,8 @@
 #include "BatchExporter.h"
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
+#include <QFileInfo>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <vector>
@@ -193,7 +195,10 @@ TEST_F(BatchExporterTests, ExecuteWithFailureEmitsErrorAndCountsFailures) {
 
 TEST_F(BatchExporterTests, ExecuteWithoutOutputDirectoryUsesInputFileDirectory) {
     TestBatchExporter exporter;
-    exporter.setInputFiles(QStringList{"/tmp/source/asset.dae"});
+    QTemporaryDir inputDir;
+    ASSERT_TRUE(inputDir.isValid());
+    const QString inputPath = QDir(inputDir.path()).filePath("asset.dae");
+    exporter.setInputFiles(QStringList{inputPath});
     exporter.setOutputFormat("obj");
     exporter.setOutputDirectory("");
 
@@ -201,5 +206,7 @@ TEST_F(BatchExporterTests, ExecuteWithoutOutputDirectoryUsesInputFileDirectory) 
 
     ASSERT_EQ(exporter.invocations.size(), 1u);
     ASSERT_EQ(exporter.invocations[0].args.size(), 5u);
-    EXPECT_EQ(exporter.invocations[0].args[4], "/tmp/source/asset.obj");
+    const QString expectedOutput = QDir(QFileInfo(inputPath).absolutePath()).filePath("asset.obj");
+    EXPECT_EQ(QDir::cleanPath(QString::fromStdString(exporter.invocations[0].args[4])),
+              QDir::cleanPath(expectedOutput));
 }

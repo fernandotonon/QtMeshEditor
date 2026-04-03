@@ -23,7 +23,7 @@ signals:
     void error(const QString& file, const QString& message);
 
 protected:
-    // Test seam: allows unit tests to override CLI execution without calling _exit().
+    // Test seam for UnitTests builds only.
     virtual int runCliPipeline(int argc, char* argv[]);
 
 private:

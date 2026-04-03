@@ -35,7 +35,12 @@ void BatchExporter::execute()
             argv.push_back(s.data());  // std::string::data() returns char* in C++17
         }
 
-        int result = runCliPipeline(static_cast<int>(argv.size()), argv.data());
+        int result = 0;
+#ifdef BATCH_EXPORTER_TEST_SEAM
+        result = runCliPipeline(static_cast<int>(argv.size()), argv.data());
+#else
+        result = CLIPipeline::run(static_cast<int>(argv.size()), argv.data());
+#endif
         if (result == 0)
             ++success;
         else
