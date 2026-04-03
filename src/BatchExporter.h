@@ -22,6 +22,10 @@ signals:
     void finished(int successCount, int failCount);
     void error(const QString& file, const QString& message);
 
+protected:
+    // Test seam for UnitTests builds only.
+    virtual int runCliPipeline(int argc, char* argv[]);
+
 private:
     QStringList mInputFiles;
     QString mOutputFormat;

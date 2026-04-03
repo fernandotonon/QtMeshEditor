@@ -402,7 +402,13 @@ if(BUILD_TESTS)
     file(GLOB_RECURSE TestFiles "${CMAKE_CURRENT_SOURCE_DIR}/*_test.cpp")
     foreach(TestFile ${TestFiles})
         list(APPEND TEST_SOURCES ${TestFile})
-    endforeach()    
+    endforeach()
+
+    # Include legacy widget sources that are only exercised by unit tests.
+    list(APPEND TEST_SOURCES
+        ${CMAKE_CURRENT_SOURCE_DIR}/animationcontrolslider.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/animationcontrolslider.h
+    )
 
     # Create the test executable (uses custom main for gcov signal handlers)
     add_executable(UnitTests
@@ -412,6 +418,7 @@ if(BUILD_TESTS)
     ${QML_RESOURCE_SRCS}
     ${CMAKE_CURRENT_SOURCE_DIR}/test_main.cpp
     )
+    target_compile_definitions(UnitTests PRIVATE BATCH_EXPORTER_TEST_SEAM)
 
     # Link against Google Test libraries (no gtest_main - we provide our own main)
     target_link_libraries(UnitTests

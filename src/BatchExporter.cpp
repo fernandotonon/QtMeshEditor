@@ -8,6 +8,7 @@ BatchExporter::BatchExporter(QObject* parent) : QObject(parent) {}
 void BatchExporter::setInputFiles(const QStringList& files) { mInputFiles = files; }
 void BatchExporter::setOutputFormat(const QString& format) { mOutputFormat = format; }
 void BatchExporter::setOutputDirectory(const QString& dir) { mOutputDir = dir; }
+int BatchExporter::runCliPipeline(int argc, char* argv[]) { return CLIPipeline::run(argc, argv); }
 
 void BatchExporter::execute()
 {
@@ -34,7 +35,12 @@ void BatchExporter::execute()
             argv.push_back(s.data());  // std::string::data() returns char* in C++17
         }
 
-        int result = CLIPipeline::run(static_cast<int>(argv.size()), argv.data());
+        int result = 0;
+#ifdef BATCH_EXPORTER_TEST_SEAM
+        result = runCliPipeline(static_cast<int>(argv.size()), argv.data());
+#else
+        result = CLIPipeline::run(static_cast<int>(argv.size()), argv.data());
+#endif
         if (result == 0)
             ++success;
         else
