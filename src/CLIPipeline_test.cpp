@@ -446,14 +446,14 @@ TEST(CLIPipelineSmoke, PrintVersionDoesNotCrash)
     EXPECT_NO_FATAL_FAILURE(CLIPipeline::printVersion());
 }
 
-// --- run() tests (early-return paths that don't create QApplication or call _exit) ---
+// --- run() tests (early-return paths that call _exit(0) to bypass static destructors) ---
 
 TEST(CLIPipelineRun, HelpFlag)
 {
     char arg0[] = "qtmesh";
     char arg1[] = "--help";
     char* argv[] = {arg0, arg1};
-    EXPECT_EQ(CLIPipeline::run(2, argv), 0);
+    EXPECT_EXIT(CLIPipeline::run(2, argv), testing::ExitedWithCode(0), "");
 }
 
 TEST(CLIPipelineRun, HelpFlagShort)
@@ -461,7 +461,7 @@ TEST(CLIPipelineRun, HelpFlagShort)
     char arg0[] = "qtmesh";
     char arg1[] = "-h";
     char* argv[] = {arg0, arg1};
-    EXPECT_EQ(CLIPipeline::run(2, argv), 0);
+    EXPECT_EXIT(CLIPipeline::run(2, argv), testing::ExitedWithCode(0), "");
 }
 
 TEST(CLIPipelineRun, VersionFlag)
@@ -469,7 +469,7 @@ TEST(CLIPipelineRun, VersionFlag)
     char arg0[] = "qtmesh";
     char arg1[] = "--version";
     char* argv[] = {arg0, arg1};
-    EXPECT_EQ(CLIPipeline::run(2, argv), 0);
+    EXPECT_EXIT(CLIPipeline::run(2, argv), testing::ExitedWithCode(0), "qtmesh [0-9]");
 }
 
 TEST(CLIPipelineRun, VersionFlagShort)
@@ -477,7 +477,7 @@ TEST(CLIPipelineRun, VersionFlagShort)
     char arg0[] = "qtmesh";
     char arg1[] = "-v";
     char* argv[] = {arg0, arg1};
-    EXPECT_EQ(CLIPipeline::run(2, argv), 0);
+    EXPECT_EXIT(CLIPipeline::run(2, argv), testing::ExitedWithCode(0), "qtmesh [0-9]");
 }
 
 TEST(CLIPipelineRun, NoCommand)
@@ -493,7 +493,7 @@ TEST(CLIPipelineRun, VerboseWithHelp)
     char arg1[] = "--verbose";
     char arg2[] = "--help";
     char* argv[] = {arg0, arg1, arg2};
-    EXPECT_EQ(CLIPipeline::run(3, argv), 0);
+    EXPECT_EXIT(CLIPipeline::run(3, argv), testing::ExitedWithCode(0), "");
 }
 
 TEST(CLIPipelineRun, CliWithHelp)
@@ -502,7 +502,7 @@ TEST(CLIPipelineRun, CliWithHelp)
     char arg1[] = "--cli";
     char arg2[] = "--help";
     char* argv[] = {arg0, arg1, arg2};
-    EXPECT_EQ(CLIPipeline::run(3, argv), 0);
+    EXPECT_EXIT(CLIPipeline::run(3, argv), testing::ExitedWithCode(0), "");
 }
 
 // --- TestArgv helper for in-process cmd* tests ---

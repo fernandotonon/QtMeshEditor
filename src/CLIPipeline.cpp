@@ -371,11 +371,11 @@ int CLIPipeline::run(int argc, char* argv[])
         }
         if (arg == "--help" || arg == "-h") {
             printUsage();
-            return 0;
+            _exit(0);
         }
         if (arg == "--version" || arg == "-v") {
             printVersion();
-            return 0;
+            _exit(0);
         }
         // First non-flag argument is the subcommand
         if (!arg.startsWith("-")) {
