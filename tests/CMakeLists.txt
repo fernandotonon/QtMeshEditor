@@ -66,6 +66,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ThemeManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
     )
 
     set(TEST_HEADER_FILES
@@ -124,6 +126,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ThemeManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/BatchExporter.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPresetLibrary.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)
