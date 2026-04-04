@@ -5,6 +5,8 @@
 #include <Ogre.h>
 #include <assimp/postprocess.h>
 #include <cmath>
+#include <QDir>
+#include <QTemporaryDir>
 
 MeshValidator* MeshValidator::m_pSingleton = nullptr;
 
@@ -231,14 +233,23 @@ void MeshValidator::fixAll()
                                   | aiProcess_FindInvalidData
                                   | aiProcess_SortByPType;
 
+    // Export to a temp OBJ file so Assimp processes the cleanup flags.
+    // .mesh files use Ogre's native loader and bypass Assimp entirely.
+    QTemporaryDir tmpDir;
+    if (!tmpDir.isValid()) {
+        emit error("Could not create temporary directory for cleaning.");
+        return;
+    }
+
     QStringList reimportPaths;
     for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
         Ogre::SceneNode* sn = entity->getParentSceneNode();
         if (!sn) continue;
 
-        QString exportedPath = MeshImporterExporter::exporter(sn);
-        if (!exportedPath.isEmpty())
-            reimportPaths << exportedPath;
+        const QString nodeName = QString::fromStdString(sn->getName());
+        const QString tmpPath = QDir(tmpDir.path()).filePath(nodeName + "_clean.obj");
+        if (MeshImporterExporter::exporter(sn, tmpPath, "obj", /*stripAnimations=*/false) == 0)
+            reimportPaths << tmpPath;
     }
 
     if (reimportPaths.isEmpty()) {
