@@ -178,7 +178,7 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_UnknownFormat_ReturnsURIW
 }
 
 TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ReturnsFilterString) {
-    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;FBX Binary (*.fbx);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;STL (*.stl);;X (*.x);;glTF 2.0 (*.gltf2);;glTF 2.0 Binary (*.glb2)";
+    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;FBX Binary (*.fbx);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;STL (*.stl);;X (*.x);;glTF 2.0 (*.gltf);;glTF 2.0 Binary (*.glb)";
 
     QString result = MeshImporterExporter::exportFileDialogFilter();
 
@@ -474,8 +474,8 @@ TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAll18For
     EXPECT_TRUE(filter.contains("PLY (*.ply)"));
     EXPECT_TRUE(filter.contains("STL (*.stl)"));
     EXPECT_TRUE(filter.contains("X (*.x)"));
-    EXPECT_TRUE(filter.contains("glTF 2.0 (*.gltf2)"));
-    EXPECT_TRUE(filter.contains("glTF 2.0 Binary (*.glb2)"));
+    EXPECT_TRUE(filter.contains("glTF 2.0 (*.gltf)"));
+    EXPECT_TRUE(filter.contains("glTF 2.0 Binary (*.glb)"));
 }
 
 TEST(MeshImporterExporterStandaloneTest, FormatFileURI_FBXFormat) {
@@ -522,8 +522,8 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_AllFormats_CorrectExtensi
         {"STL (*.stl)", ".stl"},
         {"PLY (*.ply)", ".ply"},
         {"3DS (*.3ds)", ".3ds"},
-        {"glTF 2.0 (*.gltf2)", ".gltf2"},
-        {"glTF 2.0 Binary (*.glb2)", ".glb2"},
+        {"glTF 2.0 (*.gltf)", ".gltf"},
+        {"glTF 2.0 Binary (*.glb)", ".glb"},
         {"Assimp Binary (*.assbin)", ".assbin"},
         {"FBX Binary (*.fbx)", ".fbx"},
     };
@@ -1047,4 +1047,106 @@ TEST_F(SceneSaveLoadTest, Exporter_ObjFromSkeletalEntitySucceeds)
     EXPECT_EQ(result, 0);
     EXPECT_TRUE(QFileInfo::exists(objFile));
     EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/skeletal_export.material"));
+}
+
+// ─── LOD export tests ───────────────────────────────────────────────
+
+TEST_F(SceneSaveLoadTest, Exporter_StripAnimations_FileIsWritten)
+{
+    auto* entity = createAnimatedTestEntity("strip_anim_mesh");
+    ASSERT_NE(entity, nullptr);
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString outFile = tmpDir.path() + "/strip_anim.gltf";
+
+    const int result = MeshImporterExporter::exporter(node, outFile, "glTF 2.0 (*.gltf)", /*stripAnimations=*/true);
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(outFile));
+    EXPECT_GT(QFileInfo(outFile).size(), 0);
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_StripAnimations_SkeletonHasNoAnimationsAfterRoundTrip)
+{
+    auto* entity = createAnimatedTestEntity("strip_anim_rt_mesh");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_GT(entity->getMesh()->getSkeleton()->getNumAnimations(), 0u);
+
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString outFile = tmpDir.path() + "/strip_anim_rt.gltf";
+
+    const int result = MeshImporterExporter::exporter(node, outFile, "glTF 2.0 (*.gltf)", /*stripAnimations=*/true);
+    ASSERT_EQ(result, 0);
+    ASSERT_TRUE(QFileInfo::exists(outFile));
+
+    Manager::getSingleton()->destroySceneNode(node);
+
+    QList<Ogre::SkeletonPtr> animOnlySkeletons;
+    MeshImporterExporter::importer({outFile}, 0, &animOnlySkeletons);
+
+    const auto& nodes = Manager::getSingleton()->getSceneNodes();
+    ASSERT_FALSE(nodes.empty());
+    auto* reimportedEntity = dynamic_cast<Ogre::Entity*>(
+        nodes.front()->getAttachedObject(0));
+    ASSERT_NE(reimportedEntity, nullptr);
+    // Stripped export: skeleton absent or has zero animations
+    if (reimportedEntity->hasSkeleton())
+        EXPECT_EQ(reimportedEntity->getMesh()->getSkeleton()->getNumAnimations(), 0u);
+}
+
+TEST_F(SceneSaveLoadTest, Exporter_DefaultNoStripAnimations_PreservesAnimations)
+{
+    auto* entity = createAnimatedTestEntity("preserve_anim_mesh");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+    const unsigned int originalAnimCount =
+        entity->getMesh()->getSkeleton()->getNumAnimations();
+    ASSERT_GT(originalAnimCount, 0u);
+
+    auto* node = entity->getParentSceneNode();
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString outFile = tmpDir.path() + "/preserve_anim.gltf";
+
+    const int result = MeshImporterExporter::exporter(node, outFile, "glTF 2.0 (*.gltf)");
+    ASSERT_EQ(result, 0);
+
+    Manager::getSingleton()->destroySceneNode(node);
+
+    MeshImporterExporter::importer({outFile});
+    const auto& nodes = Manager::getSingleton()->getSceneNodes();
+    ASSERT_FALSE(nodes.empty());
+    auto* reimportedEntity = dynamic_cast<Ogre::Entity*>(
+        nodes.front()->getAttachedObject(0));
+    ASSERT_NE(reimportedEntity, nullptr);
+    ASSERT_TRUE(reimportedEntity->hasSkeleton());
+    EXPECT_EQ(reimportedEntity->getMesh()->getSkeleton()->getNumAnimations(), originalAnimCount);
+}
+
+// ─── gltf short-alias format tests ─────────────────────────────────
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GltfShortAlias)
+{
+    // "gltf" is the short alias used by the LOD exporter; formatFileURI should append .gltf
+    QString result = MeshImporterExporter::formatFileURI("/tmp/model", "gltf");
+    EXPECT_EQ(result, "/tmp/model.gltf");
+}
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GltfFormat_CorrectExtension)
+{
+    QString result = MeshImporterExporter::formatFileURI("/tmp/model", "glTF 2.0 (*.gltf)");
+    EXPECT_EQ(result, "/tmp/model.gltf");
+}
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GlbFormat_CorrectExtension)
+{
+    QString result = MeshImporterExporter::formatFileURI("/tmp/model", "glTF 2.0 Binary (*.glb)");
+    EXPECT_EQ(result, "/tmp/model.glb");
 }

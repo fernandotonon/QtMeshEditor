@@ -165,14 +165,25 @@ void RTShaderHelper::applyNormalMap(Ogre::MaterialPtr& mat, const std::string& n
     if (!shaderGen) return;
 
     try {
-        // Verify the normal map texture actually exists and is loaded.
-        // If the texture file is missing, applying the RTSS normal map SRS would
-        // produce garbage lighting (shader reads blank/default texture data).
+        // Verify the normal map texture is registered (exists in any resource group).
+        // We do NOT require isLoaded() here: textures loaded from a .material file
+        // alongside a .mesh are in a path-based group and getByName() may return
+        // an unloaded stub even though the texture data is already in GPU memory.
+        // RTSS will bind to the TUS which already holds the texture pointer.
         {
             auto normalTex = Ogre::TextureManager::getSingleton().getByName(normalMapTexName);
-            if (!normalTex || !normalTex->isLoaded()) {
+            if (!normalTex) {
+                // Texture not registered at all — try loading it now.
+                try {
+                    Ogre::TextureManager::getSingleton().load(
+                        normalMapTexName,
+                        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                } catch (...) {}
+                normalTex = Ogre::TextureManager::getSingleton().getByName(normalMapTexName);
+            }
+            if (!normalTex) {
                 Ogre::LogManager::getSingleton().logMessage(
-                    "RTShaderHelper: Skipping normal map — texture '" + normalMapTexName + "' not loaded");
+                    "RTShaderHelper: Skipping normal map — texture '" + normalMapTexName + "' not found");
                 return;
             }
         }

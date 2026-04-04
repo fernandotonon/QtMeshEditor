@@ -44,6 +44,7 @@ THE SOFTWARE.
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "RTShaderHelper.h"
 #include "Assimp/Importer.h"
 #include "Assimp/MaterialProcessor.h"
 #include "Assimp/MeshProcessor.h"
@@ -69,8 +70,8 @@ const QMap<QString, QString> MeshImporterExporter::exportFormats = {
     {"STL (*.stl)", ".stl"},
     {"PLY (*.ply)", ".ply"},
     {"3DS (*.3ds)", ".3ds"},
-    {"glTF 2.0 (*.gltf2)", ".gltf2"},
-    {"glTF 2.0 Binary (*.glb2)", ".glb2"},
+    {"glTF 2.0 (*.gltf)", ".gltf"},
+    {"glTF 2.0 Binary (*.glb)", ".glb"},
     {"Assimp Binary (*.assbin)", ".assbin"},
     {"FBX Binary (*.fbx)", ".fbx"}
 };
@@ -316,6 +317,7 @@ static void readSubmeshGeometry(
         auto* ibase = static_cast<const unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
         bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
 
+        const unsigned int indexStart = static_cast<unsigned int>(iData->indexStart);
         for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
         {
             aiM->mFaces[f].mNumIndices = 3;
@@ -323,8 +325,8 @@ static void readSubmeshGeometry(
             for (unsigned int v = 0; v < 3; ++v)
             {
                 unsigned int idx = use32
-                    ? reinterpret_cast<const uint32_t*>(ibase)[f * 3 + v]
-                    : reinterpret_cast<const uint16_t*>(ibase)[f * 3 + v];
+                    ? reinterpret_cast<const uint32_t*>(ibase)[indexStart + f * 3 + v]
+                    : reinterpret_cast<const uint16_t*>(ibase)[indexStart + f * 3 + v];
                 aiM->mFaces[f].mIndices[v] = idx;
             }
         }
@@ -374,6 +376,60 @@ static void assignBoneWeights(
 
             aiM->mBones[bi++] = aiBoneObj;
         }
+    }
+}
+
+// Compact an aiMesh: remove unreferenced vertices, remap face indices and bone
+// weights. Required when exporting LOD-reduced geometry (full vertex buffer but
+// only a fraction of triangles), which otherwise causes expensive post-processing
+// (aiProcess_JoinIdenticalVertices, aiProcess_OptimizeMeshes) on import.
+static void compactAiMesh(aiMesh* aiM)
+{
+    if (!aiM || aiM->mNumVertices == 0 || aiM->mNumFaces == 0) return;
+
+    std::vector<bool> used(aiM->mNumVertices, false);
+    for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
+        for (unsigned int v = 0; v < aiM->mFaces[f].mNumIndices; ++v)
+            if (aiM->mFaces[f].mIndices[v] < aiM->mNumVertices)
+                used[aiM->mFaces[f].mIndices[v]] = true;
+
+    std::vector<unsigned int> remap(aiM->mNumVertices, UINT_MAX);
+    unsigned int newCount = 0;
+    for (unsigned int i = 0; i < aiM->mNumVertices; ++i)
+        if (used[i]) remap[i] = newCount++;
+
+    if (newCount == aiM->mNumVertices) return; // nothing to compact
+
+    for (unsigned int i = 0; i < aiM->mNumVertices; ++i) {
+        if (!used[i]) continue;
+        unsigned int ni = remap[i];
+        aiM->mVertices[ni] = aiM->mVertices[i];
+        if (aiM->mNormals)          aiM->mNormals[ni]          = aiM->mNormals[i];
+        if (aiM->mTangents)         aiM->mTangents[ni]         = aiM->mTangents[i];
+        if (aiM->mBitangents)       aiM->mBitangents[ni]       = aiM->mBitangents[i];
+        for (int c = 0; c < AI_MAX_NUMBER_OF_COLOR_SETS; ++c)
+            if (aiM->mColors[c]) aiM->mColors[c][ni] = aiM->mColors[c][i];
+        for (int t = 0; t < AI_MAX_NUMBER_OF_TEXTURECOORDS; ++t)
+            if (aiM->mTextureCoords[t]) aiM->mTextureCoords[t][ni] = aiM->mTextureCoords[t][i];
+    }
+    aiM->mNumVertices = newCount;
+
+    for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
+        for (unsigned int v = 0; v < aiM->mFaces[f].mNumIndices; ++v)
+            aiM->mFaces[f].mIndices[v] = remap[aiM->mFaces[f].mIndices[v]];
+
+    for (unsigned int bi = 0; bi < aiM->mNumBones; ++bi) {
+        aiBone* bone = aiM->mBones[bi];
+        unsigned int kept = 0;
+        for (unsigned int wi = 0; wi < bone->mNumWeights; ++wi) {
+            unsigned int vid = bone->mWeights[wi].mVertexId;
+            if (vid < remap.size() && remap[vid] != UINT_MAX) {
+                bone->mWeights[kept] = bone->mWeights[wi];
+                bone->mWeights[kept].mVertexId = remap[vid];
+                ++kept;
+            }
+        }
+        bone->mNumWeights = kept;
     }
 }
 
@@ -527,6 +583,8 @@ static aiScene* buildAiScene(const Ogre::Entity* entity)
 
         if (hasSkeleton)
             assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
+
+        compactAiMesh(aiM);
     }
 
     // --- Animations ---
@@ -809,6 +867,71 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
     return mesh;
 }
 
+// Apply RTSS normal map shaders to any materials that have a normal-map texture
+// unit. Called after loading .mesh/.xml files where MaterialProcessor doesn't run.
+static void applyNormalMapsToEntity(const Ogre::Entity* en)
+{
+    if (!en) return;
+    auto& log = Ogre::LogManager::getSingleton();
+
+    // Build tangent vectors on the mesh if they're missing — required by RTSS normal mapping.
+    if (auto mesh = en->getMesh()) {
+        bool hasTangents = false;
+        const auto* vd = mesh->getVertexDataByTrackHandle(0);
+        if (!vd && mesh->sharedVertexData)
+            vd = mesh->sharedVertexData;
+        if (vd && vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TANGENT))
+            hasTangents = true;
+        if (!hasTangents) {
+            try {
+                // storeParityInW=true → VET_FLOAT4 tangents with handedness in w,
+                // matching what MeshProcessor exports and what RTSS expects.
+                mesh->buildTangentVectors(Ogre::VES_TANGENT, 0, 0, false, false, true);
+                log.logMessage("applyNormalMapsToEntity: built tangents for '" +
+                               mesh->getName() + "'");
+            } catch (const Ogre::Exception& e) {
+                log.logMessage("applyNormalMapsToEntity: could not build tangents for '" +
+                               mesh->getName() + "': " + e.getDescription());
+            }
+        }
+    }
+
+    for (const auto* subEnt : en->getSubEntities()) {
+        auto mat = subEnt->getMaterial();
+        if (!mat) continue;
+        // Ensure the material is fully loaded so TUS names are populated.
+        if (!mat->isLoaded()) mat->load();
+        if (mat->getNumTechniques() == 0) continue;
+        auto* pass = mat->getTechnique(0)->getPass(0);
+        if (!pass) continue;
+        for (unsigned short i = 0; i < pass->getNumTextureUnitStates(); ++i) {
+            auto* tus = pass->getTextureUnitState(i);
+            const auto& tusName = tus->getName();
+            if (tusName == "normal_map" || tusName == "NormalMap") {
+                std::string texName = tus->getTextureName();
+                log.logMessage("applyNormalMapsToEntity: found normal map TUS '" +
+                               tusName + "' tex='" + texName + "' on mat='" + mat->getName() + "'",
+                               Ogre::LML_TRIVIAL);
+                if (texName.empty()) break;
+                // Ensure the texture is loaded before RTSS inspects it.
+                auto tex = Ogre::TextureManager::getSingleton().getByName(texName);
+                if (!tex || !tex->isLoaded()) {
+                    try {
+                        Ogre::TextureManager::getSingleton().load(texName, mat->getGroup());
+                    } catch (...) {
+                        try {
+                            Ogre::TextureManager::getSingleton().load(
+                                texName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                        } catch (...) {}
+                    }
+                }
+                RTShaderHelper::applyNormalMap(mat, texName);
+                break;
+            }
+        }
+    }
+}
+
 static void ensureResourceGroup(const QString &path)
 {
     auto group = path.toStdString();
@@ -847,6 +970,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(), file.path().toStdString().data()));
                 if (en->getMesh() && en->getMesh()->getSkeleton())
                     AnimationMerger::registerSkeletonUpAxis(en->getMesh()->getSkeleton()->getName(), 1);
+                applyNormalMapsToEntity(en);
             }
             else if(!file.suffix().compare("xml",Qt::CaseInsensitive))
             {
@@ -858,6 +982,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 en = Manager::getSingleton()->createEntity(sn, mesh);
                 if (en->getMesh() && en->getMesh()->getSkeleton())
                     AnimationMerger::registerSkeletonUpAxis(en->getMesh()->getSkeleton()->getName(), 1);
+                applyNormalMapsToEntity(en);
             }
             else
             {
@@ -910,10 +1035,13 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 QString MeshImporterExporter::formatFileURI(const QString &_uri, const QString &_format)
 {
     if(_uri.isEmpty()) return "";
-    const auto ext = exportFormats[_format];
-    if(_uri.right(ext.size())==ext) 
+    auto ext = exportFormats[_format];
+    // Fall back to treating the format string itself as the extension (short aliases
+    // like "gltf", "glb", "fbx" that are in assimpFormatIds but not exportFormats).
+    if (ext.isEmpty() && !_format.isEmpty() && !_format.contains(' ') && !_format.contains('('))
+        ext = "." + _format;
+    if(_uri.right(ext.size())==ext)
         return _uri;
-    
     return _uri+ext;
 }
 
@@ -947,7 +1075,8 @@ QString MeshImporterExporter::exporter(const Ogre::SceneNode *_sn)
     return uri;
 }
 
-int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format)
+int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_uri, const QString &_format,
+                                    bool stripAnimations)
 {
     if(!_sn) return -1;
 
@@ -1041,6 +1170,29 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 return -1;
             }
 
+            // LOD exports strip all skeleton data. Game engines apply the original
+            // mesh's skeleton to every LOD level; the LOD files only need geometry.
+            // Keeping bones without proper per-vertex blend elements triggers
+            // Ogre's softwareVertexBlend assertion crash on re-import.
+            if (stripAnimations)
+            {
+                for (unsigned int ai = 0; ai < scene->mNumAnimations; ++ai)
+                    delete scene->mAnimations[ai];
+                delete[] scene->mAnimations;
+                scene->mAnimations = nullptr;
+                scene->mNumAnimations = 0;
+
+                for (unsigned int mi = 0; mi < scene->mNumMeshes; ++mi)
+                {
+                    auto* m = scene->mMeshes[mi];
+                    for (unsigned int bi = 0; bi < m->mNumBones; ++bi)
+                        delete m->mBones[bi];
+                    delete[] m->mBones;
+                    m->mBones = nullptr;
+                    m->mNumBones = 0;
+                }
+            }
+
             // Map format display name to Assimp export format ID
             static const QMap<QString, QString> assimpFormatIds = {
                 {"Collada (*.dae)", "collada"},
@@ -1050,8 +1202,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
                 {"STL (*.stl)", "stl"},
                 {"PLY (*.ply)", "ply"},
                 {"3DS (*.3ds)", "3ds"},
-                {"glTF 2.0 (*.gltf2)", "gltf2"},
-                {"glTF 2.0 Binary (*.glb2)", "glb2"},
+                {"glTF 2.0 (*.gltf)", "gltf2"},
+                {"glTF 2.0 Binary (*.glb)", "glb2"},
+                {"gltf", "gltf2"},  // short alias used by LOD exporter
+                {"glb", "glb2"},    // short alias used by LOD exporter
                 {"Assimp Binary (*.assbin)", "assbin"},
             };
 
@@ -1270,6 +1424,8 @@ static aiScene* buildSceneAiScene()
 
             if (hasSkeleton)
                 assignBoneWeights(aiM, subMesh, mesh, skeleton, boneHandleToName);
+
+            compactAiMesh(aiM);
         }
 
         // --- Animations ---

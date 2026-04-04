@@ -55,6 +55,8 @@ SceneTreeModel.cpp
 ThemeManager.cpp
 BatchExporter.cpp
 MaterialPresetLibrary.cpp
+MeshLodController.cpp
+MeshValidator.cpp
 )
 
 set(HEADER_FILES
@@ -113,6 +115,8 @@ SceneTreeModel.h
 ThemeManager.h
 BatchExporter.h
 MaterialPresetLibrary.h
+MeshLodController.h
+MeshValidator.h
 )
 
 set(TEST_SOURCES "")

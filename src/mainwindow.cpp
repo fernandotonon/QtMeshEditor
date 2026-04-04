@@ -52,6 +52,8 @@
 #include "ModelDownloader.h"
 #include "UndoManager.h"
 #include "PropertiesPanelController.h"
+#include "MeshLodController.h"
+#include "MeshValidator.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -224,14 +226,15 @@ MainWindow::~MainWindow()
     // The Manager will clean up all OGRE resources (scene manager, root, etc.)
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
+    // These singletons are safe to destroy unconditionally.
+    AnimationControlController::kill();
+    MeshLodController::kill();
+    MeshValidator::kill();
+    // Only destroy Manager if it still exists and belongs to this MainWindow
+    // (In tests, Manager may be destroyed separately in TearDown)
     Manager* manager = Manager::getSingletonPtr();
     if(manager && manager->getMainWindow() == this)
-    {
-        // Destroy AnimationControlController before Manager: its poll timer holds
-        // raw Ogre pointers that become dangling once Manager is destroyed.
-        AnimationControlController::kill();
         Manager::kill();
-    }
 }
 
 void MainWindow::initToolBar()
@@ -301,6 +304,29 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<AnimationControlController>("AnimationControl", 1, 0, "AnimationControlController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AnimationControlController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<MeshLodController>("PropertiesPanel", 1, 0, "MeshLodController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return MeshLodController::qmlInstance(engine, nullptr);
+            });
+        // Open the LOD export directory picker from MainWindow so the dialog has a
+        // proper parent widget — QFileDialog invoked from a QML context doesn't
+        // reliably appear on macOS without a valid parent QWidget.
+        connect(MeshLodController::instance(), &MeshLodController::exportLodsRequested,
+                this, [this](const QString& format) {
+            // Defer via singleShot so QML's event processing finishes before the
+            // native file picker opens (required on macOS to avoid invisible dialog).
+            QTimer::singleShot(0, this, [this, format]() {
+                QString dir = QFileDialog::getExistingDirectory(
+                    this, "Export LOD levels to directory", QDir::homePath(),
+                    QFileDialog::DontUseNativeDialog | QFileDialog::ShowDirsOnly);
+                if (!dir.isEmpty())
+                    MeshLodController::instance()->doExportLods(format, dir);
+            });
+        });
+        qmlRegisterSingletonType<MeshValidator>("PropertiesPanel", 1, 0, "MeshValidator",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return MeshValidator::qmlInstance(engine, nullptr);
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));

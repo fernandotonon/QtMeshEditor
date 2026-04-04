@@ -32,7 +32,6 @@ THE SOFTWARE.
 #include "AnimationProcessor.h"
 #include "BoneProcessor.h"
 #include "MeshProcessor.h"
-
 #include <algorithm>
 
 Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded, unsigned int additionalFlags) {
@@ -45,7 +44,10 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
                          aiProcess_RemoveComponent |
                          aiProcess_GenSmoothNormals |
                          aiProcess_ValidateDataStructure |
-                         aiProcess_OptimizeGraph |
+                         // aiProcess_OptimizeGraph intentionally omitted: it collapses the
+                         // node hierarchy that aiProcess_PopulateArmatureData requires to
+                         // link aiBone objects to their aiNode, causing hangs on re-imported
+                         // skeletal meshes (e.g. exported LOD gltf2 files).
                          aiProcess_LimitBoneWeights |
                          aiProcess_SortByPType |
                          aiProcess_ImproveCacheLocality |
@@ -58,8 +60,6 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
     flags |= additionalFlags;
 
     const aiScene* scene = importer.ReadFile(path, flags);
-
-    // Read coordinate system from FBX metadata (1=Y-up, 2=Z-up).
     // Do this immediately after ReadFile while the scene is still valid.
     m_sceneUpAxis = 1; // default: Y-up
     if (scene && scene->mMetaData)
