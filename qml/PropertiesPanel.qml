@@ -296,16 +296,82 @@ Rectangle {
         id: lodComponent
 
         Column {
+            id: lodContent
             width: parent ? parent.width : 200
             padding: 8
             spacing: 6
 
             property int lodCount: 2
+            // Tracks the live reduction values from the sliders so Generate can read them
+            property var reductionValues: [0.25, 0.5, 0.75, 1.0]
 
+            // LOD level summary table
+            Column {
+                id: lodInfoColumn
+                width: parent.width - 16
+                spacing: 2
+                visible: MeshLodController.currentLodLevels > 0
+                property var lodInfoModel: MeshLodController.lodLevelInfo()
+                Connections {
+                    target: MeshLodController
+                    function onLodChanged() {
+                        lodInfoColumn.lodInfoModel = MeshLodController.lodLevelInfo()
+                        lodPreviewSlider.value = 0
+                    }
+                    function onGenerationSucceeded() { lodInfoColumn.lodInfoModel = MeshLodController.lodLevelInfo() }
+                }
+
+                Text {
+                    text: MeshLodController.currentLodLevels + " LOD level(s) generated:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11; font.bold: true
+                }
+
+                Repeater {
+                    model: lodInfoColumn.lodInfoModel
+                    Row {
+                        spacing: 8
+                        Text {
+                            text: modelData.label + ":"
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10; width: 46
+                        }
+                        Text {
+                            text: modelData.triangles.toLocaleString() + " triangles"
+                            color: Qt.lighter(PropertiesPanelController.textColor, 0.8); font.pixelSize: 10
+                        }
+                    }
+                }
+
+                // Preview LOD slider
+                Row {
+                    spacing: 6; width: parent.width
+                    Text {
+                        text: "Preview:"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Slider {
+                        id: lodPreviewSlider
+                        from: 0; to: Math.max(0, MeshLodController.currentLodLevels)
+                        value: 0; stepSize: 1
+                        width: parent.width - 90
+                        anchors.verticalCenter: parent.verticalCenter
+                        onValueChanged: MeshLodController.previewLod(value)
+                    }
+                    Text {
+                        property var info: (lodPreviewSlider.value < lodInfoColumn.lodInfoModel.length)
+                            ? lodInfoColumn.lodInfoModel[Math.round(lodPreviewSlider.value)] : null
+                        text: info ? (info.label + "\n" + info.triangles + " tri") : ""
+                        color: PropertiesPanelController.textColor; font.pixelSize: 9; width: 52
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+            }
             Text {
-                text: "Current LOD levels: " + MeshLodController.currentLodLevels
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 11
+                text: "No LOD levels — click Generate or Auto below."
+                visible: MeshLodController.currentLodLevels === 0
+                color: Qt.lighter(PropertiesPanelController.textColor, 0.6)
+                font.pixelSize: 10; font.italic: true
             }
 
             // LOD count row
@@ -367,6 +433,11 @@ Rectangle {
                             stepSize: 0.05
                             width: parent.width - 90
                             anchors.verticalCenter: parent.verticalCenter
+                            onValueChanged: {
+                                var arr = lodContent.reductionValues.slice()
+                                arr[index] = value
+                                lodContent.reductionValues = arr
+                            }
                         }
                         Text {
                             text: Math.round(reductionSlider.value * 100) + "%"
@@ -392,9 +463,7 @@ Rectangle {
                     MouseArea {
                         id: genMouse; anchors.fill: parent; hoverEnabled: true
                         onClicked: {
-                            var reductions = []
-                            for (var i = 0; i < lodCountSelector.value; ++i)
-                                reductions.push(0.25 * (i + 1))  // simple default
+                            var reductions = lodContent.reductionValues.slice(0, lodCountSelector.value)
                             MeshLodController.generateLods(lodCountSelector.value, reductions)
                         }
                     }
@@ -443,12 +512,11 @@ Rectangle {
             Row {
                 spacing: 6
                 width: parent.width - 16
-                visible: MeshLodController.currentLodLevels > 0
 
                 ComboBox {
                     id: exportFormatCombo
                     width: 90; height: 26
-                    model: ["gltf2", "fbx", "obj", "mesh"]
+                    model: ["gltf", "glb", "fbx", "obj", "mesh"]
                     background: Rectangle {
                         color: PropertiesPanelController.headerColor
                         border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 3

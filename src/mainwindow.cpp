@@ -310,6 +310,21 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MeshLodController::qmlInstance(engine, nullptr);
             });
+        // Open the LOD export directory picker from MainWindow so the dialog has a
+        // proper parent widget — QFileDialog invoked from a QML context doesn't
+        // reliably appear on macOS without a valid parent QWidget.
+        connect(MeshLodController::instance(), &MeshLodController::exportLodsRequested,
+                this, [this](const QString& format) {
+            // Defer via singleShot so QML's event processing finishes before the
+            // native file picker opens (required on macOS to avoid invisible dialog).
+            QTimer::singleShot(0, this, [this, format]() {
+                QString dir = QFileDialog::getExistingDirectory(
+                    this, "Export LOD levels to directory", QDir::homePath(),
+                    QFileDialog::DontUseNativeDialog | QFileDialog::ShowDirsOnly);
+                if (!dir.isEmpty())
+                    MeshLodController::instance()->doExportLods(format, dir);
+            });
+        });
         qmlRegisterSingletonType<MeshValidator>("PropertiesPanel", 1, 0, "MeshValidator",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MeshValidator::qmlInstance(engine, nullptr);

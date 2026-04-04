@@ -6,8 +6,11 @@
 #include <OgreSubMesh.h>
 #include <OgreMeshLodGenerator.h>
 #include <OgreLodConfig.h>
-#include <QFileDialog>
+#include <QMessageBox>
+#include <QApplication>
 #include <QDir>
+#include <QVariantMap>
+#include <limits>
 
 MeshLodController* MeshLodController::m_pSingleton = nullptr;
 
@@ -59,6 +62,68 @@ int MeshLodController::currentLodLevels() const
         return 0;
     int count = static_cast<int>(entities.front()->getMesh()->getNumLodLevels());
     return std::max(0, count - 1); // exclude base LOD level 0
+}
+
+QVariantList MeshLodController::lodLevelInfo() const
+{
+    QVariantList result;
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities()) return result;
+
+    auto entities = sel->getEntitiesSelectionList();
+    if (entities.empty()) return result;
+
+    Ogre::MeshPtr mesh = entities.front()->getMesh();
+    if (!mesh) return result;
+
+    const unsigned int totalLods = mesh->getNumLodLevels();
+    const unsigned int numSubs = mesh->getNumSubMeshes();
+
+    // LOD 0 = base mesh: sum indexData->indexCount over all submeshes
+    unsigned int baseTris = 0;
+    for (unsigned int s = 0; s < numSubs; ++s) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(s);
+        if (sub->indexData)
+            baseTris += sub->indexData->indexCount / 3;
+    }
+    QVariantMap base;
+    base["level"] = 0;
+    base["label"] = "Base";
+    base["triangles"] = baseTris;
+    result.append(base);
+
+    // LOD 1..N-1 = reduced levels
+    for (unsigned int lod = 1; lod < totalLods; ++lod) {
+        unsigned int lodTris = 0;
+        for (unsigned int s = 0; s < numSubs; ++s) {
+            Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            if ((lod - 1) < sub->mLodFaceList.size() && sub->mLodFaceList[lod - 1])
+                lodTris += sub->mLodFaceList[lod - 1]->indexCount / 3;
+        }
+        QVariantMap entry;
+        entry["level"] = static_cast<int>(lod);
+        entry["label"] = QString("LOD %1").arg(lod);
+        entry["triangles"] = lodTris;
+        result.append(entry);
+    }
+
+    return result;
+}
+
+void MeshLodController::previewLod(int lodIndex)
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities()) return;
+
+    for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
+        if (lodIndex < 0) {
+            // restore: full range, normal bias
+            entity->setMeshLodBias(1.0f, 0, std::numeric_limits<unsigned short>::max());
+        } else {
+            auto idx = static_cast<unsigned short>(lodIndex);
+            entity->setMeshLodBias(1.0f, idx, idx);
+        }
+    }
 }
 
 void MeshLodController::generateLods(int count, QVariantList reductions)
@@ -158,31 +223,46 @@ void MeshLodController::exportLods(const QString& format)
 
     const unsigned int totalLods = mesh->getNumLodLevels();
     if (totalLods <= 1) {
-        emit error("No LOD levels generated yet. Use Generate or Auto first.");
+        QMessageBox::warning(QApplication::activeWindow(),
+            "Export LOD Levels",
+            "No LOD levels generated yet.\nClick 'Generate' or 'Auto' first to create LOD levels.");
         return;
     }
 
-    QString dir = QFileDialog::getExistingDirectory(
-        nullptr, "Choose export directory for LOD levels", QDir::homePath());
-    if (dir.isEmpty()) return;
+    // Don't open a dialog here — emit a signal so MainWindow can open the
+    // directory picker with the correct parent widget (reliable on macOS).
+    emit exportLodsRequested(format);
+}
 
-    const QString baseName = QString::fromStdString(mesh->getName());
-    const QString ext = format.isEmpty() ? "gltf2" : format;
+void MeshLodController::doExportLods(const QString& format, const QString& directory)
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities()) return;
 
-    // Determine the scene node for exporting
+    auto entities = sel->getEntitiesSelectionList();
+    Ogre::Entity* entity = entities.empty() ? nullptr : entities.front();
+    if (!entity) return;
+
+    Ogre::MeshPtr mesh = entity->getMesh();
+    if (!mesh) return;
+
+    const unsigned int totalLods = mesh->getNumLodLevels();
+    if (totalLods <= 1) return;
+
     Ogre::SceneNode* sn = entity->getParentSceneNode();
     if (!sn) {
         emit error("Entity has no scene node.");
         return;
     }
 
+    const QString baseName = QString::fromStdString(mesh->getName());
+    const QString ext = format.isEmpty() ? "gltf" : format;
     int exported = 0;
 
-    // LOD 0 = original full mesh (always present); LOD 1..N are the reduced levels.
-    // Export LOD level i by temporarily swapping each submesh's indexData with its
-    // mLodFaceList[i-1] entry, exporting, then restoring.
+    // LOD 0 = original full mesh; LOD 1..N are the reduced levels.
+    // Temporarily swap each submesh's indexData with its mLodFaceList[i-1]
+    // entry, export, then restore — the in-memory mesh is never permanently altered.
     for (unsigned int lod = 1; lod < totalLods; ++lod) {
-        // Collect and swap index data for every submesh
         const unsigned int numSubs = mesh->getNumSubMeshes();
         std::vector<Ogre::IndexData*> savedIndex(numSubs, nullptr);
 
@@ -193,16 +273,14 @@ void MeshLodController::exportLods(const QString& format)
                 sub->indexData = sub->mLodFaceList[lod - 1];
         }
 
-        const QString outPath = QDir(dir).filePath(
+        const QString outPath = QDir(directory).filePath(
             QString("%1_lod%2.%3").arg(baseName).arg(lod).arg(ext));
-
-        MeshImporterExporter::exporter(sn, outPath, ext);
+        MeshImporterExporter::exporter(sn, outPath, ext, /*stripAnimations=*/true);
         ++exported;
 
-        // Restore original index data
         for (unsigned int s = 0; s < numSubs; ++s)
             mesh->getSubMesh(s)->indexData = savedIndex[s];
     }
 
-    emit exportSucceeded(exported, dir);
+    emit exportSucceeded(exported, directory);
 }
