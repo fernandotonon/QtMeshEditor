@@ -1035,10 +1035,13 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 QString MeshImporterExporter::formatFileURI(const QString &_uri, const QString &_format)
 {
     if(_uri.isEmpty()) return "";
-    const auto ext = exportFormats[_format];
-    if(_uri.right(ext.size())==ext) 
+    auto ext = exportFormats[_format];
+    // Fall back to treating the format string itself as the extension (short aliases
+    // like "gltf", "glb", "fbx" that are in assimpFormatIds but not exportFormats).
+    if (ext.isEmpty() && !_format.isEmpty() && !_format.contains(' ') && !_format.contains('('))
+        ext = "." + _format;
+    if(_uri.right(ext.size())==ext)
         return _uri;
-    
     return _uri+ext;
 }
 

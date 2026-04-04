@@ -1134,11 +1134,9 @@ TEST_F(SceneSaveLoadTest, Exporter_DefaultNoStripAnimations_PreservesAnimations)
 
 TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GltfShortAlias)
 {
-    // "gltf" is the short alias used by LOD exporter; formatFileURI maps it to .gltf
+    // "gltf" is the short alias used by the LOD exporter; formatFileURI should append .gltf
     QString result = MeshImporterExporter::formatFileURI("/tmp/model", "gltf");
-    // The gltf short alias is not in exportFormats (only used via exporter directly),
-    // so formatFileURI falls back to no-known-ext behaviour. Verify the file isn't mangled.
-    EXPECT_FALSE(result.isEmpty());
+    EXPECT_EQ(result, "/tmp/model.gltf");
 }
 
 TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GltfFormat_CorrectExtension)

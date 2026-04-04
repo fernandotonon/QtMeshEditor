@@ -6,8 +6,6 @@
 #include <OgreSubMesh.h>
 #include <OgreMeshLodGenerator.h>
 #include <OgreLodConfig.h>
-#include <QMessageBox>
-#include <QApplication>
 #include <QDir>
 #include <QVariantMap>
 #include <limits>
@@ -41,7 +39,10 @@ MeshLodController::MeshLodController() : QObject(nullptr)
     m_generator = std::make_unique<Ogre::MeshLodGenerator>();
 
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
-            this, &MeshLodController::selectionChanged);
+            this, [this]() {
+        emit selectionChanged();
+        emit lodChanged();
+    });
 }
 
 MeshLodController::~MeshLodController() = default;
@@ -223,9 +224,7 @@ void MeshLodController::exportLods(const QString& format)
 
     const unsigned int totalLods = mesh->getNumLodLevels();
     if (totalLods <= 1) {
-        QMessageBox::warning(QApplication::activeWindow(),
-            "Export LOD Levels",
-            "No LOD levels generated yet.\nClick 'Generate' or 'Auto' first to create LOD levels.");
+        emit error("No LOD levels generated yet. Click 'Generate' or 'Auto' first.");
         return;
     }
 
@@ -275,8 +274,8 @@ void MeshLodController::doExportLods(const QString& format, const QString& direc
 
         const QString outPath = QDir(directory).filePath(
             QString("%1_lod%2.%3").arg(baseName).arg(lod).arg(ext));
-        MeshImporterExporter::exporter(sn, outPath, ext, /*stripAnimations=*/true);
-        ++exported;
+        if (MeshImporterExporter::exporter(sn, outPath, ext, /*stripAnimations=*/true) == 0)
+            ++exported;
 
         for (unsigned int s = 0; s < numSubs; ++s)
             mesh->getSubMesh(s)->indexData = savedIndex[s];

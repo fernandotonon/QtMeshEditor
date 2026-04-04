@@ -226,16 +226,15 @@ MainWindow::~MainWindow()
     // The Manager will clean up all OGRE resources (scene manager, root, etc.)
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
+    // These singletons are safe to destroy unconditionally.
+    AnimationControlController::kill();
+    MeshLodController::kill();
+    MeshValidator::kill();
+    // Only destroy Manager if it still exists and belongs to this MainWindow
+    // (In tests, Manager may be destroyed separately in TearDown)
     Manager* manager = Manager::getSingletonPtr();
     if(manager && manager->getMainWindow() == this)
-    {
-        // Destroy AnimationControlController before Manager: its poll timer holds
-        // raw Ogre pointers that become dangling once Manager is destroyed.
-        AnimationControlController::kill();
-        MeshLodController::kill();
-        MeshValidator::kill();
         Manager::kill();
-    }
 }
 
 void MainWindow::initToolBar()

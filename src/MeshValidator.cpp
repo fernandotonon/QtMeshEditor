@@ -109,7 +109,7 @@ void MeshValidator::validate()
             const Ogre::VertexElement* texElem =
                 vd->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
 
-            // ---- lock vertex buffer ----
+            // ---- lock position buffer ----
             Ogre::HardwareVertexBufferSharedPtr vbuf;
             const unsigned char* vdata = nullptr;
             size_t vStride = 0;
@@ -122,15 +122,22 @@ void MeshValidator::validate()
             }
 
             // ---- check UV non-finite / out-of-range ----
-            if (texElem && vdata) {
+            // Lock the UV buffer separately — it may be in a different stream than positions.
+            if (texElem) {
+                Ogre::HardwareVertexBufferSharedPtr tbuf =
+                    vd->vertexBufferBinding->getBuffer(texElem->getSource());
+                const unsigned char* tdata = static_cast<const unsigned char*>(
+                    tbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                size_t tStride = tbuf->getVertexSize();
                 for (size_t vi = 0; vi < vd->vertexCount; ++vi) {
                     float u = 0, v = 0;
-                    getTexCoord(vdata, vStride, texElem, vi, u, v);
+                    getTexCoord(tdata, tStride, texElem, vi, u, v);
                     if (!std::isfinite(u) || !std::isfinite(v))
                         ++totalNonFiniteUV;
                     else if (u < -10.f || u > 11.f || v < -10.f || v > 11.f)
                         ++totalOutOfRangeUV; // large tiling might be intentional; use wide range
                 }
+                tbuf->unlock();
             }
 
             // ---- lock index buffer + check degenerate triangles ----
