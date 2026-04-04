@@ -71,11 +71,14 @@ TEST_F(MeshLodControllerTest, InstanceReturnsSameObject) {
 }
 
 TEST_F(MeshLodControllerTest, KillResetsInstance) {
-    auto* a = MeshLodController::instance();
-    MeshLodController::kill();
+    MeshLodController::instance(); // ensure singleton exists
+    MeshLodController::kill();     // destroy it
+    // After kill, a fresh functional instance must be available
     auto* b = MeshLodController::instance();
-    EXPECT_NE(a, b);
-    EXPECT_NE(b, nullptr);
+    ASSERT_NE(b, nullptr);
+    // Fresh instance starts with no selection (pointer equality is unreliable
+    // due to allocator reuse — test behaviour instead)
+    EXPECT_FALSE(b->hasSelection());
 }
 
 TEST_F(MeshLodControllerTest, QmlInstanceReturnsSameObject) {
