@@ -323,12 +323,15 @@ jobs:
         $exe = "${{github.workspace}}\bin\qtmesh.exe"
         Write-Host "Running: $exe --version"
         $output = & $exe --version
+        $exitCode = $LASTEXITCODE
         Write-Host "Output: $output"
+        Write-Host "Exit code: $exitCode"
         if ($output -notmatch "qtmesh \d+\.\d+\.\d+") {
           Write-Error "CLI smoke test FAILED: output '$output' does not match expected 'qtmesh X.Y.Z'"
           exit 1
         }
         Write-Host "CLI smoke test PASSED"
+        exit 0
 
     - name: Upload Artifact
       if: github.event_name == 'release' && github.event.action == 'published'
