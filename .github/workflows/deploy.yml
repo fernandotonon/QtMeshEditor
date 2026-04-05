@@ -1665,24 +1665,22 @@ jobs:
         run: |
           Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
 
-      - name: Submit to WinGet
+      - name: Generate WinGet manifests
         run: |
           $rawTag = "${{ github.event.release.tag_name }}"
           $ver = $rawTag.TrimStart("v")
           $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${rawTag}/QtMeshEditor-${rawTag}-bin-Windows.zip"
 
-          # wingetcreate update finds the latest published manifest, bumps version/URL/hash,
-          # and opens a PR — no manual manifest assembly required.
-          # Retry up to 5 times: the release asset may not be propagated yet when this job starts.
-          Write-Host "Submitting version $ver to WinGet via wingetcreate update..."
+          # wingetcreate downloads the installer to compute its hash, so the release asset
+          # must be propagated before this runs. Retry up to 5 times.
+          Write-Host "Generating manifests for version $ver..."
           $success = $false
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             Write-Host "Attempt $attempt ..."
             .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
               --version $ver `
               --urls $url `
-              --submit `
-              --token ${{ secrets.WINGET_TOKEN }} 2>&1 | Tee-Object -Variable output
+              --out winget-manifests 2>&1 | Tee-Object -Variable output
             Write-Host $output
             if ($LASTEXITCODE -eq 0) { $success = $true; break }
             if ($attempt -lt 5) {
@@ -1692,10 +1690,79 @@ jobs:
             }
           }
           if (-not $success) {
-            Write-Host "::error::wingetcreate update failed after 5 attempts (last exit code $LASTEXITCODE)"
+            Write-Host "::error::wingetcreate manifest generation failed after 5 attempts"
             exit 1
           }
-          Write-Host "WinGet submission succeeded."
+          # Show what was generated
+          Get-ChildItem -Recurse winget-manifests | Select-Object FullName
+
+      - name: Submit PR to WinGet via gh
+        env:
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          $rawTag = "${{ github.event.release.tag_name }}"
+          $ver = $rawTag.TrimStart("v")
+          $fork = "fernandotonon/winget-pkgs"
+          $branch = "submit-FernandoTonon.QtMeshEditor-$ver"
+
+          # Sync fork with upstream
+          Write-Host "Syncing fork with upstream..."
+          gh repo sync $fork --source microsoft/winget-pkgs --branch master
+
+          # Get base commit SHA from fork master
+          $baseSha = gh api "repos/$fork/git/ref/heads/master" --jq '.object.sha'
+          Write-Host "Base SHA: $baseSha"
+
+          # Upload each manifest file as a blob and build the tree array
+          $manifestRelPath = "manifests/f/FernandoTonon/QtMeshEditor/$ver"
+          $localDir = "winget-manifests\$manifestRelPath"
+          $tree = @()
+          foreach ($file in Get-ChildItem $localDir) {
+            Write-Host "Uploading blob: $($file.Name)"
+            $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
+            $b64   = [Convert]::ToBase64String($bytes)
+            $blobSha = gh api "repos/$fork/git/blobs" -X POST `
+              -f "encoding=base64" -f "content=$b64" --jq '.sha'
+            $tree += [PSCustomObject]@{
+              path = "$manifestRelPath/$($file.Name)"
+              mode = "100644"
+              type = "blob"
+              sha  = $blobSha
+            }
+          }
+
+          # Create tree on fork
+          $treeJson = [PSCustomObject]@{ base_tree = $baseSha; tree = $tree } |
+            ConvertTo-Json -Depth 10 -Compress
+          $tmpTree = [System.IO.Path]::GetTempFileName()
+          [System.IO.File]::WriteAllText($tmpTree, $treeJson)
+          $treeSha = gh api "repos/$fork/git/trees" -X POST --input $tmpTree --jq '.sha'
+          Write-Host "Tree SHA: $treeSha"
+
+          # Create commit on fork
+          $commitJson = [PSCustomObject]@{
+            message = "Add FernandoTonon.QtMeshEditor $ver"
+            tree    = $treeSha
+            parents = @($baseSha)
+          } | ConvertTo-Json -Compress
+          $tmpCommit = [System.IO.Path]::GetTempFileName()
+          [System.IO.File]::WriteAllText($tmpCommit, $commitJson)
+          $commitSha = gh api "repos/$fork/git/commits" -X POST --input $tmpCommit --jq '.sha'
+          Write-Host "Commit SHA: $commitSha"
+
+          # Push new branch to fork
+          gh api "repos/$fork/git/refs" -X POST `
+            -f "ref=refs/heads/$branch" -f "sha=$commitSha"
+          Write-Host "Branch created: $branch"
+
+          # Open PR against microsoft/winget-pkgs
+          gh pr create `
+            --repo microsoft/winget-pkgs `
+            --title "Add FernandoTonon.QtMeshEditor $ver" `
+            --body "Submitting FernandoTonon.QtMeshEditor version $ver.`n`nAuto-generated by QtMeshEditor CI." `
+            --head "fernandotonon:$branch" `
+            --base master
+          Write-Host "WinGet PR submitted successfully."
 
 ####################################################################
 # Snap Store Publish (after Linux .deb is built)
