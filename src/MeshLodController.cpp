@@ -2,6 +2,7 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "MeshImporterExporter.h"
+#include "SentryReporter.h"
 #include <Ogre.h>
 #include <OgreSubMesh.h>
 #include <OgreMeshLodGenerator.h>
@@ -135,6 +136,9 @@ void MeshLodController::generateLods(int count, QVariantList reductions)
         return;
     }
 
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Generate %1 LOD level(s)").arg(std::max(1, std::min(count, 4))));
+
     count = std::max(1, std::min(count, 4));
 
     // distances at which each LOD kicks in (world units)
@@ -176,6 +180,8 @@ void MeshLodController::generateAutoLods()
         return;
     }
 
+    SentryReporter::addBreadcrumb("ui.action", "Auto-generate LOD levels");
+
     for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
         Ogre::MeshPtr mesh = entity->getMesh();
         if (!mesh) continue;
@@ -198,6 +204,8 @@ void MeshLodController::removeLods()
     auto* sel = SelectionSet::getSingleton();
     if (!sel || !sel->hasEntities()) return;
 
+    SentryReporter::addBreadcrumb("ui.action", "Remove LOD levels");
+
     for (Ogre::Entity* entity : sel->getEntitiesSelectionList()) {
         Ogre::MeshPtr mesh = entity->getMesh();
         if (mesh)
@@ -214,6 +222,9 @@ void MeshLodController::exportLods(const QString& format)
         emit error("No mesh selected.");
         return;
     }
+
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Export LOD levels (%1)").arg(format.isEmpty() ? "gltf" : format));
 
     auto entities = sel->getEntitiesSelectionList();
     Ogre::Entity* entity = entities.empty() ? nullptr : entities.front();

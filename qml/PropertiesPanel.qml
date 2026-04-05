@@ -598,6 +598,15 @@ Rectangle {
                 }
             }
 
+            // Validating indicator
+            Text {
+                width: parent.width - 16
+                visible: MeshValidator.validating
+                text: "Validating\u2026"
+                color: PropertiesPanelController.textColor; font.pixelSize: 11
+                font.italic: true
+            }
+
             // Issues list
             Column {
                 width: parent.width - 16
