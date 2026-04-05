@@ -2,6 +2,7 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "MeshImporterExporter.h"
+#include "SentryReporter.h"
 #include <Ogre.h>
 #include <assimp/postprocess.h>
 #include <cmath>
@@ -36,12 +37,21 @@ MeshValidator::MeshValidator() : QObject(nullptr)
 {
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
             this, [this]() {
-        // Clear stale results when selection changes
+        // Clear stale results when selection changes; cancel any pending validation.
         m_issues.clear();
         m_validated = false;
+        m_pendingValidate = false;
         emit selectionChanged();
         emit issuesChanged();
     });
+}
+
+MeshValidator::~MeshValidator()
+{
+    if (m_frameListenerRegistered) {
+        if (auto* root = Ogre::Root::getSingletonPtr())
+            root->removeFrameListener(this);
+    }
 }
 
 bool MeshValidator::hasSelection() const
@@ -82,6 +92,40 @@ static void getTexCoord(const unsigned char* vertexBase, size_t stride,
 }
 
 void MeshValidator::validate()
+{
+    m_issues.clear();
+    m_validated = false;
+    emit issuesChanged();
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities())
+        return;
+
+    SentryReporter::addBreadcrumb("ui.action", "Validate mesh");
+
+    // On Linux/GL3Plus, glMapBufferRange requires an active OpenGL context.
+    // Deferring to frameStarted() guarantees the Ogre context is current.
+    if (!m_frameListenerRegistered) {
+        if (auto* mgr = Manager::getSingletonPtr()) {
+            if (auto* root = mgr->getRoot()) {
+                root->addFrameListener(this);
+                m_frameListenerRegistered = true;
+            }
+        }
+    }
+    m_pendingValidate = true;
+}
+
+bool MeshValidator::frameStarted(const Ogre::FrameEvent& /*evt*/)
+{
+    if (m_pendingValidate) {
+        m_pendingValidate = false;
+        doValidate();
+    }
+    return true;
+}
+
+void MeshValidator::doValidate()
 {
     m_issues.clear();
     m_validated = false;
@@ -226,6 +270,8 @@ void MeshValidator::fixAll()
         emit error("No mesh selected.");
         return;
     }
+
+    SentryReporter::addBreadcrumb("ui.action", "Fix mesh issues (re-import with cleanup)");
 
     // Export each selected entity to a temp file then reimport with cleanup flags.
     // This creates a new cleaned entity; the user can delete the original.

@@ -4,8 +4,9 @@
 #include <QObject>
 #include <QVariantList>
 #include <QQmlEngine>
+#include <OgreFrameListener.h>
 
-class MeshValidator : public QObject
+class MeshValidator : public QObject, public Ogre::FrameListener
 {
     Q_OBJECT
     QML_ELEMENT
@@ -39,11 +40,19 @@ signals:
 
 private:
     MeshValidator();
-    ~MeshValidator() override = default;
+    ~MeshValidator() override;
+
+    // Ogre::FrameListener — runs doValidate() the next time the GL context is current.
+    // This avoids glMapBufferRange crashes on Linux when validate() is called
+    // between render frames (i.e. without an active OpenGL context).
+    bool frameStarted(const Ogre::FrameEvent& evt) override;
+    void doValidate();
 
     static MeshValidator* m_pSingleton;
     QVariantList m_issues;
     bool m_validated = false;
+    bool m_pendingValidate = false;
+    bool m_frameListenerRegistered = false;
 };
 
 #endif // MESHVALIDATOR_H

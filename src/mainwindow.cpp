@@ -718,6 +718,8 @@ void MainWindow::importMeshs(const QStringList &_uriList)
     // if a compatible entity is already selected.
     for (const Ogre::SkeletonPtr& skel : animOnlySkeletons) {
         if (!skel) continue;
+        SentryReporter::addBreadcrumb("import",
+            QString("Animation-only file detected: %1 animation(s)").arg(skel->getNumAnimations()));
         unsigned short numAnims = skel->getNumAnimations();
         QString animList;
         for (unsigned short i = 0; i < numAnims; ++i)
@@ -741,6 +743,7 @@ void MainWindow::importMeshs(const QStringList &_uriList)
                     .arg(baseEntity->getName().c_str()),
                 QMessageBox::Yes | QMessageBox::No);
             if (btn == QMessageBox::Yes) {
+                SentryReporter::addBreadcrumb("ui.action", "Merge animation-only file into selected mesh");
                 QString errMsg;
                 Ogre::Entity* merged = AnimationMerger::mergeAnimations(baseEntity, {}, {skel}, errMsg);
                 if (!merged) {
