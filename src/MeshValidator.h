@@ -16,6 +16,7 @@ class MeshValidator : public QObject, public Ogre::FrameListener
     Q_PROPERTY(QVariantList issues READ issues NOTIFY issuesChanged)
     Q_PROPERTY(bool hasFixableIssues READ hasFixableIssues NOTIFY issuesChanged)
     Q_PROPERTY(bool validated READ validated NOTIFY issuesChanged)
+    Q_PROPERTY(bool validating READ validating NOTIFY validatingChanged)
 
 public:
     static MeshValidator* instance();
@@ -26,6 +27,7 @@ public:
     QVariantList issues() const { return m_issues; }
     bool hasFixableIssues() const;
     bool validated() const { return m_validated; }
+    bool validating() const { return m_pendingValidate; }
 
     Q_INVOKABLE void validate();
     // Re-imports the mesh with Assimp cleanup flags to fix degenerate/invalid geometry.
@@ -39,6 +41,7 @@ public:
 signals:
     void selectionChanged();
     void issuesChanged();
+    void validatingChanged();
     void fixApplied(const QString& message);
     void error(const QString& message);
 
@@ -55,7 +58,7 @@ private:
     QVariantList m_issues;
     bool m_validated = false;
     bool m_pendingValidate = false;
-    bool m_frameListenerRegistered = false;
+    Ogre::Root* m_registeredRoot = nullptr; // which Root we are listening on
 };
 
 #endif // MESHVALIDATOR_H

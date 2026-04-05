@@ -2158,8 +2158,10 @@ QJsonObject MCPServer::toolGenerateLods(const QJsonObject &args)
         return makeErrorResult(errorMsg);
 
     QVariantList info = MeshLodController::instance()->lodLevelInfo();
+    // info[0] is the base mesh; remaining entries are the generated LODs
+    int actualLods = info.size() > 1 ? info.size() - 1 : 0;
     QStringList lines;
-    lines << QString("Generated %1 LOD level(s):").arg(count);
+    lines << QString("Generated %1 LOD level(s):").arg(actualLods);
     for (const QVariant& v : info) {
         QVariantMap m = v.toMap();
         lines << QString("  %1: %2 triangles")

@@ -40,7 +40,10 @@ MeshValidator::MeshValidator() : QObject(nullptr)
         // Clear stale results when selection changes; cancel any pending validation.
         m_issues.clear();
         m_validated = false;
-        m_pendingValidate = false;
+        if (m_pendingValidate) {
+            m_pendingValidate = false;
+            emit validatingChanged();
+        }
         emit selectionChanged();
         emit issuesChanged();
     });
@@ -48,10 +51,8 @@ MeshValidator::MeshValidator() : QObject(nullptr)
 
 MeshValidator::~MeshValidator()
 {
-    if (m_frameListenerRegistered) {
-        if (auto* root = Ogre::Root::getSingletonPtr())
-            root->removeFrameListener(this);
-    }
+    if (m_registeredRoot)
+        m_registeredRoot->removeFrameListener(this);
 }
 
 bool MeshValidator::hasSelection() const
@@ -105,21 +106,27 @@ void MeshValidator::validate()
 
     // On Linux/GL3Plus, glMapBufferRange requires an active OpenGL context.
     // Deferring to frameStarted() guarantees the Ogre context is current.
-    if (!m_frameListenerRegistered) {
-        if (auto* mgr = Manager::getSingletonPtr()) {
-            if (auto* root = mgr->getRoot()) {
+    // Re-register on the current Root each time it may have changed (e.g. after
+    // Manager::kill() / re-init in test flows or in-process restarts).
+    if (auto* mgr = Manager::getSingletonPtr()) {
+        if (auto* root = mgr->getRoot()) {
+            if (m_registeredRoot != root) {
+                if (m_registeredRoot)
+                    m_registeredRoot->removeFrameListener(this);
                 root->addFrameListener(this);
-                m_frameListenerRegistered = true;
+                m_registeredRoot = root;
             }
         }
     }
     m_pendingValidate = true;
+    emit validatingChanged();
 }
 
 bool MeshValidator::frameStarted(const Ogre::FrameEvent& /*evt*/)
 {
     if (m_pendingValidate) {
         m_pendingValidate = false;
+        emit validatingChanged();
         doValidate();
     }
     return true;
