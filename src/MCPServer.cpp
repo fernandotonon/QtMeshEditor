@@ -10,6 +10,8 @@
 #include "AnimationWidget.h"
 #include "NormalVisualizer.h"
 #include "MeshInfoOverlay.h"
+#include "MeshValidator.h"
+#include "MeshLodController.h"
 #include <QDebug>
 #include <QFile>
 #include <QDir>
@@ -452,6 +454,16 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolSaveScene(args);
     } else if (name == "open_scene") {
         toolResult = toolOpenScene(args);
+    } else if (name == "validate_mesh") {
+        toolResult = toolValidateMesh(args);
+    } else if (name == "generate_lods") {
+        toolResult = toolGenerateLods(args);
+    } else if (name == "generate_auto_lods") {
+        toolResult = toolGenerateAutoLods(args);
+    } else if (name == "remove_lods") {
+        toolResult = toolRemoveLods(args);
+    } else if (name == "get_lod_info") {
+        toolResult = toolGetLodInfo(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -2094,6 +2106,131 @@ QJsonObject MCPServer::toolOpenScene(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolValidateMesh(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    // doValidate() is synchronous — safe to call here since Ogre is initialized
+    // in headless MCP mode (CPU buffers) or from the main thread with GUI.
+    MeshValidator* validator = MeshValidator::instance();
+    validator->doValidate();
+
+    QVariantList issues = validator->issues();
+    QStringList lines;
+    for (const QVariant& v : issues) {
+        QVariantMap m = v.toMap();
+        QString type = m.value("type").toString();
+        QString desc = m.value("description").toString();
+        QString prefix = (type == "error") ? "[ERROR] " : (type == "warning") ? "[WARN]  " : "[OK]    ";
+        lines << prefix + desc;
+    }
+
+    return makeSuccessResult(lines.isEmpty() ? "No issues found." : lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolGenerateLods(const QJsonObject &args)
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    int count = args.contains("count") ? args["count"].toInt() : 3;
+
+    QVariantList reductions;
+    if (args.contains("reductions")) {
+        for (const QJsonValue& v : args["reductions"].toArray())
+            reductions << v.toDouble();
+    }
+
+    QString errorMsg;
+    QObject errorCapture;
+    QObject::connect(MeshLodController::instance(), &MeshLodController::error,
+                     &errorCapture, [&errorMsg](const QString& msg) { errorMsg = msg; },
+                     Qt::DirectConnection);
+
+    MeshLodController::instance()->generateLods(count, reductions);
+
+    if (!errorMsg.isEmpty())
+        return makeErrorResult(errorMsg);
+
+    QVariantList info = MeshLodController::instance()->lodLevelInfo();
+    QStringList lines;
+    lines << QString("Generated %1 LOD level(s):").arg(count);
+    for (const QVariant& v : info) {
+        QVariantMap m = v.toMap();
+        lines << QString("  %1: %2 triangles")
+                 .arg(m["label"].toString()).arg(m["triangles"].toInt());
+    }
+    return makeSuccessResult(lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolGenerateAutoLods(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    QString errorMsg;
+    QObject errorCapture;
+    QObject::connect(MeshLodController::instance(), &MeshLodController::error,
+                     &errorCapture, [&errorMsg](const QString& msg) { errorMsg = msg; },
+                     Qt::DirectConnection);
+
+    MeshLodController::instance()->generateAutoLods();
+
+    if (!errorMsg.isEmpty())
+        return makeErrorResult(errorMsg);
+
+    QVariantList info = MeshLodController::instance()->lodLevelInfo();
+    QStringList lines;
+    lines << "Auto LOD levels generated:";
+    for (const QVariant& v : info) {
+        QVariantMap m = v.toMap();
+        lines << QString("  %1: %2 triangles")
+                 .arg(m["label"].toString()).arg(m["triangles"].toInt());
+    }
+    return makeSuccessResult(lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolRemoveLods(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    MeshLodController::instance()->removeLods();
+    return makeSuccessResult("LOD levels removed.");
+}
+
+QJsonObject MCPServer::toolGetLodInfo(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+
+    auto* sel = SelectionSet::getSingleton();
+    if (!sel || !sel->hasEntities())
+        return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
+
+    QVariantList info = MeshLodController::instance()->lodLevelInfo();
+    if (info.isEmpty())
+        return makeSuccessResult("No LOD info available (load a mesh first).");
+
+    QStringList lines;
+    for (const QVariant& v : info) {
+        QVariantMap m = v.toMap();
+        lines << QString("%1: %2 triangles")
+                 .arg(m["label"].toString()).arg(m["triangles"].toInt());
+    }
+    return makeSuccessResult(lines.join("\n"));
+}
+
 // Helper methods
 
 QJsonArray MCPServer::buildToolsList()
@@ -2608,6 +2745,85 @@ QJsonArray MCPServer::buildToolsList()
             "open_scene",
             "Open a scene file, replacing the current scene. Loads all meshes with their transforms, materials, skeletons, and animations. "
             "Reports what was loaded including entity names and animation counts.",
+            inputSchema
+        ));
+    }
+
+    // validate_mesh
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        inputSchema["properties"] = QJsonObject{};
+
+        tools.append(buildToolDefinition(
+            "validate_mesh",
+            "Validate the selected mesh for common issues: degenerate triangles (zero-area faces), "
+            "non-finite UV coordinates (NaN/Inf), and extreme UV values outside ±10. "
+            "Returns a list of issues tagged [OK], [WARN], or [ERROR]. "
+            "Select a mesh first with load_mesh.",
+            inputSchema
+        ));
+    }
+
+    // generate_lods
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject props;
+        props["count"] = QJsonObject{{"type", "integer"}, {"description", "Number of LOD levels to generate (1–4, default 3)."}};
+        props["reductions"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "number"}}},
+            {"description", "Optional array of reduction ratios per LOD level (0.0–1.0). E.g. [0.5, 0.25, 0.1]."}};
+        inputSchema["properties"] = props;
+
+        tools.append(buildToolDefinition(
+            "generate_lods",
+            "Generate LOD (Level of Detail) levels for the selected mesh, reducing polygon count at distance. "
+            "Specify count (1–4) and optional per-level reduction ratios. "
+            "Select a mesh first with load_mesh.",
+            inputSchema
+        ));
+    }
+
+    // generate_auto_lods
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        inputSchema["properties"] = QJsonObject{};
+
+        tools.append(buildToolDefinition(
+            "generate_auto_lods",
+            "Automatically generate optimal LOD levels for the selected mesh using Ogre's built-in algorithm. "
+            "LOD count and quality are chosen automatically based on mesh complexity. "
+            "Select a mesh first with load_mesh.",
+            inputSchema
+        ));
+    }
+
+    // remove_lods
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        inputSchema["properties"] = QJsonObject{};
+
+        tools.append(buildToolDefinition(
+            "remove_lods",
+            "Remove all LOD levels from the selected mesh, reverting to the full-detail base mesh. "
+            "Select a mesh first with load_mesh.",
+            inputSchema
+        ));
+    }
+
+    // get_lod_info
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        inputSchema["properties"] = QJsonObject{};
+
+        tools.append(buildToolDefinition(
+            "get_lod_info",
+            "Get LOD level information for the selected mesh: triangle count per LOD level. "
+            "Shows the base mesh (LOD 0) and all reduced LOD levels. "
+            "Select a mesh first with load_mesh.",
             inputSchema
         ));
     }

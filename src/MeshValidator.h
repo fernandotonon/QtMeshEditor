@@ -32,6 +32,10 @@ public:
     // Creates a new cleaned entity alongside the original — delete the original manually.
     Q_INVOKABLE void fixAll();
 
+    // Run validation synchronously (GL context must be current — safe from MCP/CLI context
+    // and from inside the Ogre render loop; use validate() from QML to defer automatically).
+    void doValidate();
+
 signals:
     void selectionChanged();
     void issuesChanged();
@@ -46,7 +50,6 @@ private:
     // This avoids glMapBufferRange crashes on Linux when validate() is called
     // between render frames (i.e. without an active OpenGL context).
     bool frameStarted(const Ogre::FrameEvent& evt) override;
-    void doValidate();
 
     static MeshValidator* m_pSingleton;
     QVariantList m_issues;

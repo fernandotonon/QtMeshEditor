@@ -1,6 +1,7 @@
 #include "MaterialPresetLibrary.h"
 #include "Manager.h"
 #include "SelectionSet.h"
+#include "SentryReporter.h"
 #include <Ogre.h>
 
 MaterialPresetLibrary* MaterialPresetLibrary::m_pSingleton = nullptr;
@@ -43,6 +44,9 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
     auto* sel = SelectionSet::getSingleton();
     if (!sel->hasEntities() && !sel->hasSubEntities())
         return;
+
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Apply material preset: %1").arg(name));
 
     auto* mgr = Ogre::MaterialManager::getSingletonPtr();
     if (!mgr) return;

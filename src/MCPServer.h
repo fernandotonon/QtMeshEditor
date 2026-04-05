@@ -146,6 +146,11 @@ private:
     QJsonObject toolMergeAnimations(const QJsonObject &args);
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);
+    QJsonObject toolValidateMesh(const QJsonObject &args);
+    QJsonObject toolGenerateLods(const QJsonObject &args);
+    QJsonObject toolGenerateAutoLods(const QJsonObject &args);
+    QJsonObject toolRemoveLods(const QJsonObject &args);
+    QJsonObject toolGetLodInfo(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {
