@@ -42,8 +42,6 @@ QStringList MaterialPresetLibrary::presetNames() const
 void MaterialPresetLibrary::applyPreset(const QString& name)
 {
     auto* sel = SelectionSet::getSingleton();
-    if (!sel->hasEntities() && !sel->hasSubEntities())
-        return;
 
     SentryReporter::addBreadcrumb("ui.action",
         QString("Apply material preset: %1").arg(name));
@@ -54,54 +52,59 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
     // Create or get material named after preset
     QString matName = "Preset/" + name;
     Ogre::MaterialPtr mat;
-    if (mgr->resourceExists(matName.toStdString()))
+    if (mgr->resourceExists(matName.toStdString())) {
         mat = mgr->getByName(matName.toStdString());
-    else
-    {
+    } else {
         mat = mgr->create(matName.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
         Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
 
         if (name.startsWith("Plastic")) {
             Ogre::ColourValue c(0.8f, 0.2f, 0.2f);
-            if (name.contains("Blue")) c = Ogre::ColourValue(0.2f, 0.3f, 0.9f);
+            if (name.contains("Blue"))  c = Ogre::ColourValue(0.2f, 0.3f, 0.9f);
             else if (name.contains("White")) c = Ogre::ColourValue(0.9f, 0.9f, 0.9f);
+            pass->setAmbient(c * 0.3f);
             pass->setDiffuse(c);
             pass->setSpecular(Ogre::ColourValue(0.5f, 0.5f, 0.5f));
             pass->setShininess(30.0f);
-        }
-        else if (name.startsWith("Metal")) {
+        } else if (name.startsWith("Metal")) {
             Ogre::ColourValue c(0.8f, 0.8f, 0.8f);
-            if (name.contains("Gold")) c = Ogre::ColourValue(0.9f, 0.75f, 0.3f);
+            if (name.contains("Gold"))   c = Ogre::ColourValue(0.9f, 0.75f, 0.3f);
             else if (name.contains("Copper")) c = Ogre::ColourValue(0.85f, 0.5f, 0.3f);
+            pass->setAmbient(c * 0.2f);
             pass->setDiffuse(c);
             pass->setSpecular(Ogre::ColourValue(1.0f, 1.0f, 1.0f));
             pass->setShininess(80.0f);
-        }
-        else if (name.startsWith("Wood")) {
-            pass->setDiffuse(Ogre::ColourValue(0.6f, 0.4f, 0.2f));
+        } else if (name.startsWith("Wood")) {
+            Ogre::ColourValue c(0.6f, 0.4f, 0.2f);
+            if (name.contains("Birch")) c = Ogre::ColourValue(0.78f, 0.66f, 0.47f);
+            pass->setAmbient(c * 0.4f);
+            pass->setDiffuse(c);
             pass->setSpecular(Ogre::ColourValue(0.1f, 0.1f, 0.1f));
             pass->setShininess(5.0f);
-        }
-        else if (name.startsWith("Glass")) {
-            pass->setDiffuse(Ogre::ColourValue(0.1f, 0.1f, 0.1f, 0.3f));
+        } else if (name.startsWith("Glass")) {
+            Ogre::ColourValue c(0.6f, 0.8f, 0.9f, 0.35f);
+            if (name.contains("Tinted")) c = Ogre::ColourValue(0.27f, 0.4f, 0.53f, 0.55f);
+            pass->setAmbient(Ogre::ColourValue(0.1f, 0.1f, 0.1f));
+            pass->setDiffuse(c);
             pass->setSpecular(Ogre::ColourValue(1.0f, 1.0f, 1.0f));
             pass->setShininess(100.0f);
             pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
             pass->setDepthWriteEnabled(false);
-        }
-        else if (name == "Unlit (White)") {
+        } else if (name == "Unlit (White)") {
             pass->setLightingEnabled(false);
             pass->setDiffuse(Ogre::ColourValue::White);
-        }
-        else if (name == "Wireframe") {
+        } else if (name == "Wireframe") {
             pass->setPolygonMode(Ogre::PM_WIREFRAME);
             pass->setLightingEnabled(false);
+            pass->setDiffuse(Ogre::ColourValue(0.6f, 0.9f, 0.6f));
         }
+
+        mat->compile();
     }
 
-    // Apply to selected entities
+    // Apply to resolved entities (handles node selection as well as direct entity/sub-entity selection)
     std::string stdMatName = matName.toStdString();
-    for (Ogre::Entity* ent : sel->getEntitiesSelectionList())
+    for (Ogre::Entity* ent : sel->getResolvedEntities())
         ent->setMaterialName(stdMatName);
     for (Ogre::SubEntity* sub : sel->getSubEntitiesSelectionList())
         sub->setMaterialName(stdMatName);
