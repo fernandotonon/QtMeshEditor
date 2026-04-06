@@ -15,20 +15,22 @@ class AIChatManager : public QObject
     QML_ELEMENT
     QML_SINGLETON
 
-    Q_PROPERTY(QVariantList messages   READ messages        NOTIFY messagesChanged)
-    Q_PROPERTY(bool isGenerating       READ isGenerating    NOTIFY isGeneratingChanged)
-    Q_PROPERTY(bool modelAvailable     READ modelAvailable  NOTIFY modelAvailableChanged)
-    Q_PROPERTY(QString streamingText   READ streamingText   NOTIFY streamingTextChanged)
+    Q_PROPERTY(QVariantList messages    READ messages          NOTIFY messagesChanged)
+    Q_PROPERTY(bool isGenerating        READ isGenerating      NOTIFY isGeneratingChanged)
+    Q_PROPERTY(bool modelAvailable      READ modelAvailable    NOTIFY modelAvailableChanged)
+    Q_PROPERTY(QString streamingText    READ streamingText     NOTIFY streamingTextChanged)
+    Q_PROPERTY(QString currentModelName READ currentModelName  NOTIFY currentModelNameChanged)
 
 public:
     static AIChatManager* instance();
     static AIChatManager* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
     static void kill();
 
-    QVariantList messages()  const { return m_messages; }
-    bool isGenerating()      const { return m_isGenerating; }
-    bool modelAvailable()    const;
-    QString streamingText()  const { return m_streamingText; }
+    QVariantList messages()     const { return m_messages; }
+    bool isGenerating()         const { return m_isGenerating; }
+    bool modelAvailable()       const;
+    QString streamingText()     const { return m_streamingText; }
+    QString currentModelName()  const;
 
     Q_INVOKABLE void sendMessage(const QString& text);
     Q_INVOKABLE void clearHistory();
@@ -42,6 +44,7 @@ signals:
     void isGeneratingChanged();
     void modelAvailableChanged();
     void streamingTextChanged();
+    void currentModelNameChanged();
 
 private slots:
     void onGenerationProgress(const QString& partial, float progress);
@@ -67,7 +70,7 @@ private:
 
     // Agentic loop state
     int m_toolLoopDepth = 0;
-    static const int kMaxToolLoops = 5;
+    static const int kMaxToolLoops = 3;
 };
 
 #endif // AICHATMANAGER_H

@@ -36,12 +36,18 @@ AIChatManager::AIChatManager(QObject* parent) : QObject(parent)
     connect(llm, &LLMManager::generationCompleted, this, &AIChatManager::onGenerationCompleted);
     connect(llm, &LLMManager::generationError,     this, &AIChatManager::onGenerationError);
     connect(llm, &LLMManager::generationStopped,   this, &AIChatManager::onGenerationStopped);
-    connect(llm, &LLMManager::modelLoadedChanged,  this, &AIChatManager::modelAvailableChanged);
+    connect(llm, &LLMManager::modelLoadedChanged,      this, &AIChatManager::modelAvailableChanged);
+    connect(llm, &LLMManager::currentModelNameChanged, this, &AIChatManager::currentModelNameChanged);
 }
 
 bool AIChatManager::modelAvailable() const
 {
     return LLMManager::instance()->isModelLoaded();
+}
+
+QString AIChatManager::currentModelName() const
+{
+    return LLMManager::instance()->currentModelName();
 }
 
 // ---- public slots ----
@@ -201,26 +207,31 @@ QString AIChatManager::buildSystemPrompt() const
             QString desc  = t["description"].toString();
             QJsonObject schema = t["inputSchema"].toObject();
             QJsonObject props  = schema["properties"].toObject();
-            QStringList params;
-            for (auto pit = props.begin(); pit != props.end(); ++pit)
-                params << pit.key();
-            tools += QString("- %1: %2 (params: %3)\n")
-                .arg(name, desc, params.isEmpty() ? "none" : params.join(", "));
+            QStringList paramLines;
+            for (auto pit = props.begin(); pit != props.end(); ++pit) {
+                QJsonObject pdef = pit.value().toObject();
+                QString pdesc = pdef["description"].toString();
+                paramLines << QString("    %1: %2").arg(pit.key(), pdesc);
+            }
+            tools += QString("- %1: %2\n").arg(name, desc);
+            if (!paramLines.isEmpty())
+                tools += paramLines.join("\n") + "\n";
         }
     }
 
     return QString(
         "You are an AI assistant embedded in QtMeshEditor, a 3D mesh editor.\n"
         "You help users control the editor using natural language.\n\n"
-        "When you need to execute an editor action, emit exactly one tool call block:\n"
+        "IMPORTANT RULES:\n"
+        "1. For editor actions (create objects, move things, change materials, etc.) use a tool call.\n"
+        "2. For questions about yourself, general knowledge, or anything not requiring editor state, answer directly WITHOUT tool calls.\n"
+        "3. After a tool result arrives, give a SHORT plain-text summary of what happened. Do NOT call more tools unless the user asks for something additional.\n"
+        "4. Never invent tool names. Only use the tools listed below.\n"
+        "5. Keep responses concise.\n\n"
+        "Tool call format (emit this block when you need to run a tool):\n"
         "<tool_call>\n"
-        "{\"name\": \"tool_name\", \"arguments\": {\"key\": \"value\"}}\n"
+        "{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n"
         "</tool_call>\n\n"
-        "Rules:\n"
-        "- Use tool calls only when an action is needed\n"
-        "- After receiving a tool result, summarise what happened in plain language\n"
-        "- Never invent tool names — use only those listed below\n"
-        "- Keep responses concise\n\n"
         "Available tools:\n%1"
     ).arg(tools);
 }

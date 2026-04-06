@@ -33,9 +33,13 @@ Rectangle {
             }
 
             Text {
-                text: AIChatManager.modelAvailable ? "Model ready" : "No model"
+                text: AIChatManager.modelAvailable
+                      ? AIChatManager.currentModelName
+                      : "No model"
                 color: PropertiesPanelController.textColor
                 font.pixelSize: 10
+                elide: Text.ElideMiddle
+                Layout.maximumWidth: 160
             }
 
             // Clear button

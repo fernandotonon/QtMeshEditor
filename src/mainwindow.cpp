@@ -363,11 +363,13 @@ void MainWindow::initToolBar()
         auto* chatWidget = new QQuickWidget();
         chatWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
         chatWidget->setMinimumWidth(280);
+        chatWidget->setMinimumHeight(350);
         chatWidget->setSource(QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
         m_chatDock = new QDockWidget(tr("AI Chat"), this);
         m_chatDock->setWidget(chatWidget);
         m_chatDock->setObjectName("AIChatDock");
         addDockWidget(Qt::RightDockWidgetArea, m_chatDock);
+        resizeDocks({m_chatDock}, {400}, Qt::Vertical);
         m_chatDock->hide();
     }
 

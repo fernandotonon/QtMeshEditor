@@ -421,6 +421,7 @@ void LLMManager::generateText(const QString &systemPrompt, const QString &userPr
         emit generationError("No model loaded. Please load a model first.");
         return;
     }
+    m_rawTextMode = true;
     QMetaObject::invokeMethod(m_worker, [this, systemPrompt, userPrompt]() {
         m_worker->generate(systemPrompt, userPrompt);
     }, Qt::QueuedConnection);
@@ -672,6 +673,15 @@ void LLMManager::onWorkerGenerationProgress(const QString &partialText, float pr
 
 void LLMManager::onWorkerGenerationCompleted(const QString &fullText)
 {
+    // Raw text mode (e.g. AI Chat) — skip material cleanup/validation entirely
+    if (m_rawTextMode) {
+        m_rawTextMode = false;
+        m_retryCount = 0;
+        emit generationCompleted(fullText);
+        emit isGeneratingChanged();
+        return;
+    }
+
     // Clean up the generated script
     QString cleanedScript = cleanupGeneratedScript(fullText);
 
@@ -714,12 +724,14 @@ void LLMManager::onWorkerGenerationCompleted(const QString &fullText)
 
 void LLMManager::onWorkerGenerationError(const QString &error)
 {
+    m_rawTextMode = false;
     emit generationError(error);
     emit isGeneratingChanged();
 }
 
 void LLMManager::onWorkerGenerationStopped()
 {
+    m_rawTextMode = false;
     m_retryCount = 0;
     emit generationStopped();
     emit isGeneratingChanged();

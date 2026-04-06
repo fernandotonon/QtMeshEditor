@@ -175,6 +175,7 @@ private:
     LLMSettings m_settings;
     bool m_isLoading = false;
     bool m_autoLoadModel = false;
+    bool m_rawTextMode = false;  // bypass material cleanup/validation when generateText() is active
 
     // Retry logic for invalid scripts
     QString m_pendingPrompt;
