@@ -138,7 +138,6 @@ Rectangle {
                     selectByMouse: true
                     selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
                     selectedTextColor: PropertiesPanelController.textColor
-                    background: null
                 }
             }
         }
@@ -185,7 +184,6 @@ Rectangle {
                     selectByMouse: true
                     selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
                     selectedTextColor: PropertiesPanelController.textColor
-                    background: null
                 }
 
                 // Animated "thinking" dots when no tokens yet
