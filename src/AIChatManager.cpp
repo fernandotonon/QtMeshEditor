@@ -191,9 +191,15 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
         appendMessage("tool", toolEntry, true);
     }
 
-    // Feed tool results back to the LLM for a follow-up response
+    // Follow-up generation: summarise what happened.
+    // Use a minimal system prompt (no tool list) to save context tokens and
+    // prevent the model re-entering an action loop after every tool call.
     ++m_toolLoopDepth;
-    startGeneration(buildSystemPrompt(), buildConversationPrompt());
+    const QString summaryPrompt =
+        "You are a 3D editor assistant. The tool calls above have been executed. "
+        "Write ONE short sentence confirming what was done. "
+        "Do NOT call any tools. Do NOT use <tool_call> blocks.";
+    startGeneration(summaryPrompt, buildConversationPrompt());
 }
 
 QString AIChatManager::buildSystemPrompt() const
@@ -238,8 +244,9 @@ QString AIChatManager::buildSystemPrompt() const
 
 QString AIChatManager::buildConversationPrompt(const QString& /*unused*/) const
 {
-    // Limit history to last 10 messages to avoid context overflow
-    const int kMaxHistory = 10;
+    // Limit history to avoid context overflow.
+    // Follow-ups after tool calls use a shorter window (6) to save tokens.
+    const int kMaxHistory = (m_toolLoopDepth > 0) ? 6 : 10;
     int start = qMax(0, m_messages.size() - kMaxHistory);
 
     QString conv;
