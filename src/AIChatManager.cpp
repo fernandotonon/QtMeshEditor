@@ -81,11 +81,33 @@ void AIChatManager::stopGeneration()
     LLMManager::instance()->stopGeneration();
 }
 
+// ---- helpers ----
+
+// Strip chat-template tokens that some models echo back (<|assistant|> etc.)
+// and truncate at the first hallucinated "User:" continuation.
+static QString cleanGeneratedText(const QString& raw)
+{
+    QString text = raw;
+
+    // Remove <|...|> special tokens (Phi-3, Llama-3, Mistral, etc.)
+    text.remove(QRegularExpression("<\\|[^|>]+\\|>"));
+
+    // Truncate at the first point where the model starts hallucinating the next
+    // user turn — "User:" or "Human:" at the start of a line.
+    static const QRegularExpression nextUserRe(
+        R"(\n(?:User|Human)\s*:)", QRegularExpression::CaseInsensitiveOption);
+    int pos = nextUserRe.match(text).capturedStart();
+    if (pos >= 0)
+        text = text.left(pos);
+
+    return text.trimmed();
+}
+
 // ---- generation callbacks ----
 
 void AIChatManager::onGenerationProgress(const QString& partial, float /*progress*/)
 {
-    m_streamingText = partial;
+    m_streamingText = cleanGeneratedText(partial);
     emit streamingTextChanged();
 }
 
@@ -94,7 +116,7 @@ void AIChatManager::onGenerationCompleted(const QString& fullText)
     m_streamingText.clear();
     emit streamingTextChanged();
 
-    executeToolCallsAndContinue(fullText);
+    executeToolCallsAndContinue(cleanGeneratedText(fullText));
 }
 
 void AIChatManager::onGenerationError(const QString& error)
