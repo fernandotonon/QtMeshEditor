@@ -13,6 +13,8 @@
 #include "SelectionSet.h"
 #include "TestHelpers.h"
 
+static constexpr unsigned long kSingletonSettleTimeMs = 30;
+
 static Ogre::Entity* createEntityFromMesh(const std::string& nodeName, const Ogre::MeshPtr& mesh)
 {
     if (!mesh) {
@@ -144,7 +146,8 @@ protected:
         MeshValidator::kill();
         SelectionSet::kill();
         Manager::kill();
-        QThread::msleep(30);
+        // Give QObject teardown from previous tests a short settle window.
+        QThread::msleep(kSingletonSettleTimeMs);
 
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
@@ -171,7 +174,7 @@ protected:
         if (app) {
             app->processEvents();
         }
-        QThread::msleep(30);
+        QThread::msleep(kSingletonSettleTimeMs);
     }
 
     MeshValidator* validator = nullptr;
