@@ -71,7 +71,7 @@ private:
 
     // Agentic loop state
     int m_toolLoopDepth = 0;
-    static const int kMaxToolLoops = 1;
+    static const int kMaxToolLoops = 4;
 };
 
 #endif // AICHATMANAGER_H

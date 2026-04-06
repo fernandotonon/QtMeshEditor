@@ -267,15 +267,20 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
         appendMessage("tool", toolEntry, true);
     }
 
-    // Follow-up generation: summarise what happened.
-    // Use a minimal system prompt (no tool list) to save context tokens and
-    // prevent the model re-entering an action loop after every tool call.
     ++m_toolLoopDepth;
-    const QString summaryPrompt =
-        "You are a 3D editor assistant. The tool calls above have been executed. "
-        "Write ONE short sentence confirming what was done. "
-        "Do NOT call any tools. Do NOT use <tool_call> blocks.";
-    startGeneration(summaryPrompt, buildConversationPrompt());
+
+    if (m_toolLoopDepth >= kMaxToolLoops) {
+        // Hard limit reached — force a plain summary, no more tools.
+        const QString summaryPrompt =
+            "You are a 3D editor assistant. The actions above have been executed. "
+            "Write ONE short sentence confirming what was done. Do NOT call any tools.";
+        startGeneration(summaryPrompt, buildConversationPrompt());
+    } else {
+        // Still within loop budget — use the full system prompt so the model can
+        // recover from errors (e.g. look up the correct name and retry) or chain
+        // additional steps needed to complete the user's request.
+        startGeneration(buildSystemPrompt(), buildConversationPrompt());
+    }
 }
 
 QString AIChatManager::buildSystemPrompt() const
@@ -307,18 +312,20 @@ QString AIChatManager::buildSystemPrompt() const
         "RULES:\n"
         "1. For editor actions output a bare JSON object on its own line:\n"
         "{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n"
-        "2. For questions or general chat, answer directly — no JSON.\n"
-        "3. Never invent tool names or parameters. Only use the tools and params listed below.\n"
-        "4. Keep responses brief.\n\n"
+        "2. Only one JSON call per response. Wait for the result before the next step.\n"
+        "3. If a tool returns an error (e.g. name not found, nothing selected), call\n"
+        "   get_scene_info or list_* tools to discover the correct names, then retry.\n"
+        "4. For questions or general chat, answer in plain text — no JSON.\n"
+        "5. Never invent tool names or parameters. Only use what is listed below.\n\n"
         "Available tools:\n%1"
     ).arg(tools);
 }
 
 QString AIChatManager::buildConversationPrompt(const QString& /*unused*/) const
 {
-    // Limit history to avoid context overflow.
-    // Follow-ups after tool calls use a shorter window (6) to save tokens.
-    const int kMaxHistory = (m_toolLoopDepth > 0) ? 6 : 10;
+    // Give agentic loops enough history to see prior errors and retry.
+    // Force a short window only on the final summary to save tokens.
+    const int kMaxHistory = (m_toolLoopDepth >= kMaxToolLoops - 1) ? 6 : 12;
     int start = qMax(0, m_messages.size() - kMaxHistory);
 
     QString conv;
