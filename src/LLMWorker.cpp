@@ -363,8 +363,10 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
         // Prepare next batch
         llama_batch nextBatch = llama_batch_get_one(&newToken, 1);
         if (llama_decode(m_ctx, nextBatch) != 0) {
-            emit generationError("Failed to decode token");
-            break;
+            llama_sampler_free(sampler);
+            m_isGenerating.store(false);
+            emit generationError("Failed to decode token (context full — reduce conversation length or increase context size in AI settings)");
+            return;
         }
 
         n_cur++;

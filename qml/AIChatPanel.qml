@@ -88,7 +88,7 @@ Rectangle {
             Rectangle {
                 id: bubble
                 width: parent.width
-                height: msgLabel.implicitHeight + 12
+                height: roleLabel.height + msgLabel.height + 16
                 radius: 6
                 color: {
                     if (msgTool)    return Qt.rgba(0.2, 0.3, 0.2, 0.6)
@@ -115,7 +115,7 @@ Rectangle {
                     font.pixelSize: 9; font.bold: true
                 }
 
-                Text {
+                TextEdit {
                     id: msgLabel
                     anchors { top: roleLabel.bottom; left: parent.left; right: parent.right;
                               topMargin: 2; leftMargin: 8; rightMargin: 8; bottomMargin: 6 }
@@ -123,6 +123,11 @@ Rectangle {
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 12
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    readOnly: true
+                    selectByMouse: true
+                    selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
+                    selectedTextColor: PropertiesPanelController.textColor
+                    background: null
                 }
             }
         }
@@ -148,7 +153,7 @@ Rectangle {
                     color: "#aaaaaa"; font.pixelSize: 9; font.bold: true
                 }
 
-                Text {
+                TextEdit {
                     id: streamLabel
                     anchors { top: parent.top; left: parent.left; right: parent.right;
                               topMargin: 16; leftMargin: 8; rightMargin: 8 }
@@ -156,6 +161,11 @@ Rectangle {
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 12
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    readOnly: true
+                    selectByMouse: true
+                    selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
+                    selectedTextColor: PropertiesPanelController.textColor
+                    background: null
                 }
 
                 // Animated "thinking" dots when no tokens yet

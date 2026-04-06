@@ -238,10 +238,13 @@ QString AIChatManager::buildSystemPrompt() const
 
 QString AIChatManager::buildConversationPrompt(const QString& /*unused*/) const
 {
-    // Build the full conversation as a text block so any llama.cpp model can follow it
+    // Limit history to last 10 messages to avoid context overflow
+    const int kMaxHistory = 10;
+    int start = qMax(0, m_messages.size() - kMaxHistory);
+
     QString conv;
-    for (const QVariant& v : m_messages) {
-        QVariantMap m = v.toMap();
+    for (int i = start; i < m_messages.size(); ++i) {
+        QVariantMap m = m_messages[i].toMap();
         QString role = m["role"].toString();
         QString text = m["text"].toString();
         bool isTool  = m["isTool"].toBool();
