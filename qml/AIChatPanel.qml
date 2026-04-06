@@ -88,8 +88,7 @@ Rectangle {
             Rectangle {
                 id: bubble
                 width: parent.width
-                // Height driven by explicit positions — no layout cycle
-                height: msgLabel.y + msgLabel.contentHeight + 8
+                height: msgLabel.y + msgLabel.implicitHeight + 8
                 radius: 6
                 color: {
                     if (msgTool)    return Qt.rgba(0.2, 0.3, 0.2, 0.6)
@@ -115,17 +114,26 @@ Rectangle {
                     font.pixelSize: 9; font.bold: true
                 }
 
-                TextEdit {
+                // Text drives the layout (reliable implicitHeight)
+                Text {
                     id: msgLabel
                     x: 8
                     y: roleLabel.y + roleLabel.height + 2
-                    // Explicit pixel width — no cycle with parent height
                     width: bubble.width - 16
-                    height: contentHeight
                     text: msgText
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 12
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                }
+
+                // Transparent TextEdit overlaid for selection/copy only
+                TextEdit {
+                    x: msgLabel.x; y: msgLabel.y
+                    width: msgLabel.width; height: msgLabel.implicitHeight
+                    text: msgText
+                    font: msgLabel.font
+                    wrapMode: msgLabel.wrapMode
+                    color: "transparent"
                     readOnly: true
                     selectByMouse: true
                     selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
@@ -144,7 +152,7 @@ Rectangle {
             Rectangle {
                 id: streamBubble
                 width: parent.width
-                height: streamLabel.contentHeight + 28
+                height: streamLabel.implicitHeight + 28
                 radius: 6
                 color: Qt.rgba(0.25, 0.25, 0.28, 0.9)
                 border.color: PropertiesPanelController.accentColor
@@ -156,15 +164,23 @@ Rectangle {
                     color: "#aaaaaa"; font.pixelSize: 9; font.bold: true
                 }
 
-                TextEdit {
+                Text {
                     id: streamLabel
                     anchors { top: parent.top; left: parent.left; right: parent.right;
                               topMargin: 16; leftMargin: 8; rightMargin: 8 }
-                    height: contentHeight
                     text: AIChatManager.streamingText
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 12
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                }
+
+                TextEdit {
+                    x: streamLabel.x; y: streamLabel.y
+                    width: streamLabel.width; height: streamLabel.implicitHeight
+                    text: AIChatManager.streamingText
+                    font: streamLabel.font
+                    wrapMode: streamLabel.wrapMode
+                    color: "transparent"
                     readOnly: true
                     selectByMouse: true
                     selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
