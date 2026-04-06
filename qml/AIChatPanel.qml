@@ -88,7 +88,7 @@ Rectangle {
             Rectangle {
                 id: bubble
                 width: parent.width
-                height: msgLabel.y + msgLabel.implicitHeight + 8
+                height: msgLabel.implicitHeight + 28
                 radius: 6
                 color: {
                     if (msgTool)    return Qt.rgba(0.2, 0.3, 0.2, 0.6)
@@ -100,7 +100,7 @@ Rectangle {
 
                 Text {
                     id: roleLabel
-                    x: 8; y: 5
+                    anchors { top: parent.top; left: parent.left; topMargin: 4; leftMargin: 8 }
                     text: {
                         if (msgTool)                return "⚙ tool"
                         if (msgRole === "user")     return "you"
@@ -114,25 +114,25 @@ Rectangle {
                     font.pixelSize: 9; font.bold: true
                 }
 
-                // Text drives the layout (reliable implicitHeight)
+                // Text sizes the bubble (implicitHeight is reliable)
                 Text {
                     id: msgLabel
-                    x: 8
-                    y: roleLabel.y + roleLabel.height + 2
-                    width: bubble.width - 16
+                    anchors { top: roleLabel.bottom; left: parent.left; right: parent.right;
+                              topMargin: 2; leftMargin: 8; rightMargin: 8 }
                     text: msgText
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 12
                     wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                 }
 
-                // Transparent TextEdit overlaid for selection/copy only
+                // Transparent TextEdit exactly over msgLabel — selection only
                 TextEdit {
-                    x: msgLabel.x; y: msgLabel.y
-                    width: msgLabel.width; height: msgLabel.implicitHeight
+                    anchors { top: roleLabel.bottom; left: parent.left; right: parent.right;
+                              topMargin: 2; leftMargin: 8; rightMargin: 8 }
+                    height: msgLabel.implicitHeight
                     text: msgText
-                    font: msgLabel.font
-                    wrapMode: msgLabel.wrapMode
+                    font.pixelSize: 12
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
                     color: "transparent"
                     readOnly: true
                     selectByMouse: true
