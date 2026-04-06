@@ -104,9 +104,15 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
 
     // Apply to resolved entities (handles node selection as well as direct entity/sub-entity selection)
     std::string stdMatName = matName.toStdString();
-    for (Ogre::Entity* ent : sel->getResolvedEntities())
+    auto resolvedEntities = sel->getResolvedEntities();
+    auto subEntities = sel->getSubEntitiesSelectionList();
+
+    if (resolvedEntities.isEmpty() && subEntities.isEmpty())
+        return;
+
+    for (Ogre::Entity* ent : resolvedEntities)
         ent->setMaterialName(stdMatName);
-    for (Ogre::SubEntity* sub : sel->getSubEntitiesSelectionList())
+    for (Ogre::SubEntity* sub : subEntities)
         sub->setMaterialName(stdMatName);
 
     emit presetApplied(name);
