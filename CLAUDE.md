@@ -237,7 +237,7 @@ QtMeshEditor is available via WinGet: `winget install FernandoTonon.QtMeshEditor
 - `.github/workflows/deploy.yml` — `winget-publish` job auto-submits to microsoft/winget-pkgs on release
 
 **Updating for new release:**
-The `winget-publish` CI job uses `wingetcreate` to automatically submit a PR to microsoft/winget-pkgs when a GitHub Release is published. Requires a `WINGET_TOKEN` secret (GitHub PAT with `public_repo` scope for the winget-pkgs fork).
+The `winget-publish` CI job uses `wingetcreate --submit` to automatically submit a PR to microsoft/winget-pkgs when a GitHub Release is published. Requires a `WINGET_TOKEN` secret (GitHub PAT with `public_repo` scope). **Do not use the git database API** (blobs/trees/commits endpoints) — that requires `repo` scope. `wingetcreate --submit` uses the Contents API which works with `public_repo`.
 
 Manual alternative: `./scripts/update-winget.sh <version>` generates the manifest locally.
 
