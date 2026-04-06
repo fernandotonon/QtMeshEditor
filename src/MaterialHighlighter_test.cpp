@@ -345,15 +345,18 @@ TEST(MaterialHighlighterTest, RealHighlighterFormatsSingleLineCommentAsItalic) {
     QTextDocument doc;
     RealMaterialHighlighter highlighter(&doc);
 
-    doc.setPlainText("material Test // this is a comment");
+    const QString testText = "material Test // this is a comment";
+    doc.setPlainText(testText);
     highlighter.rehighlight();
 
     const QTextBlock block = doc.firstBlock();
     const QList<QTextLayout::FormatRange> formats = block.layout()->formats();
+    const int commentStartPos = testText.indexOf("//");
+    ASSERT_GE(commentStartPos, 0);
 
     bool foundItalicComment = false;
     for (const auto& range : formats) {
-        if (range.start >= 14 && range.format.fontItalic()) {
+        if (range.start >= commentStartPos && range.format.fontItalic()) {
             foundItalicComment = true;
             break;
         }
