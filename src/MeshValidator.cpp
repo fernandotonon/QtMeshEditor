@@ -199,7 +199,7 @@ void MeshValidator::doValidate()
                     getTexCoord(tdata, tStride, texElem, vi, u, v);
                     if (!std::isfinite(u) || !std::isfinite(v))
                         ++totalNonFiniteUV;
-                    else if (u < -10.f || u > 11.f || v < -10.f || v > 11.f)
+                    else if (u < -10.f || u > 10.f || v < -10.f || v > 10.f)
                         ++totalOutOfRangeUV;
                 }
 
