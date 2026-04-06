@@ -46,9 +46,17 @@ qtmesh anim model.fbx --list                   # list animations
 qtmesh anim model.fbx --list --json            # list animations (JSON)
 qtmesh anim model.fbx --rename "Take 001" "Idle" -o out.fbx  # rename an animation
 qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
+qtmesh validate model.fbx                      # validate mesh (exit 1 if errors found)
+qtmesh validate model.fbx --json               # validation results as JSON
+qtmesh lod model.fbx --info                    # show LOD levels
+qtmesh lod model.fbx --info --json             # LOD info as JSON
+qtmesh lod model.fbx --count 3                 # generate 3 LODs → model_lod1.fbx, model_lod2.fbx, model_lod3.fbx
+qtmesh lod model.fbx --count 2 --reductions 0.25,0.5 -o out.fbx  # custom reductions, named output
+qtmesh lod model.fbx --auto                    # auto-generate LODs
+qtmesh lod model.fbx --remove -o clean.fbx     # strip LODs and save
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 

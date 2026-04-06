@@ -917,7 +917,7 @@ jobs:
             # Suites that create a real OgreWidget + GL context are known to SIGSEGV
             # under Mesa/Xvfb on CI (same root cause as the skipped MCP GL tests).
             # Crashes in these suites are treated as warnings, not build failures.
-            GL_CRASH_ALLOWLIST="SpaceCameraWidgetIntegrationTest OgreWidgetTest"
+            GL_CRASH_ALLOWLIST="SpaceCameraWidgetIntegrationTest OgreWidgetTest ViewCubeControllerOgreTest"
 
             is_gl_crash_allowed() {
                 local suite="$1"

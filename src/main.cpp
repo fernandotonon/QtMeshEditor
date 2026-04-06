@@ -83,7 +83,8 @@ int main(int argc, char *argv[])
                 QString arg(argv[i]);
                 if (arg.startsWith("-"))
                     continue;  // skip flags like --verbose
-                if (arg == "info" || arg == "fix" || arg == "convert" || arg == "anim")
+                if (arg == "info" || arg == "fix" || arg == "convert" || arg == "anim"
+                        || arg == "validate" || arg == "lod")
                     cliMode = true;
                 break;  // first non-flag arg determines mode
             }
