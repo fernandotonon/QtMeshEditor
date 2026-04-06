@@ -37,23 +37,34 @@ static Ogre::MeshPtr createDegenerateUvMesh(const std::string& name)
     mesh->sharedVertexData = new Ogre::VertexData();
     auto* decl = mesh->sharedVertexData->vertexDeclaration;
 
-    size_t offset = 0;
-    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
-    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
-    decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+    // Put positions and UVs in separate streams so MeshValidator can lock both
+    // simultaneously (it locks position first and then UVs).
+    decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    decl->addElement(1, 0, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
 
-    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-        decl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    auto posBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3), 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    auto uvBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2), 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
 
     const float nan = std::numeric_limits<float>::quiet_NaN();
-    float verts[] = {
-        0.f, 0.f, 0.f,  nan, nan,    // non-finite UV
-        1.f, 0.f, 0.f,  20.f, 0.f,   // out-of-range UV
-        2.f, 0.f, 0.f,  0.f, 0.f,    // colinear vertex => degenerate triangle
+    float positions[] = {
+        0.f, 0.f, 0.f,
+        1.f, 0.f, 0.f,
+        2.f, 0.f, 0.f, // colinear vertex => degenerate triangle
+    };
+    float uvs[] = {
+        nan, nan, // non-finite UV
+        20.f, 0.f, // out-of-range UV
+        0.f, 0.f,
     };
 
-    vbuf->writeData(0, sizeof(verts), verts);
-    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf);
+    posBuf->writeData(0, sizeof(positions), positions);
+    uvBuf->writeData(0, sizeof(uvs), uvs);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, posBuf);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(1, uvBuf);
     mesh->sharedVertexData->vertexCount = 3;
 
     auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
@@ -66,6 +77,58 @@ static Ogre::MeshPtr createDegenerateUvMesh(const std::string& name)
     sub->indexData->indexCount = 3;
 
     mesh->_setBounds(Ogre::AxisAlignedBox(-1, -1, -1, 2, 1, 1));
+    mesh->_setBoundingSphereRadius(2.0f);
+    mesh->load();
+
+    return mesh;
+}
+
+static Ogre::MeshPtr createValidUvMesh(const std::string& name)
+{
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* sub = mesh->createSubMesh();
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* decl = mesh->sharedVertexData->vertexDeclaration;
+
+    decl->addElement(0, 0, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    decl->addElement(1, 0, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+
+    auto posBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3), 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    auto uvBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2), 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+
+    float positions[] = {
+        0.f, 0.f, 0.f,
+        1.f, 0.f, 0.f,
+        0.f, 1.f, 0.f,
+    };
+    float uvs[] = {
+        0.f, 0.f,
+        1.f, 0.f,
+        0.f, 1.f,
+    };
+
+    posBuf->writeData(0, sizeof(positions), positions);
+    uvBuf->writeData(0, sizeof(uvs), uvs);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, posBuf);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(1, uvBuf);
+    mesh->sharedVertexData->vertexCount = 3;
+
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint16_t idx[] = {0, 1, 2};
+    ibuf->writeData(0, sizeof(idx), idx);
+
+    sub->useSharedVertices = true;
+    sub->indexData->indexBuffer = ibuf;
+    sub->indexData->indexCount = 3;
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1, -1, -1, 1, 1, 1));
     mesh->_setBoundingSphereRadius(2.0f);
     mesh->load();
 
@@ -141,7 +204,7 @@ TEST_F(MeshValidatorTest, HasSelectionReflectsSelectionSet)
         GTEST_SKIP() << "Skipping: mesh creation requires GL context";
     }
 
-    auto mesh = createInMemoryTriangleMesh("MeshValidatorHasSelectionMesh");
+    auto mesh = createValidUvMesh("MeshValidatorHasSelectionMesh");
     auto* entity = createEntityFromMesh("MeshValidatorHasSelectionNode", mesh);
     ASSERT_NE(entity, nullptr);
 
@@ -176,7 +239,7 @@ TEST_F(MeshValidatorTest, DoValidateValidMeshReturnsOkIssue)
         GTEST_SKIP() << "Skipping: mesh creation requires GL context";
     }
 
-    auto mesh = createInMemoryTriangleMesh("MeshValidatorValidMesh");
+    auto mesh = createValidUvMesh("MeshValidatorValidMesh");
     auto* entity = createEntityFromMesh("MeshValidatorValidNode", mesh);
     ASSERT_NE(entity, nullptr);
 
@@ -235,7 +298,7 @@ TEST_F(MeshValidatorTest, ValidateDefersAndFrameStartedRunsValidation)
         GTEST_SKIP() << "Skipping: mesh creation requires GL context";
     }
 
-    auto mesh = createInMemoryTriangleMesh("MeshValidatorFrameMesh");
+    auto mesh = createValidUvMesh("MeshValidatorFrameMesh");
     auto* entity = createEntityFromMesh("MeshValidatorFrameNode", mesh);
     ASSERT_NE(entity, nullptr);
 
@@ -264,7 +327,7 @@ TEST_F(MeshValidatorTest, SelectionChangeClearsIssuesAndCancelsPendingValidation
         GTEST_SKIP() << "Skipping: mesh creation requires GL context";
     }
 
-    auto mesh = createInMemoryTriangleMesh("MeshValidatorSelectionClearMesh");
+    auto mesh = createValidUvMesh("MeshValidatorSelectionClearMesh");
     auto* entity = createEntityFromMesh("MeshValidatorSelectionClearNode", mesh);
     ASSERT_NE(entity, nullptr);
 
