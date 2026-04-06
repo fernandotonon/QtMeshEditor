@@ -167,25 +167,45 @@ void AIChatManager::startGeneration(const QString& sysPrompt, const QString& use
     LLMManager::instance()->generateText(sysPrompt, userPrompt);
 }
 
+// Scan text for all top-level JSON objects that have both "name" and "arguments"
+// keys — these are tool calls regardless of whatever tag the model put around them.
+static QStringList extractToolJsonBlocks(const QString& text)
+{
+    QStringList results;
+    int len = text.length();
+    for (int i = 0; i < len; ++i) {
+        if (text[i] != QLatin1Char('{')) continue;
+        int depth = 0, j = i;
+        while (j < len) {
+            if (text[j] == QLatin1Char('{'))      ++depth;
+            else if (text[j] == QLatin1Char('}')) { if (--depth == 0) break; }
+            ++j;
+        }
+        if (depth != 0) continue;
+        QString candidate = text.mid(i, j - i + 1);
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(candidate.toUtf8(), &err);
+        if (err.error == QJsonParseError::NoError && doc.isObject()) {
+            QJsonObject obj = doc.object();
+            if (obj.contains("name") && obj.contains("arguments"))
+                results << candidate;
+        }
+        i = j; // skip past matched block
+    }
+    return results;
+}
+
 void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
 {
-    // Extract tool call blocks. The model sometimes outputs `tool_call> (backtick)
-    // instead of <tool_call> due to markdown confusion, so accept any non-word
-    // character before "tool_call>".
-    static const QRegularExpression re(
-        R"(\W?tool_call>\s*(.*?)\s*</tool_call>)",
-        QRegularExpression::DotMatchesEverythingOption);
+    QStringList toolBlocks = m_mcpServer ? extractToolJsonBlocks(assistantText) : QStringList{};
 
-    // Separate visible text from tool call markers
+    // Build visible text: everything that isn't a raw JSON tool block
     QString visibleText = assistantText;
-    visibleText.replace(re, QString()).simplified();
+    for (const QString& block : toolBlocks)
+        visibleText.remove(block);
+    visibleText = visibleText.simplified();
 
-    QRegularExpressionMatchIterator it = re.globalMatch(assistantText);
-    QStringList toolBlocks;
-    while (it.hasNext())
-        toolBlocks << it.next().captured(1).trimmed();
-
-    if (toolBlocks.isEmpty() || !m_mcpServer || m_toolLoopDepth >= kMaxToolLoops) {
+    if (toolBlocks.isEmpty() || m_toolLoopDepth >= kMaxToolLoops) {
         // Plain response — add to history and finish
         appendMessage("assistant", assistantText.trimmed());
         m_isGenerating = false;
@@ -194,7 +214,7 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
         return;
     }
 
-    // Show the assistant narration (without raw XML tags) if any
+    // Show the assistant narration (without the raw JSON blocks) if any
     if (!visibleText.trimmed().isEmpty())
         appendMessage("assistant", visibleText.trimmed());
 
@@ -262,10 +282,10 @@ QString AIChatManager::buildSystemPrompt() const
         "You are an AI assistant embedded in QtMeshEditor, a 3D mesh editor.\n"
         "You help users control the editor using natural language.\n\n"
         "RULES:\n"
-        "1. For editor actions use exactly ONE tool call in this format (JSON inline, no newline inside the tags):\n"
-        "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}</tool_call>\n"
-        "2. For questions or general chat, answer directly — no tool calls.\n"
-        "3. Never invent tool names. Only use the tools listed below.\n"
+        "1. For editor actions output a bare JSON object on its own line:\n"
+        "{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n"
+        "2. For questions or general chat, answer directly — no JSON.\n"
+        "3. Never invent tool names or parameters. Only use the tools and params listed below.\n"
         "4. Keep responses brief.\n\n"
         "Available tools:\n%1"
     ).arg(tools);
