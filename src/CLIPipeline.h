@@ -72,6 +72,8 @@ public:
     static int cmdFix(int argc, char* argv[]);
     static int cmdConvert(int argc, char* argv[]);
     static int cmdAnim(int argc, char* argv[]);
+    static int cmdValidate(int argc, char* argv[]);
+    static int cmdLod(int argc, char* argv[]);
 
     /// Map file extension to MeshImporterExporter format string.
     static QString formatForExtension(const QString& path);
