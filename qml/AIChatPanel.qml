@@ -88,7 +88,8 @@ Rectangle {
             Rectangle {
                 id: bubble
                 width: parent.width
-                height: bubbleColumn.height + 10
+                // Height driven by explicit positions — no layout cycle
+                height: msgLabel.y + msgLabel.contentHeight + 8
                 radius: 6
                 color: {
                     if (msgTool)    return Qt.rgba(0.2, 0.3, 0.2, 0.6)
@@ -98,41 +99,38 @@ Rectangle {
                 border.color: PropertiesPanelController.borderColor
                 border.width: 1
 
-                Column {
-                    id: bubbleColumn
-                    anchors { top: parent.top; left: parent.left; right: parent.right;
-                              topMargin: 5; leftMargin: 8; rightMargin: 8 }
-                    spacing: 2
-
-                    // Role label (small)
-                    Text {
-                        text: {
-                            if (msgTool)                return "⚙ tool"
-                            if (msgRole === "user")     return "you"
-                            return "assistant"
-                        }
-                        color: {
-                            if (msgTool)                return "#88cc88"
-                            if (msgRole === "user")     return "#88aacc"
-                            return "#aaaaaa"
-                        }
-                        font.pixelSize: 9; font.bold: true
+                Text {
+                    id: roleLabel
+                    x: 8; y: 5
+                    text: {
+                        if (msgTool)                return "⚙ tool"
+                        if (msgRole === "user")     return "you"
+                        return "assistant"
                     }
-
-                    TextEdit {
-                        id: msgLabel
-                        width: parent.width
-                        height: contentHeight
-                        text: msgText
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 12
-                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                        readOnly: true
-                        selectByMouse: true
-                        selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
-                        selectedTextColor: PropertiesPanelController.textColor
-                        background: null
+                    color: {
+                        if (msgTool)                return "#88cc88"
+                        if (msgRole === "user")     return "#88aacc"
+                        return "#aaaaaa"
                     }
+                    font.pixelSize: 9; font.bold: true
+                }
+
+                TextEdit {
+                    id: msgLabel
+                    x: 8
+                    y: roleLabel.y + roleLabel.height + 2
+                    // Explicit pixel width — no cycle with parent height
+                    width: bubble.width - 16
+                    height: contentHeight
+                    text: msgText
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 12
+                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                    readOnly: true
+                    selectByMouse: true
+                    selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
+                    selectedTextColor: PropertiesPanelController.textColor
+                    background: null
                 }
             }
         }
