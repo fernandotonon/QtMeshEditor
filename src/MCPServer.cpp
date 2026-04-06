@@ -49,6 +49,12 @@
 #include <unistd.h>
 #endif
 
+static Ogre::SceneNode* findSceneNodeByName(const QString &nodeName);
+static Ogre::Entity* findEntityByName(const QString &entityName);
+static Ogre::NodeAnimationTrack* findTrackByBoneName(Ogre::Animation* anim, const QString &boneName);
+static bool hasSelectedEntities();
+static QString captureLodControllerError(const std::function<void()> &operation);
+
 MCPServer::MCPServer(QObject *parent)
     : QObject(parent)
 {
@@ -919,8 +925,7 @@ static Ogre::Vector3 parseVector3(const QJsonValue &val) {
 QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
 {
     try {
-        Manager* mgr = Manager::getSingletonPtr();
-        if (!mgr) {
+        if (!Manager::getSingletonPtr()) {
             return makeErrorResult("Error: Manager not available");
         }
 
@@ -928,13 +933,7 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
         QString name = args["name"].toString();
         Ogre::SceneNode* targetNode = nullptr;
         if (!name.isEmpty()) {
-            QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
-            for (Ogre::SceneNode* node : nodes) {
-                if (node && QString::fromStdString(node->getName()) == name) {
-                    targetNode = node;
-                    break;
-                }
-            }
+            targetNode = findSceneNodeByName(name);
             if (!targetNode) {
                 return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
             }
@@ -1230,20 +1229,11 @@ QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
     }
 
     try {
-        Manager* mgr = Manager::getSingletonPtr();
-        if (!mgr) {
+        if (!Manager::getSingletonPtr()) {
             return makeErrorResult("Error: Manager not available");
         }
 
-        Ogre::SceneNode* targetNode = nullptr;
-        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
-        for (Ogre::SceneNode* node : nodes) {
-            if (node && QString::fromStdString(node->getName()) == name) {
-                targetNode = node;
-                break;
-            }
-        }
-
+        Ogre::SceneNode* targetNode = findSceneNodeByName(name);
         if (!targetNode) {
             return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
         }
@@ -1334,25 +1324,7 @@ QJsonObject MCPServer::toolGetAnimationInfo(const QJsonObject &args)
         return makeErrorResult("Error: 'entity' and 'animation' are required");
 
     try {
-        Manager* mgr = Manager::getSingletonPtr();
-        if (!mgr) return makeErrorResult("Error: Manager not available");
-
-        // Find entity
-        Ogre::Entity* entity = nullptr;
-        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
-        for (Ogre::SceneNode* node : nodes) {
-            if (!node) continue;
-            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
-                Ogre::MovableObject* obj = node->getAttachedObject(i);
-                if (!obj || obj->getMovableType() != "Entity") continue;
-                if (QString::fromStdString(obj->getName()) == entityName) {
-                    entity = static_cast<Ogre::Entity*>(obj);
-                    break;
-                }
-            }
-            if (entity) break;
-        }
-
+        Ogre::Entity* entity = findEntityByName(entityName);
         if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
         if (!entity->hasSkeleton()) return makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
 
@@ -1407,24 +1379,7 @@ QJsonObject MCPServer::toolSetAnimationLength(const QJsonObject &args)
         return makeErrorResult("Error: 'length' must be a positive number");
 
     try {
-        Manager* mgr = Manager::getSingletonPtr();
-        if (!mgr) return makeErrorResult("Error: Manager not available");
-
-        Ogre::Entity* entity = nullptr;
-        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
-        for (Ogre::SceneNode* node : nodes) {
-            if (!node) continue;
-            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
-                Ogre::MovableObject* obj = node->getAttachedObject(i);
-                if (!obj || obj->getMovableType() != "Entity") continue;
-                if (QString::fromStdString(obj->getName()) == entityName) {
-                    entity = static_cast<Ogre::Entity*>(obj);
-                    break;
-                }
-            }
-            if (entity) break;
-        }
-
+        Ogre::Entity* entity = findEntityByName(entityName);
         if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
         if (!entity->hasSkeleton()) return makeErrorResult(QString("Error: Entity '%1' has no skeleton").arg(entityName));
 
@@ -1462,24 +1417,7 @@ QJsonObject MCPServer::toolSetAnimationTime(const QJsonObject &args)
         return makeErrorResult("Error: 'entity' and 'animation' are required");
 
     try {
-        Manager* mgr = Manager::getSingletonPtr();
-        if (!mgr) return makeErrorResult("Error: Manager not available");
-
-        Ogre::Entity* entity = nullptr;
-        QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
-        for (Ogre::SceneNode* node : nodes) {
-            if (!node) continue;
-            for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); i++) {
-                Ogre::MovableObject* obj = node->getAttachedObject(i);
-                if (!obj || obj->getMovableType() != "Entity") continue;
-                if (QString::fromStdString(obj->getName()) == entityName) {
-                    entity = static_cast<Ogre::Entity*>(obj);
-                    break;
-                }
-            }
-            if (entity) break;
-        }
-
+        Ogre::Entity* entity = findEntityByName(entityName);
         if (!entity) return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
         if (!entity->hasAnimationState(animName.toStdString()))
             return makeErrorResult(QString("Error: Animation '%1' not found on entity '%2'").arg(animName, entityName));
@@ -1499,16 +1437,7 @@ QJsonObject MCPServer::toolSetAnimationTime(const QJsonObject &args)
             Ogre::SkeletonInstance* skeleton = entity->getSkeleton();
             Ogre::Animation* anim = skeleton->getAnimation(animName.toStdString());
 
-            // Find the track for the given bone
-            Ogre::NodeAnimationTrack* track = nullptr;
-            auto trackList = anim->_getNodeTrackList();
-            for (const auto &pair : trackList) {
-                if (QString::fromStdString(pair.second->getAssociatedNode()->getName()) == trackName) {
-                    track = pair.second;
-                    break;
-                }
-            }
-
+            Ogre::NodeAnimationTrack* track = findTrackByBoneName(anim, trackName);
             if (!track)
                 return makeErrorResult(QString("Error: Track for bone '%1' not found").arg(trackName));
 
@@ -1579,6 +1508,19 @@ QJsonObject MCPServer::toolSetAnimationTime(const QJsonObject &args)
     }
 }
 
+// Helper: find scene node by name across all scene nodes
+static Ogre::SceneNode* findSceneNodeByName(const QString &nodeName)
+{
+    Manager* mgr = Manager::getSingletonPtr();
+    if (!mgr) return nullptr;
+    QList<Ogre::SceneNode*> nodes = mgr->getSceneNodes();
+    for (Ogre::SceneNode* node : nodes) {
+        if (node && QString::fromStdString(node->getName()) == nodeName)
+            return node;
+    }
+    return nullptr;
+}
+
 // Helper: find entity by name across all scene nodes (checks movable type)
 static Ogre::Entity* findEntityByName(const QString &entityName)
 {
@@ -1595,6 +1537,23 @@ static Ogre::Entity* findEntityByName(const QString &entityName)
         }
     }
     return nullptr;
+}
+
+static bool hasSelectedEntities()
+{
+    SelectionSet* sel = SelectionSet::getSingleton();
+    return sel && sel->hasEntities();
+}
+
+static QString captureLodControllerError(const std::function<void()> &operation)
+{
+    QString errorMsg;
+    QObject errorCapture;
+    QObject::connect(MeshLodController::instance(), &MeshLodController::error,
+                     &errorCapture, [&errorMsg](const QString& msg) { errorMsg = msg; },
+                     Qt::DirectConnection);
+    operation();
+    return errorMsg;
 }
 
 // Helper: find track by bone name in an animation
@@ -2110,8 +2069,7 @@ QJsonObject MCPServer::toolValidateMesh(const QJsonObject &args)
 {
     Q_UNUSED(args);
 
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities())
+    if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
     // doValidate() is synchronous — safe to call here since Ogre is initialized
@@ -2134,8 +2092,7 @@ QJsonObject MCPServer::toolValidateMesh(const QJsonObject &args)
 
 QJsonObject MCPServer::toolGenerateLods(const QJsonObject &args)
 {
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities())
+    if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
     int count = args.contains("count") ? args["count"].toInt() : 3;
@@ -2146,14 +2103,9 @@ QJsonObject MCPServer::toolGenerateLods(const QJsonObject &args)
             reductions << v.toDouble();
     }
 
-    QString errorMsg;
-    QObject errorCapture;
-    QObject::connect(MeshLodController::instance(), &MeshLodController::error,
-                     &errorCapture, [&errorMsg](const QString& msg) { errorMsg = msg; },
-                     Qt::DirectConnection);
-
-    MeshLodController::instance()->generateLods(count, reductions);
-
+    QString errorMsg = captureLodControllerError([&]() {
+        MeshLodController::instance()->generateLods(count, reductions);
+    });
     if (!errorMsg.isEmpty())
         return makeErrorResult(errorMsg);
 
@@ -2174,18 +2126,12 @@ QJsonObject MCPServer::toolGenerateAutoLods(const QJsonObject &args)
 {
     Q_UNUSED(args);
 
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities())
+    if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
-    QString errorMsg;
-    QObject errorCapture;
-    QObject::connect(MeshLodController::instance(), &MeshLodController::error,
-                     &errorCapture, [&errorMsg](const QString& msg) { errorMsg = msg; },
-                     Qt::DirectConnection);
-
-    MeshLodController::instance()->generateAutoLods();
-
+    QString errorMsg = captureLodControllerError([&]() {
+        MeshLodController::instance()->generateAutoLods();
+    });
     if (!errorMsg.isEmpty())
         return makeErrorResult(errorMsg);
 
@@ -2204,8 +2150,7 @@ QJsonObject MCPServer::toolRemoveLods(const QJsonObject &args)
 {
     Q_UNUSED(args);
 
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities())
+    if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
     MeshLodController::instance()->removeLods();
@@ -2216,8 +2161,7 @@ QJsonObject MCPServer::toolGetLodInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
 
-    auto* sel = SelectionSet::getSingleton();
-    if (!sel || !sel->hasEntities())
+    if (!hasSelectedEntities())
         return makeErrorResult("No mesh selected. Load a mesh first with load_mesh.");
 
     QVariantList info = MeshLodController::instance()->lodLevelInfo();
@@ -2238,6 +2182,18 @@ QJsonObject MCPServer::toolGetLodInfo(const QJsonObject &args)
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
+    const auto appendTool = [this, &tools](const QString &name,
+                                           const QString &description,
+                                           const QJsonObject &properties,
+                                           const QJsonArray &required = QJsonArray()) {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        inputSchema["properties"] = properties;
+        if (!required.isEmpty()) {
+            inputSchema["required"] = required;
+        }
+        tools.append(buildToolDefinition(name, description, inputSchema));
+    };
 
     // create_material
     {
@@ -2497,56 +2453,42 @@ QJsonArray MCPServer::buildToolsList()
 
     // list_skeletal_animations
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
-        inputSchema["properties"] = QJsonObject();
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "list_skeletal_animations",
             "List all skeletal animations across all entities in the scene. Returns entity names, animation names, durations, and number of tracks (bones). Use these names with get_animation_info, set_animation_time, and other animation tools.",
-            inputSchema
-        ));
+            QJsonObject()
+        );
     }
 
     // get_animation_info
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
         props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"entity", "animation"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "get_animation_info",
             "Get detailed animation info: length, tracks (bones), and all keyframes with transform data",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"entity", "animation"}
+        );
     }
 
     // set_animation_length
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
         props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
         props["length"] = QJsonObject{{"type", "number"}, {"description", "New animation length in seconds"}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"entity", "animation", "length"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "set_animation_length",
             "Change the duration of a skeletal animation",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"entity", "animation", "length"}
+        );
     }
 
     // set_animation_time
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
         props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
@@ -2555,20 +2497,16 @@ QJsonArray MCPServer::buildToolsList()
         props["track"] = QJsonObject{{"type", "string"}, {"description", "Bone name for keyframe navigation"}};
         props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Enable/disable the animation state (default: true)"}};
         props["loop"] = QJsonObject{{"type", "boolean"}, {"description", "Set loop mode"}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"entity", "animation"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "set_animation_time",
             "Set animation time position or navigate to prev/next/first/last keyframe",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"entity", "animation"}
+        );
     }
 
     // add_keyframe
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
         props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
@@ -2577,257 +2515,199 @@ QJsonArray MCPServer::buildToolsList()
         props["translate"] = QJsonObject{{"type", "array"}, {"description", "Translation [x, y, z]"}};
         props["rotate"] = QJsonObject{{"type", "array"}, {"description", "Rotation quaternion [w, x, y, z]"}};
         props["scale"] = QJsonObject{{"type", "array"}, {"description", "Scale [x, y, z]"}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"entity", "animation", "track", "time"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "add_keyframe",
             "Add or update a keyframe on an animation track at a specific time with optional transform values",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"entity", "animation", "track", "time"}
+        );
     }
 
     // remove_keyframe
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
         props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation"}};
         props["track"] = QJsonObject{{"type", "string"}, {"description", "Bone name for the track"}};
         props["time"] = QJsonObject{{"type", "number"}, {"description", "Keyframe time in seconds to remove"}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"entity", "animation", "track", "time"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "remove_keyframe",
             "Remove a keyframe from an animation track at the specified time",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"entity", "animation", "track", "time"}
+        );
     }
 
     // play_animation
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
         props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to play"}};
         props["play"] = QJsonObject{{"type", "boolean"}, {"description", "True to play, false to stop (default: true)"}};
         props["loop"] = QJsonObject{{"type", "boolean"}, {"description", "Loop the animation (default: true)"}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"entity", "animation"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "play_animation",
             "Play or pause a skeletal animation on an entity. When playing, the animation advances in real-time in the viewport. Use list_skeletal_animations to find entity and animation names.",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"entity", "animation"}
+        );
     }
 
     // toggle_skeleton_debug
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
         props["show"] = QJsonObject{{"type", "boolean"}, {"description", "True to show, false to hide (toggles if omitted)"}};
         props["bones"] = QJsonObject{{"type", "boolean"}, {"description", "Show bone shapes (default: true)"}};
         props["axes"] = QJsonObject{{"type", "boolean"}, {"description", "Show bone axes (default: false)"}};
         props["names"] = QJsonObject{{"type", "boolean"}, {"description", "Show bone name labels (default: false)"}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"entity"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "toggle_skeleton_debug",
             "Show or hide skeleton bone visualization on an entity. Requires an entity with a skeleton. Optionally control bones, axes, and bone name labels independently.",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"entity"}
+        );
     }
 
     // toggle_bone_weights
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity"}};
         props["show"] = QJsonObject{{"type", "boolean"}, {"description", "True to show, false to hide (toggles if omitted)"}};
         props["bone"] = QJsonObject{{"type", "string"}, {"description", "Bone name to highlight its weight influence"}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"entity"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "toggle_bone_weights",
             "Show or hide bone weight heat-map overlay on an entity. Colors range from blue (0) to red (1). Optionally select a specific bone to highlight its weight influence.",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"entity"}
+        );
     }
 
     // toggle_normals
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["show"] = QJsonObject{{"type", "boolean"}, {"description", "True to show, false to hide. If omitted, toggles the current state."}};
-        inputSchema["properties"] = props;
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "toggle_normals",
             "Show or hide vertex normal visualization on all entities in the scene. "
             "Normals are displayed as colored lines extending from each vertex, "
             "color-coded by direction (|X|=Red, |Y|=Green, |Z|=Blue). "
             "Normals follow skeletal animations in real-time.",
-            inputSchema
-        ));
+            props
+        );
     }
 
     // toggle_mesh_info
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["show"] = QJsonObject{{"type", "boolean"}, {"description", "True to show, false to hide. If omitted, toggles the current state."}};
-        inputSchema["properties"] = props;
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "toggle_mesh_info",
             "Show or hide the mesh info overlay on the active viewport. "
             "Displays statistics including vertex/triangle counts, submeshes, "
             "materials, bones, and animations. Shows stats for selected entities "
             "when a selection exists, otherwise shows aggregated scene stats.",
-            inputSchema
-        ));
+            props
+        );
     }
 
     // merge_animations
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["base_entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the base entity whose mesh receives all merged animations. If omitted, the first entity with a skeleton is used."}};
-        inputSchema["properties"] = props;
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "merge_animations",
             "Merge skeletal animations from all loaded entities into a single base entity. All entities must have compatible skeletons (same bone names). "
             "Animations from non-base entities are prefixed with a slugified version of their scene node name. "
             "Load multiple mesh files first with load_mesh, then call this tool to combine all animations. "
             "Use list_skeletal_animations to see the result.",
-            inputSchema
-        ));
+            props
+        );
     }
 
     // save_scene
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["file_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to save the scene file (e.g. /tmp/scene.scene.glb). Use .scene.glb for binary glTF or .scene.gltf for text."}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"file_path"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "save_scene",
             "Save the entire scene (all loaded meshes with positions, rotations, scales, materials, skeletons, and animations) to a glTF file. "
             "Use .scene.glb for binary glTF (recommended, embeds textures) or .scene.gltf for text format.",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"file_path"}
+        );
     }
 
     // open_scene
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["file_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to a scene file to open (*.scene.glb, *.scene.gltf, *.glb, *.gltf)"}};
-        inputSchema["properties"] = props;
-        inputSchema["required"] = QJsonArray{"file_path"};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "open_scene",
             "Open a scene file, replacing the current scene. Loads all meshes with their transforms, materials, skeletons, and animations. "
             "Reports what was loaded including entity names and animation counts.",
-            inputSchema
-        ));
+            props,
+            QJsonArray{"file_path"}
+        );
     }
 
     // validate_mesh
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
-        inputSchema["properties"] = QJsonObject{};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "validate_mesh",
             "Validate the selected mesh for common issues: degenerate triangles (zero-area faces), "
             "non-finite UV coordinates (NaN/Inf), and extreme UV values outside ±10. "
             "Returns a list of issues tagged [OK], [WARN], or [ERROR]. "
             "Select a mesh first with load_mesh.",
-            inputSchema
-        ));
+            QJsonObject()
+        );
     }
 
     // generate_lods
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
         QJsonObject props;
         props["count"] = QJsonObject{{"type", "integer"}, {"description", "Number of LOD levels to generate (1–4, default 3)."}};
         props["reductions"] = QJsonObject{{"type", "array"}, {"items", QJsonObject{{"type", "number"}}},
             {"description", "Optional array of reduction ratios per LOD level (0.0–1.0). E.g. [0.5, 0.25, 0.1]."}};
-        inputSchema["properties"] = props;
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "generate_lods",
             "Generate LOD (Level of Detail) levels for the selected mesh, reducing polygon count at distance. "
             "Specify count (1–4) and optional per-level reduction ratios. "
             "Select a mesh first with load_mesh.",
-            inputSchema
-        ));
+            props
+        );
     }
 
     // generate_auto_lods
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
-        inputSchema["properties"] = QJsonObject{};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "generate_auto_lods",
             "Automatically generate optimal LOD levels for the selected mesh using Ogre's built-in algorithm. "
             "LOD count and quality are chosen automatically based on mesh complexity. "
             "Select a mesh first with load_mesh.",
-            inputSchema
-        ));
+            QJsonObject()
+        );
     }
 
     // remove_lods
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
-        inputSchema["properties"] = QJsonObject{};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "remove_lods",
             "Remove all LOD levels from the selected mesh, reverting to the full-detail base mesh. "
             "Select a mesh first with load_mesh.",
-            inputSchema
-        ));
+            QJsonObject()
+        );
     }
 
     // get_lod_info
     {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
-        inputSchema["properties"] = QJsonObject{};
-
-        tools.append(buildToolDefinition(
+        appendTool(
             "get_lod_info",
             "Get LOD level information for the selected mesh: triangle count per LOD level. "
             "Shows the base mesh (LOD 0) and all reduced LOD levels. "
             "Select a mesh first with load_mesh.",
-            inputSchema
-        ));
+            QJsonObject()
+        );
     }
 
     return tools;
