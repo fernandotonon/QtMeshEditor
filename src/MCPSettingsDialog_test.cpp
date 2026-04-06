@@ -21,6 +21,16 @@ protected:
     }
 };
 
+static QLabel* findStatusLabel(MCPSettingsDialog& dialog) {
+    const auto labels = dialog.findChildren<QLabel*>();
+    for (auto* label : labels) {
+        const QString text = label->text();
+        if (text.contains("Running") || text.contains("Stopped") || text.contains("Failed"))
+            return label;
+    }
+    return labels.isEmpty() ? nullptr : labels.last();
+}
+
 TEST_F(MCPSettingsDialogTest, ConstructionDoesNotCrash) {
     MCPSettingsDialog dialog(false, 8080);
     EXPECT_TRUE(true);
@@ -117,4 +127,96 @@ TEST_F(MCPSettingsDialogTest, CallbacksCanBeSet) {
 
     dialog.stopCallback();
     EXPECT_TRUE(stopCallbackCalled);
+}
+
+TEST_F(MCPSettingsDialogTest, EnableToggledStartSuccessDisablesPortAndShowsRunningStatus) {
+    MCPSettingsDialog dialog(false, 5050);
+
+    int capturedPort = -1;
+    dialog.startCallback = [&capturedPort](int port) -> bool {
+        capturedPort = port;
+        return true;
+    };
+
+    auto enableCheckBox = dialog.findChild<QCheckBox*>();
+    auto portSpinBox = dialog.findChild<QSpinBox*>();
+    ASSERT_NE(enableCheckBox, nullptr);
+    ASSERT_NE(portSpinBox, nullptr);
+
+    enableCheckBox->setChecked(true);
+
+    EXPECT_TRUE(enableCheckBox->isChecked());
+    EXPECT_EQ(capturedPort, 5050);
+    EXPECT_FALSE(portSpinBox->isEnabled());
+
+    auto statusLabel = findStatusLabel(dialog);
+    ASSERT_NE(statusLabel, nullptr);
+    EXPECT_TRUE(statusLabel->text().contains("Running on port 5050"));
+    EXPECT_TRUE(statusLabel->styleSheet().contains("green"));
+}
+
+TEST_F(MCPSettingsDialogTest, EnableToggledStartFailureRevertsCheckboxAndShowsErrorStatus) {
+    MCPSettingsDialog dialog(false, 6060);
+
+    bool callbackCalled = false;
+    dialog.startCallback = [&callbackCalled](int) -> bool {
+        callbackCalled = true;
+        return false;
+    };
+
+    auto enableCheckBox = dialog.findChild<QCheckBox*>();
+    auto portSpinBox = dialog.findChild<QSpinBox*>();
+    ASSERT_NE(enableCheckBox, nullptr);
+    ASSERT_NE(portSpinBox, nullptr);
+
+    enableCheckBox->setChecked(true);
+
+    EXPECT_TRUE(callbackCalled);
+    EXPECT_FALSE(enableCheckBox->isChecked());
+    EXPECT_TRUE(portSpinBox->isEnabled());
+
+    auto statusLabel = findStatusLabel(dialog);
+    ASSERT_NE(statusLabel, nullptr);
+    EXPECT_TRUE(statusLabel->text().contains("Failed to start on port 6060"));
+    EXPECT_TRUE(statusLabel->styleSheet().contains("red"));
+}
+
+TEST_F(MCPSettingsDialogTest, DisableCallsStopCallbackAndShowsStoppedStatus) {
+    MCPSettingsDialog dialog(true, 7070);
+
+    int stopCalls = 0;
+    dialog.stopCallback = [&stopCalls]() {
+        ++stopCalls;
+    };
+
+    auto enableCheckBox = dialog.findChild<QCheckBox*>();
+    auto portSpinBox = dialog.findChild<QSpinBox*>();
+    ASSERT_NE(enableCheckBox, nullptr);
+    ASSERT_NE(portSpinBox, nullptr);
+    ASSERT_TRUE(enableCheckBox->isChecked());
+
+    enableCheckBox->setChecked(false);
+
+    EXPECT_EQ(stopCalls, 1);
+    EXPECT_FALSE(enableCheckBox->isChecked());
+    EXPECT_TRUE(portSpinBox->isEnabled());
+
+    auto statusLabel = findStatusLabel(dialog);
+    ASSERT_NE(statusLabel, nullptr);
+    EXPECT_EQ(statusLabel->text(), "Stopped");
+    EXPECT_TRUE(statusLabel->styleSheet().contains("gray"));
+}
+
+TEST_F(MCPSettingsDialogTest, EnableWithoutStartCallbackFallsBackToFailureState) {
+    MCPSettingsDialog dialog(false, 8088);
+
+    auto enableCheckBox = dialog.findChild<QCheckBox*>();
+    ASSERT_NE(enableCheckBox, nullptr);
+
+    enableCheckBox->setChecked(true);
+
+    EXPECT_FALSE(enableCheckBox->isChecked());
+    auto statusLabel = findStatusLabel(dialog);
+    ASSERT_NE(statusLabel, nullptr);
+    EXPECT_TRUE(statusLabel->text().contains("Failed to start on port 8088"));
 }
