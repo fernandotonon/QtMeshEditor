@@ -320,3 +320,63 @@ TEST(MaterialHighlighterTest, CommentColorLogic) {
     // In practice, light theme gray (#808080) is a standard color for comments
     EXPECT_EQ(lightThemeCommentColor.lightness(), pureGray.lightness()) << "Light theme comment color (gray) has standard lightness";
 }
+
+TEST(MaterialHighlighterTest, RealHighlighterAppliesKeywordFormatting) {
+    QTextDocument doc;
+    RealMaterialHighlighter highlighter(&doc);
+
+    doc.setPlainText("material TestMaterial");
+    highlighter.rehighlight();
+
+    const QTextBlock block = doc.firstBlock();
+    const QList<QTextLayout::FormatRange> formats = block.layout()->formats();
+
+    bool foundBoldRange = false;
+    for (const auto& range : formats) {
+        if (range.format.fontWeight() == QFont::Bold) {
+            foundBoldRange = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundBoldRange);
+}
+
+TEST(MaterialHighlighterTest, RealHighlighterFormatsSingleLineCommentAsItalic) {
+    QTextDocument doc;
+    RealMaterialHighlighter highlighter(&doc);
+
+    doc.setPlainText("material Test // this is a comment");
+    highlighter.rehighlight();
+
+    const QTextBlock block = doc.firstBlock();
+    const QList<QTextLayout::FormatRange> formats = block.layout()->formats();
+
+    bool foundItalicComment = false;
+    for (const auto& range : formats) {
+        if (range.start >= 14 && range.format.fontItalic()) {
+            foundItalicComment = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundItalicComment);
+}
+
+TEST(MaterialHighlighterTest, RealHighlighterTracksMultilineCommentBlockState) {
+    QTextDocument doc;
+    RealMaterialHighlighter highlighter(&doc);
+
+    doc.setPlainText("/* starts here\nstill in comment\nends here */ material");
+    highlighter.rehighlight();
+
+    const QTextBlock block0 = doc.findBlockByNumber(0);
+    const QTextBlock block1 = doc.findBlockByNumber(1);
+    const QTextBlock block2 = doc.findBlockByNumber(2);
+
+    ASSERT_TRUE(block0.isValid());
+    ASSERT_TRUE(block1.isValid());
+    ASSERT_TRUE(block2.isValid());
+
+    EXPECT_EQ(block0.userState(), 1);
+    EXPECT_EQ(block1.userState(), 1);
+    EXPECT_EQ(block2.userState(), 0);
+}
