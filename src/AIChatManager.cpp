@@ -77,6 +77,7 @@ void AIChatManager::clearHistory()
 
 void AIChatManager::stopGeneration()
 {
+    m_stopRequested = true;
     LLMManager::instance()->stopGeneration();
 }
 
@@ -112,6 +113,7 @@ void AIChatManager::onGenerationStopped()
         m_streamingText.clear();
         emit streamingTextChanged();
     }
+    m_stopRequested = false;
     m_isGenerating = false;
     m_toolLoopDepth = 0;
     emit isGeneratingChanged();
@@ -131,6 +133,13 @@ void AIChatManager::appendMessage(const QString& role, const QString& text, bool
 
 void AIChatManager::startGeneration(const QString& sysPrompt, const QString& userPrompt)
 {
+    if (m_stopRequested) {
+        m_stopRequested = false;
+        m_isGenerating = false;
+        m_toolLoopDepth = 0;
+        emit isGeneratingChanged();
+        return;
+    }
     m_isGenerating = true;
     emit isGeneratingChanged();
     LLMManager::instance()->generateText(sysPrompt, userPrompt);
@@ -138,9 +147,11 @@ void AIChatManager::startGeneration(const QString& sysPrompt, const QString& use
 
 void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
 {
-    // Extract <tool_call>...</tool_call> blocks
+    // Extract tool call blocks. The model sometimes outputs `tool_call> (backtick)
+    // instead of <tool_call> due to markdown confusion, so accept any non-word
+    // character before "tool_call>".
     static const QRegularExpression re(
-        R"(<tool_call>\s*(.*?)\s*</tool_call>)",
+        R"(\W?tool_call>\s*(.*?)\s*</tool_call>)",
         QRegularExpression::DotMatchesEverythingOption);
 
     // Separate visible text from tool call markers
@@ -228,16 +239,12 @@ QString AIChatManager::buildSystemPrompt() const
     return QString(
         "You are an AI assistant embedded in QtMeshEditor, a 3D mesh editor.\n"
         "You help users control the editor using natural language.\n\n"
-        "IMPORTANT RULES:\n"
-        "1. For editor actions (create objects, move things, change materials, etc.) use a tool call.\n"
-        "2. For questions about yourself, general knowledge, or anything not requiring editor state, answer directly WITHOUT tool calls.\n"
-        "3. After a tool result arrives, give a SHORT plain-text summary of what happened. Do NOT call more tools unless the user asks for something additional.\n"
-        "4. Never invent tool names. Only use the tools listed below.\n"
-        "5. Keep responses concise.\n\n"
-        "Tool call format (emit this block when you need to run a tool):\n"
-        "<tool_call>\n"
-        "{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n"
-        "</tool_call>\n\n"
+        "RULES:\n"
+        "1. For editor actions use exactly ONE tool call in this format (JSON inline, no newline inside the tags):\n"
+        "<tool_call>{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}</tool_call>\n"
+        "2. For questions or general chat, answer directly — no tool calls.\n"
+        "3. Never invent tool names. Only use the tools listed below.\n"
+        "4. Keep responses brief.\n\n"
         "Available tools:\n%1"
     ).arg(tools);
 }

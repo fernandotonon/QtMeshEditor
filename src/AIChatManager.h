@@ -64,7 +64,8 @@ private:
     static AIChatManager* s_instance;
 
     QVariantList m_messages;  // {role, text, isTool}
-    bool m_isGenerating  = false;
+    bool m_isGenerating   = false;
+    bool m_stopRequested  = false;   // set by stopGeneration(), checked before follow-up starts
     QString m_streamingText;
     MCPServer* m_mcpServer = nullptr;
 
