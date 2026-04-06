@@ -88,7 +88,7 @@ Rectangle {
             Rectangle {
                 id: bubble
                 width: parent.width
-                height: roleLabel.height + msgLabel.height + 16
+                height: bubbleColumn.height + 10
                 radius: 6
                 color: {
                     if (msgTool)    return Qt.rgba(0.2, 0.3, 0.2, 0.6)
@@ -98,36 +98,41 @@ Rectangle {
                 border.color: PropertiesPanelController.borderColor
                 border.width: 1
 
-                // Role label (small)
-                Text {
-                    id: roleLabel
-                    anchors { top: parent.top; left: parent.left; topMargin: 4; leftMargin: 8 }
-                    text: {
-                        if (msgTool)                return "⚙ tool"
-                        if (msgRole === "user")     return "you"
-                        return "assistant"
-                    }
-                    color: {
-                        if (msgTool)                return "#88cc88"
-                        if (msgRole === "user")     return "#88aacc"
-                        return "#aaaaaa"
-                    }
-                    font.pixelSize: 9; font.bold: true
-                }
+                Column {
+                    id: bubbleColumn
+                    anchors { top: parent.top; left: parent.left; right: parent.right;
+                              topMargin: 5; leftMargin: 8; rightMargin: 8 }
+                    spacing: 2
 
-                TextEdit {
-                    id: msgLabel
-                    anchors { top: roleLabel.bottom; left: parent.left; right: parent.right;
-                              topMargin: 2; leftMargin: 8; rightMargin: 8; bottomMargin: 6 }
-                    text: msgText
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 12
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    readOnly: true
-                    selectByMouse: true
-                    selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
-                    selectedTextColor: PropertiesPanelController.textColor
-                    background: null
+                    // Role label (small)
+                    Text {
+                        text: {
+                            if (msgTool)                return "⚙ tool"
+                            if (msgRole === "user")     return "you"
+                            return "assistant"
+                        }
+                        color: {
+                            if (msgTool)                return "#88cc88"
+                            if (msgRole === "user")     return "#88aacc"
+                            return "#aaaaaa"
+                        }
+                        font.pixelSize: 9; font.bold: true
+                    }
+
+                    TextEdit {
+                        id: msgLabel
+                        width: parent.width
+                        height: contentHeight
+                        text: msgText
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 12
+                        wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+                        readOnly: true
+                        selectByMouse: true
+                        selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
+                        selectedTextColor: PropertiesPanelController.textColor
+                        background: null
+                    }
                 }
             }
         }
@@ -141,7 +146,7 @@ Rectangle {
             Rectangle {
                 id: streamBubble
                 width: parent.width
-                height: streamLabel.implicitHeight + 20
+                height: streamLabel.contentHeight + 28
                 radius: 6
                 color: Qt.rgba(0.25, 0.25, 0.28, 0.9)
                 border.color: PropertiesPanelController.accentColor
@@ -157,6 +162,7 @@ Rectangle {
                     id: streamLabel
                     anchors { top: parent.top; left: parent.left; right: parent.right;
                               topMargin: 16; leftMargin: 8; rightMargin: 8 }
+                    height: contentHeight
                     text: AIChatManager.streamingText
                     color: PropertiesPanelController.textColor
                     font.pixelSize: 12
