@@ -175,22 +175,36 @@ void MeshValidator::doValidate()
             }
 
             // ---- check UV non-finite / out-of-range ----
-            // Lock the UV buffer separately — it may be in a different stream than positions.
+            // Positions and UVs are often interleaved in the same hardware buffer.
+            // Locking the same buffer twice throws "already locked" — reuse the
+            // already-locked pointer when both elements share the same source index.
             if (texElem) {
-                Ogre::HardwareVertexBufferSharedPtr tbuf =
-                    vd->vertexBufferBinding->getBuffer(texElem->getSource());
-                const unsigned char* tdata = static_cast<const unsigned char*>(
-                    tbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-                size_t tStride = tbuf->getVertexSize();
+                bool sharedBuf = posElem && (texElem->getSource() == posElem->getSource());
+                Ogre::HardwareVertexBufferSharedPtr tbuf;
+                const unsigned char* tdata = nullptr;
+                size_t tStride = 0;
+
+                if (sharedBuf) {
+                    tdata   = vdata;
+                    tStride = vStride;
+                } else {
+                    tbuf    = vd->vertexBufferBinding->getBuffer(texElem->getSource());
+                    tdata   = static_cast<const unsigned char*>(
+                        tbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                    tStride = tbuf->getVertexSize();
+                }
+
                 for (size_t vi = 0; vi < vd->vertexCount; ++vi) {
                     float u = 0, v = 0;
                     getTexCoord(tdata, tStride, texElem, vi, u, v);
                     if (!std::isfinite(u) || !std::isfinite(v))
                         ++totalNonFiniteUV;
                     else if (u < -10.f || u > 11.f || v < -10.f || v > 11.f)
-                        ++totalOutOfRangeUV; // large tiling might be intentional; use wide range
+                        ++totalOutOfRangeUV;
                 }
-                tbuf->unlock();
+
+                if (!sharedBuf && tbuf)
+                    tbuf->unlock();
             }
 
             // ---- lock index buffer + check degenerate triangles ----
