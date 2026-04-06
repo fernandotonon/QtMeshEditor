@@ -8,6 +8,9 @@
 #include <vector>
 #include <OgreMeshManager.h>
 #include <OgreHardwareBufferManager.h>
+#include "MeshValidator.h"
+#include "MeshLodController.h"
+#include "SelectionSet.h"
 #include <OgreMaterialManager.h>
 #include "CLIPipeline.h"
 #include "MeshImporterExporter.h"
@@ -1196,4 +1199,166 @@ TEST_F(CLIPipelineTelemetryTest, OptOutThenNoTelemetryIsIdempotent)
     SentryReporter::setEnabled(false);
     EXPECT_FALSE(SentryReporter::isEnabled());
     EXPECT_FALSE(SentryReporter::isFirstLaunch());
+}
+
+// ==========================================================================
+// cmdValidate tests
+// ==========================================================================
+
+TEST(CLIPipelineCmdValidateError, NoFile)
+{
+    TestArgv args({"qtmesh", "validate"});
+    EXPECT_EQ(CLIPipeline::cmdValidate(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdValidateError, NonexistentFile)
+{
+    TestArgv args({"qtmesh", "validate", "/tmp/nonexistent_cli_validate_12345.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdValidate(args.argc(), args.argv()), 1);
+}
+
+class CLIPipelineCmdValidateTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        MeshValidator::kill();
+        MeshLodController::kill();
+        if (!tryInitOgre() || !canLoadMeshFiles())
+            GTEST_SKIP() << "Ogre not available";
+        createStandardOgreMaterials();
+        if (Manager::getSingletonPtr())
+            SelectionSet::getSingleton()->clear();
+    }
+    void TearDown() override {
+        if (Manager::getSingletonPtr()) {
+            SelectionSet::getSingleton()->clear();
+            auto nodes = Manager::getSingleton()->getSceneNodes();
+            for (auto* node : nodes) {
+                Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+                Manager::getSingleton()->destroySceneNode(node);
+            }
+        }
+        MeshValidator::kill();
+        MeshLodController::kill();
+    }
+};
+
+TEST_F(CLIPipelineCmdValidateTest, ValidateCleanMeshReportsNoErrors)
+{
+    auto meshPtr = createInMemoryTriangleMesh("cli_validate_clean");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("cli_validate_clean_node");
+    auto* entity = sceneMgr->createEntity("cli_validate_clean_entity", meshPtr);
+    node->attachObject(entity);
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    MeshValidator::instance()->doValidate();
+    QVariantList issues = MeshValidator::instance()->issues();
+
+    ASSERT_FALSE(issues.isEmpty());
+    bool hasError = false;
+    for (const QVariant& v : issues)
+        if (v.toMap().value("type").toString() == "error") hasError = true;
+    EXPECT_FALSE(hasError);
+}
+
+TEST_F(CLIPipelineCmdValidateTest, ValidateIssuesHaveExpectedFields)
+{
+    auto meshPtr = createInMemoryTriangleMesh("cli_validate_fields");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("cli_validate_fields_node");
+    auto* entity = sceneMgr->createEntity("cli_validate_fields_entity", meshPtr);
+    node->attachObject(entity);
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    MeshValidator::instance()->doValidate();
+    QVariantList issues = MeshValidator::instance()->issues();
+
+    for (const QVariant& v : issues) {
+        QVariantMap map = v.toMap();
+        EXPECT_TRUE(map.contains("type"));
+        EXPECT_TRUE(map.contains("description"));
+        EXPECT_TRUE(map.contains("count"));
+        EXPECT_TRUE(map.contains("fixable"));
+    }
+}
+
+// ==========================================================================
+// cmdLod tests
+// ==========================================================================
+
+TEST(CLIPipelineCmdLodError, NoFile)
+{
+    TestArgv args({"qtmesh", "lod"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdLodError, NoMode)
+{
+    TestArgv args({"qtmesh", "lod", "/tmp/some.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdLodError, NonexistentFile)
+{
+    TestArgv args({"qtmesh", "lod", "/tmp/nonexistent_cli_lod_12345.fbx", "--info"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 1);
+}
+
+class CLIPipelineCmdLodTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        MeshLodController::kill();
+        MeshValidator::kill();
+        if (!tryInitOgre() || !canLoadMeshFiles())
+            GTEST_SKIP() << "Ogre not available";
+        createStandardOgreMaterials();
+        if (Manager::getSingletonPtr())
+            SelectionSet::getSingleton()->clear();
+    }
+    void TearDown() override {
+        if (Manager::getSingletonPtr()) {
+            SelectionSet::getSingleton()->clear();
+            auto nodes = Manager::getSingleton()->getSceneNodes();
+            for (auto* node : nodes) {
+                Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+                Manager::getSingleton()->destroySceneNode(node);
+            }
+        }
+        MeshLodController::kill();
+        MeshValidator::kill();
+    }
+};
+
+TEST_F(CLIPipelineCmdLodTest, LodInfoBaseMeshHasOnlyLevel0)
+{
+    auto meshPtr = createInMemoryTriangleMesh("cli_lod_info");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("cli_lod_info_node");
+    auto* entity = sceneMgr->createEntity("cli_lod_info_entity", meshPtr);
+    node->attachObject(entity);
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    QVariantList lodInfo = MeshLodController::instance()->lodLevelInfo();
+    // A fresh mesh has no extra LOD levels — only the base (LOD 0)
+    ASSERT_EQ(lodInfo.size(), 1);
+    EXPECT_EQ(lodInfo[0].toMap().value("level").toInt(), 0);
+    EXPECT_EQ(lodInfo[0].toMap().value("label").toString(), "Base");
+}
+
+TEST_F(CLIPipelineCmdLodTest, LodInfoHasExpectedFields)
+{
+    auto meshPtr = createInMemoryTriangleMesh("cli_lod_fields");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = sceneMgr->getRootSceneNode()->createChildSceneNode("cli_lod_fields_node");
+    auto* entity = sceneMgr->createEntity("cli_lod_fields_entity", meshPtr);
+    node->attachObject(entity);
+    SelectionSet::getSingleton()->selectOne(entity);
+
+    QVariantList lodInfo = MeshLodController::instance()->lodLevelInfo();
+    for (const QVariant& v : lodInfo) {
+        QVariantMap map = v.toMap();
+        EXPECT_TRUE(map.contains("level"));
+        EXPECT_TRUE(map.contains("label"));
+        EXPECT_TRUE(map.contains("triangles"));
+    }
 }

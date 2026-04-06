@@ -2,9 +2,13 @@
 #include "Manager.h"
 #include "MeshImporterExporter.h"
 #include "AnimationMerger.h"
+#include "MeshValidator.h"
+#include "MeshLodController.h"
+#include "SelectionSet.h"
 #include "SentryReporter.h"
 #include <QApplication>
 #include <QWidget>
+#include <QDir>
 #include <QFileInfo>
 #include <QJsonDocument>
 #include <QDebug>
@@ -14,6 +18,7 @@
 #include <assimp/Importer.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
+#include <OgreSubMesh.h>
 
 #include <set>
 #include <cstdio>
@@ -91,6 +96,12 @@ void CLIPipeline::printUsage()
         "  anim <file> --merge <f1> [f2...] [-o <output>]\n"
         "                                    Merge animations from other files into base\n"
         "                                    (overwrites input if no -o)\n"
+        "  validate <file> [--json]          Validate mesh geometry (exit 1 if errors found)\n"
+        "  lod <file> --count N [--reductions r,...] [-o output]\n"
+        "                                    Generate N LOD levels; exports <base>_lod1.<ext> etc.\n"
+        "  lod <file> --auto [-o output]     Auto-generate LOD levels\n"
+        "  lod <file> --remove [-o output]   Remove LOD levels (overwrites input if no -o)\n"
+        "  lod <file> --info [--json]        Show LOD level info\n"
         "\n"
         "Fix flags:\n"
         "  --remove-degenerates  Remove degenerate triangles\n"
@@ -434,6 +445,8 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "fix") rc = cmdFix(argc, argv);
     else if (cmd == "convert") rc = cmdConvert(argc, argv);
     else if (cmd == "anim") rc = cmdAnim(argc, argv);
+    else if (cmd == "validate") rc = cmdValidate(argc, argv);
+    else if (cmd == "lod") rc = cmdLod(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -965,6 +978,297 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     }
 
     cliWrite(QString("Renamed animation '%1' -> '%2'\nOutput: %3\n").arg(oldName, newName, outFi.fileName()));
+
+    return 0;
+}
+
+int CLIPipeline::cmdValidate(int argc, char* argv[])
+{
+    // Parse: validate <file> [--json]
+    QString filePath;
+    bool jsonOutput = false;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "validate" || arg == "--cli") continue;
+        if (arg == "--json") { jsonOutput = true; continue; }
+        if (!arg.startsWith("-") && filePath.isEmpty()) { filePath = arg; continue; }
+    }
+
+    if (filePath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh validate <file> [--json]" << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.validate",
+        QString("Validate .%1%2").arg(fi.suffix(), jsonOutput ? " json=true" : ""));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        SentryReporter::captureMessage(
+            QString("CLI validate: import failed (.%1)").arg(fi.suffix()), "error");
+        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    // Select all loaded entities so MeshValidator can iterate them.
+    auto* sel = SelectionSet::getSingleton();
+    for (Ogre::Entity* entity : entities)
+        sel->append(entity);
+
+    MeshValidator::instance()->doValidate();
+    QVariantList issues = MeshValidator::instance()->issues();
+
+    bool hasErrors = false;
+    for (const QVariant& v : issues) {
+        if (v.toMap().value("type").toString() == "error")
+            hasErrors = true;
+    }
+
+    if (jsonOutput) {
+        QJsonArray arr;
+        for (const QVariant& v : issues) {
+            QVariantMap map = v.toMap();
+            QJsonObject obj;
+            obj["type"]        = map.value("type").toString();
+            obj["description"] = map.value("description").toString();
+            obj["count"]       = map.value("count").toInt();
+            obj["fixable"]     = map.value("fixable").toBool();
+            arr.append(obj);
+        }
+        cliWrite(QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Indented)) + "\n");
+    } else {
+        QString output;
+        for (const QVariant& v : issues) {
+            QVariantMap map = v.toMap();
+            QString type = map.value("type").toString();
+            QString desc = map.value("description").toString();
+            if (type == "ok")
+                output += QString("OK: %1\n").arg(desc);
+            else
+                output += QString("[%1] %2\n").arg(type.toUpper(), desc);
+        }
+        cliWrite(output);
+    }
+
+    return hasErrors ? 1 : 0;
+}
+
+int CLIPipeline::cmdLod(int argc, char* argv[])
+{
+    // Parse: lod <file> --count N [--reductions r,...] [-o output]
+    //    or: lod <file> --auto [-o output]
+    //    or: lod <file> --remove [-o output]
+    //    or: lod <file> --info [--json]
+    QString inputPath, outputPath;
+    int lodCount = 0;
+    bool autoMode   = false;
+    bool removeMode = false;
+    bool infoMode   = false;
+    bool jsonOutput = false;
+    QVariantList reductions;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "lod" || arg == "--cli") continue;
+        if (arg == "--auto")   { autoMode   = true; continue; }
+        if (arg == "--remove") { removeMode = true; continue; }
+        if (arg == "--info")   { infoMode   = true; continue; }
+        if (arg == "--json")   { jsonOutput = true; continue; }
+        if (arg == "--count" && i + 1 < argc) {
+            lodCount = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--reductions" && i + 1 < argc) {
+            for (const QString& p : QString(argv[++i]).split(','))
+                reductions.append(p.trimmed().toFloat());
+            continue;
+        }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString(argv[++i]);
+            continue;
+        }
+        if (!arg.startsWith("-") && inputPath.isEmpty()) {
+            inputPath = arg;
+            continue;
+        }
+    }
+
+    if (inputPath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh lod <file> --count N [--reductions r,...] [-o output]" << Qt::endl;
+        err() << "       qtmesh lod <file> --auto [-o output]" << Qt::endl;
+        err() << "       qtmesh lod <file> --remove [-o output]" << Qt::endl;
+        err() << "       qtmesh lod <file> --info [--json]" << Qt::endl;
+        return 2;
+    }
+
+    if (!autoMode && !removeMode && !infoMode && lodCount <= 0) {
+        err() << "Error: Specify --count N, --auto, --remove, or --info." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(inputPath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    QString lodOp = infoMode   ? "info"
+                  : autoMode   ? "auto"
+                  : removeMode ? "remove"
+                               : QString("count=%1").arg(lodCount);
+    SentryReporter::addBreadcrumb("cli.lod",
+        QString("LOD %1 .%2").arg(lodOp, fi.suffix()));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        SentryReporter::captureMessage(
+            QString("CLI lod: import failed (.%1)").arg(fi.suffix()), "error");
+        err() << "Error: Failed to load file: " << inputPath << Qt::endl;
+        return 1;
+    }
+
+    // Select all loaded entities so MeshLodController can find them.
+    auto* sel = SelectionSet::getSingleton();
+    for (Ogre::Entity* entity : entities)
+        sel->append(entity);
+
+    Ogre::Entity* entity = entities.first();
+    Ogre::MeshPtr mesh   = entity->getMesh();
+
+    // ---- info ----
+    if (infoMode) {
+        QVariantList lodInfo = MeshLodController::instance()->lodLevelInfo();
+
+        if (jsonOutput) {
+            QJsonArray arr;
+            for (const QVariant& v : lodInfo) {
+                QVariantMap map = v.toMap();
+                QJsonObject obj;
+                obj["level"]     = map.value("level").toInt();
+                obj["label"]     = map.value("label").toString();
+                obj["triangles"] = map.value("triangles").toInt();
+                arr.append(obj);
+            }
+            cliWrite(QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Indented)) + "\n");
+        } else {
+            QString output = "LOD levels:\n";
+            for (const QVariant& v : lodInfo) {
+                QVariantMap map = v.toMap();
+                output += QString("  LOD %1 (%2): %3 triangles\n")
+                    .arg(map.value("level").toInt())
+                    .arg(map.value("label").toString())
+                    .arg(map.value("triangles").toInt());
+            }
+            cliWrite(output);
+        }
+        return 0;
+    }
+
+    // ---- remove ----
+    if (removeMode) {
+        MeshLodController::instance()->removeLods();
+
+        QString outPath = outputPath.isEmpty() ? inputPath : outputPath;
+        QFileInfo outFi(outPath);
+        auto* node = entity->getParentSceneNode();
+
+        if (MeshImporterExporter::exporter(node, outFi.absoluteFilePath(),
+                                           formatForExtension(outPath)) != 0) {
+            SentryReporter::captureMessage(
+                QString("CLI lod: remove export failed (.%1)").arg(outFi.suffix()), "error");
+            err() << "Error: Export failed." << Qt::endl;
+            return 1;
+        }
+
+        cliWrite(QString("LOD levels removed. Saved: %1\n").arg(outFi.fileName()));
+        return 0;
+    }
+
+    // ---- generate (--count N or --auto) ----
+    if (autoMode) {
+        MeshLodController::instance()->generateAutoLods();
+    } else {
+        lodCount = std::max(1, std::min(lodCount, 4));
+        MeshLodController::instance()->generateLods(lodCount, reductions);
+    }
+
+    const unsigned int totalLods = mesh->getNumLodLevels();
+    if (totalLods <= 1) {
+        SentryReporter::captureMessage(
+            QString("CLI lod: generation produced no levels (.%1)").arg(fi.suffix()), "error");
+        err() << "Error: LOD generation produced no levels." << Qt::endl;
+        return 1;
+    }
+
+    // Determine output naming
+    QString outBaseName, outSuffix, outDir;
+    if (outputPath.isEmpty()) {
+        outDir      = fi.absolutePath();
+        outBaseName = fi.completeBaseName();
+        outSuffix   = fi.suffix();
+    } else {
+        QFileInfo outFi(outputPath);
+        outDir      = outFi.absolutePath();
+        outBaseName = outFi.completeBaseName();
+        outSuffix   = outFi.suffix().isEmpty() ? fi.suffix() : outFi.suffix();
+    }
+
+    // Export each reduced LOD level as a separate file.
+    // Temporarily swap each submesh's indexData with its LOD face list,
+    // export, then restore — identical to MeshLodController::doExportLods.
+    Ogre::SceneNode* sn = entity->getParentSceneNode();
+    const unsigned int numSubs = mesh->getNumSubMeshes();
+    int exported = 0;
+
+    for (unsigned int lod = 1; lod < totalLods; ++lod) {
+        std::vector<Ogre::IndexData*> savedIndex(numSubs, nullptr);
+
+        for (unsigned int s = 0; s < numSubs; ++s) {
+            Ogre::SubMesh* sub = mesh->getSubMesh(s);
+            savedIndex[s] = sub->indexData;
+            if ((lod - 1) < sub->mLodFaceList.size())
+                sub->indexData = sub->mLodFaceList[lod - 1];
+        }
+
+        const QString outPath = QDir(outDir).filePath(
+            QString("%1_lod%2.%3").arg(outBaseName).arg(lod).arg(outSuffix));
+        if (MeshImporterExporter::exporter(sn, outPath, formatForExtension(outPath),
+                                           /*stripAnimations=*/true) == 0)
+            ++exported;
+
+        for (unsigned int s = 0; s < numSubs; ++s)
+            mesh->getSubMesh(s)->indexData = savedIndex[s];
+    }
+
+    if (exported == 0) {
+        SentryReporter::captureMessage(
+            QString("CLI lod: all exports failed (.%1)").arg(fi.suffix()), "error");
+        err() << "Error: Failed to export LOD files." << Qt::endl;
+        return 1;
+    }
+
+    QString report = QString("Generated %1 LOD level(s) from %2:\n")
+        .arg(totalLods - 1).arg(fi.fileName());
+    for (unsigned int lod = 1; lod < totalLods; ++lod)
+        report += QString("  LOD %1: %2_lod%3.%4\n").arg(lod).arg(outBaseName).arg(lod).arg(outSuffix);
+    cliWrite(report);
 
     return 0;
 }
