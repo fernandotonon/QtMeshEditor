@@ -132,6 +132,7 @@ private:
     ViewCubeController* m_viewCubeController = nullptr;
     MCPServer* m_mcpServer = nullptr;
     QQuickWidget* m_propertiesPanel = nullptr;
+    QDockWidget* m_chatDock = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
     void addToRecentFiles(const QString& filePath);

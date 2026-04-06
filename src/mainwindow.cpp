@@ -55,6 +55,7 @@
 #include "MeshLodController.h"
 #include "MeshValidator.h"
 #include "MaterialPresetLibrary.h"
+#include "AIChatManager.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -232,6 +233,7 @@ MainWindow::~MainWindow()
     MeshLodController::kill();
     MeshValidator::kill();
     MaterialPresetLibrary::kill();
+    AIChatManager::kill();
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
     Manager* manager = Manager::getSingletonPtr();
@@ -334,6 +336,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MaterialPresetLibrary::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<AIChatManager>("AIChatPanel", 1, 0, "AIChatManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AIChatManager::qmlInstance(engine, nullptr);
+            });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
 
@@ -350,6 +356,19 @@ void MainWindow::initToolBar()
             }
             layout->addWidget(m_propertiesPanel);
         }
+    }
+
+    // AI Chat dock
+    {
+        auto* chatWidget = new QQuickWidget();
+        chatWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        chatWidget->setMinimumWidth(280);
+        chatWidget->setSource(QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
+        m_chatDock = new QDockWidget(tr("AI Chat"), this);
+        m_chatDock->setWidget(chatWidget);
+        m_chatDock->setObjectName("AIChatDock");
+        addDockWidget(Qt::RightDockWidgetArea, m_chatDock);
+        m_chatDock->hide();
     }
 
     // Animation Control dock is created below and auto-shown when animated entity is selected
@@ -473,7 +492,15 @@ void MainWindow::initToolBar()
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
-    QAction* aiSettingsAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Model Settings..."));
+    QAction* aiChatAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Chat..."));
+    connect(aiChatAction, &QAction::triggered, this, [this]() {
+        if (m_chatDock) {
+            m_chatDock->show();
+            m_chatDock->raise();
+        }
+    });
+    aiMenu->addSeparator();
+    QAction* aiSettingsAction = aiMenu->addAction(tr("AI Model Settings..."));
     connect(aiSettingsAction, &QAction::triggered, this, &MainWindow::showAIModelSettings);
 
     QAction* mcpSettingsAction = aiMenu->addAction(tr("MCP Server Settings..."));
@@ -1514,6 +1541,7 @@ bool MainWindow::startMCPServer(int port)
     if (!m_mcpServer) {
         m_mcpServer = new MCPServer(this);
         m_mcpServer->setMainWindow(this);
+        AIChatManager::instance()->setMcpServer(m_mcpServer);
     }
 
     bool ok = m_mcpServer->startHttp(port);
@@ -1542,6 +1570,7 @@ void MainWindow::setMCPServer(MCPServer* server)
         delete m_mcpServer;
     }
     m_mcpServer = server;
+    AIChatManager::instance()->setMcpServer(m_mcpServer);
 }
 
 void MainWindow::addToRecentFiles(const QString& filePath)

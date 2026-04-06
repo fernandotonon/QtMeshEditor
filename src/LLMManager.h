@@ -98,6 +98,7 @@ public slots:
 
     // Generation
     Q_INVOKABLE void generateMaterial(const QString &prompt, const QString &currentMaterial = QString(), const QStringList &availableTextures = QStringList());
+    Q_INVOKABLE void generateText(const QString &systemPrompt, const QString &userPrompt);
     Q_INVOKABLE void stopGeneration();
 
     // Settings

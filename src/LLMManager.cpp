@@ -415,6 +415,17 @@ void LLMManager::scanForModels()
     emit availableModelsChanged();
 }
 
+void LLMManager::generateText(const QString &systemPrompt, const QString &userPrompt)
+{
+    if (!isModelLoaded()) {
+        emit generationError("No model loaded. Please load a model first.");
+        return;
+    }
+    QMetaObject::invokeMethod(m_worker, [this, systemPrompt, userPrompt]() {
+        m_worker->generate(systemPrompt, userPrompt);
+    }, Qt::QueuedConnection);
+}
+
 void LLMManager::generateMaterial(const QString &prompt, const QString &currentMaterial, const QStringList &availableTextures)
 {
     if (!isModelLoaded()) {
