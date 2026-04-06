@@ -66,6 +66,15 @@ Rectangle {
                 Component.onCompleted: content = lodComponent
             }
 
+            // ---- Material Presets ----
+            CollapsibleSection {
+                title: "Material Presets"
+                sectionVisible: PropertiesPanelController.hasSelection
+                expanded: false
+
+                Component.onCompleted: content = materialPresetsComponent
+            }
+
             // ---- Mesh Validation ----
             CollapsibleSection {
                 title: "Mesh Validation"
@@ -570,6 +579,101 @@ Rectangle {
                     }
                     function onLodChanged() {
                         lodFeedback.text = ""
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Material Presets Content ----
+    Component {
+        id: materialPresetsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // Category labels and preset buttons grouped by material type
+            property var categories: [
+                { label: "Plastic",  presets: ["Plastic (Red)", "Plastic (Blue)", "Plastic (White)"] },
+                { label: "Metal",    presets: ["Metal (Silver)", "Metal (Gold)", "Metal (Copper)"] },
+                { label: "Wood",     presets: ["Wood (Oak)", "Wood (Birch)"] },
+                { label: "Glass",    presets: ["Glass (Clear)", "Glass (Tinted)"] },
+                { label: "Other",    presets: ["Unlit (White)", "Wireframe"] }
+            ]
+
+            Repeater {
+                model: parent.categories
+
+                Column {
+                    width: parent.width - 16
+                    spacing: 3
+
+                    // Category label
+                    Text {
+                        text: modelData.label
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        font.bold: true
+                        leftPadding: 2
+                    }
+
+                    // Preset buttons row
+                    Flow {
+                        width: parent.width
+                        spacing: 4
+
+                        Repeater {
+                            model: modelData.presets
+
+                            Rectangle {
+                                width: Math.min(110, (parent.width - (modelData.presets.length - 1) * 4) / modelData.presets.length)
+                                height: 24
+                                radius: 3
+                                color: presetMouse.pressed
+                                     ? Qt.darker(PropertiesPanelController.buttonColor, 1.3)
+                                     : presetMouse.containsMouse
+                                     ? Qt.lighter(PropertiesPanelController.buttonColor, 1.15)
+                                     : PropertiesPanelController.buttonColor
+                                border.color: PropertiesPanelController.borderColor
+                                border.width: 1
+
+                                Text {
+                                    anchors.centerIn: parent
+                                    text: modelData.replace(/^(Plastic|Metal|Wood|Glass|Unlit|Wireframe)\s*\(?\s*/, "").replace(/\)$/, "") || modelData
+                                    color: PropertiesPanelController.textColor
+                                    font.pixelSize: 10
+                                    elide: Text.ElideRight
+                                    width: parent.width - 6
+                                    horizontalAlignment: Text.AlignHCenter
+                                }
+
+                                MouseArea {
+                                    id: presetMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    onClicked: MaterialPresetLibrary.applyPreset(modelData)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Feedback
+            Text {
+                id: presetFeedback
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+                font.pixelSize: 10
+                color: "#60c060"
+                text: ""
+
+                Connections {
+                    target: MaterialPresetLibrary
+                    function onPresetApplied(name) {
+                        presetFeedback.text = "Applied: " + name
                     }
                 }
             }
