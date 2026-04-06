@@ -193,4 +193,6 @@ TEST(MaterialProcessorTest, ProcessMaterialReturnsExistingMaterialIfAlreadyCreat
     ASSERT_TRUE(out);
     EXPECT_EQ(out.get(), existing.get());
     EXPECT_EQ(out->getName(), name);
+
+    Ogre::MaterialManager::getSingleton().remove(name);
 }

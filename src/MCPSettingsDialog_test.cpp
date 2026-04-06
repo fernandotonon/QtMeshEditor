@@ -28,7 +28,7 @@ static QLabel* findStatusLabel(MCPSettingsDialog& dialog) {
         if (text.contains("Running") || text.contains("Stopped") || text.contains("Failed"))
             return label;
     }
-    return labels.isEmpty() ? nullptr : labels.last();
+    return nullptr;
 }
 
 TEST_F(MCPSettingsDialogTest, ConstructionDoesNotCrash) {
@@ -159,8 +159,10 @@ TEST_F(MCPSettingsDialogTest, EnableToggledStartFailureRevertsCheckboxAndShowsEr
     MCPSettingsDialog dialog(false, 6060);
 
     bool callbackCalled = false;
-    dialog.startCallback = [&callbackCalled](int) -> bool {
+    int capturedPort = -1;
+    dialog.startCallback = [&callbackCalled, &capturedPort](int port) -> bool {
         callbackCalled = true;
+        capturedPort = port;
         return false;
     };
 
@@ -172,6 +174,7 @@ TEST_F(MCPSettingsDialogTest, EnableToggledStartFailureRevertsCheckboxAndShowsEr
     enableCheckBox->setChecked(true);
 
     EXPECT_TRUE(callbackCalled);
+    EXPECT_EQ(capturedPort, 6060);
     EXPECT_FALSE(enableCheckBox->isChecked());
     EXPECT_TRUE(portSpinBox->isEnabled());
 
