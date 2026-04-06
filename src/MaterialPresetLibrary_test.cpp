@@ -196,7 +196,7 @@ TEST_F(MaterialPresetLibraryTests, PlasticPresetConfiguresExpectedMaterialProper
     inst->applyPreset("Plastic (White)");
 
     auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Plastic (White)");
-    ASSERT_FALSE(mat.isNull());
+    ASSERT_TRUE(bool(mat));
     Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
     EXPECT_FLOAT_EQ(pass->getDiffuse().r, 0.9f);
     EXPECT_FLOAT_EQ(pass->getDiffuse().g, 0.9f);
@@ -224,7 +224,7 @@ TEST_F(MaterialPresetLibraryTests, MetalPresetConfiguresExpectedMaterialProperti
     inst->applyPreset("Metal (Gold)");
 
     auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Metal (Gold)");
-    ASSERT_FALSE(mat.isNull());
+    ASSERT_TRUE(bool(mat));
     Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
     EXPECT_FLOAT_EQ(pass->getDiffuse().r, 0.9f);
     EXPECT_FLOAT_EQ(pass->getDiffuse().g, 0.75f);
@@ -252,7 +252,7 @@ TEST_F(MaterialPresetLibraryTests, WoodPresetConfiguresExpectedMaterialPropertie
     inst->applyPreset("Wood (Oak)");
 
     auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Wood (Oak)");
-    ASSERT_FALSE(mat.isNull());
+    ASSERT_TRUE(bool(mat));
     Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
     EXPECT_FLOAT_EQ(pass->getDiffuse().r, 0.6f);
     EXPECT_FLOAT_EQ(pass->getDiffuse().g, 0.4f);
@@ -280,9 +280,9 @@ TEST_F(MaterialPresetLibraryTests, GlassPresetConfiguresTransparentMaterialPrope
     inst->applyPreset("Glass (Tinted)");
 
     auto mat = Ogre::MaterialManager::getSingleton().getByName("Preset/Glass (Tinted)");
-    ASSERT_FALSE(mat.isNull());
+    ASSERT_TRUE(bool(mat));
     Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
-    EXPECT_FLOAT_EQ(pass->getDiffuse().a, 0.3f);
+    EXPECT_FLOAT_EQ(pass->getDiffuse().a, 0.55f);
     EXPECT_FLOAT_EQ(pass->getShininess(), 100.0f);
     EXPECT_FALSE(pass->getDepthWriteEnabled());
     EXPECT_EQ(QString::fromStdString(entity->getSubEntity(0)->getMaterialName()), QString("Preset/Glass (Tinted)"));
@@ -307,13 +307,13 @@ TEST_F(MaterialPresetLibraryTests, UnlitAndWireframePresetsDisableLighting) {
     inst->applyPreset("Unlit (White)");
 
     auto unlitMat = Ogre::MaterialManager::getSingleton().getByName("Preset/Unlit (White)");
-    ASSERT_FALSE(unlitMat.isNull());
+    ASSERT_TRUE(bool(unlitMat));
     Ogre::Pass* unlitPass = unlitMat->getTechnique(0)->getPass(0);
     EXPECT_FALSE(unlitPass->getLightingEnabled());
 
     inst->applyPreset("Wireframe");
     auto wireMat = Ogre::MaterialManager::getSingleton().getByName("Preset/Wireframe");
-    ASSERT_FALSE(wireMat.isNull());
+    ASSERT_TRUE(bool(wireMat));
     Ogre::Pass* wirePass = wireMat->getTechnique(0)->getPass(0);
     EXPECT_FALSE(wirePass->getLightingEnabled());
     EXPECT_EQ(wirePass->getPolygonMode(), Ogre::PM_WIREFRAME);

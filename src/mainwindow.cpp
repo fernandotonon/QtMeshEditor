@@ -54,6 +54,7 @@
 #include "PropertiesPanelController.h"
 #include "MeshLodController.h"
 #include "MeshValidator.h"
+#include "MaterialPresetLibrary.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -230,6 +231,7 @@ MainWindow::~MainWindow()
     AnimationControlController::kill();
     MeshLodController::kill();
     MeshValidator::kill();
+    MaterialPresetLibrary::kill();
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
     Manager* manager = Manager::getSingletonPtr();
@@ -327,6 +329,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<MeshValidator>("PropertiesPanel", 1, 0, "MeshValidator",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MeshValidator::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<MaterialPresetLibrary>("PropertiesPanel", 1, 0, "MaterialPresetLibrary",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return MaterialPresetLibrary::qmlInstance(engine, nullptr);
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));

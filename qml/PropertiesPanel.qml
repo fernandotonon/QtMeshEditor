@@ -66,6 +66,15 @@ Rectangle {
                 Component.onCompleted: content = lodComponent
             }
 
+            // ---- Material Presets ----
+            CollapsibleSection {
+                title: "Material Presets"
+                sectionVisible: PropertiesPanelController.hasSelection
+                expanded: false
+
+                Component.onCompleted: content = materialPresetsComponent
+            }
+
             // ---- Mesh Validation ----
             CollapsibleSection {
                 title: "Mesh Validation"
@@ -570,6 +579,207 @@ Rectangle {
                     }
                     function onLodChanged() {
                         lodFeedback.text = ""
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- Material Presets Content ----
+    Component {
+        id: materialPresetsComponent
+
+        Column {
+            id: presetsRoot
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 8
+
+            // Flat list of presets with visual properties for the sphere preview
+            property var presets: [
+                { name: "Plastic (Red)",   label: "Red",      cat: "Plastic", diff: "#cc3333", spec: "#ffbbbb", shin: 35,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Plastic (Blue)",  label: "Blue",     cat: "Plastic", diff: "#3355cc", spec: "#aabbff", shin: 35,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Plastic (White)", label: "White",    cat: "Plastic", diff: "#dddddd", spec: "#ffffff", shin: 35,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Metal (Silver)",  label: "Silver",   cat: "Metal",   diff: "#aaaaaa", spec: "#ffffff", shin: 80,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Metal (Gold)",    label: "Gold",     cat: "Metal",   diff: "#cc9922", spec: "#ffffaa", shin: 80,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Metal (Copper)",  label: "Copper",   cat: "Metal",   diff: "#c06030", spec: "#ffccaa", shin: 80,  alpha: 1.0,  wire: false, unlit: false },
+                { name: "Wood (Oak)",      label: "Oak",      cat: "Wood",    diff: "#8b5e3c", spec: "#aa7755", shin: 5,   alpha: 1.0,  wire: false, unlit: false },
+                { name: "Wood (Birch)",    label: "Birch",    cat: "Wood",    diff: "#c8a878", spec: "#e8d8b8", shin: 5,   alpha: 1.0,  wire: false, unlit: false },
+                { name: "Glass (Clear)",   label: "Clear",    cat: "Glass",   diff: "#aaccee", spec: "#ffffff", shin: 100, alpha: 0.42, wire: false, unlit: false },
+                { name: "Glass (Tinted)",  label: "Tinted",   cat: "Glass",   diff: "#446688", spec: "#aaccee", shin: 100, alpha: 0.55, wire: false, unlit: false },
+                { name: "Unlit (White)",   label: "Unlit",    cat: "Other",   diff: "#eeeeee", spec: "#eeeeee", shin: 0,   alpha: 1.0,  wire: false, unlit: true  },
+                { name: "Wireframe",       label: "Wireframe",cat: "Other",   diff: "#223322", spec: "#44dd44", shin: 0,   alpha: 1.0,  wire: true,  unlit: false }
+            ]
+            property var categories: ["Plastic", "Metal", "Wood", "Glass", "Other"]
+            property string lastApplied: ""
+
+            // Draw one category group
+            Repeater {
+                model: presetsRoot.categories
+
+                Column {
+                    id: catGroup
+                    width: presetsRoot.width - 16
+                    spacing: 4
+                    property string catName: modelData
+                    property var catPresets: {
+                        var result = []
+                        for (var i = 0; i < presetsRoot.presets.length; ++i)
+                            if (presetsRoot.presets[i].cat === catName) result.push(presetsRoot.presets[i])
+                        return result
+                    }
+
+                    Text {
+                        text: catGroup.catName
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10; font.bold: true
+                        leftPadding: 1
+                    }
+
+                    Flow {
+                        width: parent.width
+                        spacing: 6
+
+                        Repeater {
+                            model: catGroup.catPresets
+
+                            Column {
+                                id: sphereItem
+                                spacing: 2
+                                property var pdata: modelData
+
+                                // Sphere canvas
+                                Rectangle {
+                                    width: 52; height: 52; radius: 4
+                                    color: sphereArea.containsMouse
+                                         ? Qt.lighter(PropertiesPanelController.panelColor, 1.4)
+                                         : PropertiesPanelController.panelColor
+                                    border.color: presetsRoot.lastApplied === sphereItem.pdata.name
+                                               ? PropertiesPanelController.highlightColor
+                                               : PropertiesPanelController.borderColor
+                                    border.width: presetsRoot.lastApplied === sphereItem.pdata.name ? 2 : 1
+
+                                    Canvas {
+                                        anchors.centerIn: parent
+                                        width: 44; height: 44
+
+                                        property var pd: sphereItem.pdata
+
+                                        onPaint: {
+                                            var ctx = getContext("2d")
+                                            ctx.clearRect(0, 0, width, height)
+                                            var cx = width / 2, cy = height / 2
+                                            var r = Math.min(cx, cy) - 1
+
+                                            if (pd.wire) {
+                                                // Wireframe sphere
+                                                ctx.save()
+                                                ctx.beginPath()
+                                                ctx.arc(cx, cy, r, 0, Math.PI * 2)
+                                                ctx.fillStyle = "#1a2a1a"
+                                                ctx.fill()
+                                                ctx.clip()
+                                                ctx.strokeStyle = pd.spec
+                                                ctx.lineWidth = 0.9
+                                                // Latitude lines
+                                                for (var lat = -0.65; lat <= 0.7; lat += 0.32) {
+                                                    var latR = r * Math.sqrt(Math.max(0, 1 - lat * lat))
+                                                    var latY = cy + lat * r
+                                                    ctx.beginPath()
+                                                    ctx.ellipse(cx, latY, latR, latR * 0.28, 0, 0, Math.PI * 2)
+                                                    ctx.stroke()
+                                                }
+                                                // Longitude lines
+                                                for (var lon = 0; lon < Math.PI; lon += Math.PI / 3) {
+                                                    ctx.save()
+                                                    ctx.translate(cx, cy)
+                                                    ctx.rotate(lon)
+                                                    ctx.beginPath()
+                                                    ctx.ellipse(0, 0, r * 0.32, r, 0, 0, Math.PI * 2)
+                                                    ctx.stroke()
+                                                    ctx.restore()
+                                                }
+                                                ctx.restore()
+                                            } else {
+                                                // Lit sphere with radial gradient
+                                                var specSize = pd.shin > 60 ? r * 0.08
+                                                             : pd.shin > 20 ? r * 0.18 : r * 0.30
+                                                var hx = cx - r * 0.30, hy = cy - r * 0.32
+
+                                                // Dark edge shadow
+                                                ctx.beginPath()
+                                                ctx.arc(cx, cy, r, 0, Math.PI * 2)
+                                                ctx.fillStyle = Qt.darker(pd.diff, 3.0)
+                                                ctx.fill()
+
+                                                // Main lit gradient
+                                                var grad = ctx.createRadialGradient(hx, hy, specSize * 0.3, cx + r * 0.05, cy + r * 0.05, r * 1.05)
+                                                grad.addColorStop(0.00, pd.unlit ? pd.diff : pd.spec)
+                                                grad.addColorStop(0.22, pd.diff)
+                                                grad.addColorStop(0.75, Qt.darker(pd.diff, 1.7))
+                                                grad.addColorStop(1.00, Qt.darker(pd.diff, 3.0))
+
+                                                ctx.beginPath()
+                                                ctx.arc(cx, cy, r, 0, Math.PI * 2)
+                                                ctx.globalAlpha = pd.alpha
+                                                ctx.fillStyle = grad
+                                                ctx.fill()
+                                                ctx.globalAlpha = 1.0
+
+                                                // Glass refraction rim
+                                                if (pd.alpha < 0.9) {
+                                                    var rimGrad = ctx.createRadialGradient(cx, cy, r * 0.6, cx, cy, r)
+                                                    rimGrad.addColorStop(0, "transparent")
+                                                    rimGrad.addColorStop(1, Qt.lighter(pd.diff, 1.6))
+                                                    ctx.beginPath()
+                                                    ctx.arc(cx, cy, r, 0, Math.PI * 2)
+                                                    ctx.globalAlpha = 0.55
+                                                    ctx.fillStyle = rimGrad
+                                                    ctx.fill()
+                                                    ctx.globalAlpha = 1.0
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: sphereArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        cursorShape: Qt.PointingHandCursor
+                                        onClicked: {
+                                            MaterialPresetLibrary.applyPreset(sphereItem.pdata.name)
+                                            presetsRoot.lastApplied = sphereItem.pdata.name
+                                        }
+                                    }
+                                }
+
+                                // Label
+                                Text {
+                                    text: sphereItem.pdata.label
+                                    color: PropertiesPanelController.textColor
+                                    font.pixelSize: 9
+                                    width: 52
+                                    horizontalAlignment: Text.AlignHCenter
+                                    elide: Text.ElideRight
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Feedback
+            Text {
+                id: presetFeedback
+                width: presetsRoot.width - 16
+                wrapMode: Text.Wrap; font.pixelSize: 10
+                color: "#60c060"; text: ""
+
+                Connections {
+                    target: MaterialPresetLibrary
+                    function onPresetApplied(name) {
+                        presetFeedback.text = "Applied: " + name
                     }
                 }
             }
