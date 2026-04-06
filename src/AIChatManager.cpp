@@ -172,6 +172,8 @@ void AIChatManager::startGeneration(const QString& sysPrompt, const QString& use
 static QStringList extractToolJsonBlocks(const QString& text)
 {
     QStringList results;
+
+    // Primary: find {"name": "tool_name", "arguments": {...}} directly
     int len = text.length();
     for (int i = 0; i < len; ++i) {
         if (text[i] != QLatin1Char('{')) continue;
@@ -190,8 +192,29 @@ static QStringList extractToolJsonBlocks(const QString& text)
             if (obj.contains("name") && obj.contains("arguments"))
                 results << candidate;
         }
-        i = j; // skip past matched block
+        i = j;
     }
+
+    // Fallback: model sometimes mimics tool-result format:
+    //   [Tool: tool_name]
+    //   Arguments: {"param": "value"}
+    // Reconstruct the canonical {"name":..., "arguments":...} from it.
+    static const QRegularExpression altRe(
+        R"(\[Tool:\s*([^\]]+)\]\s*(?:Arguments?:\s*)?(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}))",
+        QRegularExpression::DotMatchesEverythingOption | QRegularExpression::CaseInsensitiveOption);
+    auto altIt = altRe.globalMatch(text);
+    while (altIt.hasNext()) {
+        auto m = altIt.next();
+        QString toolName = m.captured(1).trimmed();
+        QJsonParseError err;
+        QJsonDocument argDoc = QJsonDocument::fromJson(m.captured(2).trimmed().toUtf8(), &err);
+        if (err.error != QJsonParseError::NoError) continue;
+        QJsonObject call;
+        call["name"]      = toolName;
+        call["arguments"] = argDoc.isObject() ? argDoc.object() : QJsonObject{};
+        results << QString::fromUtf8(QJsonDocument(call).toJson(QJsonDocument::Compact));
+    }
+
     return results;
 }
 
@@ -308,7 +331,8 @@ QString AIChatManager::buildConversationPrompt(const QString& /*unused*/) const
         if (role == "user")
             conv += "User: " + text + "\n";
         else if (role == "tool" || isTool)
-            conv += text + "\n";         // already has [Tool: name] prefix
+            // Prefix with RESULT: so the model distinguishes past results from new calls
+            conv += "RESULT: " + text + "\n";
         else
             conv += "Assistant: " + text + "\n";
     }
