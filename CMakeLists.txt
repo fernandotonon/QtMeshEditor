@@ -269,7 +269,8 @@ if(ENABLE_SENTRY)
     FetchContent_Declare(sentry
         GIT_REPOSITORY https://github.com/getsentry/sentry-native.git
         GIT_TAG 0.7.17
-        GIT_SHALLOW TRUE)
+        GIT_SHALLOW TRUE
+        GIT_SUBMODULES_RECURSE FALSE)
     FetchContent_MakeAvailable(sentry)
     include_directories(${sentry_SOURCE_DIR}/include)
     add_definitions(-DENABLE_SENTRY)
