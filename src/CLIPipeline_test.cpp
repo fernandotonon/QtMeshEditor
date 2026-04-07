@@ -508,6 +508,27 @@ TEST(CLIPipelineRun, CliWithHelp)
     EXPECT_EXIT(CLIPipeline::run(3, argv), testing::ExitedWithCode(0), "");
 }
 
+TEST(CLIPipelineRun, UnknownCommand)
+{
+    qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    char arg0[] = "qtmesh";
+    char arg1[] = "not-a-command";
+    char* argv[] = {arg0, arg1};
+    EXPECT_EXIT(CLIPipeline::run(2, argv), testing::ExitedWithCode(2), "");
+}
+
+TEST(CLIPipelineRun, UnknownCommandWithNoTelemetryFlag)
+{
+    qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
+    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    char arg0[] = "qtmesh";
+    char arg1[] = "--no-telemetry";
+    char arg2[] = "not-a-command";
+    char* argv[] = {arg0, arg1, arg2};
+    EXPECT_EXIT(CLIPipeline::run(3, argv), testing::ExitedWithCode(2), "");
+}
+
 // --- TestArgv helper for in-process cmd* tests ---
 
 namespace {
@@ -612,6 +633,12 @@ TEST(CLIPipelineCmdInfoError, NonexistentFile)
     EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 1);
 }
 
+TEST(CLIPipelineCmdInfoError, NonexistentFileWithJsonAndCliFlag)
+{
+    TestArgv args({"qtmesh", "--cli", "info", "/tmp/nonexistent_cli_test_file_67890.fbx", "--json"});
+    EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 1);
+}
+
 // -- cmdInfo success paths --
 
 TEST_F(CLIPipelineCmdTest, CmdInfo_TextOutput)
@@ -662,6 +689,13 @@ TEST(CLIPipelineCmdConvertError, NonexistentFile)
 {
     TestArgv args({"qtmesh", "convert", "/tmp/nonexistent_cli_test_12345.fbx",
                    "-o", "/tmp/cli_test_out.mesh"});
+    EXPECT_EQ(CLIPipeline::cmdConvert(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdConvertError, NonexistentFileWithFormatAndLongOutputFlag)
+{
+    TestArgv args({"qtmesh", "--cli", "convert", "/tmp/nonexistent_cli_test_54321.fbx",
+                   "--output", "/tmp/cli_test_out.obj", "--format", "OBJ (*.obj)"});
     EXPECT_EQ(CLIPipeline::cmdConvert(args.argc(), args.argv()), 1);
 }
 
@@ -730,6 +764,14 @@ TEST(CLIPipelineCmdFixError, NoFile)
 TEST(CLIPipelineCmdFixError, NonexistentFile)
 {
     TestArgv args({"qtmesh", "fix", "/tmp/nonexistent_cli_test_12345.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdFixError, NonexistentFileWithFlagsAndLongOutputFlag)
+{
+    TestArgv args({"qtmesh", "--cli", "fix", "/tmp/nonexistent_cli_test_22222.fbx",
+                   "--output", "/tmp/cli_test_fix_out.mesh",
+                   "--remove-degenerates", "--merge-materials", "--all"});
     EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 1);
 }
 
@@ -854,9 +896,23 @@ TEST(CLIPipelineCmdAnimError, NoAction)
     EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 2);
 }
 
+TEST(CLIPipelineCmdAnimError, RenameMissingNewName)
+{
+    TestArgv args({"qtmesh", "anim", "somefile.fbx", "--rename", "OldNameOnly"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 2);
+}
+
 TEST(CLIPipelineCmdAnimError, NonexistentFile)
 {
     TestArgv args({"qtmesh", "anim", "/tmp/nonexistent_cli_test_12345.fbx", "--list"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdAnimError, MergeModeWithMissingBaseFile)
+{
+    TestArgv args({"qtmesh", "anim", "/tmp/nonexistent_cli_test_33333.fbx",
+                   "--merge", "/tmp/nonexistent_anim_source_33333.fbx",
+                   "-o", "/tmp/cli_test_merge_fail.mesh"});
     EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
 }
 
@@ -994,6 +1050,60 @@ TEST_F(CLIPipelineCmdTest, CmdAnimRename_SameNameNoop)
     EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
     QFile::remove(outFile);
     QFile::remove(QDir::tempPath() + "/cli_test_rename_noop.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimRename_TargetNameAlreadyExists)
+{
+    auto* entity = createAnimatedTestEntity("cli_test_rename_existing");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    Ogre::SkeletonPtr skelPtr = entity->getMesh()->getSkeleton();
+    ASSERT_TRUE(static_cast<bool>(skelPtr));
+    Ogre::Skeleton* skel = skelPtr.get();
+    ASSERT_GT(skel->getNumAnimations(), 0u);
+
+    const QString firstAnim = QString::fromStdString(skel->getAnimation(static_cast<unsigned short>(0))->getName());
+    const QString secondAnim = "ExistingAnimationName";
+
+    if (!skel->hasAnimation(secondAnim.toStdString())) {
+        auto* second = skel->createAnimation(secondAnim.toStdString(), 1.0f);
+        auto* rootBone = skel->getBone(static_cast<unsigned short>(0));
+        ASSERT_NE(rootBone, nullptr);
+        auto* track = second->createNodeTrack(rootBone->getHandle());
+        track->setAssociatedNode(rootBone);
+        auto* key = track->createNodeKeyFrame(0.0f);
+        key->setTranslate(Ogre::Vector3::ZERO);
+        key->setRotation(Ogre::Quaternion::IDENTITY);
+        key->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+    ASSERT_TRUE(skel->hasAnimation(secondAnim.toStdString()));
+
+    const QString sourceFile = QDir::tempPath() + "/cli_test_rename_existing_source.mesh";
+    QFile::remove(sourceFile);
+    ASSERT_EQ(
+        MeshImporterExporter::exporter(
+            entity->getParentSceneNode(),
+            sourceFile,
+            "Ogre Mesh (*.mesh)"),
+        0);
+    ASSERT_TRUE(QFile::exists(sourceFile));
+
+    auto nodes = Manager::getSingleton()->getSceneNodes();
+    for (auto* node : nodes) {
+        Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+        Manager::getSingleton()->destroySceneNode(node);
+    }
+
+    QByteArray sourceBa = sourceFile.toUtf8();
+    QByteArray firstBa = firstAnim.toUtf8();
+    QByteArray secondBa = secondAnim.toUtf8();
+    TestArgv args({"qtmesh", "anim", sourceBa.constData(),
+                   "--rename", firstBa.constData(), secondBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
+
+    QFile::remove(sourceFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_rename_existing_source.material");
 }
 
 // -- cmdAnim merge --
@@ -1217,6 +1327,12 @@ TEST(CLIPipelineCmdValidateError, NonexistentFile)
     EXPECT_EQ(CLIPipeline::cmdValidate(args.argc(), args.argv()), 1);
 }
 
+TEST(CLIPipelineCmdValidateError, NonexistentFileWithJsonAndCliFlag)
+{
+    TestArgv args({"qtmesh", "--cli", "validate", "/tmp/nonexistent_cli_validate_67890.fbx", "--json"});
+    EXPECT_EQ(CLIPipeline::cmdValidate(args.argc(), args.argv()), 1);
+}
+
 class CLIPipelineCmdValidateTest : public ::testing::Test {
 protected:
     void SetUp() override {
@@ -1301,6 +1417,26 @@ TEST(CLIPipelineCmdLodError, NoMode)
 TEST(CLIPipelineCmdLodError, NonexistentFile)
 {
     TestArgv args({"qtmesh", "lod", "/tmp/nonexistent_cli_lod_12345.fbx", "--info"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdLodError, NonexistentFileWithCountReductionsAndOutput)
+{
+    TestArgv args({"qtmesh", "--cli", "lod", "/tmp/nonexistent_cli_lod_67890.fbx",
+                   "--count", "3", "--reductions", "0.8,0.5,0.2",
+                   "--output", "/tmp/cli_test_lod_out.mesh"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdLodError, NonexistentFileWithAutoMode)
+{
+    TestArgv args({"qtmesh", "lod", "/tmp/nonexistent_cli_lod_auto_67890.fbx", "--auto"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdLodError, NonexistentFileWithRemoveMode)
+{
+    TestArgv args({"qtmesh", "lod", "/tmp/nonexistent_cli_lod_remove_67890.fbx", "--remove"});
     EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 1);
 }
 

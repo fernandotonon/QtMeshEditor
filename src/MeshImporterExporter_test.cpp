@@ -14,6 +14,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <cstdint>
+#include <set>
 #include <OgreTextureManager.h>
 #include <OgreHardwarePixelBuffer.h>
 #include "Manager.h"
@@ -301,6 +302,27 @@ TEST_F(MeshImporterExporterTest, Importer_EmptyList_DoesNotCreateSceneNodes) {
 
 TEST_F(MeshImporterExporterTest, Importer_EmptyPathEntry_IsIgnored) {
     MeshImporterExporter::importer(QStringList{""});
+    EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
+}
+
+TEST_F(MeshImporterExporterTest, Importer_MissingMeshFile_IsIgnored) {
+    MeshImporterExporter::importer(QStringList{"/tmp/nonexistent_mesh_importer_12345.mesh"});
+    EXPECT_TRUE(Manager::getSingleton()->getEntities().isEmpty());
+    EXPECT_LE(Manager::getSingleton()->getSceneNodes().size(), 1);
+}
+
+TEST_F(MeshImporterExporterTest, Importer_MissingMeshXmlFile_IsIgnored) {
+    MeshImporterExporter::importer(QStringList{"/tmp/nonexistent_mesh_importer_12345.mesh.xml"});
+    EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
+}
+
+TEST_F(MeshImporterExporterTest, Importer_MissingGenericFileWithAnimOutputs_IsIgnored) {
+    QList<Ogre::SkeletonPtr> animOnlySkeletons;
+    int upAxis = -1;
+    MeshImporterExporter::importer(
+        QStringList{"/tmp/nonexistent_mesh_importer_12345.fbx"}, 0, &animOnlySkeletons, &upAxis);
+
+    EXPECT_TRUE(animOnlySkeletons.isEmpty());
     EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
 }
 
@@ -678,6 +700,41 @@ TEST_F(SceneSaveLoadTest, EmptyScene_ExportsValidFile) {
     EXPECT_TRUE(QFileInfo::exists(sceneFile));
 }
 
+TEST_F(SceneSaveLoadTest, Exporter_OgreXmlRoundTrip_ReimportsEntity)
+{
+    auto* manager = Manager::getSingleton();
+
+    auto mesh = createInMemoryTriangleMesh("xml_roundtrip_mesh");
+    auto* node = manager->addSceneNode("XmlRoundTripNode");
+    auto* entity = manager->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString meshXmlFile = tmpDir.path() + "/xml_roundtrip.mesh.xml";
+
+    ASSERT_EQ(MeshImporterExporter::exporter(node, meshXmlFile, "Ogre XML (*.mesh.xml)"), 0);
+    ASSERT_TRUE(QFileInfo::exists(meshXmlFile));
+    ASSERT_TRUE(QFileInfo::exists(tmpDir.path() + "/xml_roundtrip.material"));
+
+    auto nodes = manager->getSceneNodes();
+    for (auto* n : nodes) {
+        manager->destroyAllAttachedMovableObjects(n);
+        manager->destroySceneNode(n);
+    }
+    ASSERT_TRUE(manager->getSceneNodes().isEmpty());
+
+    MeshImporterExporter::importer({meshXmlFile});
+    const auto& importedNodes = manager->getSceneNodes();
+    ASSERT_EQ(importedNodes.size(), 1);
+    auto* importedNode = importedNodes.first();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(importedNode->getName()));
+    auto* importedEntity = manager->getSceneMgr()->getEntity(importedNode->getName());
+    ASSERT_NE(importedEntity, nullptr);
+    ASSERT_NE(importedEntity->getMesh().get(), nullptr);
+    EXPECT_GT(importedEntity->getMesh()->getNumSubMeshes(), 0u);
+}
+
 TEST_F(SceneSaveLoadTest, SceneExporter_ProgressCallback_ReportsProgress) {
     auto* manager = Manager::getSingleton();
 
@@ -711,6 +768,64 @@ TEST_F(SceneSaveLoadTest, SceneExporter_ProgressCallback_ReportsProgress) {
         EXPECT_GE(progressValues[i], progressValues[i - 1]);
     // Should have status messages for each phase
     ASSERT_FALSE(statusMessages.empty());
+}
+
+TEST_F(SceneSaveLoadTest, SceneImporter_DuplicateNodeNames_AreMadeUnique)
+{
+    auto* manager = Manager::getSingleton();
+
+    auto mesh1 = createInMemoryTriangleMesh("dup_names_mesh_1");
+    auto* node1 = manager->addSceneNode("NodeOne");
+    ASSERT_NE(manager->createEntity(node1, mesh1), nullptr);
+
+    auto mesh2 = createInMemoryTriangleMesh("dup_names_mesh_2");
+    auto* node2 = manager->addSceneNode("NodeTwo");
+    ASSERT_NE(manager->createEntity(node2, mesh2), nullptr);
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString sceneFile = tmpDir.path() + "/duplicate_names.scene.gltf";
+    ASSERT_EQ(MeshImporterExporter::sceneExporter(sceneFile), 0);
+    ASSERT_TRUE(QFileInfo::exists(sceneFile));
+
+    QFile gltfFile(sceneFile);
+    ASSERT_TRUE(gltfFile.open(QIODevice::ReadOnly));
+    QJsonDocument doc = QJsonDocument::fromJson(gltfFile.readAll());
+    gltfFile.close();
+    ASSERT_TRUE(doc.isObject());
+
+    QJsonObject root = doc.object();
+    QJsonArray nodes = root.value("nodes").toArray();
+    ASSERT_GE(nodes.size(), 2);
+
+    for (int i = 0; i < 2; ++i) {
+        QJsonObject nodeObj = nodes[i].toObject();
+        nodeObj["name"] = "DuplicatedNode";
+        nodes[i] = nodeObj;
+    }
+    root["nodes"] = nodes;
+    doc.setObject(root);
+
+    ASSERT_TRUE(gltfFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    gltfFile.write(doc.toJson(QJsonDocument::Indented));
+    gltfFile.close();
+
+    ASSERT_TRUE(MeshImporterExporter::sceneImporter(sceneFile));
+    const auto& importedNodes = manager->getSceneNodes();
+    ASSERT_EQ(importedNodes.size(), 2);
+
+    std::set<std::string> uniqueNames;
+    bool hasSuffixedVariant = false;
+    for (auto* sn : importedNodes) {
+        const std::string name = sn->getName();
+        if (name.rfind("DuplicatedNode_", 0) == 0)
+            hasSuffixedVariant = true;
+        uniqueNames.insert(name);
+    }
+
+    EXPECT_EQ(uniqueNames.size(), importedNodes.size());
+    EXPECT_EQ(uniqueNames.count("DuplicatedNode"), 1u);
+    EXPECT_TRUE(hasSuffixedVariant);
 }
 
 TEST_F(SceneSaveLoadTest, RoundTrip_SkeletonEntity_PreservesAnimations) {
@@ -1137,6 +1252,12 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GltfShortAlias)
     // "gltf" is the short alias used by the LOD exporter; formatFileURI should append .gltf
     QString result = MeshImporterExporter::formatFileURI("/tmp/model", "gltf");
     EXPECT_EQ(result, "/tmp/model.gltf");
+}
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GlbShortAlias)
+{
+    QString result = MeshImporterExporter::formatFileURI("/tmp/model", "glb");
+    EXPECT_EQ(result, "/tmp/model.glb");
 }
 
 TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GltfFormat_CorrectExtension)
