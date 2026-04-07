@@ -427,11 +427,18 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
 
     ++m_toolLoopDepth;
 
-    if (m_toolLoopDepth >= kMaxToolLoops) {
-        // Hard limit: force done.
+    // If the model declared remaining=[] (no more steps), force done now.
+    // This prevents the 3B model from replaying the system-prompt example
+    // (e.g. always re-creating a wooden box after every single tool call).
+    QJsonArray remaining = resp["remaining"].toArray();
+    bool noMoreSteps = remaining.isEmpty() && !anyToolError;
+
+    if (noMoreSteps || m_toolLoopDepth >= kMaxToolLoops) {
+        // Task complete (or hard limit).
         appendMessage("assistant", userResponse.isEmpty() ? "Done." : userResponse);
         m_isGenerating = false;
         m_toolLoopDepth = 0;
+        m_jsonRetryCount = 0;
         m_lastToolSignatures.clear();
         emit isGeneratingChanged();
     } else if (anyToolError && m_toolLoopDepth >= 2) {
@@ -441,6 +448,7 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
             "Please check that the material/mesh/texture name is correct and try again.");
         m_isGenerating = false;
         m_toolLoopDepth = 0;
+        m_jsonRetryCount = 0;
         m_lastToolSignatures.clear();
         emit isGeneratingChanged();
     } else {
@@ -544,14 +552,14 @@ QString AIChatManager::buildSystemPrompt() const
         "   Never call the same command twice for the same object.\n"
         "3. transform_mesh requires \"name\" = exact node name (use get_scene_info if unsure).\n"
         "   Never call create_primitive to recover from a transform error.\n"
-        "   AXES: X=right(+)/left(-), Y=up(+)/down(-), Z=back(+)/front(-).\n"
+        "   AXES: X=right/left, Y=UP/DOWN (vertical), Z=forward/back (depth).\n"
+        "   'on top of' or 'above' = increase Y. 'below' = decrease Y. NEVER use Z for up/down.\n"
         "   transform_mesh sets ABSOLUTE position. For relative moves: read position from\n"
         "   get_scene_info first, compute the new coords, then call transform_mesh.\n"
         "4. Use simple names for create_primitive: 'box', 'sphere', 'cylinder', 'cone', 'plane'.\n"
-        "5. Wooden box = 3 commands:\n"
-        "   {\"command\":\"create_primitive\",\"arguments\":{\"type\":\"cube\",\"name\":\"box\"},\"remaining\":[\"create_material\",\"apply_material\"]}\n"
-        "   {\"command\":\"create_material\",\"arguments\":{\"name\":\"Wood\",\"diffuse\":[0.6,0.4,0.2]},\"remaining\":[\"apply_material\"]}\n"
-        "   {\"command\":\"apply_material\",\"arguments\":{\"mesh\":\"box\",\"material\":\"Wood\"},\"remaining\":[]}\n"
+        "   ONLY create what the user asked for. ONE primitive per request. Never create extras.\n"
+        "5. When remaining is empty [], your next response MUST have command=null with a response.\n"
+        "   After apply_material succeeds, the task is DONE. Do NOT create more primitives.\n"
         "6. Never use a material not in 'Available materials'. Call create_material first.\n"
         "7. Never invent tool names or parameter names. Only use tools listed below.\n\n"
         "Available tools:\n%1\n"
