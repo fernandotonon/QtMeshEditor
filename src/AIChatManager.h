@@ -70,8 +70,10 @@ private:
     MCPServer* m_mcpServer = nullptr;
 
     // Agentic loop state
-    int m_toolLoopDepth = 0;
-    static const int kMaxToolLoops = 10; // enough for complex multi-step tasks
+    int m_toolLoopDepth  = 0;
+    int m_jsonRetryCount = 0;
+    static const int kMaxToolLoops  = 10;
+    static const int kMaxJsonRetries = 2;  // retry if model outputs malformed JSON
     QStringList m_lastToolSignatures; // compact JSON of tool calls from previous round
 };
 

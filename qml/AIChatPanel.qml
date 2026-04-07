@@ -272,15 +272,19 @@ Rectangle {
             else if (role === "user"){ roleColor = "#88aacc"; roleLabel = "you" }
             else                    { roleColor = "#aaaaaa"; roleLabel = "assistant" }
 
-            // Assistant messages that are raw JSON tool calls — show as "[calling X]"
+            // Assistant messages may be structured JSON — render appropriately.
             var displayText = msg.text
             if (role === "assistant" && !isTool) {
                 var trimmed = msg.text.trim()
                 if (trimmed.startsWith("{")) {
                     try {
                         var obj = JSON.parse(trimmed)
-                        if (obj && obj.name)
-                            displayText = "[calling " + obj.name + "]"
+                        if (obj && obj.command)
+                            displayText = "[calling " + obj.command + "]"
+                        else if (obj && obj.response)
+                            displayText = obj.response          // final done message
+                        else if (obj && obj.name)
+                            displayText = "[calling " + obj.name + "]"  // legacy fallback
                     } catch(e) {}
                 }
             }
