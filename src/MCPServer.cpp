@@ -477,6 +477,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolSearchFiles(args);
     } else if (name == "read_file") {
         toolResult = toolReadFile(args);
+    } else if (name == "delete_entity") {
+        toolResult = toolDeleteEntity(args);
     } else if (name == "camera_control") {
         toolResult = toolCameraControl(args);
     } else if (name == "get_camera_info") {
@@ -2385,6 +2387,28 @@ QJsonObject MCPServer::toolReadFile(const QJsonObject &args)
     return makeSuccessResult(header + lines.join("\n"));
 }
 
+QJsonObject MCPServer::toolDeleteEntity(const QJsonObject &args)
+{
+    QString name = args["name"].toString();
+    if (name.isEmpty())
+        return makeErrorResult("Error: 'name' is required — specify the entity/node name to delete.");
+
+    Ogre::SceneNode* node = findSceneNodeByName(name);
+    if (!node)
+        return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
+
+    // Deselect first (same as UI delete flow)
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (sel) {
+        sel->removeOne(node);
+    }
+
+    // Destroy the node properly (same as TransformOperator::removeSelected)
+    Manager::getSingleton()->destroySceneNode(node);
+
+    return makeSuccessResult(QString("Deleted '%1' from the scene.").arg(name));
+}
+
 QJsonObject MCPServer::toolGetCameraInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
@@ -2992,6 +3016,18 @@ QJsonArray MCPServer::buildToolsList()
             "Shows the base mesh (LOD 0) and all reduced LOD levels. "
             "Select a mesh first with load_mesh.",
             QJsonObject()
+        );
+    }
+
+    // delete_entity
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity/node to delete from the scene"}};
+        appendTool(
+            "delete_entity",
+            "Permanently delete an entity/node from the scene. Use get_scene_info to find node names. This cannot be undone.",
+            props,
+            QJsonArray{"name"}
         );
     }
 

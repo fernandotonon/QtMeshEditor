@@ -161,6 +161,7 @@ private:
     QJsonObject toolReadFile(const QJsonObject &args);
     QJsonObject toolCameraControl(const QJsonObject &args);
     QJsonObject toolGetCameraInfo(const QJsonObject &args);
+    QJsonObject toolDeleteEntity(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

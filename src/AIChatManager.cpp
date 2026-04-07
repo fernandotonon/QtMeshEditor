@@ -5,18 +5,8 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QRegularExpression>
-#include <cstdio>
-#include <QDateTime>
 #include <QSettings>
 #include <QFileInfo>
-
-// ---- chat debug helpers ----
-static void chatLog(const char* tag, const QString& text)
-{
-    qint64 ms = QDateTime::currentMSecsSinceEpoch() % 100000; // last 5 digits
-    fprintf(stderr, "\n[CHAT/%s @%lld] %s\n", tag, ms, text.toUtf8().constData());
-    fflush(stderr);
-}
 
 AIChatManager* AIChatManager::s_instance = nullptr;
 
@@ -74,10 +64,7 @@ void AIChatManager::sendMessage(const QString& text)
     m_toolLoopDepth = 0;
     m_lastToolSignatures.clear();
     appendMessage("user", text.trimmed());
-    chatLog("USER", text.trimmed());
-    QString convPrompt = buildConversationPrompt();
-    chatLog("CONV_PROMPT", convPrompt);
-    startGeneration(buildSystemPrompt(), convPrompt);
+    startGeneration(buildSystemPrompt(), buildConversationPrompt());
 }
 
 void AIChatManager::clearHistory()
@@ -153,7 +140,6 @@ void AIChatManager::onGenerationCompleted(const QString& fullText)
     m_streamingText.clear();
     emit streamingTextChanged();
 
-    chatLog("MODEL_RAW", fullText);
     executeToolCallsAndContinue(cleanGeneratedText(fullText));
 }
 
@@ -204,7 +190,6 @@ void AIChatManager::startGeneration(const QString& sysPrompt, const QString& use
     }
     m_isGenerating = true;
     emit isGeneratingChanged();
-    chatLog("START_GEN", QString("sys=%1 user=%2 chars").arg(sysPrompt.size()).arg(userPrompt.size()));
     // Structured JSON envelope is ~100–150 tokens; allow 500 for generous headroom.
     // Multi-call stuffing is no longer a risk since we parse a single top-level object.
     LLMManager::instance()->generateText(sysPrompt, userPrompt, 500);
@@ -327,10 +312,6 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
     }
 
     if (!isStructured) {
-        chatLog("MALFORMED_JSON",
-                QString("retry %1/%2 — raw: %3")
-                    .arg(m_jsonRetryCount + 1).arg(kMaxJsonRetries)
-                    .arg(assistantText.left(120)));
         ++m_jsonRetryCount;
         if (m_jsonRetryCount >= kMaxJsonRetries) {
             appendMessage("assistant",
@@ -353,13 +334,6 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
     QString userResponse = resp["response"].toString();
     bool hasCommand = !resp["command"].isNull() && !command.isEmpty();
 
-    chatLog("STRUCTURED_RESP",
-            QString("command=%1 remaining=%2").arg(
-                command.isEmpty() ? "null" : command,
-                QString::fromUtf8(
-                    QJsonDocument(resp["remaining"].toArray())
-                        .toJson(QJsonDocument::Compact))));
-
     // ---- No command → task is done ----
     if (!hasCommand || m_toolLoopDepth >= kMaxToolLoops) {
         QString doneText = userResponse.isEmpty() ? "Done." : userResponse;
@@ -379,7 +353,6 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
     QStringList currentSigs = {sig};
 
     if (!m_lastToolSignatures.isEmpty() && m_lastToolSignatures == currentSigs) {
-        chatLog("LOOP_DETECTED", sig);
         appendMessage("assistant", "Done.");
         m_isGenerating = false;
         m_toolLoopDepth = 0;
@@ -399,9 +372,6 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
     bool anyToolError = false;
     if (m_mcpServer) {
         SentryReporter::addBreadcrumb("ai.tool_call", command);
-        chatLog("TOOL_CALL", QString("%1 args=%2").arg(command,
-            QString::fromUtf8(QJsonDocument(toolArgs).toJson(QJsonDocument::Compact))));
-
         QJsonObject result = m_mcpServer->callTool(command, toolArgs);
 
         QString resultText;
@@ -410,8 +380,6 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
             resultText = content.first().toObject()["text"].toString();
         else
             resultText = QJsonDocument(result).toJson(QJsonDocument::Compact);
-
-        chatLog("TOOL_RESULT", resultText);
 
         if (result["isError"].toBool() || resultText.contains("Error:"))
             anyToolError = true;
@@ -463,9 +431,9 @@ QString AIChatManager::buildSystemPrompt() const
     // The full set is still available via MCP/HTTP for external clients.
     static const QStringList chatTools = {
         "create_primitive", "create_material", "modify_material", "apply_material",
-        "transform_mesh", "get_scene_info", "list_materials", "load_mesh",
-        "export_mesh", "list_textures", "set_texture", "take_screenshot",
-        "list_files", "search_files", "read_file",
+        "transform_mesh", "delete_entity", "get_scene_info", "list_materials",
+        "load_mesh", "export_mesh", "list_textures", "set_texture",
+        "take_screenshot", "list_files", "search_files", "read_file",
         "camera_control", "get_camera_info"
     };
 
