@@ -77,7 +77,7 @@ public:
     ScopedDeathTestEnvironment()
         : m_hadQtQpaPlatform(qEnvironmentVariableIsSet("QT_QPA_PLATFORM")),
           m_oldQtQpaPlatform(qgetenv("QT_QPA_PLATFORM")),
-          m_oldDeathTestStyle(::testing::GTEST_FLAG_GET(death_test_style))
+          m_oldDeathTestStyle(GTEST_FLAG_GET(death_test_style))
     {
     }
 
