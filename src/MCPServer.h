@@ -156,6 +156,8 @@ private:
     QJsonObject toolGenerateAutoLods(const QJsonObject &args);
     QJsonObject toolRemoveLods(const QJsonObject &args);
     QJsonObject toolGetLodInfo(const QJsonObject &args);
+    QJsonObject toolListFiles(const QJsonObject &args);
+    QJsonObject toolReadFile(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

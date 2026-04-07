@@ -470,6 +470,10 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolRemoveLods(args);
     } else if (name == "get_lod_info") {
         toolResult = toolGetLodInfo(args);
+    } else if (name == "list_files") {
+        toolResult = toolListFiles(args);
+    } else if (name == "read_file") {
+        toolResult = toolReadFile(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -2219,6 +2223,99 @@ QJsonObject MCPServer::toolGetLodInfo(const QJsonObject &args)
 
 // Helper methods
 
+QJsonObject MCPServer::toolListFiles(const QJsonObject &args)
+{
+    QString path = args["path"].toString();
+    if (path.isEmpty())
+        path = QDir::homePath();
+
+    QDir dir(path);
+    if (!dir.exists())
+        return makeErrorResult(QString("Error: Directory '%1' does not exist").arg(path));
+
+    QString pattern = args["pattern"].toString();
+    QStringList nameFilters;
+    if (!pattern.isEmpty())
+        nameFilters << pattern;
+
+    QFileInfoList entries = dir.entryInfoList(
+        nameFilters,
+        QDir::AllEntries | QDir::NoDotAndDotDot,
+        QDir::DirsFirst | QDir::Name);
+
+    // Cap at 200 entries to keep response compact
+    const int maxEntries = 200;
+    QStringList lines;
+    lines << QString("Directory: %1").arg(dir.absolutePath());
+    lines << QString("Entries: %1%2").arg(
+        QString::number(qMin(entries.size(), maxEntries)),
+        entries.size() > maxEntries ? QString(" (showing first %1 of %2)").arg(maxEntries).arg(entries.size()) : "");
+    lines << "";
+
+    for (int i = 0; i < qMin(entries.size(), maxEntries); ++i) {
+        const QFileInfo& fi = entries[i];
+        if (fi.isDir()) {
+            lines << QString("[dir]  %1/").arg(fi.fileName());
+        } else {
+            // Human-readable size
+            qint64 sz = fi.size();
+            QString sizeStr;
+            if (sz < 1024)            sizeStr = QString("%1 B").arg(sz);
+            else if (sz < 1024*1024)  sizeStr = QString("%1 KB").arg(sz / 1024);
+            else                      sizeStr = QString("%1 MB").arg(sz / (1024*1024));
+            lines << QString("[file] %1  (%2)").arg(fi.fileName(), sizeStr);
+        }
+    }
+
+    return makeSuccessResult(lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolReadFile(const QJsonObject &args)
+{
+    QString path = args["path"].toString();
+    if (path.isEmpty())
+        return makeErrorResult("Error: 'path' is required");
+
+    QFileInfo fi(path);
+    if (!fi.exists())
+        return makeErrorResult(QString("Error: File '%1' does not exist").arg(path));
+    if (!fi.isFile())
+        return makeErrorResult(QString("Error: '%1' is not a file").arg(path));
+
+    // Reject binary files by extension
+    static const QStringList binaryExts = {
+        "png", "jpg", "jpeg", "bmp", "tga", "gif", "ico", "tif", "tiff",
+        "mesh", "skeleton", "exe", "dll", "dylib", "so", "o", "a",
+        "zip", "gz", "tar", "rar", "7z",
+        "mp3", "wav", "ogg", "mp4", "avi", "mov",
+        "pdf", "doc", "docx", "xls", "ppt"
+    };
+    if (binaryExts.contains(fi.suffix().toLower()))
+        return makeErrorResult(QString("Error: Cannot read binary file '%1'").arg(fi.fileName()));
+
+    // Size limit: 1 MB
+    if (fi.size() > 1024 * 1024)
+        return makeErrorResult(QString("Error: File too large (%1 MB). Max 1 MB.").arg(fi.size() / (1024*1024)));
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return makeErrorResult(QString("Error: Cannot open '%1': %2").arg(path, file.errorString()));
+
+    int maxLines = qBound(1, args["max_lines"].toInt(100), 500);
+    QStringList lines;
+    QTextStream stream(&file);
+    while (!stream.atEnd() && lines.size() < maxLines)
+        lines << stream.readLine();
+
+    bool truncated = !stream.atEnd();
+    QString header = QString("File: %1 (%2 lines%3)\n---\n").arg(
+        fi.fileName(),
+        QString::number(lines.size()),
+        truncated ? ", truncated" : "");
+
+    return makeSuccessResult(header + lines.join("\n"));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -2750,6 +2847,33 @@ QJsonArray MCPServer::buildToolsList()
             "Shows the base mesh (LOD 0) and all reduced LOD levels. "
             "Select a mesh first with load_mesh.",
             QJsonObject()
+        );
+    }
+
+    // list_files
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Directory path to list (default: user home directory)"}};
+        props["pattern"] = QJsonObject{{"type", "string"}, {"description", "Glob filter, e.g. '*.fbx' or '*.obj' (default: all files)"}};
+        appendTool(
+            "list_files",
+            "List files and directories at a given path. Use to find mesh files, textures, or other assets on disk. "
+            "Returns file names, sizes, and types (file/dir).",
+            props
+        );
+    }
+
+    // read_file
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the file to read"}};
+        props["max_lines"] = QJsonObject{{"type", "integer"}, {"description", "Maximum lines to read (default: 100, max: 500)"}};
+        appendTool(
+            "read_file",
+            "Read the contents of a text file. Useful for viewing material scripts, config files, or scene descriptions. "
+            "Binary files (images, meshes) will be rejected. Max 500 lines.",
+            props,
+            QJsonArray{"path"}
         );
     }
 
