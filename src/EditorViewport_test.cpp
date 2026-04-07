@@ -19,8 +19,9 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
+        app->processEvents();
         Manager::kill();
-        QThread::msleep(50);
+        QThread::msleep(100);
 
         constexpr int kMaxMainWindowInitAttempts = 3;
         for (int attempt = 1; attempt <= kMaxMainWindowInitAttempts && !mainWindow; ++attempt) {
@@ -30,14 +31,14 @@ protected:
                 GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
                                     << " failed: " << e.what();
                 mainWindow = nullptr;
-                Manager::kill();
-                QThread::msleep(150);
+                app->processEvents();
+                QThread::msleep(250);
             } catch (...) {
                 GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
                                     << " failed with unknown exception";
                 mainWindow = nullptr;
-                Manager::kill();
-                QThread::msleep(150);
+                app->processEvents();
+                QThread::msleep(250);
             }
         }
         ASSERT_NE(mainWindow, nullptr) << "Failed to initialize MainWindow for EditorViewport tests";

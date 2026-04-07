@@ -7,6 +7,7 @@
 #include <QResizeEvent>
 #include <QThread>
 #include <cmath>
+#include <exception>
 #include "ViewCubeController.h"
 #include "Manager.h"
 #include "EditorViewport.h"
@@ -356,41 +357,52 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
+        app->processEvents();
         Manager::kill();
-        QThread::msleep(50);
+        QThread::msleep(100);
 
-        try {
-            mainWindow = new MainWindow();
-        } catch (...) {
-            GTEST_SKIP() << "Skipping: MainWindow creation failed";
+        constexpr int kMaxMainWindowInitAttempts = 3;
+        for (int attempt = 1; attempt <= kMaxMainWindowInitAttempts && !mainWindow; ++attempt) {
+            try {
+                mainWindow = new MainWindow();
+            } catch (const std::exception& e) {
+                GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
+                                    << " failed: " << e.what();
+                mainWindow = nullptr;
+                app->processEvents();
+                QThread::msleep(250);
+            } catch (...) {
+                GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
+                                    << " failed with unknown exception";
+                mainWindow = nullptr;
+                app->processEvents();
+                QThread::msleep(250);
+            }
         }
-        ASSERT_NE(mainWindow, nullptr);
+        ASSERT_NE(mainWindow, nullptr) << "Failed to initialize MainWindow for ViewCubeControllerOgreTest";
 
         try {
             viewport = new EditorViewport(mainWindow, 41);
+        } catch (const std::exception& e) {
+            FAIL() << "EditorViewport creation failed: " << e.what();
         } catch (...) {
-            GTEST_SKIP() << "Skipping: EditorViewport creation failed";
+            FAIL() << "EditorViewport creation failed with unknown exception";
         }
-        if (!viewport) {
-            GTEST_SKIP() << "Skipping: EditorViewport is null";
-        }
+        ASSERT_NE(viewport, nullptr);
         widget = viewport->getOgreWidget();
-        if (!widget) {
-            GTEST_SKIP() << "Skipping: OgreWidget is null";
-        }
+        ASSERT_NE(widget, nullptr);
         camera = widget->getSpaceCamera();
-        if (!camera || !camera->getCamera()) {
-            GTEST_SKIP() << "Skipping: SpaceCamera not fully initialized";
-        }
+        ASSERT_NE(camera, nullptr);
+        ASSERT_NE(camera->getCamera(), nullptr);
 
         try {
             controller = new ViewCubeController(mainWindow);
-            if (!controller) {
-                GTEST_SKIP() << "Skipping: ViewCubeController creation failed";
-            }
+            ASSERT_NE(controller, nullptr);
             controller->setActiveWidget(widget);
+        } catch (const std::exception& e) {
+            FAIL() << "ViewCubeController setup failed: " << e.what();
         } catch (...) {
-            GTEST_SKIP() << "Skipping: ViewCubeController setup failed";
+            FAIL() << "ViewCubeController setup failed with unknown exception";
         }
     }
 
@@ -412,7 +424,7 @@ protected:
         }
 
         Manager::kill();
-        QThread::msleep(50);
+        QThread::msleep(100);
     }
 };
 
