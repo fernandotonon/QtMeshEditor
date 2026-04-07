@@ -96,23 +96,14 @@ void LLMManager::populateRecommendedModels()
     m_recommendedModels.clear();
 
     // Recommended GGUF models from Hugging Face - ordered by size (smallest first)
+    // Curated to avoid near-duplicates (no Coder variants or older Gemma 2)
 
-    // Gemma 3 models (Google's latest)
     m_recommendedModels.append({
         "Gemma 3 1B Q4_K_M",
         "gemma-3-1b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF/resolve/main/google_gemma-3-1b-it-Q4_K_M.gguf",
         "Google's Gemma 3 1B. Ultra-fast, great for quick tasks.",
         900000000, // ~0.9GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Gemma 2 2B Q4_K_M",
-        "gemma-2-2b-it-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
-        "Google's Gemma 2 2B. Fast and efficient.",
-        1800000000, // ~1.8GB
         false
     });
 
@@ -129,26 +120,8 @@ void LLMManager::populateRecommendedModels()
         "Qwen 2.5 3B Q4_K_M",
         "qwen2.5-3b-instruct-q4_k_m.gguf",
         "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-        "Alibaba's Qwen 2.5 3B. Great for code generation.",
+        "Alibaba's Qwen 2.5 3B. Great for structured output.",
         2100000000, // ~2.1GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Qwen 2.5 Coder 3B Q4_K_M",
-        "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 Coder 3B. Specialized for code tasks.",
-        2100000000, // ~2.1GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Phi-3.5 Mini Q4_K_M",
-        "Phi-3.5-mini-instruct-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf",
-        "Microsoft's Phi-3.5 Mini. Compact and capable.",
-        2400000000, // ~2.4GB
         false
     });
 
@@ -165,16 +138,7 @@ void LLMManager::populateRecommendedModels()
         "Qwen 2.5 7B Q4_K_M",
         "qwen2.5-7b-instruct-q4_k_m.gguf",
         "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 7B. Higher quality, requires more VRAM.",
-        4700000000, // ~4.7GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Qwen 2.5 Coder 7B Q4_K_M",
-        "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 Coder 7B. Best for code generation.",
+        "Qwen 2.5 7B. Strong instruction following and tool use.",
         4700000000, // ~4.7GB
         false
     });
@@ -183,8 +147,35 @@ void LLMManager::populateRecommendedModels()
         "Gemma 3 12B Q4_K_M",
         "gemma-3-12b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF/resolve/main/google_gemma-3-12b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 12B. High quality, needs 8GB+ VRAM.",
+        "Google's Gemma 3 12B. High quality, needs 8GB+ RAM.",
         8100000000, // ~8.1GB
+        false
+    });
+
+    m_recommendedModels.append({
+        "Qwen 2.5 14B Q4_K_M",
+        "qwen2.5-14b-instruct-q4_k_m.gguf",
+        "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf",
+        "Qwen 2.5 14B. Very capable, excellent reasoning.",
+        9400000000, // ~9.4GB
+        false
+    });
+
+    m_recommendedModels.append({
+        "Gemma 3 27B Q4_K_M",
+        "gemma-3-27b-it-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF/resolve/main/google_gemma-3-27b-it-Q4_K_M.gguf",
+        "Google's Gemma 3 27B. Excellent quality, needs 16GB+ RAM.",
+        17000000000, // ~17GB
+        false
+    });
+
+    m_recommendedModels.append({
+        "Qwen 2.5 32B Q4_K_M",
+        "qwen2.5-32b-instruct-q4_k_m.gguf",
+        "https://huggingface.co/Qwen/Qwen2.5-32B-Instruct-GGUF/resolve/main/qwen2.5-32b-instruct-q4_k_m.gguf",
+        "Qwen 2.5 32B. Near top-tier quality, needs 20GB+ RAM.",
+        20000000000, // ~20GB
         false
     });
 }

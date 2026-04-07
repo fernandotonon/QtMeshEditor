@@ -374,6 +374,18 @@ void MainWindow::initToolBar()
         addDockWidget(Qt::RightDockWidgetArea, m_chatDock);
         resizeDocks({m_chatDock}, {400}, Qt::Vertical);
         m_chatDock->hide();
+
+        // When focus lands on the dock container (not the QQuickWidget inside),
+        // forward it to the QQuickWidget. This fixes the macOS issue where
+        // clicking the chat input after switching back from another app requires
+        // two clicks — the first activates the window but focus stays on the dock.
+        connect(qApp, &QApplication::focusChanged, this, [chatWidget, this](QWidget*, QWidget* now) {
+            if (!now || !m_chatDock || !m_chatDock->isVisible()) return;
+            if (now == m_chatDock || (now->parentWidget() && now->parentWidget() == m_chatDock)) {
+                if (now != chatWidget)
+                    QTimer::singleShot(0, chatWidget, [chatWidget]() { chatWidget->setFocus(); });
+            }
+        });
     }
 
     // Animation Control dock is created below and auto-shown when animated entity is selected
