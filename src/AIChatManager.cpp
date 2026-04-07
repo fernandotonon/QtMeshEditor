@@ -459,12 +459,23 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
 
 QString AIChatManager::buildSystemPrompt() const
 {
+    // Only expose the core tool subset to the AI chat — 39 tools overwhelm a 3B model.
+    // The full set is still available via MCP/HTTP for external clients.
+    static const QStringList chatTools = {
+        "create_primitive", "create_material", "modify_material", "apply_material",
+        "transform_mesh", "get_scene_info", "list_materials", "load_mesh",
+        "export_mesh", "list_textures", "set_texture", "take_screenshot",
+        "list_files", "search_files", "read_file"
+    };
+
     QString tools;
     if (m_mcpServer) {
         QJsonArray toolList = m_mcpServer->buildToolsList();
         for (const QJsonValue& tv : toolList) {
             QJsonObject t = tv.toObject();
             QString name  = t["name"].toString();
+            if (!chatTools.contains(name))
+                continue;  // skip tools not in the AI chat subset
             QString desc  = t["description"].toString();
             QJsonObject schema = t["inputSchema"].toObject();
             QJsonObject props  = schema["properties"].toObject();
@@ -509,22 +520,26 @@ QString AIChatManager::buildSystemPrompt() const
             if (!isSystem) userMats << m;
         }
         if (userMats.size() > 20) userMats = userMats.mid(0, 20); // cap for prompt size
-        // Recent files from QSettings
+        // Recent files from QSettings — include full paths so the model can pass them to load_mesh
         QSettings settings;
         QStringList recentFiles = settings.value("RecentFiles/files").toStringList();
-        QStringList recentNames;
+        QStringList recentEntries;
         for (const QString& path : recentFiles) {
             QFileInfo fi(path);
             if (fi.exists())
-                recentNames << fi.fileName();
+                recentEntries << path;  // full absolute path
         }
-        if (recentNames.size() > 10) recentNames = recentNames.mid(0, 10);
+        if (recentEntries.size() > 10) recentEntries = recentEntries.mid(0, 10);
 
-        if (!sceneInfo.isEmpty() || !userMats.isEmpty() || !recentNames.isEmpty()) {
+        if (!sceneInfo.isEmpty() || !userMats.isEmpty() || !recentEntries.isEmpty()) {
             sceneSection = "Current scene state:\n";
             if (!sceneInfo.isEmpty())    sceneSection += sceneInfo + "\n";
             if (!userMats.isEmpty())     sceneSection += "Available materials: " + userMats.join(", ") + "\n";
-            if (!recentNames.isEmpty())  sceneSection += "Recent files: " + recentNames.join(", ") + "\n";
+            if (!recentEntries.isEmpty()) {
+                sceneSection += "Recent files (use with load_mesh):\n";
+                for (const QString& path : recentEntries)
+                    sceneSection += "  " + path + "\n";
+            }
             sceneSection += "\n";
         }
     }
@@ -552,10 +567,15 @@ QString AIChatManager::buildSystemPrompt() const
         "   Never call the same command twice for the same object.\n"
         "3. transform_mesh requires \"name\" = exact node name (use get_scene_info if unsure).\n"
         "   Never call create_primitive to recover from a transform error.\n"
-        "   AXES: X=right(+)/left(-), Y=UP(+)/DOWN(-) vertical, Z=front(+)/back(-) depth.\n"
-        "   'on top of'/'above'/'floor' = Y axis ONLY. 'in front' = +Z. NEVER use Z for up/down.\n"
-        "   transform_mesh sets ABSOLUTE position. For relative moves: read position from\n"
-        "   get_scene_info first, compute the new coords, then call transform_mesh.\n"
+        "   POSITION EXAMPLES from origin [0,0,0]:\n"
+        "     'move left 2'   → position: [-2, 0, 0]\n"
+        "     'move right 2'  → position: [2, 0, 0]\n"
+        "     'move up 3'     → position: [0, 3, 0]    ← Y is up/down\n"
+        "     'on the floor'  → position: [0, 0, 0]    ← Y=0 is ground\n"
+        "     'move forward 1'→ position: [0, 0, 1]    ← Z+ is forward/front\n"
+        "     'move back 1'   → position: [0, 0, -1]   ← Z- is back\n"
+        "   UP/DOWN/FLOOR = always Y axis. NEVER use Z for vertical movement.\n"
+        "   For relative moves: call get_scene_info first to read current position.\n"
         "4. Use simple names for create_primitive: 'box', 'sphere', 'cylinder', 'cone', 'plane'.\n"
         "   ONLY create what the user asked for. ONE primitive per request. Never create extras.\n"
         "5. When remaining is empty [], your next response MUST have command=null with a response.\n"

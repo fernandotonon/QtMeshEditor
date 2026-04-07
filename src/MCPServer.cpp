@@ -472,6 +472,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolGetLodInfo(args);
     } else if (name == "list_files") {
         toolResult = toolListFiles(args);
+    } else if (name == "search_files") {
+        toolResult = toolSearchFiles(args);
     } else if (name == "read_file") {
         toolResult = toolReadFile(args);
     } else {
@@ -2270,6 +2272,68 @@ QJsonObject MCPServer::toolListFiles(const QJsonObject &args)
     return makeSuccessResult(lines.join("\n"));
 }
 
+QJsonObject MCPServer::toolSearchFiles(const QJsonObject &args)
+{
+    QString startPath = args["path"].toString();
+    if (startPath.isEmpty())
+        startPath = QDir::homePath();
+
+    QString query = args["query"].toString();
+    if (query.isEmpty())
+        return makeErrorResult("Error: 'query' is required (e.g. '*.fbx', 'wood*', 'model.obj')");
+
+    QDir startDir(startPath);
+    if (!startDir.exists())
+        return makeErrorResult(QString("Error: Directory '%1' does not exist").arg(startPath));
+
+    // Recursive search with depth limit
+    int maxDepth = qBound(1, args["max_depth"].toInt(5), 10);
+    int maxResults = 100;
+    QStringList results;
+
+    std::function<void(const QDir&, int)> searchDir = [&](const QDir& dir, int depth) {
+        if (depth > maxDepth || results.size() >= maxResults)
+            return;
+
+        // Match files against the query pattern
+        QFileInfoList files = dir.entryInfoList(
+            QStringList{query}, QDir::Files, QDir::Name);
+        for (const QFileInfo& fi : files) {
+            if (results.size() >= maxResults) break;
+            qint64 sz = fi.size();
+            QString sizeStr;
+            if (sz < 1024)            sizeStr = QString("%1 B").arg(sz);
+            else if (sz < 1024*1024)  sizeStr = QString("%1 KB").arg(sz / 1024);
+            else                      sizeStr = QString("%1 MB").arg(sz / (1024*1024));
+            results << QString("%1  (%2)").arg(fi.absoluteFilePath(), sizeStr);
+        }
+
+        // Recurse into subdirectories
+        QFileInfoList dirs = dir.entryInfoList(
+            QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QFileInfo& di : dirs) {
+            if (results.size() >= maxResults) break;
+            searchDir(QDir(di.absoluteFilePath()), depth + 1);
+        }
+    };
+
+    searchDir(startDir, 1);
+
+    if (results.isEmpty())
+        return makeSuccessResult(QString("No files matching '%1' found in %2 (depth %3)")
+            .arg(query, startDir.absolutePath()).arg(maxDepth));
+
+    QStringList lines;
+    lines << QString("Found %1 file(s) matching '%2' in %3:")
+        .arg(results.size()).arg(query, startDir.absolutePath());
+    lines << "";
+    lines += results;
+    if (results.size() >= maxResults)
+        lines << QString("\n(results capped at %1)").arg(maxResults);
+
+    return makeSuccessResult(lines.join("\n"));
+}
+
 QJsonObject MCPServer::toolReadFile(const QJsonObject &args)
 {
     QString path = args["path"].toString();
@@ -2860,6 +2924,21 @@ QJsonArray MCPServer::buildToolsList()
             "List files and directories at a given path. Use to find mesh files, textures, or other assets on disk. "
             "Returns file names, sizes, and types (file/dir).",
             props
+        );
+    }
+
+    // search_files
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Starting directory for search (default: user home)"}};
+        props["query"] = QJsonObject{{"type", "string"}, {"description", "Glob pattern to match file names, e.g. '*.fbx', 'wood*', '*.obj'"}};
+        props["max_depth"] = QJsonObject{{"type", "integer"}, {"description", "Max directory depth to recurse (default: 5, max: 10)"}};
+        appendTool(
+            "search_files",
+            "Recursively search for files matching a glob pattern. Use to find mesh files, textures, or assets "
+            "anywhere within a directory tree. Returns absolute paths with file sizes.",
+            props,
+            QJsonArray{"query"}
         );
     }
 
