@@ -364,6 +364,9 @@ void MainWindow::initToolBar()
         chatWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
         chatWidget->setMinimumWidth(280);
         chatWidget->setMinimumHeight(350);
+        // StrongFocus: a single click inside the dock routes keyboard events into QML
+        // without requiring a prior click in the viewport.
+        chatWidget->setFocusPolicy(Qt::StrongFocus);
         chatWidget->setSource(QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
         m_chatDock = new QDockWidget(tr("AI Chat"), this);
         m_chatDock->setWidget(chatWidget);

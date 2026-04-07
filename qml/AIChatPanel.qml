@@ -8,6 +8,14 @@ Rectangle {
     id: root
     color: PropertiesPanelController.panelColor
 
+    // Forward focus to the input field whenever the panel gains active focus
+    // (e.g. when the user clicks anywhere in the dock after returning from
+    // another app window).
+    onActiveFocusChanged: {
+        if (activeFocus)
+            Qt.callLater(() => inputField.forceActiveFocus())
+    }
+
     // ---- Header bar ----
     Rectangle {
         id: header
@@ -89,10 +97,22 @@ Rectangle {
             selectedTextColor: PropertiesPanelController.textColor
             text: root.buildHtml()
 
-            // Return keyboard focus to the input field when nothing is selected,
-            // so the user doesn't have to click the input after scrolling/reading.
-            onSelectedTextChanged: {
-                if (selectedText.length === 0)
+            // Intercept Ctrl/Cmd+C to copy plain text instead of RichText HTML.
+            Keys.onPressed: (event) => {
+                if ((event.key === Qt.Key_C) &&
+                    (event.modifiers & Qt.ControlModifier)) {
+                    if (selectedText.length > 0) {
+                        Qt.application.clipboard.text = selectedText
+                        event.accepted = true
+                    }
+                }
+            }
+
+            // When the user finishes selecting (mouse released with no selection),
+            // return focus to the input field. Use onActiveFocusChanged instead of
+            // onSelectedTextChanged to avoid stealing focus mid-drag.
+            onActiveFocusChanged: {
+                if (!activeFocus && selectedText.length === 0)
                     Qt.callLater(() => inputField.forceActiveFocus())
             }
         }
@@ -153,6 +173,7 @@ Rectangle {
             font.pixelSize: 12
             wrapMode: Text.WrapAtWordBoundaryOrAnywhere
             enabled: AIChatManager.modelAvailable && !AIChatManager.isGenerating
+            focus: true
 
             Keys.onReturnPressed: (event) => {
                 if (event.modifiers & Qt.ShiftModifier) {
