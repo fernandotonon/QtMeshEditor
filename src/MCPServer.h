@@ -159,6 +159,8 @@ private:
     QJsonObject toolListFiles(const QJsonObject &args);
     QJsonObject toolSearchFiles(const QJsonObject &args);
     QJsonObject toolReadFile(const QJsonObject &args);
+    QJsonObject toolCameraControl(const QJsonObject &args);
+    QJsonObject toolGetCameraInfo(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

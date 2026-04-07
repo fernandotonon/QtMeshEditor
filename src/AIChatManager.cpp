@@ -465,7 +465,8 @@ QString AIChatManager::buildSystemPrompt() const
         "create_primitive", "create_material", "modify_material", "apply_material",
         "transform_mesh", "get_scene_info", "list_materials", "load_mesh",
         "export_mesh", "list_textures", "set_texture", "take_screenshot",
-        "list_files", "search_files", "read_file"
+        "list_files", "search_files", "read_file",
+        "camera_control", "get_camera_info"
     };
 
     QString tools;
@@ -572,16 +573,18 @@ QString AIChatManager::buildSystemPrompt() const
         "     'move right 2'  → position: [2, 0, 0]\n"
         "     'move up 3'     → position: [0, 3, 0]    ← Y is up/down\n"
         "     'on the floor'  → position: [0, 0, 0]    ← Y=0 is ground\n"
-        "     'move forward 1'→ position: [0, 0, 1]    ← Z+ is forward/front\n"
-        "     'move back 1'   → position: [0, 0, -1]   ← Z- is back\n"
+        "     'move forward 1'→ position: [0, 0, -1]   ← Z- is forward/front\n"
+        "     'move back 1'   → position: [0, 0, 1]    ← Z+ is back\n"
         "   UP/DOWN/FLOOR = always Y axis. NEVER use Z for vertical movement.\n"
         "   For relative moves: call get_scene_info first to read current position.\n"
-        "4. Use simple names for create_primitive: 'box', 'sphere', 'cylinder', 'cone', 'plane'.\n"
+        "4. Each user message is a SEPARATE task. ONLY do what that message asks.\n"
+        "   Do NOT repeat actions from previous messages (e.g. do not re-apply old materials).\n"
+        "5. Use simple names for create_primitive: 'box', 'sphere', 'cylinder', 'cone', 'plane'.\n"
         "   ONLY create what the user asked for. ONE primitive per request. Never create extras.\n"
-        "5. When remaining is empty [], your next response MUST have command=null with a response.\n"
-        "   After apply_material succeeds, the task is DONE. Do NOT create more primitives.\n"
-        "6. Never use a material not in 'Available materials'. Call create_material first.\n"
-        "7. Never invent tool names or parameter names. Only use tools listed below.\n\n"
+        "6. When remaining is empty [], your next response MUST have command=null with a response.\n"
+        "   After the last step succeeds, the task is DONE. Do NOT add extra steps.\n"
+        "7. Never use a material not in 'Available materials'. Call create_material first.\n"
+        "8. Never invent tool names or parameter names. Only use tools listed below.\n\n"
         "Available tools:\n%1\n"
         "%2"
     ).arg(tools, sceneSection);

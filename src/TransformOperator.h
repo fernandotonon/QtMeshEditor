@@ -79,6 +79,7 @@ public slots:
     void setTransformSpace(TransformSpace space);
     void toggleTransformSpace();
     void setActiveWidget(OgreWidget* ogreWidget);
+    OgreWidget* getActiveWidget() const { return m_pActiveWidget; }
     //void setSelectedNode(Ogre::SceneNode* newNode); //TODO it should not exist....
     void setSelectedPosition(const Ogre::Vector3& newPosition);
     void translateSelected(const Ogre::Vector3& newPosition);

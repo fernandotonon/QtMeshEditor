@@ -7,6 +7,7 @@
 #include "TransformOperator.h"
 #include "MeshImporterExporter.h"
 #include "OgreWidget.h"
+#include "SpaceCamera.h"
 #include "AnimationWidget.h"
 #include "NormalVisualizer.h"
 #include "MeshInfoOverlay.h"
@@ -476,6 +477,10 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolSearchFiles(args);
     } else if (name == "read_file") {
         toolResult = toolReadFile(args);
+    } else if (name == "camera_control") {
+        toolResult = toolCameraControl(args);
+    } else if (name == "get_camera_info") {
+        toolResult = toolGetCameraInfo(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -2380,6 +2385,82 @@ QJsonObject MCPServer::toolReadFile(const QJsonObject &args)
     return makeSuccessResult(header + lines.join("\n"));
 }
 
+QJsonObject MCPServer::toolGetCameraInfo(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    auto* top = TransformOperator::getSingleton();
+    OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
+    // Fallback to any viewport if no active widget yet
+    if (!ogreWidget && m_mainWindow)
+        ogreWidget = m_mainWindow->findChild<OgreWidget*>();
+    if (!ogreWidget || !ogreWidget->getSpaceCamera())
+        return makeErrorResult("Error: No active viewport");
+
+    SpaceCamera* cam = ogreWidget->getSpaceCamera();
+    Ogre::Camera* ogreCam = cam->getCamera();
+    if (!ogreCam)
+        return makeErrorResult("Error: No Ogre camera");
+
+    Ogre::Vector3 pos = ogreCam->getDerivedPosition();
+    Ogre::Vector3 dir = ogreCam->getDerivedDirection();
+    Ogre::Quaternion orient = ogreCam->getDerivedOrientation();
+
+    QStringList lines;
+    lines << QString("Camera position: [%1, %2, %3]").arg(pos.x, 0, 'f', 2).arg(pos.y, 0, 'f', 2).arg(pos.z, 0, 'f', 2);
+    lines << QString("Camera direction: [%1, %2, %3]").arg(dir.x, 0, 'f', 3).arg(dir.y, 0, 'f', 3).arg(dir.z, 0, 'f', 3);
+    lines << QString("Camera orientation: [w=%1, x=%2, y=%3, z=%4]")
+        .arg(orient.w, 0, 'f', 3).arg(orient.x, 0, 'f', 3).arg(orient.y, 0, 'f', 3).arg(orient.z, 0, 'f', 3);
+    lines << QString("Near clip: %1  Far clip: %2").arg(ogreCam->getNearClipDistance()).arg(ogreCam->getFarClipDistance());
+
+    return makeSuccessResult(lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolCameraControl(const QJsonObject &args)
+{
+    auto* top = TransformOperator::getSingleton();
+    OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
+    // Fallback to any viewport if no active widget yet
+    if (!ogreWidget && m_mainWindow)
+        ogreWidget = m_mainWindow->findChild<OgreWidget*>();
+    if (!ogreWidget || !ogreWidget->getSpaceCamera())
+        return makeErrorResult("Error: No active viewport");
+
+    SpaceCamera* cam = ogreWidget->getSpaceCamera();
+    QStringList actions;
+
+    // Frame selection — zoom to fit selected objects
+    if (args.contains("frame_selection") && args["frame_selection"].toBool()) {
+        cam->frameSelection();
+        actions << "Framed selection";
+    }
+
+    // Set camera position
+    if (args.contains("position")) {
+        Ogre::Vector3 pos = parseVector3(args["position"]);
+        cam->setCameraPosition(pos);
+        actions << QString("Position: [%1, %2, %3]").arg(pos.x).arg(pos.y).arg(pos.z);
+    }
+
+    // Set look-at target
+    if (args.contains("target")) {
+        Ogre::Vector3 target = parseVector3(args["target"]);
+        cam->setTargetPosition(target);
+        actions << QString("Target: [%1, %2, %3]").arg(target.x).arg(target.y).arg(target.z);
+    }
+
+    // Zoom by delta
+    if (args.contains("zoom")) {
+        Ogre::Real delta = args["zoom"].toDouble();
+        cam->zoomByDelta(delta);
+        actions << QString("Zoom: %1").arg(delta);
+    }
+
+    if (actions.isEmpty())
+        return makeErrorResult("Error: No camera action specified. Use position, target, zoom, or frame_selection.");
+
+    return makeSuccessResult("Camera updated:\n" + actions.join("\n"));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -2911,6 +2992,30 @@ QJsonArray MCPServer::buildToolsList()
             "Shows the base mesh (LOD 0) and all reduced LOD levels. "
             "Select a mesh first with load_mesh.",
             QJsonObject()
+        );
+    }
+
+    // get_camera_info
+    {
+        appendTool(
+            "get_camera_info",
+            "Get the current camera position, direction, and orientation in the 3D viewport.",
+            QJsonObject()
+        );
+    }
+
+    // camera_control
+    {
+        QJsonObject props;
+        props["position"] = QJsonObject{{"type", "array"}, {"description", "Set camera position [X, Y, Z]"}};
+        props["target"] = QJsonObject{{"type", "array"}, {"description", "Set camera look-at target [X, Y, Z]"}};
+        props["zoom"] = QJsonObject{{"type", "number"}, {"description", "Zoom by delta (positive = zoom in, negative = zoom out)"}};
+        props["frame_selection"] = QJsonObject{{"type", "boolean"}, {"description", "Zoom to fit the currently selected objects in view (set to true)"}};
+        appendTool(
+            "camera_control",
+            "Control the 3D viewport camera. Set position, look-at target, zoom, or frame the selection. "
+            "Multiple actions can be combined in one call.",
+            props
         );
     }
 
