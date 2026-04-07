@@ -192,6 +192,7 @@ void LLMWorker::unloadModelInternal()
     // This method assumes mutex is already held by caller
     // Does NOT emit signals - caller is responsible for that after releasing mutex
     cleanupContext();
+    m_prevTokens.clear(); // invalidate KV prefix cache
 
     if (m_model) {
         llama_model_free(m_model);
@@ -285,17 +286,33 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
         return;
     }
 
-    // Clear the KV cache
+    // KV-cache prefix reuse: if the new prompt shares a prefix with the previous
+    // call's tokens, only decode the NEW suffix — the shared prefix is already in cache.
+    size_t commonLen = 0;
+    for (size_t i = 0; i < std::min(tokens.size(), m_prevTokens.size()); ++i) {
+        if (tokens[i] == m_prevTokens[i]) ++commonLen;
+        else break;
+    }
+    // Never reuse a prefix that covers the full previous prompt — we need at least
+    // the new suffix tokens to give the model something new to respond to.
+    if (commonLen >= tokens.size()) commonLen = 0;
+
     llama_memory_t mem = llama_get_memory(m_ctx);
     if (mem) {
-        llama_memory_clear(mem, false);
+        if (commonLen == 0) {
+            llama_memory_clear(mem, false);                              // full reset
+        } else {
+            llama_memory_seq_rm(mem, 0, (llama_pos)commonLen, -1);      // trim suffix
+        }
     }
+    qDebug() << "LLMWorker: KV prefix reuse" << commonLen << "/" << tokens.size()
+             << "tokens cached";
 
-    // Process prompt in batches (n_batch = 512)
+    // Decode only the tokens not already in cache
     const int n_batch = 512;
     int n_tokens = static_cast<int>(tokens.size());
 
-    for (int i = 0; i < n_tokens; i += n_batch) {
+    for (int i = static_cast<int>(commonLen); i < n_tokens; i += n_batch) {
         if (m_stopRequested.load()) {
             m_isGenerating.store(false);
             emit generationStopped();
@@ -311,6 +328,9 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
             return;
         }
     }
+
+    // Save input tokens so the next call can find the common prefix
+    m_prevTokens = tokens;
 
     // Sampling parameters
     llama_sampler *sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());

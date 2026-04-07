@@ -3,7 +3,9 @@
 #include <QStandardPaths>
 #include <QDebug>
 #include <QFileInfo>
+#include <QFileDialog>
 #include <QTimer>
+#include <QUrl>
 #include <QRegularExpression>
 
 LLMManager* LLMManager::s_instance = nullptr;
@@ -379,6 +381,55 @@ void LLMManager::tryAutoLoadModel()
     // LCOV_EXCL_STOP
 }
 
+void LLMManager::loadModelFromPath(const QString &filePath)
+{
+    if (filePath.isEmpty() || !QFileInfo::exists(filePath)) {
+        emit modelLoadError(QString("File not found: %1").arg(filePath));
+        return;
+    }
+
+    // LCOV_EXCL_START — requires a real GGUF model file
+    QFileInfo info(filePath);
+    m_currentModelName = info.completeBaseName();
+    m_isLoading = true;
+    emit isLoadingChanged();
+    emit modelLoadStarted(m_currentModelName);
+
+    QMetaObject::invokeMethod(m_worker, [this, filePath]() {
+        m_worker->setSettings(m_settings);
+        m_worker->loadModel(filePath);
+    }, Qt::QueuedConnection);
+    // LCOV_EXCL_STOP
+}
+
+void LLMManager::setModelsDirectoryFromUrl(const QUrl &url)
+{
+    setModelsDirectory(url.toLocalFile());
+}
+
+void LLMManager::browseForModelsDirectory()
+{
+    QString dir = QFileDialog::getExistingDirectory(
+        nullptr,
+        "Select Models Directory",
+        m_modelsDirectory
+    );
+    if (!dir.isEmpty())
+        setModelsDirectory(dir);
+}
+
+void LLMManager::browseForModelFile()
+{
+    QString file = QFileDialog::getOpenFileName(
+        nullptr,
+        "Load AI Model",
+        m_modelsDirectory,
+        "GGUF models (*.gguf);;Binary models (*.bin);;All files (*)"
+    );
+    if (!file.isEmpty())
+        loadModelFromPath(file);
+}
+
 void LLMManager::unloadModel()
 {
     if (m_worker) {
@@ -402,7 +453,7 @@ void LLMManager::scanForModels()
     QFileInfoList files = modelsDir.entryInfoList(filters, QDir::Files);
 
     for (const QFileInfo &file : files) {
-        m_availableModels.append(file.baseName());
+        m_availableModels.append(file.completeBaseName());
     }
 
     // Update recommended models download status

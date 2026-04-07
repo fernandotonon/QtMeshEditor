@@ -5,6 +5,16 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QRegularExpression>
+#include <cstdio>
+#include <QDateTime>
+
+// ---- chat debug helpers ----
+static void chatLog(const char* tag, const QString& text)
+{
+    qint64 ms = QDateTime::currentMSecsSinceEpoch() % 100000; // last 5 digits
+    fprintf(stderr, "\n[CHAT/%s @%lld] %s\n", tag, ms, text.toUtf8().constData());
+    fflush(stderr);
+}
 
 AIChatManager* AIChatManager::s_instance = nullptr;
 
@@ -60,8 +70,12 @@ void AIChatManager::sendMessage(const QString& text)
     SentryReporter::addBreadcrumb("ui.action", "AI Chat: user message");
 
     m_toolLoopDepth = 0;
+    m_lastToolSignatures.clear();
     appendMessage("user", text.trimmed());
-    startGeneration(buildSystemPrompt(), buildConversationPrompt());
+    chatLog("USER", text.trimmed());
+    QString convPrompt = buildConversationPrompt();
+    chatLog("CONV_PROMPT", convPrompt);
+    startGeneration(buildSystemPrompt(), convPrompt);
 }
 
 void AIChatManager::clearHistory()
@@ -71,6 +85,7 @@ void AIChatManager::clearHistory()
     m_messages.clear();
     m_streamingText.clear();
     m_toolLoopDepth = 0;
+    m_lastToolSignatures.clear();
     emit messagesChanged();
     emit streamingTextChanged();
 }
@@ -100,6 +115,20 @@ static QString cleanGeneratedText(const QString& raw)
     if (pos >= 0)
         text = text.left(pos);
 
+    // Truncate if the model hallucinates a "RESULT:" continuation (history format)
+    static const QRegularExpression resultRe(
+        R"(\nRESULT\s*:)", QRegularExpression::CaseInsensitiveOption);
+    int rpos = resultRe.match(text).capturedStart();
+    if (rpos >= 0)
+        text = text.left(rpos);
+
+    // Truncate at "<after result>" or "EXAMPLE (" — model echoing its own examples
+    static const QRegularExpression afterResultRe(
+        R"(<after\s+result>|EXAMPLE\s*\()", QRegularExpression::CaseInsensitiveOption);
+    int apos = afterResultRe.match(text).capturedStart();
+    if (apos >= 0)
+        text = text.left(apos);
+
     return text.trimmed();
 }
 
@@ -116,6 +145,7 @@ void AIChatManager::onGenerationCompleted(const QString& fullText)
     m_streamingText.clear();
     emit streamingTextChanged();
 
+    chatLog("MODEL_RAW", fullText);
     executeToolCallsAndContinue(cleanGeneratedText(fullText));
 }
 
@@ -138,6 +168,7 @@ void AIChatManager::onGenerationStopped()
     m_stopRequested = false;
     m_isGenerating = false;
     m_toolLoopDepth = 0;
+    m_lastToolSignatures.clear();
     emit isGeneratingChanged();
 }
 
@@ -164,6 +195,7 @@ void AIChatManager::startGeneration(const QString& sysPrompt, const QString& use
     }
     m_isGenerating = true;
     emit isGeneratingChanged();
+    chatLog("START_GEN", QString("sys=%1 user=%2 chars").arg(sysPrompt.size()).arg(userPrompt.size()));
     LLMManager::instance()->generateText(sysPrompt, userPrompt);
 }
 
@@ -222,8 +254,26 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
 {
     QStringList toolBlocks = m_mcpServer ? extractToolJsonBlocks(assistantText) : QStringList{};
 
+    // Enforce one-tool-per-response rule: discard everything after the first call.
+    // The model must see the result before deciding the next step.
+    if (toolBlocks.size() > 1) {
+        chatLog("MULTI_TOOL_TRIMMED",
+                QString("Model sent %1 calls — keeping only first").arg(toolBlocks.size()));
+        toolBlocks = toolBlocks.mid(0, 1);
+    }
+
+    // Truncate the full text at end of first JSON block so stored history is clean
+    // (model sometimes outputs future rounds after the closing } — discard that).
+    QString cleanedAssistant = assistantText;
+    if (!toolBlocks.isEmpty()) {
+        int jsonEnd = assistantText.indexOf(toolBlocks.first())
+                      + toolBlocks.first().length();
+        if (jsonEnd > 0)
+            cleanedAssistant = assistantText.left(jsonEnd).trimmed();
+    }
+
     // Build visible text: everything that isn't a raw JSON tool block
-    QString visibleText = assistantText;
+    QString visibleText = cleanedAssistant;
     for (const QString& block : toolBlocks)
         visibleText.remove(block);
     visibleText = visibleText.simplified();
@@ -233,20 +283,81 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
         appendMessage("assistant", assistantText.trimmed());
         m_isGenerating = false;
         m_toolLoopDepth = 0;
+        m_lastToolSignatures.clear();
         emit isGeneratingChanged();
         return;
     }
 
-    // Show the assistant narration (without the raw JSON blocks) if any
-    if (!visibleText.trimmed().isEmpty())
+    // ---- Loop detection ----
+    // Build canonical compact-JSON signatures for the current tool calls.
+    QStringList currentSigs;
+    for (const QString& block : toolBlocks) {
+        QJsonDocument doc = QJsonDocument::fromJson(block.toUtf8());
+        if (doc.isObject())
+            currentSigs << QString::fromUtf8(doc.toJson(QJsonDocument::Compact));
+    }
+    currentSigs.sort();
+
+    if (!m_lastToolSignatures.isEmpty() && m_lastToolSignatures == currentSigs) {
+        // Same tool calls as the previous round — the model is stuck in a loop.
+        // De-duplicate: remove consecutive duplicate assistant/tool message pairs
+        // from history so only one copy is visible, then stop.
+        chatLog("LOOP_DETECTED", currentSigs.join("; "));
+
+        // Walk backwards and remove messages that duplicate the previous round:
+        // pattern is [ assistant(JSON), tool(RESULT) ] repeated.
+        // Keep walking back while we see the same signatures.
+        while (m_messages.size() >= 2) {
+            QVariantMap last = m_messages.last().toMap();
+            QVariantMap prev = m_messages.at(m_messages.size() - 2).toMap();
+            bool lastIsTool = last["isTool"].toBool();
+            bool prevIsAssistant = (prev["role"].toString() == "assistant" && !prev["isTool"].toBool());
+            if (lastIsTool && prevIsAssistant) {
+                // Check if the assistant entry matches a known duplicate signature
+                QString prevText = prev["text"].toString().trimmed();
+                QJsonDocument pd = QJsonDocument::fromJson(prevText.toUtf8());
+                bool isDupAssistant = pd.isObject() && currentSigs.contains(
+                    QString::fromUtf8(pd.toJson(QJsonDocument::Compact)));
+                if (isDupAssistant) {
+                    m_messages.removeLast(); // remove tool result
+                    m_messages.removeLast(); // remove assistant JSON
+                    continue;
+                }
+            }
+            break;
+        }
+
+        appendMessage("assistant", "Done.");
+        m_isGenerating = false;
+        m_toolLoopDepth = 0;
+        m_lastToolSignatures.clear();
+        emit messagesChanged();
+        emit isGeneratingChanged();
+        return;
+    }
+    m_lastToolSignatures = currentSigs;
+
+    // Add an assistant history entry for this turn.
+    // This is critical: without it the model's history shows RESULT with no
+    // preceding assistant action, so it re-calls the same tool on the next turn.
+    if (!visibleText.trimmed().isEmpty()) {
         appendMessage("assistant", visibleText.trimmed());
+    } else {
+        // Model output was tool JSON only.
+        // Store the raw JSON so the model sees JSON→RESULT in history and
+        // continues to output JSON (not the "[calling X]" text it would mimic).
+        // The UI detects this format and renders it as "[calling X]".
+        appendMessage("assistant", toolBlocks.join("\n"));
+    }
 
     // Execute each tool call and record results
+    bool anyToolError = false;
     for (const QString& block : toolBlocks) {
         QJsonParseError err;
         QJsonDocument doc = QJsonDocument::fromJson(block.toUtf8(), &err);
         if (err.error != QJsonParseError::NoError || !doc.isObject()) {
             appendMessage("tool", QString("[parse error] %1").arg(err.errorString()), true);
+            anyToolError = true;
             continue;
         }
         QJsonObject obj = doc.object();
@@ -254,6 +365,8 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
         QJsonObject toolArgs = obj["arguments"].toObject();
 
         SentryReporter::addBreadcrumb("ai.tool_call", toolName);
+        chatLog("TOOL_CALL", QString("%1 args=%2").arg(toolName,
+            QString::fromUtf8(QJsonDocument(toolArgs).toJson(QJsonDocument::Compact))));
         QJsonObject result = m_mcpServer->callTool(toolName, toolArgs);
 
         QString resultText;
@@ -263,22 +376,41 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
         else
             resultText = QJsonDocument(result).toJson(QJsonDocument::Compact);
 
+        chatLog("TOOL_RESULT", resultText);
+
+        // Detect tool errors so we can decide whether to allow recovery loops
+        if (result["isError"].toBool() || resultText.contains("Error:"))
+            anyToolError = true;
+
         QString toolEntry = QString("[Tool: %1]\n%2").arg(toolName, resultText.trimmed());
         appendMessage("tool", toolEntry, true);
     }
 
     ++m_toolLoopDepth;
 
+    const QString summaryPrompt =
+        "You are a 3D editor assistant. The actions above have been executed. "
+        "Write ONE short sentence confirming what was done. Do NOT call any tools.";
+
     if (m_toolLoopDepth >= kMaxToolLoops) {
-        // Hard limit reached — force a plain summary, no more tools.
-        const QString summaryPrompt =
-            "You are a 3D editor assistant. The actions above have been executed. "
-            "Write ONE short sentence confirming what was done. Do NOT call any tools.";
-        startGeneration(summaryPrompt, buildConversationPrompt());
+        // Hard limit reached — force a plain summary.
+        startGeneration(summaryPrompt, buildConversationPrompt(3));
+    } else if (!anyToolError) {
+        // Tool succeeded — give model full system prompt so it can plan next steps
+        // or confirm completion. KV cache reuse makes this fast.
+        startGeneration(buildSystemPrompt(), buildConversationPrompt());
+    } else if (m_toolLoopDepth >= 2) {
+        // Two rounds of errors — the model is stuck. Stop and surface the error.
+        appendMessage("assistant",
+            "I wasn't able to complete that action (the required resource doesn't exist or "
+            "isn't accessible). Please check that the material/mesh/texture exists and try again.");
+        m_isGenerating = false;
+        m_toolLoopDepth = 0;
+        m_lastToolSignatures.clear();
+        emit isGeneratingChanged();
     } else {
-        // Still within loop budget — use the full system prompt so the model can
-        // recover from errors (e.g. look up the correct name and retry) or chain
-        // additional steps needed to complete the user's request.
+        // One error — give the model the full system prompt so it can recover
+        // (e.g. call list_materials and retry with a real name).
         startGeneration(buildSystemPrompt(), buildConversationPrompt());
     }
 }
@@ -306,27 +438,47 @@ QString AIChatManager::buildSystemPrompt() const
         }
     }
 
+    // Inject current scene state so the model can act without a discovery round.
+    // This covers: object names, their current materials, and object count.
+    // Transforms are not included here (use get_object_transform for spatial tasks).
+    QString sceneSection;
+    if (m_mcpServer) {
+        QJsonObject result = m_mcpServer->callTool("get_scene_info", {});
+        QJsonArray content = result["content"].toArray();
+        if (!content.isEmpty()) {
+            QString info = content.first().toObject()["text"].toString().trimmed();
+            if (!info.isEmpty())
+                sceneSection = QString("Current scene state:\n%1\n\n").arg(info);
+        }
+    }
+
     return QString(
-        "You are an AI assistant embedded in QtMeshEditor, a 3D mesh editor.\n"
-        "You help users control the editor using natural language.\n\n"
-        "RULES:\n"
-        "1. For editor actions output a bare JSON object on its own line:\n"
-        "{\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n"
-        "2. Only one JSON call per response. Wait for the result before the next step.\n"
-        "3. If a tool returns an error (e.g. name not found, nothing selected), call\n"
-        "   get_scene_info or list_* tools to discover the correct names, then retry.\n"
-        "4. For questions or general chat, answer in plain text — no JSON.\n"
-        "5. Never invent tool names or parameters. Only use what is listed below.\n\n"
-        "Available tools:\n%1"
-    ).arg(tools);
+        "You are an AI assistant controlling QtMeshEditor, a 3D mesh editor.\n\n"
+        "%1"
+        "HOW TO RESPOND — choose exactly one format per response:\n\n"
+        "If you need to call a tool:\n"
+        "  Thought: <what you are doing and what still remains after this>\n"
+        "  {\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n\n"
+        "If all steps are complete:\n"
+        "  Done: <one sentence confirming what was accomplished>\n\n"
+        "CRITICAL RULES:\n"
+        "1. Output EXACTLY ONE JSON tool call per response, then STOP. Do not write anything after the closing }.\n"
+        "2. Do not output future tool calls. Wait for each result before deciding the next step.\n"
+        "3. For 'wooden box' type requests: you need 3 steps — create the object, create the material, apply the material.\n"
+        "   Complete ALL 3 steps before writing Done:.\n"
+        "4. Never use a material that is not listed in the scene above. Use create_material first.\n"
+        "5. Never invent tool names or parameter names. Only use what is listed below.\n"
+        "6. If a tool returns an error, call list_materials or get_scene_info to find the correct names.\n\n"
+        "Available tools:\n%2"
+    ).arg(sceneSection, tools);
 }
 
-QString AIChatManager::buildConversationPrompt(const QString& /*unused*/) const
+QString AIChatManager::buildConversationPrompt(int maxHistory) const
 {
-    // Give agentic loops enough history to see prior errors and retry.
-    // Force a short window only on the final summary to save tokens.
-    const int kMaxHistory = (m_toolLoopDepth >= kMaxToolLoops - 1) ? 6 : 12;
-    int start = qMax(0, m_messages.size() - kMaxHistory);
+    // Caller can pass an explicit window; 0 = use default based on loop depth.
+    if (maxHistory == 0)
+        maxHistory = (m_toolLoopDepth >= kMaxToolLoops - 1) ? 4 : 8;
+    int start = qMax(0, m_messages.size() - maxHistory);
 
     QString conv;
     for (int i = start; i < m_messages.size(); ++i) {

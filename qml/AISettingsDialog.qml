@@ -1,7 +1,6 @@
 import QtQuick 6.0
 import QtQuick.Controls 6.0
 import QtQuick.Layouts 6.0
-import QtQuick.Dialogs
 import MaterialEditorQML 1.0
 import "." as Local
 
@@ -178,6 +177,11 @@ Dialog {
                                         onClicked: LLMManager.loadModel(modelCombo.currentText)
                                     }
                                     Local.ThemedButton {
+                                        text: "Load from file…"
+                                        enabled: !LLMManager.isLoading
+                                        onClicked: LLMManager.browseForModelFile()
+                                    }
+                                    Local.ThemedButton {
                                         text: "Refresh"
                                         enabled: !LLMManager.isLoading
                                         onClicked: LLMManager.scanForModels()
@@ -185,7 +189,7 @@ Dialog {
                                     Item { Layout.fillWidth: true }
                                     Local.ThemedButton {
                                         text: "Open Models Folder"
-                                        onClicked: Qt.openUrlExternally("file://" + LLMManager.modelsDirectory)
+                                        onClicked: Qt.openUrlExternally(LLMManager.modelsDirectoryUrl)
                                     }
                                 }
                             }
@@ -420,7 +424,7 @@ Dialog {
                                 }
                                 Local.ThemedButton {
                                     text: "Browse..."
-                                    onClicked: folderDialog.open()
+                                    onClicked: LLMManager.browseForModelsDirectory()
                                 }
                             }
                         }
@@ -765,16 +769,6 @@ Dialog {
         }
     }
 
-    // Folder dialog for models directory
-    FolderDialog {
-        id: folderDialog
-        title: "Select Models Directory"
-        currentFolder: "file://" + LLMManager.modelsDirectory
-        onAccepted: {
-            var path = selectedFolder.toString().replace("file://", "")
-            LLMManager.modelsDirectory = path
-        }
-    }
 
     // Connections for download completion
     Connections {

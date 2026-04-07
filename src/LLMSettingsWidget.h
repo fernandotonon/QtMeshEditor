@@ -29,6 +29,7 @@ public:
 
 private slots:
     void onLoadModelClicked();
+    void onLoadFromFileClicked();
     void onUnloadModelClicked();
     void onBrowseDirectoryClicked();
     void onRefreshModelsClicked();
@@ -88,6 +89,7 @@ private:
     // Models tab
     QComboBox *m_modelCombo;
     QPushButton *m_loadButton;
+    QPushButton *m_loadFromFileButton;
     QPushButton *m_unloadButton;
     QPushButton *m_refreshButton;
     QLineEdit *m_directoryEdit;

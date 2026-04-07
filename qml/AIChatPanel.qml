@@ -61,165 +61,71 @@ Rectangle {
         }
     }
 
-    // ---- Message list ----
-    ListView {
-        id: messageList
+    // ---- Single selectable conversation area ----
+    Flickable {
+        id: msgFlick
         anchors {
             top: header.bottom; left: parent.left; right: parent.right
-            bottom: inputRow.top
-            bottomMargin: 4
+            bottom: thinkingRow.top; bottomMargin: 0
         }
         clip: true
-        spacing: 6
-        topMargin: 8; leftMargin: 8; rightMargin: 8
-        model: AIChatManager.messages
+        contentWidth: width
+        contentHeight: msgEdit.implicitHeight + 16
 
-        // Scroll to bottom on new messages
-        onCountChanged: Qt.callLater(() => messageList.positionViewAtEnd())
+        function scrollToBottom() {
+            contentY = Math.max(0, contentHeight - height)
+        }
 
-        delegate: Item {
-            width: messageList.width - 16
-            height: bubble.height + 4
+        TextEdit {
+            id: msgEdit
+            anchors { left: parent.left; right: parent.right; top: parent.top; margins: 8 }
+            readOnly: true
+            selectByMouse: true
+            textFormat: Text.RichText
+            wrapMode: Text.WrapAtWordBoundaryOrAnywhere
+            color: PropertiesPanelController.textColor
+            font.pixelSize: 12
+            selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
+            selectedTextColor: PropertiesPanelController.textColor
+            text: root.buildHtml()
 
-            property string msgRole: modelData.role
-            property string msgText: modelData.text
-            property bool   msgTool: modelData.isTool
-
-            Rectangle {
-                id: bubble
-                width: parent.width
-                height: msgLabel.implicitHeight + 28
-                radius: 6
-                color: {
-                    if (msgTool)    return Qt.rgba(0.2, 0.3, 0.2, 0.6)
-                    if (msgRole === "user")      return Qt.rgba(0.2, 0.3, 0.5, 0.7)
-                    return Qt.rgba(0.25, 0.25, 0.28, 0.9)
-                }
-                border.color: PropertiesPanelController.borderColor
-                border.width: 1
-
-                Text {
-                    id: roleLabel
-                    anchors { top: parent.top; left: parent.left; topMargin: 4; leftMargin: 8 }
-                    text: {
-                        if (msgTool)                return "⚙ tool"
-                        if (msgRole === "user")     return "you"
-                        return "assistant"
-                    }
-                    color: {
-                        if (msgTool)                return "#88cc88"
-                        if (msgRole === "user")     return "#88aacc"
-                        return "#aaaaaa"
-                    }
-                    font.pixelSize: 9; font.bold: true
-                }
-
-                // Text sizes the bubble (implicitHeight is reliable)
-                Text {
-                    id: msgLabel
-                    anchors { top: roleLabel.bottom; left: parent.left; right: parent.right;
-                              topMargin: 2; leftMargin: 8; rightMargin: 8 }
-                    text: msgText
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 12
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                }
-
-                // Transparent TextEdit exactly over msgLabel — selection only
-                TextEdit {
-                    anchors { top: roleLabel.bottom; left: parent.left; right: parent.right;
-                              topMargin: 2; leftMargin: 8; rightMargin: 8 }
-                    height: msgLabel.implicitHeight
-                    text: msgText
-                    font.pixelSize: 12
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                    color: "transparent"
-                    readOnly: true
-                    selectByMouse: true
-                    selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
-                    selectedTextColor: PropertiesPanelController.textColor
-                }
+            // Return keyboard focus to the input field when nothing is selected,
+            // so the user doesn't have to click the input after scrolling/reading.
+            onSelectedTextChanged: {
+                if (selectedText.length === 0)
+                    Qt.callLater(() => inputField.forceActiveFocus())
             }
         }
 
-        // Streaming bubble (shown while generating)
-        footer: Item {
-            width: messageList.width - 16
-            height: AIChatManager.streamingText.length > 0 ? streamBubble.height + 4 : 0
-            visible: AIChatManager.streamingText.length > 0
+        onContentHeightChanged: Qt.callLater(scrollToBottom)
 
-            Rectangle {
-                id: streamBubble
-                width: parent.width
-                height: streamLabel.implicitHeight + 28
-                radius: 6
-                color: Qt.rgba(0.25, 0.25, 0.28, 0.9)
-                border.color: PropertiesPanelController.accentColor
-                border.width: 1
-
-                Text {
-                    anchors { top: parent.top; left: parent.left; topMargin: 4; leftMargin: 8 }
-                    text: "assistant"
-                    color: "#aaaaaa"; font.pixelSize: 9; font.bold: true
-                }
-
-                Text {
-                    id: streamLabel
-                    anchors { top: parent.top; left: parent.left; right: parent.right;
-                              topMargin: 16; leftMargin: 8; rightMargin: 8 }
-                    text: AIChatManager.streamingText
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 12
-                    wrapMode: Text.WrapAtWordBoundaryOrAnywhere
-                }
-
-                TextEdit {
-                    x: streamLabel.x; y: streamLabel.y
-                    width: streamLabel.width; height: streamLabel.implicitHeight
-                    text: AIChatManager.streamingText
-                    font: streamLabel.font
-                    wrapMode: streamLabel.wrapMode
-                    color: "transparent"
-                    readOnly: true
-                    selectByMouse: true
-                    selectionColor: Qt.rgba(0.3, 0.5, 0.8, 0.5)
-                    selectedTextColor: PropertiesPanelController.textColor
-                }
-
-                // Animated "thinking" dots when no tokens yet
-                Row {
-                    anchors { bottom: parent.bottom; bottomMargin: 4; left: parent.left; leftMargin: 8 }
-                    spacing: 3
-                    visible: AIChatManager.streamingText.length === 0 && AIChatManager.isGenerating
-
-                    Repeater {
-                        model: 3
-                        Rectangle {
-                            width: 5; height: 5; radius: 2.5
-                            color: PropertiesPanelController.accentColor
-                            opacity: 0.3
-                            SequentialAnimation on opacity {
-                                loops: Animation.Infinite
-                                NumberAnimation { to: 1.0; duration: 400 }
-                                NumberAnimation { to: 0.3; duration: 400 }
-                                PauseAnimation  { duration: index * 150 }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Component.onCompleted: {
-                if (AIChatManager.streamingText.length > 0)
-                    Qt.callLater(() => messageList.positionViewAtEnd())
-            }
-        }
-
-        // Scroll to bottom when streaming text changes
         Connections {
             target: AIChatManager
-            function onStreamingTextChanged() {
-                Qt.callLater(() => messageList.positionViewAtEnd())
+            function onMessagesChanged()     { Qt.callLater(msgFlick.scrollToBottom) }
+            function onStreamingTextChanged(){ Qt.callLater(msgFlick.scrollToBottom) }
+        }
+    }
+
+    // ---- Thinking dots (no tokens yet) ----
+    Row {
+        id: thinkingRow
+        anchors { bottom: inputRow.top; left: parent.left; leftMargin: 12; bottomMargin: 6 }
+        height: visible ? 14 : 0
+        spacing: 4
+        visible: AIChatManager.isGenerating
+
+        Repeater {
+            model: 3
+            Rectangle {
+                width: 6; height: 6; radius: 3
+                color: PropertiesPanelController.accentColor
+                opacity: 0.3
+                SequentialAnimation on opacity {
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 1.0; duration: 400 }
+                    NumberAnimation { to: 0.3; duration: 400 }
+                    PauseAnimation  { duration: index * 150 }
+                }
             }
         }
     }
@@ -265,7 +171,7 @@ Rectangle {
             color: sendBtnArea.containsMouse
                    ? PropertiesPanelController.accentColor
                    : PropertiesPanelController.buttonColor
-            enabled: AIChatManager.modelAvailable && !AIChatManager.isGenerating
+            enabled: AIChatManager.modelAvailable
 
             Text {
                 anchors.centerIn: parent
@@ -316,11 +222,65 @@ Rectangle {
         }
     }
 
+    // ---- Helpers ----
+
     function doSend() {
         var txt = inputField.text.trim()
         if (txt.length > 0) {
             AIChatManager.sendMessage(txt)
             inputField.text = ""
         }
+    }
+
+    function escHtml(t) {
+        return t.replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/\n/g, "<br>")
+    }
+
+    function buildHtml() {
+        var html = ""
+        var msgs = AIChatManager.messages
+        for (var i = 0; i < msgs.length; ++i) {
+            var msg = msgs[i]
+            var isTool = msg.isTool
+            var role   = msg.role
+            var roleColor, roleLabel
+            if (isTool)             { roleColor = "#88cc88"; roleLabel = "⚙ tool" }
+            else if (role === "user"){ roleColor = "#88aacc"; roleLabel = "you" }
+            else                    { roleColor = "#aaaaaa"; roleLabel = "assistant" }
+
+            // Assistant messages that are raw JSON tool calls — show as "[calling X]"
+            var displayText = msg.text
+            if (role === "assistant" && !isTool) {
+                var trimmed = msg.text.trim()
+                if (trimmed.startsWith("{")) {
+                    try {
+                        var obj = JSON.parse(trimmed)
+                        if (obj && obj.name)
+                            displayText = "[calling " + obj.name + "]"
+                    } catch(e) {}
+                }
+            }
+
+            if (i > 0) html += "<br>"
+            if (role === "user") {
+                html += '<p align="right"><font color="#88aacc"><small><b>you</b></small></font><br>'
+                html += escHtml(displayText) + '</p>'
+            } else {
+                html += '<font color="' + roleColor + '"><small><b>' + roleLabel + '</b></small></font><br>'
+                html += escHtml(displayText) + "<br>"
+            }
+        }
+
+        // In-progress streaming text
+        if (AIChatManager.streamingText.length > 0) {
+            if (msgs.length > 0) html += "<br>"
+            html += '<font color="#aaaaaa"><small><b>assistant</b></small></font><br>'
+            html += escHtml(AIChatManager.streamingText)
+        }
+
+        return html
     }
 }

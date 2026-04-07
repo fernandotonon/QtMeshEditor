@@ -58,7 +58,7 @@ private:
     void appendMessage(const QString& role, const QString& text, bool isTool = false);
     void executeToolCallsAndContinue(const QString& assistantText);
     QString buildSystemPrompt() const;
-    QString buildConversationPrompt(const QString& nextUserMessage = QString()) const;
+    QString buildConversationPrompt(int maxHistory = 0) const;
     void startGeneration(const QString& sysPrompt, const QString& userPrompt);
 
     static AIChatManager* s_instance;
@@ -71,7 +71,8 @@ private:
 
     // Agentic loop state
     int m_toolLoopDepth = 0;
-    static const int kMaxToolLoops = 4;
+    static const int kMaxToolLoops = 10; // enough for complex multi-step tasks
+    QStringList m_lastToolSignatures; // compact JSON of tool calls from previous round
 };
 
 #endif // AICHATMANAGER_H

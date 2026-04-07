@@ -758,9 +758,10 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
         QStringList appliedTo;
 
         if (!meshName.isEmpty()) {
-            // Apply to specific entity by name
-            QList<Ogre::Entity*>& entities = mgr->getEntities();
             bool found = false;
+
+            // Primary: search by entity name via getEntities()
+            QList<Ogre::Entity*>& entities = mgr->getEntities();
             for (Ogre::Entity* entity : entities) {
                 if (entity && QString::fromStdString(entity->getName()) == meshName) {
                     entity->setMaterialName(materialName.toStdString());
@@ -769,8 +770,28 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
                     break;
                 }
             }
+
+            // Fallback: look up scene node by name and apply to its attached entity.
+            // Handles cases where the entity name differs from the node name, or
+            // getEntities() returns an incomplete / mis-cast list.
             if (!found) {
-                return makeErrorResult(QString("Error: Entity '%1' not found").arg(meshName));
+                Ogre::SceneNode* sn = findSceneNodeByName(meshName);
+                if (sn) {
+                    for (int i = 0; i < static_cast<int>(sn->numAttachedObjects()); ++i) {
+                        Ogre::MovableObject* obj = sn->getAttachedObject(i);
+                        if (obj && obj->getMovableType() == "Entity") {
+                            Ogre::Entity* ent = static_cast<Ogre::Entity*>(obj);
+                            ent->setMaterialName(materialName.toStdString());
+                            appliedTo << QString::fromStdString(ent->getName());
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!found) {
+                return makeErrorResult(QString("Error: Mesh '%1' not found").arg(meshName));
             }
         } else {
             // Apply to selected entities
@@ -1209,7 +1230,11 @@ QJsonObject MCPServer::toolCreatePrimitive(const QJsonObject &args)
         return makeErrorResult(QString("Failed to create %1 primitive").arg(type));
     }
 
-    return makeSuccessResult(QString("Created %1 primitive '%2'").arg(type).arg(name));
+    // Return the ACTUAL node name — Manager::addSceneNode may append a number
+    // if the requested name was already taken (e.g. "sphere" → "sphere1").
+    // The AI must use this exact name for subsequent apply_material calls.
+    QString actualName = QString::fromStdString(node->getName());
+    return makeSuccessResult(QString("Created %1 primitive '%2'").arg(type).arg(actualName));
 }
 QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
 {

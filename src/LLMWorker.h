@@ -73,6 +73,7 @@ private:
     llama_model *m_model = nullptr;
     llama_context *m_ctx = nullptr;
     const llama_vocab *m_vocab = nullptr;
+    std::vector<llama_token> m_prevTokens; // cached input tokens for KV-prefix reuse
 
     bool initializeContext();
     void cleanupContext();

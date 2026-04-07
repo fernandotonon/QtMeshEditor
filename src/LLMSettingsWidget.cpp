@@ -120,9 +120,11 @@ void LLMSettingsWidget::setupModelsTab(QWidget *parent)
 
     QHBoxLayout *buttonLayout = new QHBoxLayout();
     m_loadButton = new QPushButton("Load Model", modelGroup);
+    m_loadFromFileButton = new QPushButton("Load from file...", modelGroup);
     m_unloadButton = new QPushButton("Unload Model", modelGroup);
     m_unloadButton->setEnabled(false);
     buttonLayout->addWidget(m_loadButton);
+    buttonLayout->addWidget(m_loadFromFileButton);
     buttonLayout->addWidget(m_unloadButton);
     buttonLayout->addStretch();
     modelLayout->addLayout(buttonLayout);
@@ -143,6 +145,7 @@ void LLMSettingsWidget::setupModelsTab(QWidget *parent)
     connect(m_browseButton, &QPushButton::clicked, this, &LLMSettingsWidget::onBrowseDirectoryClicked);
     connect(m_refreshButton, &QPushButton::clicked, this, &LLMSettingsWidget::onRefreshModelsClicked);
     connect(m_loadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onLoadModelClicked);
+    connect(m_loadFromFileButton, &QPushButton::clicked, this, &LLMSettingsWidget::onLoadFromFileClicked);
     connect(m_unloadButton, &QPushButton::clicked, this, &LLMSettingsWidget::onUnloadModelClicked);
 }
 
@@ -397,6 +400,22 @@ void LLMSettingsWidget::onLoadModelClicked()
     LLMManager::instance()->loadModel(modelName);
 }
 
+void LLMSettingsWidget::onLoadFromFileClicked()
+{
+    QString file = QFileDialog::getOpenFileName(
+        nullptr,
+        "Load AI Model",
+        LLMManager::instance()->modelsDirectory(),
+        "GGUF models (*.gguf);;Binary models (*.bin);;All files (*)"
+    );
+    if (file.isEmpty())
+        return;
+    m_loadButton->setEnabled(false);
+    m_statusLabel->setText("Loading model...");
+    m_statusLabel->setStyleSheet("color: orange;");
+    LLMManager::instance()->loadModelFromPath(file);
+}
+
 void LLMSettingsWidget::onUnloadModelClicked()
 {
     LLMManager::instance()->unloadModel();
@@ -404,7 +423,9 @@ void LLMSettingsWidget::onUnloadModelClicked()
 
 void LLMSettingsWidget::onBrowseDirectoryClicked()
 {
-    QString dir = QFileDialog::getExistingDirectory(this, "Select Models Directory",
+    // Use nullptr parent so the dialog is not shown as a sheet attached to
+    // this exec()-modal window — that combination fails silently on macOS.
+    QString dir = QFileDialog::getExistingDirectory(nullptr, "Select Models Directory",
                                                      m_directoryEdit->text());
     if (!dir.isEmpty()) {
         LLMManager::instance()->setModelsDirectory(dir);

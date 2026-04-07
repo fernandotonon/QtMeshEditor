@@ -414,6 +414,21 @@ void MainWindow::initToolBar()
     addPrimitiveButton->setMenu(addPrimitiveMenu);
     ui->objectsToolbar->addWidget(addPrimitiveButton);
 
+    // AI Chat button — star icon is the common AI shorthand
+    auto aiChatButton = new QToolButton(ui->objectsToolbar);
+    aiChatButton->setText("\u2728");  // ✨
+    aiChatButton->setToolTip(tr("Open AI Chat"));
+    QFont aiFont = aiChatButton->font();
+    aiFont.setPixelSize(15);
+    aiChatButton->setFont(aiFont);
+    connect(aiChatButton, &QToolButton::clicked, this, [this]() {
+        if (m_chatDock) {
+            m_chatDock->show();
+            m_chatDock->raise();
+        }
+    });
+    ui->objectsToolbar->addWidget(aiChatButton);
+
     connect(pAddCube,       SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createCube()));
     connect(pAddSphere,     SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createSphere()));
     connect(pAddPlane,      SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createPlane()));
