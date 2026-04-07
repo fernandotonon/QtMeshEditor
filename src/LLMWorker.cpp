@@ -232,7 +232,7 @@ void LLMWorker::requestStop()
     m_stopRequested.store(true);
 }
 
-void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
+void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt, int maxTokensOverride)
 {
 #ifdef ENABLE_LOCAL_LLM
     if (!isModelLoaded()) {
@@ -349,7 +349,8 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
         eosToken = llama_vocab_eos(m_vocab);
     }
 
-    for (int i = 0; i < m_settings.maxTokens; ++i) {
+    const int effectiveMaxTokens = (maxTokensOverride > 0) ? maxTokensOverride : m_settings.maxTokens;
+    for (int i = 0; i < effectiveMaxTokens; ++i) {
         if (m_stopRequested.load()) {
             qDebug() << "LLMWorker: Generation stopped by user";
             emit generationStopped();
@@ -376,7 +377,7 @@ void LLMWorker::generate(const QString &systemPrompt, const QString &userPrompt)
             generatedText += piece;
 
             // Emit progress
-            float progress = static_cast<float>(i + 1) / m_settings.maxTokens;
+            float progress = static_cast<float>(i + 1) / effectiveMaxTokens;
             emit generationProgress(generatedText, progress);
         }
 

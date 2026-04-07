@@ -466,15 +466,15 @@ void LLMManager::scanForModels()
     emit availableModelsChanged();
 }
 
-void LLMManager::generateText(const QString &systemPrompt, const QString &userPrompt)
+void LLMManager::generateText(const QString &systemPrompt, const QString &userPrompt, int maxTokensOverride)
 {
     if (!isModelLoaded()) {
         emit generationError("No model loaded. Please load a model first.");
         return;
     }
     m_rawTextMode = true;
-    QMetaObject::invokeMethod(m_worker, [this, systemPrompt, userPrompt]() {
-        m_worker->generate(systemPrompt, userPrompt);
+    QMetaObject::invokeMethod(m_worker, [this, systemPrompt, userPrompt, maxTokensOverride]() {
+        m_worker->generate(systemPrompt, userPrompt, maxTokensOverride);
     }, Qt::QueuedConnection);
 }
 

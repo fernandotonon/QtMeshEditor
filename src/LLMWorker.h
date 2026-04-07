@@ -44,7 +44,7 @@ public:
     bool isGenerating() const { return m_isGenerating.load(); }
 
 public slots:
-    void generate(const QString &systemPrompt, const QString &userPrompt);
+    void generate(const QString &systemPrompt, const QString &userPrompt, int maxTokensOverride = 0);
 
 signals:
     void modelLoaded(const QString &modelPath);

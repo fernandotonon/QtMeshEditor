@@ -196,7 +196,9 @@ void AIChatManager::startGeneration(const QString& sysPrompt, const QString& use
     m_isGenerating = true;
     emit isGeneratingChanged();
     chatLog("START_GEN", QString("sys=%1 user=%2 chars").arg(sysPrompt.size()).arg(userPrompt.size()));
-    LLMManager::instance()->generateText(sysPrompt, userPrompt);
+    // Cap at 400 tokens: enough for Thought (50) + one JSON call (120) + Done response (30).
+    // Without this cap the model fills all available tokens with dozens of JSON calls.
+    LLMManager::instance()->generateText(sysPrompt, userPrompt, 400);
 }
 
 // Scan text for all top-level JSON objects that have both "name" and "arguments"
@@ -495,8 +497,8 @@ QString AIChatManager::buildSystemPrompt() const
         "CRITICAL RULES:\n"
         "1. Output EXACTLY ONE JSON tool call per response, then STOP. Do not write anything after the closing }.\n"
         "2. Do not output future tool calls. Wait for each result before deciding the next step.\n"
-        "3. For requests like 'wooden box': you need 3 steps — create the primitive, create the material, apply it.\n"
-        "   Continue calling tools until ALL steps are done, then write Done:.\n"
+        "3. A 'box' or 'cube' = ONE create_primitive call with type=cube. Never compose a box from multiple primitives.\n"
+        "   For 'wooden box': 3 steps — create_primitive (cube), create_material (brown), apply_material. Then Done:.\n"
         "4. Never use a material not listed under 'Available materials' below. Use create_material first.\n"
         "5. Never invent tool names or parameter names. Only use what is listed below.\n"
         "6. If a tool returns an error, call list_materials or get_scene_info to find correct names.\n\n"
