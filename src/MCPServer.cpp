@@ -2359,14 +2359,16 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject inputSchema;
         inputSchema["type"] = "object";
         QJsonObject properties;
+        properties["name"]     = QJsonObject{{"type", "string"}, {"description", "Name of the scene node to transform (required). Use get_scene_info to find exact names."}};
         properties["position"] = QJsonObject{{"type", "array"}, {"description", "Position [X, Y, Z]"}};
         properties["rotation"] = QJsonObject{{"type", "array"}, {"description", "Rotation in degrees [X, Y, Z]"}};
-        properties["scale"] = QJsonObject{{"type", "array"}, {"description", "Scale [X, Y, Z]"}};
+        properties["scale"]    = QJsonObject{{"type", "array"}, {"description", "Scale [X, Y, Z]"}};
         inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"name"};
 
         tools.append(buildToolDefinition(
             "transform_mesh",
-            "Set the position, rotation, and/or scale of a scene node. Position and scale are [X, Y, Z] arrays. Rotation is in degrees [X, Y, Z]. All parameters are optional — only provided values are applied. Use get_scene_info to find node names.",
+            "Set the position, rotation, and/or scale of a named scene node. 'name' is required — use get_scene_info to find the exact node name. Position and scale are [X, Y, Z] arrays. Rotation is in degrees [X, Y, Z].",
             inputSchema
         ));
     }

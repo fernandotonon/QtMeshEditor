@@ -7,6 +7,8 @@
 #include <QRegularExpression>
 #include <cstdio>
 #include <QDateTime>
+#include <QSettings>
+#include <QFileInfo>
 
 // ---- chat debug helpers ----
 static void chatLog(const char* tag, const QString& text)
@@ -129,6 +131,11 @@ static QString cleanGeneratedText(const QString& raw)
     if (apos >= 0)
         text = text.left(apos);
 
+    // Strip trailing pipe characters — Qwen and some other models emit "|" as a
+    // stop-token artifact at the end of their output.
+    while (text.endsWith('|') || text.endsWith(" |"))
+        text = text.left(text.lastIndexOf('|')).trimmed();
+
     return text.trimmed();
 }
 
@@ -196,9 +203,9 @@ void AIChatManager::startGeneration(const QString& sysPrompt, const QString& use
     m_isGenerating = true;
     emit isGeneratingChanged();
     chatLog("START_GEN", QString("sys=%1 user=%2 chars").arg(sysPrompt.size()).arg(userPrompt.size()));
-    // Cap at 400 tokens: enough for Thought (50) + one JSON call (120) + Done response (30).
-    // Without this cap the model fills all available tokens with dozens of JSON calls.
-    LLMManager::instance()->generateText(sysPrompt, userPrompt, 400);
+    // Cap at 300 tokens: enough for Thought (~50) + one JSON call (~100) with margin.
+    // At 400+ tokens the model can fit 3-4 small JSON calls in one response; 300 forces one.
+    LLMManager::instance()->generateText(sysPrompt, userPrompt, 300);
 }
 
 // Scan text for all top-level JSON objects that have both "name" and "arguments"
@@ -476,10 +483,22 @@ QString AIChatManager::buildSystemPrompt() const
             if (!isSystem) userMats << m;
         }
         if (userMats.size() > 20) userMats = userMats.mid(0, 20); // cap for prompt size
-        if (!sceneInfo.isEmpty() || !userMats.isEmpty()) {
+        // Recent files from QSettings
+        QSettings settings;
+        QStringList recentFiles = settings.value("RecentFiles/files").toStringList();
+        QStringList recentNames;
+        for (const QString& path : recentFiles) {
+            QFileInfo fi(path);
+            if (fi.exists())
+                recentNames << fi.fileName();
+        }
+        if (recentNames.size() > 10) recentNames = recentNames.mid(0, 10);
+
+        if (!sceneInfo.isEmpty() || !userMats.isEmpty() || !recentNames.isEmpty()) {
             sceneSection = "Current scene state:\n";
-            if (!sceneInfo.isEmpty()) sceneSection += sceneInfo + "\n";
-            if (!userMats.isEmpty())  sceneSection += "Available materials: " + userMats.join(", ") + "\n";
+            if (!sceneInfo.isEmpty())    sceneSection += sceneInfo + "\n";
+            if (!userMats.isEmpty())     sceneSection += "Available materials: " + userMats.join(", ") + "\n";
+            if (!recentNames.isEmpty())  sceneSection += "Recent files: " + recentNames.join(", ") + "\n";
             sceneSection += "\n";
         }
     }
@@ -490,18 +509,32 @@ QString AIChatManager::buildSystemPrompt() const
         "You are an AI assistant controlling QtMeshEditor, a 3D mesh editor.\n\n"
         "HOW TO RESPOND — choose exactly one format per response:\n\n"
         "If you need to call a tool:\n"
-        "  Thought: <what you are doing and what still remains after this>\n"
+        "  Thought: <one short sentence>\n"
         "  {\"name\": \"tool_name\", \"arguments\": {\"param\": \"value\"}}\n\n"
         "If all steps are complete:\n"
         "  Done: <one sentence confirming what was accomplished>\n\n"
         "CRITICAL RULES:\n"
-        "1. Output EXACTLY ONE JSON tool call per response, then STOP. Do not write anything after the closing }.\n"
-        "2. Do not output future tool calls. Wait for each result before deciding the next step.\n"
-        "3. A 'box' or 'cube' = ONE create_primitive call with type=cube. Never compose a box from multiple primitives.\n"
-        "   For 'wooden box': 3 steps — create_primitive (cube), create_material (brown), apply_material. Then Done:.\n"
-        "4. Never use a material not listed under 'Available materials' below. Use create_material first.\n"
-        "5. Never invent tool names or parameter names. Only use what is listed below.\n"
-        "6. If a tool returns an error, call list_materials or get_scene_info to find correct names.\n\n"
+        "1. Output EXACTLY ONE JSON tool call per response. Stop immediately after the closing }. Nothing else.\n"
+        "2. Keep Thought: to ONE short sentence (max 10 words). Then output JSON on the next line. Stop after }.\n"
+        "3. Check RESULT messages: if a RESULT says 'Created X' or 'Applied', that step is DONE. Advance to NEXT step.\n"
+        "   Never call the same tool twice for the same object.\n"
+        "4. transform_mesh REQUIRES 'name' = exact node name from the scene (e.g. 'box', 'sphere').\n"
+        "   If you don't know the name, call get_scene_info first, then call transform_mesh.\n"
+        "   Never call create_primitive to fix a transform error.\n"
+        "   COORDINATE AXES: X=right(+)/left(-), Y=up(+)/down(-), Z=back(+)/front(-).\n"
+        "   'Move left by N' → x decreases. 'Move right by N' → x increases.\n"
+        "   'Move forward/in front by N' → z decreases (z - N). 'Move back/behind' → z increases.\n"
+        "   transform_mesh sets ABSOLUTE position. To move relative: call get_scene_info first\n"
+        "   to read current position, then add the offset and call transform_mesh with the result.\n"
+        "5. Use simple short names for create_primitive: 'box', 'sphere', 'cylinder', 'cone', 'plane'.\n"
+        "   Never use auto-generated timestamp names as the name argument.\n"
+        "6. Wooden box = exactly 3 steps:\n"
+        "   Step 1: create_primitive type=cube name=box\n"
+        "   Step 2: create_material name=Wood diffuse=[0.6,0.4,0.2]\n"
+        "   Step 3: apply_material mesh=box material=Wood → then Done:\n"
+        "7. Never use a material name not listed under 'Available materials'. Call create_material first.\n"
+        "8. Never invent tool names or parameter names. Only use tools listed below.\n"
+        "9. Done: message must describe ONLY what you did in THIS conversation turn.\n\n"
         "Available tools:\n%1\n"
         "%2"
     ).arg(tools, sceneSection);
@@ -543,6 +576,9 @@ QString AIChatManager::buildConversationPrompt(int maxHistory) const
     for (int i = start; i < m_messages.size(); ++i)
         conv += formatMsg(m_messages[i].toMap());
 
-    conv += "Assistant:";
+    // Prime with "Thought:" so the model follows the tool-calling format.
+    // The Thought text is stripped from chat history (only the JSON is stored),
+    // so it never appears in the UI — only "[calling X]" is shown per tool call.
+    conv += "Assistant: Thought:";
     return conv;
 }
