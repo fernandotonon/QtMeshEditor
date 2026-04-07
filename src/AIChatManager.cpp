@@ -195,57 +195,6 @@ void AIChatManager::startGeneration(const QString& sysPrompt, const QString& use
     LLMManager::instance()->generateText(sysPrompt, userPrompt, 500);
 }
 
-// Scan text for all top-level JSON objects that have both "name" and "arguments"
-// keys — these are tool calls regardless of whatever tag the model put around them.
-static QStringList extractToolJsonBlocks(const QString& text)
-{
-    QStringList results;
-
-    // Primary: find {"name": "tool_name", "arguments": {...}} directly
-    int len = text.length();
-    for (int i = 0; i < len; ++i) {
-        if (text[i] != QLatin1Char('{')) continue;
-        int depth = 0, j = i;
-        while (j < len) {
-            if (text[j] == QLatin1Char('{'))      ++depth;
-            else if (text[j] == QLatin1Char('}')) { if (--depth == 0) break; }
-            ++j;
-        }
-        if (depth != 0) continue;
-        QString candidate = text.mid(i, j - i + 1);
-        QJsonParseError err;
-        QJsonDocument doc = QJsonDocument::fromJson(candidate.toUtf8(), &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject()) {
-            QJsonObject obj = doc.object();
-            if (obj.contains("name") && obj.contains("arguments"))
-                results << candidate;
-        }
-        i = j;
-    }
-
-    // Fallback: model sometimes mimics tool-result format:
-    //   [Tool: tool_name]
-    //   Arguments: {"param": "value"}
-    // Reconstruct the canonical {"name":..., "arguments":...} from it.
-    static const QRegularExpression altRe(
-        R"(\[Tool:\s*([^\]]+)\]\s*(?:Arguments?:\s*)?(\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}))",
-        QRegularExpression::DotMatchesEverythingOption | QRegularExpression::CaseInsensitiveOption);
-    auto altIt = altRe.globalMatch(text);
-    while (altIt.hasNext()) {
-        auto m = altIt.next();
-        QString toolName = m.captured(1).trimmed();
-        QJsonParseError err;
-        QJsonDocument argDoc = QJsonDocument::fromJson(m.captured(2).trimmed().toUtf8(), &err);
-        if (err.error != QJsonParseError::NoError) continue;
-        QJsonObject call;
-        call["name"]      = toolName;
-        call["arguments"] = argDoc.isObject() ? argDoc.object() : QJsonObject{};
-        results << QString::fromUtf8(QJsonDocument(call).toJson(QJsonDocument::Compact));
-    }
-
-    return results;
-}
-
 void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
 {
     // ---- Parse structured JSON response ----

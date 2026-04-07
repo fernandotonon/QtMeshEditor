@@ -154,7 +154,7 @@ Rectangle {
     Rectangle {
         id: inputRow
         anchors { bottom: parent.bottom; left: parent.left; right: parent.right }
-        height: Math.max(40, inputField.implicitHeight + 16)
+        height: Math.max(40, Math.min(inputField.implicitHeight, 80) + 16)
         color: PropertiesPanelController.headerColor
         border.color: PropertiesPanelController.borderColor
         border.width: 1

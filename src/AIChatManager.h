@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QQmlEngine>
 #include <QJSEngine>
+#include <QPointer>
 
 class MCPServer;
 
@@ -67,7 +68,7 @@ private:
     bool m_isGenerating   = false;
     bool m_stopRequested  = false;   // set by stopGeneration(), checked before follow-up starts
     QString m_streamingText;
-    MCPServer* m_mcpServer = nullptr;
+    QPointer<MCPServer> m_mcpServer;
 
     // Agentic loop state
     int m_toolLoopDepth  = 0;
