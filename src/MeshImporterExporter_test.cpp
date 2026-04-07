@@ -309,7 +309,7 @@ TEST_F(MeshImporterExporterTest, Importer_EmptyPathEntry_IsIgnored) {
 TEST_F(MeshImporterExporterTest, Importer_MissingMeshFile_IsIgnored) {
     MeshImporterExporter::importer(QStringList{"/tmp/nonexistent_mesh_importer_12345.mesh"});
     EXPECT_TRUE(Manager::getSingleton()->getEntities().isEmpty());
-    EXPECT_LE(Manager::getSingleton()->getSceneNodes().size(), 1);
+    EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
 }
 
 TEST_F(MeshImporterExporterTest, Importer_MissingMeshXmlFile_IsIgnored) {
