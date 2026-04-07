@@ -4,6 +4,7 @@
 #include <QSignalSpy>
 #include <QThread>
 #include <QStyleFactory>
+#include <exception>
 #include "EditorViewport.h"
 #include "mainwindow.h"
 #include "Manager.h"
@@ -25,7 +26,15 @@ protected:
         for (int attempt = 1; attempt <= kMaxMainWindowInitAttempts && !mainWindow; ++attempt) {
             try {
                 mainWindow = new MainWindow();
+            } catch (const std::exception& e) {
+                GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
+                                    << " failed: " << e.what();
+                mainWindow = nullptr;
+                Manager::kill();
+                QThread::msleep(150);
             } catch (...) {
+                GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
+                                    << " failed with unknown exception";
                 mainWindow = nullptr;
                 Manager::kill();
                 QThread::msleep(150);
