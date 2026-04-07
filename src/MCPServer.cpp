@@ -574,36 +574,45 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
         Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
             name.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
-        // Set properties from colors
-        QJsonObject colors = args["colors"].toObject();
+        // Accept colors as either top-level params (diffuse, ambient …) or
+        // nested under a "colors" object — both formats are valid.
+        auto resolveColor = [&](const QString& key) -> QJsonArray {
+            if (args.contains(key) && args[key].isArray())
+                return args[key].toArray();
+            QJsonObject nested = args["colors"].toObject();
+            if (nested.contains(key) && nested[key].isArray())
+                return nested[key].toArray();
+            return {};
+        };
+        auto resolveNumber = [&](const QString& key, double def) -> double {
+            if (args.contains(key)) return args[key].toDouble(def);
+            return args["colors"].toObject().value(key).toDouble(def);
+        };
+
         Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
 
-        if (colors.contains("ambient")) {
-            QJsonArray a = colors["ambient"].toArray();
-            pass->setAmbient(a[0].toDouble(0.2), a[1].toDouble(0.2), a[2].toDouble(0.2));
-        } else {
+        QJsonArray amb = resolveColor("ambient");
+        if (!amb.isEmpty())
+            pass->setAmbient(amb[0].toDouble(0.2), amb[1].toDouble(0.2), amb[2].toDouble(0.2));
+        else
             pass->setAmbient(0.2, 0.2, 0.2);
-        }
 
-        if (colors.contains("diffuse")) {
-            QJsonArray d = colors["diffuse"].toArray();
-            pass->setDiffuse(d[0].toDouble(1.0), d[1].toDouble(1.0), d[2].toDouble(1.0), 1.0);
-        }
+        QJsonArray diff = resolveColor("diffuse");
+        if (!diff.isEmpty())
+            pass->setDiffuse(diff[0].toDouble(1.0), diff[1].toDouble(1.0), diff[2].toDouble(1.0), 1.0);
 
-        if (colors.contains("specular")) {
-            QJsonArray s = colors["specular"].toArray();
-            double shininess = colors.value("shininess").toDouble(32.0);
-            pass->setSpecular(s[0].toDouble(0.5), s[1].toDouble(0.5), s[2].toDouble(0.5), 1.0);
-            pass->setShininess(shininess);
+        QJsonArray spec = resolveColor("specular");
+        if (!spec.isEmpty()) {
+            pass->setSpecular(spec[0].toDouble(0.5), spec[1].toDouble(0.5), spec[2].toDouble(0.5), 1.0);
+            pass->setShininess(resolveNumber("shininess", 32.0));
         } else {
             pass->setSpecular(0.5, 0.5, 0.5, 1.0);
             pass->setShininess(32.0);
         }
 
-        if (colors.contains("emissive")) {
-            QJsonArray e = colors["emissive"].toArray();
-            pass->setSelfIllumination(e[0].toDouble(), e[1].toDouble(), e[2].toDouble());
-        }
+        QJsonArray emis = resolveColor("emissive");
+        if (!emis.isEmpty())
+            pass->setSelfIllumination(emis[0].toDouble(), emis[1].toDouble(), emis[2].toDouble());
 
         try { mat->load(); } catch (...) { /* headless — no GPU context */ }
 
@@ -736,8 +745,14 @@ QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
 
 QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
 {
+    // Accept common model variations: "material" or "material_name"
     QString materialName = args["material"].toString();
+    if (materialName.isEmpty()) materialName = args["material_name"].toString();
+    // Accept "mesh", "mesh_name", or "entity" / "entity_name"
     QString meshName = args["mesh"].toString();
+    if (meshName.isEmpty()) meshName = args["mesh_name"].toString();
+    if (meshName.isEmpty()) meshName = args["entity"].toString();
+    if (meshName.isEmpty()) meshName = args["entity_name"].toString();
 
     if (materialName.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
@@ -2225,18 +2240,19 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject inputSchema;
         inputSchema["type"] = "object";
         QJsonObject properties;
-        properties["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the material to create"}};
-        properties["script"] = QJsonObject{{"type", "string"}, {"description", "Optional: Full Ogre3D material script"}};
-        QJsonObject colors;
-        colors["type"] = "object";
-        colors["description"] = "Optional: Color values if not providing full script";
-        properties["colors"] = colors;
+        properties["name"]      = QJsonObject{{"type", "string"}, {"description", "Name of the new material"}};
+        properties["script"]    = QJsonObject{{"type", "string"}, {"description", "Optional: full Ogre3D material script (overrides color params)"}};
+        properties["ambient"]   = QJsonObject{{"type", "array"},  {"description", "Ambient color [R, G, B] (0.0-1.0)"}};
+        properties["diffuse"]   = QJsonObject{{"type", "array"},  {"description", "Diffuse color [R, G, B] (0.0-1.0)"}};
+        properties["specular"]  = QJsonObject{{"type", "array"},  {"description", "Specular color [R, G, B] (0.0-1.0)"}};
+        properties["shininess"] = QJsonObject{{"type", "number"}, {"description", "Specular shininess (1-128)"}};
+        properties["emissive"]  = QJsonObject{{"type", "array"},  {"description", "Emissive/glow color [R, G, B] (0.0-1.0)"}};
         inputSchema["properties"] = properties;
         inputSchema["required"] = QJsonArray{"name"};
 
         tools.append(buildToolDefinition(
             "create_material",
-            "Create a new Ogre3D material. Provide either a full Ogre material script via 'script', or set individual colors (ambient, diffuse, specular, emissive) via 'colors'. The material can then be applied to a mesh with apply_material.",
+            "Create a new Ogre3D material with optional colors. Colors are [R,G,B] arrays (0.0-1.0). Apply the result to a mesh with apply_material.",
             inputSchema
         ));
     }

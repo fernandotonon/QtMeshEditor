@@ -438,23 +438,47 @@ QString AIChatManager::buildSystemPrompt() const
         }
     }
 
-    // Inject current scene state so the model can act without a discovery round.
-    // This covers: object names, their current materials, and object count.
-    // Transforms are not included here (use get_object_transform for spatial tasks).
+    // Inject current scene + material state so the model can act without a discovery round.
     QString sceneSection;
     if (m_mcpServer) {
-        QJsonObject result = m_mcpServer->callTool("get_scene_info", {});
-        QJsonArray content = result["content"].toArray();
-        if (!content.isEmpty()) {
-            QString info = content.first().toObject()["text"].toString().trimmed();
-            if (!info.isEmpty())
-                sceneSection = QString("Current scene state:\n%1\n\n").arg(info);
+        // Objects and their current materials
+        auto extractText = [](const QJsonObject& result) -> QString {
+            QJsonArray content = result["content"].toArray();
+            if (!content.isEmpty())
+                return content.first().toObject()["text"].toString().trimmed();
+            return {};
+        };
+        QString sceneInfo = extractText(m_mcpServer->callTool("get_scene_info", {}));
+        QString matRaw    = extractText(m_mcpServer->callTool("list_materials", {}));
+        // Filter material list: skip built-in Ogre materials (BaseWhite, Ogre/*, etc.)
+        // and keep only short user-created names for the scene context.
+        QStringList userMats;
+        static const QStringList sysMatPrefixes = {
+            "Available", "BaseWhite", "Ogre/", "RTSS/", "SdkTrays/",
+            "Debug", "Default", "GUI_", "NormalVisualizer", "BoneWeight",
+            "MeshInfo", "SelectionBox", "Procedural/", "Axes/"
+        };
+        for (const QString& line : matRaw.split('\n')) {
+            QString m = line.trimmed();
+            if (m.isEmpty()) continue;
+            bool isSystem = false;
+            for (const QString& prefix : sysMatPrefixes)
+                if (m.startsWith(prefix)) { isSystem = true; break; }
+            if (!isSystem) userMats << m;
+        }
+        if (userMats.size() > 20) userMats = userMats.mid(0, 20); // cap for prompt size
+        if (!sceneInfo.isEmpty() || !userMats.isEmpty()) {
+            sceneSection = "Current scene state:\n";
+            if (!sceneInfo.isEmpty()) sceneSection += sceneInfo + "\n";
+            if (!userMats.isEmpty())  sceneSection += "Available materials: " + userMats.join(", ") + "\n";
+            sceneSection += "\n";
         }
     }
 
+    // Static part first (header + instructions + tool list) so KV cache prefix
+    // stays valid across calls — scene section is dynamic and goes at the end.
     return QString(
         "You are an AI assistant controlling QtMeshEditor, a 3D mesh editor.\n\n"
-        "%1"
         "HOW TO RESPOND — choose exactly one format per response:\n\n"
         "If you need to call a tool:\n"
         "  Thought: <what you are doing and what still remains after this>\n"
@@ -464,13 +488,14 @@ QString AIChatManager::buildSystemPrompt() const
         "CRITICAL RULES:\n"
         "1. Output EXACTLY ONE JSON tool call per response, then STOP. Do not write anything after the closing }.\n"
         "2. Do not output future tool calls. Wait for each result before deciding the next step.\n"
-        "3. For 'wooden box' type requests: you need 3 steps — create the object, create the material, apply the material.\n"
-        "   Complete ALL 3 steps before writing Done:.\n"
-        "4. Never use a material that is not listed in the scene above. Use create_material first.\n"
+        "3. For requests like 'wooden box': you need 3 steps — create the primitive, create the material, apply it.\n"
+        "   Continue calling tools until ALL steps are done, then write Done:.\n"
+        "4. Never use a material not listed under 'Available materials' below. Use create_material first.\n"
         "5. Never invent tool names or parameter names. Only use what is listed below.\n"
-        "6. If a tool returns an error, call list_materials or get_scene_info to find the correct names.\n\n"
-        "Available tools:\n%2"
-    ).arg(sceneSection, tools);
+        "6. If a tool returns an error, call list_materials or get_scene_info to find correct names.\n\n"
+        "Available tools:\n%1\n"
+        "%2"
+    ).arg(tools, sceneSection);
 }
 
 QString AIChatManager::buildConversationPrompt(int maxHistory) const
