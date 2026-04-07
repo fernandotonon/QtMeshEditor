@@ -966,8 +966,14 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 
             if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
             {
+                Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().load(
+                    file.fileName().toStdString().data(),
+                    file.path().toStdString().data());
+                if (!mesh)
+                    continue;
+
                 sn = Manager::getSingleton()->addSceneNode(QString(file.baseName()));
-                en = Manager::getSingleton()->createEntity(sn, Ogre::MeshManager::getSingleton().load(file.fileName().toStdString().data(), file.path().toStdString().data()));
+                en = Manager::getSingleton()->createEntity(sn, mesh);
                 if (en->getMesh() && en->getMesh()->getSkeleton())
                     AnimationMerger::registerSkeletonUpAxis(en->getMesh()->getSkeleton()->getName(), 1);
                 applyNormalMapsToEntity(en);

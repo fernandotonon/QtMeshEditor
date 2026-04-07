@@ -902,17 +902,34 @@ jobs:
                 fi
 
                 echo "Found $test_name at $test_path"
+                local exit_code=0
                 if [ -n "$filter" ]; then
                     $test_path --gtest_output=xml:$output_file --gtest_filter="$filter"
                 else
                     $test_path --gtest_output=xml:$output_file
                 fi
+
+                exit_code=$?
+                if [ $exit_code -ne 0 ]; then
+                    return $exit_code
+                fi
+
+                local skipped_count
+                skipped_count=$(count_skipped_in_xml "$output_file")
+                if [ "$skipped_count" -gt 0 ]; then
+                    echo "ERROR: $test_name produced $skipped_count skipped test(s)."
+                    SKIPPED_TESTS=$((SKIPPED_TESTS + skipped_count))
+                    return 1
+                fi
+
+                return 0
             }
 
             TOTAL_SUITES=0
             PASSED_SUITES=0
             CRASHED_SUITES=0
             FAILED_SUITES=0
+            SKIPPED_TESTS=0
 
             # Suites that create a real OgreWidget + GL context are known to SIGSEGV
             # under Mesa/Xvfb on CI (same root cause as the skipped MCP GL tests).
@@ -925,6 +942,18 @@ jobs:
                     [ "$suite" = "$allowed" ] && return 0
                 done
                 return 1
+            }
+
+            count_skipped_in_xml() {
+                local xml_file=$1
+                if [ ! -f "$xml_file" ]; then
+                    echo "0"
+                    return 0
+                fi
+                # Treat any non-executed gtest result as a CI failure.
+                # gtest may encode these as result="skipped", status="notrun",
+                # or result="suppressed" (e.g., disabled tests).
+                grep -E '<testcase[^>]*(result="skipped"|status="notrun"|result="suppressed")' "$xml_file" | wc -l
             }
 
             # === Run UnitTests: each test suite in its own process ===
@@ -943,10 +972,18 @@ jobs:
                     echo "--- Running suite: $suite ---"
                     # Run without sudo so signal exit codes (e.g. 139 for SIGSEGV) propagate correctly.
                     # sudo can mask crash exit codes, reporting 0 for segfaulted children.
-                    $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:test-results-${suite}.xml 2>&1
+                    suite_xml="test-results-${suite}.xml"
+                    $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:${suite_xml} 2>&1
                     exit_code=$?
                     if [ $exit_code -eq 0 ]; then
-                        PASSED_SUITES=$((PASSED_SUITES + 1))
+                        skipped_count=$(count_skipped_in_xml "$suite_xml")
+                        if [ "$skipped_count" -gt 0 ]; then
+                            echo "ERROR: Suite $suite produced $skipped_count skipped test(s)."
+                            SKIPPED_TESTS=$((SKIPPED_TESTS + skipped_count))
+                            FAILED_SUITES=$((FAILED_SUITES + 1))
+                        else
+                            PASSED_SUITES=$((PASSED_SUITES + 1))
+                        fi
                     elif [ $exit_code -ge 128 ]; then
                         signal=$(($exit_code - 128))
                         if is_gl_crash_allowed "$suite"; then
@@ -962,7 +999,7 @@ jobs:
                     fi
                 done
 
-                echo "=== UnitTests summary: $PASSED_SUITES/$TOTAL_SUITES suites passed, $FAILED_SUITES failed, $CRASHED_SUITES crashed ==="
+                echo "=== UnitTests summary: $PASSED_SUITES/$TOTAL_SUITES suites passed, $FAILED_SUITES failed, $CRASHED_SUITES crashed, $SKIPPED_TESTS skipped tests ==="
             else
                 echo "ERROR: UnitTests not found!"
                 FAILED_SUITES=$((FAILED_SUITES + 1))
@@ -984,15 +1021,18 @@ jobs:
             if [ "$CRASHED_SUITES" -gt 0 ]; then
                 echo "WARNING: $CRASHED_SUITES test suite(s) crashed, but coverage data was preserved"
             fi
+            if [ "$SKIPPED_TESTS" -gt 0 ]; then
+                echo "ERROR: $SKIPPED_TESTS test(s) were skipped"
+            fi
 
             # Save failure count for post-coverage check
             echo "FAILED_SUITES=$FAILED_SUITES" >> $GITHUB_ENV
             echo "CRASHED_SUITES=$CRASHED_SUITES" >> $GITHUB_ENV
+            echo "SKIPPED_TESTS=$SKIPPED_TESTS" >> $GITHUB_ENV
 
-    # Note: MCP integration tests are skipped because Ogre's GL3Plus render system
-    # crashes (SIGABRT) during texture manager registration with Mesa EGL software
-    # rendering in CI. The ensureOgreInitialized() graceful fallback only catches
-    # exceptions, not signals. Unit tests cover MCPServer via MCPServerTest suite.
+    # Note: MCP GL-heavy integration coverage is currently represented by
+    # UnitTests (MCPServerTest suite). Dedicated GL integration execution remains
+    # constrained in headless Mesa/Xvfb environments due Ogre GL3Plus crashes.
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
@@ -1121,6 +1161,10 @@ jobs:
     - name: Fail if tests failed
       if: always()
       run: |
+        if [ "${SKIPPED_TESTS:-0}" -gt 0 ]; then
+          echo "ERROR: $SKIPPED_TESTS test(s) were skipped in CI"
+          exit 1
+        fi
         if [ "${FAILED_SUITES:-0}" -gt 0 ]; then
           echo "ERROR: $FAILED_SUITES test suite(s) failed"
           exit 1
@@ -1684,22 +1728,27 @@ jobs:
         run: |
           Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
 
-      - name: Generate WinGet manifests
+      - name: Submit to WinGet
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
           $rawTag = "${{ github.event.release.tag_name }}"
           $ver = $rawTag.TrimStart("v")
           $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${rawTag}/QtMeshEditor-${rawTag}-bin-Windows.zip"
 
-          # wingetcreate downloads the installer to compute its hash, so the release asset
-          # must be propagated before this runs. Retry up to 5 times.
-          Write-Host "Generating manifests for version $ver..."
+          # wingetcreate --submit uses the Contents API (PUT /repos/.../contents/...)
+          # which works with public_repo scope — unlike the git database API (blobs/trees)
+          # which requires repo scope.
+          # Retry up to 5 times to allow the release asset to propagate.
+          Write-Host "Submitting WinGet manifest for version $ver..."
           $success = $false
           for ($attempt = 1; $attempt -le 5; $attempt++) {
             Write-Host "Attempt $attempt ..."
             .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
               --version $ver `
               --urls $url `
-              --out winget-manifests 2>&1 | Tee-Object -Variable output
+              --token $env:WINGET_TOKEN `
+              --submit 2>&1 | Tee-Object -Variable output
             Write-Host $output
             if ($LASTEXITCODE -eq 0) { $success = $true; break }
             if ($attempt -lt 5) {
@@ -1709,102 +1758,10 @@ jobs:
             }
           }
           if (-not $success) {
-            Write-Host "::error::wingetcreate manifest generation failed after 5 attempts"
+            Write-Host "::error::WinGet submission failed after 5 attempts"
             exit 1
           }
-          # Show what was generated
-          Get-ChildItem -Recurse winget-manifests | Select-Object FullName
-
-      - name: Submit PR to WinGet via gh
-        env:
-          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $rawTag = "${{ github.event.release.tag_name }}"
-          $ver = $rawTag.TrimStart("v")
-          $fork = "fernandotonon/winget-pkgs"
-          $branch = "submit-FernandoTonon.QtMeshEditor-$ver"
-
-          # Sync fork with upstream
-          Write-Host "Syncing fork with upstream..."
-          gh repo sync $fork --source microsoft/winget-pkgs --branch master
-
-          # Get base commit SHA from fork master, then resolve to its tree SHA.
-          # GitHub's git/trees API requires a tree SHA for base_tree, not a commit SHA.
-          $baseSha = gh api "repos/$fork/git/ref/heads/master" --jq '.object.sha'
-          Write-Host "Base commit SHA: $baseSha"
-          $baseTreeSha = gh api "repos/$fork/git/commits/$baseSha" --jq '.tree.sha'
-          Write-Host "Base tree SHA: $baseTreeSha"
-
-          # Upload each manifest file as a blob and build the tree array
-          $manifestRelPath = "manifests/f/FernandoTonon/QtMeshEditor/$ver"
-          $localDir = "winget-manifests\$manifestRelPath"
-          $tree = @()
-          foreach ($file in Get-ChildItem $localDir) {
-            Write-Host "Uploading blob: $($file.Name)"
-            $bytes = [System.IO.File]::ReadAllBytes($file.FullName)
-            $b64   = [Convert]::ToBase64String($bytes)
-            $blobSha = gh api "repos/$fork/git/blobs" -X POST `
-              -f "encoding=base64" -f "content=$b64" --jq '.sha'
-            if (-not $blobSha) { throw "Failed to upload blob for $($file.Name)" }
-            $tree += [PSCustomObject]@{
-              path = "$manifestRelPath/$($file.Name)"
-              mode = "100644"
-              type = "blob"
-              sha  = $blobSha
-            }
-          }
-
-          # Create tree on fork (base_tree must be a tree SHA, not a commit SHA)
-          $treeJson = [PSCustomObject]@{ base_tree = $baseTreeSha; tree = $tree } |
-            ConvertTo-Json -Depth 10 -Compress
-          $tmpTree = [System.IO.Path]::GetTempFileName()
-          try {
-            [System.IO.File]::WriteAllText($tmpTree, $treeJson)
-            $treeSha = gh api "repos/$fork/git/trees" -X POST --input $tmpTree --jq '.sha'
-          } finally { Remove-Item $tmpTree -ErrorAction SilentlyContinue }
-          if (-not $treeSha) { throw "Failed to create git tree" }
-          Write-Host "Tree SHA: $treeSha"
-
-          # Create commit on fork
-          $commitJson = [PSCustomObject]@{
-            message = "Add FernandoTonon.QtMeshEditor $ver"
-            tree    = $treeSha
-            parents = @($baseSha)
-          } | ConvertTo-Json -Compress
-          $tmpCommit = [System.IO.Path]::GetTempFileName()
-          try {
-            [System.IO.File]::WriteAllText($tmpCommit, $commitJson)
-            $commitSha = gh api "repos/$fork/git/commits" -X POST --input $tmpCommit --jq '.sha'
-          } finally { Remove-Item $tmpCommit -ErrorAction SilentlyContinue }
-          if (-not $commitSha) { throw "Failed to create git commit" }
-          Write-Host "Commit SHA: $commitSha"
-
-          # Push new branch to fork (idempotent: update ref if branch already exists)
-          $refExists = gh api "repos/$fork/git/ref/heads/$branch" --jq '.ref' 2>$null
-          if ($refExists) {
-            Write-Host "Branch already exists — updating ref..."
-            gh api "repos/$fork/git/refs/heads/$branch" -X PATCH -f "sha=$commitSha" -f "force=true"
-          } else {
-            gh api "repos/$fork/git/refs" -X POST `
-              -f "ref=refs/heads/$branch" -f "sha=$commitSha"
-          }
-          Write-Host "Branch ready: $branch"
-
-          # Open PR against microsoft/winget-pkgs (skip if one already exists for this branch)
-          $existingPr = gh pr list --repo microsoft/winget-pkgs `
-            --head "fernandotonon:$branch" --base master --state open --json url --jq '.[0].url' 2>$null
-          if ($existingPr) {
-            Write-Host "PR already exists: $existingPr — skipping creation."
-          } else {
-            gh pr create `
-              --repo microsoft/winget-pkgs `
-              --title "Add FernandoTonon.QtMeshEditor $ver" `
-              --body "Submitting FernandoTonon.QtMeshEditor version $ver.`n`nAuto-generated by QtMeshEditor CI." `
-              --head "fernandotonon:$branch" `
-              --base master
-            Write-Host "WinGet PR submitted successfully."
-          }
+          Write-Host "WinGet PR submitted successfully."
 
 ####################################################################
 # Snap Store Publish (after Linux .deb is built)
