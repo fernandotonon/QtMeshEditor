@@ -902,17 +902,34 @@ jobs:
                 fi
 
                 echo "Found $test_name at $test_path"
+                local exit_code=0
                 if [ -n "$filter" ]; then
                     $test_path --gtest_output=xml:$output_file --gtest_filter="$filter"
                 else
                     $test_path --gtest_output=xml:$output_file
                 fi
+
+                exit_code=$?
+                if [ $exit_code -ne 0 ]; then
+                    return $exit_code
+                fi
+
+                local skipped_count
+                skipped_count=$(count_skipped_in_xml "$output_file")
+                if [ "$skipped_count" -gt 0 ]; then
+                    echo "ERROR: $test_name produced $skipped_count skipped test(s)."
+                    SKIPPED_TESTS=$((SKIPPED_TESTS + skipped_count))
+                    return 1
+                fi
+
+                return 0
             }
 
             TOTAL_SUITES=0
             PASSED_SUITES=0
             CRASHED_SUITES=0
             FAILED_SUITES=0
+            SKIPPED_TESTS=0
 
             # Suites that create a real OgreWidget + GL context are known to SIGSEGV
             # under Mesa/Xvfb on CI (same root cause as the skipped MCP GL tests).
@@ -925,6 +942,18 @@ jobs:
                     [ "$suite" = "$allowed" ] && return 0
                 done
                 return 1
+            }
+
+            count_skipped_in_xml() {
+                local xml_file=$1
+                if [ ! -f "$xml_file" ]; then
+                    echo "0"
+                    return 0
+                fi
+                # Treat any non-executed gtest result as a CI failure.
+                # gtest may encode these as result="skipped", status="notrun",
+                # or result="suppressed" (e.g., disabled tests).
+                grep -E '<testcase[^>]*(result="skipped"|status="notrun"|result="suppressed")' "$xml_file" | wc -l
             }
 
             # === Run UnitTests: each test suite in its own process ===
@@ -943,10 +972,18 @@ jobs:
                     echo "--- Running suite: $suite ---"
                     # Run without sudo so signal exit codes (e.g. 139 for SIGSEGV) propagate correctly.
                     # sudo can mask crash exit codes, reporting 0 for segfaulted children.
-                    $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:test-results-${suite}.xml 2>&1
+                    suite_xml="test-results-${suite}.xml"
+                    $UNIT_TEST_PATH --gtest_filter="${suite}.*" --gtest_output=xml:${suite_xml} 2>&1
                     exit_code=$?
                     if [ $exit_code -eq 0 ]; then
-                        PASSED_SUITES=$((PASSED_SUITES + 1))
+                        skipped_count=$(count_skipped_in_xml "$suite_xml")
+                        if [ "$skipped_count" -gt 0 ]; then
+                            echo "ERROR: Suite $suite produced $skipped_count skipped test(s)."
+                            SKIPPED_TESTS=$((SKIPPED_TESTS + skipped_count))
+                            FAILED_SUITES=$((FAILED_SUITES + 1))
+                        else
+                            PASSED_SUITES=$((PASSED_SUITES + 1))
+                        fi
                     elif [ $exit_code -ge 128 ]; then
                         signal=$(($exit_code - 128))
                         if is_gl_crash_allowed "$suite"; then
@@ -962,7 +999,7 @@ jobs:
                     fi
                 done
 
-                echo "=== UnitTests summary: $PASSED_SUITES/$TOTAL_SUITES suites passed, $FAILED_SUITES failed, $CRASHED_SUITES crashed ==="
+                echo "=== UnitTests summary: $PASSED_SUITES/$TOTAL_SUITES suites passed, $FAILED_SUITES failed, $CRASHED_SUITES crashed, $SKIPPED_TESTS skipped tests ==="
             else
                 echo "ERROR: UnitTests not found!"
                 FAILED_SUITES=$((FAILED_SUITES + 1))
@@ -984,15 +1021,18 @@ jobs:
             if [ "$CRASHED_SUITES" -gt 0 ]; then
                 echo "WARNING: $CRASHED_SUITES test suite(s) crashed, but coverage data was preserved"
             fi
+            if [ "$SKIPPED_TESTS" -gt 0 ]; then
+                echo "ERROR: $SKIPPED_TESTS test(s) were skipped"
+            fi
 
             # Save failure count for post-coverage check
             echo "FAILED_SUITES=$FAILED_SUITES" >> $GITHUB_ENV
             echo "CRASHED_SUITES=$CRASHED_SUITES" >> $GITHUB_ENV
+            echo "SKIPPED_TESTS=$SKIPPED_TESTS" >> $GITHUB_ENV
 
-    # Note: MCP integration tests are skipped because Ogre's GL3Plus render system
-    # crashes (SIGABRT) during texture manager registration with Mesa EGL software
-    # rendering in CI. The ensureOgreInitialized() graceful fallback only catches
-    # exceptions, not signals. Unit tests cover MCPServer via MCPServerTest suite.
+    # Note: MCP GL-heavy integration coverage is currently represented by
+    # UnitTests (MCPServerTest suite). Dedicated GL integration execution remains
+    # constrained in headless Mesa/Xvfb environments due Ogre GL3Plus crashes.
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
@@ -1121,6 +1161,10 @@ jobs:
     - name: Fail if tests failed
       if: always()
       run: |
+        if [ "${SKIPPED_TESTS:-0}" -gt 0 ]; then
+          echo "ERROR: $SKIPPED_TESTS test(s) were skipped in CI"
+          exit 1
+        fi
         if [ "${FAILED_SUITES:-0}" -gt 0 ]; then
           echo "ERROR: $FAILED_SUITES test suite(s) failed"
           exit 1

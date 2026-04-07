@@ -4,6 +4,7 @@
 #include <QSignalSpy>
 #include <QThread>
 #include <QStyleFactory>
+#include <exception>
 #include "EditorViewport.h"
 #include "mainwindow.h"
 #include "Manager.h"
@@ -11,34 +12,63 @@
 
 class EditorViewportTest : public ::testing::Test {
 protected:
-    QApplication* app = nullptr;
-    MainWindow* mainWindow = nullptr;
+    static QApplication* app;
+    static MainWindow* mainWindow;
 
-    void SetUp() override {
+    static void SetUpTestSuite() {
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
+        app->processEvents();
         Manager::kill();
-        QThread::msleep(50);
+        QThread::msleep(100);
 
-        try {
-            mainWindow = new MainWindow();
-        } catch (...) {
-            GTEST_SKIP() << "Skipping: MainWindow creation failed";
+        constexpr int kMaxMainWindowInitAttempts = 5;
+        for (int attempt = 1; attempt <= kMaxMainWindowInitAttempts && !mainWindow; ++attempt) {
+            try {
+                mainWindow = new MainWindow();
+            } catch (const std::exception& e) {
+                GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
+                                    << " failed: " << e.what();
+                mainWindow = nullptr;
+                app->processEvents();
+                QThread::msleep(400);
+            } catch (...) {
+                GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
+                                    << " failed with unknown exception";
+                mainWindow = nullptr;
+                app->processEvents();
+                QThread::msleep(400);
+            }
         }
-        ASSERT_NE(mainWindow, nullptr);
+        ASSERT_NE(mainWindow, nullptr) << "Failed to initialize MainWindow for EditorViewport tests";
     }
 
-    void TearDown() override {
+    static void TearDownTestSuite() {
         delete mainWindow;
         mainWindow = nullptr;
         if (app) {
             app->processEvents();
         }
         Manager::kill();
-        QThread::msleep(50);
+        QThread::msleep(100);
+        app = nullptr;
+    }
+
+    void SetUp() override {
+        ASSERT_NE(app, nullptr);
+        ASSERT_NE(mainWindow, nullptr);
+    }
+
+    void TearDown() override {
+        if (app) {
+            app->processEvents();
+        }
     }
 };
+
+QApplication* EditorViewportTest::app = nullptr;
+MainWindow* EditorViewportTest::mainWindow = nullptr;
 
 TEST_F(EditorViewportTest, ConstructionWithIndex) {
     EditorViewport viewport(mainWindow, 5);
