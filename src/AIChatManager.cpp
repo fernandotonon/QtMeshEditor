@@ -382,7 +382,14 @@ void AIChatManager::executeToolCallsAndContinue(const QString& assistantText)
         if (result["isError"].toBool() || resultText.contains("Error:"))
             anyToolError = true;
 
-        QString toolEntry = QString("[Tool: %1]\n%2").arg(toolName, resultText.trimmed());
+        // Store a truncated version of the result in history to keep context compact.
+        // The first line (summary) is enough for the model; verbose scripts/dumps are noise.
+        QString historyText = resultText.trimmed();
+        int nlPos = historyText.indexOf('\n');
+        if (nlPos > 0 && historyText.length() > 120)
+            historyText = historyText.left(nlPos).trimmed(); // keep only first line
+
+        QString toolEntry = QString("[Tool: %1]\n%2").arg(toolName, historyText);
         appendMessage("tool", toolEntry, true);
     }
 
