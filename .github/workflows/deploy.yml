@@ -950,7 +950,10 @@ jobs:
                     echo "0"
                     return 0
                 fi
-                grep -o 'result="skipped"' "$xml_file" | wc -l
+                # Treat any non-executed gtest result as a CI failure.
+                # gtest may encode these as result="skipped", status="notrun",
+                # or result="suppressed" (e.g., disabled tests).
+                grep -E '<testcase[^>]*(result="skipped"|status="notrun"|result="suppressed")' "$xml_file" | wc -l
             }
 
             # === Run UnitTests: each test suite in its own process ===
@@ -1027,10 +1030,9 @@ jobs:
             echo "CRASHED_SUITES=$CRASHED_SUITES" >> $GITHUB_ENV
             echo "SKIPPED_TESTS=$SKIPPED_TESTS" >> $GITHUB_ENV
 
-    # Note: MCP integration tests are skipped because Ogre's GL3Plus render system
-    # crashes (SIGABRT) during texture manager registration with Mesa EGL software
-    # rendering in CI. The ensureOgreInitialized() graceful fallback only catches
-    # exceptions, not signals. Unit tests cover MCPServer via MCPServerTest suite.
+    # Note: MCP GL-heavy integration coverage is currently represented by
+    # UnitTests (MCPServerTest suite). Dedicated GL integration execution remains
+    # constrained in headless Mesa/Xvfb environments due Ogre GL3Plus crashes.
 
     - name: Upload Test Results
       uses: actions/upload-artifact@v4
