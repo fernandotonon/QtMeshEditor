@@ -21,12 +21,17 @@ protected:
         Manager::kill();
         QThread::msleep(50);
 
-        try {
-            mainWindow = new MainWindow();
-        } catch (...) {
-            GTEST_SKIP() << "Skipping: MainWindow creation failed";
+        constexpr int kMaxMainWindowInitAttempts = 3;
+        for (int attempt = 1; attempt <= kMaxMainWindowInitAttempts && !mainWindow; ++attempt) {
+            try {
+                mainWindow = new MainWindow();
+            } catch (...) {
+                mainWindow = nullptr;
+                Manager::kill();
+                QThread::msleep(150);
+            }
         }
-        ASSERT_NE(mainWindow, nullptr);
+        ASSERT_NE(mainWindow, nullptr) << "Failed to initialize MainWindow for EditorViewport tests";
     }
 
     void TearDown() override {
