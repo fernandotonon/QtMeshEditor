@@ -71,6 +71,37 @@ Ogre::MeshPtr createTwoSubmeshSharedMesh(const std::string& name)
     mesh->load();
     return mesh;
 }
+
+class ScopedDeathTestEnvironment {
+public:
+    ScopedDeathTestEnvironment()
+        : m_hadQtQpaPlatform(qEnvironmentVariableIsSet("QT_QPA_PLATFORM")),
+          m_oldQtQpaPlatform(qgetenv("QT_QPA_PLATFORM")),
+          m_oldDeathTestStyle(::testing::GTEST_FLAG_GET(death_test_style))
+    {
+    }
+
+    void setOffscreenThreadsafe()
+    {
+        qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
+        GTEST_FLAG_SET(death_test_style, "threadsafe");
+    }
+
+    ~ScopedDeathTestEnvironment()
+    {
+        if (m_hadQtQpaPlatform) {
+            qputenv("QT_QPA_PLATFORM", m_oldQtQpaPlatform);
+        } else {
+            qunsetenv("QT_QPA_PLATFORM");
+        }
+        GTEST_FLAG_SET(death_test_style, m_oldDeathTestStyle);
+    }
+
+private:
+    bool m_hadQtQpaPlatform = false;
+    QByteArray m_oldQtQpaPlatform;
+    std::string m_oldDeathTestStyle;
+};
 } // anonymous namespace
 
 // --- Formatting tests (no Ogre needed) ---
@@ -510,8 +541,9 @@ TEST(CLIPipelineRun, CliWithHelp)
 
 TEST(CLIPipelineRun, UnknownCommand)
 {
-    qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ScopedDeathTestEnvironment scopedEnv;
+    scopedEnv.setOffscreenThreadsafe();
+
     char arg0[] = "qtmesh";
     char arg1[] = "not-a-command";
     char* argv[] = {arg0, arg1};
@@ -520,13 +552,25 @@ TEST(CLIPipelineRun, UnknownCommand)
 
 TEST(CLIPipelineRun, UnknownCommandWithNoTelemetryFlag)
 {
-    qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
-    GTEST_FLAG_SET(death_test_style, "threadsafe");
+    ScopedDeathTestEnvironment scopedEnv;
+    scopedEnv.setOffscreenThreadsafe();
+
+    QSettings settings;
+    const QString kSentryEnabledKey = "Sentry/enabled";
+    const bool hadSentryEnabled = settings.contains(kSentryEnabledKey);
+    const QVariant previousSentryEnabled = settings.value(kSentryEnabledKey);
+
     char arg0[] = "qtmesh";
     char arg1[] = "--no-telemetry";
     char arg2[] = "not-a-command";
     char* argv[] = {arg0, arg1, arg2};
     EXPECT_EXIT(CLIPipeline::run(3, argv), testing::ExitedWithCode(2), "");
+
+    if (hadSentryEnabled) {
+        settings.setValue(kSentryEnabledKey, previousSentryEnabled);
+    } else {
+        settings.remove(kSentryEnabledKey);
+    }
 }
 
 // --- TestArgv helper for in-process cmd* tests ---
