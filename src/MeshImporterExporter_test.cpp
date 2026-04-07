@@ -13,6 +13,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
+#include <QVector>
 #include <cstdint>
 #include <set>
 #include <OgreTextureManager.h>
@@ -798,10 +799,19 @@ TEST_F(SceneSaveLoadTest, SceneImporter_DuplicateNodeNames_AreMadeUnique)
     QJsonArray nodes = root.value("nodes").toArray();
     ASSERT_GE(nodes.size(), 2);
 
+    QVector<int> meshNodeIndices;
+    meshNodeIndices.reserve(nodes.size());
+    for (int i = 0; i < nodes.size(); ++i) {
+        const QJsonObject nodeObj = nodes[i].toObject();
+        if (nodeObj.contains("mesh"))
+            meshNodeIndices.push_back(i);
+    }
+    ASSERT_GE(meshNodeIndices.size(), 2);
+
     for (int i = 0; i < 2; ++i) {
-        QJsonObject nodeObj = nodes[i].toObject();
+        QJsonObject nodeObj = nodes[meshNodeIndices[i]].toObject();
         nodeObj["name"] = "DuplicatedNode";
-        nodes[i] = nodeObj;
+        nodes[meshNodeIndices[i]] = nodeObj;
     }
     root["nodes"] = nodes;
     doc.setObject(root);
