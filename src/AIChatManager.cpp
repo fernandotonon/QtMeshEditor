@@ -512,21 +512,35 @@ QString AIChatManager::buildConversationPrompt(int maxHistory) const
         maxHistory = (m_toolLoopDepth >= kMaxToolLoops - 1) ? 4 : 8;
     int start = qMax(0, m_messages.size() - maxHistory);
 
-    QString conv;
-    for (int i = start; i < m_messages.size(); ++i) {
-        QVariantMap m = m_messages[i].toMap();
+    auto formatMsg = [](const QVariantMap& m) -> QString {
         QString role = m["role"].toString();
         QString text = m["text"].toString();
         bool isTool  = m["isTool"].toBool();
-
         if (role == "user")
-            conv += "User: " + text + "\n";
-        else if (role == "tool" || isTool)
-            // Prefix with RESULT: so the model distinguishes past results from new calls
-            conv += "RESULT: " + text + "\n";
-        else
-            conv += "Assistant: " + text + "\n";
+            return "User: " + text + "\n";
+        if (role == "tool" || isTool)
+            return "RESULT: " + text + "\n";
+        return "Assistant: " + text + "\n";
+    };
+
+    QString conv;
+
+    // Always include the first user message so the model knows the original request,
+    // even if it has scrolled out of the sliding history window.
+    if (start > 0) {
+        for (int i = 0; i < m_messages.size(); ++i) {
+            QVariantMap m = m_messages[i].toMap();
+            if (m["role"].toString() == "user") {
+                conv += formatMsg(m);
+                conv += "...\n"; // indicate intervening history was omitted
+                break;
+            }
+        }
     }
+
+    for (int i = start; i < m_messages.size(); ++i)
+        conv += formatMsg(m_messages[i].toMap());
+
     conv += "Assistant:";
     return conv;
 }
