@@ -5,6 +5,8 @@
 #include <QSignalSpy>
 #include <QThread>
 #include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
 #include "MaterialEditorQML.h"
 #include "Manager.h"
 #include <OgreException.h>
@@ -136,6 +138,66 @@ TEST_F(MaterialEditorQMLTest, FileSystem_ListDirectory) {
     // Non-existent directory should return empty list
     QVariantList empty = editor->listDirectory("/nonexistent_path_xyz_99999");
     EXPECT_EQ(empty.size(), 0);
+}
+
+TEST_F(MaterialEditorQMLTest, FileSystem_ListDirectoryFiltersOnlyImagesAndDirectories) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString subdirPath = tempDir.filePath("textures");
+    ASSERT_TRUE(QDir().mkpath(subdirPath));
+
+    QFile imageFile(tempDir.filePath("albedo.png"));
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    imageFile.write("png");
+    imageFile.close();
+
+    QFile textFile(tempDir.filePath("notes.txt"));
+    ASSERT_TRUE(textFile.open(QIODevice::WriteOnly));
+    textFile.write("txt");
+    textFile.close();
+
+    QVariantList entries = editor->listDirectory(tempDir.path());
+    ASSERT_GE(entries.size(), 2);
+
+    bool foundDir = false;
+    bool foundImage = false;
+    bool foundText = false;
+    for (const QVariant& v : entries) {
+        const QVariantMap item = v.toMap();
+        const QString name = item.value("name").toString();
+        const QString type = item.value("type").toString();
+        if (name == "textures" && type == "dir") foundDir = true;
+        if (name == "albedo.png" && type == "file") foundImage = true;
+        if (name == "notes.txt") foundText = true;
+    }
+
+    EXPECT_TRUE(foundDir);
+    EXPECT_TRUE(foundImage);
+    EXPECT_FALSE(foundText);
+}
+
+TEST_F(MaterialEditorQMLTest, FileSystem_GetFileSizeStringCoversKbAndMbBranches) {
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString kbPath = tempDir.filePath("kb.bin");
+    QFile kbFile(kbPath);
+    ASSERT_TRUE(kbFile.open(QIODevice::WriteOnly));
+    kbFile.write(QByteArray(2048, 'k'));
+    kbFile.close();
+
+    const QString mbPath = tempDir.filePath("mb.bin");
+    QFile mbFile(mbPath);
+    ASSERT_TRUE(mbFile.open(QIODevice::WriteOnly));
+    mbFile.write(QByteArray(2 * 1024 * 1024, 'm'));
+    mbFile.close();
+
+    const QString kbSize = editor->getFileSizeString(kbPath);
+    const QString mbSize = editor->getFileSizeString(mbPath);
+
+    EXPECT_TRUE(kbSize.contains("KB"));
+    EXPECT_TRUE(mbSize.contains("MB"));
 }
 
 // ===========================================================================
@@ -1875,6 +1937,65 @@ TEST_F(MaterialEditorQMLTest, LLMProperties_InitialState) {
     // whether llama.cpp was compiled in, but the calls should not throw.
     Q_UNUSED(loaded);
     Q_UNUSED(model);
+}
+
+TEST_F(MaterialEditorQMLTest, GenerateMaterialFromPrompt_EmptyPromptEmitsError) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::aiGenerationError);
+
+    editor->generateMaterialFromPrompt("");
+
+    ASSERT_EQ(errorSpy.count(), 1);
+    const QList<QVariant> args = errorSpy.takeFirst();
+    ASSERT_EQ(args.size(), 1);
+    EXPECT_EQ(args.at(0).toString(), "Please enter a prompt");
+}
+
+TEST_F(MaterialEditorQMLTest, GenerateMaterialFromPrompt_NoModelLoadedEmitsError) {
+    if (editor->llmModelLoaded()) {
+        GTEST_SKIP() << "LLM model is already loaded in this environment";
+    }
+
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::aiGenerationError);
+
+    editor->generateMaterialFromPrompt("polished metal with scratches");
+
+    ASSERT_GE(errorSpy.count(), 1);
+    const QList<QVariant> args = errorSpy.takeFirst();
+    ASSERT_EQ(args.size(), 1);
+    EXPECT_TRUE(args.at(0).toString().contains("No AI model loaded"));
+}
+
+TEST_F(MaterialEditorQMLTest, GenerateTextureFromPrompt_EmptyPromptEmitsError) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::sdGenerationError);
+
+    editor->generateTextureFromPrompt("", 512, 512);
+
+    ASSERT_EQ(errorSpy.count(), 1);
+    const QList<QVariant> args = errorSpy.takeFirst();
+    ASSERT_EQ(args.size(), 1);
+    EXPECT_EQ(args.at(0).toString(), "Please enter a texture prompt");
+}
+
+TEST_F(MaterialEditorQMLTest, GenerateTextureFromPrompt_ReportsUnavailableBackendOrModel) {
+    QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::sdGenerationError);
+
+    editor->generateTextureFromPrompt("brushed steel", 512, 512);
+
+    ASSERT_GE(errorSpy.count(), 1);
+    const QList<QVariant> args = errorSpy.takeFirst();
+    ASSERT_EQ(args.size(), 1);
+    const QString message = args.at(0).toString();
+
+    if (editor->stableDiffusionEnabled()) {
+        EXPECT_TRUE(message.contains("No SD model loaded") || message.contains("AI Settings"));
+    } else {
+        EXPECT_TRUE(message.contains("Stable Diffusion support is not enabled"));
+    }
+}
+
+TEST_F(MaterialEditorQMLTest, StopGenerationMethodsWithoutActiveJobsDoNotCrash) {
+    EXPECT_NO_THROW(editor->stopAIGeneration());
+    EXPECT_NO_THROW(editor->stopTextureGeneration());
 }
 
 // ===========================================================================

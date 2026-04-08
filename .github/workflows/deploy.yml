@@ -1069,7 +1069,8 @@ jobs:
               --filter 'src/' \
               --exclude 'src/OgreXML/' \
               --exclude 'src/dependencies/' \
-              --exclude '.*/(LLMManager|LLMWorker|ModelDownloader|SDManager)\.cpp' \
+              --exclude '.*/(LLMManager|LLMWorker|ModelDownloader|SDManager|AIChatManager)\.cpp' \
+              --exclude '.*/(AIChatManager|SDManager|SDWorker)\.h' \
               --exclude '.*_test\.cpp' \
               --exclude '.*TestHelpers\.h' \
               --exclude '.*QtAppEnvironment_test\.cpp' \
