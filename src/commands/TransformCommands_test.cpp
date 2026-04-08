@@ -434,3 +434,97 @@ TEST_F(TransformCommandsTests, DeleteCommand_MultipleNodes) {
 
     delete cmd;
 }
+
+// ---- DuplicateCommand ----
+
+TEST_F(TransformCommandsTests, DuplicateCommand_Constructor) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("DupCmdNode1");
+    ASSERT_NE(node, nullptr);
+
+    QList<Ogre::SceneNode*> clones = {node};
+    auto* cmd = new DuplicateCommand(clones);
+    EXPECT_NE(cmd, nullptr);
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, DuplicateCommand_FirstRedoIsNoop) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("DupCmdNoop");
+    ASSERT_NE(node, nullptr);
+
+    QList<Ogre::SceneNode*> clones = {node};
+    auto* cmd = new DuplicateCommand(clones);
+
+    // First redo should be a no-op (caller already created the clones)
+    cmd->redo();
+    // Node should still be visible
+    EXPECT_TRUE(mgr->hasSceneNode("DupCmdNoop"));
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, DuplicateCommand_UndoHidesClones) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("DupCmdHide");
+    ASSERT_NE(node, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("DupHideTestMesh");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    node->attachObject(entity);
+    EXPECT_TRUE(entity->getVisible());
+
+    QList<Ogre::SceneNode*> clones = {node};
+    auto* cmd = new DuplicateCommand(clones);
+
+    // First redo (no-op)
+    cmd->redo();
+
+    // Undo should hide the cloned nodes
+    cmd->undo();
+    EXPECT_FALSE(entity->getVisible());
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, DuplicateCommand_RedoShowsClones) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("DupCmdShow");
+    ASSERT_NE(node, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("DupShowTestMesh");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    node->attachObject(entity);
+
+    QList<Ogre::SceneNode*> clones = {node};
+    auto* cmd = new DuplicateCommand(clones);
+
+    // First redo (no-op)
+    cmd->redo();
+
+    // Undo hides
+    cmd->undo();
+    EXPECT_FALSE(entity->getVisible());
+
+    // Second redo should show again
+    cmd->redo();
+    EXPECT_TRUE(entity->getVisible());
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, DuplicateCommand_EmptyCloneList) {
+    QList<Ogre::SceneNode*> clones;
+    auto* cmd = new DuplicateCommand(clones);
+
+    // Should not crash with empty list
+    EXPECT_NO_THROW(cmd->redo());
+    EXPECT_NO_THROW(cmd->undo());
+
+    delete cmd;
+}

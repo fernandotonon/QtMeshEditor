@@ -479,6 +479,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolReadFile(args);
     } else if (name == "delete_entity") {
         toolResult = toolDeleteEntity(args);
+    } else if (name == "duplicate_entity") {
+        toolResult = toolDuplicateEntity(args);
     } else if (name == "camera_control") {
         toolResult = toolCameraControl(args);
     } else if (name == "get_camera_info") {
@@ -2411,6 +2413,32 @@ QJsonObject MCPServer::toolDeleteEntity(const QJsonObject &args)
     return makeSuccessResult(QString("Deleted '%1' from the scene.").arg(name));
 }
 
+QJsonObject MCPServer::toolDuplicateEntity(const QJsonObject &args)
+{
+    QString name = args["name"].toString();
+
+    Ogre::SceneNode* sourceNode = nullptr;
+    if (!name.isEmpty()) {
+        sourceNode = findSceneNodeByName(name);
+        if (!sourceNode)
+            return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
+    } else {
+        // Duplicate current selection
+        SelectionSet* sel = SelectionSet::getSingleton();
+        if (!sel || sel->getNodesCount() == 0)
+            return makeErrorResult("Error: No name provided and no scene nodes selected.");
+        sourceNode = sel->getNodesSelectionList().first();
+    }
+
+    Ogre::SceneNode* clone = Manager::getSingleton()->duplicateSceneNode(sourceNode);
+    if (!clone)
+        return makeErrorResult("Error: Failed to duplicate node.");
+
+    return makeSuccessResult(QString("Duplicated '%1' as '%2'")
+        .arg(QString::fromStdString(sourceNode->getName()),
+             QString::fromStdString(clone->getName())));
+}
+
 QJsonObject MCPServer::toolGetCameraInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
@@ -3030,6 +3058,17 @@ QJsonArray MCPServer::buildToolsList()
             "Permanently delete an entity/node from the scene. Use get_scene_info to find node names. This cannot be undone.",
             props,
             QJsonArray{"name"}
+        );
+    }
+
+    // duplicate_entity
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity/node to duplicate. If omitted, duplicates the current selection."}};
+        appendTool(
+            "duplicate_entity",
+            "Duplicate an entity/node in the scene, creating a clone with the same mesh, materials, and transform. The clone gets a '_copy' name suffix.",
+            props
         );
     }
 

@@ -255,6 +255,37 @@ Ogre::Entity* Manager::createEntity(Ogre::SceneNode* const& sceneNode, const Ogr
     return ent;
 }
 
+Ogre::SceneNode* Manager::duplicateSceneNode(Ogre::SceneNode* source)
+{
+    if (!source || !mSceneMgr) return nullptr;
+
+    // Generate a unique name based on the source
+    QString baseName = QString::fromStdString(source->getName()) + "_copy";
+    Ogre::SceneNode* newNode = addSceneNode(baseName);
+
+    // Copy transform
+    newNode->setPosition(source->getPosition());
+    newNode->setOrientation(source->getOrientation());
+    newNode->setScale(source->getScale());
+
+    // Clone attached entities
+    for (unsigned short i = 0; i < source->numAttachedObjects(); ++i) {
+        Ogre::MovableObject* obj = source->getAttachedObject(i);
+        if (obj->getMovableType() != "Entity") continue;
+
+        Ogre::Entity* srcEntity = static_cast<Ogre::Entity*>(obj);
+        Ogre::Entity* newEntity = createEntity(newNode, srcEntity->getMesh());
+
+        // Copy per-sub-entity material assignments
+        for (unsigned int s = 0; s < srcEntity->getNumSubEntities(); ++s) {
+            newEntity->getSubEntity(s)->setMaterial(
+                srcEntity->getSubEntity(s)->getMaterial());
+        }
+    }
+
+    return newNode;
+}
+
 void Manager::destroySceneNode(const QString & name)
 {
     SentryReporter::addBreadcrumb("scene", "Destroy scene node");

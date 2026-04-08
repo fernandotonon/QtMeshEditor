@@ -51,6 +51,7 @@
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "UndoManager.h"
+#include "commands/TransformCommands.h"
 #include "PropertiesPanelController.h"
 #include "MeshLodController.h"
 #include "MeshValidator.h"
@@ -279,6 +280,9 @@ void MainWindow::initToolBar()
     // Undo/Redo
     connect(ui->actionUndo, &QAction::triggered, UndoManager::getSingleton(), &UndoManager::undo);
     connect(ui->actionRedo, &QAction::triggered, UndoManager::getSingleton(), &UndoManager::redo);
+
+    // Duplicate
+    connect(ui->actionDuplicate, &QAction::triggered, this, &MainWindow::duplicateSelected);
 
     // Refresh gizmo position after undo/redo (deferred to avoid re-entrant scene access)
     connect(UndoManager::getSingleton()->stack(), &QUndoStack::indexChanged, this, [](int) {
@@ -661,6 +665,31 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
     return true;
 }
 // LCOV_EXCL_STOP
+
+void MainWindow::duplicateSelected()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Duplicate selected objects");
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel || sel->getNodesCount() == 0) return;
+
+    QList<Ogre::SceneNode*> sources = sel->getNodesSelectionList();
+    QList<Ogre::SceneNode*> clones;
+
+    for (Ogre::SceneNode* src : sources) {
+        Ogre::SceneNode* clone = Manager::getSingleton()->duplicateSceneNode(src);
+        if (clone) clones.append(clone);
+    }
+
+    if (!clones.isEmpty()) {
+        UndoManager::getSingleton()->push(new DuplicateCommand(clones));
+
+        // Select the clones instead of the originals
+        sel->clearList();
+        for (Ogre::SceneNode* clone : clones)
+            sel->append(clone);
+    }
+}
 
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {

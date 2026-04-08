@@ -145,3 +145,34 @@ void DeleteCommand::redo()
             snap.node->setVisible(false, true);
     }
 }
+
+// ---- DuplicateCommand ----
+
+DuplicateCommand::DuplicateCommand(const QList<Ogre::SceneNode*>& clonedNodes,
+                                   QUndoCommand* parent)
+    : QUndoCommand("Duplicate", parent), mClonedNodes(clonedNodes), mFirstRedo(true)
+{
+}
+
+void DuplicateCommand::undo()
+{
+    // Hide cloned nodes (same pattern as DeleteCommand)
+    for (Ogre::SceneNode* node : mClonedNodes) {
+        if (node)
+            node->setVisible(false, true);
+    }
+    SelectionSet::getSingleton()->clearList();
+}
+
+void DuplicateCommand::redo()
+{
+    if (mFirstRedo) {
+        mFirstRedo = false;
+        return;
+    }
+    // Show cloned nodes again
+    for (Ogre::SceneNode* node : mClonedNodes) {
+        if (node)
+            node->setVisible(true, true);
+    }
+}
