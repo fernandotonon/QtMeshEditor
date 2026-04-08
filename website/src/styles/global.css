@@ -1,0 +1,81 @@
+:root {
+  --surface-0: #050a14;
+  --surface-1: #0b1322;
+  --surface-2: #101b2d;
+  --surface-3: #15243a;
+  --text-0: #e9f1ff;
+  --text-1: #afbdd3;
+  --text-muted: #8c9ab2;
+  --stroke: rgba(120, 141, 179, 0.24);
+  --stroke-strong: rgba(135, 166, 219, 0.38);
+  --accent-1: #67d3ff;
+  --accent-2: #5b8fff;
+  --font-ui: 'Sora', 'Segoe UI', 'Helvetica Neue', sans-serif;
+  --mono: 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: var(--font-ui);
+  background: var(--surface-0);
+  color: var(--text-0);
+  line-height: 1.5;
+}
+
+a {
+  color: inherit;
+}
+
+img {
+  max-width: 100%;
+}
+
+code,
+pre {
+  font-family: var(--mono);
+}
+
+code {
+  color: #b8e5ff;
+}
+
+:focus-visible {
+  outline: 3px solid rgba(103, 211, 255, 0.7);
+  outline-offset: 3px;
+  border-radius: 0.35rem;
+}
+
+.reveal {
+  animation: fade-up 460ms ease both;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}

@@ -1,0 +1,39 @@
+.card {
+  border-radius: 1rem;
+  border: 1px solid var(--stroke);
+  background: linear-gradient(180deg, rgba(16, 25, 41, 0.96), rgba(11, 16, 28, 0.96));
+  padding: 1rem;
+}
+
+.topRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.65rem;
+}
+
+.platform {
+  margin: 0;
+  color: var(--text-0);
+  font-size: 1.05rem;
+}
+
+.method {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.command {
+  margin: 0.85rem 0 0;
+  border-radius: 0.75rem;
+  border: 1px solid rgba(137, 157, 192, 0.24);
+  background: rgba(2, 8, 17, 0.8);
+  padding: 0.72rem;
+  font-family: var(--mono);
+  color: #dce8ff;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  overflow: auto;
+}
