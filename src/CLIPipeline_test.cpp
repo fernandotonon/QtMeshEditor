@@ -663,6 +663,47 @@ protected:
     }
 };
 
+static QString exportGeneratedTriangleMesh(const QString& baseName)
+{
+    auto* manager = Manager::getSingletonPtr();
+    if (!manager)
+        return QString();
+
+    const std::string meshName = (baseName + "_mesh").toStdString();
+    const QString nodeName = baseName + "_node";
+
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh(meshName);
+    Ogre::SceneNode* node = manager->addSceneNode(nodeName);
+    if (!node) {
+        if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+            Ogre::MeshManager::getSingleton().remove(old);
+        return QString();
+    }
+
+    Ogre::Entity* entity = manager->createEntity(node, mesh);
+    if (!entity) {
+        manager->destroySceneNode(node);
+        if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+            Ogre::MeshManager::getSingleton().remove(old);
+        return QString();
+    }
+
+    const QString outFile = QDir::tempPath() + "/" + baseName + ".mesh";
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/" + baseName + ".material");
+
+    const int exportRc = MeshImporterExporter::exporter(node, outFile, "Ogre Mesh (*.mesh)");
+
+    manager->destroyAllAttachedMovableObjects(node);
+    manager->destroySceneNode(node);
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    if (exportRc != 0)
+        return QString();
+    return outFile;
+}
+
 // -- cmdInfo error paths (no Ogre needed) --
 
 TEST(CLIPipelineCmdInfoError, NoFile)
@@ -713,6 +754,21 @@ TEST_F(CLIPipelineCmdTest, CmdInfo_SkipsCliFlag)
 
     TestArgv args({"qtmesh", "--cli", "info", fileBa.constData()});
     EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 0);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdInfo_InvalidExistingFile)
+{
+    const QString file = QDir::tempPath() + "/cli_test_invalid_info_input.fbx";
+    QFile invalid(file);
+    ASSERT_TRUE(invalid.open(QIODevice::WriteOnly | QIODevice::Text));
+    invalid.write("this is not a valid 3D model file");
+    invalid.close();
+
+    QByteArray fileBa = file.toUtf8();
+    TestArgv args({"qtmesh", "info", fileBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdInfo(args.argc(), args.argv()), 1);
+
+    QFile::remove(file);
 }
 
 // -- cmdConvert error paths --
@@ -1010,6 +1066,43 @@ TEST_F(CLIPipelineCmdTest, CmdAnimList_WithCliFlag)
     EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
 }
 
+TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsGeneratedMeshReturnsError)
+{
+    auto* manager = Manager::getSingleton();
+    ASSERT_NE(manager, nullptr);
+
+    Ogre::MeshPtr mesh = createInMemorySkeletonMesh("cli_no_anim_mesh");
+    ASSERT_TRUE(static_cast<bool>(mesh));
+
+    Ogre::SceneNode* node = manager->addSceneNode("cli_no_anim_node");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = manager->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+    ASSERT_EQ(entity->getMesh()->getSkeleton()->getNumAnimations(), 0u);
+
+    const QString sourceFile = QDir::tempPath() + "/cli_no_anim_source.mesh";
+    QFile::remove(sourceFile);
+    ASSERT_EQ(MeshImporterExporter::exporter(node, sourceFile, "Ogre Mesh (*.mesh)"), 0);
+    ASSERT_TRUE(QFile::exists(sourceFile));
+
+    auto nodes = manager->getSceneNodes();
+    for (auto* n : nodes) {
+        manager->destroyAllAttachedMovableObjects(n);
+        manager->destroySceneNode(n);
+    }
+
+    QByteArray sourceBa = sourceFile.toUtf8();
+    TestArgv textArgs({"qtmesh", "anim", sourceBa.constData(), "--list"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(textArgs.argc(), textArgs.argv()), 1);
+
+    TestArgv jsonArgs({"qtmesh", "anim", sourceBa.constData(), "--list", "--json"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(jsonArgs.argc(), jsonArgs.argv()), 1);
+
+    QFile::remove(sourceFile);
+    QFile::remove(QDir::tempPath() + "/cli_no_anim_source.material");
+}
+
 // -- cmdAnim rename --
 
 TEST_F(CLIPipelineCmdTest, CmdAnimRename_NonexistentAnim)
@@ -1211,6 +1304,33 @@ TEST_F(CLIPipelineCmdTest, CmdAnimMerge_NonexistentAnimFile)
                    "--merge", "/tmp/nonexistent_anim_file_12345.fbx",
                    "-o", "/tmp/cli_test_merge_fail.mesh"});
     EXPECT_NE(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimMerge_WithoutSourcesReturnsError)
+{
+    auto* manager = Manager::getSingleton();
+    ASSERT_NE(manager, nullptr);
+    auto* entity = createAnimatedTestEntity("cli_merge_no_sources");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+
+    const QString sourceFile = QDir::tempPath() + "/cli_merge_no_sources.mesh";
+    QFile::remove(sourceFile);
+    ASSERT_EQ(MeshImporterExporter::exporter(entity->getParentSceneNode(), sourceFile, "Ogre Mesh (*.mesh)"), 0);
+    ASSERT_TRUE(QFile::exists(sourceFile));
+
+    auto nodes = manager->getSceneNodes();
+    for (auto* n : nodes) {
+        manager->destroyAllAttachedMovableObjects(n);
+        manager->destroySceneNode(n);
+    }
+
+    QByteArray sourceBa = sourceFile.toUtf8();
+    TestArgv args({"qtmesh", "anim", sourceBa.constData(), "--merge"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
+
+    QFile::remove(sourceFile);
+    QFile::remove(QDir::tempPath() + "/cli_merge_no_sources.material");
 }
 
 // --- Additional formatting edge cases ---
@@ -1442,6 +1562,23 @@ TEST_F(CLIPipelineCmdValidateTest, ValidateIssuesHaveExpectedFields)
     }
 }
 
+TEST_F(CLIPipelineCmdValidateTest, CmdValidate_SucceedsForGeneratedMeshTextAndJson)
+{
+    const QString sourceFile = exportGeneratedTriangleMesh("cli_validate_generated");
+    ASSERT_FALSE(sourceFile.isEmpty());
+    ASSERT_TRUE(QFile::exists(sourceFile));
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    TestArgv textArgs({"qtmesh", "validate", sourceBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdValidate(textArgs.argc(), textArgs.argv()), 0);
+
+    TestArgv jsonArgs({"qtmesh", "validate", sourceBa.constData(), "--json"});
+    EXPECT_EQ(CLIPipeline::cmdValidate(jsonArgs.argc(), jsonArgs.argv()), 0);
+
+    QFile::remove(sourceFile);
+    QFile::remove(QDir::tempPath() + "/cli_validate_generated.material");
+}
+
 // ==========================================================================
 // cmdLod tests
 // ==========================================================================
@@ -1541,4 +1678,32 @@ TEST_F(CLIPipelineCmdLodTest, LodInfoHasExpectedFields)
         EXPECT_TRUE(map.contains("label"));
         EXPECT_TRUE(map.contains("triangles"));
     }
+}
+
+TEST_F(CLIPipelineCmdLodTest, CmdLod_InfoAndRemoveFromGeneratedMesh)
+{
+    const QString sourceFile = exportGeneratedTriangleMesh("cli_lod_generated");
+    ASSERT_FALSE(sourceFile.isEmpty());
+    ASSERT_TRUE(QFile::exists(sourceFile));
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    TestArgv infoTextArgs({"qtmesh", "lod", sourceBa.constData(), "--info"});
+    EXPECT_EQ(CLIPipeline::cmdLod(infoTextArgs.argc(), infoTextArgs.argv()), 0);
+
+    TestArgv infoJsonArgs({"qtmesh", "lod", sourceBa.constData(), "--info", "--json"});
+    EXPECT_EQ(CLIPipeline::cmdLod(infoJsonArgs.argc(), infoJsonArgs.argv()), 0);
+
+    const QString removedOut = QDir::tempPath() + "/cli_lod_removed.mesh";
+    QByteArray removedOutBa = removedOut.toUtf8();
+    QFile::remove(removedOut);
+    QFile::remove(QDir::tempPath() + "/cli_lod_removed.material");
+
+    TestArgv removeArgs({"qtmesh", "lod", sourceBa.constData(), "--remove", "-o", removedOutBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdLod(removeArgs.argc(), removeArgs.argv()), 0);
+    EXPECT_TRUE(QFile::exists(removedOut));
+
+    QFile::remove(sourceFile);
+    QFile::remove(QDir::tempPath() + "/cli_lod_generated.material");
+    QFile::remove(removedOut);
+    QFile::remove(QDir::tempPath() + "/cli_lod_removed.material");
 }
