@@ -665,21 +665,41 @@ protected:
 
 static QString exportGeneratedTriangleMesh(const QString& baseName)
 {
-    auto* manager = Manager::getSingleton();
+    auto* manager = Manager::getSingletonPtr();
+    if (!manager)
+        return QString();
+
     const std::string meshName = (baseName + "_mesh").toStdString();
     const QString nodeName = baseName + "_node";
 
     Ogre::MeshPtr mesh = createInMemoryTriangleMesh(meshName);
     Ogre::SceneNode* node = manager->addSceneNode(nodeName);
-    Ogre::Entity* entity = manager->createEntity(node, mesh);
-    if (!entity)
+    if (!node) {
+        if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+            Ogre::MeshManager::getSingleton().remove(old);
         return QString();
+    }
+
+    Ogre::Entity* entity = manager->createEntity(node, mesh);
+    if (!entity) {
+        manager->destroySceneNode(node);
+        if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+            Ogre::MeshManager::getSingleton().remove(old);
+        return QString();
+    }
 
     const QString outFile = QDir::tempPath() + "/" + baseName + ".mesh";
     QFile::remove(outFile);
     QFile::remove(QDir::tempPath() + "/" + baseName + ".material");
 
-    if (MeshImporterExporter::exporter(node, outFile, "Ogre Mesh (*.mesh)") != 0)
+    const int exportRc = MeshImporterExporter::exporter(node, outFile, "Ogre Mesh (*.mesh)");
+
+    manager->destroyAllAttachedMovableObjects(node);
+    manager->destroySceneNode(node);
+    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+        Ogre::MeshManager::getSingleton().remove(old);
+
+    if (exportRc != 0)
         return QString();
     return outFile;
 }
