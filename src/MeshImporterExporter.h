@@ -59,6 +59,12 @@ public:
     static QString formatFileURI(const QString &_uri, const QString &_format);
     static QString exportFileDialogFilter();
 
+    /// Export the current animated pose of an entity as a static mesh (no skeleton/animation).
+    /// Reads software-skinned vertex positions, builds a new mesh, and exports it.
+    /// Returns 0 on success, non-zero on error.
+    static int exportCurrentPose(Ogre::Entity* entity, const QString& outputPath,
+                                 const QString& format = QString());
+
     static int sceneExporter(const QString &_uri, const ProgressCallback& progress = nullptr);
     static bool sceneImporter(const QString &_uri);
 };

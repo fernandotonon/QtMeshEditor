@@ -5,8 +5,10 @@
 #include "PrimitiveObject.h"
 #include "AnimationWidget.h"
 #include "SkeletonTransform.h"
+#include "MeshImporterExporter.h"
 #include "Manager.h"
 #include <QApplication>
+#include <QFileDialog>
 #include <QPalette>
 #include <Ogre.h>
 
@@ -480,6 +482,40 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
         }
     }
     return false;
+}
+
+bool PropertiesPanelController::exportCurrentPose(const QString& path)
+{
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    Ogre::Entity* animatedEntity = nullptr;
+    for (Ogre::Entity* ent : entities)
+    {
+        if (ent->hasSkeleton()) {
+            animatedEntity = ent;
+            break;
+        }
+    }
+
+    if (!animatedEntity) return false;
+
+    QString outputPath = path;
+    if (outputPath.isEmpty())
+    {
+        QString filter = "STL (*.stl)";
+        outputPath = QFileDialog::getSaveFileName(
+            nullptr,
+            QObject::tr("Export Current Pose"),
+            QString::fromStdString(animatedEntity->getName()) + "_pose",
+            MeshImporterExporter::exportFileDialogFilter(),
+            &filter,
+            QFileDialog::DontUseNativeDialog);
+        if (outputPath.isEmpty()) return false;
+
+        outputPath = MeshImporterExporter::formatFileURI(outputPath, filter);
+    }
+
+    int result = MeshImporterExporter::exportCurrentPose(animatedEntity, outputPath);
+    return result == 0;
 }
 
 void PropertiesPanelController::onSelectionChanged()

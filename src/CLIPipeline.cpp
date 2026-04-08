@@ -102,6 +102,10 @@ void CLIPipeline::printUsage()
         "  lod <file> --auto [-o output]     Auto-generate LOD levels\n"
         "  lod <file> --remove [-o output]   Remove LOD levels (overwrites input if no -o)\n"
         "  lod <file> --info [--json]        Show LOD level info\n"
+        "  pose <file> --animation <name> --time <t> -o <output>\n"
+        "                                    Export a single posed frame as static mesh\n"
+        "  pose <file> --animation <name> --count N -o <pattern>\n"
+        "                                    Export N evenly spaced frames (use %02d in pattern)\n"
         "\n"
         "Fix flags:\n"
         "  --remove-degenerates  Remove degenerate triangles\n"
@@ -447,6 +451,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "anim") rc = cmdAnim(argc, argv);
     else if (cmd == "validate") rc = cmdValidate(argc, argv);
     else if (cmd == "lod") rc = cmdLod(argc, argv);
+    else if (cmd == "pose") rc = cmdPose(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -1273,3 +1278,169 @@ int CLIPipeline::cmdLod(int argc, char* argv[])
     return 0;
 }
 
+int CLIPipeline::cmdPose(int argc, char* argv[])
+{
+    // Parse: pose <file> --animation <name> --time <t> -o <output>
+    //        pose <file> --animation <name> --count N -o <pattern>
+    QString filePath, outputPath, animName;
+    float time = -1.0f;
+    int count = 0;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "pose" || arg == "--cli") continue;
+        if (arg == "--animation" && i + 1 < argc) {
+            animName = QString(argv[++i]);
+            continue;
+        }
+        if (arg == "--time" && i + 1 < argc) {
+            time = QString(argv[++i]).toFloat();
+            continue;
+        }
+        if (arg == "--count" && i + 1 < argc) {
+            count = QString(argv[++i]).toInt();
+            continue;
+        }
+        if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
+            outputPath = QString(argv[++i]);
+            continue;
+        }
+        if (!arg.startsWith("-") && filePath.isEmpty()) {
+            filePath = arg;
+            continue;
+        }
+    }
+
+    if (filePath.isEmpty()) {
+        err() << "Error: No input file specified." << Qt::endl;
+        err() << "Usage: qtmesh pose <file> --animation <name> --time <t> -o <output>" << Qt::endl;
+        err() << "       qtmesh pose <file> --animation <name> --count N -o <pattern>" << Qt::endl;
+        return 2;
+    }
+
+    if (animName.isEmpty()) {
+        err() << "Error: --animation <name> is required." << Qt::endl;
+        return 2;
+    }
+
+    if (outputPath.isEmpty()) {
+        err() << "Error: -o <output> is required." << Qt::endl;
+        return 2;
+    }
+
+    if (time < 0.0f && count <= 0) {
+        err() << "Error: Specify --time <t> or --count <N>." << Qt::endl;
+        return 2;
+    }
+
+    QFileInfo fi(filePath);
+    if (!fi.exists()) {
+        err() << "Error: File not found: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    if (!initOgreHeadless()) return 1;
+
+    SentryReporter::addBreadcrumb("cli.pose", QString("Pose export .%1 anim=%2")
+        .arg(fi.suffix(), animName));
+
+    MeshImporterExporter::importer({fi.absoluteFilePath()});
+
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty()) {
+        SentryReporter::captureMessage(QString("CLI pose: import failed (.%1)").arg(fi.suffix()), "error");
+        err() << "Error: Failed to load file: " << filePath << Qt::endl;
+        return 1;
+    }
+
+    Ogre::Entity* entity = entities.first();
+    if (!entity->hasSkeleton()) {
+        err() << "Error: File has no skeleton — cannot export pose." << Qt::endl;
+        return 1;
+    }
+
+    // Find the animation
+    auto* animStates = entity->getAllAnimationStates();
+    if (!animStates || !animStates->hasAnimationState(animName.toStdString())) {
+        err() << "Error: Animation '" << animName << "' not found." << Qt::endl;
+        err() << "Available animations:" << Qt::endl;
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        if (skel) {
+            for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai)
+                err() << "  " << QString::fromStdString(skel->getAnimation(ai)->getName()) << Qt::endl;
+        }
+        return 1;
+    }
+
+    auto* animState = animStates->getAnimationState(animName.toStdString());
+    float animLength = animState->getLength();
+
+    if (count > 0) {
+        // Export multiple evenly-spaced frames
+        int exported = 0;
+        for (int f = 0; f < count; ++f) {
+            float t = (count == 1) ? 0.0f : (animLength * f / (count - 1));
+
+            // Enable animation at the desired time
+            animState->setEnabled(true);
+            animState->setTimePosition(t);
+
+            // Build output path with frame number substitution
+            // Support printf-style patterns like pose_%02d.stl
+            QString framePath;
+            if (outputPath.contains('%')) {
+                // Use sprintf-style formatting
+                char buf[1024];
+                snprintf(buf, sizeof(buf), outputPath.toUtf8().constData(), f);
+                framePath = QString::fromUtf8(buf);
+            } else {
+                // Insert frame number before extension
+                QFileInfo outFi(outputPath);
+                framePath = QString("%1/%2_%3.%4")
+                    .arg(outFi.path(), outFi.completeBaseName())
+                    .arg(f, 2, 10, QChar('0'))
+                    .arg(outFi.suffix());
+            }
+
+            int result = MeshImporterExporter::exportCurrentPose(entity, framePath);
+            if (result == 0) {
+                ++exported;
+                cliWrite(QString("Exported frame %1/%2 (t=%3s): %4\n")
+                    .arg(f + 1).arg(count)
+                    .arg(t, 0, 'f', 3)
+                    .arg(QFileInfo(framePath).fileName()));
+            } else {
+                err() << "Error: Failed to export frame " << (f + 1) << Qt::endl;
+            }
+
+            animState->setEnabled(false);
+        }
+
+        if (exported == 0) {
+            err() << "Error: All frame exports failed." << Qt::endl;
+            return 1;
+        }
+
+        return 0;
+
+    } else {
+        // Export single frame at specified time
+        animState->setEnabled(true);
+        animState->setTimePosition(time);
+
+        int result = MeshImporterExporter::exportCurrentPose(entity, outputPath);
+        animState->setEnabled(false);
+
+        if (result != 0) {
+            SentryReporter::captureMessage(
+                QString("CLI pose: export failed (.%1)").arg(fi.suffix()), "error");
+            err() << "Error: Export failed." << Qt::endl;
+            return 1;
+        }
+
+        cliWrite(QString("Exported pose (t=%1s): %2\n")
+            .arg(time, 0, 'f', 3)
+            .arg(QFileInfo(outputPath).fileName()));
+        return 0;
+    }
+}

@@ -168,6 +168,10 @@ public:
     Q_INVOKABLE void toggleBoneWeights(const QString& entityName, bool show);
     Q_INVOKABLE bool renameAnimation(const QString& entityName, const QString& oldName, const QString& newName);
 
+    /// Export the current animated pose of the first selected animated entity as a static mesh.
+    /// Opens a file save dialog if no path is provided.
+    Q_INVOKABLE bool exportCurrentPose(const QString& path = QString());
+
 public slots:
     void onSelectionChanged();
     void onTransformChanged();

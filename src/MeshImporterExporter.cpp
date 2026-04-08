@@ -50,6 +50,7 @@ THE SOFTWARE.
 #include "Assimp/MeshProcessor.h"
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
+#include "CLIPipeline.h"
 
 #ifndef WIN32
     #include <unistd.h>
@@ -1273,6 +1274,235 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
     }
 
     return 0;
+}
+
+// ─── Export current pose as static mesh ──────────────────────────────
+int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString& outputPath,
+                                             const QString& format)
+{
+    if (!entity) return -1;
+    if (outputPath.isEmpty()) return -1;
+
+    SentryReporter::addBreadcrumb("file.export", QString("Export pose: %1").arg(outputPath));
+
+    const bool hasSkel = entity->hasSkeleton();
+    if (!hasSkel) {
+        // No skeleton means the mesh is already static — just export as-is
+        auto* node = entity->getParentSceneNode();
+        if (!node) return -1;
+        QString fmt = format.isEmpty() ? CLIPipeline::formatForExtension(outputPath) : format;
+        return exporter(node, outputPath, fmt, true);
+    }
+
+    // Request software skinning so we can read CPU-side deformed vertices
+    entity->addSoftwareAnimationRequest(false);
+    entity->_updateAnimation();
+
+    const Ogre::MeshPtr mesh = entity->getMesh();
+    const unsigned int numSub = mesh->getNumSubMeshes();
+
+    // Build an aiScene with deformed vertex positions, NO skeleton, NO animations
+    auto* scene = new aiScene();
+    scene->mRootNode = new aiNode();
+    scene->mRootNode->mName = aiString(entity->getName());
+    scene->mRootNode->mNumMeshes = numSub;
+    scene->mRootNode->mMeshes = new unsigned int[numSub];
+    for (unsigned int si = 0; si < numSub; ++si)
+        scene->mRootNode->mMeshes[si] = si;
+
+    // Materials
+    std::vector<Ogre::MaterialPtr> materials;
+    std::set<std::string, std::less<>> seen;
+    for (const auto* sub : entity->getSubEntities())
+    {
+        auto mat = sub->getMaterial();
+        if (seen.insert(mat->getName()).second)
+            materials.push_back(mat);
+    }
+    scene->mNumMaterials = static_cast<unsigned int>(materials.size());
+    scene->mMaterials = new aiMaterial*[scene->mNumMaterials];
+    std::map<std::string, unsigned int, std::less<>> matIndexMap;
+    for (unsigned int i = 0; i < scene->mNumMaterials; ++i) {
+        scene->mMaterials[i] = buildAiMaterialFromOgre(materials[i]);
+        matIndexMap[materials[i]->getName()] = i;
+    }
+
+    // Meshes — read deformed positions from software-skinned buffers
+    scene->mNumMeshes = numSub;
+    scene->mMeshes = numSub > 0 ? new aiMesh*[numSub] : nullptr;
+
+    for (unsigned int si = 0; si < numSub; ++si)
+    {
+        const Ogre::SubMesh* subMesh = mesh->getSubMesh(si);
+        Ogre::SubEntity* subEnt = entity->getSubEntity(si);
+
+        // Get the software-skinned vertex data (deformed positions/normals)
+        Ogre::VertexData* animData = subMesh->useSharedVertices
+            ? entity->_getSkelAnimVertexData()
+            : subEnt->_getSkelAnimVertexData();
+
+        // Fall back to bind-pose vertex data if skinned data unavailable
+        const Ogre::VertexData* bindData = subMesh->useSharedVertices
+            ? mesh->sharedVertexData : subMesh->vertexData;
+
+        if (!animData && !bindData) {
+            scene->mMeshes[si] = new aiMesh();
+            continue;
+        }
+
+        auto* aiM = new aiMesh();
+        scene->mMeshes[si] = aiM;
+        aiM->mPrimitiveTypes = aiPrimitiveType_TRIANGLE;
+
+        // Use animData for positions and normals, bindData for UVs and indices
+        const Ogre::VertexData* posSource = animData ? animData : bindData;
+        aiM->mNumVertices = static_cast<unsigned int>(posSource->vertexCount);
+        aiM->mVertices = new aiVector3D[aiM->mNumVertices];
+
+        // Material index
+        auto matIt = matIndexMap.find(subEnt->getMaterial()->getName());
+        aiM->mMaterialIndex = (matIt != matIndexMap.end()) ? matIt->second : 0;
+
+        // Read deformed positions
+        const auto* posElem = posSource->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+        if (posElem)
+        {
+            auto vbuf = posSource->vertexBufferBinding->getBuffer(posElem->getSource());
+            auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+            {
+                const Ogre::Real* p;
+                posElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+                aiM->mVertices[j] = aiVector3D(p[0], p[1], p[2]);
+            }
+            vbuf->unlock();
+        }
+
+        // Read deformed normals (from animData if available, otherwise bindData)
+        const auto* normElem = posSource->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
+        if (normElem)
+        {
+            aiM->mNormals = new aiVector3D[aiM->mNumVertices];
+            auto vbuf = posSource->vertexBufferBinding->getBuffer(normElem->getSource());
+            auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+            {
+                const Ogre::Real* p;
+                normElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+                aiM->mNormals[j] = aiVector3D(p[0], p[1], p[2]);
+            }
+            vbuf->unlock();
+        }
+
+        // Read UVs from bind-pose data (skinning doesn't affect UVs)
+        if (bindData)
+        {
+            const auto* tcElem = bindData->vertexDeclaration->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
+            if (tcElem)
+            {
+                aiM->mTextureCoords[0] = new aiVector3D[aiM->mNumVertices];
+                aiM->mNumUVComponents[0] = 2;
+                auto vbuf = bindData->vertexBufferBinding->getBuffer(tcElem->getSource());
+                auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+                {
+                    const Ogre::Real* p;
+                    tcElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+                    aiM->mTextureCoords[0][j] = aiVector3D(p[0], p[1], 0.0f);
+                }
+                vbuf->unlock();
+            }
+        }
+
+        // Read indices from the original submesh
+        const Ogre::IndexData* iData = subMesh->indexData;
+        if (iData && iData->indexCount > 0)
+        {
+            aiM->mNumFaces = static_cast<unsigned int>(iData->indexCount / 3);
+            aiM->mFaces = new aiFace[aiM->mNumFaces];
+            auto ibuf = iData->indexBuffer;
+            auto* ibase = static_cast<const unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
+
+            const unsigned int indexStart = static_cast<unsigned int>(iData->indexStart);
+            for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
+            {
+                aiM->mFaces[f].mNumIndices = 3;
+                aiM->mFaces[f].mIndices = new unsigned int[3];
+                for (unsigned int v = 0; v < 3; ++v)
+                {
+                    unsigned int idx = use32
+                        ? reinterpret_cast<const uint32_t*>(ibase)[indexStart + f * 3 + v]
+                        : reinterpret_cast<const uint16_t*>(ibase)[indexStart + f * 3 + v];
+                    aiM->mFaces[f].mIndices[v] = idx;
+                }
+            }
+            ibuf->unlock();
+        }
+
+        compactAiMesh(aiM);
+    }
+
+    // No animations, no bones — this is a static mesh
+
+    // Release software animation request
+    entity->removeSoftwareAnimationRequest(false);
+
+    // Export the scene using the same Assimp path as regular export
+    QFileInfo file(outputPath);
+    QString fmt = format.isEmpty() ? CLIPipeline::formatForExtension(outputPath) : format;
+
+    int result = -1;
+
+    if (fmt == "FBX Binary (*.fbx)") {
+        // For FBX, we need to use Assimp since FBXExporter writes skeleton data
+        // from the original entity. Fall through to the Assimp path.
+    }
+
+    // Use Assimp exporter for all formats (the scene has no skeleton)
+    {
+        static const QMap<QString, QString> assimpFormatIds = {
+            {"Collada (*.dae)", "collada"},
+            {"X (*.x)", "x"},
+            {"OBJ (*.obj)", "obj"},
+            {"OBJ without MTL (*.objnomtl)", "objnomtl"},
+            {"STL (*.stl)", "stl"},
+            {"PLY (*.ply)", "ply"},
+            {"3DS (*.3ds)", "3ds"},
+            {"glTF 2.0 (*.gltf)", "gltf2"},
+            {"glTF 2.0 Binary (*.glb)", "glb2"},
+            {"gltf", "gltf2"},
+            {"glb", "glb2"},
+            {"Assimp Binary (*.assbin)", "assbin"},
+            {"FBX Binary (*.fbx)", "fbx"},
+        };
+
+        QString formatId = assimpFormatIds.value(fmt, file.suffix());
+
+        try {
+            Assimp::Exporter exporter;
+            unsigned int exportFlags = (formatId == "x") ? 0 : aiProcess_ConvertToLeftHanded;
+            aiReturn aiResult = exporter.Export(scene, formatId.toStdString().c_str(),
+                                                file.filePath().toStdString().c_str(),
+                                                exportFlags);
+            if (aiResult == AI_SUCCESS) {
+                result = 0;
+                exportMaterial(entity, file);
+            } else {
+                auto msg = QString("Assimp export (pose) to %1 failed: %2")
+                    .arg(formatId).arg(exporter.GetErrorString());
+                Ogre::LogManager::getSingleton().logError(msg.toStdString());
+                SentryReporter::captureMessage(msg, "error");
+            }
+        } catch (std::exception& ex) {
+            auto msg = QString("Export pose failed: %1").arg(ex.what());
+            Ogre::LogManager::getSingleton().logError(msg.toStdString());
+            SentryReporter::captureMessage(msg, "error");
+        }
+    }
+
+    delete scene;
+    return result;
 }
 
 // ─── Scene-level export: all scene nodes → single glTF ──────────────

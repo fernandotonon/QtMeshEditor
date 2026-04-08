@@ -26,7 +26,7 @@ fi
 # contains "editor" so CLI mode detection by name fails. Pass --cli
 # explicitly to force CLI mode.
 case "${1:-}" in
-    info|fix|convert|anim|--help|-h|--version|-v)
+    info|fix|convert|anim|validate|lod|pose|--help|-h|--version|-v)
         exec /usr/bin/qtmesheditor --cli "$@"
         ;;
     --mcp|--with-mcp)

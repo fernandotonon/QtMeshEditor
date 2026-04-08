@@ -386,7 +386,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 
     // Start a performance transaction for heavy tools
     static const QStringList heavyTools = {
-        "load_mesh", "export_mesh", "take_screenshot", "create_primitive", "create_material",
+        "load_mesh", "export_mesh", "export_pose", "take_screenshot", "create_primitive", "create_material",
         "merge_animations", "save_scene", "open_scene"
     };
     uintptr_t txn = 0;
@@ -489,6 +489,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolSetSnapSettings(args);
     } else if (name == "get_snap_settings") {
         toolResult = toolGetSnapSettings(args);
+    } else if (name == "export_pose") {
+        toolResult = toolExportPose(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -2581,6 +2583,70 @@ QJsonObject MCPServer::toolGetSnapSettings(const QJsonObject &args)
     return makeSuccessResult(lines.join("\n"));
 }
 
+QJsonObject MCPServer::toolExportPose(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    QString animName = args["animation"].toString();
+    double time = args["time"].toDouble(0.0);
+    QString outputPath = args["output_path"].toString();
+
+    if (outputPath.isEmpty())
+        return makeErrorResult("Error: output_path is required");
+    if (animName.isEmpty())
+        return makeErrorResult("Error: animation name is required");
+
+    try {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        // Find the entity
+        Ogre::Entity* entity = nullptr;
+        if (!entityName.isEmpty()) {
+            auto* sm = mgr->getSceneMgr();
+            if (sm->hasEntity(entityName.toStdString()))
+                entity = sm->getEntity(entityName.toStdString());
+        }
+        if (!entity) {
+            // Try the first selected entity, or first entity in scene
+            SelectionSet* sel = SelectionSet::getSingleton();
+            if (sel && sel->getEntitiesCount() > 0) {
+                entity = sel->getEntity(0);
+            } else {
+                auto& entities = mgr->getEntities();
+                if (!entities.isEmpty())
+                    entity = entities.first();
+            }
+        }
+
+        if (!entity)
+            return makeErrorResult("Error: No entity found. Specify entity name or select one.");
+        if (!entity->hasSkeleton())
+            return makeErrorResult("Error: Entity has no skeleton — cannot export pose.");
+
+        // Set animation time
+        auto* animStates = entity->getAllAnimationStates();
+        if (!animStates || !animStates->hasAnimationState(animName.toStdString()))
+            return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+
+        auto* animState = animStates->getAnimationState(animName.toStdString());
+        animState->setEnabled(true);
+        animState->setTimePosition(static_cast<float>(time));
+
+        int result = MeshImporterExporter::exportCurrentPose(entity, outputPath);
+
+        animState->setEnabled(false);
+
+        if (result != 0)
+            return makeErrorResult(QString("Error: Export failed (code %1)").arg(result));
+
+        return makeSuccessResult(QString("Exported pose to: %1 (animation: %2, time: %3s)")
+            .arg(outputPath).arg(animName).arg(time, 0, 'f', 3));
+
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error exporting pose: %1").arg(e.what()));
+    }
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -2789,6 +2855,23 @@ QJsonArray MCPServer::buildToolsList()
             "Export the selected scene node's mesh to a file. A node must be selected first (use get_scene_info to list nodes). Skeleton and animation data is included automatically when present.",
             inputSchema
         ));
+    }
+
+    // export_pose
+    {
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity (optional, defaults to selected or first entity)"}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the skeletal animation to pose"}};
+        props["time"] = QJsonObject{{"type", "number"}, {"description", "Time position in seconds within the animation (default: 0.0)"}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Output file path (e.g., 'posed.stl', 'posed.obj', 'posed.fbx')"}};
+        appendTool(
+            "export_pose",
+            "Export the current animated pose of a skeletal entity as a static mesh (no skeleton, no animations). "
+            "Scrub the animation to the desired time, then bake the deformed vertex positions into a new mesh file. "
+            "Supports STL, OBJ, glTF, FBX, and other formats.",
+            props,
+            QJsonArray{"animation", "output_path"}
+        );
     }
 
     // get_scene_info

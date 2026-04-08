@@ -165,6 +165,7 @@ private:
     QJsonObject toolDuplicateEntity(const QJsonObject &args);
     QJsonObject toolSetSnapSettings(const QJsonObject &args);
     QJsonObject toolGetSnapSettings(const QJsonObject &args);
+    QJsonObject toolExportPose(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

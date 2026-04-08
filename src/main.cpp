@@ -84,7 +84,7 @@ int main(int argc, char *argv[])
                 if (arg.startsWith("-"))
                     continue;  // skip flags like --verbose
                 if (arg == "info" || arg == "fix" || arg == "convert" || arg == "anim"
-                        || arg == "validate" || arg == "lod")
+                        || arg == "validate" || arg == "lod" || arg == "pose")
                     cliMode = true;
                 break;  // first non-flag arg determines mode
             }

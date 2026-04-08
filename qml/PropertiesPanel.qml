@@ -1172,6 +1172,26 @@ Rectangle {
                             }
                             Text { text: "Weights"; color: PropertiesPanelController.textColor; font.pixelSize: 10; anchors.verticalCenter: parent.verticalCenter }
                         }
+
+                        // Export Pose button (if has skeleton)
+                        Rectangle {
+                            visible: grp.hasSkeleton
+                            width: parent.width - 8; height: 24; radius: 3
+                            color: exportPoseMouse.pressed ? Qt.darker(PropertiesPanelController.headerColor, 1.2)
+                                 : exportPoseMouse.containsMouse ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
+                                 : PropertiesPanelController.headerColor
+                            border.color: PropertiesPanelController.borderColor; border.width: 1
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: "Export Pose"
+                                color: PropertiesPanelController.textColor; font.pixelSize: 11
+                            }
+                            MouseArea {
+                                id: exportPoseMouse; anchors.fill: parent; hoverEnabled: true
+                                onClicked: PropertiesPanelController.exportCurrentPose()
+                            }
+                        }
                     }
                 }
             }
