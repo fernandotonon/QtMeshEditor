@@ -23,22 +23,29 @@ protected:
         Manager::kill();
         QThread::msleep(100);
 
-        constexpr int kMaxMainWindowInitAttempts = 5;
+        constexpr int kMaxMainWindowInitAttempts = 6;
         for (int attempt = 1; attempt <= kMaxMainWindowInitAttempts && !mainWindow; ++attempt) {
+            // EGL/Xvfb setup can transiently fail to create the Ogre surface in CI.
+            // Reset global manager state between attempts before constructing MainWindow.
+            Manager::kill();
+            app->processEvents();
+            QThread::msleep(75);
             try {
                 mainWindow = new MainWindow();
             } catch (const std::exception& e) {
                 GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
                                     << " failed: " << e.what();
                 mainWindow = nullptr;
+                Manager::kill();
                 app->processEvents();
-                QThread::msleep(400);
+                QThread::msleep(200 * attempt);
             } catch (...) {
                 GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
                                     << " failed with unknown exception";
                 mainWindow = nullptr;
+                Manager::kill();
                 app->processEvents();
-                QThread::msleep(400);
+                QThread::msleep(200 * attempt);
             }
         }
         ASSERT_NE(mainWindow, nullptr) << "Failed to initialize MainWindow for EditorViewport tests";
