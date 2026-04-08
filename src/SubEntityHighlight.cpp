@@ -66,27 +66,34 @@ SubEntityHighlight::SubEntityHighlight()
 
 void SubEntityHighlight::onSubEntitySelectionChanged()
 {
-    auto* sel = SelectionSet::getSingleton();
-    const auto& currentSubEntities = sel->getSubEntitiesSelectionList();
+    try {
+        auto* sel = SelectionSet::getSingleton();
+        if (!sel) return;
 
-    // Build a set of currently selected sub-entities for quick lookup
-    QSet<Ogre::SubEntity*> selectedSet(currentSubEntities.begin(), currentSubEntities.end());
+        // Copy the list to avoid issues if it's modified during iteration
+        QList<Ogre::SubEntity*> currentSubEntities = sel->getSubEntitiesSelectionList();
 
-    // Remove highlights from sub-entities no longer selected
-    QList<Ogre::SubEntity*> toRemove;
-    for (auto it = mOriginalMaterials.begin(); it != mOriginalMaterials.end(); ++it)
-    {
-        if (!selectedSet.contains(it.key()))
-            toRemove.append(it.key());
-    }
-    for (Ogre::SubEntity* sub : toRemove)
-        removeHighlight(sub);
+        QSet<Ogre::SubEntity*> selectedSet(currentSubEntities.begin(), currentSubEntities.end());
 
-    // Apply highlights to newly selected sub-entities
-    for (Ogre::SubEntity* sub : currentSubEntities)
-    {
-        if (!mOriginalMaterials.contains(sub))
-            applyHighlight(sub);
+        // Remove highlights from sub-entities no longer selected
+        QList<Ogre::SubEntity*> toRemove;
+        for (auto it = mOriginalMaterials.begin(); it != mOriginalMaterials.end(); ++it)
+        {
+            if (!selectedSet.contains(it.key()))
+                toRemove.append(it.key());
+        }
+        for (Ogre::SubEntity* sub : toRemove)
+            removeHighlight(sub);
+
+        // Apply highlights to newly selected sub-entities
+        for (Ogre::SubEntity* sub : currentSubEntities)
+        {
+            if (sub && !mOriginalMaterials.contains(sub))
+                applyHighlight(sub);
+        }
+    } catch (...) {
+        // Sub-entity pointers may be stale after scene changes — silently recover
+        mOriginalMaterials.clear();
     }
 }
 
@@ -112,7 +119,11 @@ void SubEntityHighlight::removeHighlight(Ogre::SubEntity* sub)
     auto it = mOriginalMaterials.find(sub);
     if (it == mOriginalMaterials.end()) return;
 
-    sub->setMaterialName(it.value());
+    try {
+        sub->setMaterialName(it.value());
+    } catch (...) {
+        // Sub-entity or material may have been destroyed — just remove from tracking
+    }
     mOriginalMaterials.erase(it);
 }
 

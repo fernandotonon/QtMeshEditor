@@ -375,32 +375,37 @@ void TransformOperator::updateGizmoPosition()
     }
     else if(SelectionSet::getSingleton()->hasSubEntities())
     {
-        // Position gizmo at the centroid of the selected sub-mesh vertices
-        Ogre::Vector3 center = Ogre::Vector3::ZERO;
-        int count = 0;
-        for (int i = 0; i < SelectionSet::getSingleton()->getSubEntitiesCount(); ++i)
-        {
-            Ogre::SubEntity* sub = SelectionSet::getSingleton()->getSubEntity(i);
-            Ogre::Entity* ent = sub->getParent();
-            // Find the sub-mesh index
-            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+        try {
+            // Position gizmo at the centroid of the selected sub-mesh vertices
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            int count = 0;
+            for (int i = 0; i < SelectionSet::getSingleton()->getSubEntitiesCount(); ++i)
             {
-                if (ent->getSubEntity(s) == sub)
+                Ogre::SubEntity* sub = SelectionSet::getSingleton()->getSubEntity(i);
+                if (!sub || !sub->getParent()) continue;
+                Ogre::Entity* ent = sub->getParent();
+                for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
                 {
-                    center += SubMeshTransform::getSubMeshCenter(ent, s);
-                    ++count;
-                    break;
+                    if (ent->getSubEntity(s) == sub)
+                    {
+                        center += SubMeshTransform::getSubMeshCenter(ent, s);
+                        ++count;
+                        break;
+                    }
                 }
             }
-        }
-        if (count > 0)
-        {
-            center /= static_cast<Ogre::Real>(count);
-            // Add the parent scene node position (sub-mesh center is in local space)
-            Ogre::SubEntity* firstSub = SelectionSet::getSingleton()->getSubEntity(0);
-            Ogre::Vector3 nodePos = firstSub->getParent()->getParentSceneNode()->getPosition();
-            currentPosition = center;
-            m_pTransformNode->setPosition(center + nodePos);
+            if (count > 0)
+            {
+                center /= static_cast<Ogre::Real>(count);
+                Ogre::SubEntity* firstSub = SelectionSet::getSingleton()->getSubEntity(0);
+                if (firstSub && firstSub->getParent() && firstSub->getParent()->getParentSceneNode()) {
+                    Ogre::Vector3 nodePos = firstSub->getParent()->getParentSceneNode()->getPosition();
+                    currentPosition = center;
+                    m_pTransformNode->setPosition(center + nodePos);
+                }
+            }
+        } catch (...) {
+            // Sub-entity pointers may be stale — skip gizmo positioning
         }
     }
     emit selectedPositionChanged(currentPosition);
