@@ -284,11 +284,21 @@ Ogre::SceneNode* Manager::duplicateSceneNode(Ogre::SceneNode* source)
         // Mesh::clone() copies geometry but still references the same Skeleton resource.
         // We must also clone the skeleton and reassign it to the new mesh.
         QString cloneMeshName = QString::fromStdString(newNode->getName()) + "_mesh";
+
+        // Remove stale resources from a previous undo cycle (redo re-creates them)
+        if (Ogre::MeshManager::getSingleton().getByName(cloneMeshName.toStdString()))
+            Ogre::MeshManager::getSingleton().remove(cloneMeshName.toStdString());
+
         Ogre::MeshPtr clonedMesh = srcEntity->getMesh()->clone(cloneMeshName.toStdString());
 
         if (srcEntity->getMesh()->hasSkeleton()) {
             try {
                 QString cloneSkelName = QString::fromStdString(newNode->getName()) + "_skel";
+
+                // Remove stale skeleton from a previous undo cycle
+                if (Ogre::SkeletonManager::getSingleton().getByName(cloneSkelName.toStdString()))
+                    Ogre::SkeletonManager::getSingleton().remove(cloneSkelName.toStdString());
+
                 Ogre::SkeletonPtr srcSkel = srcEntity->getMesh()->getSkeleton();
 
                 // isManual=true tells Ogre not to try loading from disk
