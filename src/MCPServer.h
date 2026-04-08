@@ -130,6 +130,7 @@ private:
     QJsonObject toolLoadMesh(const QJsonObject &args);
     QJsonObject toolGetMeshInfo(const QJsonObject &args);
     QJsonObject toolTransformMesh(const QJsonObject &args);
+    QJsonObject toolTransformSubMesh(const QJsonObject &args);
     QJsonObject toolListTextures(const QJsonObject &args);
     QJsonObject toolSetTexture(const QJsonObject &args);
     QJsonObject toolExportMesh(const QJsonObject &args);

@@ -3,12 +3,14 @@
 
 #include <QUndoCommand>
 #include <QList>
+#include <vector>
 #include <OgreVector.h>
 #include <OgreQuaternion.h>
 
 namespace Ogre {
     class SceneNode;
     class Entity;
+    class SubEntity;
 }
 
 // Translate scene nodes by a delta
@@ -100,6 +102,29 @@ public:
 private:
     QStringList mSourceNodeNames;
     QList<Ogre::SceneNode*> mClonedNodes;
+    bool mFirstRedo = true;
+};
+
+// Sub-mesh vertex transform (stores full vertex snapshot for undo)
+class SubMeshTransformCommand : public QUndoCommand
+{
+public:
+    enum TransformType { Translate, Rotate, Scale };
+
+    SubMeshTransformCommand(Ogre::SubEntity* subEntity,
+                            const std::vector<Ogre::Vector3>& originalPositions,
+                            const QString& description = "SubMesh Transform",
+                            QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    Ogre::SubEntity* mSubEntity;
+    Ogre::Entity* mEntity;
+    unsigned int mSubMeshIndex;
+    std::vector<Ogre::Vector3> mOriginalPositions;
+    std::vector<Ogre::Vector3> mNewPositions;
     bool mFirstRedo = true;
 };
 

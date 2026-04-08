@@ -4,7 +4,9 @@
 #include <QObject>
 #include <QPoint>
 #include <QList>
+#include <vector>
 #include <OgreRay.h>
+#include <OgreVector.h>
 #include "QtInputManager.h"
 
 //class TransformWidget;
@@ -20,6 +22,7 @@ namespace Ogre{
     class RaySceneQuery;
     class SceneNode;
     class MovableObject;
+    class SubEntity;
 }
 class TransformOperator : public QObject, public QtMouseListener
 {
@@ -162,6 +165,10 @@ private:
     QList<Ogre::Vector3>                    mUndoStartPositions;
     QList<Ogre::Quaternion>                 mUndoStartOrientations;
     QList<Ogre::Vector3>                    mUndoStartScales;
+
+    // Sub-entity undo state: vertex positions captured at drag start
+    QList<Ogre::SubEntity*>                 mUndoSubEntities;
+    QList<std::vector<Ogre::Vector3>>       mUndoSubMeshPositions;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;
 #else

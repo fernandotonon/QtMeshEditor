@@ -42,6 +42,7 @@
 #include <OgreKeyFrame.h>
 #include <OgreBone.h>
 #include "AnimationMerger.h"
+#include "SubMeshTransform.h"
 
 #ifdef Q_OS_WIN
 #include <io.h>
@@ -419,6 +420,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolGetMeshInfo(args);
     } else if (name == "transform_mesh") {
         toolResult = toolTransformMesh(args);
+    } else if (name == "transform_submesh") {
+        toolResult = toolTransformSubMesh(args);
     } else if (name == "list_textures") {
         toolResult = toolListTextures(args);
     } else if (name == "set_texture") {
@@ -1028,6 +1031,65 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
         return makeSuccessResult(QString("Applied transforms to '%1':\n%2")
             .arg(QString::fromStdString(targetNode->getName()))
             .arg(transforms.join("\n")));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolTransformSubMesh(const QJsonObject &args)
+{
+    try {
+        if (!Manager::getSingletonPtr())
+            return makeErrorResult("Error: Manager not available");
+
+        QString entityName = args["entity_name"].toString();
+        if (entityName.isEmpty())
+            return makeErrorResult("Error: entity_name is required");
+
+        int subIdx = args["submesh_index"].toInt(-1);
+        if (subIdx < 0)
+            return makeErrorResult("Error: submesh_index must be a non-negative integer");
+
+        Ogre::Entity* entity = findEntityByName(entityName);
+        if (!entity)
+            return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+
+        unsigned int uSubIdx = static_cast<unsigned int>(subIdx);
+        if (uSubIdx >= entity->getNumSubEntities())
+            return makeErrorResult(QString("Error: submesh_index %1 out of range (entity has %2 sub-meshes)")
+                .arg(subIdx).arg(entity->getNumSubEntities()));
+
+        QStringList transforms;
+
+        if (args.contains("translate")) {
+            Ogre::Vector3 delta = parseVector3(args["translate"]);
+            SubMeshTransform::translateSubMesh(entity, uSubIdx, delta);
+            transforms << QString("translate: %1, %2, %3").arg(delta.x).arg(delta.y).arg(delta.z);
+        }
+        if (args.contains("rotate")) {
+            Ogre::Vector3 rot = parseVector3(args["rotate"]);
+            Ogre::Quaternion q;
+            q.FromAngleAxis(Ogre::Degree(rot.x), Ogre::Vector3::UNIT_X);
+            Ogre::Quaternion qy; qy.FromAngleAxis(Ogre::Degree(rot.y), Ogre::Vector3::UNIT_Y);
+            Ogre::Quaternion qz; qz.FromAngleAxis(Ogre::Degree(rot.z), Ogre::Vector3::UNIT_Z);
+            SubMeshTransform::rotateSubMesh(entity, uSubIdx, qz * qy * q);
+            transforms << QString("rotate: %1, %2, %3").arg(rot.x).arg(rot.y).arg(rot.z);
+        }
+        if (args.contains("scale")) {
+            Ogre::Vector3 scale = parseVector3(args["scale"]);
+            SubMeshTransform::scaleSubMesh(entity, uSubIdx, scale);
+            transforms << QString("scale: %1, %2, %3").arg(scale.x).arg(scale.y).arg(scale.z);
+        }
+
+        if (transforms.isEmpty())
+            return makeErrorResult("Error: No transform specified. Provide translate, rotate, or scale.");
+
+        SentryReporter::addBreadcrumb("mcp.tool",
+            QString("transform_submesh: %1[%2]").arg(entityName).arg(subIdx));
+
+        return makeSuccessResult(QString("Applied sub-mesh transforms to '%1' submesh %2:\n%3")
+            .arg(entityName).arg(subIdx).arg(transforms.join("\n")));
 
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
@@ -2797,6 +2859,26 @@ QJsonArray MCPServer::buildToolsList()
         tools.append(buildToolDefinition(
             "transform_mesh",
             "Set the position, rotation, and/or scale of a named scene node. 'name' is required — use get_scene_info to find the exact node name. Position and scale are [X, Y, Z] arrays. Rotation is in degrees [X, Y, Z].",
+            inputSchema
+        ));
+    }
+
+    // transform_submesh
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["entity_name"]   = QJsonObject{{"type", "string"}, {"description", "Name of the entity containing the sub-mesh"}};
+        properties["submesh_index"] = QJsonObject{{"type", "integer"}, {"description", "Zero-based index of the sub-mesh within the entity"}};
+        properties["translate"]     = QJsonObject{{"type", "array"}, {"description", "Translation delta [X, Y, Z] applied to vertex positions"}};
+        properties["rotate"]        = QJsonObject{{"type", "array"}, {"description", "Rotation in degrees [X, Y, Z] applied around sub-mesh centroid"}};
+        properties["scale"]         = QJsonObject{{"type", "array"}, {"description", "Scale factor [X, Y, Z] applied around sub-mesh centroid"}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"entity_name", "submesh_index"};
+
+        tools.append(buildToolDefinition(
+            "transform_submesh",
+            "Transform vertices of a specific sub-mesh within an entity. Modifies the actual vertex buffer data (positions and normals), making changes exportable. Provide entity_name and submesh_index, plus any combination of translate, rotate, and scale.",
             inputSchema
         ));
     }

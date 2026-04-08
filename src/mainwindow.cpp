@@ -45,6 +45,7 @@
 #include "MCPServer.h"
 #include "NormalVisualizer.h"
 #include "MeshInfoOverlay.h"
+#include "SubEntityHighlight.h"
 #include "SpaceCamera.h"
 #include "ViewCube/ViewCubeController.h"
 #include "LLMManager.h"
@@ -230,6 +231,7 @@ MainWindow::~MainWindow()
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
     // These singletons are safe to destroy unconditionally.
+    SubEntityHighlight::kill();
     AnimationControlController::kill();
     MeshLodController::kill();
     MeshValidator::kill();
@@ -505,6 +507,9 @@ void MainWindow::initToolBar()
     // show normals
     m_normalVisualizer = new NormalVisualizer(Manager::getSingleton()->getSceneMgr(), this);
     connect(ui->actionShow_Normals, &QAction::toggled, m_normalVisualizer, &NormalVisualizer::setVisible);
+
+    // Sub-entity selection highlight (auto-connects to SelectionSet signals)
+    SubEntityHighlight::getSingleton();
 
     // show mesh info overlay
     m_meshInfoOverlay = new MeshInfoOverlay(this);

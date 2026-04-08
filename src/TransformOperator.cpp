@@ -16,6 +16,7 @@
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "MeshTransform.h"
+#include "SubMeshTransform.h"
 #include "Euler.h"
 #include "ViewportGrid.h"
 #include "UndoManager.h"
@@ -294,7 +295,7 @@ void TransformOperator::removeSelected()
 void TransformOperator::updateGizmo()
 {
     updateGizmoPosition();
-    if(SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities())
+    if(SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()||SelectionSet::getSingleton()->hasSubEntities())
     {
         // Determine gizmo orientation based on transform space
         Ogre::Quaternion gizmoOrientation;
@@ -371,6 +372,36 @@ void TransformOperator::updateGizmoPosition()
         currentOrientation  = SelectionSet::getSingleton()->getSelectionOrientation();
         currentScale        = SelectionSet::getSingleton()->getSelectionScale();
         m_pTransformNode->setPosition(currentPosition + SelectionSet::getSingleton()->getSelectionNodesCenter());
+    }
+    else if(SelectionSet::getSingleton()->hasSubEntities())
+    {
+        // Position gizmo at the centroid of the selected sub-mesh vertices
+        Ogre::Vector3 center = Ogre::Vector3::ZERO;
+        int count = 0;
+        for (int i = 0; i < SelectionSet::getSingleton()->getSubEntitiesCount(); ++i)
+        {
+            Ogre::SubEntity* sub = SelectionSet::getSingleton()->getSubEntity(i);
+            Ogre::Entity* ent = sub->getParent();
+            // Find the sub-mesh index
+            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+            {
+                if (ent->getSubEntity(s) == sub)
+                {
+                    center += SubMeshTransform::getSubMeshCenter(ent, s);
+                    ++count;
+                    break;
+                }
+            }
+        }
+        if (count > 0)
+        {
+            center /= static_cast<Ogre::Real>(count);
+            // Add the parent scene node position (sub-mesh center is in local space)
+            Ogre::SubEntity* firstSub = SelectionSet::getSingleton()->getSubEntity(0);
+            Ogre::Vector3 nodePos = firstSub->getParent()->getParentSceneNode()->getPosition();
+            currentPosition = center;
+            m_pTransformNode->setPosition(center + nodePos);
+        }
     }
     emit selectedPositionChanged(currentPosition);
     emit selectedOrientationChanged(currentOrientation);
@@ -595,6 +626,28 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                     mUndoStartPositions.append(node->getPosition());
                     mUndoStartOrientations.append(node->getOrientation());
                     mUndoStartScales.append(node->getScale());
+                }
+            }
+
+            // Capture undo state for sub-entities (vertex snapshots)
+            mUndoSubEntities.clear();
+            mUndoSubMeshPositions.clear();
+            if (SelectionSet::getSingleton()->hasSubEntities())
+            {
+                SentryReporter::addBreadcrumb("ui.transform",
+                    QString("Sub-mesh transform start (%1 sub-entities)")
+                        .arg(SelectionSet::getSingleton()->getSubEntitiesCount()));
+
+                for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+                {
+                    Ogre::Entity* ent = sub->getParent();
+                    unsigned int subIdx = 0;
+                    for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+                    {
+                        if (ent->getSubEntity(s) == sub) { subIdx = s; break; }
+                    }
+                    mUndoSubEntities.append(sub);
+                    mUndoSubMeshPositions.append(SubMeshTransform::readPositions(ent, subIdx));
                 }
             }
 
@@ -874,6 +927,34 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
 void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 {
+    // Push undo commands for sub-entity vertex transforms
+    if (SelectionSet::getSingleton()->hasSubEntities() && !mUndoSubEntities.isEmpty()
+        && (e->button() == Qt::LeftButton))
+    {
+        for (int i = 0; i < mUndoSubEntities.size(); ++i)
+        {
+            Ogre::SubEntity* sub = mUndoSubEntities[i];
+            Ogre::Entity* ent = sub->getParent();
+            unsigned int subIdx = 0;
+            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+            {
+                if (ent->getSubEntity(s) == sub) { subIdx = s; break; }
+            }
+            auto currentPositions = SubMeshTransform::readPositions(ent, subIdx);
+            bool changed = (currentPositions != mUndoSubMeshPositions[i]);
+            if (changed)
+            {
+                QString desc = QString("SubMesh %1 Transform").arg(subIdx);
+                UndoManager::getSingleton()->push(
+                    new SubMeshTransformCommand(sub, mUndoSubMeshPositions[i], desc));
+            }
+        }
+        mUndoSubEntities.clear();
+        mUndoSubMeshPositions.clear();
+        mStartPoint = Ogre::Vector3::ZERO;
+        mScaleStartDistance = 0.0f;
+    }
+
     if((SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()) && (e->button() == Qt::LeftButton))
     {
         // Push undo command if a transform was performed on scene nodes
@@ -1006,6 +1087,22 @@ void TransformOperator::translateSelected(const Ogre::Vector3& translation)
             obj->getParentSceneNode()->needUpdate(true);
         }
     }
+    else if(SelectionSet::getSingleton()->hasSubEntities())
+    {
+        for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+        {
+            Ogre::Entity* ent = sub->getParent();
+            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+            {
+                if (ent->getSubEntity(s) == sub)
+                {
+                    SubMeshTransform::translateSubMesh(ent, s, translation);
+                    break;
+                }
+            }
+        }
+        updateGizmoPosition();
+    }
 }
 
 void TransformOperator::setSelectedScale(const Ogre::Vector3& newScale)
@@ -1039,6 +1136,22 @@ void TransformOperator::scaleSelected(const Ogre::Vector3& scaleFactor)
             obj->getParentSceneNode()->needUpdate(true);
             SelectionSet::getSingleton()->setEntityScaleFactor(obj,scaleFactor);
         }
+    }
+    else if(SelectionSet::getSingleton()->hasSubEntities())
+    {
+        for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+        {
+            Ogre::Entity* ent = sub->getParent();
+            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+            {
+                if (ent->getSubEntity(s) == sub)
+                {
+                    SubMeshTransform::scaleSubMesh(ent, s, scaleFactor);
+                    break;
+                }
+            }
+        }
+        updateGizmoPosition();
     }
 }
 
@@ -1093,6 +1206,22 @@ void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
             SelectionSet::getSingleton()->setEntityRotation(
                 obj, SelectionSet::getSingleton()->getEntityRotation(obj) + eulerDelta);
         }
+    }
+    else if(SelectionSet::getSingleton()->hasSubEntities())
+    {
+        for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+        {
+            Ogre::Entity* ent = sub->getParent();
+            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+            {
+                if (ent->getSubEntity(s) == sub)
+                {
+                    SubMeshTransform::rotateSubMesh(ent, s, rotation);
+                    break;
+                }
+            }
+        }
+        updateGizmoPosition();
     }
 }
 
