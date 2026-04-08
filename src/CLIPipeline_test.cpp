@@ -1066,7 +1066,7 @@ TEST_F(CLIPipelineCmdTest, CmdAnimList_WithCliFlag)
     EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
 }
 
-TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsReturnsSuccess)
+TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsGeneratedMeshReturnsError)
 {
     auto* manager = Manager::getSingleton();
     ASSERT_NE(manager, nullptr);
@@ -1094,10 +1094,10 @@ TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsReturnsSuccess)
 
     QByteArray sourceBa = sourceFile.toUtf8();
     TestArgv textArgs({"qtmesh", "anim", sourceBa.constData(), "--list"});
-    EXPECT_EQ(CLIPipeline::cmdAnim(textArgs.argc(), textArgs.argv()), 0);
+    EXPECT_EQ(CLIPipeline::cmdAnim(textArgs.argc(), textArgs.argv()), 1);
 
     TestArgv jsonArgs({"qtmesh", "anim", sourceBa.constData(), "--list", "--json"});
-    EXPECT_EQ(CLIPipeline::cmdAnim(jsonArgs.argc(), jsonArgs.argv()), 0);
+    EXPECT_EQ(CLIPipeline::cmdAnim(jsonArgs.argc(), jsonArgs.argv()), 1);
 
     QFile::remove(sourceFile);
     QFile::remove(QDir::tempPath() + "/cli_no_anim_source.material");
