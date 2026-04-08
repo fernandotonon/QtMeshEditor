@@ -209,20 +209,24 @@ Rectangle {
         id: snapSettingsComponent
 
         Column {
+            id: snapCol
             width: parent ? parent.width : 200
             padding: 8
             spacing: 6
 
-            // Enable toggle
-            Row {
-                spacing: 8
-                width: parent.width - 16
+            property real btnAreaWidth: snapCol.width - 16
 
-                CheckBox {
-                    id: snapEnabledCheck
-                    checked: PropertiesPanelController.snapEnabled
-                    onCheckedChanged: PropertiesPanelController.snapEnabled = checked
-                    palette.windowText: PropertiesPanelController.textColor
+            // Enable toggle (themed custom checkbox matching animation checkboxes)
+            Row {
+                spacing: 6
+                width: snapCol.btnAreaWidth
+
+                Rectangle {
+                    width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                    border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                    color: PropertiesPanelController.snapEnabled ? PropertiesPanelController.highlightColor : "transparent"
+                    Text { anchors.centerIn: parent; text: PropertiesPanelController.snapEnabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.snapEnabled = !PropertiesPanelController.snapEnabled }
                 }
                 Text {
                     text: "Enable Snap (or hold Ctrl)"
@@ -236,22 +240,24 @@ Rectangle {
             Text {
                 text: "Grid Size (Translation)"
                 color: PropertiesPanelController.textColor
-                font.pixelSize: 11
-                font.bold: true
+                font.pixelSize: 11; font.bold: true
             }
-            Row {
-                spacing: 4
-                width: parent.width - 16
+            Flow {
+                spacing: 3
+                width: snapCol.btnAreaWidth
 
                 Repeater {
                     model: PropertiesPanelController.gridSizePresets()
-                    delegate: Button {
-                        text: modelData.toString()
-                        width: Math.max(36, implicitWidth)
-                        height: 24
-                        font.pixelSize: 10
-                        highlighted: Math.abs(PropertiesPanelController.snapGridSize - modelData) < 0.001
-                        onClicked: PropertiesPanelController.snapGridSize = modelData
+                    delegate: Rectangle {
+                        property bool active: Math.abs(PropertiesPanelController.snapGridSize - modelData) < 0.001
+                        width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.gridSizePresets().length - 1)) / PropertiesPanelController.gridSizePresets().length)
+                        height: 22; radius: 3
+                        color: active ? PropertiesPanelController.highlightColor
+                             : snapBtnMa1.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                             : PropertiesPanelController.buttonColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: modelData.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { id: snapBtnMa1; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapGridSize = modelData }
                     }
                 }
             }
@@ -260,22 +266,24 @@ Rectangle {
             Text {
                 text: "Angle Step (Rotation)"
                 color: PropertiesPanelController.textColor
-                font.pixelSize: 11
-                font.bold: true
+                font.pixelSize: 11; font.bold: true
             }
-            Row {
-                spacing: 4
-                width: parent.width - 16
+            Flow {
+                spacing: 3
+                width: snapCol.btnAreaWidth
 
                 Repeater {
                     model: PropertiesPanelController.angleStepPresets()
-                    delegate: Button {
-                        text: modelData + "\u00B0"
-                        width: Math.max(36, implicitWidth)
-                        height: 24
-                        font.pixelSize: 10
-                        highlighted: Math.abs(PropertiesPanelController.snapAngleStep - modelData) < 0.001
-                        onClicked: PropertiesPanelController.snapAngleStep = modelData
+                    delegate: Rectangle {
+                        property bool active: Math.abs(PropertiesPanelController.snapAngleStep - modelData) < 0.001
+                        width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.angleStepPresets().length - 1)) / PropertiesPanelController.angleStepPresets().length)
+                        height: 22; radius: 3
+                        color: active ? PropertiesPanelController.highlightColor
+                             : snapBtnMa2.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                             : PropertiesPanelController.buttonColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: modelData + "\u00B0"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { id: snapBtnMa2; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapAngleStep = modelData }
                     }
                 }
             }
@@ -284,22 +292,24 @@ Rectangle {
             Text {
                 text: "Scale Step"
                 color: PropertiesPanelController.textColor
-                font.pixelSize: 11
-                font.bold: true
+                font.pixelSize: 11; font.bold: true
             }
-            Row {
-                spacing: 4
-                width: parent.width - 16
+            Flow {
+                spacing: 3
+                width: snapCol.btnAreaWidth
 
                 Repeater {
                     model: PropertiesPanelController.scaleStepPresets()
-                    delegate: Button {
-                        text: modelData.toString()
-                        width: Math.max(36, implicitWidth)
-                        height: 24
-                        font.pixelSize: 10
-                        highlighted: Math.abs(PropertiesPanelController.snapScaleStep - modelData) < 0.001
-                        onClicked: PropertiesPanelController.snapScaleStep = modelData
+                    delegate: Rectangle {
+                        property bool active: Math.abs(PropertiesPanelController.snapScaleStep - modelData) < 0.001
+                        width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.scaleStepPresets().length - 1)) / PropertiesPanelController.scaleStepPresets().length)
+                        height: 22; radius: 3
+                        color: active ? PropertiesPanelController.highlightColor
+                             : snapBtnMa3.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                             : PropertiesPanelController.buttonColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Text { anchors.centerIn: parent; text: modelData.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { id: snapBtnMa3; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapScaleStep = modelData }
                     }
                 }
             }
