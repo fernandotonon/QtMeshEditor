@@ -1723,7 +1723,6 @@ jobs:
     needs: build-windows
     if: github.event_name == 'release' && github.event.action == 'published'
     runs-on: ubuntu-latest
-    continue-on-error: true   # don't fail the release if WinGet submission fails
     steps:
       - uses: actions/checkout@v4
 
@@ -1737,6 +1736,17 @@ jobs:
           VER="${RAW_TAG#v}"
           URL="https://github.com/fernandotonon/QtMeshEditor/releases/download/${RAW_TAG}/QtMeshEditor-${RAW_TAG}-bin-Windows.zip"
 
+          # Wait for the release asset to be downloadable (GitHub CDN propagation)
+          echo "Waiting for release asset to be available..."
+          for attempt in $(seq 1 10); do
+            if curl -fsSL -o /dev/null "$URL" 2>/dev/null; then
+              echo "Asset available (attempt $attempt)"
+              break
+            fi
+            echo "Attempt $attempt: asset not yet available, waiting 30s..."
+            sleep 30
+          done
+
           echo "Generating WinGet manifest for version $VER..."
           wingetcreate update FernandoTonon.QtMeshEditor \
             --version "$VER" \
@@ -1747,40 +1757,63 @@ jobs:
           find manifests -type f -exec cat {} +
 
       - name: Submit PR to winget-pkgs
+        continue-on-error: true   # don't fail the release if submission fails
         env:
           GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
           RAW_TAG="${{ github.event.release.tag_name }}"
           VER="${RAW_TAG#v}"
           BRANCH="qtmesheditor-${VER}"
-          FORK_OWNER="${{ github.repository_owner }}"
           MANIFEST_DIR="manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+
+          # Derive fork owner from the authenticated token (may differ from repo owner)
+          FORK_OWNER="$(gh api user --jq .login)"
+          echo "Authenticated as: $FORK_OWNER"
 
           # Ensure we have a fork of winget-pkgs
           gh repo fork microsoft/winget-pkgs --clone=false 2>/dev/null || true
+
+          # Configure git to use the GH token for push
+          gh auth setup-git
 
           # Clone the fork (shallow)
           gh repo clone "${FORK_OWNER}/winget-pkgs" winget-pkgs -- --depth 1
           cd winget-pkgs
 
-          # Create branch and copy manifests
-          git checkout -b "$BRANCH"
+          # Handle reruns: if branch already exists, check it out; otherwise create it
+          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
+            echo "Branch $BRANCH already exists, updating..."
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+          else
+            git checkout -b "$BRANCH"
+          fi
+
+          # Copy manifests
           mkdir -p "manifests/f/FernandoTonon/QtMeshEditor/${VER}"
           cp -r "../${MANIFEST_DIR}/." "manifests/f/FernandoTonon/QtMeshEditor/${VER}/"
 
-          # Commit and push
+          # Commit and push (--allow-empty handles no-diff reruns)
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
           git commit -m "Update FernandoTonon.QtMeshEditor to ${VER}"
           git push -u origin "$BRANCH"
 
-          # Open PR against microsoft/winget-pkgs
-          gh pr create \
-            --repo microsoft/winget-pkgs \
-            --head "${FORK_OWNER}:${BRANCH}" \
-            --title "Update FernandoTonon.QtMeshEditor to ${VER}" \
-            --body "## Automated update\nVersion: ${VER}\nRelease: https://github.com/fernandotonon/QtMeshEditor/releases/tag/${RAW_TAG}"
+          # Open PR (or skip if one already exists for this branch)
+          EXISTING_PR="$(gh pr list --repo microsoft/winget-pkgs --head "${FORK_OWNER}:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
+          if [ -n "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
+            echo "PR #${EXISTING_PR} already exists for this version, skipping creation."
+          else
+            gh pr create \
+              --repo microsoft/winget-pkgs \
+              --head "${FORK_OWNER}:${BRANCH}" \
+              --title "Update FernandoTonon.QtMeshEditor to ${VER}" \
+              --body "## Automated update
+          Version: ${VER}
+          Release: https://github.com/fernandotonon/QtMeshEditor/releases/tag/${RAW_TAG}"
+          fi
 
           echo "WinGet PR submitted successfully."
 
