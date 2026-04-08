@@ -1722,46 +1722,67 @@ jobs:
  winget-publish:
     needs: build-windows
     if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
+    continue-on-error: true   # don't fail the release if WinGet submission fails
     steps:
-      - name: Install wingetcreate
-        run: |
-          Invoke-WebRequest -Uri https://aka.ms/wingetcreate/latest -OutFile wingetcreate.exe
+      - uses: actions/checkout@v4
 
-      - name: Submit to WinGet
+      - name: Generate WinGet manifest
+        run: |
+          # Install wingetcreate (Linux .NET tool)
+          dotnet tool install --global wingetcreate
+          export PATH="$PATH:$HOME/.dotnet/tools"
+
+          RAW_TAG="${{ github.event.release.tag_name }}"
+          VER="${RAW_TAG#v}"
+          URL="https://github.com/fernandotonon/QtMeshEditor/releases/download/${RAW_TAG}/QtMeshEditor-${RAW_TAG}-bin-Windows.zip"
+
+          echo "Generating WinGet manifest for version $VER..."
+          wingetcreate update FernandoTonon.QtMeshEditor \
+            --version "$VER" \
+            --urls "$URL" \
+            --out manifests
+
+          echo "Manifest generated:"
+          find manifests -type f -exec cat {} +
+
+      - name: Submit PR to winget-pkgs
         env:
-          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
+          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
-          $rawTag = "${{ github.event.release.tag_name }}"
-          $ver = $rawTag.TrimStart("v")
-          $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${rawTag}/QtMeshEditor-${rawTag}-bin-Windows.zip"
+          RAW_TAG="${{ github.event.release.tag_name }}"
+          VER="${RAW_TAG#v}"
+          BRANCH="qtmesheditor-${VER}"
+          FORK_OWNER="${{ github.repository_owner }}"
+          MANIFEST_DIR="manifests/f/FernandoTonon/QtMeshEditor/${VER}"
 
-          # wingetcreate --submit uses the Contents API (PUT /repos/.../contents/...)
-          # which works with public_repo scope — unlike the git database API (blobs/trees)
-          # which requires repo scope.
-          # Retry up to 5 times to allow the release asset to propagate.
-          Write-Host "Submitting WinGet manifest for version $ver..."
-          $success = $false
-          for ($attempt = 1; $attempt -le 5; $attempt++) {
-            Write-Host "Attempt $attempt ..."
-            .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
-              --version $ver `
-              --urls $url `
-              --token $env:WINGET_TOKEN `
-              --submit 2>&1 | Tee-Object -Variable output
-            Write-Host $output
-            if ($LASTEXITCODE -eq 0) { $success = $true; break }
-            if ($attempt -lt 5) {
-              $delay = $attempt * 30
-              Write-Host "wingetcreate exited $LASTEXITCODE — retrying in $delay s..."
-              Start-Sleep -Seconds $delay
-            }
-          }
-          if (-not $success) {
-            Write-Host "::error::WinGet submission failed after 5 attempts"
-            exit 1
-          }
-          Write-Host "WinGet PR submitted successfully."
+          # Ensure we have a fork of winget-pkgs
+          gh repo fork microsoft/winget-pkgs --clone=false 2>/dev/null || true
+
+          # Clone the fork (shallow)
+          gh repo clone "${FORK_OWNER}/winget-pkgs" winget-pkgs -- --depth 1
+          cd winget-pkgs
+
+          # Create branch and copy manifests
+          git checkout -b "$BRANCH"
+          mkdir -p "manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+          cp -r "../${MANIFEST_DIR}/." "manifests/f/FernandoTonon/QtMeshEditor/${VER}/"
+
+          # Commit and push
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -m "Update FernandoTonon.QtMeshEditor to ${VER}"
+          git push -u origin "$BRANCH"
+
+          # Open PR against microsoft/winget-pkgs
+          gh pr create \
+            --repo microsoft/winget-pkgs \
+            --head "${FORK_OWNER}:${BRANCH}" \
+            --title "Update FernandoTonon.QtMeshEditor to ${VER}" \
+            --body "## Automated update\nVersion: ${VER}\nRelease: https://github.com/fernandotonon/QtMeshEditor/releases/tag/${RAW_TAG}"
+
+          echo "WinGet PR submitted successfully."
 
 ####################################################################
 # Snap Store Publish (after Linux .deb is built)
