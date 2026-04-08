@@ -163,6 +163,8 @@ private:
     QJsonObject toolGetCameraInfo(const QJsonObject &args);
     QJsonObject toolDeleteEntity(const QJsonObject &args);
     QJsonObject toolDuplicateEntity(const QJsonObject &args);
+    QJsonObject toolSetSnapSettings(const QJsonObject &args);
+    QJsonObject toolGetSnapSettings(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

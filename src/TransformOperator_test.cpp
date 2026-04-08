@@ -527,3 +527,116 @@ TEST_F(TransformOperatorTests, RemoveSelectedDestroysNodesAndClearsUndoHistory)
     EXPECT_TRUE(SelectionSet::getSingleton()->isEmpty());
     EXPECT_FALSE(UndoManager::getSingleton()->canUndo());
 }
+
+// ---- Snap Utility Tests ----
+
+TEST(TransformOperatorSnap, SnapValueRoundsToNearestStep)
+{
+    EXPECT_DOUBLE_EQ(TransformOperator::snapValue(0.0, 1.0), 0.0);
+    EXPECT_DOUBLE_EQ(TransformOperator::snapValue(0.4, 1.0), 0.0);
+    EXPECT_DOUBLE_EQ(TransformOperator::snapValue(0.6, 1.0), 1.0);
+    EXPECT_DOUBLE_EQ(TransformOperator::snapValue(-0.6, 1.0), -1.0);
+    EXPECT_DOUBLE_EQ(TransformOperator::snapValue(2.3, 0.5), 2.5);
+    EXPECT_DOUBLE_EQ(TransformOperator::snapValue(2.2, 0.5), 2.0);
+    EXPECT_DOUBLE_EQ(TransformOperator::snapValue(0.13, 0.25), 0.25);
+    EXPECT_DOUBLE_EQ(TransformOperator::snapValue(0.12, 0.25), 0.0);
+}
+
+TEST(TransformOperatorSnap, SnapTranslationSnapsEachAxis)
+{
+    Ogre::Vector3 input(1.7f, 0.3f, -2.6f);
+    Ogre::Vector3 snapped = TransformOperator::snapTranslation(input, 1.0);
+    EXPECT_NEAR(snapped.x, 2.0f, 0.001f);
+    EXPECT_NEAR(snapped.y, 0.0f, 0.001f);
+    EXPECT_NEAR(snapped.z, -3.0f, 0.001f);
+}
+
+TEST(TransformOperatorSnap, SnapTranslationWithSmallGrid)
+{
+    Ogre::Vector3 input(0.13f, 0.07f, 0.24f);
+    Ogre::Vector3 snapped = TransformOperator::snapTranslation(input, 0.1);
+    EXPECT_NEAR(snapped.x, 0.1f, 0.001f);
+    EXPECT_NEAR(snapped.y, 0.1f, 0.001f);
+    EXPECT_NEAR(snapped.z, 0.2f, 0.001f);
+}
+
+TEST(TransformOperatorSnap, SnapAngleRoundsToNearestAngle)
+{
+    EXPECT_NEAR(TransformOperator::snapAngle(10.0f, 15.0), 15.0f, 0.001f);
+    EXPECT_NEAR(TransformOperator::snapAngle(6.0f, 15.0), 0.0f, 0.001f);
+    EXPECT_NEAR(TransformOperator::snapAngle(44.0f, 45.0), 45.0f, 0.001f);
+    EXPECT_NEAR(TransformOperator::snapAngle(22.0f, 45.0), 0.0f, 0.001f);
+    EXPECT_NEAR(TransformOperator::snapAngle(-80.0f, 90.0), -90.0f, 0.001f);
+    EXPECT_NEAR(TransformOperator::snapAngle(3.0f, 5.0), 5.0f, 0.001f);
+}
+
+TEST(TransformOperatorSnap, SnapScaleSnapsEachAxis)
+{
+    Ogre::Vector3 input(0.3f, 0.6f, -0.13f);
+    Ogre::Vector3 snapped = TransformOperator::snapScale(input, 0.25);
+    EXPECT_NEAR(snapped.x, 0.25f, 0.001f);
+    EXPECT_NEAR(snapped.y, 0.5f, 0.001f);
+    EXPECT_NEAR(snapped.z, -0.25f, 0.001f);
+}
+
+TEST(TransformOperatorSnap, PresetsReturnExpectedValues)
+{
+    auto grid = TransformOperator::gridSizePresets();
+    EXPECT_EQ(grid.size(), 6);
+    EXPECT_DOUBLE_EQ(grid[0], 0.1);
+    EXPECT_DOUBLE_EQ(grid[5], 5.0);
+
+    auto angle = TransformOperator::angleStepPresets();
+    EXPECT_EQ(angle.size(), 4);
+    EXPECT_DOUBLE_EQ(angle[0], 5.0);
+    EXPECT_DOUBLE_EQ(angle[3], 90.0);
+
+    auto scale = TransformOperator::scaleStepPresets();
+    EXPECT_EQ(scale.size(), 3);
+    EXPECT_DOUBLE_EQ(scale[0], 0.1);
+    EXPECT_DOUBLE_EQ(scale[2], 0.5);
+}
+
+TEST_F(TransformOperatorTests, SnapSettingsRoundTripAndEmitSignal)
+{
+    QSignalSpy spy(op, &TransformOperator::snapSettingsChanged);
+    ASSERT_TRUE(spy.isValid());
+
+    op->setSnapEnabled(true);
+    EXPECT_TRUE(op->isSnapEnabled());
+    EXPECT_EQ(spy.count(), 1);
+
+    op->setSnapGridSize(2.0);
+    EXPECT_DOUBLE_EQ(op->snapGridSize(), 2.0);
+    EXPECT_EQ(spy.count(), 2);
+
+    op->setSnapAngleStep(45.0);
+    EXPECT_DOUBLE_EQ(op->snapAngleStep(), 45.0);
+    EXPECT_EQ(spy.count(), 3);
+
+    op->setSnapScaleStep(0.5);
+    EXPECT_DOUBLE_EQ(op->snapScaleStep(), 0.5);
+    EXPECT_EQ(spy.count(), 4);
+
+    // Setting same value should not emit again
+    op->setSnapEnabled(true);
+    EXPECT_EQ(spy.count(), 4);
+
+    op->setSnapGridSize(2.0);
+    EXPECT_EQ(spy.count(), 4);
+}
+
+TEST_F(TransformOperatorTests, SnapSettingsRejectInvalidValues)
+{
+    op->setSnapGridSize(1.0);
+    op->setSnapGridSize(-1.0);
+    EXPECT_DOUBLE_EQ(op->snapGridSize(), 1.0);
+
+    op->setSnapAngleStep(15.0);
+    op->setSnapAngleStep(0.0);
+    EXPECT_DOUBLE_EQ(op->snapAngleStep(), 15.0);
+
+    op->setSnapScaleStep(0.25);
+    op->setSnapScaleStep(-0.5);
+    EXPECT_DOUBLE_EQ(op->snapScaleStep(), 0.25);
+}

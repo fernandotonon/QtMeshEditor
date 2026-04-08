@@ -32,6 +32,14 @@ Rectangle {
                 Component.onCompleted: content = transformComponent
             }
 
+            // ---- Snap Settings ----
+            CollapsibleSection {
+                title: "Snap Settings"
+                expanded: false
+
+                Component.onCompleted: content = snapSettingsComponent
+            }
+
             // ---- Primitive Parameters ----
             CollapsibleSection {
                 title: "Primitive: " + PropertiesPanelController.primitiveType
@@ -192,6 +200,108 @@ Rectangle {
                     onNewValue: function(val) { PropertiesPanelController.scaleY = val } }
                 TransformField { label: "Z"; value: PropertiesPanelController.scaleZ; color: "#4040c0"
                     onNewValue: function(val) { PropertiesPanelController.scaleZ = val } }
+            }
+        }
+    }
+
+    // ---- Snap Settings Content ----
+    Component {
+        id: snapSettingsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // Enable toggle
+            Row {
+                spacing: 8
+                width: parent.width - 16
+
+                CheckBox {
+                    id: snapEnabledCheck
+                    checked: PropertiesPanelController.snapEnabled
+                    onCheckedChanged: PropertiesPanelController.snapEnabled = checked
+                    palette.windowText: PropertiesPanelController.textColor
+                }
+                Text {
+                    text: "Enable Snap (or hold Ctrl)"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            // Grid Size
+            Text {
+                text: "Grid Size (Translation)"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                spacing: 4
+                width: parent.width - 16
+
+                Repeater {
+                    model: PropertiesPanelController.gridSizePresets()
+                    delegate: Button {
+                        text: modelData.toString()
+                        width: Math.max(36, implicitWidth)
+                        height: 24
+                        font.pixelSize: 10
+                        highlighted: Math.abs(PropertiesPanelController.snapGridSize - modelData) < 0.001
+                        onClicked: PropertiesPanelController.snapGridSize = modelData
+                    }
+                }
+            }
+
+            // Angle Step
+            Text {
+                text: "Angle Step (Rotation)"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                spacing: 4
+                width: parent.width - 16
+
+                Repeater {
+                    model: PropertiesPanelController.angleStepPresets()
+                    delegate: Button {
+                        text: modelData + "\u00B0"
+                        width: Math.max(36, implicitWidth)
+                        height: 24
+                        font.pixelSize: 10
+                        highlighted: Math.abs(PropertiesPanelController.snapAngleStep - modelData) < 0.001
+                        onClicked: PropertiesPanelController.snapAngleStep = modelData
+                    }
+                }
+            }
+
+            // Scale Step
+            Text {
+                text: "Scale Step"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+            }
+            Row {
+                spacing: 4
+                width: parent.width - 16
+
+                Repeater {
+                    model: PropertiesPanelController.scaleStepPresets()
+                    delegate: Button {
+                        text: modelData.toString()
+                        width: Math.max(36, implicitWidth)
+                        height: 24
+                        font.pixelSize: 10
+                        highlighted: Math.abs(PropertiesPanelController.snapScaleStep - modelData) < 0.001
+                        onClicked: PropertiesPanelController.snapScaleStep = modelData
+                    }
+                }
             }
         }
     }

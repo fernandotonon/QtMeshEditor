@@ -485,6 +485,10 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolCameraControl(args);
     } else if (name == "get_camera_info") {
         toolResult = toolGetCameraInfo(args);
+    } else if (name == "set_snap_settings") {
+        toolResult = toolSetSnapSettings(args);
+    } else if (name == "get_snap_settings") {
+        toolResult = toolGetSnapSettings(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -2515,6 +2519,68 @@ QJsonObject MCPServer::toolCameraControl(const QJsonObject &args)
     return makeSuccessResult("Camera updated:\n" + actions.join("\n"));
 }
 
+QJsonObject MCPServer::toolSetSnapSettings(const QJsonObject &args)
+{
+    auto* top = TransformOperator::getSingleton();
+    if (!top)
+        return makeErrorResult("Error: TransformOperator not initialized");
+
+    QStringList changes;
+
+    if (args.contains("enabled")) {
+        bool enabled = args["enabled"].toBool();
+        top->setSnapEnabled(enabled);
+        changes << QString("Snap %1").arg(enabled ? "enabled" : "disabled");
+    }
+
+    if (args.contains("grid_size")) {
+        double gridSize = args["grid_size"].toDouble();
+        if (gridSize <= 0.0)
+            return makeErrorResult("Error: grid_size must be positive");
+        top->setSnapGridSize(gridSize);
+        changes << QString("Grid size: %1").arg(gridSize);
+    }
+
+    if (args.contains("angle_step")) {
+        double angleStep = args["angle_step"].toDouble();
+        if (angleStep <= 0.0)
+            return makeErrorResult("Error: angle_step must be positive");
+        top->setSnapAngleStep(angleStep);
+        changes << QString("Angle step: %1 degrees").arg(angleStep);
+    }
+
+    if (args.contains("scale_step")) {
+        double scaleStep = args["scale_step"].toDouble();
+        if (scaleStep <= 0.0)
+            return makeErrorResult("Error: scale_step must be positive");
+        top->setSnapScaleStep(scaleStep);
+        changes << QString("Scale step: %1").arg(scaleStep);
+    }
+
+    if (changes.isEmpty())
+        return makeErrorResult("Error: No snap settings specified. Use enabled, grid_size, angle_step, or scale_step.");
+
+    return makeSuccessResult("Snap settings updated:\n" + changes.join("\n"));
+}
+
+QJsonObject MCPServer::toolGetSnapSettings(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    auto* top = TransformOperator::getSingleton();
+    if (!top)
+        return makeErrorResult("Error: TransformOperator not initialized");
+
+    QStringList lines;
+    lines << QString("Snap enabled: %1").arg(top->isSnapEnabled() ? "true" : "false");
+    lines << QString("Grid size: %1 (translation)").arg(top->snapGridSize());
+    lines << QString("Angle step: %1 degrees (rotation)").arg(top->snapAngleStep());
+    lines << QString("Scale step: %1 (scale)").arg(top->snapScaleStep());
+    lines << "";
+    lines << "Tip: Hold Ctrl during drag for temporary snap, even when snap is disabled.";
+
+    return makeSuccessResult(lines.join("\n"));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -3093,6 +3159,30 @@ QJsonArray MCPServer::buildToolsList()
             "Control the 3D viewport camera. Set position, look-at target, zoom, or frame the selection. "
             "Multiple actions can be combined in one call.",
             props
+        );
+    }
+
+    // set_snap_settings
+    {
+        QJsonObject props;
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Enable or disable persistent snapping. When enabled, transforms always snap. When disabled, hold Ctrl during drag to snap."}};
+        props["grid_size"] = QJsonObject{{"type", "number"}, {"description", "Translation snap grid size. Presets: 0.1, 0.25, 0.5, 1.0, 2.0, 5.0"}};
+        props["angle_step"] = QJsonObject{{"type", "number"}, {"description", "Rotation snap angle in degrees. Presets: 5, 15, 45, 90"}};
+        props["scale_step"] = QJsonObject{{"type", "number"}, {"description", "Scale snap step size. Presets: 0.1, 0.25, 0.5"}};
+        appendTool(
+            "set_snap_settings",
+            "Configure transform snapping. Snapping rounds translations to grid positions, rotations to angle increments, "
+            "and scales to step sizes. Hold Ctrl during drag for temporary snap, or enable persistent snap.",
+            props
+        );
+    }
+
+    // get_snap_settings
+    {
+        appendTool(
+            "get_snap_settings",
+            "Get the current transform snap settings: enabled state, grid size, angle step, and scale step.",
+            QJsonObject()
         );
     }
 

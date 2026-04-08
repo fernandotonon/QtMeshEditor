@@ -53,6 +53,9 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
         emit transformChanged();
     });
 
+    connect(transformOp, &TransformOperator::snapSettingsChanged,
+            this, &PropertiesPanelController::snapSettingsChanged);
+
     connect(Manager::getSingleton(), &Manager::sceneNodeCreated, this, &PropertiesPanelController::onSceneChanged);
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, &PropertiesPanelController::onSceneChanged);
 
@@ -499,4 +502,69 @@ void PropertiesPanelController::onSceneChanged()
 void PropertiesPanelController::refreshTheme()
 {
     emit themeChanged();
+}
+
+// Snap settings — delegate to TransformOperator
+bool PropertiesPanelController::snapEnabled() const
+{
+    return TransformOperator::getSingleton()->isSnapEnabled();
+}
+
+double PropertiesPanelController::snapGridSize() const
+{
+    return TransformOperator::getSingleton()->snapGridSize();
+}
+
+double PropertiesPanelController::snapAngleStep() const
+{
+    return TransformOperator::getSingleton()->snapAngleStep();
+}
+
+double PropertiesPanelController::snapScaleStep() const
+{
+    return TransformOperator::getSingleton()->snapScaleStep();
+}
+
+void PropertiesPanelController::setSnapEnabled(bool enabled)
+{
+    TransformOperator::getSingleton()->setSnapEnabled(enabled);
+}
+
+void PropertiesPanelController::setSnapGridSize(double size)
+{
+    TransformOperator::getSingleton()->setSnapGridSize(size);
+}
+
+void PropertiesPanelController::setSnapAngleStep(double degrees)
+{
+    TransformOperator::getSingleton()->setSnapAngleStep(degrees);
+}
+
+void PropertiesPanelController::setSnapScaleStep(double step)
+{
+    TransformOperator::getSingleton()->setSnapScaleStep(step);
+}
+
+QVariantList PropertiesPanelController::gridSizePresets() const
+{
+    QVariantList result;
+    for (double v : TransformOperator::gridSizePresets())
+        result.append(v);
+    return result;
+}
+
+QVariantList PropertiesPanelController::angleStepPresets() const
+{
+    QVariantList result;
+    for (double v : TransformOperator::angleStepPresets())
+        result.append(v);
+    return result;
+}
+
+QVariantList PropertiesPanelController::scaleStepPresets() const
+{
+    QVariantList result;
+    for (double v : TransformOperator::scaleStepPresets())
+        result.append(v);
+    return result;
 }

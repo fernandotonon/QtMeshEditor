@@ -1,4 +1,7 @@
 #include <QtDebug>
+#include <QSettings>
+#include <QApplication>
+#include <cmath>
 
 #include "GlobalDefinitions.h"
 
@@ -80,6 +83,13 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     connect(SelectionSet::getSingleton(),SIGNAL(selectionChanged()),this,SLOT(onSelectionChanged()));
 
     QtInputManager::getInstance().AddMouseListener(this);
+
+    // Load snap settings from QSettings
+    QSettings settings;
+    mSnapEnabled    = settings.value("Snap/enabled", false).toBool();
+    mSnapGridSize   = settings.value("Snap/gridSize", 1.0).toDouble();
+    mSnapAngleStep  = settings.value("Snap/angleStep", 15.0).toDouble();
+    mSnapScaleStep  = settings.value("Snap/scaleStep", 0.25).toDouble();
 }
 
 TransformOperator::~TransformOperator()
@@ -143,6 +153,98 @@ void TransformOperator::swap(int& x, int& y)
 {
     int temp = x;
     x = y; y = temp;
+}
+
+////////////////////////////////////////
+// Snap settings
+
+void TransformOperator::setSnapEnabled(bool enabled)
+{
+    if (mSnapEnabled != enabled)
+    {
+        mSnapEnabled = enabled;
+        QSettings settings;
+        settings.setValue("Snap/enabled", mSnapEnabled);
+        SentryReporter::addBreadcrumb("ui.action",
+            mSnapEnabled ? "Snap enabled" : "Snap disabled");
+        emit snapSettingsChanged();
+    }
+}
+
+void TransformOperator::setSnapGridSize(double size)
+{
+    if (size > 0.0 && mSnapGridSize != size)
+    {
+        mSnapGridSize = size;
+        QSettings settings;
+        settings.setValue("Snap/gridSize", mSnapGridSize);
+        emit snapSettingsChanged();
+    }
+}
+
+void TransformOperator::setSnapAngleStep(double degrees)
+{
+    if (degrees > 0.0 && mSnapAngleStep != degrees)
+    {
+        mSnapAngleStep = degrees;
+        QSettings settings;
+        settings.setValue("Snap/angleStep", mSnapAngleStep);
+        emit snapSettingsChanged();
+    }
+}
+
+void TransformOperator::setSnapScaleStep(double step)
+{
+    if (step > 0.0 && mSnapScaleStep != step)
+    {
+        mSnapScaleStep = step;
+        QSettings settings;
+        settings.setValue("Snap/scaleStep", mSnapScaleStep);
+        emit snapSettingsChanged();
+    }
+}
+
+QList<double> TransformOperator::gridSizePresets()
+{
+    return { 0.1, 0.25, 0.5, 1.0, 2.0, 5.0 };
+}
+
+QList<double> TransformOperator::angleStepPresets()
+{
+    return { 5.0, 15.0, 45.0, 90.0 };
+}
+
+QList<double> TransformOperator::scaleStepPresets()
+{
+    return { 0.1, 0.25, 0.5 };
+}
+
+double TransformOperator::snapValue(double value, double step)
+{
+    return std::round(value / step) * step;
+}
+
+Ogre::Vector3 TransformOperator::snapTranslation(const Ogre::Vector3& translation, double gridSize)
+{
+    return Ogre::Vector3(
+        static_cast<Ogre::Real>(snapValue(translation.x, gridSize)),
+        static_cast<Ogre::Real>(snapValue(translation.y, gridSize)),
+        static_cast<Ogre::Real>(snapValue(translation.z, gridSize))
+    );
+}
+
+Ogre::Real TransformOperator::snapAngle(Ogre::Real degrees, double angleStep)
+{
+    return static_cast<Ogre::Real>(snapValue(degrees, angleStep));
+}
+
+Ogre::Vector3 TransformOperator::snapScale(const Ogre::Vector3& scale, double scaleStep)
+{
+    return Ogre::Vector3(
+        static_cast<Ogre::Real>(snapValue(scale.x, scaleStep)),
+        static_cast<Ogre::Real>(snapValue(scale.y, scaleStep)),
+        static_cast<Ogre::Real>(snapValue(scale.z, scaleStep))
+    );
 }
 const Ogre::ColourValue& TransformOperator::getSelectionBoxColour() const
 {   return m_pSelectionBox->getBoxColour();   }
@@ -496,6 +598,11 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 }
             }
 
+            // Reset snap accumulators at drag start
+            mSnapTranslationAccum = Ogre::Vector3::ZERO;
+            mSnapRotationAccum = Ogre::Vector3::ZERO;
+            mSnapScaleAccum = Ogre::Vector3::ZERO;
+
             // Checking the ray intersection with a plane parallel to viewport & on the geometric center of selection
             Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
             std::pair<bool, Ogre::Real> result = mouseRay.intersects(Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
@@ -568,12 +675,33 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                     translation = worldDelta * mTransformVector;
                 }
 
-                translateSelected(translation);
-                mStartPoint = point;
-
-                emit selectedPositionChanged(SelectionSet::getSingleton()->getSelectionCenter());
-
-                updateGizmoPosition();
+                // Apply snap if Ctrl is held or snap is permanently enabled
+                bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
+                if (snapping)
+                {
+                    mSnapTranslationAccum += translation;
+                    Ogre::Vector3 snapped = snapTranslation(mSnapTranslationAccum, mSnapGridSize);
+                    if (snapped.isZeroLength())
+                    {
+                        // Not enough accumulated to reach a snap step yet — consume the raw delta
+                        mStartPoint = point;
+                    }
+                    else
+                    {
+                        mSnapTranslationAccum -= snapped;
+                        translateSelected(snapped);
+                        mStartPoint = point;
+                        emit selectedPositionChanged(SelectionSet::getSingleton()->getSelectionCenter());
+                        updateGizmoPosition();
+                    }
+                }
+                else
+                {
+                    translateSelected(translation);
+                    mStartPoint = point;
+                    emit selectedPositionChanged(SelectionSet::getSingleton()->getSelectionCenter());
+                    updateGizmoPosition();
+                }
             }
         }
     }
@@ -626,10 +754,46 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                     rotation.normalise();
                 }
 
-                rotateSelected(rotation);
-                mStartPoint = point;
+                // Apply snap if Ctrl is held or snap is permanently enabled
+                bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
+                if (snapping)
+                {
+                    // Convert incremental rotation to Euler for accumulation
+                    Ogre::Euler euler;
+                    euler.fromQuaternion(rotation);
+                    Ogre::Vector3 deltaDegs(euler.pitch().valueDegrees(),
+                                            euler.yaw().valueDegrees(),
+                                            euler.roll().valueDegrees());
+                    mSnapRotationAccum += deltaDegs;
 
-                emit selectedOrientationChanged(SelectionSet::getSingleton()->getSelectionOrientation());
+                    // Snap each axis independently
+                    Ogre::Vector3 snappedDegs(
+                        snapAngle(mSnapRotationAccum.x, mSnapAngleStep),
+                        snapAngle(mSnapRotationAccum.y, mSnapAngleStep),
+                        snapAngle(mSnapRotationAccum.z, mSnapAngleStep)
+                    );
+
+                    if (snappedDegs.isZeroLength())
+                    {
+                        mStartPoint = point;
+                    }
+                    else
+                    {
+                        mSnapRotationAccum -= snappedDegs;
+                        Ogre::Euler snappedEuler(Ogre::Degree(snappedDegs.y),
+                                                 Ogre::Degree(snappedDegs.x),
+                                                 Ogre::Degree(snappedDegs.z));
+                        rotateSelected(snappedEuler.toQuaternion());
+                        mStartPoint = point;
+                        emit selectedOrientationChanged(SelectionSet::getSingleton()->getSelectionOrientation());
+                    }
+                }
+                else
+                {
+                    rotateSelected(rotation);
+                    mStartPoint = point;
+                    emit selectedOrientationChanged(SelectionSet::getSingleton()->getSelectionOrientation());
+                }
             }
         }
     }
@@ -674,11 +838,34 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                         scaleFactor = Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
                     }
 
-                    scaleSelected(scaleFactor);
-                    mScaleStartDistance = currentDistance;
-
-                    emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
-                    updateGizmoPosition();
+                    // Apply snap if Ctrl is held or snap is permanently enabled
+                    bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
+                    if (snapping)
+                    {
+                        // Accumulate the delta from identity (1.0)
+                        mSnapScaleAccum += (scaleFactor - Ogre::Vector3::UNIT_SCALE);
+                        Ogre::Vector3 snappedDelta = snapScale(mSnapScaleAccum, mSnapScaleStep);
+                        if (snappedDelta.isZeroLength())
+                        {
+                            mScaleStartDistance = currentDistance;
+                        }
+                        else
+                        {
+                            mSnapScaleAccum -= snappedDelta;
+                            Ogre::Vector3 snappedFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
+                            scaleSelected(snappedFactor);
+                            mScaleStartDistance = currentDistance;
+                            emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
+                            updateGizmoPosition();
+                        }
+                    }
+                    else
+                    {
+                        scaleSelected(scaleFactor);
+                        mScaleStartDistance = currentDistance;
+                        emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
+                        updateGizmoPosition();
+                    }
                 }
             }
         }
