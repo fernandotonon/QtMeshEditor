@@ -176,6 +176,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 
 - **UI: QML over Widgets.** New UI should be built in QML (Qt Quick), not Qt Widgets. The Inspector panel (`qml/PropertiesPanel.qml`) and Material Editor (`qml/MaterialEditorWindow.qml`) are the reference for the QML approach. The old Transform/Material/Edit/Animation tabs have been replaced by the QML Inspector. AnimationWidget and PrimitivesWidget still exist as hidden backing widgets but are not user-visible tabs.
 - **Cross-platform: Windows, Linux (Ubuntu), macOS.** All code must compile and run on all three. Guard platform-specific APIs with `#ifdef Q_OS_WIN`, `#ifdef Q_OS_MACOS`, `#ifdef Q_OS_LINUX`. Test the CI build across all three platforms before merging.
+- **Sentry breadcrumbs.** All user-facing actions and significant operations must be tracked with `SentryReporter::addBreadcrumb(category, message)`. Use `"ui.action"` for toolbar/menu clicks, `"ai.tool_call"` for MCP tool invocations, `"file.import"` / `"file.export"` for I/O operations. This enables crash diagnostics and usage telemetry. Check existing patterns in `mainwindow.cpp`, `TransformOperator.cpp`, and `MCPServer.cpp`.
 - **Unit tests.** Add Google Test unit tests for new functionality. Test files live alongside source in `src/` with the `_test.cpp` suffix (e.g., `Manager_test.cpp`). CI runs tests only on Linux to save budget, so:
   - Features that depend on optional components (e.g., local LLM / llama.cpp) may not be available in the test environment — guard with `#ifdef ENABLE_LOCAL_LLM` or skip gracefully.
   - Tests must work under Xvfb (headless X11) — avoid assumptions about a real display.
@@ -204,6 +205,8 @@ All other version references are auto-generated from this via CMake template sub
 - `DEBIAN-control.in` — Debian package control file
 
 **To bump the version**, only edit the `VERSION` in `CMakeLists.txt` line 16. The rest updates automatically on rebuild.
+
+**Version format: `X.Y.Z` only — never prepend `v`.** GitHub release tags, update check comparisons, and all version strings use plain `X.Y.Z` (e.g., `2.21.0`, not `v2.21.0`). The update check feature compares the runtime version against the latest GitHub release tag, so a `v` prefix would break the comparison.
 
 Note: `MCPServer.h` has a separate `SERVER_VERSION` ("1.0.0") for the MCP protocol — only bump that if the MCP interface changes.
 
