@@ -249,15 +249,15 @@ Rectangle {
                 Repeater {
                     model: PropertiesPanelController.gridSizePresets()
                     delegate: Rectangle {
-                        property bool active: Math.abs(PropertiesPanelController.snapGridSize - modelData) < 0.001
+                        property real val: modelData
                         width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.gridSizePresets().length - 1)) / PropertiesPanelController.gridSizePresets().length)
                         height: 22; radius: 3
-                        color: active ? PropertiesPanelController.highlightColor
+                        color: Math.abs(PropertiesPanelController.snapGridSize - val) < 0.001 ? PropertiesPanelController.highlightColor
                              : snapBtnMa1.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
                              : PropertiesPanelController.buttonColor
                         border.color: PropertiesPanelController.borderColor; border.width: 1
-                        Text { anchors.centerIn: parent; text: modelData.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
-                        MouseArea { id: snapBtnMa1; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapGridSize = modelData }
+                        Text { anchors.centerIn: parent; text: val.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { id: snapBtnMa1; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapGridSize = val }
                     }
                 }
             }
@@ -275,15 +275,15 @@ Rectangle {
                 Repeater {
                     model: PropertiesPanelController.angleStepPresets()
                     delegate: Rectangle {
-                        property bool active: Math.abs(PropertiesPanelController.snapAngleStep - modelData) < 0.001
+                        property real val: modelData
                         width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.angleStepPresets().length - 1)) / PropertiesPanelController.angleStepPresets().length)
                         height: 22; radius: 3
-                        color: active ? PropertiesPanelController.highlightColor
+                        color: Math.abs(PropertiesPanelController.snapAngleStep - val) < 0.001 ? PropertiesPanelController.highlightColor
                              : snapBtnMa2.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
                              : PropertiesPanelController.buttonColor
                         border.color: PropertiesPanelController.borderColor; border.width: 1
-                        Text { anchors.centerIn: parent; text: modelData + "\u00B0"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
-                        MouseArea { id: snapBtnMa2; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapAngleStep = modelData }
+                        Text { anchors.centerIn: parent; text: val + "\u00B0"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { id: snapBtnMa2; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapAngleStep = val }
                     }
                 }
             }
@@ -301,15 +301,15 @@ Rectangle {
                 Repeater {
                     model: PropertiesPanelController.scaleStepPresets()
                     delegate: Rectangle {
-                        property bool active: Math.abs(PropertiesPanelController.snapScaleStep - modelData) < 0.001
+                        property real val: modelData
                         width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.scaleStepPresets().length - 1)) / PropertiesPanelController.scaleStepPresets().length)
                         height: 22; radius: 3
-                        color: active ? PropertiesPanelController.highlightColor
+                        color: Math.abs(PropertiesPanelController.snapScaleStep - val) < 0.001 ? PropertiesPanelController.highlightColor
                              : snapBtnMa3.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
                              : PropertiesPanelController.buttonColor
                         border.color: PropertiesPanelController.borderColor; border.width: 1
-                        Text { anchors.centerIn: parent; text: modelData.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
-                        MouseArea { id: snapBtnMa3; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapScaleStep = modelData }
+                        Text { anchors.centerIn: parent; text: val.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea { id: snapBtnMa3; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapScaleStep = val }
                     }
                 }
             }
