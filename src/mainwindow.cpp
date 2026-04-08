@@ -347,6 +347,19 @@ void MainWindow::initToolBar()
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
 
+        // Force QQuickWidget repaint when snap settings change — QQuickWidget
+        // inside a QDockWidget doesn't repaint on internal QML property changes.
+        // QWidget::update() alone isn't enough; must also request a new frame
+        // from the QML scene graph via quickWindow().
+        connect(TransformOperator::getSingleton(), &TransformOperator::snapSettingsChanged,
+                this, [this]() {
+            if (m_propertiesPanel) {
+                m_propertiesPanel->update();
+                if (m_propertiesPanel->quickWindow())
+                    m_propertiesPanel->quickWindow()->requestUpdate();
+            }
+        });
+
         // Replace the tab widget content with the Inspector panel directly
         auto* dockContents = ui->meshEditorWidget->widget();
         auto* layout = dockContents->layout();

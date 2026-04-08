@@ -216,21 +216,46 @@ Rectangle {
 
             property real btnAreaWidth: snapCol.width - 16
 
-            // Local mirror properties — delegates bind to these for reactive updates
-            property bool curSnapEnabled: PropertiesPanelController.snapEnabled
-            property real curGridSize: PropertiesPanelController.snapGridSize
-            property real curAngleStep: PropertiesPanelController.snapAngleStep
-            property real curScaleStep: PropertiesPanelController.snapScaleStep
+            // Active indices — pure QML properties, guaranteed reactive in delegates
+            property int activeGridIdx: -1
+            property int activeAngleIdx: -1
+            property int activeScaleIdx: -1
+            property bool snapOn: false
 
-            Connections {
-                target: PropertiesPanelController
-                function onSnapEnabledChanged() { snapCol.curSnapEnabled = PropertiesPanelController.snapEnabled }
-                function onSnapGridSizeChanged() { snapCol.curGridSize = PropertiesPanelController.snapGridSize }
-                function onSnapAngleStepChanged() { snapCol.curAngleStep = PropertiesPanelController.snapAngleStep }
-                function onSnapScaleStepChanged() { snapCol.curScaleStep = PropertiesPanelController.snapScaleStep }
+            property var gridPresets: [0.1, 0.25, 0.5, 1.0, 2.0, 5.0]
+            property var anglePresets: [5, 15, 45, 90]
+            property var scalePresets: [0.1, 0.25, 0.5]
+
+            function findIdx(arr, val) {
+                for (var i = 0; i < arr.length; ++i)
+                    if (Math.abs(arr[i] - val) < 0.001) return i
+                return -1
             }
 
-            // Enable toggle (themed custom checkbox matching animation checkboxes)
+            // Timer to force QQuickWidget repaint — toggling opacity marks
+            // the entire subtree dirty in the scene graph, forcing a redraw.
+            Timer {
+                id: snapRepaintTimer
+                interval: 1; repeat: false
+                onTriggered: snapCol.opacity = 1.0
+            }
+            function forceRepaint() {
+                // Nuclear option: reset Repeater models to force full delegate recreation.
+                // QQuickWidget inside QDockWidget doesn't repaint sibling delegates on
+                // property changes — only mouse events trigger repaints.
+                var g = gridRepeater.model; gridRepeater.model = null; gridRepeater.model = g
+                var a = angleRepeater.model; angleRepeater.model = null; angleRepeater.model = a
+                var s = scaleRepeater.model; scaleRepeater.model = null; scaleRepeater.model = s
+            }
+
+            Component.onCompleted: {
+                snapOn = PropertiesPanelController.snapEnabled
+                activeGridIdx = findIdx(gridPresets, PropertiesPanelController.snapGridSize)
+                activeAngleIdx = findIdx(anglePresets, PropertiesPanelController.snapAngleStep)
+                activeScaleIdx = findIdx(scalePresets, PropertiesPanelController.snapScaleStep)
+            }
+
+            // Enable toggle
             Row {
                 spacing: 6
                 width: snapCol.btnAreaWidth
@@ -238,9 +263,13 @@ Rectangle {
                 Rectangle {
                     width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                     border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                    color: snapCol.curSnapEnabled ? PropertiesPanelController.highlightColor : "transparent"
-                    Text { anchors.centerIn: parent; text: snapCol.curSnapEnabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                    MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.snapEnabled = !snapCol.curSnapEnabled }
+                    color: snapCol.snapOn ? PropertiesPanelController.highlightColor : "transparent"
+                    Behavior on color { ColorAnimation { duration: 50 } }
+                    Text { anchors.centerIn: parent; text: snapCol.snapOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: { snapCol.snapOn = !snapCol.snapOn; PropertiesPanelController.snapEnabled = snapCol.snapOn; snapCol.forceRepaint() }
+                    }
                 }
                 Text {
                     text: "Enable Snap (or hold Ctrl)"
@@ -251,79 +280,73 @@ Rectangle {
             }
 
             // Grid Size
-            Text {
-                text: "Grid Size (Translation)"
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 11; font.bold: true
-            }
+            Text { text: "Grid Size (Translation)"; color: PropertiesPanelController.textColor; font.pixelSize: 11; font.bold: true }
             Flow {
-                spacing: 3
-                width: snapCol.btnAreaWidth
-
+                spacing: 3; width: snapCol.btnAreaWidth
                 Repeater {
-                    model: PropertiesPanelController.gridSizePresets()
+                    id: gridRepeater
+                    model: snapCol.gridPresets
                     delegate: Rectangle {
-                        property real val: modelData
-                        width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.gridSizePresets().length - 1)) / PropertiesPanelController.gridSizePresets().length)
+                        width: Math.max(30, (snapCol.btnAreaWidth - 3 * (snapCol.gridPresets.length - 1)) / snapCol.gridPresets.length)
                         height: 22; radius: 3
-                        color: Math.abs(snapCol.curGridSize - val) < 0.001 ? PropertiesPanelController.highlightColor
-                             : snapBtnMa1.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
-                             : PropertiesPanelController.buttonColor
+                        color: index === snapCol.activeGridIdx ? PropertiesPanelController.highlightColor
+                             : ma1.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                             : PropertiesPanelController.headerColor
+                        Behavior on color { ColorAnimation { duration: 50 } }
                         border.color: PropertiesPanelController.borderColor; border.width: 1
-                        Text { anchors.centerIn: parent; text: val.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
-                        MouseArea { id: snapBtnMa1; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapGridSize = val }
+                        Text { anchors.centerIn: parent; text: modelData.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea {
+                            id: ma1; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: { snapCol.activeGridIdx = index; PropertiesPanelController.snapGridSize = modelData; snapCol.forceRepaint() }
+                        }
                     }
                 }
             }
 
             // Angle Step
-            Text {
-                text: "Angle Step (Rotation)"
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 11; font.bold: true
-            }
+            Text { text: "Angle Step (Rotation)"; color: PropertiesPanelController.textColor; font.pixelSize: 11; font.bold: true }
             Flow {
-                spacing: 3
-                width: snapCol.btnAreaWidth
-
+                spacing: 3; width: snapCol.btnAreaWidth
                 Repeater {
-                    model: PropertiesPanelController.angleStepPresets()
+                    id: angleRepeater
+                    model: snapCol.anglePresets
                     delegate: Rectangle {
-                        property real val: modelData
-                        width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.angleStepPresets().length - 1)) / PropertiesPanelController.angleStepPresets().length)
+                        width: Math.max(30, (snapCol.btnAreaWidth - 3 * (snapCol.anglePresets.length - 1)) / snapCol.anglePresets.length)
                         height: 22; radius: 3
-                        color: Math.abs(snapCol.curAngleStep - val) < 0.001 ? PropertiesPanelController.highlightColor
-                             : snapBtnMa2.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
-                             : PropertiesPanelController.buttonColor
+                        color: index === snapCol.activeAngleIdx ? PropertiesPanelController.highlightColor
+                             : ma2.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                             : PropertiesPanelController.headerColor
+                        Behavior on color { ColorAnimation { duration: 50 } }
                         border.color: PropertiesPanelController.borderColor; border.width: 1
-                        Text { anchors.centerIn: parent; text: val + "\u00B0"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
-                        MouseArea { id: snapBtnMa2; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapAngleStep = val }
+                        Text { anchors.centerIn: parent; text: modelData + "\u00B0"; color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea {
+                            id: ma2; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: { snapCol.activeAngleIdx = index; PropertiesPanelController.snapAngleStep = modelData; snapCol.forceRepaint() }
+                        }
                     }
                 }
             }
 
             // Scale Step
-            Text {
-                text: "Scale Step"
-                color: PropertiesPanelController.textColor
-                font.pixelSize: 11; font.bold: true
-            }
+            Text { text: "Scale Step"; color: PropertiesPanelController.textColor; font.pixelSize: 11; font.bold: true }
             Flow {
-                spacing: 3
-                width: snapCol.btnAreaWidth
-
+                spacing: 3; width: snapCol.btnAreaWidth
                 Repeater {
-                    model: PropertiesPanelController.scaleStepPresets()
+                    id: scaleRepeater
+                    model: snapCol.scalePresets
                     delegate: Rectangle {
-                        property real val: modelData
-                        width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.scaleStepPresets().length - 1)) / PropertiesPanelController.scaleStepPresets().length)
+                        width: Math.max(30, (snapCol.btnAreaWidth - 3 * (snapCol.scalePresets.length - 1)) / snapCol.scalePresets.length)
                         height: 22; radius: 3
-                        color: Math.abs(snapCol.curScaleStep - val) < 0.001 ? PropertiesPanelController.highlightColor
-                             : snapBtnMa3.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
-                             : PropertiesPanelController.buttonColor
+                        color: index === snapCol.activeScaleIdx ? PropertiesPanelController.highlightColor
+                             : ma3.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                             : PropertiesPanelController.headerColor
+                        Behavior on color { ColorAnimation { duration: 50 } }
                         border.color: PropertiesPanelController.borderColor; border.width: 1
-                        Text { anchors.centerIn: parent; text: val.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
-                        MouseArea { id: snapBtnMa3; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: PropertiesPanelController.snapScaleStep = val }
+                        Text { anchors.centerIn: parent; text: modelData.toString(); color: PropertiesPanelController.textColor; font.pixelSize: 10 }
+                        MouseArea {
+                            id: ma3; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: { snapCol.activeScaleIdx = index; PropertiesPanelController.snapScaleStep = modelData; snapCol.forceRepaint() }
+                        }
                     }
                 }
             }
