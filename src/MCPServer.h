@@ -66,7 +66,7 @@ public:
     /**
      * @brief Set the main window reference for accessing editor functionality
      */
-    void setMainWindow(MainWindow *mainWindow);
+    void setMainWindow(QObject *mainWindow);
 
     /**
      * @brief Set the file descriptor for MCP output (instead of stdout)
@@ -199,7 +199,7 @@ private:
     QMap<QTcpSocket*, QByteArray> m_httpBuffers;
 
     // Member variables
-    MainWindow *m_mainWindow = nullptr;
+    QObject *m_mainWindow = nullptr;
     QSocketNotifier *m_stdinNotifier = nullptr;
     int m_stdinFd = -1;
     int m_stdoutFd = -1;

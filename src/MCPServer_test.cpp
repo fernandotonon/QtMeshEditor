@@ -12,8 +12,15 @@
 #include <QTemporaryDir>
 #include <memory>
 #include <QMainWindow>
+
+#ifdef Q_OS_WIN
+#include <io.h>
+#include <fcntl.h>
+#include <windows.h>
+#else
 #include <unistd.h>
 #include <fcntl.h>
+#endif
 
 #define private public
 #include "MCPServer.h"
@@ -41,6 +48,42 @@ static bool isError(const QJsonObject &result)
     return result["isError"].toBool(false);
 }
 
+static int createPipe(int pipeFds[2])
+{
+#ifdef Q_OS_WIN
+    return _pipe(pipeFds, 4096, _O_BINARY);
+#else
+    return pipe(pipeFds);
+#endif
+}
+
+static qint64 readFromFd(int fd, char *buffer, size_t size)
+{
+#ifdef Q_OS_WIN
+    return _read(fd, buffer, static_cast<unsigned int>(size));
+#else
+    return read(fd, buffer, size);
+#endif
+}
+
+static qint64 writeToFd(int fd, const QByteArray &data)
+{
+#ifdef Q_OS_WIN
+    return _write(fd, data.constData(), static_cast<unsigned int>(data.size()));
+#else
+    return write(fd, data.constData(), static_cast<size_t>(data.size()));
+#endif
+}
+
+static int closeFd(int fd)
+{
+#ifdef Q_OS_WIN
+    return _close(fd);
+#else
+    return close(fd);
+#endif
+}
+
 static QByteArray readTransportMessage(int readFd)
 {
     QByteArray response;
@@ -48,12 +91,12 @@ static QByteArray readTransportMessage(int readFd)
     int expectedTotalBytes = -1;
 
     while (true) {
-        ssize_t bytesRead = read(readFd, buffer, sizeof(buffer));
+        const qint64 bytesRead = readFromFd(readFd, buffer, sizeof(buffer));
         if (bytesRead <= 0) {
             break;
         }
 
-        response.append(buffer, bytesRead);
+        response.append(buffer, static_cast<int>(bytesRead));
 
         if (expectedTotalBytes < 0) {
             const int headerEnd = response.indexOf("\r\n\r\n");
@@ -92,6 +135,30 @@ static QByteArray readTransportMessage(int readFd)
 
 static QByteArray readTransportMessageNonBlocking(int readFd)
 {
+#ifdef Q_OS_WIN
+    const intptr_t osHandle = _get_osfhandle(readFd);
+    if (osHandle == -1) {
+        return {};
+    }
+
+    DWORD availableBytes = 0;
+    if (!PeekNamedPipe(reinterpret_cast<HANDLE>(osHandle), nullptr, 0, nullptr, &availableBytes, nullptr)) {
+        return {};
+    }
+    if (availableBytes == 0) {
+        return {};
+    }
+
+    const DWORD bytesToRead = (availableBytes > 4096) ? 4096 : availableBytes;
+    QByteArray response;
+    response.resize(static_cast<int>(bytesToRead));
+    const qint64 bytesRead = readFromFd(readFd, response.data(), static_cast<size_t>(bytesToRead));
+    if (bytesRead <= 0) {
+        return {};
+    }
+    response.resize(static_cast<int>(bytesRead));
+    return response;
+#else
     const int flags = fcntl(readFd, F_GETFL, 0);
     if (flags == -1) {
         return {};
@@ -103,13 +170,14 @@ static QByteArray readTransportMessageNonBlocking(int readFd)
 
     QByteArray response;
     char buffer[4096];
-    ssize_t bytesRead = read(readFd, buffer, sizeof(buffer));
+    const qint64 bytesRead = readFromFd(readFd, buffer, sizeof(buffer));
     if (bytesRead > 0) {
-        response.append(buffer, bytesRead);
+        response.append(buffer, static_cast<int>(bytesRead));
     }
 
     fcntl(readFd, F_SETFL, flags);
     return response;
+#endif
 }
 
 static QJsonObject extractJsonBody(const QByteArray &transport)
@@ -218,7 +286,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
         server = std::make_unique<MCPServer>();
-        ASSERT_EQ(pipe(outputPipe), 0);
+        ASSERT_EQ(createPipe(outputPipe), 0);
         server->setOutputFd(outputPipe[1]);
     }
 
@@ -226,10 +294,10 @@ protected:
     {
         server.reset();
         if (outputPipe[0] != -1) {
-            close(outputPipe[0]);
+            closeFd(outputPipe[0]);
         }
         if (outputPipe[1] != -1) {
-            close(outputPipe[1]);
+            closeFd(outputPipe[1]);
         }
         Manager::kill();
         if (app) {
@@ -3007,10 +3075,9 @@ TEST_F(MCPServerTest, ToggleMeshInfo_ToggleOnOff)
 
 TEST_F(MCPServerTest, ToggleMeshInfo_SuccessPath)
 {
-    // Create a fake MainWindow with a MeshInfoOverlay child so findChild works
     QMainWindow fakeWindow;
-    auto* overlay = new MeshInfoOverlay(reinterpret_cast<MainWindow*>(&fakeWindow));
-    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+    auto* overlay = new MeshInfoOverlay(&fakeWindow);
+    server->setMainWindow(&fakeWindow);
 
     EXPECT_FALSE(overlay->isVisible());
 
@@ -4073,7 +4140,7 @@ TEST_F(MCPServerProtocolTest, BuildToolsListContainsCoreToolDefinitions)
 TEST_F(MCPServerProtocolTest, OnReadyReadRecoversAfterInvalidHeaderAndParsesMessage)
 {
     int inputPipe[2] = {-1, -1};
-    ASSERT_EQ(pipe(inputPipe), 0);
+    ASSERT_EQ(createPipe(inputPipe), 0);
 
     server->m_stdinFd = inputPipe[0];
     server->m_stdinNotifier = new QSocketNotifier(server->m_stdinFd, QSocketNotifier::Read, server.get());
@@ -4085,7 +4152,7 @@ TEST_F(MCPServerProtocolTest, OnReadyReadRecoversAfterInvalidHeaderAndParsesMess
         {"params", QJsonObject{}}
     };
     const QByteArray payload = QByteArray("garbage\r\n\r\n") + makeTransport(QJsonDocument(request).toJson(QJsonDocument::Compact));
-    ASSERT_GT(write(inputPipe[1], payload.constData(), payload.size()), 0);
+    ASSERT_GT(writeToFd(inputPipe[1], payload), 0);
 
     server->onReadyRead();
 
@@ -4095,14 +4162,14 @@ TEST_F(MCPServerProtocolTest, OnReadyReadRecoversAfterInvalidHeaderAndParsesMess
 
     delete server->m_stdinNotifier;
     server->m_stdinNotifier = nullptr;
-    close(inputPipe[0]);
-    close(inputPipe[1]);
+    closeFd(inputPipe[0]);
+    closeFd(inputPipe[1]);
 }
 
 TEST_F(MCPServerProtocolTest, OnReadyReadWaitsForCompleteTransportBody)
 {
     int inputPipe[2] = {-1, -1};
-    ASSERT_EQ(pipe(inputPipe), 0);
+    ASSERT_EQ(createPipe(inputPipe), 0);
 
     server->m_stdinFd = inputPipe[0];
     server->m_stdinNotifier = new QSocketNotifier(server->m_stdinFd, QSocketNotifier::Read, server.get());
@@ -4116,12 +4183,12 @@ TEST_F(MCPServerProtocolTest, OnReadyReadWaitsForCompleteTransportBody)
     const QByteArray payload = QJsonDocument(request).toJson(QJsonDocument::Compact);
     const QByteArray header = QByteArray("Content-Length: ") + QByteArray::number(payload.size()) + "\r\n\r\n";
 
-    ASSERT_GT(write(inputPipe[1], header.constData(), header.size()), 0);
+    ASSERT_GT(writeToFd(inputPipe[1], header), 0);
     server->onReadyRead();
     EXPECT_TRUE(readTransportMessageNonBlocking(outputPipe[0]).isEmpty());
     EXPECT_EQ(server->m_buffer, header);
 
-    ASSERT_GT(write(inputPipe[1], payload.constData(), payload.size()), 0);
+    ASSERT_GT(writeToFd(inputPipe[1], payload), 0);
     server->onReadyRead();
 
     const QJsonObject response = extractJsonBody(readTransportMessage(outputPipe[0]));
@@ -4131,14 +4198,14 @@ TEST_F(MCPServerProtocolTest, OnReadyReadWaitsForCompleteTransportBody)
 
     delete server->m_stdinNotifier;
     server->m_stdinNotifier = nullptr;
-    close(inputPipe[0]);
-    close(inputPipe[1]);
+    closeFd(inputPipe[0]);
+    closeFd(inputPipe[1]);
 }
 
 TEST_F(MCPServerProtocolTest, OnReadyReadSkipsInvalidContentLengthAndProcessesNextMessage)
 {
     int inputPipe[2] = {-1, -1};
-    ASSERT_EQ(pipe(inputPipe), 0);
+    ASSERT_EQ(createPipe(inputPipe), 0);
 
     server->m_stdinFd = inputPipe[0];
     server->m_stdinNotifier = new QSocketNotifier(server->m_stdinFd, QSocketNotifier::Read, server.get());
@@ -4150,7 +4217,7 @@ TEST_F(MCPServerProtocolTest, OnReadyReadSkipsInvalidContentLengthAndProcessesNe
         {"params", QJsonObject{}}
     };
     const QByteArray payload = QByteArray("Content-Length: 0\r\n\r\n") + makeTransport(QJsonDocument(request).toJson(QJsonDocument::Compact));
-    ASSERT_GT(write(inputPipe[1], payload.constData(), payload.size()), 0);
+    ASSERT_GT(writeToFd(inputPipe[1], payload), 0);
 
     server->onReadyRead();
 
@@ -4160,20 +4227,20 @@ TEST_F(MCPServerProtocolTest, OnReadyReadSkipsInvalidContentLengthAndProcessesNe
 
     delete server->m_stdinNotifier;
     server->m_stdinNotifier = nullptr;
-    close(inputPipe[0]);
-    close(inputPipe[1]);
+    closeFd(inputPipe[0]);
+    closeFd(inputPipe[1]);
 }
 
 TEST_F(MCPServerProtocolTest, OnReadyReadEofDisablesNotifierAndReturns)
 {
     int inputPipe[2] = {-1, -1};
-    ASSERT_EQ(pipe(inputPipe), 0);
+    ASSERT_EQ(createPipe(inputPipe), 0);
 
     server->m_stdinFd = inputPipe[0];
     server->m_stdinNotifier = new QSocketNotifier(server->m_stdinFd, QSocketNotifier::Read, server.get());
 
     // Force EOF on read end
-    close(inputPipe[1]);
+    closeFd(inputPipe[1]);
     inputPipe[1] = -1;
 
     server->onReadyRead();
@@ -4182,7 +4249,7 @@ TEST_F(MCPServerProtocolTest, OnReadyReadEofDisablesNotifierAndReturns)
 
     delete server->m_stdinNotifier;
     server->m_stdinNotifier = nullptr;
-    close(inputPipe[0]);
+    closeFd(inputPipe[0]);
 }
 
 TEST_F(MCPServerProtocolTest, SendNotificationSerializesMethodAndParams)
@@ -4713,7 +4780,7 @@ TEST_F(MCPServerTest, SearchFiles_NoMatchesReturnsFriendlyMessage)
     EXPECT_TRUE(getResultText(result).contains("No files matching"));
 }
 
-TEST_F(MCPServerTest, ReadFile_CannotOpenFileReturnsError)
+TEST_F(MCPServerTest, ReadFile_UnreadableFileRespectsProcessPrivileges)
 {
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
@@ -4727,11 +4794,22 @@ TEST_F(MCPServerTest, ReadFile_CannotOpenFileReturnsError)
     // Remove all permissions to force open failure on read.
     ASSERT_TRUE(QFile::setPermissions(filePath, QFileDevice::Permissions()));
 
+    QFile probe(filePath);
+    const bool canStillRead = probe.open(QIODevice::ReadOnly | QIODevice::Text);
+    if (canStillRead) {
+        probe.close();
+    }
+
     QJsonObject args;
     args["path"] = filePath;
     QJsonObject result = server->callTool("read_file", args);
-    EXPECT_TRUE(isError(result));
-    EXPECT_TRUE(getResultText(result).contains("Cannot open"));
+    if (canStillRead) {
+        EXPECT_FALSE(isError(result));
+        EXPECT_TRUE(getResultText(result).contains("File: locked.txt"));
+    } else {
+        EXPECT_TRUE(isError(result));
+        EXPECT_TRUE(getResultText(result).contains("Cannot open"));
+    }
 }
 
 TEST_F(MCPServerTest, ApplyMaterial_ToSelectedEntitiesWithoutMeshArg)
@@ -4841,7 +4919,7 @@ TEST_F(MCPServerProtocolTest, HandleResourcesReadCurrentMaterialUsesMaterialEdit
     auto* matEditor = new MaterialEditorQML(&fakeWindow);
     matEditor->setMaterialName("LiveMat");
     matEditor->setMaterialText("material LiveMat\n{\n}\n");
-    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+    server->setMainWindow(&fakeWindow);
 
     const QJsonObject result = server->handleResourcesRead(
         QJsonObject{{"uri", "qtmesheditor://material/current"}});
@@ -4888,7 +4966,7 @@ TEST_F(MCPServerTest, LoadMesh_WithMainWindowChecksMissingFilePath)
 TEST_F(MCPServerTest, TakeScreenshot_MainWindowWithoutOgreWidgetReturnsError)
 {
     QMainWindow fakeWindow;
-    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+    server->setMainWindow(&fakeWindow);
 
     QJsonObject args;
     args["path"] = QDir(QDir::tempPath()).filePath("mcp_no_ogrewidget.png");
@@ -4990,7 +5068,7 @@ TEST_F(MCPServerTest, ToggleSkeletonDebug_SkeletonEntityWithoutAnimationWidgetRe
     ASSERT_NE(entity, nullptr);
 
     QMainWindow fakeWindow;
-    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+    server->setMainWindow(&fakeWindow);
 
     QJsonObject args;
     args["entity"] = "SkelNoAnimWidgetEntity";
@@ -5030,7 +5108,7 @@ TEST_F(MCPServerTest, Animate_PitchAndRollCoveredByTick)
 TEST_F(MCPServerTest, ToggleNormals_MainWindowWithoutVisualizerReturnsError)
 {
     QMainWindow fakeWindow;
-    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+    server->setMainWindow(&fakeWindow);
 
     QJsonObject result = server->callTool("toggle_normals", QJsonObject());
     EXPECT_TRUE(isError(result));
@@ -5042,7 +5120,7 @@ TEST_F(MCPServerTest, ToggleNormals_MainWindowWithoutVisualizerReturnsError)
 TEST_F(MCPServerTest, ToggleMeshInfo_MainWindowWithoutOverlayReturnsError)
 {
     QMainWindow fakeWindow;
-    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+    server->setMainWindow(&fakeWindow);
 
     QJsonObject result = server->callTool("toggle_mesh_info", QJsonObject());
     EXPECT_TRUE(isError(result));
