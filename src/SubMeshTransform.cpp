@@ -122,14 +122,10 @@ void SubMeshTransform::writePositions(Ogre::Entity* entity, unsigned int subMesh
     vbuf->unlock();
 
     recalculateMeshBounds(mesh);
-    // Force Ogre to re-upload modified vertex data to GPU by detaching
-    // and re-attaching the entity. needUpdate() only marks the scene node
-    // transform as dirty, not the mesh GPU buffer.
-    Ogre::SceneNode* parentNode = entity->getParentSceneNode();
-    if (parentNode) {
-        parentNode->detachObject(entity);
-        parentNode->attachObject(entity);
-    }
+    // Force the entity to recognize that its mesh data changed.
+    // _initialise(true) forces Ogre to rebuild the entity's internal
+    // render operations, picking up the modified vertex buffer data.
+    entity->_initialise(true);
 }
 
 void SubMeshTransform::translateSubMesh(Ogre::Entity* entity, unsigned int subMeshIndex,
@@ -158,14 +154,10 @@ void SubMeshTransform::translateSubMesh(Ogre::Entity* entity, unsigned int subMe
     vbuf->unlock();
 
     recalculateMeshBounds(mesh);
-    // Force Ogre to re-upload modified vertex data to GPU by detaching
-    // and re-attaching the entity. needUpdate() only marks the scene node
-    // transform as dirty, not the mesh GPU buffer.
-    Ogre::SceneNode* parentNode = entity->getParentSceneNode();
-    if (parentNode) {
-        parentNode->detachObject(entity);
-        parentNode->attachObject(entity);
-    }
+    // Force the entity to recognize that its mesh data changed.
+    // _initialise(true) forces Ogre to rebuild the entity's internal
+    // render operations, picking up the modified vertex buffer data.
+    entity->_initialise(true);
 }
 
 void SubMeshTransform::scaleSubMesh(Ogre::Entity* entity, unsigned int subMeshIndex,
@@ -201,14 +193,10 @@ void SubMeshTransform::scaleSubMesh(Ogre::Entity* entity, unsigned int subMeshIn
     vbuf->unlock();
 
     recalculateMeshBounds(mesh);
-    // Force Ogre to re-upload modified vertex data to GPU by detaching
-    // and re-attaching the entity. needUpdate() only marks the scene node
-    // transform as dirty, not the mesh GPU buffer.
-    Ogre::SceneNode* parentNode = entity->getParentSceneNode();
-    if (parentNode) {
-        parentNode->detachObject(entity);
-        parentNode->attachObject(entity);
-    }
+    // Force the entity to recognize that its mesh data changed.
+    // _initialise(true) forces Ogre to rebuild the entity's internal
+    // render operations, picking up the modified vertex buffer data.
+    entity->_initialise(true);
 }
 
 void SubMeshTransform::rotateSubMesh(Ogre::Entity* entity, unsigned int subMeshIndex,
@@ -264,14 +252,10 @@ void SubMeshTransform::rotateSubMesh(Ogre::Entity* entity, unsigned int subMeshI
     }
 
     recalculateMeshBounds(mesh);
-    // Force Ogre to re-upload modified vertex data to GPU by detaching
-    // and re-attaching the entity. needUpdate() only marks the scene node
-    // transform as dirty, not the mesh GPU buffer.
-    Ogre::SceneNode* parentNode = entity->getParentSceneNode();
-    if (parentNode) {
-        parentNode->detachObject(entity);
-        parentNode->attachObject(entity);
-    }
+    // Force the entity to recognize that its mesh data changed.
+    // _initialise(true) forces Ogre to rebuild the entity's internal
+    // render operations, picking up the modified vertex buffer data.
+    entity->_initialise(true);
 }
 
 void SubMeshTransform::recalculateMeshBounds(Ogre::Mesh* mesh)
