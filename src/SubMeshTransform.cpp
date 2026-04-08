@@ -107,12 +107,28 @@ void SubMeshTransform::writePositions(Ogre::Entity* entity, unsigned int subMesh
     const auto* posElem = vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
     if (!posElem) return;
 
-    auto vbuf = vertexData->vertexBufferBinding->getBuffer(posElem->getSource());
+    unsigned short source = posElem->getSource();
+    auto vbuf = vertexData->vertexBufferBinding->getBuffer(source);
     size_t bufSize = vbuf->getSizeInBytes();
     size_t vertexSize = vbuf->getVertexSize();
 
-    // Read entire buffer into local memory, modify positions, write back.
-    // This ensures the GPU gets a full buffer upload via writeData().
+    // If the buffer was created as HBU_STATIC, the GL driver may ignore updates.
+    // Replace it with a dynamic buffer so writeData triggers a real GPU upload.
+    if (vbuf->getUsage() & Ogre::HardwareBuffer::HBU_STATIC) {
+        std::vector<unsigned char> oldData(bufSize);
+        vbuf->readData(0, bufSize, oldData.data());
+
+        auto newBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+            vertexSize, vertexData->vertexCount,
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true /* useShadowBuffer */);
+        newBuf->writeData(0, bufSize, oldData.data(), true);
+        vertexData->vertexBufferBinding->setBinding(source, newBuf);
+        vbuf = newBuf;
+    }
+
+    // Read entire buffer into local memory, modify positions, then write back
+    // using HBL_DISCARD which orphans the old GPU buffer and allocates a fresh
+    // one — guaranteed to be rendered on the next frame.
     std::vector<unsigned char> bufCopy(bufSize);
     vbuf->readData(0, bufSize, bufCopy.data());
 
@@ -126,10 +142,50 @@ void SubMeshTransform::writePositions(Ogre::Entity* entity, unsigned int subMesh
         pReal[2] = positions[j].z;
     }
 
-    // writeData forces a GPU buffer upload regardless of shadow buffer state
-    vbuf->writeData(0, bufSize, bufCopy.data(), true);
+    // Lock with DISCARD to get a fresh GPU buffer, memcpy all data, unlock
+    auto* dest = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+    memcpy(dest, bufCopy.data(), bufSize);
+    vbuf->unlock();
 
     recalculateMeshBounds(mesh);
+
+    // For skeletal entities, Ogre renders from the SubEntity's animation
+    // blend buffer, NOT the mesh VBO. We must also update that buffer
+    // for immediate visual feedback. The mesh buffer is the "bind pose"
+    // (persisted/exported), the animation buffer is what the GPU renders.
+    if (entity->hasSkeleton() && subMeshIndex < entity->getNumSubEntities()) {
+        Ogre::SubEntity* sub = entity->getSubEntity(subMeshIndex);
+        Ogre::VertexData* animData = sub->_getSkelAnimVertexData();
+        if (animData && animData->vertexCount > 0) {
+            const auto* animPosElem = animData->vertexDeclaration
+                ->findElementBySemantic(Ogre::VES_POSITION);
+            if (animPosElem) {
+                auto animBuf = animData->vertexBufferBinding
+                    ->getBuffer(animPosElem->getSource());
+                size_t animBufSize = animBuf->getSizeInBytes();
+                size_t animVertSize = animBuf->getVertexSize();
+
+                std::vector<unsigned char> animCopy(animBufSize);
+                animBuf->readData(0, animBufSize, animCopy.data());
+
+                size_t animCount = std::min(positions.size(),
+                    static_cast<size_t>(animData->vertexCount));
+                for (size_t j = 0; j < animCount; ++j) {
+                    Ogre::Real* pReal;
+                    animPosElem->baseVertexPointerToElement(
+                        animCopy.data() + j * animVertSize, &pReal);
+                    pReal[0] = positions[j].x;
+                    pReal[1] = positions[j].y;
+                    pReal[2] = positions[j].z;
+                }
+
+                auto* dest = static_cast<unsigned char*>(
+                    animBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+                memcpy(dest, animCopy.data(), animBufSize);
+                animBuf->unlock();
+            }
+        }
+    }
 }
 
 void SubMeshTransform::translateSubMesh(Ogre::Entity* entity, unsigned int subMeshIndex,
