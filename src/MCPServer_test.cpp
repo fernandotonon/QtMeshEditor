@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QJsonDocument>
 #include <QTcpSocket>
+#include <QTcpServer>
 #include <QSignalSpy>
 #include <QElapsedTimer>
 #include <QDir>
@@ -19,6 +20,8 @@
 #undef private
 
 #include "Manager.h"
+#include "mainwindow.h"
+#include "MaterialEditorQML.h"
 #include "MeshInfoOverlay.h"
 #include "PrimitiveObject.h"
 #include "SelectionSet.h"
@@ -151,6 +154,56 @@ protected:
         {
             app->processEvents();
         }
+    }
+
+    Ogre::Entity* createAndSelectTriangleEntity(const QString& baseName)
+    {
+        auto* manager = Manager::getSingletonPtr();
+        if (!manager) {
+            return nullptr;
+        }
+
+        Ogre::MeshPtr mesh = createInMemoryTriangleMesh((baseName + "_mesh").toStdString());
+        if (!mesh) {
+            return nullptr;
+        }
+
+        Ogre::SceneManager* sceneMgr = manager->getSceneMgr();
+        if (!sceneMgr) {
+            return nullptr;
+        }
+
+        Ogre::SceneNode* node = manager->addSceneNode(baseName);
+        if (!node) {
+            return nullptr;
+        }
+
+        Ogre::Entity* entity = sceneMgr->createEntity((baseName + "_entity").toStdString(), mesh);
+        if (!entity) {
+            return nullptr;
+        }
+
+        node->attachObject(entity);
+        SelectionSet::getSingleton()->clear();
+        SelectionSet::getSingleton()->selectOne(entity);
+        app->processEvents();
+        return entity;
+    }
+
+    MainWindow* createMainWindowWithRetries()
+    {
+        MainWindow* window = nullptr;
+        constexpr int kMaxAttempts = 4;
+        for (int attempt = 1; attempt <= kMaxAttempts && !window; ++attempt) {
+            try {
+                window = new MainWindow();
+            } catch (...) {
+                window = nullptr;
+                app->processEvents();
+                QThread::msleep(150 * attempt);
+            }
+        }
+        return window;
     }
 
     QApplication* app = nullptr;
@@ -4339,4 +4392,772 @@ TEST_F(MCPServerTest, CameraControl_NoActionSpecified)
     // or "No active viewport" — both are valid error paths
     QJsonObject result = server->callTool("camera_control", QJsonObject());
     EXPECT_TRUE(isError(result));
+}
+
+// ---- MCP mesh validation / LOD wrappers ----
+
+TEST_F(MCPServerTest, ValidateMesh_WithSelectionReturnsReport)
+{
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPValidateSel");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject result = server->callTool("validate_mesh", QJsonObject());
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+
+    const QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("No issues found.") || text.contains("[ERROR]") ||
+                text.contains("[WARN]") || text.contains("[OK]"));
+}
+
+TEST_F(MCPServerTest, GenerateLods_WithSelectionProducesLodInfo)
+{
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPLodGenerate");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject genArgs;
+    genArgs["count"] = 1;
+    genArgs["reductions"] = QJsonArray{0.5};
+    QJsonObject genResult = server->callTool("generate_lods", genArgs);
+    EXPECT_FALSE(isError(genResult)) << getResultText(genResult).toStdString();
+    EXPECT_TRUE(getResultText(genResult).contains("Generated"));
+
+    QJsonObject infoResult = server->callTool("get_lod_info", QJsonObject());
+    EXPECT_FALSE(isError(infoResult)) << getResultText(infoResult).toStdString();
+    EXPECT_TRUE(getResultText(infoResult).contains("Base"));
+}
+
+TEST_F(MCPServerTest, GenerateAutoLods_WithSelectionSucceeds)
+{
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPLodAuto");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject result = server->callTool("generate_auto_lods", QJsonObject());
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+    EXPECT_TRUE(getResultText(result).contains("Auto LOD levels generated"));
+}
+
+TEST_F(MCPServerTest, RemoveLods_WithSelectionSucceeds)
+{
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPLodRemove");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject genArgs;
+    genArgs["count"] = 1;
+    genArgs["reductions"] = QJsonArray{0.5};
+    QJsonObject genResult = server->callTool("generate_lods", genArgs);
+    ASSERT_FALSE(isError(genResult)) << getResultText(genResult).toStdString();
+
+    QJsonObject removeResult = server->callTool("remove_lods", QJsonObject());
+    EXPECT_FALSE(isError(removeResult)) << getResultText(removeResult).toStdString();
+    EXPECT_TRUE(getResultText(removeResult).contains("removed"));
+}
+
+// ---- Additional filesystem coverage ----
+
+TEST_F(MCPServerTest, ListFiles_ShowsDirectoryAndHumanReadableSizes)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    ASSERT_TRUE(QDir(tmpDir.path()).mkdir("subfolder"));
+
+    QFile tiny(tmpDir.filePath("tiny.txt"));
+    ASSERT_TRUE(tiny.open(QIODevice::WriteOnly));
+    tiny.write("1234567890");
+    tiny.close();
+
+    QFile medium(tmpDir.filePath("medium.txt"));
+    ASSERT_TRUE(medium.open(QIODevice::WriteOnly));
+    medium.write(QByteArray(2048, 'a'));
+    medium.close();
+
+    QFile large(tmpDir.filePath("large.txt"));
+    ASSERT_TRUE(large.open(QIODevice::WriteOnly));
+    large.write(QByteArray(2 * 1024 * 1024, 'b'));
+    large.close();
+
+    QJsonObject args;
+    args["path"] = tmpDir.path();
+    QJsonObject result = server->callTool("list_files", args);
+    EXPECT_FALSE(isError(result));
+
+    const QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("[dir]  subfolder/"));
+    EXPECT_TRUE(text.contains("B)"));
+    EXPECT_TRUE(text.contains("KB)"));
+    EXPECT_TRUE(text.contains("MB)"));
+}
+
+TEST_F(MCPServerTest, SearchFiles_CapsResultsAndFormatsSizes)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QFile big(tmpDir.filePath("000_big.txt"));
+    ASSERT_TRUE(big.open(QIODevice::WriteOnly));
+    big.write(QByteArray(2 * 1024 * 1024, 'x'));
+    big.close();
+
+    for (int i = 0; i < 120; ++i) {
+        QFile f(tmpDir.filePath(QString("match_%1.txt").arg(i, 3, 10, QLatin1Char('0'))));
+        ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+        f.write("m");
+        f.close();
+    }
+
+    QJsonObject args;
+    args["path"] = tmpDir.path();
+    args["query"] = "*.txt";
+    args["max_depth"] = 2;
+    QJsonObject result = server->callTool("search_files", args);
+    EXPECT_FALSE(isError(result));
+
+    const QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("results capped at 100"));
+    EXPECT_TRUE(text.contains("MB)"));
+}
+
+TEST_F(MCPServerTest, ReadFile_PathThatIsDirectoryReturnsError)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QJsonObject args;
+    args["path"] = tmpDir.path();
+    QJsonObject result = server->callTool("read_file", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("is not a file"));
+}
+
+TEST_F(MCPServerTest, ReadFile_TooLargeReturnsError)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QFile f(tmpDir.filePath("huge.txt"));
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write(QByteArray(2 * 1024 * 1024, 'z'));
+    f.close();
+
+    QJsonObject args;
+    args["path"] = f.fileName();
+    QJsonObject result = server->callTool("read_file", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("File too large"));
+}
+
+// ---- Additional delete-entity coverage ----
+
+TEST_F(MCPServerTest, DeleteEntity_RemovesExistingSceneNode)
+{
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPDeleteOk");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["name"] = "MCPDeleteOk";
+    QJsonObject result = server->callTool("delete_entity", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Deleted 'MCPDeleteOk'"));
+
+    bool stillExists = false;
+    const QList<Ogre::SceneNode*> nodes = Manager::getSingleton()->getSceneNodes();
+    for (Ogre::SceneNode* node : nodes) {
+        if (node && QString::fromStdString(node->getName()) == "MCPDeleteOk") {
+            stillExists = true;
+            break;
+        }
+    }
+    EXPECT_FALSE(stillExists);
+}
+
+TEST_F(MCPServerTest, ApplyMaterial_ByNodeNameUsesFallbackPath)
+{
+    QJsonObject createMatArgs;
+    createMatArgs["name"] = "FallbackNodeMaterial";
+    QJsonObject createMatResult = server->callTool("create_material", createMatArgs);
+    ASSERT_FALSE(isError(createMatResult)) << getResultText(createMatResult).toStdString();
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPApplyByNode");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["material"] = "FallbackNodeMaterial";
+    // Deliberately use node name, not entity name, to force node fallback branch.
+    args["mesh"] = "MCPApplyByNode";
+    QJsonObject result = server->callTool("apply_material", args);
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+    EXPECT_TRUE(getResultText(result).contains("Applied material"));
+    EXPECT_TRUE(getResultText(result).contains("MCPApplyByNode_entity"));
+}
+
+TEST_F(MCPServerTest, TransformMesh_UsesSelectedNodeAndObjectVectors)
+{
+    auto* manager = Manager::getSingletonPtr();
+    ASSERT_NE(manager, nullptr);
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("MCPTransformObj_mesh");
+    ASSERT_TRUE(static_cast<bool>(mesh));
+
+    Ogre::SceneNode* node = manager->addSceneNode("MCPTransformObjNode");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = manager->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    QJsonObject args;
+    args["position"] = QJsonObject{{"x", 1.0}, {"y", 2.0}, {"z", 3.0}};
+    args["rotation"] = QJsonObject{{"x", 10.0}, {"y", 20.0}, {"z", 30.0}};
+    args["scale"] = QJsonObject{{"x", 2.0}, {"y", 2.0}, {"z", 2.0}};
+
+    QJsonObject result = server->callTool("transform_mesh", args);
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+    EXPECT_TRUE(getResultText(result).contains("Applied transforms"));
+    EXPECT_TRUE(getResultText(result).contains("MCPTransformObjNode"));
+}
+
+TEST_F(MCPServerTest, ModifyMaterial_NoTechniquesReturnsError)
+{
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
+        "NoTechniquesMat",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(static_cast<bool>(mat));
+    mat->removeAllTechniques();
+
+    QJsonObject args;
+    args["name"] = "NoTechniquesMat";
+    args["ambient"] = QJsonArray{0.1, 0.2, 0.3};
+    QJsonObject result = server->callTool("modify_material", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("has no techniques"));
+}
+
+TEST_F(MCPServerTest, ModifyMaterial_NoPassesReturnsError)
+{
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
+        "NoPassesMat",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(static_cast<bool>(mat));
+    ASSERT_GT(mat->getNumTechniques(), 0u);
+    Ogre::Technique* technique = mat->getTechnique(0);
+    ASSERT_NE(technique, nullptr);
+    technique->removeAllPasses();
+
+    QJsonObject args;
+    args["name"] = "NoPassesMat";
+    args["ambient"] = QJsonArray{0.1, 0.2, 0.3};
+    QJsonObject result = server->callTool("modify_material", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("technique has no passes"));
+}
+
+TEST_F(MCPServerTest, SetTexture_WithExistingTextureUnitUpdatesUnit)
+{
+    QJsonObject createArgs;
+    createArgs["name"] = "SetTextureExistingUnitMat";
+    ASSERT_FALSE(isError(server->callTool("create_material", createArgs)));
+
+    QJsonObject firstArgs;
+    firstArgs["material"] = "SetTextureExistingUnitMat";
+    firstArgs["texture"] = "first_texture.png";
+    firstArgs["unit"] = 0;
+    ASSERT_FALSE(isError(server->callTool("set_texture", firstArgs)));
+
+    QJsonObject secondArgs;
+    secondArgs["material"] = "SetTextureExistingUnitMat";
+    secondArgs["texture"] = "second_texture.png";
+    secondArgs["unit"] = 0;
+    QJsonObject secondResult = server->callTool("set_texture", secondArgs);
+    EXPECT_FALSE(isError(secondResult)) << getResultText(secondResult).toStdString();
+    EXPECT_TRUE(getResultText(secondResult).contains("second_texture.png"));
+}
+
+TEST_F(MCPServerTest, SetTexture_MaterialWithoutTechniquePassReturnsError)
+{
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
+        "NoTechPassForTextureMat",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(static_cast<bool>(mat));
+    mat->removeAllTechniques();
+
+    QJsonObject args;
+    args["material"] = "NoTechPassForTextureMat";
+    args["texture"] = "tex.png";
+    QJsonObject result = server->callTool("set_texture", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("has no technique/pass"));
+}
+
+TEST_F(MCPServerTest, ListTextures_IncludesCreatedTextureResource)
+{
+    Ogre::TexturePtr texture = Ogre::TextureManager::getSingleton().create(
+        "MCPServer_ListTextures_ManualTex",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(static_cast<bool>(texture));
+
+    QJsonObject result = server->callTool("list_textures", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("MCPServer_ListTextures_ManualTex"));
+}
+
+TEST_F(MCPServerTest, SearchFiles_NoMatchesReturnsFriendlyMessage)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QJsonObject args;
+    args["path"] = tmpDir.path();
+    args["query"] = "*.fbx";
+    QJsonObject result = server->callTool("search_files", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No files matching"));
+}
+
+TEST_F(MCPServerTest, ReadFile_CannotOpenFileReturnsError)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QString filePath = tmpDir.filePath("locked.txt");
+    QFile f(filePath);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write("content");
+    f.close();
+
+    // Remove all permissions to force open failure on read.
+    ASSERT_TRUE(QFile::setPermissions(filePath, QFileDevice::Permissions()));
+
+    QJsonObject args;
+    args["path"] = filePath;
+    QJsonObject result = server->callTool("read_file", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Cannot open"));
+}
+
+TEST_F(MCPServerTest, ApplyMaterial_ToSelectedEntitiesWithoutMeshArg)
+{
+    QJsonObject createMatArgs;
+    createMatArgs["name"] = "ApplySelectedMaterial";
+    ASSERT_FALSE(isError(server->callTool("create_material", createMatArgs)));
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPApplySelected");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["material"] = "ApplySelectedMaterial";
+    QJsonObject result = server->callTool("apply_material", args);
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+    EXPECT_TRUE(getResultText(result).contains("Applied material"));
+    EXPECT_TRUE(getResultText(result).contains("MCPApplySelected_entity"));
+}
+
+TEST_F(MCPServerTest, GetMeshInfo_UsesSelectedEntityPathWhenSelectionExists)
+{
+    Ogre::Entity* entity = createAndSelectTriangleEntity("MCPGetInfoSelected");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject result = server->callTool("get_mesh_info", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("MCPGetInfoSelected_entity"));
+}
+
+TEST_F(MCPServerTest, TransformMesh_InvalidVectorTypeFallsBackToZeroVector)
+{
+    auto* manager = Manager::getSingletonPtr();
+    ASSERT_NE(manager, nullptr);
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("MCPTransformInvalidVec_mesh");
+    ASSERT_TRUE(static_cast<bool>(mesh));
+
+    Ogre::SceneNode* node = manager->addSceneNode("MCPTransformInvalidVecNode");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(manager->createEntity(node, mesh), nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    QJsonObject args;
+    args["position"] = "not-a-vector";
+    QJsonObject result = server->callTool("transform_mesh", args);
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+    EXPECT_TRUE(getResultText(result).contains("position: 0, 0, 0"));
+}
+
+TEST_F(MCPServerTest, CameraTools_WithMainWindowExecuteSuccessPaths)
+{
+    std::unique_ptr<MainWindow> mainWindow(createMainWindowWithRetries());
+    ASSERT_NE(mainWindow, nullptr);
+    server->setMainWindow(mainWindow.get());
+
+    QJsonObject cameraInfo = server->callTool("get_camera_info", QJsonObject());
+    EXPECT_FALSE(isError(cameraInfo)) << getResultText(cameraInfo).toStdString();
+    EXPECT_TRUE(getResultText(cameraInfo).contains("Camera position"));
+
+    QJsonObject controlArgs;
+    controlArgs["position"] = QJsonObject{{"x", 5.0}, {"y", 6.0}, {"z", 7.0}};
+    controlArgs["target"] = QJsonObject{{"x", 0.0}, {"y", 0.0}, {"z", 0.0}};
+    controlArgs["zoom"] = 2.0;
+    QJsonObject controlResult = server->callTool("camera_control", controlArgs);
+    EXPECT_FALSE(isError(controlResult)) << getResultText(controlResult).toStdString();
+    EXPECT_TRUE(getResultText(controlResult).contains("Camera updated"));
+
+    server->setMainWindow(nullptr);
+}
+
+TEST_F(MCPServerTest, ToggleNormals_WithMainWindowTogglesVisibility)
+{
+    std::unique_ptr<MainWindow> mainWindow(createMainWindowWithRetries());
+    ASSERT_NE(mainWindow, nullptr);
+    server->setMainWindow(mainWindow.get());
+
+    QJsonObject showArgs;
+    showArgs["show"] = true;
+    QJsonObject showResult = server->callTool("toggle_normals", showArgs);
+    EXPECT_FALSE(isError(showResult)) << getResultText(showResult).toStdString();
+    EXPECT_TRUE(getResultText(showResult).contains("shown"));
+
+    QJsonObject hideArgs;
+    hideArgs["show"] = false;
+    QJsonObject hideResult = server->callTool("toggle_normals", hideArgs);
+    EXPECT_FALSE(isError(hideResult)) << getResultText(hideResult).toStdString();
+    EXPECT_TRUE(getResultText(hideResult).contains("hidden"));
+
+    server->setMainWindow(nullptr);
+}
+
+TEST_F(MCPServerHttpTest, StartHttp_PortAlreadyInUseReturnsFalse)
+{
+    QTcpServer blocker;
+    ASSERT_TRUE(blocker.listen(QHostAddress::LocalHost, 0));
+    int usedPort = blocker.serverPort();
+    ASSERT_GT(usedPort, 0);
+
+    EXPECT_FALSE(server->startHttp(usedPort));
+    EXPECT_EQ(server->m_httpServer, nullptr);
+}
+
+TEST_F(MCPServerProtocolTest, HandleResourcesReadCurrentMaterialUsesMaterialEditorTextWhenAvailable)
+{
+    QMainWindow fakeWindow;
+    auto* matEditor = new MaterialEditorQML(&fakeWindow);
+    matEditor->setMaterialName("LiveMat");
+    matEditor->setMaterialText("material LiveMat\n{\n}\n");
+    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+
+    const QJsonObject result = server->handleResourcesRead(
+        QJsonObject{{"uri", "qtmesheditor://material/current"}});
+    const QJsonArray contents = result["contents"].toArray();
+    ASSERT_EQ(contents.size(), 1);
+    const QString text = contents[0].toObject()["text"].toString();
+    EXPECT_TRUE(text.contains("LiveMat"));
+    EXPECT_TRUE(text.contains("material"));
+
+    server->setMainWindow(nullptr);
+    delete matEditor;
+}
+
+TEST_F(MCPServerTest, CreateMaterialTopLevelColors)
+{
+    QJsonObject args;
+    args["name"] = "TopLevelColorMat";
+    args["ambient"] = QJsonArray{0.2, 0.3, 0.4};
+    args["diffuse"] = QJsonArray{0.7, 0.1, 0.2};
+    args["specular"] = QJsonArray{0.8, 0.9, 1.0};
+    args["emissive"] = QJsonArray{0.05, 0.06, 0.07};
+    args["shininess"] = 48.0;
+
+    QJsonObject result = server->callTool("create_material", args);
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+    EXPECT_TRUE(getResultText(result).contains("TopLevelColorMat"));
+}
+
+TEST_F(MCPServerTest, LoadMesh_WithMainWindowChecksMissingFilePath)
+{
+    std::unique_ptr<MainWindow> mainWindow(createMainWindowWithRetries());
+    ASSERT_NE(mainWindow, nullptr);
+    server->setMainWindow(mainWindow.get());
+
+    QJsonObject args;
+    args["path"] = "/tmp/definitely_missing_mesh_file_123456.mesh";
+    QJsonObject result = server->callTool("load_mesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("File not found"));
+
+    server->setMainWindow(nullptr);
+}
+
+TEST_F(MCPServerTest, TakeScreenshot_MainWindowWithoutOgreWidgetReturnsError)
+{
+    QMainWindow fakeWindow;
+    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+
+    QJsonObject args;
+    args["path"] = QDir(QDir::tempPath()).filePath("mcp_no_ogrewidget.png");
+    QJsonObject result = server->callTool("take_screenshot", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("OgreWidget not found"));
+
+    server->setMainWindow(nullptr);
+}
+
+TEST_F(MCPServerTest, SetAnimationLength_ClampsCurrentStateTime)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimClampLenEntity");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasAnimationState("TestAnim"));
+    entity->getAnimationState("TestAnim")->setTimePosition(0.9f);
+
+    QJsonObject args;
+    args["entity"] = "AnimClampLenEntity";
+    args["animation"] = "TestAnim";
+    args["length"] = 0.25;
+    QJsonObject result = server->callTool("set_animation_length", args);
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+
+    EXPECT_LE(entity->getAnimationState("TestAnim")->getTimePosition(), 0.2501f);
+}
+
+TEST_F(MCPServerTest, SetAnimationTime_NavigateMissingTrackOnSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimNavMissingTrackEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimNavMissingTrackEntity";
+    args["animation"] = "TestAnim";
+    args["navigate"] = "next";
+    args["track"] = "MissingBoneName";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Track for bone 'MissingBoneName' not found"));
+}
+
+TEST_F(MCPServerTest, SetAnimationTime_MissingTimeAndNavigateWithValidAnimation)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("AnimMissingTimeEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "AnimMissingTimeEntity";
+    args["animation"] = "TestAnim";
+    QJsonObject result = server->callTool("set_animation_time", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Either 'time' or 'navigate' is required"));
+}
+
+TEST_F(MCPServerTest, RemoveKeyframe_AnimationNotFoundOnSkeletonEntity)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("RemoveMissingAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "RemoveMissingAnimEntity";
+    args["animation"] = "DoesNotExistAnim";
+    args["track"] = "Child";
+    args["time"] = 0.5;
+    QJsonObject result = server->callTool("remove_keyframe", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Animation 'DoesNotExistAnim' not found"));
+}
+
+TEST_F(MCPServerTest, ToggleSkeletonDebug_SkeletonEntityWithoutMainWindowReturnsMainWindowError)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelNoMainWindowEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity"] = "SkelNoMainWindowEntity";
+    args["show"] = true;
+    QJsonObject result = server->callTool("toggle_skeleton_debug", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("MainWindow not available"));
+}
+
+TEST_F(MCPServerTest, ToggleSkeletonDebug_SkeletonEntityWithoutAnimationWidgetReturnsError)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("SkelNoAnimWidgetEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QMainWindow fakeWindow;
+    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+
+    QJsonObject args;
+    args["entity"] = "SkelNoAnimWidgetEntity";
+    args["show"] = true;
+    QJsonObject result = server->callTool("toggle_skeleton_debug", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("AnimationWidget not found"));
+
+    server->setMainWindow(nullptr);
+}
+
+TEST_F(MCPServerTest, Animate_PitchAndRollCoveredByTick)
+{
+    auto* manager = Manager::getSingletonPtr();
+    ASSERT_NE(manager, nullptr);
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("MCPAnimTickMesh");
+    ASSERT_TRUE(static_cast<bool>(mesh));
+
+    Ogre::SceneNode* node = manager->addSceneNode("MCPAnimTickNode");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(manager->createEntity(node, mesh), nullptr);
+
+    QJsonObject args;
+    args["name"] = "MCPAnimTickNode";
+    args["pitch"] = 15.0;
+    args["roll"] = 20.0;
+    QJsonObject startResult = server->callTool("animate", args);
+    ASSERT_FALSE(isError(startResult)) << getResultText(startResult).toStdString();
+
+    Ogre::Quaternion before = node->getOrientation();
+    server->onAnimationTick();
+    Ogre::Quaternion after = node->getOrientation();
+
+    EXPECT_FALSE(before.equals(after, Ogre::Radian(1e-4f)));
+}
+
+TEST_F(MCPServerTest, ToggleNormals_MainWindowWithoutVisualizerReturnsError)
+{
+    QMainWindow fakeWindow;
+    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+
+    QJsonObject result = server->callTool("toggle_normals", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("NormalVisualizer not found"));
+
+    server->setMainWindow(nullptr);
+}
+
+TEST_F(MCPServerTest, ToggleMeshInfo_MainWindowWithoutOverlayReturnsError)
+{
+    QMainWindow fakeWindow;
+    server->setMainWindow(reinterpret_cast<MainWindow*>(&fakeWindow));
+
+    QJsonObject result = server->callTool("toggle_mesh_info", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("MeshInfoOverlay not found"));
+
+    server->setMainWindow(nullptr);
+}
+
+TEST_F(MCPServerTest, MergeAnimations_InvalidBaseEntityWhenSkeletonEntitiesExist)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    ASSERT_NE(createAnimatedTestEntity("MergeInvalidBaseA"), nullptr);
+    ASSERT_NE(createAnimatedTestEntity("MergeInvalidBaseB"), nullptr);
+
+    QJsonObject args;
+    args["base_entity"] = "ThisEntityDoesNotExist";
+    QJsonObject result = server->callTool("merge_animations", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found or has no skeleton"));
+}
+
+TEST_F(MCPServerTest, MergeAnimations_WithoutBaseEntityUsesFallbackSelection)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    ASSERT_NE(createAnimatedTestEntity("MergeFallbackA"), nullptr);
+    ASSERT_NE(createAnimatedTestEntity("MergeFallbackB"), nullptr);
+
+    QJsonObject result = server->callTool("merge_animations", QJsonObject());
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, SaveScene_InvalidPathReturnsExporterError)
+{
+    QJsonObject args;
+    args["file_path"] = "/tmp/nonexistent_scene_dir_456789/out.scene.glb";
+    QJsonObject result = server->callTool("save_scene", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, OpenScene_InvalidFormatFileReturnsImportError)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QString path = tmpDir.filePath("not_a_scene.txt");
+
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly));
+    f.write("this is not a scene file");
+    f.close();
+
+    QJsonObject args;
+    args["file_path"] = path;
+    QJsonObject result = server->callTool("open_scene", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, GetLodInfo_WithSelectionAndNoGeneratedLods)
+{
+    Ogre::Entity* entity = createAndSelectTriangleEntity("LodInfoNoGenerated");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject result = server->callTool("get_lod_info", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    const QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("No LOD info available") || text.contains("Base"));
+}
+
+TEST_F(MCPServerTest, CameraControl_FrameSelectionWithMainWindow)
+{
+    std::unique_ptr<MainWindow> mainWindow(createMainWindowWithRetries());
+    ASSERT_NE(mainWindow, nullptr);
+    server->setMainWindow(mainWindow.get());
+
+    QJsonObject args;
+    args["frame_selection"] = true;
+    QJsonObject result = server->callTool("camera_control", args);
+    EXPECT_FALSE(isError(result)) << getResultText(result).toStdString();
+    EXPECT_TRUE(getResultText(result).contains("Framed selection"));
+
+    server->setMainWindow(nullptr);
+}
+
+TEST_F(MCPServerTest, CameraControl_NoActionSpecifiedWithActiveViewport)
+{
+    std::unique_ptr<MainWindow> mainWindow(createMainWindowWithRetries());
+    ASSERT_NE(mainWindow, nullptr);
+    server->setMainWindow(mainWindow.get());
+
+    QJsonObject result = server->callTool("camera_control", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No camera action specified"));
+
+    server->setMainWindow(nullptr);
+}
+
+TEST_F(MCPServerTest, SearchFiles_MaxDepthStopsRecursion)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QDir base(tmpDir.path());
+    ASSERT_TRUE(base.mkdir("level1"));
+    ASSERT_TRUE(QDir(base.filePath("level1")).mkdir("level2"));
+    QFile deepFile(base.filePath("level1/level2/deep.obj"));
+    ASSERT_TRUE(deepFile.open(QIODevice::WriteOnly));
+    deepFile.write("obj");
+    deepFile.close();
+
+    QJsonObject args;
+    args["path"] = tmpDir.path();
+    args["query"] = "*.obj";
+    args["max_depth"] = 1;
+    QJsonObject result = server->callTool("search_files", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No files matching"));
 }
