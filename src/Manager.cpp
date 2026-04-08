@@ -268,13 +268,19 @@ Ogre::SceneNode* Manager::duplicateSceneNode(Ogre::SceneNode* source)
     newNode->setOrientation(source->getOrientation());
     newNode->setScale(source->getScale());
 
-    // Clone attached entities
+    // Deep-clone attached entities (each gets its own Mesh copy so
+    // skeleton, animations, and materials are fully independent).
     for (unsigned short i = 0; i < source->numAttachedObjects(); ++i) {
         Ogre::MovableObject* obj = source->getAttachedObject(i);
         if (obj->getMovableType() != "Entity") continue;
 
         Ogre::Entity* srcEntity = static_cast<Ogre::Entity*>(obj);
-        Ogre::Entity* newEntity = createEntity(newNode, srcEntity->getMesh());
+
+        // Clone the mesh resource so animations/skeleton are independent
+        QString cloneMeshName = QString::fromStdString(newNode->getName()) + "_mesh";
+        Ogre::MeshPtr clonedMesh = srcEntity->getMesh()->clone(cloneMeshName.toStdString());
+
+        Ogre::Entity* newEntity = createEntity(newNode, clonedMesh);
 
         // Copy per-sub-entity material assignments
         for (unsigned int s = 0; s < srcEntity->getNumSubEntities(); ++s) {
