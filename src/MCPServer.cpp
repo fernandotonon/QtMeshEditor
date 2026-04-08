@@ -71,7 +71,7 @@ MCPServer::~MCPServer()
     stop();
 }
 
-void MCPServer::setMainWindow(MainWindow *mainWindow)
+void MCPServer::setMainWindow(QObject *mainWindow)
 {
     m_mainWindow = mainWindow;
 }
@@ -851,7 +851,8 @@ QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
         return makeErrorResult("Error: File path is required");
     }
 
-    if (!m_mainWindow) {
+    MainWindow* mainWindow = qobject_cast<MainWindow*>(m_mainWindow);
+    if (!mainWindow) {
         return makeErrorResult("Error: MainWindow not available. Run with --with-mcp flag for full functionality.");
     }
 
@@ -860,7 +861,7 @@ QJsonObject MCPServer::toolLoadMesh(const QJsonObject &args)
     }
 
     try {
-        m_mainWindow->importMeshs(QStringList{path});
+        mainWindow->importMeshs(QStringList{path});
         return makeSuccessResult(QString("Loaded mesh from: %1").arg(path));
 
     } catch (std::exception& e) {
@@ -1757,9 +1758,10 @@ QJsonObject MCPServer::toolPlayAnimation(const QJsonObject &args)
         state->setEnabled(play);
         state->setLoop(loop);
 
-        if (m_mainWindow) {
+        MainWindow* mainWindow = qobject_cast<MainWindow*>(m_mainWindow);
+        if (mainWindow) {
             if (play) {
-                m_mainWindow->setPlaying(true);
+                mainWindow->setPlaying(true);
             } else {
                 // Only stop global playback if no entity has enabled animations
                 bool anyEnabled = false;
@@ -1779,7 +1781,7 @@ QJsonObject MCPServer::toolPlayAnimation(const QJsonObject &args)
                     if (anyEnabled) break;
                 }
                 if (!anyEnabled)
-                    m_mainWindow->setPlaying(false);
+                    mainWindow->setPlaying(false);
             }
         }
 
