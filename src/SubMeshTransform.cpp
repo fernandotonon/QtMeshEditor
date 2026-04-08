@@ -108,24 +108,28 @@ void SubMeshTransform::writePositions(Ogre::Entity* entity, unsigned int subMesh
     if (!posElem) return;
 
     auto vbuf = vertexData->vertexBufferBinding->getBuffer(posElem->getSource());
-    auto* vertex = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
+    size_t bufSize = vbuf->getSizeInBytes();
+    size_t vertexSize = vbuf->getVertexSize();
+
+    // Read entire buffer into local memory, modify positions, write back.
+    // This ensures the GPU gets a full buffer upload via writeData().
+    std::vector<unsigned char> bufCopy(bufSize);
+    vbuf->readData(0, bufSize, bufCopy.data());
 
     size_t count = std::min(positions.size(), static_cast<size_t>(vertexData->vertexCount));
-    for (size_t j = 0; j < count; ++j, vertex += vbuf->getVertexSize())
+    for (size_t j = 0; j < count; ++j)
     {
         Ogre::Real* pReal;
-        posElem->baseVertexPointerToElement(vertex, &pReal);
+        posElem->baseVertexPointerToElement(bufCopy.data() + j * vertexSize, &pReal);
         pReal[0] = positions[j].x;
         pReal[1] = positions[j].y;
         pReal[2] = positions[j].z;
     }
-    vbuf->unlock();
+
+    // writeData forces a GPU buffer upload regardless of shadow buffer state
+    vbuf->writeData(0, bufSize, bufCopy.data(), true);
 
     recalculateMeshBounds(mesh);
-    // Force the entity to recognize that its mesh data changed.
-    // _initialise(true) forces Ogre to rebuild the entity's internal
-    // render operations, picking up the modified vertex buffer data.
-    entity->_initialise(true);
 }
 
 void SubMeshTransform::translateSubMesh(Ogre::Entity* entity, unsigned int subMeshIndex,
@@ -133,31 +137,17 @@ void SubMeshTransform::translateSubMesh(Ogre::Entity* entity, unsigned int subMe
 {
     if (!entity) return;
 
-    Ogre::Mesh* mesh = entity->getMesh().get();
-    Ogre::VertexData* vertexData = getVertexData(mesh, subMeshIndex);
-    if (!vertexData) return;
+    // Read current positions, modify, write back (guarantees GPU buffer update)
+    auto positions = readPositions(entity, subMeshIndex);
+    if (positions.empty()) return;
 
-    const auto* posElem = vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-    if (!posElem) return;
-
-    auto vbuf = vertexData->vertexBufferBinding->getBuffer(posElem->getSource());
-    auto* vertex = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
-
-    for (size_t j = 0; j < vertexData->vertexCount; ++j, vertex += vbuf->getVertexSize())
-    {
-        Ogre::Real* pReal;
-        posElem->baseVertexPointerToElement(vertex, &pReal);
-        pReal[0] += delta.x;
-        pReal[1] += delta.y;
-        pReal[2] += delta.z;
+    for (auto& p : positions) {
+        p.x += delta.x;
+        p.y += delta.y;
+        p.z += delta.z;
     }
-    vbuf->unlock();
 
-    recalculateMeshBounds(mesh);
-    // Force the entity to recognize that its mesh data changed.
-    // _initialise(true) forces Ogre to rebuild the entity's internal
-    // render operations, picking up the modified vertex buffer data.
-    entity->_initialise(true);
+    writePositions(entity, subMeshIndex, positions);
 }
 
 void SubMeshTransform::scaleSubMesh(Ogre::Entity* entity, unsigned int subMeshIndex,
@@ -166,37 +156,15 @@ void SubMeshTransform::scaleSubMesh(Ogre::Entity* entity, unsigned int subMeshIn
     if (!entity) return;
 
     Ogre::Vector3 center = getSubMeshCenter(entity, subMeshIndex);
+    auto positions = readPositions(entity, subMeshIndex);
+    if (positions.empty()) return;
 
-    Ogre::Mesh* mesh = entity->getMesh().get();
-    Ogre::VertexData* vertexData = getVertexData(mesh, subMeshIndex);
-    if (!vertexData) return;
-
-    const auto* posElem = vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-    if (!posElem) return;
-
-    auto vbuf = vertexData->vertexBufferBinding->getBuffer(posElem->getSource());
-    auto* vertex = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
-
-    for (size_t j = 0; j < vertexData->vertexCount; ++j, vertex += vbuf->getVertexSize())
-    {
-        Ogre::Real* pReal;
-        posElem->baseVertexPointerToElement(vertex, &pReal);
-
-        Ogre::Vector3 pos(pReal[0], pReal[1], pReal[2]);
-        Ogre::Vector3 offset = pos - center;
-        Ogre::Vector3 result = center + offset * scale;
-
-        pReal[0] = result.x;
-        pReal[1] = result.y;
-        pReal[2] = result.z;
+    for (auto& p : positions) {
+        Ogre::Vector3 offset = p - center;
+        p = center + offset * scale;
     }
-    vbuf->unlock();
 
-    recalculateMeshBounds(mesh);
-    // Force the entity to recognize that its mesh data changed.
-    // _initialise(true) forces Ogre to rebuild the entity's internal
-    // render operations, picking up the modified vertex buffer data.
-    entity->_initialise(true);
+    writePositions(entity, subMeshIndex, positions);
 }
 
 void SubMeshTransform::rotateSubMesh(Ogre::Entity* entity, unsigned int subMeshIndex,
@@ -205,32 +173,20 @@ void SubMeshTransform::rotateSubMesh(Ogre::Entity* entity, unsigned int subMeshI
     if (!entity) return;
 
     Ogre::Vector3 center = getSubMeshCenter(entity, subMeshIndex);
+    auto positions = readPositions(entity, subMeshIndex);
+    if (positions.empty()) return;
 
+    for (auto& p : positions) {
+        p = rotation * (p - center) + center;
+    }
+
+    writePositions(entity, subMeshIndex, positions);
+
+    // Also rotate normals
     Ogre::Mesh* mesh = entity->getMesh().get();
     Ogre::VertexData* vertexData = getVertexData(mesh, subMeshIndex);
     if (!vertexData) return;
 
-    const auto* posElem = vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
-    if (!posElem) return;
-
-    auto vbuf = vertexData->vertexBufferBinding->getBuffer(posElem->getSource());
-    auto* vertex = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_NORMAL));
-
-    for (size_t j = 0; j < vertexData->vertexCount; ++j, vertex += vbuf->getVertexSize())
-    {
-        Ogre::Real* pReal;
-        posElem->baseVertexPointerToElement(vertex, &pReal);
-
-        Ogre::Vector3 pos(pReal[0], pReal[1], pReal[2]);
-        Ogre::Vector3 result = rotation * (pos - center) + center;
-
-        pReal[0] = result.x;
-        pReal[1] = result.y;
-        pReal[2] = result.z;
-    }
-    vbuf->unlock();
-
-    // Also rotate normals for this sub-mesh
     const auto* normElem = vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_NORMAL);
     if (normElem && normElem->getType() == Ogre::VET_FLOAT3)
     {
@@ -250,12 +206,6 @@ void SubMeshTransform::rotateSubMesh(Ogre::Entity* entity, unsigned int subMeshI
         }
         nbuf->unlock();
     }
-
-    recalculateMeshBounds(mesh);
-    // Force the entity to recognize that its mesh data changed.
-    // _initialise(true) forces Ogre to rebuild the entity's internal
-    // render operations, picking up the modified vertex buffer data.
-    entity->_initialise(true);
 }
 
 void SubMeshTransform::recalculateMeshBounds(Ogre::Mesh* mesh)
