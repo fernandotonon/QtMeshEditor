@@ -216,6 +216,20 @@ Rectangle {
 
             property real btnAreaWidth: snapCol.width - 16
 
+            // Local mirror properties — delegates bind to these for reactive updates
+            property bool curSnapEnabled: PropertiesPanelController.snapEnabled
+            property real curGridSize: PropertiesPanelController.snapGridSize
+            property real curAngleStep: PropertiesPanelController.snapAngleStep
+            property real curScaleStep: PropertiesPanelController.snapScaleStep
+
+            Connections {
+                target: PropertiesPanelController
+                function onSnapEnabledChanged() { snapCol.curSnapEnabled = PropertiesPanelController.snapEnabled }
+                function onSnapGridSizeChanged() { snapCol.curGridSize = PropertiesPanelController.snapGridSize }
+                function onSnapAngleStepChanged() { snapCol.curAngleStep = PropertiesPanelController.snapAngleStep }
+                function onSnapScaleStepChanged() { snapCol.curScaleStep = PropertiesPanelController.snapScaleStep }
+            }
+
             // Enable toggle (themed custom checkbox matching animation checkboxes)
             Row {
                 spacing: 6
@@ -224,9 +238,9 @@ Rectangle {
                 Rectangle {
                     width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                     border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                    color: PropertiesPanelController.snapEnabled ? PropertiesPanelController.highlightColor : "transparent"
-                    Text { anchors.centerIn: parent; text: PropertiesPanelController.snapEnabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                    MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.snapEnabled = !PropertiesPanelController.snapEnabled }
+                    color: snapCol.curSnapEnabled ? PropertiesPanelController.highlightColor : "transparent"
+                    Text { anchors.centerIn: parent; text: snapCol.curSnapEnabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.snapEnabled = !snapCol.curSnapEnabled }
                 }
                 Text {
                     text: "Enable Snap (or hold Ctrl)"
@@ -252,7 +266,7 @@ Rectangle {
                         property real val: modelData
                         width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.gridSizePresets().length - 1)) / PropertiesPanelController.gridSizePresets().length)
                         height: 22; radius: 3
-                        color: Math.abs(PropertiesPanelController.snapGridSize - val) < 0.001 ? PropertiesPanelController.highlightColor
+                        color: Math.abs(snapCol.curGridSize - val) < 0.001 ? PropertiesPanelController.highlightColor
                              : snapBtnMa1.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
                              : PropertiesPanelController.buttonColor
                         border.color: PropertiesPanelController.borderColor; border.width: 1
@@ -278,7 +292,7 @@ Rectangle {
                         property real val: modelData
                         width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.angleStepPresets().length - 1)) / PropertiesPanelController.angleStepPresets().length)
                         height: 22; radius: 3
-                        color: Math.abs(PropertiesPanelController.snapAngleStep - val) < 0.001 ? PropertiesPanelController.highlightColor
+                        color: Math.abs(snapCol.curAngleStep - val) < 0.001 ? PropertiesPanelController.highlightColor
                              : snapBtnMa2.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
                              : PropertiesPanelController.buttonColor
                         border.color: PropertiesPanelController.borderColor; border.width: 1
@@ -304,7 +318,7 @@ Rectangle {
                         property real val: modelData
                         width: Math.max(30, (snapCol.btnAreaWidth - 3 * (PropertiesPanelController.scaleStepPresets().length - 1)) / PropertiesPanelController.scaleStepPresets().length)
                         height: 22; radius: 3
-                        color: Math.abs(PropertiesPanelController.snapScaleStep - val) < 0.001 ? PropertiesPanelController.highlightColor
+                        color: Math.abs(snapCol.curScaleStep - val) < 0.001 ? PropertiesPanelController.highlightColor
                              : snapBtnMa3.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
                              : PropertiesPanelController.buttonColor
                         border.color: PropertiesPanelController.borderColor; border.width: 1
