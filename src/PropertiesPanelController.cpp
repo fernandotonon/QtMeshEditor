@@ -55,8 +55,13 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
         emit transformChanged();
     });
 
-    connect(transformOp, &TransformOperator::snapSettingsChanged,
-            this, &PropertiesPanelController::snapSettingsChanged);
+    connect(transformOp, &TransformOperator::snapSettingsChanged, this, [this]() {
+        emit snapSettingsChanged();
+        emit snapEnabledChanged();
+        emit snapGridSizeChanged();
+        emit snapAngleStepChanged();
+        emit snapScaleStepChanged();
+    });
 
     connect(Manager::getSingleton(), &Manager::sceneNodeCreated, this, &PropertiesPanelController::onSceneChanged);
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, &PropertiesPanelController::onSceneChanged);
@@ -564,21 +569,25 @@ double PropertiesPanelController::snapScaleStep() const
 void PropertiesPanelController::setSnapEnabled(bool enabled)
 {
     TransformOperator::getSingleton()->setSnapEnabled(enabled);
+    emit snapEnabledChanged();
 }
 
 void PropertiesPanelController::setSnapGridSize(double size)
 {
     TransformOperator::getSingleton()->setSnapGridSize(size);
+    emit snapGridSizeChanged();
 }
 
 void PropertiesPanelController::setSnapAngleStep(double degrees)
 {
     TransformOperator::getSingleton()->setSnapAngleStep(degrees);
+    emit snapAngleStepChanged();
 }
 
 void PropertiesPanelController::setSnapScaleStep(double step)
 {
     TransformOperator::getSingleton()->setSnapScaleStep(step);
+    emit snapScaleStepChanged();
 }
 
 QVariantList PropertiesPanelController::gridSizePresets() const

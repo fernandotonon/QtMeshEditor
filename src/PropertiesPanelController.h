@@ -45,10 +45,10 @@ class PropertiesPanelController : public QObject
     Q_PROPERTY(bool playing READ isPlaying WRITE setPlaying NOTIFY playingChanged)
 
     // Snap properties
-    Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapSettingsChanged)
-    Q_PROPERTY(double snapGridSize READ snapGridSize WRITE setSnapGridSize NOTIFY snapSettingsChanged)
-    Q_PROPERTY(double snapAngleStep READ snapAngleStep WRITE setSnapAngleStep NOTIFY snapSettingsChanged)
-    Q_PROPERTY(double snapScaleStep READ snapScaleStep WRITE setSnapScaleStep NOTIFY snapSettingsChanged)
+    Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
+    Q_PROPERTY(double snapGridSize READ snapGridSize WRITE setSnapGridSize NOTIFY snapGridSizeChanged)
+    Q_PROPERTY(double snapAngleStep READ snapAngleStep WRITE setSnapAngleStep NOTIFY snapAngleStepChanged)
+    Q_PROPERTY(double snapScaleStep READ snapScaleStep WRITE setSnapScaleStep NOTIFY snapScaleStepChanged)
 
     // Primitive properties
     Q_PROPERTY(bool hasPrimitive READ hasPrimitive NOTIFY selectionChanged)
@@ -187,6 +187,10 @@ signals:
     void playingChanged();
     void animationStateChanged();
     void snapSettingsChanged();
+    void snapEnabledChanged();
+    void snapGridSizeChanged();
+    void snapAngleStepChanged();
+    void snapScaleStepChanged();
 
 private:
     PropertiesPanelController();
