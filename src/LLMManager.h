@@ -7,6 +7,7 @@
 #include <QStringList>
 #include <QVariantMap>
 #include <QDir>
+#include <QUrl>
 #include <QQmlEngine>
 #include <QJSEngine>
 #include "LLMWorker.h"
@@ -43,6 +44,7 @@ class LLMManager : public QObject
     Q_PROPERTY(bool isLoading READ isLoading NOTIFY isLoadingChanged)
     Q_PROPERTY(QStringList availableModels READ availableModels NOTIFY availableModelsChanged)
     Q_PROPERTY(QString modelsDirectory READ modelsDirectory WRITE setModelsDirectory NOTIFY modelsDirectoryChanged)
+    Q_PROPERTY(QUrl modelsDirectoryUrl READ modelsDirectoryUrl NOTIFY modelsDirectoryChanged)
     Q_PROPERTY(QVariantList recommendedModels READ getRecommendedModelsInfo NOTIFY availableModelsChanged)
 
     // Settings properties for QML binding
@@ -66,6 +68,7 @@ public:
 
     // Settings
     QString modelsDirectory() const { return m_modelsDirectory; }
+    QUrl modelsDirectoryUrl() const { return QUrl::fromLocalFile(m_modelsDirectory); }
     void setModelsDirectory(const QString &dir);
     LLMSettings getSettings() const;
     void setSettings(const LLMSettings &settings);
@@ -92,12 +95,17 @@ public:
 public slots:
     // Model operations
     Q_INVOKABLE void loadModel(const QString &modelName);
+    Q_INVOKABLE void loadModelFromPath(const QString &filePath);
+    Q_INVOKABLE void setModelsDirectoryFromUrl(const QUrl &url);
+    Q_INVOKABLE void browseForModelsDirectory();
+    Q_INVOKABLE void browseForModelFile();
     Q_INVOKABLE void unloadModel();
     Q_INVOKABLE void scanForModels();
     Q_INVOKABLE void tryAutoLoadModel();
 
     // Generation
     Q_INVOKABLE void generateMaterial(const QString &prompt, const QString &currentMaterial = QString(), const QStringList &availableTextures = QStringList());
+    Q_INVOKABLE void generateText(const QString &systemPrompt, const QString &userPrompt, int maxTokensOverride = 0);
     Q_INVOKABLE void stopGeneration();
 
     // Settings
@@ -174,6 +182,7 @@ private:
     LLMSettings m_settings;
     bool m_isLoading = false;
     bool m_autoLoadModel = false;
+    bool m_rawTextMode = false;  // bypass material cleanup/validation when generateText() is active
 
     // Retry logic for invalid scripts
     QString m_pendingPrompt;

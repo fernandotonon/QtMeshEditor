@@ -3,7 +3,9 @@
 #include <QStandardPaths>
 #include <QDebug>
 #include <QFileInfo>
+#include <QFileDialog>
 #include <QTimer>
+#include <QUrl>
 #include <QRegularExpression>
 
 LLMManager* LLMManager::s_instance = nullptr;
@@ -94,23 +96,14 @@ void LLMManager::populateRecommendedModels()
     m_recommendedModels.clear();
 
     // Recommended GGUF models from Hugging Face - ordered by size (smallest first)
+    // Curated to avoid near-duplicates (no Coder variants or older Gemma 2)
 
-    // Gemma 3 models (Google's latest)
     m_recommendedModels.append({
         "Gemma 3 1B Q4_K_M",
         "gemma-3-1b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-1b-it-GGUF/resolve/main/google_gemma-3-1b-it-Q4_K_M.gguf",
         "Google's Gemma 3 1B. Ultra-fast, great for quick tasks.",
         900000000, // ~0.9GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Gemma 2 2B Q4_K_M",
-        "gemma-2-2b-it-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/gemma-2-2b-it-GGUF/resolve/main/gemma-2-2b-it-Q4_K_M.gguf",
-        "Google's Gemma 2 2B. Fast and efficient.",
-        1800000000, // ~1.8GB
         false
     });
 
@@ -127,26 +120,8 @@ void LLMManager::populateRecommendedModels()
         "Qwen 2.5 3B Q4_K_M",
         "qwen2.5-3b-instruct-q4_k_m.gguf",
         "https://huggingface.co/Qwen/Qwen2.5-3B-Instruct-GGUF/resolve/main/qwen2.5-3b-instruct-q4_k_m.gguf",
-        "Alibaba's Qwen 2.5 3B. Great for code generation.",
+        "Alibaba's Qwen 2.5 3B. Great for structured output.",
         2100000000, // ~2.1GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Qwen 2.5 Coder 3B Q4_K_M",
-        "qwen2.5-coder-3b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-Coder-3B-Instruct-GGUF/resolve/main/qwen2.5-coder-3b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 Coder 3B. Specialized for code tasks.",
-        2100000000, // ~2.1GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Phi-3.5 Mini Q4_K_M",
-        "Phi-3.5-mini-instruct-Q4_K_M.gguf",
-        "https://huggingface.co/bartowski/Phi-3.5-mini-instruct-GGUF/resolve/main/Phi-3.5-mini-instruct-Q4_K_M.gguf",
-        "Microsoft's Phi-3.5 Mini. Compact and capable.",
-        2400000000, // ~2.4GB
         false
     });
 
@@ -163,16 +138,7 @@ void LLMManager::populateRecommendedModels()
         "Qwen 2.5 7B Q4_K_M",
         "qwen2.5-7b-instruct-q4_k_m.gguf",
         "https://huggingface.co/Qwen/Qwen2.5-7B-Instruct-GGUF/resolve/main/qwen2.5-7b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 7B. Higher quality, requires more VRAM.",
-        4700000000, // ~4.7GB
-        false
-    });
-
-    m_recommendedModels.append({
-        "Qwen 2.5 Coder 7B Q4_K_M",
-        "qwen2.5-coder-7b-instruct-q4_k_m.gguf",
-        "https://huggingface.co/Qwen/Qwen2.5-Coder-7B-Instruct-GGUF/resolve/main/qwen2.5-coder-7b-instruct-q4_k_m.gguf",
-        "Qwen 2.5 Coder 7B. Best for code generation.",
+        "Qwen 2.5 7B. Strong instruction following and tool use.",
         4700000000, // ~4.7GB
         false
     });
@@ -181,8 +147,35 @@ void LLMManager::populateRecommendedModels()
         "Gemma 3 12B Q4_K_M",
         "gemma-3-12b-it-Q4_K_M.gguf",
         "https://huggingface.co/bartowski/google_gemma-3-12b-it-GGUF/resolve/main/google_gemma-3-12b-it-Q4_K_M.gguf",
-        "Google's Gemma 3 12B. High quality, needs 8GB+ VRAM.",
+        "Google's Gemma 3 12B. High quality, needs 8GB+ RAM.",
         8100000000, // ~8.1GB
+        false
+    });
+
+    m_recommendedModels.append({
+        "Qwen 2.5 14B Q4_K_M",
+        "qwen2.5-14b-instruct-q4_k_m.gguf",
+        "https://huggingface.co/Qwen/Qwen2.5-14B-Instruct-GGUF/resolve/main/qwen2.5-14b-instruct-q4_k_m.gguf",
+        "Qwen 2.5 14B. Very capable, excellent reasoning.",
+        9400000000, // ~9.4GB
+        false
+    });
+
+    m_recommendedModels.append({
+        "Gemma 3 27B Q4_K_M",
+        "gemma-3-27b-it-Q4_K_M.gguf",
+        "https://huggingface.co/bartowski/google_gemma-3-27b-it-GGUF/resolve/main/google_gemma-3-27b-it-Q4_K_M.gguf",
+        "Google's Gemma 3 27B. Excellent quality, needs 16GB+ RAM.",
+        17000000000, // ~17GB
+        false
+    });
+
+    m_recommendedModels.append({
+        "Qwen 2.5 32B Q4_K_M",
+        "qwen2.5-32b-instruct-q4_k_m.gguf",
+        "https://huggingface.co/Qwen/Qwen2.5-32B-Instruct-GGUF/resolve/main/qwen2.5-32b-instruct-q4_k_m.gguf",
+        "Qwen 2.5 32B. Near top-tier quality, needs 20GB+ RAM.",
+        20000000000, // ~20GB
         false
     });
 }
@@ -379,6 +372,55 @@ void LLMManager::tryAutoLoadModel()
     // LCOV_EXCL_STOP
 }
 
+void LLMManager::loadModelFromPath(const QString &filePath)
+{
+    if (filePath.isEmpty() || !QFileInfo::exists(filePath)) {
+        emit modelLoadError(QString("File not found: %1").arg(filePath));
+        return;
+    }
+
+    // LCOV_EXCL_START — requires a real GGUF model file
+    QFileInfo info(filePath);
+    m_currentModelName = info.completeBaseName();
+    m_isLoading = true;
+    emit isLoadingChanged();
+    emit modelLoadStarted(m_currentModelName);
+
+    QMetaObject::invokeMethod(m_worker, [this, filePath]() {
+        m_worker->setSettings(m_settings);
+        m_worker->loadModel(filePath);
+    }, Qt::QueuedConnection);
+    // LCOV_EXCL_STOP
+}
+
+void LLMManager::setModelsDirectoryFromUrl(const QUrl &url)
+{
+    setModelsDirectory(url.toLocalFile());
+}
+
+void LLMManager::browseForModelsDirectory()
+{
+    QString dir = QFileDialog::getExistingDirectory(
+        nullptr,
+        "Select Models Directory",
+        m_modelsDirectory
+    );
+    if (!dir.isEmpty())
+        setModelsDirectory(dir);
+}
+
+void LLMManager::browseForModelFile()
+{
+    QString file = QFileDialog::getOpenFileName(
+        nullptr,
+        "Load AI Model",
+        m_modelsDirectory,
+        "GGUF models (*.gguf);;Binary models (*.bin);;All files (*)"
+    );
+    if (!file.isEmpty())
+        loadModelFromPath(file);
+}
+
 void LLMManager::unloadModel()
 {
     if (m_worker) {
@@ -402,7 +444,7 @@ void LLMManager::scanForModels()
     QFileInfoList files = modelsDir.entryInfoList(filters, QDir::Files);
 
     for (const QFileInfo &file : files) {
-        m_availableModels.append(file.baseName());
+        m_availableModels.append(file.completeBaseName());
     }
 
     // Update recommended models download status
@@ -413,6 +455,18 @@ void LLMManager::scanForModels()
 
     qDebug() << "LLMManager: Found" << m_availableModels.size() << "models in" << m_modelsDirectory;
     emit availableModelsChanged();
+}
+
+void LLMManager::generateText(const QString &systemPrompt, const QString &userPrompt, int maxTokensOverride)
+{
+    if (!isModelLoaded()) {
+        emit generationError("No model loaded. Please load a model first.");
+        return;
+    }
+    m_rawTextMode = true;
+    QMetaObject::invokeMethod(m_worker, [this, systemPrompt, userPrompt, maxTokensOverride]() {
+        m_worker->generate(systemPrompt, userPrompt, maxTokensOverride);
+    }, Qt::QueuedConnection);
 }
 
 void LLMManager::generateMaterial(const QString &prompt, const QString &currentMaterial, const QStringList &availableTextures)
@@ -661,6 +715,15 @@ void LLMManager::onWorkerGenerationProgress(const QString &partialText, float pr
 
 void LLMManager::onWorkerGenerationCompleted(const QString &fullText)
 {
+    // Raw text mode (e.g. AI Chat) — skip material cleanup/validation entirely
+    if (m_rawTextMode) {
+        m_rawTextMode = false;
+        m_retryCount = 0;
+        emit generationCompleted(fullText);
+        emit isGeneratingChanged();
+        return;
+    }
+
     // Clean up the generated script
     QString cleanedScript = cleanupGeneratedScript(fullText);
 
@@ -703,12 +766,14 @@ void LLMManager::onWorkerGenerationCompleted(const QString &fullText)
 
 void LLMManager::onWorkerGenerationError(const QString &error)
 {
+    m_rawTextMode = false;
     emit generationError(error);
     emit isGeneratingChanged();
 }
 
 void LLMManager::onWorkerGenerationStopped()
 {
+    m_rawTextMode = false;
     m_retryCount = 0;
     emit generationStopped();
     emit isGeneratingChanged();

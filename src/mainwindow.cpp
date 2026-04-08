@@ -55,6 +55,7 @@
 #include "MeshLodController.h"
 #include "MeshValidator.h"
 #include "MaterialPresetLibrary.h"
+#include "AIChatManager.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -232,6 +233,7 @@ MainWindow::~MainWindow()
     MeshLodController::kill();
     MeshValidator::kill();
     MaterialPresetLibrary::kill();
+    AIChatManager::kill();
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
     Manager* manager = Manager::getSingletonPtr();
@@ -334,6 +336,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return MaterialPresetLibrary::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<AIChatManager>("AIChatPanel", 1, 0, "AIChatManager",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AIChatManager::qmlInstance(engine, nullptr);
+            });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
 
@@ -350,6 +356,36 @@ void MainWindow::initToolBar()
             }
             layout->addWidget(m_propertiesPanel);
         }
+    }
+
+    // AI Chat dock
+    {
+        auto* chatWidget = new QQuickWidget();
+        chatWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        chatWidget->setMinimumWidth(280);
+        chatWidget->setMinimumHeight(350);
+        // StrongFocus: a single click inside the dock routes keyboard events into QML
+        // without requiring a prior click in the viewport.
+        chatWidget->setFocusPolicy(Qt::StrongFocus);
+        chatWidget->setSource(QUrl("qrc:/AIChatPanel/AIChatPanel.qml"));
+        m_chatDock = new QDockWidget(tr("AI Chat"), this);
+        m_chatDock->setWidget(chatWidget);
+        m_chatDock->setObjectName("AIChatDock");
+        addDockWidget(Qt::RightDockWidgetArea, m_chatDock);
+        resizeDocks({m_chatDock}, {400}, Qt::Vertical);
+        m_chatDock->hide();
+
+        // When focus lands on the dock container (not the QQuickWidget inside),
+        // forward it to the QQuickWidget. This fixes the macOS issue where
+        // clicking the chat input after switching back from another app requires
+        // two clicks — the first activates the window but focus stays on the dock.
+        connect(qApp, &QApplication::focusChanged, this, [chatWidget, this](QWidget*, QWidget* now) {
+            if (!now || !m_chatDock || !m_chatDock->isVisible()) return;
+            if (now == m_chatDock || (now->parentWidget() && now->parentWidget() == m_chatDock)) {
+                if (now != chatWidget)
+                    QTimer::singleShot(0, chatWidget, [chatWidget]() { chatWidget->setFocus(); });
+            }
+        });
     }
 
     // Animation Control dock is created below and auto-shown when animated entity is selected
@@ -392,6 +428,21 @@ void MainWindow::initToolBar()
 
     addPrimitiveButton->setMenu(addPrimitiveMenu);
     ui->objectsToolbar->addWidget(addPrimitiveButton);
+
+    // AI Chat button — star icon is the common AI shorthand
+    auto aiChatButton = new QToolButton(ui->objectsToolbar);
+    aiChatButton->setText("\u2728");  // ✨
+    aiChatButton->setToolTip(tr("Open AI Chat"));
+    QFont aiFont = aiChatButton->font();
+    aiFont.setPixelSize(15);
+    aiChatButton->setFont(aiFont);
+    connect(aiChatButton, &QToolButton::clicked, this, [this]() {
+        if (m_chatDock) {
+            m_chatDock->show();
+            m_chatDock->raise();
+        }
+    });
+    ui->objectsToolbar->addWidget(aiChatButton);
 
     connect(pAddCube,       SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createCube()));
     connect(pAddSphere,     SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createSphere()));
@@ -473,7 +524,15 @@ void MainWindow::initToolBar()
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
-    QAction* aiSettingsAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Model Settings..."));
+    QAction* aiChatAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Chat..."));
+    connect(aiChatAction, &QAction::triggered, this, [this]() {
+        if (m_chatDock) {
+            m_chatDock->show();
+            m_chatDock->raise();
+        }
+    });
+    aiMenu->addSeparator();
+    QAction* aiSettingsAction = aiMenu->addAction(tr("AI Model Settings..."));
     connect(aiSettingsAction, &QAction::triggered, this, &MainWindow::showAIModelSettings);
 
     QAction* mcpSettingsAction = aiMenu->addAction(tr("MCP Server Settings..."));
@@ -1514,6 +1573,7 @@ bool MainWindow::startMCPServer(int port)
     if (!m_mcpServer) {
         m_mcpServer = new MCPServer(this);
         m_mcpServer->setMainWindow(this);
+        AIChatManager::instance()->setMcpServer(m_mcpServer);
     }
 
     bool ok = m_mcpServer->startHttp(port);
@@ -1542,6 +1602,7 @@ void MainWindow::setMCPServer(MCPServer* server)
         delete m_mcpServer;
     }
     m_mcpServer = server;
+    AIChatManager::instance()->setMcpServer(m_mcpServer);
 }
 
 void MainWindow::addToRecentFiles(const QString& filePath)

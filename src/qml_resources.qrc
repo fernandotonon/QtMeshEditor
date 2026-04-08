@@ -25,4 +25,7 @@
   <qresource prefix="/AnimationControl">
     <file alias="AnimationControlPanel.qml">../qml/AnimationControlPanel.qml</file>
   </qresource>
+  <qresource prefix="/AIChatPanel">
+    <file alias="AIChatPanel.qml">../qml/AIChatPanel.qml</file>
+  </qresource>
 </RCC>

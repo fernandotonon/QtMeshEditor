@@ -54,9 +54,14 @@ public:
     bool startHttp(int port = 8080);
 
     /**
-     * @brief Call a tool by name with arguments (public API for HTTP)
+     * @brief Call a tool by name with arguments (public API for HTTP and AI Chat)
      */
     QJsonObject callTool(const QString &name, const QJsonObject &args);
+
+    /**
+     * @brief Build the list of available tools (public API for AI Chat)
+     */
+    QJsonArray buildToolsList();
 
     /**
      * @brief Set the main window reference for accessing editor functionality
@@ -151,6 +156,12 @@ private:
     QJsonObject toolGenerateAutoLods(const QJsonObject &args);
     QJsonObject toolRemoveLods(const QJsonObject &args);
     QJsonObject toolGetLodInfo(const QJsonObject &args);
+    QJsonObject toolListFiles(const QJsonObject &args);
+    QJsonObject toolSearchFiles(const QJsonObject &args);
+    QJsonObject toolReadFile(const QJsonObject &args);
+    QJsonObject toolCameraControl(const QJsonObject &args);
+    QJsonObject toolGetCameraInfo(const QJsonObject &args);
+    QJsonObject toolDeleteEntity(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {
@@ -175,7 +186,6 @@ private:
     static QJsonObject makeErrorResult(const QString &message);
     static QJsonObject makeSuccessResult(const QString &message);
     bool ensureOgreInitialized();
-    QJsonArray buildToolsList();
     QJsonObject buildToolDefinition(const QString &name, const QString &description,
                                      const QJsonObject &inputSchema);
 

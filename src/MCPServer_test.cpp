@@ -2785,9 +2785,13 @@ TEST_F(MCPServerTest, AllToolNamesAreRecognized)
         "list_skeletal_animations", "get_animation_info", "set_animation_length",
         "set_animation_time", "add_keyframe", "remove_keyframe",
         "play_animation", "toggle_skeleton_debug", "toggle_bone_weights",
-        "toggle_normals", "toggle_mesh_info", "merge_animations"
+        "toggle_normals", "toggle_mesh_info", "merge_animations",
+        "save_scene", "open_scene", "validate_mesh",
+        "generate_lods", "generate_auto_lods", "remove_lods", "get_lod_info",
+        "delete_entity", "get_camera_info", "camera_control",
+        "list_files", "search_files", "read_file"
     };
-    EXPECT_EQ(allTools.size(), 27);
+    EXPECT_EQ(allTools.size(), 40);
 
     for (const QString &tool : allTools) {
         QJsonObject result = server->callTool(tool, QJsonObject());
@@ -4148,4 +4152,191 @@ TEST_F(MCPServerProtocolTest, SendErrorSerializesJsonRpcError)
     EXPECT_EQ(response["id"].toString(), "req-1");
     EXPECT_EQ(response["error"].toObject()["code"].toInt(), -32001);
     EXPECT_EQ(response["error"].toObject()["message"].toString(), "custom failure");
+}
+
+// ---- Filesystem tools ----
+
+TEST_F(MCPServerTest, ListFiles_ValidDirectory)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    // Create a test file
+    QFile f(tmpDir.filePath("test.fbx"));
+    f.open(QIODevice::WriteOnly);
+    f.write("dummy");
+    f.close();
+
+    QJsonObject args;
+    args["path"] = tmpDir.path();
+    QJsonObject result = server->callTool("list_files", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("test.fbx"));
+}
+
+TEST_F(MCPServerTest, ListFiles_NonexistentDirectory)
+{
+    QJsonObject args;
+    args["path"] = "/nonexistent/path/that/does/not/exist";
+    QJsonObject result = server->callTool("list_files", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("does not exist"));
+}
+
+TEST_F(MCPServerTest, ListFiles_WithPattern)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QFile f1(tmpDir.filePath("model.fbx"));
+    f1.open(QIODevice::WriteOnly); f1.write("fbx"); f1.close();
+    QFile f2(tmpDir.filePath("texture.png"));
+    f2.open(QIODevice::WriteOnly); f2.write("png"); f2.close();
+
+    QJsonObject args;
+    args["path"] = tmpDir.path();
+    args["pattern"] = "*.fbx";
+    QJsonObject result = server->callTool("list_files", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("model.fbx"));
+    EXPECT_FALSE(getResultText(result).contains("texture.png"));
+}
+
+TEST_F(MCPServerTest, SearchFiles_ValidQuery)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QDir(tmpDir.path()).mkdir("subdir");
+    QFile f(tmpDir.filePath("subdir/deep.obj"));
+    f.open(QIODevice::WriteOnly); f.write("obj"); f.close();
+
+    QJsonObject args;
+    args["path"] = tmpDir.path();
+    args["query"] = "*.obj";
+    QJsonObject result = server->callTool("search_files", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("deep.obj"));
+}
+
+TEST_F(MCPServerTest, SearchFiles_MissingQuery)
+{
+    QJsonObject args;
+    args["path"] = QDir::tempPath();
+    QJsonObject result = server->callTool("search_files", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("query"));
+}
+
+TEST_F(MCPServerTest, SearchFiles_NonexistentDirectory)
+{
+    QJsonObject args;
+    args["path"] = "/nonexistent/search/path";
+    args["query"] = "*.fbx";
+    QJsonObject result = server->callTool("search_files", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, ReadFile_ValidTextFile)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QFile f(tmpDir.filePath("test.txt"));
+    f.open(QIODevice::WriteOnly);
+    f.write("line1\nline2\nline3\n");
+    f.close();
+
+    QJsonObject args;
+    args["path"] = tmpDir.filePath("test.txt");
+    QJsonObject result = server->callTool("read_file", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("line1"));
+    EXPECT_TRUE(getResultText(result).contains("line2"));
+}
+
+TEST_F(MCPServerTest, ReadFile_MissingPath)
+{
+    QJsonObject result = server->callTool("read_file", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, ReadFile_NonexistentFile)
+{
+    QJsonObject args;
+    args["path"] = "/nonexistent/file.txt";
+    QJsonObject result = server->callTool("read_file", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("does not exist"));
+}
+
+TEST_F(MCPServerTest, ReadFile_BinaryFileRejected)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QFile f(tmpDir.filePath("image.png"));
+    f.open(QIODevice::WriteOnly); f.write("fake png"); f.close();
+
+    QJsonObject args;
+    args["path"] = tmpDir.filePath("image.png");
+    QJsonObject result = server->callTool("read_file", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("binary"));
+}
+
+TEST_F(MCPServerTest, ReadFile_MaxLinesRespected)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    QFile f(tmpDir.filePath("long.txt"));
+    f.open(QIODevice::WriteOnly);
+    for (int i = 0; i < 50; ++i) f.write(QStringLiteral("line %1\n").arg(i).toUtf8());
+    f.close();
+
+    QJsonObject args;
+    args["path"] = tmpDir.filePath("long.txt");
+    args["max_lines"] = 5;
+    QJsonObject result = server->callTool("read_file", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("truncated"));
+}
+
+// ---- Delete entity ----
+
+TEST_F(MCPServerTest, DeleteEntity_MissingName)
+{
+    QJsonObject result = server->callTool("delete_entity", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("required"));
+}
+
+TEST_F(MCPServerTest, DeleteEntity_NonexistentEntity)
+{
+    QJsonObject args;
+    args["name"] = "nonexistent_entity_xyz";
+    QJsonObject result = server->callTool("delete_entity", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+// ---- Camera tools ----
+
+TEST_F(MCPServerTest, GetCameraInfo_NoMainWindow)
+{
+    // Server has no mainWindow set — should return error
+    QJsonObject result = server->callTool("get_camera_info", QJsonObject());
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, CameraControl_NoMainWindow)
+{
+    QJsonObject args;
+    args["zoom"] = 5.0;
+    QJsonObject result = server->callTool("camera_control", args);
+    EXPECT_TRUE(isError(result));
+}
+
+TEST_F(MCPServerTest, CameraControl_NoActionSpecified)
+{
+    // Even with no mainWindow, the error should mention "No camera action"
+    // or "No active viewport" — both are valid error paths
+    QJsonObject result = server->callTool("camera_control", QJsonObject());
+    EXPECT_TRUE(isError(result));
 }

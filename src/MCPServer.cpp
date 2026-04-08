@@ -7,6 +7,7 @@
 #include "TransformOperator.h"
 #include "MeshImporterExporter.h"
 #include "OgreWidget.h"
+#include "SpaceCamera.h"
 #include "AnimationWidget.h"
 #include "NormalVisualizer.h"
 #include "MeshInfoOverlay.h"
@@ -470,6 +471,18 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolRemoveLods(args);
     } else if (name == "get_lod_info") {
         toolResult = toolGetLodInfo(args);
+    } else if (name == "list_files") {
+        toolResult = toolListFiles(args);
+    } else if (name == "search_files") {
+        toolResult = toolSearchFiles(args);
+    } else if (name == "read_file") {
+        toolResult = toolReadFile(args);
+    } else if (name == "delete_entity") {
+        toolResult = toolDeleteEntity(args);
+    } else if (name == "camera_control") {
+        toolResult = toolCameraControl(args);
+    } else if (name == "get_camera_info") {
+        toolResult = toolGetCameraInfo(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -574,36 +587,45 @@ QJsonObject MCPServer::toolCreateMaterial(const QJsonObject &args)
         Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
             name.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
-        // Set properties from colors
-        QJsonObject colors = args["colors"].toObject();
+        // Accept colors as either top-level params (diffuse, ambient …) or
+        // nested under a "colors" object — both formats are valid.
+        auto resolveColor = [&](const QString& key) -> QJsonArray {
+            if (args.contains(key) && args[key].isArray())
+                return args[key].toArray();
+            QJsonObject nested = args["colors"].toObject();
+            if (nested.contains(key) && nested[key].isArray())
+                return nested[key].toArray();
+            return {};
+        };
+        auto resolveNumber = [&](const QString& key, double def) -> double {
+            if (args.contains(key)) return args[key].toDouble(def);
+            return args["colors"].toObject().value(key).toDouble(def);
+        };
+
         Ogre::Pass* pass = mat->getTechnique(0)->getPass(0);
 
-        if (colors.contains("ambient")) {
-            QJsonArray a = colors["ambient"].toArray();
-            pass->setAmbient(a[0].toDouble(0.2), a[1].toDouble(0.2), a[2].toDouble(0.2));
-        } else {
+        QJsonArray amb = resolveColor("ambient");
+        if (!amb.isEmpty())
+            pass->setAmbient(amb[0].toDouble(0.2), amb[1].toDouble(0.2), amb[2].toDouble(0.2));
+        else
             pass->setAmbient(0.2, 0.2, 0.2);
-        }
 
-        if (colors.contains("diffuse")) {
-            QJsonArray d = colors["diffuse"].toArray();
-            pass->setDiffuse(d[0].toDouble(1.0), d[1].toDouble(1.0), d[2].toDouble(1.0), 1.0);
-        }
+        QJsonArray diff = resolveColor("diffuse");
+        if (!diff.isEmpty())
+            pass->setDiffuse(diff[0].toDouble(1.0), diff[1].toDouble(1.0), diff[2].toDouble(1.0), 1.0);
 
-        if (colors.contains("specular")) {
-            QJsonArray s = colors["specular"].toArray();
-            double shininess = colors.value("shininess").toDouble(32.0);
-            pass->setSpecular(s[0].toDouble(0.5), s[1].toDouble(0.5), s[2].toDouble(0.5), 1.0);
-            pass->setShininess(shininess);
+        QJsonArray spec = resolveColor("specular");
+        if (!spec.isEmpty()) {
+            pass->setSpecular(spec[0].toDouble(0.5), spec[1].toDouble(0.5), spec[2].toDouble(0.5), 1.0);
+            pass->setShininess(resolveNumber("shininess", 32.0));
         } else {
             pass->setSpecular(0.5, 0.5, 0.5, 1.0);
             pass->setShininess(32.0);
         }
 
-        if (colors.contains("emissive")) {
-            QJsonArray e = colors["emissive"].toArray();
-            pass->setSelfIllumination(e[0].toDouble(), e[1].toDouble(), e[2].toDouble());
-        }
+        QJsonArray emis = resolveColor("emissive");
+        if (!emis.isEmpty())
+            pass->setSelfIllumination(emis[0].toDouble(), emis[1].toDouble(), emis[2].toDouble());
 
         try { mat->load(); } catch (...) { /* headless — no GPU context */ }
 
@@ -736,8 +758,14 @@ QJsonObject MCPServer::toolListMaterials(const QJsonObject &args)
 
 QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
 {
+    // Accept common model variations: "material" or "material_name"
     QString materialName = args["material"].toString();
+    if (materialName.isEmpty()) materialName = args["material_name"].toString();
+    // Accept "mesh", "mesh_name", or "entity" / "entity_name"
     QString meshName = args["mesh"].toString();
+    if (meshName.isEmpty()) meshName = args["mesh_name"].toString();
+    if (meshName.isEmpty()) meshName = args["entity"].toString();
+    if (meshName.isEmpty()) meshName = args["entity_name"].toString();
 
     if (materialName.isEmpty()) {
         return makeErrorResult("Error: Material name is required");
@@ -758,9 +786,10 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
         QStringList appliedTo;
 
         if (!meshName.isEmpty()) {
-            // Apply to specific entity by name
-            QList<Ogre::Entity*>& entities = mgr->getEntities();
             bool found = false;
+
+            // Primary: search by entity name via getEntities()
+            QList<Ogre::Entity*>& entities = mgr->getEntities();
             for (Ogre::Entity* entity : entities) {
                 if (entity && QString::fromStdString(entity->getName()) == meshName) {
                     entity->setMaterialName(materialName.toStdString());
@@ -769,8 +798,28 @@ QJsonObject MCPServer::toolApplyMaterial(const QJsonObject &args)
                     break;
                 }
             }
+
+            // Fallback: look up scene node by name and apply to its attached entity.
+            // Handles cases where the entity name differs from the node name, or
+            // getEntities() returns an incomplete / mis-cast list.
             if (!found) {
-                return makeErrorResult(QString("Error: Entity '%1' not found").arg(meshName));
+                Ogre::SceneNode* sn = findSceneNodeByName(meshName);
+                if (sn) {
+                    for (int i = 0; i < static_cast<int>(sn->numAttachedObjects()); ++i) {
+                        Ogre::MovableObject* obj = sn->getAttachedObject(i);
+                        if (obj && obj->getMovableType() == "Entity") {
+                            Ogre::Entity* ent = static_cast<Ogre::Entity*>(obj);
+                            ent->setMaterialName(materialName.toStdString());
+                            appliedTo << QString::fromStdString(ent->getName());
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!found) {
+                return makeErrorResult(QString("Error: Mesh '%1' not found").arg(meshName));
             }
         } else {
             // Apply to selected entities
@@ -1209,7 +1258,11 @@ QJsonObject MCPServer::toolCreatePrimitive(const QJsonObject &args)
         return makeErrorResult(QString("Failed to create %1 primitive").arg(type));
     }
 
-    return makeSuccessResult(QString("Created %1 primitive '%2'").arg(type).arg(name));
+    // Return the ACTUAL node name — Manager::addSceneNode may append a number
+    // if the requested name was already taken (e.g. "sphere" → "sphere1").
+    // The AI must use this exact name for subsequent apply_material calls.
+    QString actualName = QString::fromStdString(node->getName());
+    return makeSuccessResult(QString("Created %1 primitive '%2'").arg(type).arg(actualName));
 }
 QJsonObject MCPServer::toolAnimate(const QJsonObject &args)
 {
@@ -2179,6 +2232,259 @@ QJsonObject MCPServer::toolGetLodInfo(const QJsonObject &args)
 
 // Helper methods
 
+QJsonObject MCPServer::toolListFiles(const QJsonObject &args)
+{
+    QString path = args["path"].toString();
+    if (path.isEmpty())
+        path = QDir::homePath();
+
+    QDir dir(path);
+    if (!dir.exists())
+        return makeErrorResult(QString("Error: Directory '%1' does not exist").arg(path));
+
+    QString pattern = args["pattern"].toString();
+    QStringList nameFilters;
+    if (!pattern.isEmpty())
+        nameFilters << pattern;
+
+    QFileInfoList entries = dir.entryInfoList(
+        nameFilters,
+        QDir::AllEntries | QDir::NoDotAndDotDot,
+        QDir::DirsFirst | QDir::Name);
+
+    // Cap at 200 entries to keep response compact
+    const int maxEntries = 200;
+    QStringList lines;
+    lines << QString("Directory: %1").arg(dir.absolutePath());
+    lines << QString("Entries: %1%2").arg(
+        QString::number(qMin(entries.size(), maxEntries)),
+        entries.size() > maxEntries ? QString(" (showing first %1 of %2)").arg(maxEntries).arg(entries.size()) : "");
+    lines << "";
+
+    for (int i = 0; i < qMin(entries.size(), maxEntries); ++i) {
+        const QFileInfo& fi = entries[i];
+        if (fi.isDir()) {
+            lines << QString("[dir]  %1/").arg(fi.fileName());
+        } else {
+            // Human-readable size
+            qint64 sz = fi.size();
+            QString sizeStr;
+            if (sz < 1024)            sizeStr = QString("%1 B").arg(sz);
+            else if (sz < 1024*1024)  sizeStr = QString("%1 KB").arg(sz / 1024);
+            else                      sizeStr = QString("%1 MB").arg(sz / (1024*1024));
+            lines << QString("[file] %1  (%2)").arg(fi.fileName(), sizeStr);
+        }
+    }
+
+    return makeSuccessResult(lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolSearchFiles(const QJsonObject &args)
+{
+    QString startPath = args["path"].toString();
+    if (startPath.isEmpty())
+        startPath = QDir::homePath();
+
+    QString query = args["query"].toString();
+    if (query.isEmpty())
+        return makeErrorResult("Error: 'query' is required (e.g. '*.fbx', 'wood*', 'model.obj')");
+
+    QDir startDir(startPath);
+    if (!startDir.exists())
+        return makeErrorResult(QString("Error: Directory '%1' does not exist").arg(startPath));
+
+    // Recursive search with depth limit
+    int maxDepth = qBound(1, args["max_depth"].toInt(5), 10);
+    int maxResults = 100;
+    QStringList results;
+
+    std::function<void(const QDir&, int)> searchDir = [&](const QDir& dir, int depth) {
+        if (depth > maxDepth || results.size() >= maxResults)
+            return;
+
+        // Match files against the query pattern
+        QFileInfoList files = dir.entryInfoList(
+            QStringList{query}, QDir::Files, QDir::Name);
+        for (const QFileInfo& fi : files) {
+            if (results.size() >= maxResults) break;
+            qint64 sz = fi.size();
+            QString sizeStr;
+            if (sz < 1024)            sizeStr = QString("%1 B").arg(sz);
+            else if (sz < 1024*1024)  sizeStr = QString("%1 KB").arg(sz / 1024);
+            else                      sizeStr = QString("%1 MB").arg(sz / (1024*1024));
+            results << QString("%1  (%2)").arg(fi.absoluteFilePath(), sizeStr);
+        }
+
+        // Recurse into subdirectories
+        QFileInfoList dirs = dir.entryInfoList(
+            QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+        for (const QFileInfo& di : dirs) {
+            if (results.size() >= maxResults) break;
+            searchDir(QDir(di.absoluteFilePath()), depth + 1);
+        }
+    };
+
+    searchDir(startDir, 1);
+
+    if (results.isEmpty())
+        return makeSuccessResult(QString("No files matching '%1' found in %2 (depth %3)")
+            .arg(query, startDir.absolutePath()).arg(maxDepth));
+
+    QStringList lines;
+    lines << QString("Found %1 file(s) matching '%2' in %3:")
+        .arg(results.size()).arg(query, startDir.absolutePath());
+    lines << "";
+    lines += results;
+    if (results.size() >= maxResults)
+        lines << QString("\n(results capped at %1)").arg(maxResults);
+
+    return makeSuccessResult(lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolReadFile(const QJsonObject &args)
+{
+    QString path = args["path"].toString();
+    if (path.isEmpty())
+        return makeErrorResult("Error: 'path' is required");
+
+    QFileInfo fi(path);
+    if (!fi.exists())
+        return makeErrorResult(QString("Error: File '%1' does not exist").arg(path));
+    if (!fi.isFile())
+        return makeErrorResult(QString("Error: '%1' is not a file").arg(path));
+
+    // Reject binary files by extension
+    static const QStringList binaryExts = {
+        "png", "jpg", "jpeg", "bmp", "tga", "gif", "ico", "tif", "tiff",
+        "mesh", "skeleton", "exe", "dll", "dylib", "so", "o", "a",
+        "zip", "gz", "tar", "rar", "7z",
+        "mp3", "wav", "ogg", "mp4", "avi", "mov",
+        "pdf", "doc", "docx", "xls", "ppt"
+    };
+    if (binaryExts.contains(fi.suffix().toLower()))
+        return makeErrorResult(QString("Error: Cannot read binary file '%1'").arg(fi.fileName()));
+
+    // Size limit: 1 MB
+    if (fi.size() > 1024 * 1024)
+        return makeErrorResult(QString("Error: File too large (%1 MB). Max 1 MB.").arg(fi.size() / (1024*1024)));
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return makeErrorResult(QString("Error: Cannot open '%1': %2").arg(path, file.errorString()));
+
+    int maxLines = qBound(1, args["max_lines"].toInt(100), 500);
+    QStringList lines;
+    QTextStream stream(&file);
+    while (!stream.atEnd() && lines.size() < maxLines)
+        lines << stream.readLine();
+
+    bool truncated = !stream.atEnd();
+    QString header = QString("File: %1 (%2 lines%3)\n---\n").arg(
+        fi.fileName(),
+        QString::number(lines.size()),
+        truncated ? ", truncated" : "");
+
+    return makeSuccessResult(header + lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolDeleteEntity(const QJsonObject &args)
+{
+    QString name = args["name"].toString();
+    if (name.isEmpty())
+        return makeErrorResult("Error: 'name' is required — specify the entity/node name to delete.");
+
+    Ogre::SceneNode* node = findSceneNodeByName(name);
+    if (!node)
+        return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
+
+    // Deselect first (same as UI delete flow)
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (sel) {
+        sel->removeOne(node);
+    }
+
+    // Destroy the node properly (same as TransformOperator::removeSelected)
+    Manager::getSingleton()->destroySceneNode(node);
+
+    return makeSuccessResult(QString("Deleted '%1' from the scene.").arg(name));
+}
+
+QJsonObject MCPServer::toolGetCameraInfo(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    auto* top = TransformOperator::getSingleton();
+    OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
+    // Fallback to any viewport if no active widget yet
+    if (!ogreWidget && m_mainWindow)
+        ogreWidget = m_mainWindow->findChild<OgreWidget*>();
+    if (!ogreWidget || !ogreWidget->getSpaceCamera())
+        return makeErrorResult("Error: No active viewport");
+
+    SpaceCamera* cam = ogreWidget->getSpaceCamera();
+    Ogre::Camera* ogreCam = cam->getCamera();
+    if (!ogreCam)
+        return makeErrorResult("Error: No Ogre camera");
+
+    Ogre::Vector3 pos = ogreCam->getDerivedPosition();
+    Ogre::Vector3 dir = ogreCam->getDerivedDirection();
+    Ogre::Quaternion orient = ogreCam->getDerivedOrientation();
+
+    QStringList lines;
+    lines << QString("Camera position: [%1, %2, %3]").arg(pos.x, 0, 'f', 2).arg(pos.y, 0, 'f', 2).arg(pos.z, 0, 'f', 2);
+    lines << QString("Camera direction: [%1, %2, %3]").arg(dir.x, 0, 'f', 3).arg(dir.y, 0, 'f', 3).arg(dir.z, 0, 'f', 3);
+    lines << QString("Camera orientation: [w=%1, x=%2, y=%3, z=%4]")
+        .arg(orient.w, 0, 'f', 3).arg(orient.x, 0, 'f', 3).arg(orient.y, 0, 'f', 3).arg(orient.z, 0, 'f', 3);
+    lines << QString("Near clip: %1  Far clip: %2").arg(ogreCam->getNearClipDistance()).arg(ogreCam->getFarClipDistance());
+
+    return makeSuccessResult(lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolCameraControl(const QJsonObject &args)
+{
+    auto* top = TransformOperator::getSingleton();
+    OgreWidget* ogreWidget = top ? top->getActiveWidget() : nullptr;
+    // Fallback to any viewport if no active widget yet
+    if (!ogreWidget && m_mainWindow)
+        ogreWidget = m_mainWindow->findChild<OgreWidget*>();
+    if (!ogreWidget || !ogreWidget->getSpaceCamera())
+        return makeErrorResult("Error: No active viewport");
+
+    SpaceCamera* cam = ogreWidget->getSpaceCamera();
+    QStringList actions;
+
+    // Frame selection — zoom to fit selected objects
+    if (args.contains("frame_selection") && args["frame_selection"].toBool()) {
+        cam->frameSelection();
+        actions << "Framed selection";
+    }
+
+    // Set camera position
+    if (args.contains("position")) {
+        Ogre::Vector3 pos = parseVector3(args["position"]);
+        cam->setCameraPosition(pos);
+        actions << QString("Position: [%1, %2, %3]").arg(pos.x).arg(pos.y).arg(pos.z);
+    }
+
+    // Set look-at target
+    if (args.contains("target")) {
+        Ogre::Vector3 target = parseVector3(args["target"]);
+        cam->setTargetPosition(target);
+        actions << QString("Target: [%1, %2, %3]").arg(target.x).arg(target.y).arg(target.z);
+    }
+
+    // Zoom by delta
+    if (args.contains("zoom")) {
+        Ogre::Real delta = args["zoom"].toDouble();
+        cam->zoomByDelta(delta);
+        actions << QString("Zoom: %1").arg(delta);
+    }
+
+    if (actions.isEmpty())
+        return makeErrorResult("Error: No camera action specified. Use position, target, zoom, or frame_selection.");
+
+    return makeSuccessResult("Camera updated:\n" + actions.join("\n"));
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -2200,18 +2506,19 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject inputSchema;
         inputSchema["type"] = "object";
         QJsonObject properties;
-        properties["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the material to create"}};
-        properties["script"] = QJsonObject{{"type", "string"}, {"description", "Optional: Full Ogre3D material script"}};
-        QJsonObject colors;
-        colors["type"] = "object";
-        colors["description"] = "Optional: Color values if not providing full script";
-        properties["colors"] = colors;
+        properties["name"]      = QJsonObject{{"type", "string"}, {"description", "Name of the new material"}};
+        properties["script"]    = QJsonObject{{"type", "string"}, {"description", "Optional: full Ogre3D material script (overrides color params)"}};
+        properties["ambient"]   = QJsonObject{{"type", "array"},  {"description", "Ambient color [R, G, B] (0.0-1.0)"}};
+        properties["diffuse"]   = QJsonObject{{"type", "array"},  {"description", "Diffuse color [R, G, B] (0.0-1.0)"}};
+        properties["specular"]  = QJsonObject{{"type", "array"},  {"description", "Specular color [R, G, B] (0.0-1.0)"}};
+        properties["shininess"] = QJsonObject{{"type", "number"}, {"description", "Specular shininess (1-128)"}};
+        properties["emissive"]  = QJsonObject{{"type", "array"},  {"description", "Emissive/glow color [R, G, B] (0.0-1.0)"}};
         inputSchema["properties"] = properties;
         inputSchema["required"] = QJsonArray{"name"};
 
         tools.append(buildToolDefinition(
             "create_material",
-            "Create a new Ogre3D material. Provide either a full Ogre material script via 'script', or set individual colors (ambient, diffuse, specular, emissive) via 'colors'. The material can then be applied to a mesh with apply_material.",
+            "Create a new Ogre3D material with optional colors. Colors are [R,G,B] arrays (0.0-1.0). Apply the result to a mesh with apply_material.",
             inputSchema
         ));
     }
@@ -2318,14 +2625,16 @@ QJsonArray MCPServer::buildToolsList()
         QJsonObject inputSchema;
         inputSchema["type"] = "object";
         QJsonObject properties;
+        properties["name"]     = QJsonObject{{"type", "string"}, {"description", "Name of the scene node to transform (required). Use get_scene_info to find exact names."}};
         properties["position"] = QJsonObject{{"type", "array"}, {"description", "Position [X, Y, Z]"}};
         properties["rotation"] = QJsonObject{{"type", "array"}, {"description", "Rotation in degrees [X, Y, Z]"}};
-        properties["scale"] = QJsonObject{{"type", "array"}, {"description", "Scale [X, Y, Z]"}};
+        properties["scale"]    = QJsonObject{{"type", "array"}, {"description", "Scale [X, Y, Z]"}};
         inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"name"};
 
         tools.append(buildToolDefinition(
             "transform_mesh",
-            "Set the position, rotation, and/or scale of a scene node. Position and scale are [X, Y, Z] arrays. Rotation is in degrees [X, Y, Z]. All parameters are optional — only provided values are applied. Use get_scene_info to find node names.",
+            "Set the position, rotation, and/or scale of a named scene node. 'name' is required — use get_scene_info to find the exact node name. Position and scale are [X, Y, Z] arrays. Rotation is in degrees [X, Y, Z].",
             inputSchema
         ));
     }
@@ -2707,6 +3016,84 @@ QJsonArray MCPServer::buildToolsList()
             "Shows the base mesh (LOD 0) and all reduced LOD levels. "
             "Select a mesh first with load_mesh.",
             QJsonObject()
+        );
+    }
+
+    // delete_entity
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity/node to delete from the scene"}};
+        appendTool(
+            "delete_entity",
+            "Permanently delete an entity/node from the scene. Use get_scene_info to find node names. This cannot be undone.",
+            props,
+            QJsonArray{"name"}
+        );
+    }
+
+    // get_camera_info
+    {
+        appendTool(
+            "get_camera_info",
+            "Get the current camera position, direction, and orientation in the 3D viewport.",
+            QJsonObject()
+        );
+    }
+
+    // camera_control
+    {
+        QJsonObject props;
+        props["position"] = QJsonObject{{"type", "array"}, {"description", "Set camera position [X, Y, Z]"}};
+        props["target"] = QJsonObject{{"type", "array"}, {"description", "Set camera look-at target [X, Y, Z]"}};
+        props["zoom"] = QJsonObject{{"type", "number"}, {"description", "Zoom by delta (positive = zoom in, negative = zoom out)"}};
+        props["frame_selection"] = QJsonObject{{"type", "boolean"}, {"description", "Zoom to fit the currently selected objects in view (set to true)"}};
+        appendTool(
+            "camera_control",
+            "Control the 3D viewport camera. Set position, look-at target, zoom, or frame the selection. "
+            "Multiple actions can be combined in one call.",
+            props
+        );
+    }
+
+    // list_files
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Directory path to list (default: user home directory)"}};
+        props["pattern"] = QJsonObject{{"type", "string"}, {"description", "Glob filter, e.g. '*.fbx' or '*.obj' (default: all files)"}};
+        appendTool(
+            "list_files",
+            "List files and directories at a given path. Use to find mesh files, textures, or other assets on disk. "
+            "Returns file names, sizes, and types (file/dir).",
+            props
+        );
+    }
+
+    // search_files
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Starting directory for search (default: user home)"}};
+        props["query"] = QJsonObject{{"type", "string"}, {"description", "Glob pattern to match file names, e.g. '*.fbx', 'wood*', '*.obj'"}};
+        props["max_depth"] = QJsonObject{{"type", "integer"}, {"description", "Max directory depth to recurse (default: 5, max: 10)"}};
+        appendTool(
+            "search_files",
+            "Recursively search for files matching a glob pattern. Use to find mesh files, textures, or assets "
+            "anywhere within a directory tree. Returns absolute paths with file sizes.",
+            props,
+            QJsonArray{"query"}
+        );
+    }
+
+    // read_file
+    {
+        QJsonObject props;
+        props["path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to the file to read"}};
+        props["max_lines"] = QJsonObject{{"type", "integer"}, {"description", "Maximum lines to read (default: 100, max: 500)"}};
+        appendTool(
+            "read_file",
+            "Read the contents of a text file. Useful for viewing material scripts, config files, or scene descriptions. "
+            "Binary files (images, meshes) will be rejected. Max 500 lines.",
+            props,
+            QJsonArray{"path"}
         );
     }
 

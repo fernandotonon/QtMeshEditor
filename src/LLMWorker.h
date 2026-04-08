@@ -44,7 +44,7 @@ public:
     bool isGenerating() const { return m_isGenerating.load(); }
 
 public slots:
-    void generate(const QString &systemPrompt, const QString &userPrompt);
+    void generate(const QString &systemPrompt, const QString &userPrompt, int maxTokensOverride = 0);
 
 signals:
     void modelLoaded(const QString &modelPath);
@@ -73,6 +73,7 @@ private:
     llama_model *m_model = nullptr;
     llama_context *m_ctx = nullptr;
     const llama_vocab *m_vocab = nullptr;
+    std::vector<llama_token> m_prevTokens; // cached input tokens for KV-prefix reuse
 
     bool initializeContext();
     void cleanupContext();

@@ -57,6 +57,7 @@ BatchExporter.cpp
 MaterialPresetLibrary.cpp
 MeshLodController.cpp
 MeshValidator.cpp
+AIChatManager.cpp
 )
 
 set(HEADER_FILES
@@ -117,6 +118,7 @@ BatchExporter.h
 MaterialPresetLibrary.h
 MeshLodController.h
 MeshValidator.h
+AIChatManager.h
 )
 
 set(TEST_SOURCES "")
