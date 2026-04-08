@@ -148,19 +148,24 @@ void DeleteCommand::redo()
 
 // ---- DuplicateCommand ----
 
-DuplicateCommand::DuplicateCommand(const QList<Ogre::SceneNode*>& clonedNodes,
+DuplicateCommand::DuplicateCommand(const QList<Ogre::SceneNode*>& sourceNodes,
+                                   const QList<Ogre::SceneNode*>& clonedNodes,
                                    QUndoCommand* parent)
     : QUndoCommand("Duplicate", parent), mClonedNodes(clonedNodes), mFirstRedo(true)
 {
+    // Store source node names so we can re-duplicate on redo
+    for (Ogre::SceneNode* src : sourceNodes)
+        mSourceNodeNames << QString::fromStdString(src->getName());
 }
 
 void DuplicateCommand::undo()
 {
-    // Hide cloned nodes (same pattern as DeleteCommand)
+    // Destroy the cloned nodes (same as removeSelected pattern)
     for (Ogre::SceneNode* node : mClonedNodes) {
         if (node)
-            node->setVisible(false, true);
+            Manager::getSingleton()->destroySceneNode(node);
     }
+    mClonedNodes.clear();
     SelectionSet::getSingleton()->clearList();
 }
 
@@ -170,9 +175,18 @@ void DuplicateCommand::redo()
         mFirstRedo = false;
         return;
     }
-    // Show cloned nodes again
-    for (Ogre::SceneNode* node : mClonedNodes) {
-        if (node)
-            node->setVisible(true, true);
+    // Re-duplicate from the source nodes
+    mClonedNodes.clear();
+    for (const QString& name : mSourceNodeNames) {
+        if (!Manager::getSingleton()->hasSceneNode(name)) continue;
+        Ogre::SceneNode* src = Manager::getSingleton()->getSceneMgr()
+            ->getSceneNode(name.toStdString());
+        Ogre::SceneNode* clone = Manager::getSingleton()->duplicateSceneNode(src);
+        if (clone) mClonedNodes.append(clone);
     }
+    // Select the new clones
+    SelectionSet* sel = SelectionSet::getSingleton();
+    sel->clearList();
+    for (Ogre::SceneNode* clone : mClonedNodes)
+        sel->append(clone);
 }

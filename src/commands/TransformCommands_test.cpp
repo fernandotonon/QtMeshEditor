@@ -443,7 +443,7 @@ TEST_F(TransformCommandsTests, DuplicateCommand_Constructor) {
     ASSERT_NE(node, nullptr);
 
     QList<Ogre::SceneNode*> clones = {node};
-    auto* cmd = new DuplicateCommand(clones);
+    auto* cmd = new DuplicateCommand(clones, clones);
     EXPECT_NE(cmd, nullptr);
 
     delete cmd;
@@ -455,7 +455,7 @@ TEST_F(TransformCommandsTests, DuplicateCommand_FirstRedoIsNoop) {
     ASSERT_NE(node, nullptr);
 
     QList<Ogre::SceneNode*> clones = {node};
-    auto* cmd = new DuplicateCommand(clones);
+    auto* cmd = new DuplicateCommand(clones, clones);
 
     // First redo should be a no-op (caller already created the clones)
     cmd->redo();
@@ -478,7 +478,7 @@ TEST_F(TransformCommandsTests, DuplicateCommand_UndoHidesClones) {
     EXPECT_TRUE(entity->getVisible());
 
     QList<Ogre::SceneNode*> clones = {node};
-    auto* cmd = new DuplicateCommand(clones);
+    auto* cmd = new DuplicateCommand(clones, clones);
 
     // First redo (no-op)
     cmd->redo();
@@ -502,7 +502,7 @@ TEST_F(TransformCommandsTests, DuplicateCommand_RedoShowsClones) {
     node->attachObject(entity);
 
     QList<Ogre::SceneNode*> clones = {node};
-    auto* cmd = new DuplicateCommand(clones);
+    auto* cmd = new DuplicateCommand(clones, clones);
 
     // First redo (no-op)
     cmd->redo();
@@ -520,7 +520,7 @@ TEST_F(TransformCommandsTests, DuplicateCommand_RedoShowsClones) {
 
 TEST_F(TransformCommandsTests, DuplicateCommand_EmptyCloneList) {
     QList<Ogre::SceneNode*> clones;
-    auto* cmd = new DuplicateCommand(clones);
+    auto* cmd = new DuplicateCommand(clones, clones);
 
     // Should not crash with empty list
     EXPECT_NO_THROW(cmd->redo());

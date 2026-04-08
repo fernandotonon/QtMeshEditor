@@ -86,17 +86,19 @@ private:
     bool mFirstRedo = true;
 };
 
-// Duplicate scene nodes (hides clones on undo, shows on redo)
+// Duplicate scene nodes (destroys clones on undo, re-duplicates on redo)
 class DuplicateCommand : public QUndoCommand
 {
 public:
-    DuplicateCommand(const QList<Ogre::SceneNode*>& clonedNodes,
+    DuplicateCommand(const QList<Ogre::SceneNode*>& sourceNodes,
+                     const QList<Ogre::SceneNode*>& clonedNodes,
                      QUndoCommand* parent = nullptr);
 
     void undo() override;
     void redo() override;
 
 private:
+    QStringList mSourceNodeNames;
     QList<Ogre::SceneNode*> mClonedNodes;
     bool mFirstRedo = true;
 };

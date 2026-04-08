@@ -682,7 +682,7 @@ void MainWindow::duplicateSelected()
     }
 
     if (!clones.isEmpty()) {
-        UndoManager::getSingleton()->push(new DuplicateCommand(clones));
+        UndoManager::getSingleton()->push(new DuplicateCommand(sources, clones));
 
         // Select the clones instead of the originals
         sel->clearList();
@@ -697,19 +697,24 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 
     switch(event->key()){
     case Qt::Key_Q:
+        SentryReporter::addBreadcrumb("ui.shortcut", "Q — Select mode");
         setTransformState(TransformOperator::TS_SELECT);
        break;
     case Qt::Key_W:
+        SentryReporter::addBreadcrumb("ui.shortcut", "W — Translate mode");
         setTransformState(TransformOperator::TS_TRANSLATE);
        break;
     case Qt::Key_E:
+        SentryReporter::addBreadcrumb("ui.shortcut", "E — Rotate mode");
         setTransformState(TransformOperator::TS_ROTATE);
        break;
     case Qt::Key_R:
+        SentryReporter::addBreadcrumb("ui.shortcut", "R — Scale mode");
         setTransformState(TransformOperator::TS_SCALE);
        break;
     case Qt::Key_F:
     {
+        SentryReporter::addBreadcrumb("ui.shortcut", "F — Frame selection");
         // Frame selection: zoom camera to fit selected objects
         SpaceCamera* cam = nullptr;
         for (auto* vp : mDockWidgetList) {
@@ -724,9 +729,11 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         break;
     }
     case Qt::Key_X:
+        SentryReporter::addBreadcrumb("ui.shortcut", "X — Toggle transform space");
         TransformOperator::getSingleton()->toggleTransformSpace();
        break;
     case Qt::Key_Delete:
+        SentryReporter::addBreadcrumb("ui.shortcut", "Delete — Remove selected");
         TransformOperator::getSingleton()->removeSelected();
        break;
     default:
