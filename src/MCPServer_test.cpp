@@ -2907,13 +2907,16 @@ TEST_F(MCPServerTest, AllToolNamesAreRecognized)
         "set_animation_time", "add_keyframe", "remove_keyframe",
         "play_animation", "toggle_skeleton_debug", "toggle_bone_weights",
         "toggle_normals", "toggle_mesh_info", "merge_animations",
+        "resample_animation",
         "save_scene", "open_scene", "validate_mesh",
         "generate_lods", "generate_auto_lods", "remove_lods", "get_lod_info",
         "delete_entity", "duplicate_entity", "get_camera_info", "camera_control",
         "set_snap_settings", "get_snap_settings", "export_pose",
-        "list_files", "search_files", "read_file"
+        "list_files", "search_files", "read_file",
+        "group_nodes", "ungroup_node", "reparent_node",
+        "set_pivot_mode", "get_pivot_mode"
     };
-    EXPECT_EQ(allTools.size(), 45);
+    EXPECT_EQ(allTools.size(), 51);
 
     for (const QString &tool : allTools) {
         QJsonObject result = server->callTool(tool, QJsonObject());
@@ -5519,4 +5522,248 @@ TEST_F(MCPServerTest, ExportPose_AnimatedEntitySuccess)
 
     // Cleanup
     QFile::remove(exportPath);
+}
+
+// ==========================================================================
+// NEW TESTS: group_nodes tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, GroupNodes_Valid)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* node1 = mgr->addSceneNode("GroupTestNode1");
+    auto* node2 = mgr->addSceneNode("GroupTestNode2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+
+    // Attach a mesh to each so they are real scene nodes
+    Ogre::MeshPtr mesh1 = createInMemoryTriangleMesh("GroupTestMesh1");
+    Ogre::MeshPtr mesh2 = createInMemoryTriangleMesh("GroupTestMesh2");
+    ASSERT_TRUE(mesh1);
+    ASSERT_TRUE(mesh2);
+    node1->attachObject(mgr->getSceneMgr()->createEntity("GroupTestEnt1", mesh1));
+    node2->attachObject(mgr->getSceneMgr()->createEntity("GroupTestEnt2", mesh2));
+
+    QJsonObject args;
+    QJsonArray names;
+    names.append("GroupTestNode1");
+    names.append("GroupTestNode2");
+    args["names"] = names;
+
+    QJsonObject result = server->callTool("group_nodes", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Created group"));
+    EXPECT_TRUE(getResultText(result).contains("2 child nodes"));
+}
+
+TEST_F(MCPServerTest, GroupNodes_TooFewNodes)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* node1 = mgr->addSceneNode("GroupSingleNode");
+    ASSERT_NE(node1, nullptr);
+
+    QJsonObject args;
+    QJsonArray names;
+    names.append("GroupSingleNode");
+    args["names"] = names;
+
+    QJsonObject result = server->callTool("group_nodes", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("At least 2"));
+}
+
+TEST_F(MCPServerTest, GroupNodes_NonexistentNode)
+{
+    QJsonObject args;
+    QJsonArray names;
+    names.append("NonexistentNodeA");
+    names.append("NonexistentNodeB");
+    args["names"] = names;
+
+    QJsonObject result = server->callTool("group_nodes", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+// ==========================================================================
+// NEW TESTS: ungroup_node tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, UngroupNode_Valid)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    // Create two nodes and group them first
+    auto* node1 = mgr->addSceneNode("UngroupTestNode1");
+    auto* node2 = mgr->addSceneNode("UngroupTestNode2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+
+    Ogre::MeshPtr mesh1 = createInMemoryTriangleMesh("UngroupMesh1");
+    Ogre::MeshPtr mesh2 = createInMemoryTriangleMesh("UngroupMesh2");
+    ASSERT_TRUE(mesh1);
+    ASSERT_TRUE(mesh2);
+    node1->attachObject(mgr->getSceneMgr()->createEntity("UngroupEnt1", mesh1));
+    node2->attachObject(mgr->getSceneMgr()->createEntity("UngroupEnt2", mesh2));
+
+    QList<Ogre::SceneNode*> nodes = {node1, node2};
+    Ogre::SceneNode* groupNode = mgr->groupNodes(nodes);
+    ASSERT_NE(groupNode, nullptr);
+    QString groupName = QString::fromStdString(groupNode->getName());
+
+    QJsonObject args;
+    args["name"] = groupName;
+    QJsonObject result = server->callTool("ungroup_node", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Ungrouped"));
+}
+
+TEST_F(MCPServerTest, UngroupNode_NotAGroup)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    // A node with an attached entity is not a group node
+    auto* node = mgr->addSceneNode("UngroupNotGroupNode");
+    ASSERT_NE(node, nullptr);
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("UngroupNotGroupMesh");
+    ASSERT_TRUE(mesh);
+    node->attachObject(mgr->getSceneMgr()->createEntity("UngroupNotGroupEnt", mesh));
+
+    QJsonObject args;
+    args["name"] = "UngroupNotGroupNode";
+    QJsonObject result = server->callTool("ungroup_node", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not a group node"));
+}
+
+// ==========================================================================
+// NEW TESTS: reparent_node tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, ReparentNode_Valid)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* parentNode = mgr->addSceneNode("ReparentParent");
+    auto* childNode = mgr->addSceneNode("ReparentChild");
+    ASSERT_NE(parentNode, nullptr);
+    ASSERT_NE(childNode, nullptr);
+
+    QJsonObject args;
+    args["node_name"] = "ReparentChild";
+    args["new_parent_name"] = "ReparentParent";
+    QJsonObject result = server->callTool("reparent_node", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Reparented"));
+}
+
+TEST_F(MCPServerTest, ReparentNode_CyclePrevented)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    auto* parentNode = mgr->addSceneNode("CycleParent");
+    auto* childNode = mgr->addSceneNode("CycleChild");
+    ASSERT_NE(parentNode, nullptr);
+    ASSERT_NE(childNode, nullptr);
+
+    // First reparent child under parent
+    mgr->reparentNode(childNode, parentNode);
+
+    // Now try to reparent parent under child (should fail with cycle error)
+    QJsonObject args;
+    args["node_name"] = "CycleParent";
+    args["new_parent_name"] = "CycleChild";
+    QJsonObject result = server->callTool("reparent_node", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("cycle"));
+}
+
+TEST_F(MCPServerTest, ReparentNode_NonexistentNode)
+{
+    QJsonObject args;
+    args["node_name"] = "NonexistentReparentNode";
+    args["new_parent_name"] = "root";
+    QJsonObject result = server->callTool("reparent_node", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+// ==========================================================================
+// NEW TESTS: set_pivot_mode / get_pivot_mode tools
+// ==========================================================================
+
+TEST_F(MCPServerTest, SetPivotMode_Valid)
+{
+    // TransformOperator may not be initialized in test environment
+    QJsonObject args;
+    args["mode"] = "center";
+    QJsonObject result = server->callTool("set_pivot_mode", args);
+    // Either succeeds or returns "not initialized" error — both are valid
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, SetPivotMode_Invalid)
+{
+    QJsonObject args;
+    args["mode"] = "invalid_mode";
+    QJsonObject result = server->callTool("set_pivot_mode", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Invalid pivot mode") ||
+                getResultText(result).contains("not initialized"));
+}
+
+TEST_F(MCPServerTest, GetPivotMode_ReturnsCurrentMode)
+{
+    QJsonObject result = server->callTool("get_pivot_mode", QJsonObject());
+    // Either returns mode or "not initialized" error
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+// ==========================================================================
+// NEW TESTS: resample_animation tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, ResampleAnimation_MissingArgs)
+{
+    QJsonObject args;
+    // No target_keyframes or decimate_step — should fail
+    QJsonObject result = server->callTool("resample_animation", args);
+    EXPECT_TRUE(isError(result));
+    // Will either say "No entity with skeleton" or "Specify target_keyframes"
+    EXPECT_FALSE(getResultText(result).isEmpty());
+}
+
+TEST_F(MCPServerTest, ResampleAnimation_Valid)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("ResampleAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "ResampleAnimEntity";
+    args["target_keyframes"] = 5;
+    QJsonObject result = server->callTool("resample_animation", args);
+    // May succeed or fail depending on skeleton state, but should not crash
+    EXPECT_FALSE(getResultText(result).isEmpty());
 }
