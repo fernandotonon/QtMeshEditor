@@ -60,12 +60,8 @@ Column {
             property bool canDrop: false
 
             onEntered: function(drag) {
-                // Get the dragged node name from the drag source
-                var draggedName = ""
-                if (drag.source && drag.source.Drag && drag.source.Drag.mimeData) {
-                    draggedName = drag.source.Drag.mimeData["application/x-qtmesheditor-node"] || ""
-                }
-                if (draggedName && treeNode.isNodeType) {
+                var draggedName = PropertiesPanelController.draggedNodeName || ""
+                if (draggedName && treeNode.isNodeType && draggedName !== treeNode.nodeName) {
                     canDrop = PropertiesPanelController.canReparentNode(draggedName, treeNode.nodeName)
                 } else {
                     canDrop = false
@@ -79,10 +75,7 @@ Column {
             }
             onDropped: function(drop) {
                 dropHighlight.visible = false
-                var draggedName = ""
-                if (drop.source && drop.source.Drag && drop.source.Drag.mimeData) {
-                    draggedName = drop.source.Drag.mimeData["application/x-qtmesheditor-node"] || ""
-                }
+                var draggedName = PropertiesPanelController.draggedNodeName || ""
                 if (draggedName && canDrop) {
                     PropertiesPanelController.reparentNode(draggedName, treeNode.nodeName)
                     drop.accepted = true
@@ -90,6 +83,7 @@ Column {
                     drop.accepted = false
                 }
                 canDrop = false
+                PropertiesPanelController.draggedNodeName = ""
             }
         }
 
@@ -101,6 +95,14 @@ Column {
             drag.target: treeNode.isNodeType ? dragProxy : undefined
             drag.threshold: 10
 
+            onPressed: function(mouse) {
+                // Set the dragged node name so DropAreas can access it
+                if (treeNode.isNodeType)
+                    PropertiesPanelController.draggedNodeName = treeNode.nodeName
+            }
+            onReleased: function(mouse) {
+                PropertiesPanelController.draggedNodeName = ""
+            }
             onClicked: function(mouse) {
                 if (treeModel) {
                     var multiSelect = (mouse.modifiers & Qt.ControlModifier) ||

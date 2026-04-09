@@ -48,6 +48,9 @@ class PropertiesPanelController : public QObject
     // Pivot mode
     Q_PROPERTY(int pivotMode READ pivotMode WRITE setPivotMode NOTIFY pivotModeChanged)
 
+    // Drag-and-drop state for scene tree reparenting
+    Q_PROPERTY(QString draggedNodeName MEMBER m_draggedNodeName NOTIFY draggedNodeNameChanged)
+
     // Undo history
     Q_PROPERTY(QVariantList undoHistory READ undoHistory NOTIFY undoHistoryChanged)
     Q_PROPERTY(int undoIndex READ undoIndex NOTIFY undoHistoryChanged)
@@ -214,6 +217,7 @@ signals:
     void snapGridSizeChanged();
     void snapAngleStepChanged();
     void snapScaleStepChanged();
+    void draggedNodeNameChanged();
 
 private:
     PropertiesPanelController();
@@ -228,6 +232,7 @@ private:
     SceneTreeModel* mSceneTreeModel = nullptr;
     bool mPlaying = false;
     class AnimationWidget* mAnimationWidget = nullptr;
+    QString m_draggedNodeName;
 };
 
 #endif // PROPERTIES_PANEL_CONTROLLER_H

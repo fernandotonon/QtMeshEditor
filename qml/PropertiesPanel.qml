@@ -158,10 +158,7 @@ Rectangle {
                     property bool canDrop: false
 
                     onEntered: function(drag) {
-                        var draggedName = ""
-                        if (drag.source && drag.source.Drag && drag.source.Drag.mimeData) {
-                            draggedName = drag.source.Drag.mimeData["application/x-qtmesheditor-node"] || ""
-                        }
+                        var draggedName = PropertiesPanelController.draggedNodeName || ""
                         if (draggedName) {
                             canDrop = PropertiesPanelController.canReparentNode(draggedName, "root")
                         } else {
@@ -176,10 +173,7 @@ Rectangle {
                     }
                     onDropped: function(drop) {
                         rootDropHighlight.visible = false
-                        var draggedName = ""
-                        if (drop.source && drop.source.Drag && drop.source.Drag.mimeData) {
-                            draggedName = drop.source.Drag.mimeData["application/x-qtmesheditor-node"] || ""
-                        }
+                        var draggedName = PropertiesPanelController.draggedNodeName || ""
                         if (draggedName && canDrop) {
                             PropertiesPanelController.reparentNode(draggedName, "root")
                             drop.accepted = true
@@ -187,6 +181,7 @@ Rectangle {
                             drop.accepted = false
                         }
                         canDrop = false
+                        PropertiesPanelController.draggedNodeName = ""
                     }
                 }
             }
