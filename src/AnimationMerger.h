@@ -24,6 +24,22 @@ public:
                                 const std::string& oldName,
                                 const std::string& newName);
 
+    /// Resample an animation to exactly N evenly-spaced keyframes.
+    /// Uses interpolation to evaluate T/R/S at each sample point, producing
+    /// a smooth curve with a uniform keyframe distribution.
+    /// Returns the number of keyframes removed (negative if keyframes were added).
+    static int resampleAnimation(Ogre::Skeleton* skel,
+                                 const std::string& animName,
+                                 int targetKeyframes);
+
+    /// Decimate an animation by keeping every Nth keyframe (plus always the last).
+    /// This is a lossy reduction that preserves only the original keyframe data
+    /// at the kept indices — no interpolation is performed.
+    /// Returns the number of keyframes removed.
+    static int decimateAnimation(Ogre::Skeleton* skel,
+                                 const std::string& animName,
+                                 int step);
+
     /// Merge animations from sourceEntities into baseEntity's skeleton.
     /// Convenience wrapper; forwards an empty skeleton list to the 4-argument overload.
     static Ogre::Entity* mergeAnimations(

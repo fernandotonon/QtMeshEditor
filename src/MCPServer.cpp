@@ -390,7 +390,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     // Start a performance transaction for heavy tools
     static const QStringList heavyTools = {
         "load_mesh", "export_mesh", "export_pose", "take_screenshot", "create_primitive", "create_material",
-        "merge_animations", "save_scene", "open_scene"
+        "merge_animations", "resample_animation", "save_scene", "open_scene"
     };
     uintptr_t txn = 0;
     if (heavyTools.contains(name)) {
@@ -462,6 +462,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolToggleMeshInfo(args);
     } else if (name == "merge_animations") {
         toolResult = toolMergeAnimations(args);
+    } else if (name == "resample_animation") {
+        toolResult = toolResampleAnimation(args);
     } else if (name == "save_scene") {
         toolResult = toolSaveScene(args);
     } else if (name == "open_scene") {
@@ -496,6 +498,16 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolGetSnapSettings(args);
     } else if (name == "export_pose") {
         toolResult = toolExportPose(args);
+    } else if (name == "group_nodes") {
+        toolResult = toolGroupNodes(args);
+    } else if (name == "ungroup_node") {
+        toolResult = toolUngroupNode(args);
+    } else if (name == "reparent_node") {
+        toolResult = toolReparentNode(args);
+    } else if (name == "set_pivot_mode") {
+        toolResult = toolSetPivotMode(args);
+    } else if (name == "get_pivot_mode") {
+        toolResult = toolGetPivotMode(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -2119,6 +2131,112 @@ QJsonObject MCPServer::toolMergeAnimations(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolResampleAnimation(const QJsonObject &args)
+{
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        // Resolve entity
+        QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+
+        QList<Ogre::Entity*> allEntities = mgr->getEntities();
+        if (!entityName.isEmpty()) {
+            for (auto* ent : allEntities) {
+                if (ent && QString::fromStdString(ent->getName()) == entityName) {
+                    entity = ent;
+                    break;
+                }
+            }
+            if (!entity)
+                return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        } else {
+            // Use first entity with a skeleton
+            for (auto* ent : allEntities) {
+                if (ent && ent->hasSkeleton()) {
+                    entity = ent;
+                    break;
+                }
+            }
+        }
+
+        if (!entity || !entity->hasSkeleton())
+            return makeErrorResult("Error: No entity with skeleton found");
+
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        if (!skel)
+            return makeErrorResult("Error: No skeleton found");
+
+        QString animName = args["animation_name"].toString();
+        int targetKeyframes = args["target_keyframes"].toInt(0);
+        int decimateStep = args["decimate_step"].toInt(0);
+
+        if (targetKeyframes <= 0 && decimateStep <= 0)
+            return makeErrorResult("Error: Specify 'target_keyframes' (>= 2) for resampling or 'decimate_step' (>= 2) for decimation");
+
+        bool isResample = targetKeyframes >= 2;
+
+        if (isResample && targetKeyframes < 2)
+            return makeErrorResult("Error: target_keyframes must be >= 2");
+        if (!isResample && decimateStep < 2)
+            return makeErrorResult("Error: decimate_step must be >= 2");
+
+        // Collect animation names to process
+        std::vector<std::string> animNames;
+        if (!animName.isEmpty()) {
+            if (!skel->hasAnimation(animName.toStdString()))
+                return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+            animNames.push_back(animName.toStdString());
+        } else {
+            for (unsigned short i = 0; i < skel->getNumAnimations(); ++i)
+                animNames.push_back(skel->getAnimation(i)->getName());
+        }
+
+        int totalRemoved = 0;
+        int animsProcessed = 0;
+        for (const auto& name : animNames) {
+            int removed = isResample
+                ? AnimationMerger::resampleAnimation(skel.get(), name, targetKeyframes)
+                : AnimationMerger::decimateAnimation(skel.get(), name, decimateStep);
+            totalRemoved += removed;
+            ++animsProcessed;
+        }
+
+        entity->refreshAvailableAnimationState();
+
+        QString op = isResample ? "Resampled" : "Decimated";
+        QString detail = isResample
+            ? QString("to %1 keyframes").arg(targetKeyframes)
+            : QString("with step %1").arg(decimateStep);
+        QString result = QString("%1 %2 animation(s) %3 (removed %4 keyframes)")
+            .arg(op).arg(animsProcessed).arg(detail).arg(totalRemoved);
+
+        // List resulting animations
+        result += "\n\nAnimations:";
+        for (unsigned short i = 0; i < skel->getNumAnimations(); ++i) {
+            auto* anim = skel->getAnimation(i);
+            int maxKf = 0;
+            for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+                int kfCount = static_cast<int>(track->getNumKeyFrames());
+                if (kfCount > maxKf) maxKf = kfCount;
+            }
+            result += QString("\n  - %1 (%2s, %3 keyframes)")
+                .arg(QString::fromStdString(anim->getName()))
+                .arg(anim->getLength(), 0, 'f', 2)
+                .arg(maxKf);
+        }
+
+        return makeSuccessResult(result);
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
 QJsonObject MCPServer::toolSaveScene(const QJsonObject &args)
 {
     try {
@@ -2719,6 +2837,210 @@ QJsonObject MCPServer::toolExportPose(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolGroupNodes(const QJsonObject &args)
+{
+    try {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        QList<Ogre::SceneNode*> nodes;
+
+        if (args.contains("names")) {
+            QJsonArray names = args["names"].toArray();
+            for (const auto& nameVal : names) {
+                QString name = nameVal.toString();
+                Ogre::SceneNode* node = mgr->getSceneNode(name);
+                if (!node)
+                    return makeErrorResult(QString("Error: Scene node '%1' not found").arg(name));
+                nodes.append(node);
+            }
+        } else {
+            // Use current selection
+            SelectionSet* sel = SelectionSet::getSingleton();
+            if (!sel || sel->getNodesCount() < 2)
+                return makeErrorResult("Error: At least 2 nodes must be selected or specified");
+            nodes = sel->getNodesSelectionList();
+        }
+
+        if (nodes.size() < 2)
+            return makeErrorResult("Error: At least 2 nodes are required to create a group");
+
+        Ogre::SceneNode* groupNode = mgr->groupNodes(nodes);
+        if (!groupNode)
+            return makeErrorResult("Error: Failed to create group node");
+
+        UndoManager::getSingleton()->push(new GroupCommand(nodes));
+
+        return makeSuccessResult(QString("Created group '%1' with %2 child nodes")
+            .arg(QString::fromStdString(groupNode->getName()))
+            .arg(nodes.size()));
+
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error grouping nodes: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolUngroupNode(const QJsonObject &args)
+{
+    try {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        Ogre::SceneNode* groupNode = nullptr;
+
+        if (args.contains("name")) {
+            QString name = args["name"].toString();
+            groupNode = mgr->getSceneNode(name);
+            if (!groupNode)
+                return makeErrorResult(QString("Error: Scene node '%1' not found").arg(name));
+        } else {
+            // Use current selection
+            SelectionSet* sel = SelectionSet::getSingleton();
+            if (!sel || sel->getNodesCount() != 1)
+                return makeErrorResult("Error: Select exactly one group node, or specify a name");
+            groupNode = sel->getSceneNode(0);
+        }
+
+        if (!mgr->isGroupNode(groupNode))
+            return makeErrorResult(QString("Error: '%1' is not a group node (must have children and no attached meshes)")
+                .arg(QString::fromStdString(groupNode->getName())));
+
+        int childCount = static_cast<int>(groupNode->numChildren());
+        QString groupName = QString::fromStdString(groupNode->getName());
+
+        UndoManager::getSingleton()->push(new UngroupCommand(groupNode));
+        mgr->ungroupNode(groupNode);
+
+        return makeSuccessResult(QString("Ungrouped '%1': %2 children moved to parent")
+            .arg(groupName).arg(childCount));
+
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error ungrouping node: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolReparentNode(const QJsonObject &args)
+{
+    try {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        SentryReporter::addBreadcrumb("ai.tool_call", "reparent_node");
+
+        if (!args.contains("node_name"))
+            return makeErrorResult("Error: 'node_name' is required");
+
+        QString nodeName = args["node_name"].toString();
+        QString newParentName = args.value("new_parent_name").toString();
+
+        // Resolve "root" to empty string (root scene node)
+        if (newParentName.toLower() == "root")
+            newParentName = QString();
+
+        auto* sceneMgr = mgr->getSceneMgr();
+        if (!sceneMgr) return makeErrorResult("Error: SceneManager not available");
+
+        Ogre::SceneNode* node = mgr->getSceneNode(nodeName);
+        if (!node)
+            return makeErrorResult(QString("Error: Scene node '%1' not found").arg(nodeName));
+
+        Ogre::SceneNode* newParent = nullptr;
+        if (newParentName.isEmpty()) {
+            newParent = sceneMgr->getRootSceneNode();
+        } else {
+            newParent = mgr->getSceneNode(newParentName);
+            if (!newParent)
+                return makeErrorResult(QString("Error: Target parent node '%1' not found").arg(newParentName));
+        }
+
+        // Validate
+        if (node == newParent)
+            return makeErrorResult("Error: Cannot reparent a node to itself");
+
+        if (Manager::isDescendantOf(newParent, node))
+            return makeErrorResult("Error: Cannot reparent a node into its own subtree (would create a cycle)");
+
+        if (node->getParent() == newParent)
+            return makeErrorResult(QString("Error: Node '%1' is already a child of '%2'")
+                .arg(nodeName, newParentName.isEmpty() ? "root" : newParentName));
+
+        // Capture old state for undo
+        Ogre::SceneNode* oldParent = static_cast<Ogre::SceneNode*>(node->getParent());
+        QString oldParentName = (oldParent && oldParent != sceneMgr->getRootSceneNode())
+            ? QString::fromStdString(oldParent->getName()) : QString();
+        Ogre::Vector3 oldLocalPos = node->getPosition();
+        Ogre::Quaternion oldLocalOrient = node->getOrientation();
+        Ogre::Vector3 oldLocalScale = node->getScale();
+
+        if (!mgr->reparentNode(node, newParent))
+            return makeErrorResult("Error: Reparent operation failed");
+
+        // Capture new local transform
+        Ogre::Vector3 newLocalPos = node->getPosition();
+        Ogre::Quaternion newLocalOrient = node->getOrientation();
+        Ogre::Vector3 newLocalScale = node->getScale();
+
+        QString resolvedNewParentName = (newParent != sceneMgr->getRootSceneNode())
+            ? QString::fromStdString(newParent->getName()) : QString();
+
+        UndoManager::getSingleton()->push(new ReparentCommand(
+            nodeName, oldParentName, resolvedNewParentName,
+            oldLocalPos, oldLocalOrient, oldLocalScale,
+            newLocalPos, newLocalOrient, newLocalScale));
+
+        return makeSuccessResult(QString("Reparented '%1' under '%2' (world transform preserved)")
+            .arg(nodeName, newParentName.isEmpty() ? "root" : newParentName));
+
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error reparenting node: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolSetPivotMode(const QJsonObject &args)
+{
+    auto* top = TransformOperator::getSingleton();
+    if (!top)
+        return makeErrorResult("Error: TransformOperator not initialized");
+
+    QString modeStr = args["mode"].toString().toLower();
+    TransformOperator::PivotMode mode;
+
+    if (modeStr == "center")
+        mode = TransformOperator::PIVOT_CENTER;
+    else if (modeStr == "bottom")
+        mode = TransformOperator::PIVOT_BOTTOM;
+    else if (modeStr == "origin")
+        mode = TransformOperator::PIVOT_ORIGIN;
+    else
+        return makeErrorResult(QString("Error: Invalid pivot mode '%1'. Must be 'center', 'bottom', or 'origin'.").arg(modeStr));
+
+    SentryReporter::addBreadcrumb("ai.tool_call",
+        QString("set_pivot_mode: %1").arg(modeStr));
+
+    top->setPivotMode(mode);
+    return makeSuccessResult(QString("Pivot mode set to '%1'").arg(modeStr));
+}
+
+QJsonObject MCPServer::toolGetPivotMode(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    auto* top = TransformOperator::getSingleton();
+    if (!top)
+        return makeErrorResult("Error: TransformOperator not initialized");
+
+    QString modeStr;
+    switch (top->pivotMode()) {
+    case TransformOperator::PIVOT_CENTER: modeStr = "center"; break;
+    case TransformOperator::PIVOT_BOTTOM: modeStr = "bottom"; break;
+    case TransformOperator::PIVOT_ORIGIN: modeStr = "origin"; break;
+    }
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{{"type", "text"}, {"text", QString("Pivot mode: %1").arg(modeStr)}}};
+    result["mode"] = modeStr;
+    return result;
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -3205,6 +3527,22 @@ QJsonArray MCPServer::buildToolsList()
         );
     }
 
+    // resample_animation
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
+        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to resample. If omitted, all animations are processed."}};
+        props["target_keyframes"] = QJsonObject{{"type", "integer"}, {"description", "Resample to exactly N evenly-spaced keyframes (N >= 2). Mutually exclusive with decimate_step."}};
+        props["decimate_step"] = QJsonObject{{"type", "integer"}, {"description", "Keep every Nth keyframe plus the last (N >= 2). Mutually exclusive with target_keyframes."}};
+        appendTool(
+            "resample_animation",
+            "Resample or decimate animation keyframes. Use target_keyframes for uniform resampling (interpolated) "
+            "or decimate_step to keep every Nth original keyframe. Reduces animation data size while preserving "
+            "bone hierarchy. Use list_skeletal_animations to see the result.",
+            props
+        );
+    }
+
     // save_scene
     {
         QJsonObject props;
@@ -3400,6 +3738,73 @@ QJsonArray MCPServer::buildToolsList()
             "Binary files (images, meshes) will be rejected. Max 500 lines.",
             props,
             QJsonArray{"path"}
+        );
+    }
+
+    // group_nodes
+    {
+        QJsonObject props;
+        props["names"] = QJsonObject{{"type", "array"}, {"description", "Array of scene node names to group. If omitted, groups the current selection."},
+                                      {"items", QJsonObject{{"type", "string"}}}};
+        appendTool(
+            "group_nodes",
+            "Group scene nodes under a new parent node. The group node is positioned at the centroid of the selected nodes. "
+            "Transforming the group transforms all children. Requires at least 2 nodes.",
+            props
+        );
+    }
+
+    // ungroup_node
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the group node to ungroup. If omitted, ungroups the current selection."}};
+        appendTool(
+            "ungroup_node",
+            "Ungroup a group node: move its children to the group's parent and delete the empty group. "
+            "Only works on group nodes (scene nodes with children and no attached meshes).",
+            props
+        );
+    }
+
+    // reparent_node
+    {
+        QJsonObject props;
+        props["node_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the scene node to reparent"}};
+        props["new_parent_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the new parent node, or 'root' for the root scene node. If omitted, reparents to root."}};
+        QJsonArray required;
+        required.append("node_name");
+        appendTool(
+            "reparent_node",
+            "Reparent a scene node under a different parent in the scene hierarchy. "
+            "Preserves the node's world-space transform by recalculating the local transform. "
+            "Prevents invalid operations (reparenting into own subtree). Supports undo.",
+            props,
+            required
+        );
+    }
+
+    // set_pivot_mode
+    {
+        QJsonObject props;
+        props["mode"] = QJsonObject{{"type", "string"}, {"description", "Pivot mode: 'center' (bounding box center), 'bottom' (bottom of bounding box), or 'origin' (scene node position)"},
+                                     {"enum", QJsonArray{"center", "bottom", "origin"}}};
+        QJsonArray required;
+        required.append("mode");
+        appendTool(
+            "set_pivot_mode",
+            "Set the pivot point mode for rotation and scale operations. 'center' uses the bounding box center, "
+            "'bottom' uses the bottom of the bounding box (floor level), 'origin' uses the scene node position.",
+            props,
+            required
+        );
+    }
+
+    // get_pivot_mode
+    {
+        appendTool(
+            "get_pivot_mode",
+            "Get the current pivot point mode. Returns 'center', 'bottom', or 'origin'.",
+            QJsonObject()
         );
     }
 

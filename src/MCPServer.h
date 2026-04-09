@@ -150,6 +150,7 @@ private:
     QJsonObject toolToggleNormals(const QJsonObject &args);
     QJsonObject toolToggleMeshInfo(const QJsonObject &args);
     QJsonObject toolMergeAnimations(const QJsonObject &args);
+    QJsonObject toolResampleAnimation(const QJsonObject &args);
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);
     QJsonObject toolValidateMesh(const QJsonObject &args);
@@ -167,6 +168,11 @@ private:
     QJsonObject toolSetSnapSettings(const QJsonObject &args);
     QJsonObject toolGetSnapSettings(const QJsonObject &args);
     QJsonObject toolExportPose(const QJsonObject &args);
+    QJsonObject toolGroupNodes(const QJsonObject &args);
+    QJsonObject toolUngroupNode(const QJsonObject &args);
+    QJsonObject toolReparentNode(const QJsonObject &args);
+    QJsonObject toolSetPivotMode(const QJsonObject &args);
+    QJsonObject toolGetPivotMode(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

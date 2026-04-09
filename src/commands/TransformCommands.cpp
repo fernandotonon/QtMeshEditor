@@ -192,6 +192,294 @@ void DuplicateCommand::redo()
         sel->append(clone);
 }
 
+// ---- GroupCommand ----
+
+GroupCommand::GroupCommand(const QList<Ogre::SceneNode*>& nodes,
+                           QUndoCommand* parent)
+    : QUndoCommand("Group", parent), mFirstRedo(true)
+{
+    // Compute centroid for group position
+    Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+    for (Ogre::SceneNode* node : nodes)
+        centroid += node->_getDerivedPosition();
+    centroid /= static_cast<Ogre::Real>(nodes.size());
+    mGroupPosition = centroid;
+
+    // Store original parent info for each node
+    for (Ogre::SceneNode* node : nodes)
+    {
+        NodeParentInfo info;
+        info.nodeName = node->getName();
+        Ogre::Node* p = node->getParent();
+        auto* mgr = Manager::getSingleton()->getSceneMgr();
+        info.oldParentName = (p && p != mgr->getRootSceneNode()) ? p->getName() : "";
+        info.oldPosition = node->getPosition();
+        info.oldOrientation = node->getOrientation();
+        info.oldScale = node->getScale();
+        mNodeInfos.append(info);
+    }
+}
+
+void GroupCommand::undo()
+{
+    auto* mgr = Manager::getSingleton();
+    auto* sceneMgr = mgr->getSceneMgr();
+    if (!sceneMgr) return;
+
+    // Find the group node
+    if (!sceneMgr->hasSceneNode(mGroupNodeName)) return;
+    Ogre::SceneNode* groupNode = sceneMgr->getSceneNode(mGroupNodeName);
+
+    // Reparent children back to original parents with original local transforms
+    for (const auto& info : mNodeInfos) {
+        if (!sceneMgr->hasSceneNode(info.nodeName)) continue;
+        Ogre::SceneNode* child = sceneMgr->getSceneNode(info.nodeName);
+
+        groupNode->removeChild(child);
+
+        Ogre::SceneNode* oldParent = info.oldParentName.empty()
+            ? sceneMgr->getRootSceneNode()
+            : sceneMgr->getSceneNode(info.oldParentName);
+        oldParent->addChild(child);
+
+        child->setPosition(info.oldPosition);
+        child->setOrientation(info.oldOrientation);
+        child->setScale(info.oldScale);
+    }
+
+    // Destroy the group node
+    emit mgr->sceneNodeDestroyed(groupNode);
+    mgr->destroyAllAttachedMovableObjects(groupNode);
+    sceneMgr->destroySceneNode(groupNode);
+}
+
+void GroupCommand::redo()
+{
+    if (mFirstRedo) {
+        // First redo is the initial grouping — done by caller (Manager::groupNodes)
+        // We just need to capture the group node name
+        auto* mgr = Manager::getSingleton();
+        QList<Ogre::SceneNode*> nodes;
+        for (const auto& info : mNodeInfos) {
+            if (mgr->getSceneMgr()->hasSceneNode(info.nodeName))
+                nodes.append(mgr->getSceneMgr()->getSceneNode(info.nodeName));
+        }
+        // The group node was created by the caller before pushing this command
+        // Find it by looking for the parent of the first node
+        if (!nodes.isEmpty()) {
+            Ogre::SceneNode* parent = static_cast<Ogre::SceneNode*>(nodes.first()->getParent());
+            if (parent && parent != mgr->getSceneMgr()->getRootSceneNode())
+                mGroupNodeName = parent->getName();
+        }
+        mFirstRedo = false;
+        return;
+    }
+
+    // Re-do: recreate group and reparent
+    auto* mgr = Manager::getSingleton();
+    auto* sceneMgr = mgr->getSceneMgr();
+    if (!sceneMgr) return;
+
+    // Recreate the group node
+    Ogre::SceneNode* groupNode = sceneMgr->getRootSceneNode()->createChildSceneNode(mGroupNodeName);
+    groupNode->setPosition(mGroupPosition);
+
+    for (const auto& info : mNodeInfos) {
+        if (!sceneMgr->hasSceneNode(info.nodeName)) continue;
+        Ogre::SceneNode* child = sceneMgr->getSceneNode(info.nodeName);
+
+        // Save world transform
+        Ogre::Vector3 worldPos = child->_getDerivedPosition();
+        Ogre::Quaternion worldOrient = child->_getDerivedOrientation();
+        Ogre::Vector3 worldScale = child->_getDerivedScale();
+
+        // Reparent
+        Ogre::SceneNode* oldParent = static_cast<Ogre::SceneNode*>(child->getParent());
+        if (oldParent) oldParent->removeChild(child);
+        groupNode->addChild(child);
+
+        // Restore world transform as local transform under group
+        Ogre::Quaternion groupWorldOrient = groupNode->_getDerivedOrientation();
+        Ogre::Vector3 groupWorldScale = groupNode->_getDerivedScale();
+        Ogre::Vector3 groupDerivedPos = groupNode->_getDerivedPosition();
+
+        child->setOrientation(groupWorldOrient.Inverse() * worldOrient);
+        child->setScale(worldScale / groupWorldScale);
+        child->setPosition(groupWorldOrient.Inverse() *
+            ((worldPos - groupDerivedPos) / groupWorldScale));
+    }
+
+    emit mgr->sceneNodeCreated(groupNode);
+    SelectionSet::getSingleton()->selectOne(groupNode);
+}
+
+// ---- UngroupCommand ----
+
+UngroupCommand::UngroupCommand(Ogre::SceneNode* groupNode,
+                                QUndoCommand* parent)
+    : QUndoCommand("Ungroup", parent), mFirstRedo(true)
+{
+    mGroupNodeName = groupNode->getName();
+    mGroupPosition = groupNode->getPosition();
+    mGroupOrientation = groupNode->getOrientation();
+    mGroupScale = groupNode->getScale();
+
+    Ogre::Node* p = groupNode->getParent();
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    mGroupParentName = (p && p != sceneMgr->getRootSceneNode()) ? p->getName() : "";
+
+    // Capture children info (local transforms relative to group)
+    for (auto& child : groupNode->getChildren()) {
+        Ogre::SceneNode* childNode = static_cast<Ogre::SceneNode*>(child);
+        if (Manager::getSingleton()->isForbiddenNodeName(QString::fromStdString(childNode->getName())))
+            continue;
+        ChildInfo ci;
+        ci.childName = childNode->getName();
+        ci.localPosition = childNode->getPosition();
+        ci.localOrientation = childNode->getOrientation();
+        ci.localScale = childNode->getScale();
+        mChildInfos.append(ci);
+    }
+}
+
+void UngroupCommand::undo()
+{
+    // Re-create the group node and reparent children back
+    auto* mgr = Manager::getSingleton();
+    auto* sceneMgr = mgr->getSceneMgr();
+    if (!sceneMgr) return;
+
+    Ogre::SceneNode* parentNode = mGroupParentName.empty()
+        ? sceneMgr->getRootSceneNode()
+        : sceneMgr->getSceneNode(mGroupParentName);
+
+    Ogre::SceneNode* groupNode = parentNode->createChildSceneNode(mGroupNodeName);
+    groupNode->setPosition(mGroupPosition);
+    groupNode->setOrientation(mGroupOrientation);
+    groupNode->setScale(mGroupScale);
+
+    for (const auto& ci : mChildInfos) {
+        if (!sceneMgr->hasSceneNode(ci.childName)) continue;
+        Ogre::SceneNode* child = sceneMgr->getSceneNode(ci.childName);
+
+        Ogre::SceneNode* oldParent = static_cast<Ogre::SceneNode*>(child->getParent());
+        if (oldParent) oldParent->removeChild(child);
+        groupNode->addChild(child);
+
+        // Restore original local transforms relative to group
+        child->setPosition(ci.localPosition);
+        child->setOrientation(ci.localOrientation);
+        child->setScale(ci.localScale);
+    }
+
+    emit mgr->sceneNodeCreated(groupNode);
+    SelectionSet::getSingleton()->selectOne(groupNode);
+}
+
+void UngroupCommand::redo()
+{
+    if (mFirstRedo) {
+        // First redo is the initial ungrouping — done by caller (Manager::ungroupNode)
+        mFirstRedo = false;
+        return;
+    }
+
+    // Re-ungroup
+    auto* mgr = Manager::getSingleton();
+    auto* sceneMgr = mgr->getSceneMgr();
+    if (!sceneMgr || !sceneMgr->hasSceneNode(mGroupNodeName)) return;
+
+    Ogre::SceneNode* groupNode = sceneMgr->getSceneNode(mGroupNodeName);
+    mgr->ungroupNode(groupNode);
+}
+
+// ---- ReparentCommand ----
+
+ReparentCommand::ReparentCommand(const QString& nodeName,
+                                 const QString& oldParentName,
+                                 const QString& newParentName,
+                                 const Ogre::Vector3& oldLocalPos,
+                                 const Ogre::Quaternion& oldLocalOrient,
+                                 const Ogre::Vector3& oldLocalScale,
+                                 const Ogre::Vector3& newLocalPos,
+                                 const Ogre::Quaternion& newLocalOrient,
+                                 const Ogre::Vector3& newLocalScale,
+                                 QUndoCommand* parent)
+    : QUndoCommand("Reparent", parent)
+    , mNodeName(nodeName)
+    , mOldParentName(oldParentName)
+    , mNewParentName(newParentName)
+    , mOldLocalPos(oldLocalPos)
+    , mOldLocalOrient(oldLocalOrient)
+    , mOldLocalScale(oldLocalScale)
+    , mNewLocalPos(newLocalPos)
+    , mNewLocalOrient(newLocalOrient)
+    , mNewLocalScale(newLocalScale)
+{
+}
+
+void ReparentCommand::undo()
+{
+    auto* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr ? mgr->getSceneMgr() : nullptr;
+    if (!sceneMgr) return;
+
+    if (!sceneMgr->hasSceneNode(mNodeName.toStdString())) return;
+    Ogre::SceneNode* node = sceneMgr->getSceneNode(mNodeName.toStdString());
+
+    Ogre::SceneNode* oldParent = mOldParentName.isEmpty()
+        ? sceneMgr->getRootSceneNode()
+        : (sceneMgr->hasSceneNode(mOldParentName.toStdString())
+            ? sceneMgr->getSceneNode(mOldParentName.toStdString())
+            : nullptr);
+    if (!oldParent) return;
+
+    Ogre::SceneNode* currentParent = static_cast<Ogre::SceneNode*>(node->getParent());
+    if (currentParent)
+        currentParent->removeChild(node);
+    oldParent->addChild(node);
+
+    node->setPosition(mOldLocalPos);
+    node->setOrientation(mOldLocalOrient);
+    node->setScale(mOldLocalScale);
+
+    emit mgr->sceneNodeCreated(node);
+}
+
+void ReparentCommand::redo()
+{
+    if (mFirstRedo) {
+        // First redo is the initial reparent — already performed by the caller
+        mFirstRedo = false;
+        return;
+    }
+
+    auto* mgr = Manager::getSingletonPtr();
+    auto* sceneMgr = mgr ? mgr->getSceneMgr() : nullptr;
+    if (!sceneMgr) return;
+
+    if (!sceneMgr->hasSceneNode(mNodeName.toStdString())) return;
+    Ogre::SceneNode* node = sceneMgr->getSceneNode(mNodeName.toStdString());
+
+    Ogre::SceneNode* newParent = mNewParentName.isEmpty()
+        ? sceneMgr->getRootSceneNode()
+        : (sceneMgr->hasSceneNode(mNewParentName.toStdString())
+            ? sceneMgr->getSceneNode(mNewParentName.toStdString())
+            : nullptr);
+    if (!newParent) return;
+
+    Ogre::SceneNode* currentParent = static_cast<Ogre::SceneNode*>(node->getParent());
+    if (currentParent)
+        currentParent->removeChild(node);
+    newParent->addChild(node);
+
+    node->setPosition(mNewLocalPos);
+    node->setOrientation(mNewLocalOrient);
+    node->setScale(mNewLocalScale);
+
+    emit mgr->sceneNodeCreated(node);
+}
+
 // ---- SubMeshTransformCommand ----
 
 SubMeshTransformCommand::SubMeshTransformCommand(Ogre::SubEntity* subEntity,

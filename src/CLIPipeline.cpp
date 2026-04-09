@@ -96,6 +96,10 @@ void CLIPipeline::printUsage()
         "  anim <file> --merge <f1> [f2...] [-o <output>]\n"
         "                                    Merge animations from other files into base\n"
         "                                    (overwrites input if no -o)\n"
+        "  anim <file> --resample N [-o <output>] [--animation <name>]\n"
+        "                                    Resample to exactly N evenly-spaced keyframes\n"
+        "  anim <file> --decimate-step S [-o <output>] [--animation <name>]\n"
+        "                                    Keep every Sth keyframe (plus first and last)\n"
         "  validate <file> [--json]          Validate mesh geometry (exit 1 if errors found)\n"
         "  lod <file> --count N [--reductions r,...] [-o output]\n"
         "                                    Generate N LOD levels; exports <base>_lod1.<ext> etc.\n"
@@ -788,11 +792,17 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     // Parse: anim <file> --list [--json]
     //    or: anim <file> --rename <old> <new> [-o <output>]
     //    or: anim <file> --merge <f1> [f2...] [-o <output>]
-    QString filePath, oldName, newName, outputPath;
+    //    or: anim <file> --resample N [-o <output>] [--animation <name>]
+    //    or: anim <file> --decimate-step S [-o <output>] [--animation <name>]
+    QString filePath, oldName, newName, outputPath, animationFilter;
     bool listMode = false;
     bool renameMode = false;
     bool mergeMode = false;
+    bool resampleMode = false;
+    bool decimateMode = false;
     bool jsonOutput = false;
+    int resampleCount = 0;
+    int decimateStep = 0;
     QStringList mergeFiles;
 
     // Collect positional args (excluding flags)
@@ -817,6 +827,20 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             }
             continue;
         }
+        if (arg == "--resample" && i + 1 < argc) {
+            resampleMode = true;
+            resampleCount = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--decimate-step" && i + 1 < argc) {
+            decimateMode = true;
+            decimateStep = QString(argv[++i]).toInt();
+            continue;
+        }
+        if (arg == "--animation" && i + 1 < argc) {
+            animationFilter = QString(argv[++i]);
+            continue;
+        }
         if ((arg == "-o" || arg == "--output") && i + 1 < argc) {
             outputPath = QString(argv[++i]);
             continue;
@@ -832,15 +856,17 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     filePath = positional[0];
 
-    if (!listMode && !renameMode && !mergeMode) {
-        err() << "Error: Specify --list, --rename <old> <new>, or --merge <files...>." << Qt::endl;
+    if (!listMode && !renameMode && !mergeMode && !resampleMode && !decimateMode) {
+        err() << "Error: Specify --list, --rename, --merge, --resample, or --decimate-step." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --rename <old> <new> [-o <output>]" << Qt::endl;
         err() << "       qtmesh anim <file> --merge <f1> [f2...] [-o <output>]" << Qt::endl;
+        err() << "       qtmesh anim <file> --resample N [-o <output>] [--animation <name>]" << Qt::endl;
+        err() << "       qtmesh anim <file> --decimate-step S [-o <output>] [--animation <name>]" << Qt::endl;
         return 2;
     }
 
-    if ((renameMode || mergeMode) && outputPath.isEmpty()) {
+    if ((renameMode || mergeMode || resampleMode || decimateMode) && outputPath.isEmpty()) {
         outputPath = filePath;  // overwrite in place
     }
 
@@ -852,7 +878,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     if (!initOgreHeadless()) return 1;
 
-    QString animOp = listMode ? "list" : (renameMode ? "rename" : "merge");
+    QString animOp = listMode ? "list" : (renameMode ? "rename" : (resampleMode ? "resample" : (decimateMode ? "decimate" : "merge")));
     SentryReporter::addBreadcrumb("cli.anim", QString("Anim %1 .%2%3")
         .arg(animOp, fi.suffix(), mergeMode ? QString(" files=%1").arg(mergeFiles.size()) : ""));
 
@@ -951,6 +977,112 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         }
 
         cliWrite(QString("Merged %1 files -> %2\n").arg(allEntities.size()).arg(outFi.fileName()));
+        return 0;
+    }
+
+    // Resample mode
+    if (resampleMode) {
+        if (resampleCount < 2) {
+            err() << "Error: --resample requires N >= 2." << Qt::endl;
+            return 2;
+        }
+
+        SentryReporter::addBreadcrumb("cli.anim", QString("Resample N=%1 anim=%2")
+            .arg(resampleCount).arg(animationFilter.isEmpty() ? "(all)" : animationFilter));
+
+        int totalRemoved = 0;
+        int animsProcessed = 0;
+        unsigned short numAnims = skel->getNumAnimations();
+
+        // Collect animation names first (modifying skeleton invalidates iteration)
+        std::vector<std::string> animNames;
+        for (unsigned short i = 0; i < numAnims; ++i)
+            animNames.push_back(skel->getAnimation(i)->getName());
+
+        for (const auto& name : animNames) {
+            if (!animationFilter.isEmpty() && animationFilter.toStdString() != name)
+                continue;
+            int removed = AnimationMerger::resampleAnimation(skel.get(), name, resampleCount);
+            totalRemoved += removed;
+            ++animsProcessed;
+        }
+
+        if (animsProcessed == 0) {
+            err() << "Error: No matching animation found." << Qt::endl;
+            if (!animationFilter.isEmpty()) {
+                err() << "Available animations:" << Qt::endl;
+                for (const auto& name : animNames)
+                    err() << "  " << QString::fromStdString(name) << Qt::endl;
+            }
+            return 1;
+        }
+
+        entity->refreshAvailableAnimationState();
+
+        auto* node = entity->getParentSceneNode();
+        QFileInfo outFi(outputPath);
+        int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), formatForExtension(outputPath));
+        if (result != 0) {
+            SentryReporter::captureMessage(QString("CLI anim: resample export failed (.%1)").arg(outFi.suffix()), "error");
+            err() << "Error: Export failed." << Qt::endl;
+            return 1;
+        }
+
+        cliWrite(QString("Resampled %1 animation(s) to %2 keyframes (removed %3 keyframes)\nOutput: %4\n")
+            .arg(animsProcessed).arg(resampleCount).arg(totalRemoved).arg(outFi.fileName()));
+        return 0;
+    }
+
+    // Decimate mode
+    if (decimateMode) {
+        if (decimateStep < 2) {
+            err() << "Error: --decimate-step requires S >= 2." << Qt::endl;
+            return 2;
+        }
+
+        SentryReporter::addBreadcrumb("cli.anim", QString("Decimate step=%1 anim=%2")
+            .arg(decimateStep).arg(animationFilter.isEmpty() ? "(all)" : animationFilter));
+
+        int totalRemoved = 0;
+        int animsProcessed = 0;
+        unsigned short numAnims = skel->getNumAnimations();
+
+        // Collect animation names first (modifying skeleton invalidates iteration)
+        std::vector<std::string> animNames;
+        for (unsigned short i = 0; i < numAnims; ++i)
+            animNames.push_back(skel->getAnimation(i)->getName());
+
+        for (const auto& name : animNames) {
+            if (!animationFilter.isEmpty() && animationFilter.toStdString() != name)
+                continue;
+            int removed = AnimationMerger::decimateAnimation(skel.get(), name, decimateStep);
+            totalRemoved += removed;
+            ++animsProcessed;
+        }
+
+        if (animsProcessed == 0) {
+            err() << "Error: No matching animation found." << Qt::endl;
+            if (!animationFilter.isEmpty()) {
+                err() << "Available animations:" << Qt::endl;
+                for (const auto& name : animNames)
+                    err() << "  " << QString::fromStdString(name) << Qt::endl;
+            }
+            return 1;
+        }
+
+        entity->refreshAvailableAnimationState();
+
+        auto* node = entity->getParentSceneNode();
+        QFileInfo outFi(outputPath);
+        int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), formatForExtension(outputPath));
+        if (result != 0) {
+            SentryReporter::captureMessage(QString("CLI anim: decimate export failed (.%1)").arg(outFi.suffix()), "error");
+            err() << "Error: Export failed." << Qt::endl;
+            return 1;
+        }
+
+        cliWrite(QString("Decimated %1 animation(s) with step %2 (removed %3 keyframes)\nOutput: %4\n")
+            .arg(animsProcessed).arg(decimateStep).arg(totalRemoved).arg(outFi.fileName()));
         return 0;
     }
 

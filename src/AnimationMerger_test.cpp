@@ -9,6 +9,7 @@
 #include <OgreSkeletonManager.h>
 #include <OgreMeshManager.h>
 #include <OgreHardwareBufferManager.h>
+#include <OgreKeyFrame.h>
 
 class AnimationMergerTest : public ::testing::Test {
 protected:
@@ -383,6 +384,213 @@ TEST_F(AnimationMergerTest, MergeAnimationsNumericSuffixPreserved)
     Ogre::MeshManager::getSingleton().remove(meshBase);
     Ogre::SkeletonManager::getSingleton().remove(skelBase);
     Ogre::SkeletonManager::getSingleton().remove(skelAnim);
+}
+
+TEST_F(AnimationMergerTest, ResampleAnimationBasic)
+{
+    // Create a skeleton with an animation that has 10 keyframes
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "resample_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* bone = skel->createBone("root", 0);
+    auto* bone2 = skel->createBone("spine", 1);
+    bone->addChild(bone2);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("walk", 1.0f);
+
+    // Track for root bone with 10 keyframes (linear translation)
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+    for (int i = 0; i < 10; ++i) {
+        float t = i / 9.0f;
+        auto* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3(t, 0, 0));
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    // Track for spine bone with 10 keyframes
+    auto* track2 = anim->createNodeTrack(1);
+    track2->setAssociatedNode(bone2);
+    for (int i = 0; i < 10; ++i) {
+        float t = i / 9.0f;
+        auto* kf = track2->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3(0, t, 0));
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    // Resample to 5 keyframes
+    int removed = AnimationMerger::resampleAnimation(skel.get(), "walk", 5);
+    EXPECT_EQ(removed, 5); // 10 original - 5 target = 5 removed
+
+    // Verify the animation still exists and has 5 keyframes per track
+    EXPECT_TRUE(skel->hasAnimation("walk"));
+    auto* newAnim = skel->getAnimation("walk");
+    EXPECT_FLOAT_EQ(newAnim->getLength(), 1.0f);
+
+    for (const auto& [handle, newTrack] : newAnim->_getNodeTrackList()) {
+        EXPECT_EQ(newTrack->getNumKeyFrames(), 5u);
+        // First keyframe at t=0
+        EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(0)->getTime(), 0.0f);
+        // Last keyframe at t=1.0
+        EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(4)->getTime(), 1.0f);
+    }
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, ResampleAnimationPreservesInterpolation)
+{
+    // The resampled keyframes should match interpolated values from the original
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "resample_interp_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("move", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+
+    // Create keyframes with known positions: linear from (0,0,0) to (1,0,0)
+    for (int i = 0; i < 11; ++i) {
+        float t = i / 10.0f;
+        auto* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3(t, 0, 0));
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    // Resample to 3 keyframes: t=0, t=0.5, t=1.0
+    AnimationMerger::resampleAnimation(skel.get(), "move", 3);
+
+    auto* newAnim = skel->getAnimation("move");
+    auto& trackList = newAnim->_getNodeTrackList();
+    ASSERT_EQ(trackList.size(), 1u);
+
+    auto* newTrack = trackList.begin()->second;
+    ASSERT_EQ(newTrack->getNumKeyFrames(), 3u);
+
+    // Check midpoint is interpolated correctly
+    auto* midKf = newTrack->getNodeKeyFrame(1);
+    EXPECT_NEAR(midKf->getTranslate().x, 0.5f, 0.01f);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, DecimateAnimationBasic)
+{
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "decimate_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("run", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+
+    // Create 10 keyframes
+    for (int i = 0; i < 10; ++i) {
+        float t = i / 9.0f;
+        auto* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3(static_cast<float>(i), 0, 0));
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    // Decimate with step=3: keep indices 0, 3, 6, 9 (last)
+    int removed = AnimationMerger::decimateAnimation(skel.get(), "run", 3);
+    EXPECT_EQ(removed, 6); // 10 - 4 = 6
+
+    auto* newAnim = skel->getAnimation("run");
+    auto& trackList = newAnim->_getNodeTrackList();
+    ASSERT_EQ(trackList.size(), 1u);
+
+    auto* newTrack = trackList.begin()->second;
+    EXPECT_EQ(newTrack->getNumKeyFrames(), 4u);
+
+    // Verify kept keyframe values (original translate.x was the index)
+    EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(0)->getTranslate().x, 0.0f); // index 0
+    EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(1)->getTranslate().x, 3.0f); // index 3
+    EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(2)->getTranslate().x, 6.0f); // index 6
+    EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(3)->getTranslate().x, 9.0f); // index 9 (last)
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, DecimateAlwaysKeepsLast)
+{
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "decimate_last_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("jump", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+
+    // 7 keyframes: keep 0, 5, 6 (last) with step=5
+    for (int i = 0; i < 7; ++i) {
+        float t = i / 6.0f;
+        auto* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3(static_cast<float>(i), 0, 0));
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    AnimationMerger::decimateAnimation(skel.get(), "jump", 5);
+
+    auto* newTrack = skel->getAnimation("jump")->_getNodeTrackList().begin()->second;
+    EXPECT_EQ(newTrack->getNumKeyFrames(), 3u); // 0, 5, 6(last)
+
+    // Verify last keyframe is preserved
+    auto* lastKf = newTrack->getNodeKeyFrame(newTrack->getNumKeyFrames() - 1);
+    EXPECT_FLOAT_EQ(lastKf->getTranslate().x, 6.0f);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, ResampleNullSkeleton)
+{
+    // Edge case: null skeleton should return 0
+    EXPECT_EQ(AnimationMerger::resampleAnimation(nullptr, "test", 5), 0);
+}
+
+TEST_F(AnimationMergerTest, DecimateNullSkeleton)
+{
+    EXPECT_EQ(AnimationMerger::decimateAnimation(nullptr, "test", 3), 0);
+}
+
+TEST_F(AnimationMergerTest, ResampleMissingAnimation)
+{
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "resample_missing_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    // No animations on this skeleton
+    EXPECT_EQ(AnimationMerger::resampleAnimation(skel.get(), "nonexistent", 5), 0);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, DecimateStepTooSmall)
+{
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "decimate_small_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+    skel->createAnimation("idle", 1.0f);
+
+    // step < 2 should be a no-op
+    EXPECT_EQ(AnimationMerger::decimateAnimation(skel.get(), "idle", 1), 0);
+    EXPECT_EQ(AnimationMerger::decimateAnimation(skel.get(), "idle", 0), 0);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
 }
 
 // Standalone test that doesn't need Ogre initialization

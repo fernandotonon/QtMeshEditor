@@ -14,6 +14,8 @@ Column {
     property bool hasChildren: childCount > 0
     property string nodeName: treeModel ? (treeModel.data(nodeIndex) || "") : ""
     property bool selected: false
+    // Only Node-type items are draggable (not entities/submeshes)
+    property bool isNodeType: treeModel ? (treeModel.data(nodeIndex, 259) === "Node" || treeModel.data(nodeIndex, 259) === "Group") : false
 
     width: parent ? parent.width : 200
 
@@ -31,6 +33,7 @@ Column {
 
     // Row for this node
     Rectangle {
+        id: nodeRow
         width: treeNode.width
         height: 22
         color: treeNode.selected
@@ -38,12 +41,12 @@ Column {
                : (rowMouse.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.15)
                                          : "transparent")
 
-        // Full-row mouse area for selection (behind everything)
+        // Full-row mouse area for selection
         MouseArea {
             id: rowMouse
             anchors.fill: parent
             hoverEnabled: true
-            // acceptedButtons default is Qt.LeftButton
+
             onClicked: function(mouse) {
                 if (treeModel) {
                     var multiSelect = (mouse.modifiers & Qt.ControlModifier) ||
@@ -51,6 +54,7 @@ Column {
                     treeModel.selectItem(nodeIndex.row, treeModel.parent(nodeIndex), multiSelect)
                 }
             }
+
         }
 
         Row {
@@ -58,6 +62,7 @@ Column {
             anchors.left: parent.left
             anchors.leftMargin: 4 + indentLevel * 16
             spacing: 4
+            z: 10  // Above drop areas
 
             // Expand/collapse chevron button
             Item {

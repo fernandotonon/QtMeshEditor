@@ -82,6 +82,13 @@ public:
 
     Ogre::SceneNode*    duplicateSceneNode(Ogre::SceneNode* source);
 
+    Ogre::SceneNode*    groupNodes(const QList<Ogre::SceneNode*>& nodes);
+    void                ungroupNode(Ogre::SceneNode* groupNode);
+    bool                isGroupNode(Ogre::SceneNode* node) const;
+
+    bool                reparentNode(Ogre::SceneNode* node, Ogre::SceneNode* newParent);
+    static bool         isDescendantOf(Ogre::SceneNode* candidate, Ogre::SceneNode* ancestor);
+
     bool                hasSceneNode(const QString &_name);
     QList<Ogre::SceneNode *>&   getSceneNodes();
 

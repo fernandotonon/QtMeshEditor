@@ -91,6 +91,14 @@ Rectangle {
 
                 Component.onCompleted: content = validationComponent
             }
+
+            // ---- Undo History ----
+            CollapsibleSection {
+                title: "Undo History"
+                expanded: false
+
+                Component.onCompleted: content = undoHistoryComponent
+            }
         }
     }
 
@@ -105,6 +113,37 @@ Rectangle {
             property var treeModel: PropertiesPanelController.sceneTreeModel
             property int nodeCount: treeModel ? treeModel.rowCount() : 0
             property bool delegatesActive: true
+
+            // Scene header with reparent button
+            Row {
+                width: outlinerColumn.width
+                height: 22
+                spacing: 4
+
+                Text {
+                    text: "\u25A1 Scene (Root)"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11; font.bold: true
+                    anchors.verticalCenter: parent.verticalCenter
+                    leftPadding: 4
+                }
+
+                Item { width: 1; height: 1; Layout.fillWidth: true }
+
+                // "Move to Root" button — visible when a non-root node is selected
+                Rectangle {
+                    visible: PropertiesPanelController.selectionName !== "" &&
+                             PropertiesPanelController.canReparentNode(PropertiesPanelController.selectionName, "root")
+                    width: toRootText.implicitWidth + 10; height: 18; radius: 3
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: toRootMa.containsMouse ? PropertiesPanelController.highlightColor : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { id: toRootText; anchors.centerIn: parent; text: "\u2191 to Root"; color: PropertiesPanelController.textColor; font.pixelSize: 9 }
+                    MouseArea { id: toRootMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: PropertiesPanelController.reparentNode(PropertiesPanelController.selectionName, "root")
+                    }
+                }
+            }
 
             Repeater {
                 model: outlinerColumn.nodeCount
@@ -200,6 +239,52 @@ Rectangle {
                     onNewValue: function(val) { PropertiesPanelController.scaleY = val } }
                 TransformField { label: "Z"; value: PropertiesPanelController.scaleZ; color: "#4040c0"
                     onNewValue: function(val) { PropertiesPanelController.scaleZ = val } }
+            }
+
+            // Pivot Point
+            Text {
+                text: "Pivot Point (P)"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 4
+            }
+            Row {
+                spacing: 4
+                width: parent.width - 16
+
+                property int activePivot: PropertiesPanelController.pivotMode
+
+                Repeater {
+                    model: [
+                        { label: "Center", mode: 0 },
+                        { label: "Bottom", mode: 1 },
+                        { label: "Origin", mode: 2 }
+                    ]
+                    delegate: Rectangle {
+                        required property var modelData
+                        required property int index
+                        width: (parent.width - 8) / 3
+                        height: 24
+                        radius: 3
+                        color: PropertiesPanelController.pivotMode === modelData.mode
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.inputColor
+                        border.width: 1
+                        border.color: PropertiesPanelController.borderColor
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: PropertiesPanelController.pivotMode = modelData.mode
+                        }
+                    }
+                }
             }
         }
     }
@@ -1251,6 +1336,163 @@ Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    // ---- Undo History Content ----
+    Component {
+        id: undoHistoryComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            spacing: 0
+
+            property var historyEntries: PropertiesPanelController.undoHistory
+            property int currentIndex: PropertiesPanelController.undoIndex
+
+            // Empty state
+            Text {
+                visible: historyEntries.length === 0
+                text: "No undo history"
+                color: Qt.darker(PropertiesPanelController.textColor, 1.4)
+                font.pixelSize: 11
+                font.italic: true
+                padding: 8
+            }
+
+            // "Clean State" entry (index 0 — before any command)
+            Rectangle {
+                visible: historyEntries.length > 0
+                width: parent.width
+                height: 26
+                color: currentIndex === 0 ? PropertiesPanelController.highlightColor
+                                          : historyCleanMouse.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.15)
+                                          : "transparent"
+
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: 8
+                    spacing: 6
+
+                    Text {
+                        text: currentIndex === 0 ? "\u25B6" : ""
+                        color: currentIndex === 0 ? "white" : PropertiesPanelController.textColor
+                        font.pixelSize: 9
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Text {
+                        text: "Initial State"
+                        color: currentIndex === 0 ? "white" : Qt.darker(PropertiesPanelController.textColor, 1.2)
+                        font.pixelSize: 11
+                        font.italic: true
+                    }
+                }
+
+                MouseArea {
+                    id: historyCleanMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: PropertiesPanelController.undoToIndex(0)
+                }
+            }
+
+            // Command entries
+            Repeater {
+                model: historyEntries
+
+                Rectangle {
+                    required property var modelData
+                    required property int index
+
+                    width: parent ? parent.width : 200
+                    height: 26
+                    color: {
+                        var isActive = (index < currentIndex)
+                        var isCurrent = (index === currentIndex - 1)
+                        if (isCurrent) return PropertiesPanelController.highlightColor
+                        if (historyEntryMouse.containsMouse) return Qt.lighter(PropertiesPanelController.panelColor, 1.15)
+                        if (!isActive) return Qt.darker(PropertiesPanelController.panelColor, 1.05)
+                        return "transparent"
+                    }
+
+                    Row {
+                        anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left
+                        anchors.leftMargin: 8
+                        spacing: 6
+
+                        Text {
+                            text: (index === currentIndex - 1) ? "\u25B6" : ""
+                            color: (index === currentIndex - 1) ? "white" : PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        Text {
+                            text: modelData.text || ("Command " + (index + 1))
+                            color: {
+                                var isActive = (index < currentIndex)
+                                var isCurrent = (index === currentIndex - 1)
+                                if (isCurrent) return "white"
+                                if (!isActive) return Qt.darker(PropertiesPanelController.textColor, 1.4)
+                                return PropertiesPanelController.textColor
+                            }
+                            font.pixelSize: 11
+                        }
+                    }
+
+                    MouseArea {
+                        id: historyEntryMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: PropertiesPanelController.undoToIndex(index + 1)
+                    }
+                }
+            }
+
+            // Separator
+            Rectangle {
+                visible: historyEntries.length > 0
+                width: parent.width
+                height: 1
+                color: PropertiesPanelController.borderColor
+            }
+
+            // Clear History button
+            Rectangle {
+                visible: historyEntries.length > 0
+                width: parent.width - 16
+                height: 26
+                anchors.horizontalCenter: parent.horizontalCenter
+                radius: 3
+                color: clearHistoryMouse.pressed ? Qt.darker(PropertiesPanelController.headerColor, 1.2)
+                     : clearHistoryMouse.containsMouse ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
+                     : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                border.width: 1
+
+                Text {
+                    anchors.centerIn: parent
+                    text: "Clear History"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+
+                MouseArea {
+                    id: clearHistoryMouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: PropertiesPanelController.clearUndoHistory()
+                }
+            }
+
+            // Bottom padding
+            Item { width: 1; height: 8 }
         }
     }
 }

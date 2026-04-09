@@ -70,6 +70,8 @@ public:
     Q_INVOKABLE QString materialName(int row, const QModelIndex& parentIndex) const;
     Q_INVOKABLE void setMaterial(int row, const QModelIndex& parentIndex, const QString& materialName);
     Q_INVOKABLE QStringList availableMaterials() const;
+    Q_INVOKABLE bool canReparent(const QString& nodeName, const QString& newParentName) const;
+    Q_INVOKABLE bool reparentNode(const QString& nodeName, const QString& newParentName);
 
 public slots:
     void rebuild();

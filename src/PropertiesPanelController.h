@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QStringList>
 #include <QColor>
+#include <QVariantList>
 #include <QVariantMap>
 #include <QQmlEngine>
 #include "SceneTreeModel.h"
@@ -43,6 +44,16 @@ class PropertiesPanelController : public QObject
     // Animation
     Q_PROPERTY(bool hasAnimations READ hasAnimations NOTIFY selectionChanged)
     Q_PROPERTY(bool playing READ isPlaying WRITE setPlaying NOTIFY playingChanged)
+
+    // Pivot mode
+    Q_PROPERTY(int pivotMode READ pivotMode WRITE setPivotMode NOTIFY pivotModeChanged)
+
+    // Drag-and-drop state for scene tree reparenting
+    Q_PROPERTY(QString draggedNodeName MEMBER m_draggedNodeName NOTIFY draggedNodeNameChanged)
+
+    // Undo history
+    Q_PROPERTY(QVariantList undoHistory READ undoHistory NOTIFY undoHistoryChanged)
+    Q_PROPERTY(int undoIndex READ undoIndex NOTIFY undoHistoryChanged)
 
     // Snap properties
     Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
@@ -103,6 +114,11 @@ public:
     void setScaleY(double v);
     void setScaleZ(double v);
 
+    // Pivot mode accessors/mutators
+    int pivotMode() const;
+    void setPivotMode(int mode);
+    Q_INVOKABLE void cyclePivotMode();
+
     // Snap accessors/mutators
     bool snapEnabled() const;
     double snapGridSize() const;
@@ -155,7 +171,15 @@ public:
     void setPrimUTile(double v);
     void setPrimVTile(double v);
 
+    // Undo history
+    QVariantList undoHistory() const;
+    int undoIndex() const;
+    Q_INVOKABLE void undoToIndex(int index);
+    Q_INVOKABLE void clearUndoHistory();
+
     Q_INVOKABLE void selectNodeByName(const QString& name);
+    Q_INVOKABLE bool canReparentNode(const QString& nodeName, const QString& newParentName);
+    Q_INVOKABLE bool reparentNode(const QString& nodeName, const QString& newParentName);
     void setAnimationWidget(class AnimationWidget* widget) { mAnimationWidget = widget; }
 
     // Animation
@@ -186,11 +210,14 @@ signals:
     void primitiveChanged();
     void playingChanged();
     void animationStateChanged();
+    void pivotModeChanged();
+    void undoHistoryChanged();
     void snapSettingsChanged();
     void snapEnabledChanged();
     void snapGridSizeChanged();
     void snapAngleStepChanged();
     void snapScaleStepChanged();
+    void draggedNodeNameChanged();
 
 private:
     PropertiesPanelController();
@@ -205,6 +232,7 @@ private:
     SceneTreeModel* mSceneTreeModel = nullptr;
     bool mPlaying = false;
     class AnimationWidget* mAnimationWidget = nullptr;
+    QString m_draggedNodeName;
 };
 
 #endif // PROPERTIES_PANEL_CONTROLLER_H

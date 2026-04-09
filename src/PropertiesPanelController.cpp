@@ -6,6 +6,7 @@
 #include "AnimationWidget.h"
 #include "SkeletonTransform.h"
 #include "MeshImporterExporter.h"
+#include "UndoManager.h"
 #include "Manager.h"
 #include "SentryReporter.h"
 #include <QApplication>
@@ -56,6 +57,10 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
         emit transformChanged();
     });
 
+    connect(transformOp, &TransformOperator::pivotModeChanged, this, [this]() {
+        emit pivotModeChanged();
+    });
+
     connect(transformOp, &TransformOperator::snapSettingsChanged, this, [this]() {
         emit snapSettingsChanged();
         emit snapEnabledChanged();
@@ -66,6 +71,12 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
 
     connect(Manager::getSingleton(), &Manager::sceneNodeCreated, this, &PropertiesPanelController::onSceneChanged);
     connect(Manager::getSingleton(), &Manager::sceneNodeDestroyed, this, &PropertiesPanelController::onSceneChanged);
+
+    // Undo history: refresh when the stack changes
+    connect(UndoManager::getSingleton()->stack(), &QUndoStack::indexChanged,
+            this, &PropertiesPanelController::undoHistoryChanged);
+    connect(UndoManager::getSingleton()->stack(), &QUndoStack::cleanChanged,
+            this, [this]() { emit undoHistoryChanged(); });
 
     mSceneTreeModel = new SceneTreeModel(this);
 
@@ -234,6 +245,57 @@ void PropertiesPanelController::selectNodeByName(const QString& name)
         Ogre::SceneNode* node = sceneMgr->getSceneNode(name.toStdString());
         SelectionSet::getSingleton()->selectOne(node);
     }
+}
+
+bool PropertiesPanelController::canReparentNode(const QString& nodeName, const QString& newParentName)
+{
+    if (!mSceneTreeModel) return false;
+    return mSceneTreeModel->canReparent(nodeName, newParentName);
+}
+
+bool PropertiesPanelController::reparentNode(const QString& nodeName, const QString& newParentName)
+{
+    if (!mSceneTreeModel) return false;
+    return mSceneTreeModel->reparentNode(nodeName, newParentName);
+}
+
+// ---- Undo History ----
+
+QVariantList PropertiesPanelController::undoHistory() const
+{
+    QVariantList result;
+    auto* stack = UndoManager::getSingleton()->stack();
+    for (int i = 0; i < stack->count(); ++i)
+    {
+        QVariantMap entry;
+        entry["text"] = stack->text(i);
+        entry["isCurrent"] = (i == stack->index() - 1);
+        result.append(entry);
+    }
+    return result;
+}
+
+int PropertiesPanelController::undoIndex() const
+{
+    return UndoManager::getSingleton()->stack()->index();
+}
+
+void PropertiesPanelController::undoToIndex(int index)
+{
+    auto* stack = UndoManager::getSingleton()->stack();
+    if (index < 0 || index > stack->count()) return;
+
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Undo history jump to index %1").arg(index));
+
+    stack->setIndex(index);
+}
+
+void PropertiesPanelController::clearUndoHistory()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Clear undo history");
+    UndoManager::getSingleton()->clear();
+    emit undoHistoryChanged();
 }
 
 bool PropertiesPanelController::hasPrimitive() const { return getSelectedPrimitive() != nullptr; }
@@ -545,6 +607,28 @@ void PropertiesPanelController::onSceneChanged()
 void PropertiesPanelController::refreshTheme()
 {
     emit themeChanged();
+}
+
+// Pivot mode — delegate to TransformOperator
+int PropertiesPanelController::pivotMode() const
+{
+    return static_cast<int>(TransformOperator::getSingleton()->pivotMode());
+}
+
+void PropertiesPanelController::setPivotMode(int mode)
+{
+    if (mode >= TransformOperator::PIVOT_CENTER && mode <= TransformOperator::PIVOT_ORIGIN)
+    {
+        TransformOperator::getSingleton()->setPivotMode(
+            static_cast<TransformOperator::PivotMode>(mode));
+        emit pivotModeChanged();
+    }
+}
+
+void PropertiesPanelController::cyclePivotMode()
+{
+    TransformOperator::getSingleton()->cyclePivotMode();
+    emit pivotModeChanged();
 }
 
 // Snap settings — delegate to TransformOperator
