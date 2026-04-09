@@ -230,6 +230,9 @@ function App() {
                 >
                   {primaryCtaLabel}
                 </button>
+                <ButtonLink href={links.docs} variant="secondary">
+                  {hero.ctaDocs}
+                </ButtonLink>
                 <ButtonLink href={links.github} variant="secondary">
                   {hero.ctaSecondary}
                 </ButtonLink>
@@ -334,8 +337,8 @@ function App() {
             <a href={links.releases} target="_blank" rel="noreferrer">
               Latest release binaries
             </a>
-            <a href={links.github} target="_blank" rel="noreferrer">
-              Full CLI docs on GitHub
+            <a href={links.docs} target="_blank" rel="noreferrer">
+              Full documentation
             </a>
           </div>
         </Section>

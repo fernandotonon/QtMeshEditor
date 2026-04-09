@@ -1,5 +1,6 @@
 export const links = {
   github: 'https://github.com/fernandotonon/QtMeshEditor',
+  docs: './docs.html',
   releases: 'https://github.com/fernandotonon/QtMeshEditor/releases/latest',
   allReleases: 'https://github.com/fernandotonon/QtMeshEditor/releases',
   issues: 'https://github.com/fernandotonon/QtMeshEditor/issues',
@@ -32,7 +33,8 @@ export const hero = {
   subtitle:
     'QtMeshEditor is a focused GUI + CLI toolkit for indie teams: merge animation clips, convert 40+ formats, inspect skeletons, and automate repeatable asset tasks.',
   ctaPrimary: 'Download Latest',
-  ctaSecondary: 'View on GitHub'
+  ctaSecondary: 'View on GitHub',
+  ctaDocs: 'Documentation'
 };
 
 export const proofPoints = ['Free & open source', 'Windows / macOS / Linux', 'GUI + CLI', '40+ formats'];
@@ -169,7 +171,7 @@ export const trustItems = [
 ];
 
 export const footerLinks = [
-  { label: 'Docs', href: './docs.html' },
+  { label: 'Documentation', href: links.docs },
   { label: 'GitHub', href: links.github },
   { label: 'Releases', href: links.allReleases },
   { label: 'Issues', href: links.issues },
