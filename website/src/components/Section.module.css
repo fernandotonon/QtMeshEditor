@@ -1,0 +1,31 @@
+.section {
+  width: min(1120px, 92vw);
+  margin: 0 auto;
+  padding: 5.25rem 0 0;
+}
+
+.header {
+  margin-bottom: 1.7rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.55rem;
+  color: var(--accent-1);
+  font-size: 0.84rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  font-weight: 700;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(1.7rem, 3vw, 2.45rem);
+  line-height: 1.1;
+  color: var(--text-0);
+}
+
+.subtitle {
+  margin: 0.8rem 0 0;
+  max-width: 68ch;
+  color: var(--text-1);
+}

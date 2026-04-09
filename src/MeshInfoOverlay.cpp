@@ -10,7 +10,7 @@
 #include <QLocale>
 #include <QSet>
 
-MeshInfoOverlay::MeshInfoOverlay(MainWindow* parent)
+MeshInfoOverlay::MeshInfoOverlay(QMainWindow* parent)
     : QObject(parent)
     , mMainWindow(parent)
 {

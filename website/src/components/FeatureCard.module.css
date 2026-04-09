@@ -1,0 +1,34 @@
+.card {
+  border: 1px solid var(--stroke);
+  background: linear-gradient(180deg, rgba(20, 28, 45, 0.95), rgba(14, 19, 31, 0.95));
+  border-radius: 1rem;
+  padding: 1.1rem;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+}
+
+.tag {
+  margin: 0 0 0.55rem;
+  display: inline-flex;
+  border: 1px solid rgba(46, 188, 255, 0.35);
+  background: rgba(46, 188, 255, 0.08);
+  color: var(--accent-1);
+  border-radius: 999px;
+  padding: 0.18rem 0.56rem;
+  font-size: 0.76rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+}
+
+.title {
+  margin: 0;
+  color: var(--text-0);
+  font-size: 1.04rem;
+}
+
+.body {
+  margin: 0.55rem 0 0;
+  color: var(--text-1);
+  font-size: 0.94rem;
+  line-height: 1.45;
+}

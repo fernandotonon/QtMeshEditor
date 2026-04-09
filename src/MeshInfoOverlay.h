@@ -7,14 +7,14 @@
 #include <QPointer>
 #include <Ogre.h>
 
-class MainWindow;
 class OgreWidget;
+class QMainWindow;
 
 class MeshInfoOverlay : public QObject
 {
     Q_OBJECT
 public:
-    explicit MeshInfoOverlay(MainWindow* parent);
+    explicit MeshInfoOverlay(QMainWindow* parent);
     ~MeshInfoOverlay() override;
 
     bool isVisible() const { return mVisible; }
@@ -38,7 +38,7 @@ private:
     void repositionLabel();
     QList<Ogre::Entity*> collectEntities(bool& isSelection) const;
 
-    MainWindow* mMainWindow;
+    QMainWindow* mMainWindow;
     bool mVisible = false;
     QPointer<QLabel> mLabel;                  // top-level transparent overlay window
     QPointer<OgreWidget> mActiveWidget;       // currently focused viewport

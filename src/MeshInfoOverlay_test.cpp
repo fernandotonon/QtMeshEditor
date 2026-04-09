@@ -51,14 +51,6 @@ TEST(MeshInfoOverlayFormat, MixedNullAndNullOnlyList)
 // Lifecycle tests (require Ogre for Manager/SelectionSet singletons)
 // ===========================================================================
 
-// MeshInfoOverlay takes MainWindow* but only uses QObject/QWidget methods
-// on it (installEventFilter, findChildren, QLabel parent).  We use a plain
-// QMainWindow to avoid the heavyweight real MainWindow construction.
-static MainWindow* fakeMainWindow(QMainWindow* w)
-{
-    return reinterpret_cast<MainWindow*>(w);
-}
-
 class MeshInfoOverlayLifecycleTest : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
@@ -76,7 +68,7 @@ protected:
         createStandardOgreMaterials();
 
         window = new QMainWindow();
-        overlay = new MeshInfoOverlay(fakeMainWindow(window));
+        overlay = new MeshInfoOverlay(window);
     }
 
     void TearDown() override {
