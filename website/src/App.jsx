@@ -102,7 +102,7 @@ function App() {
     [detectedPlatform]
   );
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
-  const primaryCtaLabel = recommendedStore ? `Install via ${recommendedStore}` : hero.ctaPrimary;
+  const primaryCtaLabel = recommendedStore ? `Install via ${recommendedStore}` : 'Open Install Portal';
 
   useEffect(() => {
     if (!isInstallPortalOpen || typeof document === 'undefined') {
@@ -322,6 +322,7 @@ function App() {
               <CodePanel title="Fix and optimize" code={pipelineExamples.fix} label="fix" />
               <CodePanel title="Convert formats" code={pipelineExamples.convert} label="convert" />
               <CodePanel title="Merge animations" code={pipelineExamples.merge} label="anim" />
+              <CodePanel title="Docker" code={pipelineExamples.docker} label="docker" />
               <CodePanel title="GitHub Actions" code={pipelineExamples.githubAction} label="ci" />
             </div>
 

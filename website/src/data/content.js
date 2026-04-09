@@ -82,12 +82,12 @@ export const useCases = [
 ];
 
 export const pipelineExamples = {
-  scan: `# Preview workflow (actively evolving)\nqtmesh scan ./assets --fail-on error\nqtmesh scan ./assets --format sarif -o reports/qtmesh.sarif`,
+  scan: `# Preview workflow (actively evolving)\nqtmesh scan ./assets --fail-on error\nqtmesh scan ./assets --sarif reports/qtmesh.sarif --report reports/qtmesh.json`,
   fix: `qtmesh fix model.fbx -o fixed.fbx\nqtmesh fix model.fbx --all -o fixed.fbx`,
   convert: `qtmesh convert model.fbx -o model.glb2\nqtmesh convert model.dae -o model.mesh`,
   merge: `qtmesh anim base.fbx \\\n  --merge walk.fbx run.fbx jump.fbx idle.fbx \\\n  -o merged.fbx`,
   docker: `docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \\\n  ghcr.io/fernandotonon/qtmesh scan ./assets --fail-on error`,
-  githubAction: `- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@master\n  with:\n    command: scan\n    input-file: assets\n    options: --fail-on error`,
+  githubAction: `- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@c56db1ce3f2b29960cc1c9f82f5be98a51594138\n  with:\n    command: scan\n    input-file: assets\n    options: --fail-on error`,
   scanFixConvert: `qtmesh scan ./assets --fail-on error\nqtmesh fix character.fbx --all -o character_fixed.fbx\nqtmesh convert character_fixed.fbx -o character.glb2`
 };
 
