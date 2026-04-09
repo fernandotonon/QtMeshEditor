@@ -134,7 +134,7 @@ export const installOptions = [
   {
     platform: 'Windows',
     method: 'winget',
-    command: 'winget install FernandoTonon.QtMeshEditor'
+    command: 'winget install FernandoTonon.QtMeshEditor --source winget'
   },
   {
     platform: 'macOS',

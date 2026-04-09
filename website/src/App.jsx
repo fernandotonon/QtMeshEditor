@@ -59,15 +59,8 @@ function App() {
     () => installOptions.find((item) => item.platform === detectedPlatform) || null,
     [detectedPlatform]
   );
-  const storeInstallOptions = useMemo(
-    () => installOptions.filter((item) => ['Windows', 'macOS', 'Linux'].includes(item.platform)),
-    []
-  );
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
   const primaryCtaLabel = recommendedStore ? `Install via ${recommendedStore}` : 'Open Install Portal';
-  const orderedStoreOptions = recommendedInstall
-    ? [recommendedInstall, ...storeInstallOptions.filter((item) => item.platform !== recommendedInstall.platform)]
-    : storeInstallOptions;
 
   useEffect(() => {
     if (!isInstallPortalOpen || typeof document === 'undefined') {
@@ -346,7 +339,7 @@ function App() {
                   <h2 id="install-portal-title" className={styles.installPortalTitle}>
                     {recommendedInstall
                       ? `Detected ${recommendedInstall.platform}: install via ${recommendedStore}`
-                      : 'Choose your platform store'}
+                      : 'Could not detect your OS automatically'}
                   </h2>
                 </div>
                 <button
@@ -360,22 +353,23 @@ function App() {
               </div>
 
               <div className={styles.installPortalGrid}>
-                {orderedStoreOptions.map((item) => (
+                {recommendedInstall ? (
                   <article
-                    key={item.platform}
-                    className={`${styles.installPortalCard} ${
-                      recommendedInstall?.platform === item.platform ? styles.installPortalCardRecommended : ''
-                    }`}
+                    className={`${styles.installPortalCard} ${styles.installPortalCardRecommended}`}
                   >
                     <div className={styles.installPortalCardTop}>
-                      <h3>{item.platform}</h3>
-                      <span>{item.method}</span>
+                      <h3>{recommendedInstall.platform}</h3>
+                      <span>{recommendedInstall.method}</span>
                     </div>
                     <pre>
-                      <code>{item.command}</code>
+                      <code>{recommendedInstall.command}</code>
                     </pre>
                   </article>
-                ))}
+                ) : (
+                  <p className={styles.installPortalFallback}>
+                    OS detection is unavailable in this browser. Use the latest release download links below.
+                  </p>
+                )}
               </div>
 
               <div className={styles.installPortalLinks}>

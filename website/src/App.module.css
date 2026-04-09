@@ -258,6 +258,11 @@
   color: #9cdfff;
 }
 
+.installPortalFallback {
+  margin: 0;
+  color: var(--text-1);
+}
+
 .proofRow {
   list-style: none;
   margin: 1.2rem 0 0;
