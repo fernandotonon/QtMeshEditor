@@ -1,6 +1,6 @@
 # qtmesh.yml — 3D asset pipeline linting configuration
 # Copy this file as qtmesh.yml in your project root and customize.
-# See: https://github.com/nickvdp/QtMeshEditor
+# See: https://github.com/fernandotonon/QtMeshEditor
 #
 # The scan command picks up qtmesh.yml (or qtmesh.yaml / qtmesh.json)
 # automatically from the current directory. Override with --config <path>.

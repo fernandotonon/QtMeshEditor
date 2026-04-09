@@ -745,3 +745,70 @@ TEST(ScanConfigTest, LoadConfig_WithScopes)
     EXPECT_TRUE(config.scopes[0].rules.contains("require_skeleton"));
     EXPECT_EQ(config.scopes[1].pathPattern, "props/**");
 }
+
+// ---------------------------------------------------------------------------
+// Regression: empty-asset + name requirement tests
+// ---------------------------------------------------------------------------
+
+TEST(ScanEngineTest, EvaluateRules_RequireAnimNames_NoAnimations)
+{
+    // Asset has NO animations but require_animation_names is set
+    AssetInfo asset;
+    asset.relativePath = "character.fbx";
+    asset.format = "fbx";
+    asset.animationCount = 0;  // no animations
+
+    ScanConfig config = ScanConfig::defaults();
+    config.requireAnimationNames = {"walk", "run"};
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_EQ(findings.size(), 2);
+    for (const auto& f : findings)
+        EXPECT_EQ(f.rule, "require_animation_names");
+}
+
+TEST(ScanEngineTest, EvaluateRules_RequireBoneNames_NoSkeleton)
+{
+    // Asset has NO skeleton but require_bone_names is set
+    AssetInfo asset;
+    asset.relativePath = "prop.fbx";
+    asset.format = "fbx";
+    asset.hasSkeleton = false;
+    asset.boneCount = 0;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.requireBoneNames = {"Hips", "Spine"};
+
+    auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_EQ(findings.size(), 2);
+    for (const auto& f : findings)
+        EXPECT_EQ(f.rule, "require_bone_names");
+}
+
+// ---------------------------------------------------------------------------
+// Overlapping scopes: later scope wins
+// ---------------------------------------------------------------------------
+
+TEST(ScanEngineTest, ScopedRules_OverlappingLastWins)
+{
+    ScanConfig config = ScanConfig::defaults();
+    config.maxVertexCount = 100000;
+
+    ScanScope broad;
+    broad.pathPattern = "characters/**";
+    broad.rules["max_vertex_count"] = 50000;
+    config.scopes.append(broad);
+
+    ScanScope narrow;
+    narrow.pathPattern = "characters/bosses/**";
+    narrow.rules["max_vertex_count"] = 200000;
+    config.scopes.append(narrow);
+
+    // Both scopes match — later scope (bosses) should win
+    ScanConfig effective = config.withScopeOverrides("characters/bosses/dragon.fbx");
+    EXPECT_EQ(effective.maxVertexCount, 200000);
+
+    // Only first scope matches
+    ScanConfig effective2 = config.withScopeOverrides("characters/hero.fbx");
+    EXPECT_EQ(effective2.maxVertexCount, 50000);
+}

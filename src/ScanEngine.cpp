@@ -15,6 +15,8 @@
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
+#include "SentryReporter.h"
+
 #include <algorithm>
 #include <set>
 
@@ -426,7 +428,7 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
     }
 
     // ---- require_animation_names ----
-    if (!config.requireAnimationNames.isEmpty() && asset.animationCount > 0) {
+    if (!config.requireAnimationNames.isEmpty()) {
         for (const auto& required : config.requireAnimationNames) {
             bool found = false;
             for (const auto& name : asset.animationNames) {
@@ -441,7 +443,7 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
     }
 
     // ---- require_bone_names ----
-    if (!config.requireBoneNames.isEmpty() && asset.hasSkeleton) {
+    if (!config.requireBoneNames.isEmpty()) {
         for (const auto& required : config.requireBoneNames) {
             bool found = false;
             for (const auto& name : asset.boneNames) {
@@ -479,14 +481,15 @@ void ScanEngine::applyFixes(const ScanConfig& config, AssetInfo& asset,
 
             if (config.dryRun) {
                 f.message += QString(" [dry-run: would rename to %1]").arg(newName);
-                f.fixed = true;
             } else {
                 if (QFile::rename(oldPath, newPath)) {
+                    SentryReporter::addBreadcrumb("file.export",
+                        QString("Rename: %1 -> %2").arg(QFileInfo(oldPath).fileName(), newName));
                     f.message += QString(" [fixed: renamed to %1]").arg(newName);
                     f.fixed = true;
                     asset.filePath = newPath;
-                    asset.relativePath = QDir(QFileInfo(oldPath).path())
-                                             .relativeFilePath(newPath);
+                    QString relDir = QFileInfo(asset.relativePath).path();
+                    asset.relativePath = (relDir == ".") ? newName : relDir + "/" + newName;
                 } else {
                     f.message += " [fix failed: could not rename file]";
                 }
@@ -518,24 +521,29 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
 
     // Enumerate and inspect all files across all roots
     for (const auto& scanRoot : roots) {
+        SentryReporter::addBreadcrumb("file.import",
+            QString("Scan start: %1").arg(scanRoot));
         QStringList files = enumerateFiles(config, scanRoot);
 
         for (const auto& filePath : files) {
             AssetInfo asset = inspectAsset(filePath, scanRoot);
+            if (asset.loadError)
+                SentryReporter::addBreadcrumb("file.import",
+                    QString("Load error: %1 — %2").arg(asset.relativePath, asset.errorMessage));
             QList<Finding> findings = evaluateRules(asset, config);
 
             // Apply fixes where possible
             applyFixes(config, asset, findings);
 
-            // Tally
+            // Tally — fixed findings don't count toward error/warning totals
             bool hasError = false, hasWarning = false;
             for (const auto& f : findings) {
+                if (f.fixed) { result.fixed++; continue; }
                 switch (f.severity) {
                 case Severity::Error:   result.errors++;   hasError   = true; break;
                 case Severity::Warning: result.warnings++; hasWarning = true; break;
                 case Severity::Info:    result.infos++;    break;
                 }
-                if (f.fixed) result.fixed++;
             }
 
             if (asset.loadError)

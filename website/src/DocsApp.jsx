@@ -597,7 +597,7 @@ scopes:
             <h3 className={s.subsection}>JSON (<Code>--json</Code> or <Code>--report &lt;file&gt;</Code>)</h3>
             <p className={s.para}>Machine-readable output with full asset metadata and findings.</p>
             <CodeBlock>{`{
-  "version": "2.23.0",
+  "version": "2.x.x",
   "summary": {
     "scanned": 5, "passed": 3, "warnings": 1,
     "errors": 2, "fixed": 0, "skipped": 0

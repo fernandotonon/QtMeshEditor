@@ -1643,7 +1643,14 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     // CLI overrides
     if (fix)     config.fixEnabled = true;
     if (dryRun)  config.dryRun = true;
-    if (!failOn.isEmpty()) config.failOn = failOn;
+    if (!failOn.isEmpty()) {
+        failOn = failOn.toLower();
+        if (failOn != "info" && failOn != "warning" && failOn != "error" && failOn != "never") {
+            err() << "Error: --fail-on must be one of: info, warning, error, never" << Qt::endl;
+            return 2;
+        }
+        config.failOn = failOn;
+    }
 
     if (!includeArg.isEmpty()) {
         config.includePatterns.clear();
@@ -1708,8 +1715,12 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (reportPath.isEmpty() && !config.reportOutput.isEmpty()) {
         QFile f(config.reportOutput);
         QDir().mkpath(QFileInfo(config.reportOutput).path());
-        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
-            f.write(ScanEngine::formatJson(result).toUtf8());
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+            if (config.reportFormat == "text")
+                f.write(ScanEngine::formatText(result, config).toUtf8());
+            else
+                f.write(ScanEngine::formatJson(result).toUtf8());
+        }
     }
     if (sarifPath.isEmpty() && !config.sarifOutput.isEmpty()) {
         QFile f(config.sarifOutput);

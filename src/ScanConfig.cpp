@@ -79,6 +79,9 @@ QVariantMap parseSimpleYaml(const QString& content)
     QString subsection;
     QVariantMap subsectionMap;
 
+    // Track subsection insertion order (QVariantMap sorts alphabetically)
+    QStringList subsectionOrder;
+
     // Block list accumulation
     QString listKey;
     QStringList listItems;
@@ -105,6 +108,7 @@ QVariantMap parseSimpleYaml(const QString& content)
         flushList();
         if (!subsection.isEmpty() && !section.isEmpty()) {
             sectionMap[subsection] = QVariant::fromValue(subsectionMap);
+            subsectionOrder.append(subsection);
             subsectionMap.clear();
             subsection.clear();
         }
@@ -113,8 +117,11 @@ QVariantMap parseSimpleYaml(const QString& content)
     auto flushSection = [&]() {
         flushSubsection();
         if (!section.isEmpty()) {
+            if (!subsectionOrder.isEmpty())
+                sectionMap["_order"] = subsectionOrder;
             root[section] = QVariant::fromValue(sectionMap);
             sectionMap.clear();
+            subsectionOrder.clear();
             section.clear();
         }
     };
@@ -350,12 +357,26 @@ ScanConfig ScanConfig::fromVariantMap(const QVariantMap& root)
     }
 
     // scopes section — map of path patterns to rule override maps
+    // Use _order key (if present) to preserve YAML declaration order,
+    // since QVariantMap/QMap sorts keys alphabetically.
     QVariantMap scopesMap = root.value("scopes").toMap();
-    for (auto it = scopesMap.constBegin(); it != scopesMap.constEnd(); ++it) {
-        ScanScope scope;
-        scope.pathPattern = it.key();
-        scope.rules = it.value().toMap();
-        config.scopes.append(scope);
+    QStringList scopeOrder = scopesMap.value("_order").toStringList();
+    if (scopeOrder.isEmpty()) {
+        // Fallback: iterate map keys (alphabetical — JSON or missing _order)
+        for (auto it = scopesMap.constBegin(); it != scopesMap.constEnd(); ++it) {
+            if (it.key() == "_order") continue;
+            ScanScope scope;
+            scope.pathPattern = it.key();
+            scope.rules = it.value().toMap();
+            config.scopes.append(scope);
+        }
+    } else {
+        for (const auto& key : scopeOrder) {
+            ScanScope scope;
+            scope.pathPattern = key;
+            scope.rules = scopesMap.value(key).toMap();
+            config.scopes.append(scope);
+        }
     }
 
     // fix section
