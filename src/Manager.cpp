@@ -272,6 +272,13 @@ Ogre::SceneNode* Manager::duplicateSceneNode(Ogre::SceneNode* source)
     newNode->setOrientation(source->getOrientation());
     newNode->setScale(source->getScale());
 
+    // Copy user object bindings (preserves primitive type, custom data, etc.)
+    const auto& srcBindings = source->getUserObjectBindings();
+    auto& dstBindings = newNode->getUserObjectBindings();
+    // Copy the "default" user any (used by PrimitiveObject::isPrimitive)
+    if (!srcBindings.getUserAny().isEmpty())
+        dstBindings.setUserAny(srcBindings.getUserAny());
+
     // Deep-clone attached entities (each gets its own Mesh copy so
     // skeleton, animations, and materials are fully independent).
     for (unsigned short i = 0; i < source->numAttachedObjects(); ++i) {
@@ -283,7 +290,9 @@ Ogre::SceneNode* Manager::duplicateSceneNode(Ogre::SceneNode* source)
         // Deep-clone mesh AND skeleton so animations are fully independent.
         // Mesh::clone() copies geometry but still references the same Skeleton resource.
         // We must also clone the skeleton and reassign it to the new mesh.
-        QString cloneMeshName = QString::fromStdString(newNode->getName()) + "_mesh";
+        // Use per-entity index to avoid name collisions when a node has multiple entities.
+        QString cloneMeshName = QString::fromStdString(newNode->getName()) + "_mesh" +
+                                (i > 0 ? QString::number(i) : QString());
 
         // Remove stale resources from a previous undo cycle (redo re-creates them)
         if (Ogre::MeshManager::getSingleton().getByName(cloneMeshName.toStdString()))
@@ -293,7 +302,8 @@ Ogre::SceneNode* Manager::duplicateSceneNode(Ogre::SceneNode* source)
 
         if (srcEntity->getMesh()->hasSkeleton()) {
             try {
-                QString cloneSkelName = QString::fromStdString(newNode->getName()) + "_skel";
+                QString cloneSkelName = QString::fromStdString(newNode->getName()) + "_skel" +
+                                       (i > 0 ? QString::number(i) : QString());
 
                 // Remove stale skeleton from a previous undo cycle
                 if (Ogre::SkeletonManager::getSingleton().getByName(cloneSkelName.toStdString()))
