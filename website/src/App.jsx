@@ -1,9 +1,9 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import styles from './App.module.css';
 import ButtonLink from './components/ButtonLink';
 import CodePanel from './components/CodePanel';
 import FeatureCard from './components/FeatureCard';
-import InstallCard from './components/InstallCard';
 import Section from './components/Section';
 import {
   comparisonItems,
@@ -52,71 +52,83 @@ function getStoreLabel(method) {
 }
 
 function App() {
+  const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
   const detectedOs = useMemo(detectVisitorOs, []);
   const detectedPlatform = PLATFORM_BY_OS[detectedOs];
   const recommendedInstall = useMemo(
     () => installOptions.find((item) => item.platform === detectedPlatform) || null,
     [detectedPlatform]
   );
+  const storeInstallOptions = useMemo(
+    () => installOptions.filter((item) => ['Windows', 'macOS', 'Linux'].includes(item.platform)),
+    []
+  );
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
-  const primaryCtaHref = recommendedInstall ? '#install-recommendation' : links.releases;
-  const primaryCtaLabel = recommendedStore ? `Install via ${recommendedStore}` : hero.ctaPrimary;
+  const primaryCtaLabel = recommendedStore ? `Install via ${recommendedStore}` : 'Open Install Portal';
+  const orderedStoreOptions = recommendedInstall
+    ? [recommendedInstall, ...storeInstallOptions.filter((item) => item.platform !== recommendedInstall.platform)]
+    : storeInstallOptions;
+
+  useEffect(() => {
+    if (!isInstallPortalOpen || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape') {
+        setIsInstallPortalOpen(false);
+      }
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', closeOnEscape);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [isInstallPortalOpen]);
 
   return (
-    <div className={styles.page}>
-      <div className={styles.backdrop} aria-hidden="true" />
+    <>
+      <div className={styles.page}>
+        <div className={styles.backdrop} aria-hidden="true" />
 
-      <main className={styles.main}>
-        <header className={`${styles.hero} reveal`}>
-          <div className={styles.heroCopy}>
-            <p className={styles.kicker}>QtMeshEditor</p>
-            <h1 className={styles.heroTitle}>{hero.title}</h1>
-            <p className={styles.heroSubtitle}>{hero.subtitle}</p>
+        <main className={styles.main}>
+          <header className={`${styles.hero} reveal`}>
+            <div className={styles.heroCopy}>
+              <p className={styles.kicker}>QtMeshEditor</p>
+              <h1 className={styles.heroTitle}>{hero.title}</h1>
+              <p className={styles.heroSubtitle}>{hero.subtitle}</p>
 
-            <div className={styles.ctaRow}>
-              <ButtonLink href={primaryCtaHref}>{primaryCtaLabel}</ButtonLink>
-              <ButtonLink href={links.github} variant="secondary">
-                {hero.ctaSecondary}
-              </ButtonLink>
-            </div>
-
-            <div id="install-recommendation" className={styles.installRecommendation} aria-live="polite">
-              <p className={styles.installRecommendationTitle}>
-                {recommendedInstall
-                  ? `Detected ${recommendedInstall.platform}. Recommended store install: ${recommendedStore}.`
-                  : 'Recommended install stores: winget, Homebrew, and snap.'}
-              </p>
-              {recommendedInstall ? (
-                <pre className={styles.installRecommendationCommand}>
-                  <code>{recommendedInstall.command}</code>
-                </pre>
-              ) : (
-                <p className={styles.installRecommendationBody}>
-                  Open the Install section to pick the command for your platform.
-                </p>
-              )}
-              <div className={styles.installRecommendationLinks}>
-                <a href="#install">View all install options</a>
-                <a href={links.releases} target="_blank" rel="noreferrer">
-                  Download file from latest release
-                </a>
+              <div className={styles.ctaRow}>
+                <button
+                  type="button"
+                  className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
+                  onClick={() => setIsInstallPortalOpen(true)}
+                >
+                  {primaryCtaLabel}
+                </button>
+                <ButtonLink href={links.github} variant="secondary">
+                  {hero.ctaSecondary}
+                </ButtonLink>
               </div>
+
+              <ul className={styles.proofRow} aria-label="Product proof points">
+                {proofPoints.map((item) => (
+                  <li key={item} className={styles.proofPill}>
+                    {item}
+                  </li>
+                ))}
+              </ul>
             </div>
 
-            <ul className={styles.proofRow} aria-label="Product proof points">
-              {proofPoints.map((item) => (
-                <li key={item} className={styles.proofPill}>
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <figure className={styles.heroMediaCard}>
-            <img className={styles.heroImage} src={media.mergeDemo.src} alt={media.mergeDemo.alt} />
-            <figcaption className={styles.mediaCaption}>Merge workflow in action</figcaption>
-          </figure>
-        </header>
+            <figure className={styles.heroMediaCard}>
+              <img className={styles.heroImage} src={media.mergeDemo.src} alt={media.mergeDemo.alt} />
+              <figcaption className={styles.mediaCaption}>Merge workflow in action</figcaption>
+            </figure>
+          </header>
 
         <Section
           id="demo"
@@ -239,71 +251,146 @@ function App() {
           </div>
         </Section>
 
-        <Section
-          id="install"
-          eyebrow="Install"
-          title="Install QtMeshEditor your way"
-          subtitle="Store-first installs with winget, Homebrew, and snap. Prefer manual packages? Use the latest release files."
-        >
-          <div className={styles.installGrid}>
-            {installOptions.map((item) => (
-              <InstallCard
-                key={item.platform}
-                platform={item.platform}
-                method={item.method}
-                command={item.command}
-              />
-            ))}
-          </div>
-        </Section>
+          <Section
+            id="install"
+            eyebrow="Install"
+            title="Install QtMeshEditor your way"
+            subtitle="Open the install portal to get store-first commands for your platform."
+          >
+            <div className={styles.installPortalEntry}>
+              <p>
+                Store options include <code>winget</code>, <code>Homebrew</code>, and <code>snap</code>. You can also
+                download binaries directly from the latest release.
+              </p>
+              <div className={styles.installPortalEntryActions}>
+                <button
+                  type="button"
+                  className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
+                  onClick={() => setIsInstallPortalOpen(true)}
+                >
+                  Open Install Portal
+                </button>
+                <a href={links.releases} target="_blank" rel="noreferrer">
+                  Download from latest release
+                </a>
+              </div>
+            </div>
+          </Section>
 
-        <Section
-          id="trust"
-          eyebrow="Open Source Trust"
-          title="Built in public for long-term production use"
-          subtitle="Used by developers around the world for practical 3D asset preparation and pipeline automation."
-        >
-          <div className={styles.trustLead}>
-            <a href="https://github.com/fernandotonon/QtMeshEditor/stargazers" target="_blank" rel="noreferrer">
-              <img
-                className={styles.starBadge}
-                src="https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star"
-                alt="GitHub stars for QtMeshEditor"
-                loading="lazy"
-              />
-            </a>
-            <p className={styles.trustCopy}>Active development since 2012 • MIT license • Community-driven roadmap</p>
-          </div>
-
-          <div className={styles.trustGrid}>
-            {trustItems.map((item) => (
-              <FeatureCard key={item.title} title={item.title} body={item.body} />
-            ))}
-          </div>
-
-          <nav className={styles.communityLinks} aria-label="Community links">
-            {footerLinks.map((item) => (
-              <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
-                {item.label}
+          <Section
+            id="trust"
+            eyebrow="Open Source Trust"
+            title="Built in public for long-term production use"
+            subtitle="Used by developers around the world for practical 3D asset preparation and pipeline automation."
+          >
+            <div className={styles.trustLead}>
+              <a href="https://github.com/fernandotonon/QtMeshEditor/stargazers" target="_blank" rel="noreferrer">
+                <img
+                  className={styles.starBadge}
+                  src="https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star"
+                  alt="GitHub stars for QtMeshEditor"
+                  loading="lazy"
+                />
               </a>
-            ))}
-          </nav>
-        </Section>
-      </main>
+              <p className={styles.trustCopy}>Active development since 2012 • MIT license • Community-driven roadmap</p>
+            </div>
 
-      <footer className={styles.footer}>
-        <div className={styles.footerInner}>
-          <p>QtMeshEditor</p>
-          <div className={styles.footerLinks}>
-            {footerLinks.map((item) => (
-              <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
-                {item.label}
-              </a>
-            ))}
+            <div className={styles.trustGrid}>
+              {trustItems.map((item) => (
+                <FeatureCard key={item.title} title={item.title} body={item.body} />
+              ))}
+            </div>
+
+            <nav className={styles.communityLinks} aria-label="Community links">
+              {footerLinks.map((item) => (
+                <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
+                  {item.label}
+                </a>
+              ))}
+            </nav>
+          </Section>
+        </main>
+
+        <footer className={styles.footer}>
+          <div className={styles.footerInner}>
+            <p>QtMeshEditor</p>
+            <div className={styles.footerLinks}>
+              {footerLinks.map((item) => (
+                <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
+                  {item.label}
+                </a>
+              ))}
+            </div>
           </div>
-        </div>
-      </footer>
-    </div>
+        </footer>
+      </div>
+
+      {isInstallPortalOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className={styles.installPortalBackdrop}
+            onClick={() => setIsInstallPortalOpen(false)}
+            role="presentation"
+          >
+            <div
+              className={styles.installPortalDialog}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="install-portal-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className={styles.installPortalHeader}>
+                <div>
+                  <p className={styles.installPortalEyebrow}>Install Portal</p>
+                  <h2 id="install-portal-title" className={styles.installPortalTitle}>
+                    {recommendedInstall
+                      ? `Detected ${recommendedInstall.platform}: install via ${recommendedStore}`
+                      : 'Choose your platform store'}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  className={styles.installPortalClose}
+                  onClick={() => setIsInstallPortalOpen(false)}
+                  aria-label="Close install portal"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className={styles.installPortalGrid}>
+                {orderedStoreOptions.map((item) => (
+                  <article
+                    key={item.platform}
+                    className={`${styles.installPortalCard} ${
+                      recommendedInstall?.platform === item.platform ? styles.installPortalCardRecommended : ''
+                    }`}
+                  >
+                    <div className={styles.installPortalCardTop}>
+                      <h3>{item.platform}</h3>
+                      <span>{item.method}</span>
+                    </div>
+                    <pre>
+                      <code>{item.command}</code>
+                    </pre>
+                  </article>
+                ))}
+              </div>
+
+              <div className={styles.installPortalLinks}>
+                <a href={links.releases} target="_blank" rel="noreferrer">
+                  Download file from latest release
+                </a>
+                <a href={links.allReleases} target="_blank" rel="noreferrer">
+                  Browse all releases
+                </a>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 
