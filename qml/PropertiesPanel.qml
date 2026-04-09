@@ -114,6 +114,83 @@ Rectangle {
             property int nodeCount: treeModel ? treeModel.rowCount() : 0
             property bool delegatesActive: true
 
+            // Root drop zone — drop here to reparent to root scene node
+            Rectangle {
+                width: outlinerColumn.width
+                height: 22
+                color: rootDropHighlight.visible
+                       ? Qt.lighter(PropertiesPanelController.highlightColor, 1.3)
+                       : Qt.darker(PropertiesPanelController.panelColor, 1.05)
+
+                Rectangle {
+                    id: rootDropHighlight
+                    anchors.fill: parent
+                    color: PropertiesPanelController.highlightColor
+                    opacity: 0.25
+                    visible: false
+                }
+
+                Row {
+                    anchors.verticalCenter: parent.verticalCenter
+                    anchors.left: parent.left
+                    anchors.leftMargin: 4
+                    spacing: 4
+
+                    Text {
+                        text: "\u25A1"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: "Scene (Root)"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        font.bold: true
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                DropArea {
+                    anchors.fill: parent
+                    keys: ["application/x-qtmesheditor-node"]
+
+                    property bool canDrop: false
+
+                    onEntered: function(drag) {
+                        var draggedName = ""
+                        if (drag.source && drag.source.Drag && drag.source.Drag.mimeData) {
+                            draggedName = drag.source.Drag.mimeData["application/x-qtmesheditor-node"] || ""
+                        }
+                        if (draggedName) {
+                            canDrop = PropertiesPanelController.canReparentNode(draggedName, "root")
+                        } else {
+                            canDrop = false
+                        }
+                        rootDropHighlight.visible = canDrop
+                        drag.accepted = canDrop
+                    }
+                    onExited: {
+                        rootDropHighlight.visible = false
+                        canDrop = false
+                    }
+                    onDropped: function(drop) {
+                        rootDropHighlight.visible = false
+                        var draggedName = ""
+                        if (drop.source && drop.source.Drag && drop.source.Drag.mimeData) {
+                            draggedName = drop.source.Drag.mimeData["application/x-qtmesheditor-node"] || ""
+                        }
+                        if (draggedName && canDrop) {
+                            PropertiesPanelController.reparentNode(draggedName, "root")
+                            drop.accepted = true
+                        } else {
+                            drop.accepted = false
+                        }
+                        canDrop = false
+                    }
+                }
+            }
+
             Repeater {
                 model: outlinerColumn.nodeCount
 

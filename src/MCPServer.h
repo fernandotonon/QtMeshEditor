@@ -170,6 +170,7 @@ private:
     QJsonObject toolExportPose(const QJsonObject &args);
     QJsonObject toolGroupNodes(const QJsonObject &args);
     QJsonObject toolUngroupNode(const QJsonObject &args);
+    QJsonObject toolReparentNode(const QJsonObject &args);
     QJsonObject toolSetPivotMode(const QJsonObject &args);
     QJsonObject toolGetPivotMode(const QJsonObject &args);
 

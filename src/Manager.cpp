@@ -517,6 +517,64 @@ bool Manager::isGroupNode(Ogre::SceneNode* node) const
     return node->numAttachedObjects() == 0 && node->numChildren() > 0;
 }
 
+bool Manager::isDescendantOf(Ogre::SceneNode* candidate, Ogre::SceneNode* ancestor)
+{
+    if (!candidate || !ancestor) return false;
+    Ogre::Node* current = candidate->getParent();
+    while (current) {
+        if (current == ancestor) return true;
+        current = current->getParent();
+    }
+    return false;
+}
+
+bool Manager::reparentNode(Ogre::SceneNode* node, Ogre::SceneNode* newParent)
+{
+    if (!node || !newParent || !mSceneMgr) return false;
+
+    // Prevent reparenting to self
+    if (node == newParent) return false;
+
+    // Prevent cycles: newParent must not be a descendant of node
+    if (isDescendantOf(newParent, node)) return false;
+
+    // Already a child of newParent — nothing to do
+    if (node->getParent() == newParent) return false;
+
+    SentryReporter::addBreadcrumb("scene",
+        QString("Reparent '%1' under '%2'")
+            .arg(QString::fromStdString(node->getName()))
+            .arg(QString::fromStdString(newParent->getName())));
+
+    // Save world transform before reparenting
+    node->_update(true, true);
+    Ogre::Vector3 worldPos = node->_getDerivedPosition();
+    Ogre::Quaternion worldOrient = node->_getDerivedOrientation();
+    Ogre::Vector3 worldScale = node->_getDerivedScale();
+
+    // Reparent
+    Ogre::SceneNode* oldParent = static_cast<Ogre::SceneNode*>(node->getParent());
+    if (oldParent)
+        oldParent->removeChild(node);
+    newParent->addChild(node);
+
+    // Restore world transform as new local transform relative to newParent
+    newParent->_update(true, true);
+    Ogre::Quaternion parentWorldOrient = newParent->_getDerivedOrientation();
+    Ogre::Vector3 parentWorldScale = newParent->_getDerivedScale();
+    Ogre::Vector3 parentDerivedPos = newParent->_getDerivedPosition();
+
+    node->setOrientation(parentWorldOrient.Inverse() * worldOrient);
+    node->setScale(worldScale / parentWorldScale);
+    node->setPosition(parentWorldOrient.Inverse() *
+        ((worldPos - parentDerivedPos) / parentWorldScale));
+
+    // Trigger scene tree rebuild
+    emit sceneNodeCreated(node);
+
+    return true;
+}
+
 void Manager::destroySceneNode(const QString & name)
 {
     SentryReporter::addBreadcrumb("scene", "Destroy scene node");

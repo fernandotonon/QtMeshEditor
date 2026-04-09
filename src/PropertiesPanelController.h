@@ -175,6 +175,8 @@ public:
     Q_INVOKABLE void clearUndoHistory();
 
     Q_INVOKABLE void selectNodeByName(const QString& name);
+    Q_INVOKABLE bool canReparentNode(const QString& nodeName, const QString& newParentName);
+    Q_INVOKABLE bool reparentNode(const QString& nodeName, const QString& newParentName);
     void setAnimationWidget(class AnimationWidget* widget) { mAnimationWidget = widget; }
 
     // Animation

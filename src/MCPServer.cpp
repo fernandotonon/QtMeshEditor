@@ -502,6 +502,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolGroupNodes(args);
     } else if (name == "ungroup_node") {
         toolResult = toolUngroupNode(args);
+    } else if (name == "reparent_node") {
+        toolResult = toolReparentNode(args);
     } else if (name == "set_pivot_mode") {
         toolResult = toolSetPivotMode(args);
     } else if (name == "get_pivot_mode") {
@@ -2917,6 +2919,83 @@ QJsonObject MCPServer::toolUngroupNode(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolReparentNode(const QJsonObject &args)
+{
+    try {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        SentryReporter::addBreadcrumb("ai.tool_call", "reparent_node");
+
+        if (!args.contains("node_name"))
+            return makeErrorResult("Error: 'node_name' is required");
+
+        QString nodeName = args["node_name"].toString();
+        QString newParentName = args.value("new_parent_name").toString();
+
+        // Resolve "root" to empty string (root scene node)
+        if (newParentName.toLower() == "root")
+            newParentName = QString();
+
+        auto* sceneMgr = mgr->getSceneMgr();
+        if (!sceneMgr) return makeErrorResult("Error: SceneManager not available");
+
+        Ogre::SceneNode* node = mgr->getSceneNode(nodeName);
+        if (!node)
+            return makeErrorResult(QString("Error: Scene node '%1' not found").arg(nodeName));
+
+        Ogre::SceneNode* newParent = nullptr;
+        if (newParentName.isEmpty()) {
+            newParent = sceneMgr->getRootSceneNode();
+        } else {
+            newParent = mgr->getSceneNode(newParentName);
+            if (!newParent)
+                return makeErrorResult(QString("Error: Target parent node '%1' not found").arg(newParentName));
+        }
+
+        // Validate
+        if (node == newParent)
+            return makeErrorResult("Error: Cannot reparent a node to itself");
+
+        if (Manager::isDescendantOf(newParent, node))
+            return makeErrorResult("Error: Cannot reparent a node into its own subtree (would create a cycle)");
+
+        if (node->getParent() == newParent)
+            return makeErrorResult(QString("Error: Node '%1' is already a child of '%2'")
+                .arg(nodeName, newParentName.isEmpty() ? "root" : newParentName));
+
+        // Capture old state for undo
+        Ogre::SceneNode* oldParent = static_cast<Ogre::SceneNode*>(node->getParent());
+        QString oldParentName = (oldParent && oldParent != sceneMgr->getRootSceneNode())
+            ? QString::fromStdString(oldParent->getName()) : QString();
+        Ogre::Vector3 oldLocalPos = node->getPosition();
+        Ogre::Quaternion oldLocalOrient = node->getOrientation();
+        Ogre::Vector3 oldLocalScale = node->getScale();
+
+        if (!mgr->reparentNode(node, newParent))
+            return makeErrorResult("Error: Reparent operation failed");
+
+        // Capture new local transform
+        Ogre::Vector3 newLocalPos = node->getPosition();
+        Ogre::Quaternion newLocalOrient = node->getOrientation();
+        Ogre::Vector3 newLocalScale = node->getScale();
+
+        QString resolvedNewParentName = (newParent != sceneMgr->getRootSceneNode())
+            ? QString::fromStdString(newParent->getName()) : QString();
+
+        UndoManager::getSingleton()->push(new ReparentCommand(
+            nodeName, oldParentName, resolvedNewParentName,
+            oldLocalPos, oldLocalOrient, oldLocalScale,
+            newLocalPos, newLocalOrient, newLocalScale));
+
+        return makeSuccessResult(QString("Reparented '%1' under '%2' (world transform preserved)")
+            .arg(nodeName, newParentName.isEmpty() ? "root" : newParentName));
+
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error reparenting node: %1").arg(e.what()));
+    }
+}
+
 QJsonObject MCPServer::toolSetPivotMode(const QJsonObject &args)
 {
     auto* top = TransformOperator::getSingleton();
@@ -3684,6 +3763,23 @@ QJsonArray MCPServer::buildToolsList()
             "Ungroup a group node: move its children to the group's parent and delete the empty group. "
             "Only works on group nodes (scene nodes with children and no attached meshes).",
             props
+        );
+    }
+
+    // reparent_node
+    {
+        QJsonObject props;
+        props["node_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the scene node to reparent"}};
+        props["new_parent_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the new parent node, or 'root' for the root scene node. If omitted, reparents to root."}};
+        QJsonArray required;
+        required.append("node_name");
+        appendTool(
+            "reparent_node",
+            "Reparent a scene node under a different parent in the scene hierarchy. "
+            "Preserves the node's world-space transform by recalculating the local transform. "
+            "Prevents invalid operations (reparenting into own subtree). Supports undo.",
+            props,
+            required
         );
     }
 

@@ -247,6 +247,18 @@ void PropertiesPanelController::selectNodeByName(const QString& name)
     }
 }
 
+bool PropertiesPanelController::canReparentNode(const QString& nodeName, const QString& newParentName)
+{
+    if (!mSceneTreeModel) return false;
+    return mSceneTreeModel->canReparent(nodeName, newParentName);
+}
+
+bool PropertiesPanelController::reparentNode(const QString& nodeName, const QString& newParentName)
+{
+    if (!mSceneTreeModel) return false;
+    return mSceneTreeModel->reparentNode(nodeName, newParentName);
+}
+
 // ---- Undo History ----
 
 QVariantList PropertiesPanelController::undoHistory() const

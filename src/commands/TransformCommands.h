@@ -155,6 +155,37 @@ private:
     bool mFirstRedo = true;
 };
 
+// Reparent a scene node under a new parent, preserving world-space transform
+class ReparentCommand : public QUndoCommand
+{
+public:
+    ReparentCommand(const QString& nodeName,
+                    const QString& oldParentName,
+                    const QString& newParentName,
+                    const Ogre::Vector3& oldLocalPos,
+                    const Ogre::Quaternion& oldLocalOrient,
+                    const Ogre::Vector3& oldLocalScale,
+                    const Ogre::Vector3& newLocalPos,
+                    const Ogre::Quaternion& newLocalOrient,
+                    const Ogre::Vector3& newLocalScale,
+                    QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    QString mNodeName;
+    QString mOldParentName;
+    QString mNewParentName;
+    Ogre::Vector3 mOldLocalPos;
+    Ogre::Quaternion mOldLocalOrient;
+    Ogre::Vector3 mOldLocalScale;
+    Ogre::Vector3 mNewLocalPos;
+    Ogre::Quaternion mNewLocalOrient;
+    Ogre::Vector3 mNewLocalScale;
+    bool mFirstRedo = true;
+};
+
 // Sub-mesh vertex transform (stores full vertex snapshot for undo)
 class SubMeshTransformCommand : public QUndoCommand
 {

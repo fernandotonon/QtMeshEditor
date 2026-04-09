@@ -2,6 +2,9 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "GlobalDefinitions.h"
+#include "UndoManager.h"
+#include "commands/TransformCommands.h"
+#include "SentryReporter.h"
 #include <QTimer>
 #include <Ogre.h>
 
@@ -330,6 +333,93 @@ QStringList SceneTreeModel::availableMaterials() const
     }
     names.sort(Qt::CaseInsensitive);
     return names;
+}
+
+bool SceneTreeModel::canReparent(const QString& nodeName, const QString& newParentName) const
+{
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return false;
+
+    auto* sceneMgr = mgr->getSceneMgr();
+    if (!sceneMgr) return false;
+
+    // Node must exist
+    if (!sceneMgr->hasSceneNode(nodeName.toStdString())) return false;
+
+    Ogre::SceneNode* node = sceneMgr->getSceneNode(nodeName.toStdString());
+
+    // Resolve target parent (empty or "root" means root scene node)
+    Ogre::SceneNode* newParent = nullptr;
+    if (newParentName.isEmpty() || newParentName == "root") {
+        newParent = sceneMgr->getRootSceneNode();
+    } else {
+        if (!sceneMgr->hasSceneNode(newParentName.toStdString())) return false;
+        newParent = sceneMgr->getSceneNode(newParentName.toStdString());
+    }
+
+    // Cannot reparent to self
+    if (node == newParent) return false;
+
+    // Already a child of the target — no-op
+    if (node->getParent() == newParent) return false;
+
+    // Cannot reparent into own subtree
+    if (Manager::isDescendantOf(newParent, node)) return false;
+
+    return true;
+}
+
+bool SceneTreeModel::reparentNode(const QString& nodeName, const QString& newParentName)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    if (!mgr) return false;
+
+    auto* sceneMgr = mgr->getSceneMgr();
+    if (!sceneMgr) return false;
+
+    if (!canReparent(nodeName, newParentName)) return false;
+
+    Ogre::SceneNode* node = sceneMgr->getSceneNode(nodeName.toStdString());
+
+    // Resolve target parent
+    Ogre::SceneNode* newParent = nullptr;
+    if (newParentName.isEmpty() || newParentName == "root") {
+        newParent = sceneMgr->getRootSceneNode();
+    } else {
+        newParent = sceneMgr->getSceneNode(newParentName.toStdString());
+    }
+
+    // Capture old state for undo
+    Ogre::SceneNode* oldParent = static_cast<Ogre::SceneNode*>(node->getParent());
+    QString oldParentName = (oldParent && oldParent != sceneMgr->getRootSceneNode())
+        ? QString::fromStdString(oldParent->getName()) : QString();
+    Ogre::Vector3 oldLocalPos = node->getPosition();
+    Ogre::Quaternion oldLocalOrient = node->getOrientation();
+    Ogre::Vector3 oldLocalScale = node->getScale();
+
+    // Perform the reparent (preserves world transform)
+    if (!mgr->reparentNode(node, newParent))
+        return false;
+
+    // Capture new local transform (set by reparentNode)
+    Ogre::Vector3 newLocalPos = node->getPosition();
+    Ogre::Quaternion newLocalOrient = node->getOrientation();
+    Ogre::Vector3 newLocalScale = node->getScale();
+
+    // Resolve new parent name for undo storage
+    QString resolvedNewParentName = (newParent != sceneMgr->getRootSceneNode())
+        ? QString::fromStdString(newParent->getName()) : QString();
+
+    // Push undo command
+    UndoManager::getSingleton()->push(new ReparentCommand(
+        nodeName, oldParentName, resolvedNewParentName,
+        oldLocalPos, oldLocalOrient, oldLocalScale,
+        newLocalPos, newLocalOrient, newLocalScale));
+
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Reparent node '%1' under '%2'").arg(nodeName, newParentName.isEmpty() ? "root" : newParentName));
+
+    return true;
 }
 
 void SceneTreeModel::updateSelection()

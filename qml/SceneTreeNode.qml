@@ -14,6 +14,8 @@ Column {
     property bool hasChildren: childCount > 0
     property string nodeName: treeModel ? (treeModel.data(nodeIndex) || "") : ""
     property bool selected: false
+    // Only Node-type items are draggable (not entities/submeshes)
+    property bool isNodeType: treeModel ? (treeModel.data(nodeIndex, 259) === "Node" || treeModel.data(nodeIndex, 259) === "Group") : false
 
     width: parent ? parent.width : 200
 
@@ -31,6 +33,7 @@ Column {
 
     // Row for this node
     Rectangle {
+        id: nodeRow
         width: treeNode.width
         height: 22
         color: treeNode.selected
@@ -38,18 +41,110 @@ Column {
                : (rowMouse.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.15)
                                          : "transparent")
 
-        // Full-row mouse area for selection (behind everything)
+        // Drop highlight (shown when a valid drop target)
+        Rectangle {
+            id: dropHighlight
+            anchors.fill: parent
+            color: PropertiesPanelController.highlightColor
+            opacity: 0.3
+            visible: false
+            z: 5
+        }
+
+        // DropArea for reparenting: accepts dragged nodes
+        DropArea {
+            id: nodeDropArea
+            anchors.fill: parent
+            keys: ["application/x-qtmesheditor-node"]
+
+            property bool canDrop: false
+
+            onEntered: function(drag) {
+                // Get the dragged node name from the drag source
+                var draggedName = ""
+                if (drag.source && drag.source.Drag && drag.source.Drag.mimeData) {
+                    draggedName = drag.source.Drag.mimeData["application/x-qtmesheditor-node"] || ""
+                }
+                if (draggedName && treeNode.isNodeType) {
+                    canDrop = PropertiesPanelController.canReparentNode(draggedName, treeNode.nodeName)
+                } else {
+                    canDrop = false
+                }
+                dropHighlight.visible = canDrop
+                drag.accepted = canDrop
+            }
+            onExited: {
+                dropHighlight.visible = false
+                canDrop = false
+            }
+            onDropped: function(drop) {
+                dropHighlight.visible = false
+                var draggedName = ""
+                if (drop.source && drop.source.Drag && drop.source.Drag.mimeData) {
+                    draggedName = drop.source.Drag.mimeData["application/x-qtmesheditor-node"] || ""
+                }
+                if (draggedName && canDrop) {
+                    PropertiesPanelController.reparentNode(draggedName, treeNode.nodeName)
+                    drop.accepted = true
+                } else {
+                    drop.accepted = false
+                }
+                canDrop = false
+            }
+        }
+
+        // Full-row mouse area for selection and drag initiation
         MouseArea {
             id: rowMouse
             anchors.fill: parent
             hoverEnabled: true
-            // acceptedButtons default is Qt.LeftButton
+            drag.target: treeNode.isNodeType ? dragProxy : undefined
+            drag.threshold: 10
+
             onClicked: function(mouse) {
                 if (treeModel) {
                     var multiSelect = (mouse.modifiers & Qt.ControlModifier) ||
                                       (mouse.modifiers & Qt.ShiftModifier)
                     treeModel.selectItem(nodeIndex.row, treeModel.parent(nodeIndex), multiSelect)
                 }
+            }
+
+            // Drag proxy (invisible item that follows the mouse during drag)
+            Item {
+                id: dragProxy
+                width: 1
+                height: 1
+
+                Drag.active: rowMouse.drag.active
+                Drag.keys: ["application/x-qtmesheditor-node"]
+                Drag.mimeData: {
+                    "application/x-qtmesheditor-node": treeNode.nodeName
+                }
+                Drag.hotSpot.x: 0
+                Drag.hotSpot.y: 0
+                Drag.dragType: Drag.Internal
+            }
+        }
+
+        // Floating drag label (appears near cursor during drag)
+        Rectangle {
+            id: dragLabel
+            visible: rowMouse.drag.active
+            z: 100
+            width: dragLabelText.implicitWidth + 12
+            height: 20
+            radius: 3
+            color: PropertiesPanelController.highlightColor
+            opacity: 0.9
+            x: rowMouse.mouseX + 15
+            y: rowMouse.mouseY - 10
+
+            Text {
+                id: dragLabelText
+                anchors.centerIn: parent
+                text: treeNode.nodeName
+                color: "white"
+                font.pixelSize: 10
             }
         }
 
@@ -58,6 +153,7 @@ Column {
             anchors.left: parent.left
             anchors.leftMargin: 4 + indentLevel * 16
             spacing: 4
+            z: 10  // Above drop areas
 
             // Expand/collapse chevron button
             Item {
