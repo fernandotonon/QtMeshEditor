@@ -110,30 +110,78 @@
   align-items: center;
   justify-content: space-between;
   gap: 1rem;
-  padding: 0.75rem 2.5rem;
-  margin-left: 280px;
-  background: rgba(5, 10, 20, 0.85);
+  padding: 0.85rem 2.5rem;
+  background: linear-gradient(180deg, rgba(10, 18, 31, 0.95), rgba(8, 14, 24, 0.95));
   backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--stroke);
+  border-bottom: 1px solid var(--stroke-strong);
 }
 
-.topBar h1 {
+.topBarBrand {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.topBarKicker {
   margin: 0;
-  font-size: 1.05rem;
+  color: var(--accent-1);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.topBarTitle {
+  margin: 0;
+  font-size: 1.02rem;
   font-weight: 700;
   color: var(--text-0);
 }
 
-.topBar a {
-  color: var(--accent-1);
-  text-decoration: none;
-  font-size: 0.88rem;
-  font-weight: 600;
-  transition: color 140ms ease;
+.topBarActions {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
 }
 
-.topBar a:hover {
+.topBarLink,
+.topBarLinkSecondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.62rem;
+  border: 1px solid transparent;
+  padding: 0.42rem 0.75rem;
+  text-decoration: none;
+  font-size: 0.82rem;
+  font-weight: 700;
+  transition: transform 120ms ease, box-shadow 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.topBarLink {
+  color: var(--accent-1);
+  background: rgba(46, 188, 255, 0.1);
+  border-color: rgba(46, 188, 255, 0.34);
+}
+
+.topBarLinkSecondary {
+  color: var(--text-1);
+  background: var(--surface-2);
+  border-color: var(--stroke-strong);
+}
+
+.topBarLink:hover,
+.topBarLinkSecondary:hover {
+  transform: translateY(-1px);
+}
+
+.topBarLink:hover {
   color: #9cdfff;
+  box-shadow: 0 10px 22px rgba(46, 188, 255, 0.2);
+}
+
+.topBarLinkSecondary:hover {
+  color: var(--text-0);
+  background: var(--surface-3);
 }
 
 /* ── Breadcrumb ─────────────────────────────────────────── */
@@ -399,12 +447,19 @@
   }
 
   .topBar {
-    margin-left: 0;
     padding-left: 3.5rem;
+    padding-right: 1.2rem;
+    align-items: start;
+    flex-direction: column;
   }
 
   .mainInner {
     padding: 1.5rem 1.2rem 3rem;
+  }
+
+  .topBarActions {
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .sectionTitle {

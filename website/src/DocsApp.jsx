@@ -143,10 +143,18 @@ export default function DocsApp() {
 
       <main className={s.main}>
         <div className={s.topBar}>
-          <span style={{ fontWeight: 700 }}>qtmesh CLI Reference</span>
-          <a href="https://github.com/fernandotonon/QtMeshEditor" target="_blank" rel="noopener" style={{ color: 'var(--accent-1)', textDecoration: 'none', fontSize: '0.85rem' }}>
-            GitHub
-          </a>
+          <div className={s.topBarBrand}>
+            <p className={s.topBarKicker}>Documentation</p>
+            <h1 className={s.topBarTitle}>qtmesh CLI Reference</h1>
+          </div>
+          <nav className={s.topBarActions} aria-label="Documentation links">
+            <a href="./index.html" className={s.topBarLinkSecondary}>
+              Back to Main Page
+            </a>
+            <a href="https://github.com/fernandotonon/QtMeshEditor" target="_blank" rel="noopener" className={s.topBarLink}>
+              GitHub
+            </a>
+          </nav>
         </div>
 
         <div className={s.mainInner}>
