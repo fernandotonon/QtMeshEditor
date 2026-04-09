@@ -290,6 +290,16 @@ void MainWindow::initToolBar()
     connect(ui->actionGroup, &QAction::triggered, this, &MainWindow::groupSelected);
     connect(ui->actionUngroup, &QAction::triggered, this, &MainWindow::ungroupSelected);
 
+    // Enable/disable group actions based on selection
+    connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged, this, [this]() {
+        auto* sel = SelectionSet::getSingleton();
+        int nodeCount = sel->getNodesCount();
+        ui->actionGroup->setEnabled(nodeCount >= 2);
+        bool canUngroup = (nodeCount == 1) && Manager::getSingleton()->isGroupNode(
+            sel->getNodesSelectionList().first());
+        ui->actionUngroup->setEnabled(canUngroup);
+    });
+
     // Refresh gizmo position after undo/redo (deferred to avoid re-entrant scene access)
     connect(UndoManager::getSingleton()->stack(), &QUndoStack::indexChanged, this, [](int) {
         QTimer::singleShot(0, []() {

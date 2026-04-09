@@ -589,16 +589,22 @@
    </property>
   </action>
   <action name="actionGroup">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
-    <string>Group</string>
+    <string>Group Nodes</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+G</string>
    </property>
   </action>
   <action name="actionUngroup">
+   <property name="enabled">
+    <bool>false</bool>
+   </property>
    <property name="text">
-    <string>Ungroup</string>
+    <string>Ungroup Nodes</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+G</string>
