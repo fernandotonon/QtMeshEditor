@@ -49,6 +49,8 @@ ViewCube/ViewCubeController.cpp
 SDWorker.cpp
 SDManager.cpp
 UndoManager.cpp
+SubMeshTransform.cpp
+SubEntityHighlight.cpp
 commands/TransformCommands.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
@@ -110,6 +112,8 @@ ViewCube/ViewCubeController.h
 SDWorker.h
 SDManager.h
 UndoManager.h
+SubMeshTransform.h
+SubEntityHighlight.h
 commands/TransformCommands.h
 PropertiesPanelController.h
 SceneTreeModel.h

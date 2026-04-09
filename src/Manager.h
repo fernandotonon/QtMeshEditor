@@ -80,6 +80,8 @@ public:
     void                destroySceneNode(Ogre::SceneNode* node);
     void                destroyAllAttachedMovableObjects(Ogre::SceneNode* node);
 
+    Ogre::SceneNode*    duplicateSceneNode(Ogre::SceneNode* source);
+
     bool                hasSceneNode(const QString &_name);
     QList<Ogre::SceneNode *>&   getSceneNodes();
 

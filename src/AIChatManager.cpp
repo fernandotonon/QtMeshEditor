@@ -380,7 +380,7 @@ QString AIChatManager::buildSystemPrompt() const
     // The full set is still available via MCP/HTTP for external clients.
     static const QStringList chatTools = {
         "create_primitive", "create_material", "modify_material", "apply_material",
-        "transform_mesh", "delete_entity", "get_scene_info", "list_materials",
+        "transform_mesh", "delete_entity", "duplicate_entity", "get_scene_info", "list_materials",
         "load_mesh", "export_mesh", "list_textures", "set_texture",
         "take_screenshot", "list_files", "search_files", "read_file",
         "camera_control", "get_camera_info"

@@ -5,8 +5,11 @@
 #include "PrimitiveObject.h"
 #include "AnimationWidget.h"
 #include "SkeletonTransform.h"
+#include "MeshImporterExporter.h"
 #include "Manager.h"
+#include "SentryReporter.h"
 #include <QApplication>
+#include <QFileDialog>
 #include <QPalette>
 #include <Ogre.h>
 
@@ -51,6 +54,14 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
     connect(transformOp, &TransformOperator::selectedScaleChanged, this, [this](const Ogre::Vector3& scale) {
         mScaleX = scale.x; mScaleY = scale.y; mScaleZ = scale.z;
         emit transformChanged();
+    });
+
+    connect(transformOp, &TransformOperator::snapSettingsChanged, this, [this]() {
+        emit snapSettingsChanged();
+        emit snapEnabledChanged();
+        emit snapGridSizeChanged();
+        emit snapAngleStepChanged();
+        emit snapScaleStepChanged();
     });
 
     connect(Manager::getSingleton(), &Manager::sceneNodeCreated, this, &PropertiesPanelController::onSceneChanged);
@@ -479,6 +490,41 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
     return false;
 }
 
+bool PropertiesPanelController::exportCurrentPose(const QString& path)
+{
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    Ogre::Entity* animatedEntity = nullptr;
+    for (Ogre::Entity* ent : entities)
+    {
+        if (ent->hasSkeleton()) {
+            animatedEntity = ent;
+            break;
+        }
+    }
+
+    if (!animatedEntity) return false;
+
+    QString outputPath = path;
+    if (outputPath.isEmpty())
+    {
+        QString filter = "STL (*.stl)";
+        outputPath = QFileDialog::getSaveFileName(
+            nullptr,
+            QObject::tr("Export Current Pose"),
+            QString::fromStdString(animatedEntity->getName()) + "_pose",
+            MeshImporterExporter::exportFileDialogFilter(),
+            &filter,
+            QFileDialog::DontUseNativeDialog);
+        if (outputPath.isEmpty()) return false;
+
+        outputPath = MeshImporterExporter::formatFileURI(outputPath, filter);
+    }
+
+    SentryReporter::addBreadcrumb("ui.action", "Export current pose via Inspector");
+    int result = MeshImporterExporter::exportCurrentPose(animatedEntity, outputPath);
+    return result == 0;
+}
+
 void PropertiesPanelController::onSelectionChanged()
 {
     onTransformChanged();
@@ -499,4 +545,73 @@ void PropertiesPanelController::onSceneChanged()
 void PropertiesPanelController::refreshTheme()
 {
     emit themeChanged();
+}
+
+// Snap settings — delegate to TransformOperator
+bool PropertiesPanelController::snapEnabled() const
+{
+    return TransformOperator::getSingleton()->isSnapEnabled();
+}
+
+double PropertiesPanelController::snapGridSize() const
+{
+    return TransformOperator::getSingleton()->snapGridSize();
+}
+
+double PropertiesPanelController::snapAngleStep() const
+{
+    return TransformOperator::getSingleton()->snapAngleStep();
+}
+
+double PropertiesPanelController::snapScaleStep() const
+{
+    return TransformOperator::getSingleton()->snapScaleStep();
+}
+
+void PropertiesPanelController::setSnapEnabled(bool enabled)
+{
+    TransformOperator::getSingleton()->setSnapEnabled(enabled);
+    emit snapEnabledChanged();
+}
+
+void PropertiesPanelController::setSnapGridSize(double size)
+{
+    TransformOperator::getSingleton()->setSnapGridSize(size);
+    emit snapGridSizeChanged();
+}
+
+void PropertiesPanelController::setSnapAngleStep(double degrees)
+{
+    TransformOperator::getSingleton()->setSnapAngleStep(degrees);
+    emit snapAngleStepChanged();
+}
+
+void PropertiesPanelController::setSnapScaleStep(double step)
+{
+    TransformOperator::getSingleton()->setSnapScaleStep(step);
+    emit snapScaleStepChanged();
+}
+
+QVariantList PropertiesPanelController::gridSizePresets() const
+{
+    QVariantList result;
+    for (double v : TransformOperator::gridSizePresets())
+        result.append(v);
+    return result;
+}
+
+QVariantList PropertiesPanelController::angleStepPresets() const
+{
+    QVariantList result;
+    for (double v : TransformOperator::angleStepPresets())
+        result.append(v);
+    return result;
+}
+
+QVariantList PropertiesPanelController::scaleStepPresets() const
+{
+    QVariantList result;
+    for (double v : TransformOperator::scaleStepPresets())
+        result.append(v);
+    return result;
 }

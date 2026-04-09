@@ -3,7 +3,10 @@
 
 #include <QObject>
 #include <QPoint>
+#include <QList>
+#include <vector>
 #include <OgreRay.h>
+#include <OgreVector.h>
 #include "QtInputManager.h"
 
 //class TransformWidget;
@@ -19,6 +22,7 @@ namespace Ogre{
     class RaySceneQuery;
     class SceneNode;
     class MovableObject;
+    class SubEntity;
 }
 class TransformOperator : public QObject, public QtMouseListener
 {
@@ -52,6 +56,30 @@ public:
     const Ogre::ColourValue& getSelectionBoxColour() const;
     TransformSpace getTransformSpace() const { return mTransformSpace; }
 
+    // --- Snap settings ---
+    bool isSnapEnabled() const { return mSnapEnabled; }
+    void setSnapEnabled(bool enabled);
+
+    double snapGridSize() const { return mSnapGridSize; }
+    void setSnapGridSize(double size);
+
+    double snapAngleStep() const { return mSnapAngleStep; }
+    void setSnapAngleStep(double degrees);
+
+    double snapScaleStep() const { return mSnapScaleStep; }
+    void setSnapScaleStep(double step);
+
+    // Available preset values
+    static QList<double> gridSizePresets();
+    static QList<double> angleStepPresets();
+    static QList<double> scaleStepPresets();
+
+    // Snap helpers (public for testing)
+    static double snapValue(double value, double step);
+    static Ogre::Vector3 snapTranslation(const Ogre::Vector3& translation, double gridSize);
+    static Ogre::Real snapAngle(Ogre::Real degrees, double angleStep);
+    static Ogre::Vector3 snapScale(const Ogre::Vector3& scale, double scaleStep);
+
     // Made public for testing
     static void swap(int& x, int& y);
     Ogre::Ray   rayFromScreenPoint(const QPoint& pos);
@@ -71,6 +99,7 @@ signals:
     void selectedScaleChanged(const Ogre::Vector3& newScale);
     void selectedOrientationChanged(const Ogre::Vector3& newOrientation);
     void transformSpaceChanged(TransformSpace newSpace);
+    void snapSettingsChanged();
 
 public slots:
     void onSelectionChanged();
@@ -121,10 +150,27 @@ private:
     TransformSpace                          mTransformSpace = SPACE_WORLD;
     Ogre::Real                              mScaleStartDistance = 0.0f;
 
+    // Snap settings (persisted in QSettings)
+    bool                                    mSnapEnabled = false;
+    double                                  mSnapGridSize = 1.0;
+    double                                  mSnapAngleStep = 15.0;
+    double                                  mSnapScaleStep = 0.25;
+
+    // Snap accumulators (track sub-snap-threshold motion during drag)
+    Ogre::Vector3                           mSnapTranslationAccum = Ogre::Vector3::ZERO;
+    Ogre::Vector3                           mSnapRotationAccum = Ogre::Vector3::ZERO;
+    Ogre::Vector3                           mSnapScaleAccum = Ogre::Vector3::ZERO;
+    // Cumulative snapped scale factor applied during this drag (for entity absolute-scale path)
+    Ogre::Vector3                           mSnapScaleCumulative = Ogre::Vector3::UNIT_SCALE;
+
     // Undo state: captured at mouse press, used to create command at mouse release
     QList<Ogre::Vector3>                    mUndoStartPositions;
     QList<Ogre::Quaternion>                 mUndoStartOrientations;
     QList<Ogre::Vector3>                    mUndoStartScales;
+
+    // Sub-entity undo state: vertex positions captured at drag start
+    QList<Ogre::SubEntity*>                 mUndoSubEntities;
+    QList<std::vector<Ogre::Vector3>>       mUndoSubMeshPositions;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;
 #else

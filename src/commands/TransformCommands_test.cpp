@@ -2,6 +2,7 @@
 #include "TransformCommands.h"
 #include "../Manager.h"
 #include "../SelectionSet.h"
+#include "../SubMeshTransform.h"
 #include "../TestHelpers.h"
 #include <QApplication>
 #include <QCoreApplication>
@@ -433,4 +434,337 @@ TEST_F(TransformCommandsTests, DeleteCommand_MultipleNodes) {
     EXPECT_EQ(node2->getPosition(), Ogre::Vector3(4, 5, 6));
 
     delete cmd;
+}
+
+// ---- DuplicateCommand ----
+
+TEST_F(TransformCommandsTests, DuplicateCommand_Constructor) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("DupCmdNode1");
+    ASSERT_NE(node, nullptr);
+
+    QList<Ogre::SceneNode*> clones = {node};
+    auto* cmd = new DuplicateCommand(clones, clones);
+    EXPECT_NE(cmd, nullptr);
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, DuplicateCommand_FirstRedoIsNoop) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("DupCmdNoop");
+    ASSERT_NE(node, nullptr);
+
+    QList<Ogre::SceneNode*> clones = {node};
+    auto* cmd = new DuplicateCommand(clones, clones);
+
+    // First redo should be a no-op (caller already created the clones)
+    cmd->redo();
+    // Node should still be visible
+    EXPECT_TRUE(mgr->hasSceneNode("DupCmdNoop"));
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, DuplicateCommand_UndoDestroysClones) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* srcNode = mgr->addSceneNode("DupCmdHideSrc");
+    ASSERT_NE(srcNode, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("DupHideTestMesh");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    srcNode->attachObject(entity);
+
+    // Create a real clone (separate node)
+    Ogre::SceneNode* cloneNode = mgr->duplicateSceneNode(srcNode);
+    ASSERT_NE(cloneNode, nullptr);
+    QString cloneName = QString::fromStdString(cloneNode->getName());
+
+    QList<Ogre::SceneNode*> sources = {srcNode};
+    QList<Ogre::SceneNode*> clones = {cloneNode};
+    auto* cmd = new DuplicateCommand(sources, clones);
+
+    // First redo (no-op)
+    cmd->redo();
+    // Clone should exist
+    EXPECT_TRUE(mgr->hasSceneNode(cloneName));
+
+    // Undo should destroy the clone
+    cmd->undo();
+    EXPECT_FALSE(mgr->hasSceneNode(cloneName));
+
+    // Source should still exist
+    EXPECT_TRUE(mgr->hasSceneNode(QString::fromStdString(srcNode->getName())));
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, DuplicateCommand_RedoRecreatesClones) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* srcNode = mgr->addSceneNode("DupCmdShowSrc");
+    ASSERT_NE(srcNode, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("DupShowTestMesh");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    srcNode->attachObject(entity);
+
+    Ogre::SceneNode* cloneNode = mgr->duplicateSceneNode(srcNode);
+    ASSERT_NE(cloneNode, nullptr);
+
+    QList<Ogre::SceneNode*> sources = {srcNode};
+    QList<Ogre::SceneNode*> clones = {cloneNode};
+    auto* cmd = new DuplicateCommand(sources, clones);
+
+    // First redo (no-op)
+    cmd->redo();
+
+    // Undo destroys clone
+    cmd->undo();
+
+    // Second redo should re-duplicate from source
+    cmd->redo();
+    // Source should still exist
+    EXPECT_TRUE(mgr->hasSceneNode(QString::fromStdString(srcNode->getName())));
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, DuplicateCommand_EmptyCloneList) {
+    QList<Ogre::SceneNode*> clones;
+    auto* cmd = new DuplicateCommand(clones, clones);
+
+    // Should not crash with empty list
+    EXPECT_NO_THROW(cmd->redo());
+    EXPECT_NO_THROW(cmd->undo());
+
+    delete cmd;
+}
+
+// ---- SubMeshTransformCommand ----
+
+TEST_F(TransformCommandsTests, SubMeshTransformCommand_TranslateUndoRedo) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+
+    Manager* mgr = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("SubMeshCmdTranslate");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    auto* node = mgr->addSceneNode("SubMeshCmdNode");
+    node->attachObject(entity);
+
+    Ogre::SubEntity* sub = entity->getSubEntity(0);
+    ASSERT_NE(sub, nullptr);
+
+    // Read original positions
+    auto origPositions = SubMeshTransform::readPositions(entity, 0);
+    ASSERT_EQ(origPositions.size(), 3u);
+
+    // Translate the sub-mesh
+    Ogre::Vector3 delta(10, 20, 30);
+    SubMeshTransform::translateSubMesh(entity, 0, delta);
+
+    // Create undo command with original positions (simulates what TransformOperator does)
+    auto* cmd = new SubMeshTransformCommand(sub, origPositions, "Test SubMesh Translate");
+
+    // First redo captures current (post-transform) positions (no-op)
+    cmd->redo();
+
+    // Verify positions are translated
+    auto currentPositions = SubMeshTransform::readPositions(entity, 0);
+    for (size_t i = 0; i < origPositions.size(); ++i) {
+        EXPECT_NEAR(currentPositions[i].x, origPositions[i].x + delta.x, 0.001f);
+        EXPECT_NEAR(currentPositions[i].y, origPositions[i].y + delta.y, 0.001f);
+        EXPECT_NEAR(currentPositions[i].z, origPositions[i].z + delta.z, 0.001f);
+    }
+
+    // Undo should restore original positions
+    cmd->undo();
+    auto restoredPositions = SubMeshTransform::readPositions(entity, 0);
+    for (size_t i = 0; i < origPositions.size(); ++i) {
+        EXPECT_NEAR(restoredPositions[i].x, origPositions[i].x, 0.001f);
+        EXPECT_NEAR(restoredPositions[i].y, origPositions[i].y, 0.001f);
+        EXPECT_NEAR(restoredPositions[i].z, origPositions[i].z, 0.001f);
+    }
+
+    // Redo should re-apply the transform
+    cmd->redo();
+    auto redonePositions = SubMeshTransform::readPositions(entity, 0);
+    for (size_t i = 0; i < origPositions.size(); ++i) {
+        EXPECT_NEAR(redonePositions[i].x, origPositions[i].x + delta.x, 0.001f);
+        EXPECT_NEAR(redonePositions[i].y, origPositions[i].y + delta.y, 0.001f);
+        EXPECT_NEAR(redonePositions[i].z, origPositions[i].z + delta.z, 0.001f);
+    }
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, SubMeshTransformCommand_NullSubEntity) {
+    // Should not crash with null sub-entity
+    std::vector<Ogre::Vector3> empty;
+    auto* cmd = new SubMeshTransformCommand(nullptr, empty, "Null test");
+
+    EXPECT_NO_THROW(cmd->redo());
+    EXPECT_NO_THROW(cmd->undo());
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, SubMeshTransform_GetCenter) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+
+    Manager* mgr = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("SubMeshCenterTest");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    auto* node = mgr->addSceneNode("SubMeshCenterNode");
+    node->attachObject(entity);
+
+    Ogre::Vector3 center = SubMeshTransform::getSubMeshCenter(entity, 0);
+    // Triangle vertices are (0,0,0), (1,0,0), (0,1,0)
+    // Centroid should be ~(0.333, 0.333, 0)
+    EXPECT_NEAR(center.x, 1.0f/3.0f, 0.01f);
+    EXPECT_NEAR(center.y, 1.0f/3.0f, 0.01f);
+    EXPECT_NEAR(center.z, 0.0f, 0.01f);
+}
+
+TEST_F(TransformCommandsTests, SubMeshTransform_ReadWritePositions) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+
+    Manager* mgr = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("SubMeshRWTest");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    auto* node = mgr->addSceneNode("SubMeshRWNode");
+    node->attachObject(entity);
+
+    auto positions = SubMeshTransform::readPositions(entity, 0);
+    ASSERT_EQ(positions.size(), 3u);
+
+    // Modify and write back
+    for (auto& p : positions)
+        p += Ogre::Vector3(5, 5, 5);
+    SubMeshTransform::writePositions(entity, 0, positions);
+
+    // Read again and verify
+    auto modified = SubMeshTransform::readPositions(entity, 0);
+    EXPECT_NEAR(modified[0].x, 5.0f, 0.001f);
+    EXPECT_NEAR(modified[0].y, 5.0f, 0.001f);
+    EXPECT_NEAR(modified[0].z, 5.0f, 0.001f);
+}
+
+// ---- SubMeshTransform: scaleSubMesh ----
+
+TEST_F(TransformCommandsTests, SubMeshTransform_ScaleSubMesh) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+
+    Manager* mgr = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("SubMeshScaleTest");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    auto* node = mgr->addSceneNode("SubMeshScaleNode");
+    node->attachObject(entity);
+
+    // Read original positions: triangle at (0,0,0), (1,0,0), (0,1,0)
+    auto origPositions = SubMeshTransform::readPositions(entity, 0);
+    ASSERT_EQ(origPositions.size(), 3u);
+
+    Ogre::Vector3 center = SubMeshTransform::getSubMeshCenter(entity, 0);
+
+    // Scale by 2x around centroid
+    Ogre::Vector3 scaleFactor(2.0f, 2.0f, 2.0f);
+    SubMeshTransform::scaleSubMesh(entity, 0, scaleFactor);
+
+    auto scaledPositions = SubMeshTransform::readPositions(entity, 0);
+    ASSERT_EQ(scaledPositions.size(), 3u);
+
+    // After scaling by 2x around centroid, each vertex should be 2x as far from the centroid
+    for (size_t i = 0; i < origPositions.size(); ++i) {
+        Ogre::Vector3 origOffset = origPositions[i] - center;
+        Ogre::Vector3 scaledOffset = scaledPositions[i] - center;
+        EXPECT_NEAR(scaledOffset.x, origOffset.x * scaleFactor.x, 0.01f);
+        EXPECT_NEAR(scaledOffset.y, origOffset.y * scaleFactor.y, 0.01f);
+        EXPECT_NEAR(scaledOffset.z, origOffset.z * scaleFactor.z, 0.01f);
+    }
+}
+
+// ---- SubMeshTransform: rotateSubMesh ----
+
+TEST_F(TransformCommandsTests, SubMeshTransform_RotateSubMesh) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+
+    Manager* mgr = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("SubMeshRotateTest");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    auto* node = mgr->addSceneNode("SubMeshRotateNode");
+    node->attachObject(entity);
+
+    // Read original positions: triangle at (0,0,0), (1,0,0), (0,1,0)
+    auto origPositions = SubMeshTransform::readPositions(entity, 0);
+    ASSERT_EQ(origPositions.size(), 3u);
+
+    Ogre::Vector3 center = SubMeshTransform::getSubMeshCenter(entity, 0);
+
+    // Rotate 90 degrees around Z axis
+    Ogre::Quaternion rotation(Ogre::Degree(90), Ogre::Vector3::UNIT_Z);
+    SubMeshTransform::rotateSubMesh(entity, 0, rotation);
+
+    auto rotatedPositions = SubMeshTransform::readPositions(entity, 0);
+    ASSERT_EQ(rotatedPositions.size(), 3u);
+
+    // After rotating around centroid, each vertex should be at rotated offset
+    for (size_t i = 0; i < origPositions.size(); ++i) {
+        Ogre::Vector3 origOffset = origPositions[i] - center;
+        Ogre::Vector3 expectedOffset = rotation * origOffset;
+        Ogre::Vector3 actualOffset = rotatedPositions[i] - center;
+        EXPECT_NEAR(actualOffset.x, expectedOffset.x, 0.01f);
+        EXPECT_NEAR(actualOffset.y, expectedOffset.y, 0.01f);
+        EXPECT_NEAR(actualOffset.z, expectedOffset.z, 0.01f);
+    }
+}
+
+// ---- SubMeshTransform: rotateSubMesh preserves centroid ----
+
+TEST_F(TransformCommandsTests, SubMeshTransform_RotatePreservesCentroid) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+
+    Manager* mgr = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("SubMeshRotCenterTest");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    auto* node = mgr->addSceneNode("SubMeshRotCenterNode");
+    node->attachObject(entity);
+
+    Ogre::Vector3 centerBefore = SubMeshTransform::getSubMeshCenter(entity, 0);
+
+    Ogre::Quaternion rotation(Ogre::Degree(45), Ogre::Vector3::UNIT_Y);
+    SubMeshTransform::rotateSubMesh(entity, 0, rotation);
+
+    Ogre::Vector3 centerAfter = SubMeshTransform::getSubMeshCenter(entity, 0);
+
+    // Centroid should remain the same after rotation around centroid
+    EXPECT_NEAR(centerAfter.x, centerBefore.x, 0.01f);
+    EXPECT_NEAR(centerAfter.y, centerBefore.y, 0.01f);
+    EXPECT_NEAR(centerAfter.z, centerBefore.z, 0.01f);
+}
+
+// ---- SubMeshTransform: scaleSubMesh preserves centroid ----
+
+TEST_F(TransformCommandsTests, SubMeshTransform_ScalePreservesCentroid) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+
+    Manager* mgr = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("SubMeshScaleCenterTest");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    auto* node = mgr->addSceneNode("SubMeshScaleCenterNode");
+    node->attachObject(entity);
+
+    Ogre::Vector3 centerBefore = SubMeshTransform::getSubMeshCenter(entity, 0);
+
+    SubMeshTransform::scaleSubMesh(entity, 0, Ogre::Vector3(3.0f, 0.5f, 2.0f));
+
+    Ogre::Vector3 centerAfter = SubMeshTransform::getSubMeshCenter(entity, 0);
+
+    // Centroid should remain the same after scaling around centroid
+    EXPECT_NEAR(centerAfter.x, centerBefore.x, 0.01f);
+    EXPECT_NEAR(centerAfter.y, centerBefore.y, 0.01f);
+    EXPECT_NEAR(centerAfter.z, centerBefore.z, 0.01f);
 }

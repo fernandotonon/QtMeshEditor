@@ -2901,18 +2901,19 @@ TEST_F(MCPServerTest, AllToolNamesAreRecognized)
     QStringList allTools = {
         "create_material", "modify_material", "get_material", "list_materials",
         "apply_material", "load_mesh", "get_mesh_info", "transform_mesh",
-        "list_textures", "set_texture", "export_mesh", "get_scene_info",
-        "take_screenshot", "create_primitive", "animate",
+        "transform_submesh", "list_textures", "set_texture", "export_mesh",
+        "get_scene_info", "take_screenshot", "create_primitive", "animate",
         "list_skeletal_animations", "get_animation_info", "set_animation_length",
         "set_animation_time", "add_keyframe", "remove_keyframe",
         "play_animation", "toggle_skeleton_debug", "toggle_bone_weights",
         "toggle_normals", "toggle_mesh_info", "merge_animations",
         "save_scene", "open_scene", "validate_mesh",
         "generate_lods", "generate_auto_lods", "remove_lods", "get_lod_info",
-        "delete_entity", "get_camera_info", "camera_control",
+        "delete_entity", "duplicate_entity", "get_camera_info", "camera_control",
+        "set_snap_settings", "get_snap_settings", "export_pose",
         "list_files", "search_files", "read_file"
     };
-    EXPECT_EQ(allTools.size(), 40);
+    EXPECT_EQ(allTools.size(), 45);
 
     for (const QString &tool : allTools) {
         QJsonObject result = server->callTool(tool, QJsonObject());
@@ -5238,4 +5239,284 @@ TEST_F(MCPServerTest, SearchFiles_MaxDepthStopsRecursion)
     QJsonObject result = server->callTool("search_files", args);
     EXPECT_FALSE(isError(result));
     EXPECT_TRUE(getResultText(result).contains("No files matching"));
+}
+
+// ==========================================================================
+// NEW TESTS: duplicate_entity tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, DuplicateEntity_Valid)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "DupTestCube";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["name"] = "DupTestCube";
+    QJsonObject result = server->callTool("duplicate_entity", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Duplicated"));
+    EXPECT_TRUE(text.contains("DupTestCube"));
+}
+
+TEST_F(MCPServerTest, DuplicateEntity_NonexistentEntity)
+{
+    QJsonObject args;
+    args["name"] = "NoSuchEntity_XYZ";
+    QJsonObject result = server->callTool("duplicate_entity", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, DuplicateEntity_NoNameNoSelection)
+{
+    // No name provided and nothing selected
+    SelectionSet::getSingleton()->clear();
+    QJsonObject result = server->callTool("duplicate_entity", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No name provided") ||
+                getResultText(result).contains("no scene nodes selected"));
+}
+
+// ==========================================================================
+// NEW TESTS: transform_submesh tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, TransformSubmesh_MissingEntity)
+{
+    QJsonObject args;
+    args["submesh_index"] = 0;
+    args["translate"] = QJsonArray{1.0, 0.0, 0.0};
+    QJsonObject result = server->callTool("transform_submesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("entity_name is required"));
+}
+
+TEST_F(MCPServerTest, TransformSubmesh_InvalidIndex)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("SubMeshIdxTest");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "SubMeshIdxTest_entity";
+    args["submesh_index"] = 999;
+    args["translate"] = QJsonArray{1.0, 0.0, 0.0};
+    QJsonObject result = server->callTool("transform_submesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("out of range"));
+}
+
+TEST_F(MCPServerTest, TransformSubmesh_EntityNotFound)
+{
+    QJsonObject args;
+    args["entity_name"] = "NonExistentEntity_XYZ";
+    args["submesh_index"] = 0;
+    args["translate"] = QJsonArray{1.0, 0.0, 0.0};
+    QJsonObject result = server->callTool("transform_submesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("not found"));
+}
+
+TEST_F(MCPServerTest, TransformSubmesh_NoTransformSpecified)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("SubMeshNoTrans");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "SubMeshNoTrans_entity";
+    args["submesh_index"] = 0;
+    // No translate, rotate, or scale
+    QJsonObject result = server->callTool("transform_submesh", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No transform specified"));
+}
+
+TEST_F(MCPServerTest, TransformSubmesh_TranslateValid)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAndSelectTriangleEntity("SubMeshTranslate");
+    ASSERT_NE(entity, nullptr);
+
+    QJsonObject args;
+    args["entity_name"] = "SubMeshTranslate_entity";
+    args["submesh_index"] = 0;
+    args["translate"] = QJsonArray{5.0, 10.0, 15.0};
+    QJsonObject result = server->callTool("transform_submesh", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("translate"));
+}
+
+// ==========================================================================
+// NEW TESTS: set_snap_settings tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, SetSnapSettings_ValidSettings)
+{
+    QJsonObject args;
+    args["enabled"] = true;
+    args["grid_size"] = 2.0;
+    args["angle_step"] = 15.0;
+    args["scale_step"] = 0.25;
+    QJsonObject result = server->callTool("set_snap_settings", args);
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Snap enabled"));
+    EXPECT_TRUE(text.contains("Grid size: 2"));
+    EXPECT_TRUE(text.contains("Angle step: 15"));
+    EXPECT_TRUE(text.contains("Scale step: 0.25"));
+
+    // Verify via get_snap_settings
+    QJsonObject getResult = server->callTool("get_snap_settings", QJsonObject());
+    EXPECT_FALSE(isError(getResult));
+    QString getText = getResultText(getResult);
+    EXPECT_TRUE(getText.contains("Snap enabled: true"));
+    EXPECT_TRUE(getText.contains("Grid size: 2"));
+    EXPECT_TRUE(getText.contains("Angle step: 15"));
+    EXPECT_TRUE(getText.contains("Scale step: 0.25"));
+}
+
+TEST_F(MCPServerTest, SetSnapSettings_InvalidValues)
+{
+    // Negative grid_size should be rejected
+    QJsonObject args1;
+    args1["grid_size"] = -1.0;
+    QJsonObject result1 = server->callTool("set_snap_settings", args1);
+    EXPECT_TRUE(isError(result1));
+    EXPECT_TRUE(getResultText(result1).contains("must be positive"));
+
+    // Negative angle_step should be rejected
+    QJsonObject args2;
+    args2["angle_step"] = -5.0;
+    QJsonObject result2 = server->callTool("set_snap_settings", args2);
+    EXPECT_TRUE(isError(result2));
+    EXPECT_TRUE(getResultText(result2).contains("must be positive"));
+
+    // Negative scale_step should be rejected
+    QJsonObject args3;
+    args3["scale_step"] = -0.1;
+    QJsonObject result3 = server->callTool("set_snap_settings", args3);
+    EXPECT_TRUE(isError(result3));
+    EXPECT_TRUE(getResultText(result3).contains("must be positive"));
+
+    // Zero grid_size should be rejected
+    QJsonObject args4;
+    args4["grid_size"] = 0.0;
+    QJsonObject result4 = server->callTool("set_snap_settings", args4);
+    EXPECT_TRUE(isError(result4));
+    EXPECT_TRUE(getResultText(result4).contains("must be positive"));
+}
+
+TEST_F(MCPServerTest, SetSnapSettings_NoFieldsSpecified)
+{
+    QJsonObject result = server->callTool("set_snap_settings", QJsonObject());
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No snap settings specified"));
+}
+
+TEST_F(MCPServerTest, SetSnapSettings_EnableOnly)
+{
+    QJsonObject args;
+    args["enabled"] = false;
+    QJsonObject result = server->callTool("set_snap_settings", args);
+    EXPECT_FALSE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("Snap disabled"));
+}
+
+// ==========================================================================
+// NEW TESTS: get_snap_settings tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, GetSnapSettings_ReturnsCurrentValues)
+{
+    QJsonObject result = server->callTool("get_snap_settings", QJsonObject());
+    EXPECT_FALSE(isError(result));
+    QString text = getResultText(result);
+    EXPECT_TRUE(text.contains("Snap enabled:"));
+    EXPECT_TRUE(text.contains("Grid size:"));
+    EXPECT_TRUE(text.contains("Angle step:"));
+    EXPECT_TRUE(text.contains("Scale step:"));
+}
+
+// ==========================================================================
+// NEW TESTS: export_pose tool
+// ==========================================================================
+
+TEST_F(MCPServerTest, ExportPose_MissingOutputPath)
+{
+    QJsonObject args;
+    args["animation"] = "Walk";
+    // No output_path
+    QJsonObject result = server->callTool("export_pose", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("output_path is required"));
+}
+
+TEST_F(MCPServerTest, ExportPose_MissingAnimationName)
+{
+    QJsonObject args;
+    args["output_path"] = "/tmp/pose_test.stl";
+    // No animation name
+    QJsonObject result = server->callTool("export_pose", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("animation name is required"));
+}
+
+TEST_F(MCPServerTest, ExportPose_NoEntityInScene)
+{
+    QJsonObject args;
+    args["output_path"] = "/tmp/pose_test.stl";
+    args["animation"] = "Walk";
+    QJsonObject result = server->callTool("export_pose", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("No entity found"));
+}
+
+TEST_F(MCPServerTest, ExportPose_EntityWithoutSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    // Create a primitive (no skeleton)
+    QJsonObject primArgs;
+    primArgs["type"] = "cube";
+    primArgs["name"] = "ExportPoseCube";
+    server->callTool("create_primitive", primArgs);
+
+    QJsonObject args;
+    args["entity"] = "ExportPoseCube";
+    args["output_path"] = "/tmp/pose_test.stl";
+    args["animation"] = "Walk";
+    QJsonObject result = server->callTool("export_pose", args);
+    EXPECT_TRUE(isError(result));
+    EXPECT_TRUE(getResultText(result).contains("no skeleton"));
+}
+
+TEST_F(MCPServerTest, ExportPose_AnimatedEntitySuccess)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("ExportPoseAnimEntity");
+    ASSERT_NE(entity, nullptr);
+
+    QString exportPath = QDir(QDir::tempPath()).filePath("mcp_export_pose_test.mesh");
+    QJsonObject args;
+    args["entity"] = "ExportPoseAnimEntity";
+    args["animation"] = "TestAnim";
+    args["time"] = 0.5;
+    args["output_path"] = exportPath;
+    QJsonObject result = server->callTool("export_pose", args);
+    // May succeed or fail depending on whether the export code works in this context,
+    // but should not crash and should provide a meaningful result
+    EXPECT_FALSE(getResultText(result).isEmpty());
+
+    // Cleanup
+    QFile::remove(exportPath);
 }

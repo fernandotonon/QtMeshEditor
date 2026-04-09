@@ -130,6 +130,7 @@ private:
     QJsonObject toolLoadMesh(const QJsonObject &args);
     QJsonObject toolGetMeshInfo(const QJsonObject &args);
     QJsonObject toolTransformMesh(const QJsonObject &args);
+    QJsonObject toolTransformSubMesh(const QJsonObject &args);
     QJsonObject toolListTextures(const QJsonObject &args);
     QJsonObject toolSetTexture(const QJsonObject &args);
     QJsonObject toolExportMesh(const QJsonObject &args);
@@ -162,6 +163,10 @@ private:
     QJsonObject toolCameraControl(const QJsonObject &args);
     QJsonObject toolGetCameraInfo(const QJsonObject &args);
     QJsonObject toolDeleteEntity(const QJsonObject &args);
+    QJsonObject toolDuplicateEntity(const QJsonObject &args);
+    QJsonObject toolSetSnapSettings(const QJsonObject &args);
+    QJsonObject toolGetSnapSettings(const QJsonObject &args);
+    QJsonObject toolExportPose(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {
@@ -211,7 +216,7 @@ private:
     // MCP Protocol version
     static constexpr const char* MCP_VERSION = "2024-11-05";
     static constexpr const char* SERVER_NAME = "QtMeshEditor";
-    static constexpr const char* SERVER_VERSION = "1.1.0";
+    static constexpr const char* SERVER_VERSION = "1.3.0";
 };
 
 #endif // MCPSERVER_H

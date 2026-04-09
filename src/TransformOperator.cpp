@@ -1,4 +1,7 @@
 #include <QtDebug>
+#include <QSettings>
+#include <QApplication>
+#include <cmath>
 
 #include "GlobalDefinitions.h"
 
@@ -13,6 +16,7 @@
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "MeshTransform.h"
+#include "SubMeshTransform.h"
 #include "Euler.h"
 #include "ViewportGrid.h"
 #include "UndoManager.h"
@@ -80,6 +84,13 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     connect(SelectionSet::getSingleton(),SIGNAL(selectionChanged()),this,SLOT(onSelectionChanged()));
 
     QtInputManager::getInstance().AddMouseListener(this);
+
+    // Load snap settings from QSettings
+    QSettings settings;
+    mSnapEnabled    = settings.value("Snap/enabled", false).toBool();
+    mSnapGridSize   = settings.value("Snap/gridSize", 1.0).toDouble();
+    mSnapAngleStep  = settings.value("Snap/angleStep", 15.0).toDouble();
+    mSnapScaleStep  = settings.value("Snap/scaleStep", 0.25).toDouble();
 }
 
 TransformOperator::~TransformOperator()
@@ -144,6 +155,98 @@ void TransformOperator::swap(int& x, int& y)
     int temp = x;
     x = y; y = temp;
 }
+
+////////////////////////////////////////
+// Snap settings
+
+void TransformOperator::setSnapEnabled(bool enabled)
+{
+    if (mSnapEnabled != enabled)
+    {
+        mSnapEnabled = enabled;
+        QSettings settings;
+        settings.setValue("Snap/enabled", mSnapEnabled);
+        SentryReporter::addBreadcrumb("ui.action",
+            mSnapEnabled ? "Snap enabled" : "Snap disabled");
+        emit snapSettingsChanged();
+    }
+}
+
+void TransformOperator::setSnapGridSize(double size)
+{
+    if (size > 0.0 && mSnapGridSize != size)
+    {
+        mSnapGridSize = size;
+        QSettings settings;
+        settings.setValue("Snap/gridSize", mSnapGridSize);
+        emit snapSettingsChanged();
+    }
+}
+
+void TransformOperator::setSnapAngleStep(double degrees)
+{
+    if (degrees > 0.0 && mSnapAngleStep != degrees)
+    {
+        mSnapAngleStep = degrees;
+        QSettings settings;
+        settings.setValue("Snap/angleStep", mSnapAngleStep);
+        emit snapSettingsChanged();
+    }
+}
+
+void TransformOperator::setSnapScaleStep(double step)
+{
+    if (step > 0.0 && mSnapScaleStep != step)
+    {
+        mSnapScaleStep = step;
+        QSettings settings;
+        settings.setValue("Snap/scaleStep", mSnapScaleStep);
+        emit snapSettingsChanged();
+    }
+}
+
+QList<double> TransformOperator::gridSizePresets()
+{
+    return { 0.1, 0.25, 0.5, 1.0, 2.0, 5.0 };
+}
+
+QList<double> TransformOperator::angleStepPresets()
+{
+    return { 5.0, 15.0, 45.0, 90.0 };
+}
+
+QList<double> TransformOperator::scaleStepPresets()
+{
+    return { 0.1, 0.25, 0.5 };
+}
+
+double TransformOperator::snapValue(double value, double step)
+{
+    return std::round(value / step) * step;
+}
+
+Ogre::Vector3 TransformOperator::snapTranslation(const Ogre::Vector3& translation, double gridSize)
+{
+    return Ogre::Vector3(
+        static_cast<Ogre::Real>(snapValue(translation.x, gridSize)),
+        static_cast<Ogre::Real>(snapValue(translation.y, gridSize)),
+        static_cast<Ogre::Real>(snapValue(translation.z, gridSize))
+    );
+}
+
+Ogre::Real TransformOperator::snapAngle(Ogre::Real degrees, double angleStep)
+{
+    return static_cast<Ogre::Real>(snapValue(degrees, angleStep));
+}
+
+Ogre::Vector3 TransformOperator::snapScale(const Ogre::Vector3& scale, double scaleStep)
+{
+    return Ogre::Vector3(
+        static_cast<Ogre::Real>(snapValue(scale.x, scaleStep)),
+        static_cast<Ogre::Real>(snapValue(scale.y, scaleStep)),
+        static_cast<Ogre::Real>(snapValue(scale.z, scaleStep))
+    );
+}
 const Ogre::ColourValue& TransformOperator::getSelectionBoxColour() const
 {   return m_pSelectionBox->getBoxColour();   }
 
@@ -192,7 +295,7 @@ void TransformOperator::removeSelected()
 void TransformOperator::updateGizmo()
 {
     updateGizmoPosition();
-    if(SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities())
+    if(SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()||SelectionSet::getSingleton()->hasSubEntities())
     {
         // Determine gizmo orientation based on transform space
         Ogre::Quaternion gizmoOrientation;
@@ -269,6 +372,41 @@ void TransformOperator::updateGizmoPosition()
         currentOrientation  = SelectionSet::getSingleton()->getSelectionOrientation();
         currentScale        = SelectionSet::getSingleton()->getSelectionScale();
         m_pTransformNode->setPosition(currentPosition + SelectionSet::getSingleton()->getSelectionNodesCenter());
+    }
+    else if(SelectionSet::getSingleton()->hasSubEntities())
+    {
+        try {
+            // Position gizmo at the centroid of the selected sub-mesh vertices
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            int count = 0;
+            for (int i = 0; i < SelectionSet::getSingleton()->getSubEntitiesCount(); ++i)
+            {
+                Ogre::SubEntity* sub = SelectionSet::getSingleton()->getSubEntity(i);
+                if (!sub || !sub->getParent()) continue;
+                Ogre::Entity* ent = sub->getParent();
+                for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+                {
+                    if (ent->getSubEntity(s) == sub)
+                    {
+                        center += SubMeshTransform::getSubMeshCenter(ent, s);
+                        ++count;
+                        break;
+                    }
+                }
+            }
+            if (count > 0)
+            {
+                center /= static_cast<Ogre::Real>(count);
+                Ogre::SubEntity* firstSub = SelectionSet::getSingleton()->getSubEntity(0);
+                if (firstSub && firstSub->getParent() && firstSub->getParent()->getParentSceneNode()) {
+                    Ogre::Vector3 nodePos = firstSub->getParent()->getParentSceneNode()->getPosition();
+                    currentPosition = center;
+                    m_pTransformNode->setPosition(center + nodePos);
+                }
+            }
+        } catch (...) {
+            // Sub-entity pointers may be stale — skip gizmo positioning
+        }
     }
     emit selectedPositionChanged(currentPosition);
     emit selectedOrientationChanged(currentOrientation);
@@ -496,6 +634,34 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 }
             }
 
+            // Capture undo state for sub-entities (vertex snapshots)
+            mUndoSubEntities.clear();
+            mUndoSubMeshPositions.clear();
+            if (SelectionSet::getSingleton()->hasSubEntities())
+            {
+                SentryReporter::addBreadcrumb("ui.transform",
+                    QString("Sub-mesh transform start (%1 sub-entities)")
+                        .arg(SelectionSet::getSingleton()->getSubEntitiesCount()));
+
+                for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+                {
+                    Ogre::Entity* ent = sub->getParent();
+                    unsigned int subIdx = 0;
+                    for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+                    {
+                        if (ent->getSubEntity(s) == sub) { subIdx = s; break; }
+                    }
+                    mUndoSubEntities.append(sub);
+                    mUndoSubMeshPositions.append(SubMeshTransform::readPositions(ent, subIdx));
+                }
+            }
+
+            // Reset snap accumulators at drag start
+            mSnapTranslationAccum = Ogre::Vector3::ZERO;
+            mSnapRotationAccum = Ogre::Vector3::ZERO;
+            mSnapScaleAccum = Ogre::Vector3::ZERO;
+            mSnapScaleCumulative = Ogre::Vector3::UNIT_SCALE;
+
             // Checking the ray intersection with a plane parallel to viewport & on the geometric center of selection
             Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
             std::pair<bool, Ogre::Real> result = mouseRay.intersects(Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
@@ -568,12 +734,33 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                     translation = worldDelta * mTransformVector;
                 }
 
-                translateSelected(translation);
-                mStartPoint = point;
-
-                emit selectedPositionChanged(SelectionSet::getSingleton()->getSelectionCenter());
-
-                updateGizmoPosition();
+                // Apply snap if Ctrl is held or snap is permanently enabled
+                bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
+                if (snapping)
+                {
+                    mSnapTranslationAccum += translation;
+                    Ogre::Vector3 snapped = snapTranslation(mSnapTranslationAccum, mSnapGridSize);
+                    if (snapped.isZeroLength())
+                    {
+                        // Not enough accumulated to reach a snap step yet — consume the raw delta
+                        mStartPoint = point;
+                    }
+                    else
+                    {
+                        mSnapTranslationAccum -= snapped;
+                        translateSelected(snapped);
+                        mStartPoint = point;
+                        emit selectedPositionChanged(SelectionSet::getSingleton()->getSelectionCenter());
+                        updateGizmoPosition();
+                    }
+                }
+                else
+                {
+                    translateSelected(translation);
+                    mStartPoint = point;
+                    emit selectedPositionChanged(SelectionSet::getSingleton()->getSelectionCenter());
+                    updateGizmoPosition();
+                }
             }
         }
     }
@@ -626,10 +813,46 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                     rotation.normalise();
                 }
 
-                rotateSelected(rotation);
-                mStartPoint = point;
+                // Apply snap if Ctrl is held or snap is permanently enabled
+                bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
+                if (snapping)
+                {
+                    // Convert incremental rotation to Euler for accumulation
+                    Ogre::Euler euler;
+                    euler.fromQuaternion(rotation);
+                    Ogre::Vector3 deltaDegs(euler.pitch().valueDegrees(),
+                                            euler.yaw().valueDegrees(),
+                                            euler.roll().valueDegrees());
+                    mSnapRotationAccum += deltaDegs;
 
-                emit selectedOrientationChanged(SelectionSet::getSingleton()->getSelectionOrientation());
+                    // Snap each axis independently
+                    Ogre::Vector3 snappedDegs(
+                        snapAngle(mSnapRotationAccum.x, mSnapAngleStep),
+                        snapAngle(mSnapRotationAccum.y, mSnapAngleStep),
+                        snapAngle(mSnapRotationAccum.z, mSnapAngleStep)
+                    );
+
+                    if (snappedDegs.isZeroLength())
+                    {
+                        mStartPoint = point;
+                    }
+                    else
+                    {
+                        mSnapRotationAccum -= snappedDegs;
+                        Ogre::Euler snappedEuler(Ogre::Degree(snappedDegs.y),
+                                                 Ogre::Degree(snappedDegs.x),
+                                                 Ogre::Degree(snappedDegs.z));
+                        rotateSelected(snappedEuler.toQuaternion());
+                        mStartPoint = point;
+                        emit selectedOrientationChanged(SelectionSet::getSingleton()->getSelectionOrientation());
+                    }
+                }
+                else
+                {
+                    rotateSelected(rotation);
+                    mStartPoint = point;
+                    emit selectedOrientationChanged(SelectionSet::getSingleton()->getSelectionOrientation());
+                }
             }
         }
     }
@@ -674,11 +897,45 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                         scaleFactor = Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
                     }
 
-                    scaleSelected(scaleFactor);
-                    mScaleStartDistance = currentDistance;
-
-                    emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
-                    updateGizmoPosition();
+                    // Apply snap if Ctrl is held or snap is permanently enabled
+                    bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
+                    if (snapping)
+                    {
+                        // Accumulate the delta from identity (1.0)
+                        mSnapScaleAccum += (scaleFactor - Ogre::Vector3::UNIT_SCALE);
+                        Ogre::Vector3 snappedDelta = snapScale(mSnapScaleAccum, mSnapScaleStep);
+                        if (snappedDelta.isZeroLength())
+                        {
+                            mScaleStartDistance = currentDistance;
+                        }
+                        else
+                        {
+                            mSnapScaleAccum -= snappedDelta;
+                            // For nodes: use incremental factor (node->scale is multiplicative)
+                            // For entities/sub-entities: use cumulative factor (scaleSelected
+                            // undoes previous and applies absolute)
+                            if (SelectionSet::getSingleton()->hasNodes())
+                            {
+                                Ogre::Vector3 snappedFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
+                                scaleSelected(snappedFactor);
+                            }
+                            else
+                            {
+                                mSnapScaleCumulative += snappedDelta;
+                                scaleSelected(mSnapScaleCumulative);
+                            }
+                            mScaleStartDistance = currentDistance;
+                            emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
+                            updateGizmoPosition();
+                        }
+                    }
+                    else
+                    {
+                        scaleSelected(scaleFactor);
+                        mScaleStartDistance = currentDistance;
+                        emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
+                        updateGizmoPosition();
+                    }
                 }
             }
         }
@@ -687,6 +944,34 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
 void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 {
+    // Push undo commands for sub-entity vertex transforms
+    if (SelectionSet::getSingleton()->hasSubEntities() && !mUndoSubEntities.isEmpty()
+        && (e->button() == Qt::LeftButton))
+    {
+        for (int i = 0; i < mUndoSubEntities.size(); ++i)
+        {
+            Ogre::SubEntity* sub = mUndoSubEntities[i];
+            Ogre::Entity* ent = sub->getParent();
+            unsigned int subIdx = 0;
+            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+            {
+                if (ent->getSubEntity(s) == sub) { subIdx = s; break; }
+            }
+            auto currentPositions = SubMeshTransform::readPositions(ent, subIdx);
+            bool changed = (currentPositions != mUndoSubMeshPositions[i]);
+            if (changed)
+            {
+                QString desc = QString("SubMesh %1 Transform").arg(subIdx);
+                UndoManager::getSingleton()->push(
+                    new SubMeshTransformCommand(sub, mUndoSubMeshPositions[i], desc));
+            }
+        }
+        mUndoSubEntities.clear();
+        mUndoSubMeshPositions.clear();
+        mStartPoint = Ogre::Vector3::ZERO;
+        mScaleStartDistance = 0.0f;
+    }
+
     if((SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()) && (e->button() == Qt::LeftButton))
     {
         // Push undo command if a transform was performed on scene nodes
@@ -819,6 +1104,22 @@ void TransformOperator::translateSelected(const Ogre::Vector3& translation)
             obj->getParentSceneNode()->needUpdate(true);
         }
     }
+    else if(SelectionSet::getSingleton()->hasSubEntities())
+    {
+        for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+        {
+            Ogre::Entity* ent = sub->getParent();
+            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+            {
+                if (ent->getSubEntity(s) == sub)
+                {
+                    SubMeshTransform::translateSubMesh(ent, s, translation);
+                    break;
+                }
+            }
+        }
+        updateGizmoPosition();
+    }
 }
 
 void TransformOperator::setSelectedScale(const Ogre::Vector3& newScale)
@@ -852,6 +1153,22 @@ void TransformOperator::scaleSelected(const Ogre::Vector3& scaleFactor)
             obj->getParentSceneNode()->needUpdate(true);
             SelectionSet::getSingleton()->setEntityScaleFactor(obj,scaleFactor);
         }
+    }
+    else if(SelectionSet::getSingleton()->hasSubEntities())
+    {
+        for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+        {
+            Ogre::Entity* ent = sub->getParent();
+            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+            {
+                if (ent->getSubEntity(s) == sub)
+                {
+                    SubMeshTransform::scaleSubMesh(ent, s, scaleFactor);
+                    break;
+                }
+            }
+        }
+        updateGizmoPosition();
     }
 }
 
@@ -906,6 +1223,22 @@ void TransformOperator::rotateSelected(const Ogre::Quaternion& rotation)
             SelectionSet::getSingleton()->setEntityRotation(
                 obj, SelectionSet::getSingleton()->getEntityRotation(obj) + eulerDelta);
         }
+    }
+    else if(SelectionSet::getSingleton()->hasSubEntities())
+    {
+        for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+        {
+            Ogre::Entity* ent = sub->getParent();
+            for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
+            {
+                if (ent->getSubEntity(s) == sub)
+                {
+                    SubMeshTransform::rotateSubMesh(ent, s, rotation);
+                    break;
+                }
+            }
+        }
+        updateGizmoPosition();
     }
 }
 

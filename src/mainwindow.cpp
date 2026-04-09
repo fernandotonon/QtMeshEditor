@@ -45,12 +45,14 @@
 #include "MCPServer.h"
 #include "NormalVisualizer.h"
 #include "MeshInfoOverlay.h"
+#include "SubEntityHighlight.h"
 #include "SpaceCamera.h"
 #include "ViewCube/ViewCubeController.h"
 #include "LLMManager.h"
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "UndoManager.h"
+#include "commands/TransformCommands.h"
 #include "PropertiesPanelController.h"
 #include "MeshLodController.h"
 #include "MeshValidator.h"
@@ -229,6 +231,7 @@ MainWindow::~MainWindow()
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
     // These singletons are safe to destroy unconditionally.
+    SubEntityHighlight::kill();
     AnimationControlController::kill();
     MeshLodController::kill();
     MeshValidator::kill();
@@ -279,6 +282,9 @@ void MainWindow::initToolBar()
     // Undo/Redo
     connect(ui->actionUndo, &QAction::triggered, UndoManager::getSingleton(), &UndoManager::undo);
     connect(ui->actionRedo, &QAction::triggered, UndoManager::getSingleton(), &UndoManager::redo);
+
+    // Duplicate
+    connect(ui->actionDuplicate, &QAction::triggered, this, &MainWindow::duplicateSelected);
 
     // Refresh gizmo position after undo/redo (deferred to avoid re-entrant scene access)
     connect(UndoManager::getSingleton()->stack(), &QUndoStack::indexChanged, this, [](int) {
@@ -342,6 +348,19 @@ void MainWindow::initToolBar()
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
+
+        // Force QQuickWidget repaint when snap settings change — QQuickWidget
+        // inside a QDockWidget doesn't repaint on internal QML property changes.
+        // QWidget::update() alone isn't enough; must also request a new frame
+        // from the QML scene graph via quickWindow().
+        connect(TransformOperator::getSingleton(), &TransformOperator::snapSettingsChanged,
+                this, [this]() {
+            if (m_propertiesPanel) {
+                m_propertiesPanel->update();
+                if (m_propertiesPanel->quickWindow())
+                    m_propertiesPanel->quickWindow()->requestUpdate();
+            }
+        });
 
         // Replace the tab widget content with the Inspector panel directly
         auto* dockContents = ui->meshEditorWidget->widget();
@@ -488,6 +507,9 @@ void MainWindow::initToolBar()
     // show normals
     m_normalVisualizer = new NormalVisualizer(Manager::getSingleton()->getSceneMgr(), this);
     connect(ui->actionShow_Normals, &QAction::toggled, m_normalVisualizer, &NormalVisualizer::setVisible);
+
+    // Sub-entity selection highlight (auto-connects to SelectionSet signals)
+    SubEntityHighlight::getSingleton();
 
     // show mesh info overlay
     m_meshInfoOverlay = new MeshInfoOverlay(this);
@@ -662,25 +684,55 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
 }
 // LCOV_EXCL_STOP
 
+void MainWindow::duplicateSelected()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Duplicate selected objects");
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel || sel->getNodesCount() == 0) return;
+
+    QList<Ogre::SceneNode*> sources = sel->getNodesSelectionList();
+    QList<Ogre::SceneNode*> clones;
+
+    for (Ogre::SceneNode* src : sources) {
+        Ogre::SceneNode* clone = Manager::getSingleton()->duplicateSceneNode(src);
+        if (clone) clones.append(clone);
+    }
+
+    if (!clones.isEmpty()) {
+        UndoManager::getSingleton()->push(new DuplicateCommand(sources, clones));
+
+        // Select the clones instead of the originals
+        sel->clearList();
+        for (Ogre::SceneNode* clone : clones)
+            sel->append(clone);
+    }
+}
+
 void MainWindow::keyPressEvent(QKeyEvent *event)
 {
     QtInputManager::getInstance().keyPressEvent(event);
 
     switch(event->key()){
     case Qt::Key_Q:
+        SentryReporter::addBreadcrumb("ui.shortcut", "Q — Select mode");
         setTransformState(TransformOperator::TS_SELECT);
        break;
     case Qt::Key_W:
+        SentryReporter::addBreadcrumb("ui.shortcut", "W — Translate mode");
         setTransformState(TransformOperator::TS_TRANSLATE);
        break;
     case Qt::Key_E:
+        SentryReporter::addBreadcrumb("ui.shortcut", "E — Rotate mode");
         setTransformState(TransformOperator::TS_ROTATE);
        break;
     case Qt::Key_R:
+        SentryReporter::addBreadcrumb("ui.shortcut", "R — Scale mode");
         setTransformState(TransformOperator::TS_SCALE);
        break;
     case Qt::Key_F:
     {
+        SentryReporter::addBreadcrumb("ui.shortcut", "F — Frame selection");
         // Frame selection: zoom camera to fit selected objects
         SpaceCamera* cam = nullptr;
         for (auto* vp : mDockWidgetList) {
@@ -695,9 +747,11 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         break;
     }
     case Qt::Key_X:
+        SentryReporter::addBreadcrumb("ui.shortcut", "X — Toggle transform space");
         TransformOperator::getSingleton()->toggleTransformSpace();
        break;
     case Qt::Key_Delete:
+        SentryReporter::addBreadcrumb("ui.shortcut", "Delete — Remove selected");
         TransformOperator::getSingleton()->removeSelected();
        break;
     default:

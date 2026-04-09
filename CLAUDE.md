@@ -46,6 +46,8 @@ qtmesh anim model.fbx --list                   # list animations
 qtmesh anim model.fbx --list --json            # list animations (JSON)
 qtmesh anim model.fbx --rename "Take 001" "Idle" -o out.fbx  # rename an animation
 qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
+qtmesh pose model.fbx --animation "Walk" --time 0.5 -o posed.stl  # export single frame
+qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl  # export N evenly spaced frames
 qtmesh validate model.fbx                      # validate mesh (exit 1 if errors found)
 qtmesh validate model.fbx --json               # validation results as JSON
 qtmesh lod model.fbx --info                    # show LOD levels
@@ -56,7 +58,7 @@ qtmesh lod model.fbx --auto                    # auto-generate LODs
 qtmesh lod model.fbx --remove -o clean.fbx     # strip LODs and save
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
@@ -147,7 +149,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### CLI Pipeline
 
 - **CLIPipeline** (`src/CLIPipeline.h/cpp`): Headless command-line interface for mesh operations. All static methods — entry point is `CLIPipeline::run(argc, argv)`.
-- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge).
+- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`.
 - Activated via `qtmesh` symlink (created at build time), `--cli` flag, or recognized subcommand as first arg.
 - Redirects stdout to stderr (Ogre/Qt noise) and writes CLI output to the original stdout fd. Uses `_exit()` to avoid Ogre static destructor crashes on macOS.
 - **AnimationMerger** (`src/AnimationMerger.h/cpp`): Public `renameAnimation()` static method used by both CLI and GUI for animation renaming.
@@ -176,6 +178,7 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 
 - **UI: QML over Widgets.** New UI should be built in QML (Qt Quick), not Qt Widgets. The Inspector panel (`qml/PropertiesPanel.qml`) and Material Editor (`qml/MaterialEditorWindow.qml`) are the reference for the QML approach. The old Transform/Material/Edit/Animation tabs have been replaced by the QML Inspector. AnimationWidget and PrimitivesWidget still exist as hidden backing widgets but are not user-visible tabs.
 - **Cross-platform: Windows, Linux (Ubuntu), macOS.** All code must compile and run on all three. Guard platform-specific APIs with `#ifdef Q_OS_WIN`, `#ifdef Q_OS_MACOS`, `#ifdef Q_OS_LINUX`. Test the CI build across all three platforms before merging.
+- **Sentry breadcrumbs.** All user-facing actions and significant operations must be tracked with `SentryReporter::addBreadcrumb(category, message)`. Use `"ui.action"` for toolbar/menu clicks, `"ai.tool_call"` for MCP tool invocations, `"file.import"` / `"file.export"` for I/O operations. This enables crash diagnostics and usage telemetry. Check existing patterns in `mainwindow.cpp`, `TransformOperator.cpp`, and `MCPServer.cpp`.
 - **Unit tests.** Add Google Test unit tests for new functionality. Test files live alongside source in `src/` with the `_test.cpp` suffix (e.g., `Manager_test.cpp`). CI runs tests only on Linux to save budget, so:
   - Features that depend on optional components (e.g., local LLM / llama.cpp) may not be available in the test environment — guard with `#ifdef ENABLE_LOCAL_LLM` or skip gracefully.
   - Tests must work under Xvfb (headless X11) — avoid assumptions about a real display.
@@ -204,6 +207,8 @@ All other version references are auto-generated from this via CMake template sub
 - `DEBIAN-control.in` — Debian package control file
 
 **To bump the version**, only edit the `VERSION` in `CMakeLists.txt` line 16. The rest updates automatically on rebuild.
+
+**Version format: `X.Y.Z` only — never prepend `v`.** GitHub release tags, update check comparisons, and all version strings use plain `X.Y.Z` (e.g., `2.21.0`, not `v2.21.0`). The update check feature compares the runtime version against the latest GitHub release tag, so a `v` prefix would break the comparison.
 
 Note: `MCPServer.h` has a separate `SERVER_VERSION` ("1.0.0") for the MCP protocol — only bump that if the MCP interface changes.
 

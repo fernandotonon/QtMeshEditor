@@ -1,6 +1,7 @@
 #include "TransformCommands.h"
 #include "../Manager.h"
 #include "../SelectionSet.h"
+#include "../SubMeshTransform.h"
 #include <Ogre.h>
 
 // Check if a scene node pointer is still valid (not destroyed)
@@ -143,5 +144,102 @@ void DeleteCommand::redo()
     {
         if (snap.node)
             snap.node->setVisible(false, true);
+    }
+}
+
+// ---- DuplicateCommand ----
+
+DuplicateCommand::DuplicateCommand(const QList<Ogre::SceneNode*>& sourceNodes,
+                                   const QList<Ogre::SceneNode*>& clonedNodes,
+                                   QUndoCommand* parent)
+    : QUndoCommand("Duplicate", parent), mClonedNodes(clonedNodes), mFirstRedo(true)
+{
+    // Store source node names so we can re-duplicate on redo
+    for (Ogre::SceneNode* src : sourceNodes)
+        mSourceNodeNames << QString::fromStdString(src->getName());
+}
+
+void DuplicateCommand::undo()
+{
+    // Destroy the cloned nodes (same as removeSelected pattern)
+    for (Ogre::SceneNode* node : mClonedNodes) {
+        if (node)
+            Manager::getSingleton()->destroySceneNode(node);
+    }
+    mClonedNodes.clear();
+    SelectionSet::getSingleton()->clearList();
+}
+
+void DuplicateCommand::redo()
+{
+    if (mFirstRedo) {
+        mFirstRedo = false;
+        return;
+    }
+    // Re-duplicate from the source nodes
+    mClonedNodes.clear();
+    for (const QString& name : mSourceNodeNames) {
+        if (!Manager::getSingleton()->hasSceneNode(name)) continue;
+        Ogre::SceneNode* src = Manager::getSingleton()->getSceneMgr()
+            ->getSceneNode(name.toStdString());
+        Ogre::SceneNode* clone = Manager::getSingleton()->duplicateSceneNode(src);
+        if (clone) mClonedNodes.append(clone);
+    }
+    // Select the new clones
+    SelectionSet* sel = SelectionSet::getSingleton();
+    sel->clearList();
+    for (Ogre::SceneNode* clone : mClonedNodes)
+        sel->append(clone);
+}
+
+// ---- SubMeshTransformCommand ----
+
+SubMeshTransformCommand::SubMeshTransformCommand(Ogre::SubEntity* subEntity,
+                                                   const std::vector<Ogre::Vector3>& originalPositions,
+                                                   const QString& description,
+                                                   QUndoCommand* parent)
+    : QUndoCommand(description, parent)
+    , mSubEntity(subEntity)
+    , mEntity(subEntity ? subEntity->getParent() : nullptr)
+    , mSubMeshIndex(0)
+    , mOriginalPositions(originalPositions)
+    , mFirstRedo(true)
+{
+    // Determine the sub-mesh index within the parent entity
+    if (mEntity)
+    {
+        for (unsigned int i = 0; i < mEntity->getNumSubEntities(); ++i)
+        {
+            if (mEntity->getSubEntity(i) == mSubEntity)
+            {
+                mSubMeshIndex = i;
+                break;
+            }
+        }
+    }
+}
+
+void SubMeshTransformCommand::undo()
+{
+    if (mEntity)
+    {
+        SubMeshTransform::writePositions(mEntity, mSubMeshIndex, mOriginalPositions);
+    }
+}
+
+void SubMeshTransformCommand::redo()
+{
+    if (mFirstRedo)
+    {
+        // Capture the current (post-transform) positions on first redo
+        if (mEntity)
+            mNewPositions = SubMeshTransform::readPositions(mEntity, mSubMeshIndex);
+        mFirstRedo = false;
+        return;
+    }
+
+    if (mEntity)
+    {
+        SubMeshTransform::writePositions(mEntity, mSubMeshIndex, mNewPositions);
     }
 }

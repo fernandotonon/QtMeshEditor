@@ -42,6 +42,9 @@
 #include <OgreKeyFrame.h>
 #include <OgreBone.h>
 #include "AnimationMerger.h"
+#include "SubMeshTransform.h"
+#include "UndoManager.h"
+#include "commands/TransformCommands.h"
 
 #ifdef Q_OS_WIN
 #include <io.h>
@@ -386,7 +389,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 
     // Start a performance transaction for heavy tools
     static const QStringList heavyTools = {
-        "load_mesh", "export_mesh", "take_screenshot", "create_primitive", "create_material",
+        "load_mesh", "export_mesh", "export_pose", "take_screenshot", "create_primitive", "create_material",
         "merge_animations", "save_scene", "open_scene"
     };
     uintptr_t txn = 0;
@@ -419,6 +422,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolGetMeshInfo(args);
     } else if (name == "transform_mesh") {
         toolResult = toolTransformMesh(args);
+    } else if (name == "transform_submesh") {
+        toolResult = toolTransformSubMesh(args);
     } else if (name == "list_textures") {
         toolResult = toolListTextures(args);
     } else if (name == "set_texture") {
@@ -479,10 +484,18 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolReadFile(args);
     } else if (name == "delete_entity") {
         toolResult = toolDeleteEntity(args);
+    } else if (name == "duplicate_entity") {
+        toolResult = toolDuplicateEntity(args);
     } else if (name == "camera_control") {
         toolResult = toolCameraControl(args);
     } else if (name == "get_camera_info") {
         toolResult = toolGetCameraInfo(args);
+    } else if (name == "set_snap_settings") {
+        toolResult = toolSetSnapSettings(args);
+    } else if (name == "get_snap_settings") {
+        toolResult = toolGetSnapSettings(args);
+    } else if (name == "export_pose") {
+        toolResult = toolExportPose(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -1020,6 +1033,65 @@ QJsonObject MCPServer::toolTransformMesh(const QJsonObject &args)
         return makeSuccessResult(QString("Applied transforms to '%1':\n%2")
             .arg(QString::fromStdString(targetNode->getName()))
             .arg(transforms.join("\n")));
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
+    }
+}
+
+QJsonObject MCPServer::toolTransformSubMesh(const QJsonObject &args)
+{
+    try {
+        if (!Manager::getSingletonPtr())
+            return makeErrorResult("Error: Manager not available");
+
+        QString entityName = args["entity_name"].toString();
+        if (entityName.isEmpty())
+            return makeErrorResult("Error: entity_name is required");
+
+        int subIdx = args["submesh_index"].toInt(-1);
+        if (subIdx < 0)
+            return makeErrorResult("Error: submesh_index must be a non-negative integer");
+
+        Ogre::Entity* entity = findEntityByName(entityName);
+        if (!entity)
+            return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+
+        unsigned int uSubIdx = static_cast<unsigned int>(subIdx);
+        if (uSubIdx >= entity->getNumSubEntities())
+            return makeErrorResult(QString("Error: submesh_index %1 out of range (entity has %2 sub-meshes)")
+                .arg(subIdx).arg(entity->getNumSubEntities()));
+
+        QStringList transforms;
+
+        if (args.contains("translate")) {
+            Ogre::Vector3 delta = parseVector3(args["translate"]);
+            SubMeshTransform::translateSubMesh(entity, uSubIdx, delta);
+            transforms << QString("translate: %1, %2, %3").arg(delta.x).arg(delta.y).arg(delta.z);
+        }
+        if (args.contains("rotate")) {
+            Ogre::Vector3 rot = parseVector3(args["rotate"]);
+            Ogre::Quaternion q;
+            q.FromAngleAxis(Ogre::Degree(rot.x), Ogre::Vector3::UNIT_X);
+            Ogre::Quaternion qy; qy.FromAngleAxis(Ogre::Degree(rot.y), Ogre::Vector3::UNIT_Y);
+            Ogre::Quaternion qz; qz.FromAngleAxis(Ogre::Degree(rot.z), Ogre::Vector3::UNIT_Z);
+            SubMeshTransform::rotateSubMesh(entity, uSubIdx, qz * qy * q);
+            transforms << QString("rotate: %1, %2, %3").arg(rot.x).arg(rot.y).arg(rot.z);
+        }
+        if (args.contains("scale")) {
+            Ogre::Vector3 scale = parseVector3(args["scale"]);
+            SubMeshTransform::scaleSubMesh(entity, uSubIdx, scale);
+            transforms << QString("scale: %1, %2, %3").arg(scale.x).arg(scale.y).arg(scale.z);
+        }
+
+        if (transforms.isEmpty())
+            return makeErrorResult("Error: No transform specified. Provide translate, rotate, or scale.");
+
+        SentryReporter::addBreadcrumb("mcp.tool",
+            QString("transform_submesh: %1[%2]").arg(entityName).arg(subIdx));
+
+        return makeSuccessResult(QString("Applied sub-mesh transforms to '%1' submesh %2:\n%3")
+            .arg(entityName).arg(subIdx).arg(transforms.join("\n")));
 
     } catch (Ogre::Exception& e) {
         return makeErrorResult(QString("Ogre error: %1").arg(QString::fromStdString(e.getFullDescription())));
@@ -2411,6 +2483,37 @@ QJsonObject MCPServer::toolDeleteEntity(const QJsonObject &args)
     return makeSuccessResult(QString("Deleted '%1' from the scene.").arg(name));
 }
 
+QJsonObject MCPServer::toolDuplicateEntity(const QJsonObject &args)
+{
+    QString name = args["name"].toString();
+
+    Ogre::SceneNode* sourceNode = nullptr;
+    if (!name.isEmpty()) {
+        sourceNode = findSceneNodeByName(name);
+        if (!sourceNode)
+            return makeErrorResult(QString("Error: Node '%1' not found").arg(name));
+    } else {
+        // Duplicate current selection
+        SelectionSet* sel = SelectionSet::getSingleton();
+        if (!sel || sel->getNodesCount() == 0)
+            return makeErrorResult("Error: No name provided and no scene nodes selected.");
+        sourceNode = sel->getNodesSelectionList().first();
+    }
+
+    Ogre::SceneNode* clone = Manager::getSingleton()->duplicateSceneNode(sourceNode);
+    if (!clone)
+        return makeErrorResult("Error: Failed to duplicate node.");
+
+    // Push undo command so MCP duplication is reversible (same as UI path)
+    QList<Ogre::SceneNode*> sources = {sourceNode};
+    QList<Ogre::SceneNode*> clones = {clone};
+    UndoManager::getSingleton()->push(new DuplicateCommand(sources, clones));
+
+    return makeSuccessResult(QString("Duplicated '%1' as '%2'")
+        .arg(QString::fromStdString(sourceNode->getName()),
+             QString::fromStdString(clone->getName())));
+}
+
 QJsonObject MCPServer::toolGetCameraInfo(const QJsonObject &args)
 {
     Q_UNUSED(args);
@@ -2485,6 +2588,135 @@ QJsonObject MCPServer::toolCameraControl(const QJsonObject &args)
         return makeErrorResult("Error: No camera action specified. Use position, target, zoom, or frame_selection.");
 
     return makeSuccessResult("Camera updated:\n" + actions.join("\n"));
+}
+
+QJsonObject MCPServer::toolSetSnapSettings(const QJsonObject &args)
+{
+    auto* top = TransformOperator::getSingleton();
+    if (!top)
+        return makeErrorResult("Error: TransformOperator not initialized");
+
+    // Validate all fields first to avoid partial mutation
+    if (args.contains("grid_size") && args["grid_size"].toDouble() <= 0.0)
+        return makeErrorResult("Error: grid_size must be positive");
+    if (args.contains("angle_step") && args["angle_step"].toDouble() <= 0.0)
+        return makeErrorResult("Error: angle_step must be positive");
+    if (args.contains("scale_step") && args["scale_step"].toDouble() <= 0.0)
+        return makeErrorResult("Error: scale_step must be positive");
+
+    // Apply all validated fields
+    QStringList changes;
+
+    if (args.contains("enabled")) {
+        bool enabled = args["enabled"].toBool();
+        top->setSnapEnabled(enabled);
+        changes << QString("Snap %1").arg(enabled ? "enabled" : "disabled");
+    }
+
+    if (args.contains("grid_size")) {
+        double gridSize = args["grid_size"].toDouble();
+        top->setSnapGridSize(gridSize);
+        changes << QString("Grid size: %1").arg(gridSize);
+    }
+
+    if (args.contains("angle_step")) {
+        double angleStep = args["angle_step"].toDouble();
+        top->setSnapAngleStep(angleStep);
+        changes << QString("Angle step: %1 degrees").arg(angleStep);
+    }
+
+    if (args.contains("scale_step")) {
+        double scaleStep = args["scale_step"].toDouble();
+        top->setSnapScaleStep(scaleStep);
+        changes << QString("Scale step: %1").arg(scaleStep);
+    }
+
+    if (changes.isEmpty())
+        return makeErrorResult("Error: No snap settings specified. Use enabled, grid_size, angle_step, or scale_step.");
+
+    return makeSuccessResult("Snap settings updated:\n" + changes.join("\n"));
+}
+
+QJsonObject MCPServer::toolGetSnapSettings(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    auto* top = TransformOperator::getSingleton();
+    if (!top)
+        return makeErrorResult("Error: TransformOperator not initialized");
+
+    QStringList lines;
+    lines << QString("Snap enabled: %1").arg(top->isSnapEnabled() ? "true" : "false");
+    lines << QString("Grid size: %1 (translation)").arg(top->snapGridSize());
+    lines << QString("Angle step: %1 degrees (rotation)").arg(top->snapAngleStep());
+    lines << QString("Scale step: %1 (scale)").arg(top->snapScaleStep());
+    lines << "";
+    lines << "Tip: Hold Ctrl during drag for temporary snap, even when snap is disabled.";
+
+    return makeSuccessResult(lines.join("\n"));
+}
+
+QJsonObject MCPServer::toolExportPose(const QJsonObject &args)
+{
+    QString entityName = args["entity"].toString();
+    QString animName = args["animation"].toString();
+    double time = args["time"].toDouble(0.0);
+    QString outputPath = args["output_path"].toString();
+
+    if (outputPath.isEmpty())
+        return makeErrorResult("Error: output_path is required");
+    if (animName.isEmpty())
+        return makeErrorResult("Error: animation name is required");
+
+    try {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        // Find the entity
+        Ogre::Entity* entity = nullptr;
+        if (!entityName.isEmpty()) {
+            auto* sm = mgr->getSceneMgr();
+            if (sm->hasEntity(entityName.toStdString()))
+                entity = sm->getEntity(entityName.toStdString());
+        }
+        if (!entity) {
+            // Try the first selected entity, or first entity in scene
+            SelectionSet* sel = SelectionSet::getSingleton();
+            if (sel && sel->getEntitiesCount() > 0) {
+                entity = sel->getEntity(0);
+            } else {
+                auto& entities = mgr->getEntities();
+                if (!entities.isEmpty())
+                    entity = entities.first();
+            }
+        }
+
+        if (!entity)
+            return makeErrorResult("Error: No entity found. Specify entity name or select one.");
+        if (!entity->hasSkeleton())
+            return makeErrorResult("Error: Entity has no skeleton — cannot export pose.");
+
+        // Set animation time
+        auto* animStates = entity->getAllAnimationStates();
+        if (!animStates || !animStates->hasAnimationState(animName.toStdString()))
+            return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+
+        auto* animState = animStates->getAnimationState(animName.toStdString());
+        animState->setEnabled(true);
+        animState->setTimePosition(static_cast<float>(time));
+
+        int result = MeshImporterExporter::exportCurrentPose(entity, outputPath);
+
+        animState->setEnabled(false);
+
+        if (result != 0)
+            return makeErrorResult(QString("Error: Export failed (code %1)").arg(result));
+
+        return makeSuccessResult(QString("Exported pose to: %1 (animation: %2, time: %3s)")
+            .arg(outputPath).arg(animName).arg(time, 0, 'f', 3));
+
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error exporting pose: %1").arg(e.what()));
+    }
 }
 
 QJsonArray MCPServer::buildToolsList()
@@ -2641,6 +2873,26 @@ QJsonArray MCPServer::buildToolsList()
         ));
     }
 
+    // transform_submesh
+    {
+        QJsonObject inputSchema;
+        inputSchema["type"] = "object";
+        QJsonObject properties;
+        properties["entity_name"]   = QJsonObject{{"type", "string"}, {"description", "Name of the entity containing the sub-mesh"}};
+        properties["submesh_index"] = QJsonObject{{"type", "integer"}, {"description", "Zero-based index of the sub-mesh within the entity"}};
+        properties["translate"]     = QJsonObject{{"type", "array"}, {"description", "Translation delta [X, Y, Z] applied to vertex positions"}};
+        properties["rotate"]        = QJsonObject{{"type", "array"}, {"description", "Rotation in degrees [X, Y, Z] applied around sub-mesh centroid"}};
+        properties["scale"]         = QJsonObject{{"type", "array"}, {"description", "Scale factor [X, Y, Z] applied around sub-mesh centroid"}};
+        inputSchema["properties"] = properties;
+        inputSchema["required"] = QJsonArray{"entity_name", "submesh_index"};
+
+        tools.append(buildToolDefinition(
+            "transform_submesh",
+            "Transform vertices of a specific sub-mesh within an entity. Modifies the actual vertex buffer data (positions and normals), making changes exportable. Provide entity_name and submesh_index, plus any combination of translate, rotate, and scale.",
+            inputSchema
+        ));
+    }
+
     // list_textures
     {
         QJsonObject inputSchema;
@@ -2695,6 +2947,23 @@ QJsonArray MCPServer::buildToolsList()
             "Export the selected scene node's mesh to a file. A node must be selected first (use get_scene_info to list nodes). Skeleton and animation data is included automatically when present.",
             inputSchema
         ));
+    }
+
+    // export_pose
+    {
+        QJsonObject props;
+        props["entity"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity (optional, defaults to selected or first entity)"}};
+        props["animation"] = QJsonObject{{"type", "string"}, {"description", "Name of the skeletal animation to pose"}};
+        props["time"] = QJsonObject{{"type", "number"}, {"description", "Time position in seconds within the animation (default: 0.0)"}};
+        props["output_path"] = QJsonObject{{"type", "string"}, {"description", "Output file path (e.g., 'posed.stl', 'posed.obj', 'posed.fbx')"}};
+        appendTool(
+            "export_pose",
+            "Export the current animated pose of a skeletal entity as a static mesh (no skeleton, no animations). "
+            "Scrub the animation to the desired time, then bake the deformed vertex positions into a new mesh file. "
+            "Supports STL, OBJ, glTF, FBX, and other formats.",
+            props,
+            QJsonArray{"animation", "output_path"}
+        );
     }
 
     // get_scene_info
@@ -3033,6 +3302,17 @@ QJsonArray MCPServer::buildToolsList()
         );
     }
 
+    // duplicate_entity
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity/node to duplicate. If omitted, duplicates the current selection."}};
+        appendTool(
+            "duplicate_entity",
+            "Duplicate an entity/node in the scene, creating a clone with the same mesh, materials, and transform. The clone gets a '_copy' name suffix.",
+            props
+        );
+    }
+
     // get_camera_info
     {
         appendTool(
@@ -3054,6 +3334,30 @@ QJsonArray MCPServer::buildToolsList()
             "Control the 3D viewport camera. Set position, look-at target, zoom, or frame the selection. "
             "Multiple actions can be combined in one call.",
             props
+        );
+    }
+
+    // set_snap_settings
+    {
+        QJsonObject props;
+        props["enabled"] = QJsonObject{{"type", "boolean"}, {"description", "Enable or disable persistent snapping. When enabled, transforms always snap. When disabled, hold Ctrl during drag to snap."}};
+        props["grid_size"] = QJsonObject{{"type", "number"}, {"description", "Translation snap grid size. Presets: 0.1, 0.25, 0.5, 1.0, 2.0, 5.0"}};
+        props["angle_step"] = QJsonObject{{"type", "number"}, {"description", "Rotation snap angle in degrees. Presets: 5, 15, 45, 90"}};
+        props["scale_step"] = QJsonObject{{"type", "number"}, {"description", "Scale snap step size. Presets: 0.1, 0.25, 0.5"}};
+        appendTool(
+            "set_snap_settings",
+            "Configure transform snapping. Snapping rounds translations to grid positions, rotations to angle increments, "
+            "and scales to step sizes. Hold Ctrl during drag for temporary snap, or enable persistent snap.",
+            props
+        );
+    }
+
+    // get_snap_settings
+    {
+        appendTool(
+            "get_snap_settings",
+            "Get the current transform snap settings: enabled state, grid size, angle step, and scale step.",
+            QJsonObject()
         );
     }
 

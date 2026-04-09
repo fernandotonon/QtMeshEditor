@@ -44,6 +44,12 @@ class PropertiesPanelController : public QObject
     Q_PROPERTY(bool hasAnimations READ hasAnimations NOTIFY selectionChanged)
     Q_PROPERTY(bool playing READ isPlaying WRITE setPlaying NOTIFY playingChanged)
 
+    // Snap properties
+    Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
+    Q_PROPERTY(double snapGridSize READ snapGridSize WRITE setSnapGridSize NOTIFY snapGridSizeChanged)
+    Q_PROPERTY(double snapAngleStep READ snapAngleStep WRITE setSnapAngleStep NOTIFY snapAngleStepChanged)
+    Q_PROPERTY(double snapScaleStep READ snapScaleStep WRITE setSnapScaleStep NOTIFY snapScaleStepChanged)
+
     // Primitive properties
     Q_PROPERTY(bool hasPrimitive READ hasPrimitive NOTIFY selectionChanged)
     Q_PROPERTY(QString primitiveType READ primitiveType NOTIFY selectionChanged)
@@ -97,6 +103,20 @@ public:
     void setScaleY(double v);
     void setScaleZ(double v);
 
+    // Snap accessors/mutators
+    bool snapEnabled() const;
+    double snapGridSize() const;
+    double snapAngleStep() const;
+    double snapScaleStep() const;
+    void setSnapEnabled(bool enabled);
+    void setSnapGridSize(double size);
+    void setSnapAngleStep(double degrees);
+    void setSnapScaleStep(double step);
+
+    Q_INVOKABLE QVariantList gridSizePresets() const;
+    Q_INVOKABLE QVariantList angleStepPresets() const;
+    Q_INVOKABLE QVariantList scaleStepPresets() const;
+
     // Selection state
     bool hasSelection() const;
     bool hasEntitySelection() const;
@@ -148,6 +168,10 @@ public:
     Q_INVOKABLE void toggleBoneWeights(const QString& entityName, bool show);
     Q_INVOKABLE bool renameAnimation(const QString& entityName, const QString& oldName, const QString& newName);
 
+    /// Export the current animated pose of the first selected animated entity as a static mesh.
+    /// Opens a file save dialog if no path is provided.
+    Q_INVOKABLE bool exportCurrentPose(const QString& path = QString());
+
 public slots:
     void onSelectionChanged();
     void onTransformChanged();
@@ -162,6 +186,11 @@ signals:
     void primitiveChanged();
     void playingChanged();
     void animationStateChanged();
+    void snapSettingsChanged();
+    void snapEnabledChanged();
+    void snapGridSizeChanged();
+    void snapAngleStepChanged();
+    void snapScaleStepChanged();
 
 private:
     PropertiesPanelController();

@@ -37,6 +37,10 @@ THE SOFTWARE.
 
 #include "Manager.h"
 #include "RTShaderHelper.h"
+#include <OgreSkeletonManager.h>
+#include <OgreSkeleton.h>
+#include <OgreBone.h>
+#include <OgreAnimation.h>
 #include "SentryReporter.h"
 #include "SelectionSet.h"
 #include "TransformOperator.h"
@@ -253,6 +257,136 @@ Ogre::Entity* Manager::createEntity(Ogre::SceneNode* const& sceneNode, const Ogr
     if(!mInitializingScene)
         SelectionSet::getSingleton()->selectOne(sceneNode);
     return ent;
+}
+
+Ogre::SceneNode* Manager::duplicateSceneNode(Ogre::SceneNode* source)
+{
+    if (!source || !mSceneMgr) return nullptr;
+
+    // Generate a unique name based on the source
+    QString baseName = QString::fromStdString(source->getName()) + "_copy";
+    Ogre::SceneNode* newNode = addSceneNode(baseName);
+
+    // Copy transform
+    newNode->setPosition(source->getPosition());
+    newNode->setOrientation(source->getOrientation());
+    newNode->setScale(source->getScale());
+
+    // Copy user object bindings (preserves primitive type, custom data, etc.)
+    const auto& srcBindings = source->getUserObjectBindings();
+    auto& dstBindings = newNode->getUserObjectBindings();
+    // Copy the "default" user any (used by PrimitiveObject::isPrimitive)
+    if (!srcBindings.getUserAny().isEmpty())
+        dstBindings.setUserAny(srcBindings.getUserAny());
+
+    // Deep-clone attached entities (each gets its own Mesh copy so
+    // skeleton, animations, and materials are fully independent).
+    for (unsigned short i = 0; i < source->numAttachedObjects(); ++i) {
+        Ogre::MovableObject* obj = source->getAttachedObject(i);
+        if (obj->getMovableType() != "Entity") continue;
+
+        Ogre::Entity* srcEntity = static_cast<Ogre::Entity*>(obj);
+
+        // Deep-clone mesh AND skeleton so animations are fully independent.
+        // Mesh::clone() copies geometry but still references the same Skeleton resource.
+        // We must also clone the skeleton and reassign it to the new mesh.
+        // Use per-entity index to avoid name collisions when a node has multiple entities.
+        QString cloneMeshName = QString::fromStdString(newNode->getName()) + "_mesh" +
+                                (i > 0 ? QString::number(i) : QString());
+
+        // Remove stale resources from a previous undo cycle (redo re-creates them)
+        if (Ogre::MeshManager::getSingleton().getByName(cloneMeshName.toStdString()))
+            Ogre::MeshManager::getSingleton().remove(cloneMeshName.toStdString());
+
+        Ogre::MeshPtr clonedMesh = srcEntity->getMesh()->clone(cloneMeshName.toStdString());
+
+        if (srcEntity->getMesh()->hasSkeleton()) {
+            try {
+                QString cloneSkelName = QString::fromStdString(newNode->getName()) + "_skel" +
+                                       (i > 0 ? QString::number(i) : QString());
+
+                // Remove stale skeleton from a previous undo cycle
+                if (Ogre::SkeletonManager::getSingleton().getByName(cloneSkelName.toStdString()))
+                    Ogre::SkeletonManager::getSingleton().remove(cloneSkelName.toStdString());
+
+                Ogre::SkeletonPtr srcSkel = srcEntity->getMesh()->getSkeleton();
+
+                // isManual=true tells Ogre not to try loading from disk
+                Ogre::SkeletonPtr clonedSkel = Ogre::SkeletonManager::getSingleton().create(
+                    cloneSkelName.toStdString(), srcSkel->getGroup(), true);
+
+                // Copy bones using the skeleton's bone iterator (handles may not be sequential)
+                auto srcBoneIt = srcSkel->getBoneIterator();
+                while (srcBoneIt.hasMoreElements()) {
+                    Ogre::Bone* srcBone = srcBoneIt.getNext();
+                    Ogre::Bone* newBone = clonedSkel->createBone(
+                        srcBone->getName(), srcBone->getHandle());
+                    newBone->setPosition(srcBone->getInitialPosition());
+                    newBone->setOrientation(srcBone->getInitialOrientation());
+                    newBone->setScale(srcBone->getInitialScale());
+                    newBone->setInitialState();
+                }
+
+                // Rebuild bone hierarchy
+                auto srcBoneIt2 = srcSkel->getBoneIterator();
+                while (srcBoneIt2.hasMoreElements()) {
+                    Ogre::Bone* srcBone = srcBoneIt2.getNext();
+                    Ogre::Node* srcParent = srcBone->getParent();
+                    if (srcParent && srcSkel->hasBone(srcParent->getName())) {
+                        Ogre::Bone* dstParent = clonedSkel->getBone(srcParent->getName());
+                        Ogre::Bone* dstBone = clonedSkel->getBone(srcBone->getName());
+                        if (dstParent && dstBone && !dstBone->getParent())
+                            dstParent->addChild(dstBone);
+                    }
+                }
+                clonedSkel->setBindingPose();
+
+                // Copy animations
+                for (unsigned short a = 0; a < srcSkel->getNumAnimations(); ++a) {
+                    Ogre::Animation* srcAnim = srcSkel->getAnimation(a);
+                    Ogre::Animation* dstAnim = clonedSkel->createAnimation(
+                        srcAnim->getName(), srcAnim->getLength());
+                    dstAnim->setInterpolationMode(srcAnim->getInterpolationMode());
+                    dstAnim->setRotationInterpolationMode(srcAnim->getRotationInterpolationMode());
+
+                    for (const auto& [handle, srcTrack] : srcAnim->_getNodeTrackList()) {
+                        auto* dstTrack = dstAnim->createNodeTrack(handle);
+                        try {
+                            if (srcTrack->getAssociatedNode()) {
+                                Ogre::Bone* dstBone = clonedSkel->getBone(handle);
+                                if (dstBone) dstTrack->setAssociatedNode(dstBone);
+                            }
+                        } catch (...) { /* handle not found — skip association */ }
+                        for (unsigned short k = 0; k < srcTrack->getNumKeyFrames(); ++k) {
+                            const auto* kf = srcTrack->getNodeKeyFrame(k);
+                            auto* dstKf = dstTrack->createNodeKeyFrame(kf->getTime());
+                            dstKf->setTranslate(kf->getTranslate());
+                            dstKf->setRotation(kf->getRotation());
+                            dstKf->setScale(kf->getScale());
+                        }
+                    }
+                }
+
+                // Signal that the skeleton is fully loaded (populated in-memory)
+                clonedSkel->_fireLoadingComplete();
+
+                clonedMesh->setSkeletonName(clonedSkel->getName());
+                clonedMesh->_notifySkeleton(clonedSkel);
+            } catch (Ogre::Exception& e) {
+                qWarning("Failed to clone skeleton: %s", e.getFullDescription().c_str());
+            }
+        }
+
+        Ogre::Entity* newEntity = createEntity(newNode, clonedMesh);
+
+        // Copy per-sub-entity material assignments
+        for (unsigned int s = 0; s < srcEntity->getNumSubEntities(); ++s) {
+            newEntity->getSubEntity(s)->setMaterial(
+                srcEntity->getSubEntity(s)->getMaterial());
+        }
+    }
+
+    return newNode;
 }
 
 void Manager::destroySceneNode(const QString & name)
