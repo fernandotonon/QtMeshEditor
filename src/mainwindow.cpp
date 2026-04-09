@@ -791,6 +791,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         SentryReporter::addBreadcrumb("ui.shortcut", "X — Toggle transform space");
         TransformOperator::getSingleton()->toggleTransformSpace();
        break;
+    case Qt::Key_P:
+        SentryReporter::addBreadcrumb("ui.shortcut", "P — Cycle pivot mode");
+        TransformOperator::getSingleton()->cyclePivotMode();
+       break;
     case Qt::Key_Delete:
         SentryReporter::addBreadcrumb("ui.shortcut", "Delete — Remove selected");
         TransformOperator::getSingleton()->removeSelected();

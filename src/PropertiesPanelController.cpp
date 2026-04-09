@@ -56,6 +56,10 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
         emit transformChanged();
     });
 
+    connect(transformOp, &TransformOperator::pivotModeChanged, this, [this]() {
+        emit pivotModeChanged();
+    });
+
     connect(transformOp, &TransformOperator::snapSettingsChanged, this, [this]() {
         emit snapSettingsChanged();
         emit snapEnabledChanged();
@@ -545,6 +549,28 @@ void PropertiesPanelController::onSceneChanged()
 void PropertiesPanelController::refreshTheme()
 {
     emit themeChanged();
+}
+
+// Pivot mode — delegate to TransformOperator
+int PropertiesPanelController::pivotMode() const
+{
+    return static_cast<int>(TransformOperator::getSingleton()->pivotMode());
+}
+
+void PropertiesPanelController::setPivotMode(int mode)
+{
+    if (mode >= TransformOperator::PIVOT_CENTER && mode <= TransformOperator::PIVOT_ORIGIN)
+    {
+        TransformOperator::getSingleton()->setPivotMode(
+            static_cast<TransformOperator::PivotMode>(mode));
+        emit pivotModeChanged();
+    }
+}
+
+void PropertiesPanelController::cyclePivotMode()
+{
+    TransformOperator::getSingleton()->cyclePivotMode();
+    emit pivotModeChanged();
 }
 
 // Snap settings — delegate to TransformOperator

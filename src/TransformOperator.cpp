@@ -2,6 +2,7 @@
 #include <QSettings>
 #include <QApplication>
 #include <cmath>
+#include <limits>
 
 #include "GlobalDefinitions.h"
 
@@ -91,6 +92,11 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     mSnapGridSize   = settings.value("Snap/gridSize", 1.0).toDouble();
     mSnapAngleStep  = settings.value("Snap/angleStep", 15.0).toDouble();
     mSnapScaleStep  = settings.value("Snap/scaleStep", 0.25).toDouble();
+
+    // Load pivot mode from QSettings
+    int pivotVal = settings.value("Pivot/mode", static_cast<int>(PIVOT_CENTER)).toInt();
+    if (pivotVal >= PIVOT_CENTER && pivotVal <= PIVOT_ORIGIN)
+        mPivotMode = static_cast<PivotMode>(pivotVal);
 }
 
 TransformOperator::~TransformOperator()
@@ -247,6 +253,216 @@ Ogre::Vector3 TransformOperator::snapScale(const Ogre::Vector3& scale, double sc
         static_cast<Ogre::Real>(snapValue(scale.z, scaleStep))
     );
 }
+void TransformOperator::setPivotMode(PivotMode mode)
+{
+    if (mPivotMode != mode)
+    {
+        mPivotMode = mode;
+        QSettings settings;
+        settings.setValue("Pivot/mode", static_cast<int>(mPivotMode));
+        QString modeName;
+        switch (mode) {
+        case PIVOT_CENTER: modeName = "Center"; break;
+        case PIVOT_BOTTOM: modeName = "Bottom"; break;
+        case PIVOT_ORIGIN: modeName = "Origin"; break;
+        }
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Pivot mode changed to %1").arg(modeName));
+        updateGizmoPosition();
+        emit pivotModeChanged(mPivotMode);
+    }
+}
+
+void TransformOperator::cyclePivotMode()
+{
+    switch (mPivotMode) {
+    case PIVOT_CENTER: setPivotMode(PIVOT_BOTTOM); break;
+    case PIVOT_BOTTOM: setPivotMode(PIVOT_ORIGIN); break;
+    case PIVOT_ORIGIN: setPivotMode(PIVOT_CENTER); break;
+    }
+}
+
+Ogre::Vector3 TransformOperator::getPivotPoint() const
+{
+    auto* sel = SelectionSet::getSingleton();
+    if (sel->isEmpty())
+        return Ogre::Vector3::ZERO;
+
+    switch (mPivotMode)
+    {
+    case PIVOT_CENTER:
+    {
+        // True geometric center of bounding box
+        if (sel->hasNodes())
+        {
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            for (int i = 0; i < sel->getNodesCount(); ++i)
+            {
+                Ogre::SceneNode* node = sel->getSceneNode(i);
+                // Use world bounding box center if entities are attached,
+                // otherwise use node position
+                if (node->numAttachedObjects() > 0)
+                {
+                    Ogre::AxisAlignedBox aabb;
+                    for (auto& obj : node->getAttachedObjects())
+                        aabb.merge(obj->getWorldBoundingBox(true));
+                    if (aabb.isFinite())
+                    {
+                        center += aabb.getCenter();
+                        continue;
+                    }
+                }
+                center += node->getPosition();
+            }
+            return center / static_cast<Ogre::Real>(sel->getNodesCount());
+        }
+        else if (sel->hasEntities())
+        {
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            for (int i = 0; i < sel->getEntitiesCount(); ++i)
+            {
+                Ogre::Entity* ent = sel->getEntity(i);
+                const Ogre::AxisAlignedBox bb = ent->getWorldBoundingBox(true);
+                if (bb.isFinite())
+                    center += bb.getCenter();
+                else
+                    center += ent->getParentSceneNode()->getPosition();
+            }
+            return center / static_cast<Ogre::Real>(sel->getEntitiesCount());
+        }
+        else if (sel->hasSubEntities())
+        {
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            for (int i = 0; i < sel->getSubEntitiesCount(); ++i)
+            {
+                Ogre::SubEntity* sub = sel->getSubEntity(i);
+                const Ogre::AxisAlignedBox bb = sub->getParent()->getWorldBoundingBox(true);
+                if (bb.isFinite())
+                    center += bb.getCenter();
+                else
+                    center += sub->getParent()->getParentSceneNode()->getPosition();
+            }
+            return center / static_cast<Ogre::Real>(sel->getSubEntitiesCount());
+        }
+        break;
+    }
+    case PIVOT_BOTTOM:
+    {
+        // Bottom-center: center of bounding box but Y = minimum Y
+        if (sel->hasNodes())
+        {
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            Ogre::Real minY = std::numeric_limits<Ogre::Real>::max();
+            int count = sel->getNodesCount();
+            for (int i = 0; i < count; ++i)
+            {
+                Ogre::SceneNode* node = sel->getSceneNode(i);
+                if (node->numAttachedObjects() > 0)
+                {
+                    Ogre::AxisAlignedBox aabb;
+                    for (auto& obj : node->getAttachedObjects())
+                        aabb.merge(obj->getWorldBoundingBox(true));
+                    if (aabb.isFinite())
+                    {
+                        center += aabb.getCenter();
+                        if (aabb.getMinimum().y < minY)
+                            minY = aabb.getMinimum().y;
+                        continue;
+                    }
+                }
+                center += node->getPosition();
+                if (node->getPosition().y < minY)
+                    minY = node->getPosition().y;
+            }
+            center /= static_cast<Ogre::Real>(count);
+            center.y = minY;
+            return center;
+        }
+        else if (sel->hasEntities())
+        {
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            Ogre::Real minY = std::numeric_limits<Ogre::Real>::max();
+            int count = sel->getEntitiesCount();
+            for (int i = 0; i < count; ++i)
+            {
+                Ogre::Entity* ent = sel->getEntity(i);
+                const Ogre::AxisAlignedBox bb = ent->getWorldBoundingBox(true);
+                if (bb.isFinite())
+                {
+                    center += bb.getCenter();
+                    if (bb.getMinimum().y < minY)
+                        minY = bb.getMinimum().y;
+                }
+                else
+                {
+                    center += ent->getParentSceneNode()->getPosition();
+                    if (ent->getParentSceneNode()->getPosition().y < minY)
+                        minY = ent->getParentSceneNode()->getPosition().y;
+                }
+            }
+            center /= static_cast<Ogre::Real>(count);
+            center.y = minY;
+            return center;
+        }
+        else if (sel->hasSubEntities())
+        {
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            Ogre::Real minY = std::numeric_limits<Ogre::Real>::max();
+            int count = sel->getSubEntitiesCount();
+            for (int i = 0; i < count; ++i)
+            {
+                Ogre::SubEntity* sub = sel->getSubEntity(i);
+                const Ogre::AxisAlignedBox bb = sub->getParent()->getWorldBoundingBox(true);
+                if (bb.isFinite())
+                {
+                    center += bb.getCenter();
+                    if (bb.getMinimum().y < minY)
+                        minY = bb.getMinimum().y;
+                }
+                else
+                {
+                    center += sub->getParent()->getParentSceneNode()->getPosition();
+                    if (sub->getParent()->getParentSceneNode()->getPosition().y < minY)
+                        minY = sub->getParent()->getParentSceneNode()->getPosition().y;
+                }
+            }
+            center /= static_cast<Ogre::Real>(count);
+            center.y = minY;
+            return center;
+        }
+        break;
+    }
+    case PIVOT_ORIGIN:
+    {
+        // Node's own local origin (node position / parent scene node position)
+        if (sel->hasNodes())
+        {
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            for (int i = 0; i < sel->getNodesCount(); ++i)
+                center += sel->getSceneNode(i)->getPosition();
+            return center / static_cast<Ogre::Real>(sel->getNodesCount());
+        }
+        else if (sel->hasEntities())
+        {
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            for (int i = 0; i < sel->getEntitiesCount(); ++i)
+                center += sel->getEntity(i)->getParentSceneNode()->getPosition();
+            return center / static_cast<Ogre::Real>(sel->getEntitiesCount());
+        }
+        else if (sel->hasSubEntities())
+        {
+            Ogre::Vector3 center = Ogre::Vector3::ZERO;
+            for (int i = 0; i < sel->getSubEntitiesCount(); ++i)
+                center += sel->getSubEntity(i)->getParent()->getParentSceneNode()->getPosition();
+            return center / static_cast<Ogre::Real>(sel->getSubEntitiesCount());
+        }
+        break;
+    }
+    }
+
+    return Ogre::Vector3::ZERO;
+}
+
 const Ogre::ColourValue& TransformOperator::getSelectionBoxColour() const
 {   return m_pSelectionBox->getBoxColour();   }
 
@@ -361,17 +577,19 @@ void TransformOperator::updateGizmoPosition()
 
     if(SelectionSet::getSingleton()->hasNodes())
     {
-        currentPosition     = SelectionSet::getSingleton()->getSelectionCenter();
         currentOrientation  = SelectionSet::getSingleton()->getSelectionOrientation();
         currentScale        = SelectionSet::getSingleton()->getSelectionScale();
-        m_pTransformNode->setPosition(currentPosition);
+        Ogre::Vector3 pivotPoint = getPivotPoint();
+        currentPosition     = pivotPoint;
+        m_pTransformNode->setPosition(pivotPoint);
     }
     else if(SelectionSet::getSingleton()->hasEntities())
     {
-        currentPosition     = SelectionSet::getSingleton()->getSelectionCenter()-SelectionSet::getSingleton()->getSelectionNodesCenter();
         currentOrientation  = SelectionSet::getSingleton()->getSelectionOrientation();
         currentScale        = SelectionSet::getSingleton()->getSelectionScale();
-        m_pTransformNode->setPosition(currentPosition + SelectionSet::getSingleton()->getSelectionNodesCenter());
+        Ogre::Vector3 pivotPoint = getPivotPoint();
+        currentPosition     = pivotPoint - SelectionSet::getSingleton()->getSelectionNodesCenter();
+        m_pTransformNode->setPosition(pivotPoint);
     }
     else if(SelectionSet::getSingleton()->hasSubEntities())
     {

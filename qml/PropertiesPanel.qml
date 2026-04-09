@@ -201,6 +201,52 @@ Rectangle {
                 TransformField { label: "Z"; value: PropertiesPanelController.scaleZ; color: "#4040c0"
                     onNewValue: function(val) { PropertiesPanelController.scaleZ = val } }
             }
+
+            // Pivot Point
+            Text {
+                text: "Pivot Point (P)"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 11
+                font.bold: true
+                topPadding: 4
+            }
+            Row {
+                spacing: 4
+                width: parent.width - 16
+
+                property int activePivot: PropertiesPanelController.pivotMode
+
+                Repeater {
+                    model: [
+                        { label: "Center", mode: 0 },
+                        { label: "Bottom", mode: 1 },
+                        { label: "Origin", mode: 2 }
+                    ]
+                    delegate: Rectangle {
+                        required property var modelData
+                        required property int index
+                        width: (parent.width - 8) / 3
+                        height: 24
+                        radius: 3
+                        color: PropertiesPanelController.pivotMode === modelData.mode
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.inputColor
+                        border.width: 1
+                        border.color: PropertiesPanelController.borderColor
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: PropertiesPanelController.pivotMode = modelData.mode
+                        }
+                    }
+                }
+            }
         }
     }
 

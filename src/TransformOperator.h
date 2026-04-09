@@ -52,9 +52,21 @@ public:
         SPACE_WORLD,
         SPACE_LOCAL,
     };
+    enum PivotMode
+    {
+        PIVOT_CENTER,
+        PIVOT_BOTTOM,
+        PIVOT_ORIGIN,
+    };
+    Q_ENUM(PivotMode)
 
     const Ogre::ColourValue& getSelectionBoxColour() const;
     TransformSpace getTransformSpace() const { return mTransformSpace; }
+
+    PivotMode pivotMode() const { return mPivotMode; }
+    void setPivotMode(PivotMode mode);
+    void cyclePivotMode();
+    Ogre::Vector3 getPivotPoint() const;
 
     // --- Snap settings ---
     bool isSnapEnabled() const { return mSnapEnabled; }
@@ -99,6 +111,7 @@ signals:
     void selectedScaleChanged(const Ogre::Vector3& newScale);
     void selectedOrientationChanged(const Ogre::Vector3& newOrientation);
     void transformSpaceChanged(TransformSpace newSpace);
+    void pivotModeChanged(PivotMode newMode);
     void snapSettingsChanged();
 
 public slots:
@@ -148,6 +161,7 @@ private:
     Ogre::Vector3                           mTransformVector = Ogre::Vector3::ZERO;
     TransformState                          mTransformState = TS_NONE;
     TransformSpace                          mTransformSpace = SPACE_WORLD;
+    PivotMode                               mPivotMode = PIVOT_CENTER;
     Ogre::Real                              mScaleStartDistance = 0.0f;
 
     // Snap settings (persisted in QSettings)

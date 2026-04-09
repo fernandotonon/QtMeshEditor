@@ -502,6 +502,10 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolGroupNodes(args);
     } else if (name == "ungroup_node") {
         toolResult = toolUngroupNode(args);
+    } else if (name == "set_pivot_mode") {
+        toolResult = toolSetPivotMode(args);
+    } else if (name == "get_pivot_mode") {
+        toolResult = toolGetPivotMode(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -2913,6 +2917,51 @@ QJsonObject MCPServer::toolUngroupNode(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolSetPivotMode(const QJsonObject &args)
+{
+    auto* top = TransformOperator::getSingleton();
+    if (!top)
+        return makeErrorResult("Error: TransformOperator not initialized");
+
+    QString modeStr = args["mode"].toString().toLower();
+    TransformOperator::PivotMode mode;
+
+    if (modeStr == "center")
+        mode = TransformOperator::PIVOT_CENTER;
+    else if (modeStr == "bottom")
+        mode = TransformOperator::PIVOT_BOTTOM;
+    else if (modeStr == "origin")
+        mode = TransformOperator::PIVOT_ORIGIN;
+    else
+        return makeErrorResult(QString("Error: Invalid pivot mode '%1'. Must be 'center', 'bottom', or 'origin'.").arg(modeStr));
+
+    SentryReporter::addBreadcrumb("ai.tool_call",
+        QString("set_pivot_mode: %1").arg(modeStr));
+
+    top->setPivotMode(mode);
+    return makeSuccessResult(QString("Pivot mode set to '%1'").arg(modeStr));
+}
+
+QJsonObject MCPServer::toolGetPivotMode(const QJsonObject &args)
+{
+    Q_UNUSED(args);
+    auto* top = TransformOperator::getSingleton();
+    if (!top)
+        return makeErrorResult("Error: TransformOperator not initialized");
+
+    QString modeStr;
+    switch (top->pivotMode()) {
+    case TransformOperator::PIVOT_CENTER: modeStr = "center"; break;
+    case TransformOperator::PIVOT_BOTTOM: modeStr = "bottom"; break;
+    case TransformOperator::PIVOT_ORIGIN: modeStr = "origin"; break;
+    }
+
+    QJsonObject result;
+    result["content"] = QJsonArray{QJsonObject{{"type", "text"}, {"text", QString("Pivot mode: %1").arg(modeStr)}}};
+    result["mode"] = modeStr;
+    return result;
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -3635,6 +3684,31 @@ QJsonArray MCPServer::buildToolsList()
             "Ungroup a group node: move its children to the group's parent and delete the empty group. "
             "Only works on group nodes (scene nodes with children and no attached meshes).",
             props
+        );
+    }
+
+    // set_pivot_mode
+    {
+        QJsonObject props;
+        props["mode"] = QJsonObject{{"type", "string"}, {"description", "Pivot mode: 'center' (bounding box center), 'bottom' (bottom of bounding box), or 'origin' (scene node position)"},
+                                     {"enum", QJsonArray{"center", "bottom", "origin"}}};
+        QJsonArray required;
+        required.append("mode");
+        appendTool(
+            "set_pivot_mode",
+            "Set the pivot point mode for rotation and scale operations. 'center' uses the bounding box center, "
+            "'bottom' uses the bottom of the bounding box (floor level), 'origin' uses the scene node position.",
+            props,
+            required
+        );
+    }
+
+    // get_pivot_mode
+    {
+        appendTool(
+            "get_pivot_mode",
+            "Get the current pivot point mode. Returns 'center', 'bottom', or 'origin'.",
+            QJsonObject()
         );
     }
 

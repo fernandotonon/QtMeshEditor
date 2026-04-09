@@ -44,6 +44,9 @@ class PropertiesPanelController : public QObject
     Q_PROPERTY(bool hasAnimations READ hasAnimations NOTIFY selectionChanged)
     Q_PROPERTY(bool playing READ isPlaying WRITE setPlaying NOTIFY playingChanged)
 
+    // Pivot mode
+    Q_PROPERTY(int pivotMode READ pivotMode WRITE setPivotMode NOTIFY pivotModeChanged)
+
     // Snap properties
     Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
     Q_PROPERTY(double snapGridSize READ snapGridSize WRITE setSnapGridSize NOTIFY snapGridSizeChanged)
@@ -102,6 +105,11 @@ public:
     void setScaleX(double v);
     void setScaleY(double v);
     void setScaleZ(double v);
+
+    // Pivot mode accessors/mutators
+    int pivotMode() const;
+    void setPivotMode(int mode);
+    Q_INVOKABLE void cyclePivotMode();
 
     // Snap accessors/mutators
     bool snapEnabled() const;
@@ -186,6 +194,7 @@ signals:
     void primitiveChanged();
     void playingChanged();
     void animationStateChanged();
+    void pivotModeChanged();
     void snapSettingsChanged();
     void snapEnabledChanged();
     void snapGridSizeChanged();
