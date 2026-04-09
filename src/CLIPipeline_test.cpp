@@ -1775,7 +1775,15 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_InfoAndRemoveFromGeneratedMesh)
 
 TEST(CLIPipelineCmdScanError, MissingConfigFileReturns2)
 {
-    TestArgv args({"qtmesh", "scan", "--config", "/tmp/qtmesh_scan_missing_config.yml"});
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString missingConfig = tmpDir.filePath("qtmesh_scan_missing_config.yml");
+    QFile::remove(missingConfig); // Ensure this path does not exist.
+    ASSERT_FALSE(QFileInfo::exists(missingConfig));
+
+    QByteArray configBa = missingConfig.toUtf8();
+    TestArgv args({"qtmesh", "scan", "--config", configBa.constData()});
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
 }
 

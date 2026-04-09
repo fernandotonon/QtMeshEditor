@@ -719,6 +719,7 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
 asset_scan:
   stage: lint
   image: ghcr.io/fernandotonon/qtmesh:latest
+  entrypoint: [""]
   script:
     - scan \${CI_PROJECT_DIR}/assets \\
         --config \${CI_PROJECT_DIR}/qtmesh.yml \\
