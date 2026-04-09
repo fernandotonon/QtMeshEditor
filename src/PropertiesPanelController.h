@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QStringList>
 #include <QColor>
+#include <QVariantList>
 #include <QVariantMap>
 #include <QQmlEngine>
 #include "SceneTreeModel.h"
@@ -46,6 +47,10 @@ class PropertiesPanelController : public QObject
 
     // Pivot mode
     Q_PROPERTY(int pivotMode READ pivotMode WRITE setPivotMode NOTIFY pivotModeChanged)
+
+    // Undo history
+    Q_PROPERTY(QVariantList undoHistory READ undoHistory NOTIFY undoHistoryChanged)
+    Q_PROPERTY(int undoIndex READ undoIndex NOTIFY undoHistoryChanged)
 
     // Snap properties
     Q_PROPERTY(bool snapEnabled READ snapEnabled WRITE setSnapEnabled NOTIFY snapEnabledChanged)
@@ -163,6 +168,12 @@ public:
     void setPrimUTile(double v);
     void setPrimVTile(double v);
 
+    // Undo history
+    QVariantList undoHistory() const;
+    int undoIndex() const;
+    Q_INVOKABLE void undoToIndex(int index);
+    Q_INVOKABLE void clearUndoHistory();
+
     Q_INVOKABLE void selectNodeByName(const QString& name);
     void setAnimationWidget(class AnimationWidget* widget) { mAnimationWidget = widget; }
 
@@ -195,6 +206,7 @@ signals:
     void playingChanged();
     void animationStateChanged();
     void pivotModeChanged();
+    void undoHistoryChanged();
     void snapSettingsChanged();
     void snapEnabledChanged();
     void snapGridSizeChanged();
