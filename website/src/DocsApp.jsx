@@ -159,10 +159,11 @@ export default function DocsApp() {
 
             <h3 className={s.subsection}>Package Managers</h3>
             <CodeBlock>{`# Windows (WinGet)
-winget install FernandoTonon.QtMeshEditor
+winget install FernandoTonon.QtMeshEditor --source winget
 
 # macOS (Homebrew)
-brew install --cask qtmesheditor
+brew tap fernandotonon/qtmesheditor
+brew install qtmesheditor
 
 # Linux (Snap)
 sudo snap install qtmesheditor
