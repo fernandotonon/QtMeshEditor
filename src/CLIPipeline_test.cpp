@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSettings>
+#include <QTemporaryDir>
 #include <vector>
 #include <OgreMeshManager.h>
 #include <OgreHardwareBufferManager.h>
@@ -596,6 +597,24 @@ private:
     QList<QByteArray> m_storage;
     QList<char*> m_argv;
     int m_argc = 0;
+};
+
+/// RAII helper to temporarily switch current working directory.
+class ScopedCurrentDir {
+public:
+    explicit ScopedCurrentDir(const QString& path)
+        : m_old(QDir::currentPath())
+    {
+        QDir::setCurrent(path);
+    }
+
+    ~ScopedCurrentDir()
+    {
+        QDir::setCurrent(m_old);
+    }
+
+private:
+    QString m_old;
 };
 
 } // anonymous namespace
@@ -1748,4 +1767,143 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_InfoAndRemoveFromGeneratedMesh)
     QFile::remove(QDir::tempPath() + "/cli_lod_generated.material");
     QFile::remove(removedOut);
     QFile::remove(QDir::tempPath() + "/cli_lod_removed.material");
+}
+
+// ==========================================================================
+// cmdScan tests
+// ==========================================================================
+
+TEST(CLIPipelineCmdScanError, MissingConfigFileReturns2)
+{
+    TestArgv args({"qtmesh", "scan", "--config", "/tmp/qtmesh_scan_missing_config.yml"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdScanError, InvalidFailOnReturns2)
+{
+    TestArgv args({"qtmesh", "scan", "--fail-on", "fatal"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdScanError, NonDirectoryScanRootReturns2)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString filePath = tmpDir.filePath("not_a_directory.txt");
+    QFile f(filePath);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    f.write("x");
+    f.close();
+
+    QByteArray fileBa = filePath.toUtf8();
+    TestArgv args({"qtmesh", "scan", fileBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdScan, ReportAndSarifAreWrittenWithFailOnNever)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    // Invalid FBX triggers a deterministic load_error finding without Ogre.
+    const QString scanFile = tmpDir.filePath("bad.fbx");
+    QFile invalid(scanFile);
+    ASSERT_TRUE(invalid.open(QIODevice::WriteOnly | QIODevice::Text));
+    invalid.write("not a real fbx");
+    invalid.close();
+
+    const QString reportPath = tmpDir.filePath("out/report.json");
+    const QString sarifPath = tmpDir.filePath("out/report.sarif");
+    QFile::remove(reportPath);
+    QFile::remove(sarifPath);
+
+    QByteArray rootBa = tmpDir.path().toUtf8();
+    QByteArray reportBa = reportPath.toUtf8();
+    QByteArray sarifBa = sarifPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(),
+                   "--json",
+                   "--report", reportBa.constData(),
+                   "--sarif", sarifBa.constData(),
+                   "--fail-on", "never"});
+
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(reportPath));
+    EXPECT_TRUE(QFile::exists(sarifPath));
+
+    QFile reportFile(reportPath);
+    ASSERT_TRUE(reportFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString report = QString::fromUtf8(reportFile.readAll());
+    EXPECT_TRUE(report.contains("\"summary\""));
+    EXPECT_TRUE(report.contains("\"load_error\""));
+
+    QFile sarifFile(sarifPath);
+    ASSERT_TRUE(sarifFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString sarif = QString::fromUtf8(sarifFile.readAll());
+    EXPECT_TRUE(sarif.contains("\"version\": \"2.1.0\""));
+    EXPECT_TRUE(sarif.contains("\"tool\""));
+}
+
+TEST(CLIPipelineCmdScan, IncludePatternNormalizesBareExtension)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QDir root(tmpDir.path());
+    ASSERT_TRUE(root.mkpath("nested/deeper"));
+
+    // If "*.fbx" is normalized to "**/*.fbx", this nested file is scanned,
+    // causing load_error and non-zero exit with default fail_on=error.
+    const QString nestedFbx = tmpDir.filePath("nested/deeper/model.fbx");
+    QFile invalid(nestedFbx);
+    ASSERT_TRUE(invalid.open(QIODevice::WriteOnly | QIODevice::Text));
+    invalid.write("invalid fbx payload");
+    invalid.close();
+
+    QByteArray rootBa = tmpDir.path().toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--include", "*.fbx"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, AutoDetectConfigWritesConfiguredReports)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    QDir root(tmpDir.path());
+    ASSERT_TRUE(root.mkpath("assets"));
+
+    const QString scanFile = tmpDir.filePath("assets/auto_bad.fbx");
+    QFile invalid(scanFile);
+    ASSERT_TRUE(invalid.open(QIODevice::WriteOnly | QIODevice::Text));
+    invalid.write("invalid fbx");
+    invalid.close();
+
+    const QString configPath = tmpDir.filePath("qtmesh.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "report:\n"
+        "  format: json\n"
+        "  output: auto/report.json\n"
+        "  sarif_output: auto/report.sarif\n"
+        "  fail_on: never\n");
+    cfg.close();
+
+    QFile::remove(tmpDir.filePath("auto/report.json"));
+    QFile::remove(tmpDir.filePath("auto/report.sarif"));
+
+    QByteArray rootBa = tmpDir.filePath("assets").toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+
+    const QString autoReport = tmpDir.filePath("auto/report.json");
+    const QString autoSarif = tmpDir.filePath("auto/report.sarif");
+    EXPECT_TRUE(QFile::exists(autoReport));
+    EXPECT_TRUE(QFile::exists(autoSarif));
+
+    QFile reportFile(autoReport);
+    ASSERT_TRUE(reportFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString report = QString::fromUtf8(reportFile.readAll());
+    EXPECT_TRUE(report.contains("\"summary\""));
 }
