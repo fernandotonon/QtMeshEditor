@@ -133,8 +133,8 @@ export const highlightFeatures = [
 export const installOptions = [
   {
     platform: 'Windows',
-    method: 'WinGet',
-    command: 'winget install FernandoTonon.QtMeshEditor'
+    method: 'winget',
+    command: 'winget install FernandoTonon.QtMeshEditor --source winget'
   },
   {
     platform: 'macOS',
@@ -143,8 +143,8 @@ export const installOptions = [
   },
   {
     platform: 'Linux',
-    method: 'Snap / .deb',
-    command: 'sudo snap install qtmesheditor\n# or: sudo apt install ./qtmesheditor_amd64.deb'
+    method: 'snap',
+    command: 'sudo snap install qtmesheditor\n# Alternative: download .deb from latest release\n# sudo apt install ./qtmesheditor_amd64.deb'
   },
   {
     platform: 'Docker',

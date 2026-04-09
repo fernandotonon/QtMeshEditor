@@ -77,3 +77,8 @@ exported.skeleton.xml
 temp.material
 temp.mesh.xml
 Twist Dance.fbx.skeleton
+
+#website
+website/dist/
+website/node_modules/
+
