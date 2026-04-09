@@ -599,6 +599,12 @@ TEST(TransformOperatorSnap, PresetsReturnExpectedValues)
 
 TEST_F(TransformOperatorTests, SnapSettingsRoundTripAndEmitSignal)
 {
+    // Reset to known state first (QSettings may have persisted different values)
+    op->setSnapEnabled(false);
+    op->setSnapGridSize(1.0);
+    op->setSnapAngleStep(15.0);
+    op->setSnapScaleStep(0.25);
+
     QSignalSpy spy(op, &TransformOperator::snapSettingsChanged);
     ASSERT_TRUE(spy.isValid());
 
