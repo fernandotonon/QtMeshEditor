@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import styles from './App.module.css';
 import ButtonLink from './components/ButtonLink';
 import CodePanel from './components/CodePanel';
@@ -19,7 +20,48 @@ import {
   useCases
 } from './data/content';
 
+const PLATFORM_BY_OS = {
+  windows: 'Windows',
+  macos: 'macOS',
+  linux: 'Linux'
+};
+
+function detectVisitorOs() {
+  if (typeof navigator === 'undefined') {
+    return 'unknown';
+  }
+
+  const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+  const userAgent = (navigator.userAgent || '').toLowerCase();
+  const source = `${platform} ${userAgent}`;
+
+  if (source.includes('win')) {
+    return 'windows';
+  }
+  if (source.includes('mac') || source.includes('darwin')) {
+    return 'macos';
+  }
+  if (source.includes('linux') || source.includes('x11')) {
+    return 'linux';
+  }
+  return 'unknown';
+}
+
+function getStoreLabel(method) {
+  return method.split('/')[0].trim();
+}
+
 function App() {
+  const detectedOs = useMemo(detectVisitorOs, []);
+  const detectedPlatform = PLATFORM_BY_OS[detectedOs];
+  const recommendedInstall = useMemo(
+    () => installOptions.find((item) => item.platform === detectedPlatform) || null,
+    [detectedPlatform]
+  );
+  const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
+  const primaryCtaHref = recommendedInstall ? '#install-recommendation' : links.releases;
+  const primaryCtaLabel = recommendedStore ? `Install via ${recommendedStore}` : hero.ctaPrimary;
+
   return (
     <div className={styles.page}>
       <div className={styles.backdrop} aria-hidden="true" />
@@ -32,10 +74,33 @@ function App() {
             <p className={styles.heroSubtitle}>{hero.subtitle}</p>
 
             <div className={styles.ctaRow}>
-              <ButtonLink href={links.releases}>{hero.ctaPrimary}</ButtonLink>
+              <ButtonLink href={primaryCtaHref}>{primaryCtaLabel}</ButtonLink>
               <ButtonLink href={links.github} variant="secondary">
                 {hero.ctaSecondary}
               </ButtonLink>
+            </div>
+
+            <div id="install-recommendation" className={styles.installRecommendation} aria-live="polite">
+              <p className={styles.installRecommendationTitle}>
+                {recommendedInstall
+                  ? `Detected ${recommendedInstall.platform}. Recommended store install: ${recommendedStore}.`
+                  : 'Recommended install stores: winget, Homebrew, and snap.'}
+              </p>
+              {recommendedInstall ? (
+                <pre className={styles.installRecommendationCommand}>
+                  <code>{recommendedInstall.command}</code>
+                </pre>
+              ) : (
+                <p className={styles.installRecommendationBody}>
+                  Open the Install section to pick the command for your platform.
+                </p>
+              )}
+              <div className={styles.installRecommendationLinks}>
+                <a href="#install">View all install options</a>
+                <a href={links.releases} target="_blank" rel="noreferrer">
+                  Download file from latest release
+                </a>
+              </div>
             </div>
 
             <ul className={styles.proofRow} aria-label="Product proof points">
@@ -178,7 +243,7 @@ function App() {
           id="install"
           eyebrow="Install"
           title="Install QtMeshEditor your way"
-          subtitle="Desktop packages for creators, plus Docker for automation-first pipelines."
+          subtitle="Store-first installs with winget, Homebrew, and snap. Prefer manual packages? Use the latest release files."
         >
           <div className={styles.installGrid}>
             {installOptions.map((item) => (
