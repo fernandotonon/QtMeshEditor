@@ -1,8 +1,9 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import styles from './App.module.css';
 import ButtonLink from './components/ButtonLink';
 import CodePanel from './components/CodePanel';
 import FeatureCard from './components/FeatureCard';
-import InstallCard from './components/InstallCard';
 import Section from './components/Section';
 import {
   comparisonItems,
@@ -19,39 +20,235 @@ import {
   useCases
 } from './data/content';
 
+const PLATFORM_BY_OS = {
+  windows: 'Windows',
+  macos: 'macOS',
+  linux: 'Linux'
+};
+
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function detectVisitorOs() {
+  if (typeof navigator === 'undefined') {
+    return 'unknown';
+  }
+
+  const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
+  const userAgent = (navigator.userAgent || '').toLowerCase();
+  const source = `${platform} ${userAgent}`;
+
+  if (
+    source.includes('android') ||
+    source.includes('iphone') ||
+    source.includes('ipad') ||
+    source.includes('ipod') ||
+    source.includes('mobile')
+  ) {
+    return 'unknown';
+  }
+
+  if (source.includes('win')) {
+    return 'windows';
+  }
+  if (source.includes('mac') || source.includes('darwin')) {
+    return 'macos';
+  }
+  if (source.includes('linux') || source.includes('x11')) {
+    return 'linux';
+  }
+  return 'unknown';
+}
+
+function getStoreLabel(method) {
+  return method.split('/')[0].trim();
+}
+
+async function copyText(text) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard is not available');
+  }
+
+  const input = document.createElement('textarea');
+  input.value = text;
+  input.setAttribute('readonly', '');
+  input.style.position = 'absolute';
+  input.style.left = '-9999px';
+  document.body.appendChild(input);
+  input.select();
+
+  const copied = document.execCommand('copy');
+  document.body.removeChild(input);
+
+  if (!copied) {
+    throw new Error('Copy failed');
+  }
+}
+
 function App() {
+  const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
+  const [copyState, setCopyState] = useState('idle');
+  const portalDialogRef = useRef(null);
+  const portalTriggerRef = useRef(null);
+  const detectedOs = useMemo(detectVisitorOs, []);
+  const detectedPlatform = PLATFORM_BY_OS[detectedOs];
+  const recommendedInstall = useMemo(
+    () => installOptions.find((item) => item.platform === detectedPlatform) || null,
+    [detectedPlatform]
+  );
+  const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
+  const primaryCtaLabel = recommendedStore ? `Install via ${recommendedStore}` : 'Open Install Portal';
+
+  useEffect(() => {
+    if (!isInstallPortalOpen || typeof document === 'undefined') {
+      return undefined;
+    }
+
+    const dialog = portalDialogRef.current;
+    if (!dialog) {
+      return undefined;
+    }
+
+    const collectFocusableElements = () =>
+      Array.from(dialog.querySelectorAll(FOCUSABLE_SELECTOR)).filter(
+        (element) =>
+          element instanceof HTMLElement &&
+          element.getAttribute('aria-hidden') !== 'true' &&
+          element.tabIndex !== -1 &&
+          element.getClientRects().length > 0
+      );
+
+    const focusableElements = collectFocusableElements();
+    (focusableElements[0] || dialog).focus();
+
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setIsInstallPortalOpen(false);
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      const focusable = collectFocusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const activeElement = document.activeElement;
+
+      if (!dialog.contains(activeElement)) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
+
+      if (event.shiftKey && (activeElement === first || activeElement === dialog)) {
+        event.preventDefault();
+        last.focus();
+        return;
+      }
+
+      if (!event.shiftKey && activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKeyDown);
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener('keydown', onKeyDown);
+      portalTriggerRef.current?.focus();
+    };
+  }, [isInstallPortalOpen]);
+
+  useEffect(() => {
+    if (!isInstallPortalOpen) {
+      setCopyState('idle');
+    }
+  }, [isInstallPortalOpen]);
+
+  useEffect(() => {
+    if (copyState === 'idle') {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setCopyState('idle'), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  async function handleCopyInstallCommand() {
+    if (!recommendedInstall) {
+      return;
+    }
+
+    try {
+      await copyText(recommendedInstall.command);
+      setCopyState('copied');
+    } catch {
+      setCopyState('error');
+    }
+  }
+
+  function handleOpenInstallPortal(event) {
+    portalTriggerRef.current = event.currentTarget;
+    setIsInstallPortalOpen(true);
+  }
+
   return (
-    <div className={styles.page}>
-      <div className={styles.backdrop} aria-hidden="true" />
+    <>
+      <div className={styles.page}>
+        <div className={styles.backdrop} aria-hidden="true" />
 
-      <main className={styles.main}>
-        <header className={`${styles.hero} reveal`}>
-          <div className={styles.heroCopy}>
-            <p className={styles.kicker}>QtMeshEditor</p>
-            <h1 className={styles.heroTitle}>{hero.title}</h1>
-            <p className={styles.heroSubtitle}>{hero.subtitle}</p>
+        <main className={styles.main}>
+          <header className={`${styles.hero} reveal`}>
+            <div className={styles.heroCopy}>
+              <p className={styles.kicker}>QtMeshEditor</p>
+              <h1 className={styles.heroTitle}>{hero.title}</h1>
+              <p className={styles.heroSubtitle}>{hero.subtitle}</p>
 
-            <div className={styles.ctaRow}>
-              <ButtonLink href={links.releases}>{hero.ctaPrimary}</ButtonLink>
-              <ButtonLink href={links.github} variant="secondary">
-                {hero.ctaSecondary}
-              </ButtonLink>
+              <div className={styles.ctaRow}>
+                <button
+                  type="button"
+                  className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
+                  onClick={handleOpenInstallPortal}
+                >
+                  {primaryCtaLabel}
+                </button>
+                <ButtonLink href={links.github} variant="secondary">
+                  {hero.ctaSecondary}
+                </ButtonLink>
+              </div>
+
+              <ul className={styles.proofRow} aria-label="Product proof points">
+                {proofPoints.map((item) => (
+                  <li key={item} className={styles.proofPill}>
+                    {item}
+                  </li>
+                ))}
+              </ul>
             </div>
 
-            <ul className={styles.proofRow} aria-label="Product proof points">
-              {proofPoints.map((item) => (
-                <li key={item} className={styles.proofPill}>
-                  {item}
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <figure className={styles.heroMediaCard}>
-            <img className={styles.heroImage} src={media.mergeDemo.src} alt={media.mergeDemo.alt} />
-            <figcaption className={styles.mediaCaption}>Merge workflow in action</figcaption>
-          </figure>
-        </header>
+            <figure className={styles.heroMediaCard}>
+              <img className={styles.heroImage} src={media.mergeDemo.src} alt={media.mergeDemo.alt} />
+              <figcaption className={styles.mediaCaption}>Merge workflow in action</figcaption>
+            </figure>
+          </header>
 
         <Section
           id="demo"
@@ -174,71 +371,158 @@ function App() {
           </div>
         </Section>
 
-        <Section
-          id="install"
-          eyebrow="Install"
-          title="Install QtMeshEditor your way"
-          subtitle="Desktop packages for creators, plus Docker for automation-first pipelines."
-        >
-          <div className={styles.installGrid}>
-            {installOptions.map((item) => (
-              <InstallCard
-                key={item.platform}
-                platform={item.platform}
-                method={item.method}
-                command={item.command}
-              />
-            ))}
-          </div>
-        </Section>
+          <Section
+            id="install"
+            eyebrow="Install"
+            title="Install QtMeshEditor your way"
+            subtitle="Open the install portal to get store-first commands for your platform."
+          >
+            <div className={styles.installPortalEntry}>
+              <p>
+                Store options include <code>winget</code>, <code>Homebrew</code>, and <code>snap</code>. You can also
+                download binaries directly from the latest release.
+              </p>
+              <div className={styles.installPortalEntryActions}>
+                <button
+                  type="button"
+                  className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
+                  onClick={handleOpenInstallPortal}
+                >
+                  Open Install Portal
+                </button>
+                <a href={links.releases} target="_blank" rel="noreferrer">
+                  Download from latest release
+                </a>
+              </div>
+            </div>
+          </Section>
 
-        <Section
-          id="trust"
-          eyebrow="Open Source Trust"
-          title="Built in public for long-term production use"
-          subtitle="Used by developers around the world for practical 3D asset preparation and pipeline automation."
-        >
-          <div className={styles.trustLead}>
-            <a href="https://github.com/fernandotonon/QtMeshEditor/stargazers" target="_blank" rel="noreferrer">
-              <img
-                className={styles.starBadge}
-                src="https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star"
-                alt="GitHub stars for QtMeshEditor"
-                loading="lazy"
-              />
-            </a>
-            <p className={styles.trustCopy}>Active development since 2012 • MIT license • Community-driven roadmap</p>
-          </div>
-
-          <div className={styles.trustGrid}>
-            {trustItems.map((item) => (
-              <FeatureCard key={item.title} title={item.title} body={item.body} />
-            ))}
-          </div>
-
-          <nav className={styles.communityLinks} aria-label="Community links">
-            {footerLinks.map((item) => (
-              <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
-                {item.label}
+          <Section
+            id="trust"
+            eyebrow="Open Source Trust"
+            title="Built in public for long-term production use"
+            subtitle="Used by developers around the world for practical 3D asset preparation and pipeline automation."
+          >
+            <div className={styles.trustLead}>
+              <a href="https://github.com/fernandotonon/QtMeshEditor/stargazers" target="_blank" rel="noreferrer">
+                <img
+                  className={styles.starBadge}
+                  src="https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star"
+                  alt="GitHub stars for QtMeshEditor"
+                  loading="lazy"
+                />
               </a>
-            ))}
-          </nav>
-        </Section>
-      </main>
+              <p className={styles.trustCopy}>Active development since 2012 • MIT license • Community-driven roadmap</p>
+            </div>
 
-      <footer className={styles.footer}>
-        <div className={styles.footerInner}>
-          <p>QtMeshEditor</p>
-          <div className={styles.footerLinks}>
-            {footerLinks.map((item) => (
-              <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
-                {item.label}
-              </a>
-            ))}
+            <div className={styles.trustGrid}>
+              {trustItems.map((item) => (
+                <FeatureCard key={item.title} title={item.title} body={item.body} />
+              ))}
+            </div>
+
+            <nav className={styles.communityLinks} aria-label="Community links">
+              {footerLinks.map((item) => (
+                <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
+                  {item.label}
+                </a>
+              ))}
+            </nav>
+          </Section>
+        </main>
+
+        <footer className={styles.footer}>
+          <div className={styles.footerInner}>
+            <p>QtMeshEditor</p>
+            <div className={styles.footerLinks}>
+              {footerLinks.map((item) => (
+                <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
+                  {item.label}
+                </a>
+              ))}
+            </div>
           </div>
-        </div>
-      </footer>
-    </div>
+        </footer>
+      </div>
+
+      {isInstallPortalOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            className={styles.installPortalBackdrop}
+            onClick={() => setIsInstallPortalOpen(false)}
+            role="presentation"
+          >
+            <div
+              className={styles.installPortalDialog}
+              ref={portalDialogRef}
+              tabIndex={-1}
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="install-portal-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className={styles.installPortalHeader}>
+                <div>
+                  <p className={styles.installPortalEyebrow}>Install Portal</p>
+                  <h2 id="install-portal-title" className={styles.installPortalTitle}>
+                    {recommendedInstall
+                      ? `Detected ${recommendedInstall.platform}: install via ${recommendedStore}`
+                      : 'Could not detect your OS automatically'}
+                  </h2>
+                </div>
+                <button
+                  type="button"
+                  className={styles.installPortalClose}
+                  onClick={() => setIsInstallPortalOpen(false)}
+                  aria-label="Close install portal"
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className={styles.installPortalGrid}>
+                {recommendedInstall ? (
+                  <article
+                    className={`${styles.installPortalCard} ${styles.installPortalCardRecommended}`}
+                  >
+                    <div className={styles.installPortalCardTop}>
+                      <h3>{recommendedInstall.platform}</h3>
+                      <div className={styles.installPortalCardActions}>
+                        <span>{recommendedInstall.method}</span>
+                        <button
+                          type="button"
+                          className={styles.installPortalCopyButton}
+                          onClick={handleCopyInstallCommand}
+                        >
+                          {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Retry' : 'Copy'}
+                        </button>
+                      </div>
+                    </div>
+                    <pre>
+                      <code>{recommendedInstall.command}</code>
+                    </pre>
+                  </article>
+                ) : (
+                  <p className={styles.installPortalFallback}>
+                    OS detection is unavailable in this browser. Use the latest release download links below.
+                  </p>
+                )}
+              </div>
+
+              <div className={styles.installPortalLinks}>
+                <a href={links.releases} target="_blank" rel="noreferrer">
+                  Download file from latest release
+                </a>
+                <a href={links.allReleases} target="_blank" rel="noreferrer">
+                  Browse all releases
+                </a>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
+    </>
   );
 }
 

@@ -66,6 +66,224 @@
   gap: 0.7rem;
 }
 
+.ctaButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  border: 1px solid transparent;
+  padding: 0.75rem 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  transition: transform 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+  cursor: pointer;
+}
+
+.ctaButton:hover {
+  transform: translateY(-1px);
+}
+
+.ctaButton:active {
+  transform: translateY(0);
+}
+
+.ctaButtonPrimary {
+  background: linear-gradient(135deg, var(--accent-1), var(--accent-2));
+  color: var(--surface-0);
+  box-shadow: 0 10px 30px rgba(46, 188, 255, 0.25);
+}
+
+.ctaButtonPrimary:hover {
+  box-shadow: 0 16px 34px rgba(46, 188, 255, 0.35);
+}
+
+.installPortalEntry {
+  border: 1px solid var(--stroke);
+  border-radius: 0.95rem;
+  background: linear-gradient(180deg, rgba(15, 24, 40, 0.95), rgba(9, 16, 27, 0.95));
+  padding: 0.9rem;
+}
+
+.installPortalEntry p {
+  margin: 0;
+  color: var(--text-1);
+}
+
+.installPortalEntryActions {
+  margin-top: 0.75rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.8rem;
+  align-items: center;
+}
+
+.installPortalEntryActions a {
+  color: var(--accent-1);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.installPortalEntryActions a:hover {
+  color: #9cdfff;
+}
+
+.installPortalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(2, 7, 14, 0.78);
+  backdrop-filter: blur(6px);
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+}
+
+.installPortalDialog {
+  width: min(620px, 100%);
+  max-height: min(88vh, 760px);
+  overflow: auto;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 1rem;
+  padding: 1rem;
+  background: linear-gradient(180deg, rgba(13, 22, 37, 0.98), rgba(9, 15, 26, 0.98));
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.5);
+}
+
+.installPortalHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.installPortalEyebrow {
+  margin: 0;
+  color: var(--accent-1);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.installPortalTitle {
+  margin: 0.25rem 0 0;
+  font-size: clamp(1.2rem, 2.3vw, 1.8rem);
+}
+
+.installPortalClose {
+  border: 1px solid var(--stroke-strong);
+  background: var(--surface-2);
+  color: var(--text-0);
+  border-radius: 0.65rem;
+  font-weight: 600;
+  padding: 0.45rem 0.8rem;
+  cursor: pointer;
+}
+
+.installPortalClose:hover {
+  background: var(--surface-3);
+}
+
+.installPortalGrid {
+  margin-top: 0.95rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0.75rem;
+}
+
+.installPortalCard {
+  border: 1px solid var(--stroke);
+  border-radius: 0.9rem;
+  padding: 0.75rem;
+  background: var(--surface-1);
+}
+
+.installPortalCardRecommended {
+  border-color: rgba(46, 188, 255, 0.5);
+  box-shadow: inset 0 0 0 1px rgba(46, 188, 255, 0.18);
+}
+
+.installPortalCardTop {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.installPortalCardTop h3 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.installPortalCardActions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.installPortalCardTop span {
+  color: var(--accent-1);
+  border: 1px solid rgba(46, 188, 255, 0.35);
+  border-radius: 999px;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.installPortalCopyButton {
+  border: 1px solid var(--stroke-strong);
+  background: var(--surface-2);
+  color: var(--text-0);
+  border-radius: 0.55rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.installPortalCopyButton:hover {
+  background: var(--surface-3);
+}
+
+.installPortalCard pre {
+  margin: 0.7rem 0 0;
+  border: 1px solid var(--stroke-strong);
+  border-radius: 0.7rem;
+  padding: 0.62rem 0.75rem;
+  overflow-x: auto;
+  background: rgba(8, 12, 20, 0.9);
+}
+
+.installPortalCard code {
+  color: #baf6ff;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.installPortalLinks {
+  margin-top: 0.9rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.installPortalLinks a {
+  color: var(--accent-1);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.installPortalLinks a:hover {
+  color: #9cdfff;
+}
+
+.installPortalFallback {
+  margin: 0;
+  color: var(--text-1);
+}
+
 .proofRow {
   list-style: none;
   margin: 1.2rem 0 0;
@@ -352,6 +570,18 @@
 @media (max-width: 760px) {
   .hero {
     padding-top: 3.7rem;
+  }
+
+  .installPortalDialog {
+    padding: 0.9rem;
+  }
+
+  .installPortalHeader {
+    flex-direction: column;
+  }
+
+  .installPortalClose {
+    align-self: start;
   }
 
   .previewStrip,
