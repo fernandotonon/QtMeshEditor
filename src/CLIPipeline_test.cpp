@@ -875,6 +875,21 @@ TEST(CLIPipelineCmdFixError, NonexistentFileWithFlagsAndLongOutputFlag)
     EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 1);
 }
 
+TEST(CLIPipelineCmdFixError, ExistingInvalidFileWithAllFlagReturnsError)
+{
+    const QString file = QDir::tempPath() + "/cli_test_fix_existing_invalid_input.fbx";
+    QFile invalid(file);
+    ASSERT_TRUE(invalid.open(QIODevice::WriteOnly | QIODevice::Text));
+    invalid.write("invalid fbx payload");
+    invalid.close();
+
+    QByteArray fileBa = file.toUtf8();
+    TestArgv args({"qtmesh", "fix", fileBa.constData(), "--all"});
+    EXPECT_EQ(CLIPipeline::cmdFix(args.argc(), args.argv()), 1);
+
+    QFile::remove(file);
+}
+
 // -- cmdFix success paths --
 
 TEST_F(CLIPipelineCmdTest, CmdFix_Basic)
@@ -1013,6 +1028,21 @@ TEST(CLIPipelineCmdAnimError, MergeModeWithMissingBaseFile)
     TestArgv args({"qtmesh", "anim", "/tmp/nonexistent_cli_test_33333.fbx",
                    "--merge", "/tmp/nonexistent_anim_source_33333.fbx",
                    "-o", "/tmp/cli_test_merge_fail.mesh"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdAnimError, RenameModeWithoutOutputUsesDefaultOutputPath)
+{
+    TestArgv args({"qtmesh", "anim", "/tmp/nonexistent_cli_test_rename_default_33333.fbx",
+                   "--rename", "OldAnimName", "NewAnimName"});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdAnimError, MergeModeWithoutOutputUsesDefaultOutputPath)
+{
+    TestArgv args({"qtmesh", "anim", "/tmp/nonexistent_cli_test_merge_default_44444.fbx",
+                   "--merge", "/tmp/nonexistent_anim_source_44444_a.fbx",
+                   "/tmp/nonexistent_anim_source_44444_b.fbx"});
     EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
 }
 
@@ -1619,6 +1649,18 @@ TEST(CLIPipelineCmdLodError, NonexistentFileWithRemoveMode)
 {
     TestArgv args({"qtmesh", "lod", "/tmp/nonexistent_cli_lod_remove_67890.fbx", "--remove"});
     EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdLodError, NonexistentFileWithInfoAndJsonMode)
+{
+    TestArgv args({"qtmesh", "lod", "/tmp/nonexistent_cli_lod_info_67890.fbx", "--info", "--json"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdLodError, InvalidCountValueReportsModeError)
+{
+    TestArgv args({"qtmesh", "lod", "/tmp/nonexistent_cli_lod_count_abc.fbx", "--count", "abc"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 2);
 }
 
 class CLIPipelineCmdLodTest : public ::testing::Test {

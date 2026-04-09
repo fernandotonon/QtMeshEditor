@@ -7,10 +7,12 @@
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMimeData>
+#include <QMessageBox>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
+#include <QTimer>
 
 // NOTE: These access-specifier redefinitions are a pragmatic test-only workaround
 // to cover MainWindow internals. Prefer dedicated test APIs or friend tests when feasible.
@@ -141,6 +143,11 @@ TEST_F(MainWindowTest, KeyFFrameSelectionEmptyDoesNotCrash) {
     SelectionSet::getSingleton()->clear();
     QKeyEvent event(QEvent::KeyPress, Qt::Key_F, Qt::NoModifier);
     EXPECT_NO_THROW(window->keyPressEvent(&event));
+}
+
+TEST_F(MainWindowTest, KeyReleaseEventDoesNotCrash) {
+    QKeyEvent event(QEvent::KeyRelease, Qt::Key_W, Qt::NoModifier);
+    EXPECT_NO_THROW(window->keyReleaseEvent(&event));
 }
 
 // keyReleaseEvent is protected — tested implicitly via keyPressEvent
@@ -316,6 +323,29 @@ TEST_F(MainWindowTest, OpenRecentFileWithoutActionSenderDoesNothing) {
     window->openRecentFile();
 
     EXPECT_TRUE(window->mUriList.isEmpty());
+}
+
+TEST_F(MainWindowTest, OpenRecentFileRemovesMissingPathFromSettings) {
+    const QString missingPath = tempDir.filePath("missing.mesh");
+    window->addToRecentFiles(missingPath);
+    QAction* action = recentFileAction(0);
+    ASSERT_NE(action, nullptr);
+    ASSERT_EQ(action->data().toString(), missingPath);
+
+    // Auto-close the warning QMessageBox shown by openRecentFile().
+    QTimer::singleShot(0, []() {
+        for (QWidget* w : QApplication::topLevelWidgets()) {
+            if (auto* box = qobject_cast<QMessageBox*>(w)) {
+                box->accept();
+            }
+        }
+    });
+
+    action->trigger();
+
+    const QStringList files = QSettings().value("RecentFiles/files").toStringList();
+    EXPECT_FALSE(files.contains(missingPath));
+    EXPECT_FALSE(window->mUriList.contains(missingPath));
 }
 
 TEST_F(MainWindowTest, ToolbarTogglesUpdateWidgetVisibility) {
