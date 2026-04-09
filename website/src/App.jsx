@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import styles from './App.module.css';
 import ButtonLink from './components/ButtonLink';
@@ -26,6 +26,9 @@ const PLATFORM_BY_OS = {
   linux: 'Linux'
 };
 
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
 function detectVisitorOs() {
   if (typeof navigator === 'undefined') {
     return 'unknown';
@@ -34,6 +37,16 @@ function detectVisitorOs() {
   const platform = (navigator.userAgentData?.platform || navigator.platform || '').toLowerCase();
   const userAgent = (navigator.userAgent || '').toLowerCase();
   const source = `${platform} ${userAgent}`;
+
+  if (
+    source.includes('android') ||
+    source.includes('iphone') ||
+    source.includes('ipad') ||
+    source.includes('ipod') ||
+    source.includes('mobile')
+  ) {
+    return 'unknown';
+  }
 
   if (source.includes('win')) {
     return 'windows';
@@ -80,6 +93,8 @@ async function copyText(text) {
 function App() {
   const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
   const [copyState, setCopyState] = useState('idle');
+  const portalDialogRef = useRef(null);
+  const portalTriggerRef = useRef(null);
   const detectedOs = useMemo(detectVisitorOs, []);
   const detectedPlatform = PLATFORM_BY_OS[detectedOs];
   const recommendedInstall = useMemo(
@@ -94,19 +109,71 @@ function App() {
       return undefined;
     }
 
-    const closeOnEscape = (event) => {
+    const dialog = portalDialogRef.current;
+    if (!dialog) {
+      return undefined;
+    }
+
+    const collectFocusableElements = () =>
+      Array.from(dialog.querySelectorAll(FOCUSABLE_SELECTOR)).filter(
+        (element) =>
+          element instanceof HTMLElement &&
+          element.getAttribute('aria-hidden') !== 'true' &&
+          element.tabIndex !== -1 &&
+          element.getClientRects().length > 0
+      );
+
+    const focusableElements = collectFocusableElements();
+    (focusableElements[0] || dialog).focus();
+
+    const onKeyDown = (event) => {
       if (event.key === 'Escape') {
+        event.preventDefault();
         setIsInstallPortalOpen(false);
+        return;
+      }
+
+      if (event.key !== 'Tab') {
+        return;
+      }
+
+      const focusable = collectFocusableElements();
+      if (focusable.length === 0) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const activeElement = document.activeElement;
+
+      if (!dialog.contains(activeElement)) {
+        event.preventDefault();
+        first.focus();
+        return;
+      }
+
+      if (event.shiftKey && (activeElement === first || activeElement === dialog)) {
+        event.preventDefault();
+        last.focus();
+        return;
+      }
+
+      if (!event.shiftKey && activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
 
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
-    window.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('keydown', onKeyDown);
 
     return () => {
       document.body.style.overflow = previousOverflow;
-      window.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('keydown', onKeyDown);
+      portalTriggerRef.current?.focus();
     };
   }, [isInstallPortalOpen]);
 
@@ -138,6 +205,11 @@ function App() {
     }
   }
 
+  function handleOpenInstallPortal(event) {
+    portalTriggerRef.current = event.currentTarget;
+    setIsInstallPortalOpen(true);
+  }
+
   return (
     <>
       <div className={styles.page}>
@@ -154,7 +226,7 @@ function App() {
                 <button
                   type="button"
                   className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
-                  onClick={() => setIsInstallPortalOpen(true)}
+                  onClick={handleOpenInstallPortal}
                 >
                   {primaryCtaLabel}
                 </button>
@@ -314,7 +386,7 @@ function App() {
                 <button
                   type="button"
                   className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
-                  onClick={() => setIsInstallPortalOpen(true)}
+                  onClick={handleOpenInstallPortal}
                 >
                   Open Install Portal
                 </button>
@@ -383,6 +455,8 @@ function App() {
           >
             <div
               className={styles.installPortalDialog}
+              ref={portalDialogRef}
+              tabIndex={-1}
               role="dialog"
               aria-modal="true"
               aria-labelledby="install-portal-title"
