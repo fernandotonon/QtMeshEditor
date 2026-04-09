@@ -26,6 +26,7 @@ const NAV = [
   { section: 'Integration', items: [
     { id: 'docker', label: 'Docker' },
     { id: 'github-actions', label: 'GitHub Actions' },
+    { id: 'gitlab-ci', label: 'GitLab CI' },
     { id: 'ci-cd', label: 'CI/CD Patterns' },
   ]},
 ];
@@ -682,12 +683,12 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
 
           <section className={s.section} id="github-actions">
             <h2 className={s.sectionTitle}>GitHub Actions</h2>
-            <h3 className={s.subsection}>Reusable Action</h3>
+            <h3 className={s.subsection}>Reusable Action (scan example)</h3>
             <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@master
   with:
-    command: info
-    input-file: assets/character.fbx
-    options: --json`}</CodeBlock>
+    command: scan
+    input-file: assets
+    options: --config qtmesh.yml --sarif scan-report.sarif --report scan-report.json --fail-on error`}</CodeBlock>
 
             <h3 className={s.subsection}>Direct Docker Usage</h3>
             <CodeBlock lang="yaml">{`- name: Scan assets
@@ -705,6 +706,31 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
   uses: github/codeql-action/upload-sarif@v3
   with:
     sarif_file: scan-report.sarif`}</CodeBlock>
+          </section>
+
+          <section className={s.section} id="gitlab-ci">
+            <h2 className={s.sectionTitle}>GitLab CI</h2>
+            <p className={s.para}>
+              Use the Docker image directly in <Code>.gitlab-ci.yml</Code> to run scan checks and keep reports as artifacts.
+            </p>
+            <CodeBlock lang="yaml">{`stages:
+  - lint
+
+asset_scan:
+  stage: lint
+  image: ghcr.io/fernandotonon/qtmesh:latest
+  script:
+    - scan \${CI_PROJECT_DIR}/assets \\
+        --config \${CI_PROJECT_DIR}/qtmesh.yml \\
+        --sarif \${CI_PROJECT_DIR}/scan-report.sarif \\
+        --report \${CI_PROJECT_DIR}/scan-report.json \\
+        --fail-on error
+  artifacts:
+    when: always
+    paths:
+      - scan-report.sarif
+      - scan-report.json
+    expire_in: 7 days`}</CodeBlock>
           </section>
 
           <section className={s.section} id="ci-cd">
