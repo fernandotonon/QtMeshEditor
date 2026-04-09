@@ -569,14 +569,17 @@ bool Manager::reparentNode(Ogre::SceneNode* node, Ogre::SceneNode* newParent)
     node->setPosition(parentWorldOrient.Inverse() *
         ((worldPos - parentDerivedPos) / parentWorldScale));
 
-    // Auto-delete the old parent if it became an empty group
-    // (no attached objects and no remaining children = orphaned group node)
-    if (oldParent && oldParent != mSceneMgr->getRootSceneNode()
-        && oldParent->numAttachedObjects() == 0
-        && oldParent->numChildren() == 0) {
-        emit sceneNodeDestroyed(oldParent);
-        destroyAllAttachedMovableObjects(oldParent);
-        mSceneMgr->destroySceneNode(oldParent);
+    // Cascade-delete empty group ancestors: if removing this child left
+    // the old parent empty, destroy it — then check ITS parent, and so on.
+    Ogre::SceneNode* emptyCheck = oldParent;
+    while (emptyCheck && emptyCheck != mSceneMgr->getRootSceneNode()
+           && emptyCheck->numAttachedObjects() == 0
+           && emptyCheck->numChildren() == 0) {
+        Ogre::SceneNode* nextParent = static_cast<Ogre::SceneNode*>(emptyCheck->getParent());
+        emit sceneNodeDestroyed(emptyCheck);
+        destroyAllAttachedMovableObjects(emptyCheck);
+        mSceneMgr->destroySceneNode(emptyCheck);
+        emptyCheck = nextParent;
     }
 
     // Trigger scene tree rebuild
