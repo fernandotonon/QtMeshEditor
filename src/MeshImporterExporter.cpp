@@ -1294,8 +1294,14 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
         return exporter(node, outputPath, fmt, true);
     }
 
-    // Request software skinning so we can read CPU-side deformed vertices
+    // Request software skinning so we can read CPU-side deformed vertices.
+    // Use a guard to ensure the request is always released, even on exception.
     entity->addSoftwareAnimationRequest(false);
+    struct SoftAnimGuard {
+        Ogre::Entity* ent;
+        ~SoftAnimGuard() { if (ent) ent->removeSoftwareAnimationRequest(false); }
+    } softAnimGuard{entity};
+
     entity->_updateAnimation();
 
     const Ogre::MeshPtr mesh = entity->getMesh();
@@ -1444,9 +1450,7 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
     }
 
     // No animations, no bones — this is a static mesh
-
-    // Release software animation request
-    entity->removeSoftwareAnimationRequest(false);
+    // (Software animation request is released by softAnimGuard destructor)
 
     // Export the scene using the same Assimp path as regular export
     QFileInfo file(outputPath);
@@ -1481,7 +1485,10 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
 
         try {
             Assimp::Exporter exporter;
-            unsigned int exportFlags = (formatId == "x") ? 0 : aiProcess_ConvertToLeftHanded;
+            // glTF/GLB and DirectX (.x) are right-handed like Ogre — skip handedness conversion.
+            // Only apply ConvertToLeftHanded for formats that expect left-handed coords (e.g. FBX).
+            bool rightHanded = (formatId == "x" || formatId == "gltf2" || formatId == "glb2");
+            unsigned int exportFlags = rightHanded ? 0 : aiProcess_ConvertToLeftHanded;
             aiReturn aiResult = exporter.Export(scene, formatId.toStdString().c_str(),
                                                 file.filePath().toStdString().c_str(),
                                                 exportFlags);

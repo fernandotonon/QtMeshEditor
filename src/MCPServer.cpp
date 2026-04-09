@@ -43,6 +43,8 @@
 #include <OgreBone.h>
 #include "AnimationMerger.h"
 #include "SubMeshTransform.h"
+#include "UndoManager.h"
+#include "commands/TransformCommands.h"
 
 #ifdef Q_OS_WIN
 #include <io.h>
@@ -2502,6 +2504,11 @@ QJsonObject MCPServer::toolDuplicateEntity(const QJsonObject &args)
     if (!clone)
         return makeErrorResult("Error: Failed to duplicate node.");
 
+    // Push undo command so MCP duplication is reversible (same as UI path)
+    QList<Ogre::SceneNode*> sources = {sourceNode};
+    QList<Ogre::SceneNode*> clones = {clone};
+    UndoManager::getSingleton()->push(new DuplicateCommand(sources, clones));
+
     return makeSuccessResult(QString("Duplicated '%1' as '%2'")
         .arg(QString::fromStdString(sourceNode->getName()),
              QString::fromStdString(clone->getName())));
@@ -2589,6 +2596,15 @@ QJsonObject MCPServer::toolSetSnapSettings(const QJsonObject &args)
     if (!top)
         return makeErrorResult("Error: TransformOperator not initialized");
 
+    // Validate all fields first to avoid partial mutation
+    if (args.contains("grid_size") && args["grid_size"].toDouble() <= 0.0)
+        return makeErrorResult("Error: grid_size must be positive");
+    if (args.contains("angle_step") && args["angle_step"].toDouble() <= 0.0)
+        return makeErrorResult("Error: angle_step must be positive");
+    if (args.contains("scale_step") && args["scale_step"].toDouble() <= 0.0)
+        return makeErrorResult("Error: scale_step must be positive");
+
+    // Apply all validated fields
     QStringList changes;
 
     if (args.contains("enabled")) {
@@ -2599,24 +2615,18 @@ QJsonObject MCPServer::toolSetSnapSettings(const QJsonObject &args)
 
     if (args.contains("grid_size")) {
         double gridSize = args["grid_size"].toDouble();
-        if (gridSize <= 0.0)
-            return makeErrorResult("Error: grid_size must be positive");
         top->setSnapGridSize(gridSize);
         changes << QString("Grid size: %1").arg(gridSize);
     }
 
     if (args.contains("angle_step")) {
         double angleStep = args["angle_step"].toDouble();
-        if (angleStep <= 0.0)
-            return makeErrorResult("Error: angle_step must be positive");
         top->setSnapAngleStep(angleStep);
         changes << QString("Angle step: %1 degrees").arg(angleStep);
     }
 
     if (args.contains("scale_step")) {
         double scaleStep = args["scale_step"].toDouble();
-        if (scaleStep <= 0.0)
-            return makeErrorResult("Error: scale_step must be positive");
         top->setSnapScaleStep(scaleStep);
         changes << QString("Scale step: %1").arg(scaleStep);
     }

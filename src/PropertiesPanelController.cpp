@@ -7,6 +7,7 @@
 #include "SkeletonTransform.h"
 #include "MeshImporterExporter.h"
 #include "Manager.h"
+#include "SentryReporter.h"
 #include <QApplication>
 #include <QFileDialog>
 #include <QPalette>
@@ -519,6 +520,7 @@ bool PropertiesPanelController::exportCurrentPose(const QString& path)
         outputPath = MeshImporterExporter::formatFileURI(outputPath, filter);
     }
 
+    SentryReporter::addBreadcrumb("ui.action", "Export current pose via Inspector");
     int result = MeshImporterExporter::exportCurrentPose(animatedEntity, outputPath);
     return result == 0;
 }

@@ -160,6 +160,8 @@ private:
     Ogre::Vector3                           mSnapTranslationAccum = Ogre::Vector3::ZERO;
     Ogre::Vector3                           mSnapRotationAccum = Ogre::Vector3::ZERO;
     Ogre::Vector3                           mSnapScaleAccum = Ogre::Vector3::ZERO;
+    // Cumulative snapped scale factor applied during this drag (for entity absolute-scale path)
+    Ogre::Vector3                           mSnapScaleCumulative = Ogre::Vector3::UNIT_SCALE;
 
     // Undo state: captured at mouse press, used to create command at mouse release
     QList<Ogre::Vector3>                    mUndoStartPositions;

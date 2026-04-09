@@ -255,6 +255,15 @@ Rectangle {
                 activeScaleIdx = findIdx(scalePresets, PropertiesPanelController.snapScaleStep)
             }
 
+            // Sync from external changes (MCP tools, other UI paths)
+            Connections {
+                target: PropertiesPanelController
+                function onSnapEnabledChanged() { snapCol.snapOn = PropertiesPanelController.snapEnabled; snapCol.forceRepaint() }
+                function onSnapGridSizeChanged() { snapCol.activeGridIdx = snapCol.findIdx(snapCol.gridPresets, PropertiesPanelController.snapGridSize); snapCol.forceRepaint() }
+                function onSnapAngleStepChanged() { snapCol.activeAngleIdx = snapCol.findIdx(snapCol.anglePresets, PropertiesPanelController.snapAngleStep); snapCol.forceRepaint() }
+                function onSnapScaleStepChanged() { snapCol.activeScaleIdx = snapCol.findIdx(snapCol.scalePresets, PropertiesPanelController.snapScaleStep); snapCol.forceRepaint() }
+            }
+
             // Enable toggle
             Row {
                 spacing: 6

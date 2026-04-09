@@ -660,6 +660,7 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             mSnapTranslationAccum = Ogre::Vector3::ZERO;
             mSnapRotationAccum = Ogre::Vector3::ZERO;
             mSnapScaleAccum = Ogre::Vector3::ZERO;
+            mSnapScaleCumulative = Ogre::Vector3::UNIT_SCALE;
 
             // Checking the ray intersection with a plane parallel to viewport & on the geometric center of selection
             Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
@@ -910,8 +911,19 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                         else
                         {
                             mSnapScaleAccum -= snappedDelta;
-                            Ogre::Vector3 snappedFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
-                            scaleSelected(snappedFactor);
+                            // For nodes: use incremental factor (node->scale is multiplicative)
+                            // For entities/sub-entities: use cumulative factor (scaleSelected
+                            // undoes previous and applies absolute)
+                            if (SelectionSet::getSingleton()->hasNodes())
+                            {
+                                Ogre::Vector3 snappedFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
+                                scaleSelected(snappedFactor);
+                            }
+                            else
+                            {
+                                mSnapScaleCumulative += snappedDelta;
+                                scaleSelected(mSnapScaleCumulative);
+                            }
                             mScaleStartDistance = currentDistance;
                             emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
                             updateGizmoPosition();
