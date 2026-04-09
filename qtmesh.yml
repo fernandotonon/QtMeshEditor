@@ -1,0 +1,46 @@
+# qtmesh.yml — Asset validation config for QtMeshEditor repository
+# Used by CI to validate the demo/test models in media/.
+
+version: 1
+
+scan:
+  roots:
+    - media/
+  include:
+    - "**/*.fbx"
+    - "**/*.glb"
+    - "**/*.gltf"
+    - "**/*.obj"
+    - "**/*.mesh"
+  exclude:
+    # robot.mesh uses Ogre MeshSerializer v1.40 which Assimp cannot read
+    - "**/robot.mesh"
+    - "**/build/**"
+    - "**/.git/**"
+
+rules:
+  # Complexity limits — generous for demo assets
+  max_file_size_mb: 50
+  min_file_size_mb: 0.001
+  max_vertex_count: 50000
+  min_vertex_count: 3
+  max_mesh_count: 16
+  max_material_count: 16
+  max_anim_keyframes: 500
+  max_anim_duration: 30.0
+  min_anim_keyframes: 2
+
+  # All demo assets should have a skeleton and at least one animation
+  require_skeleton: true
+  require_animations: true
+
+  # Texture/material hygiene
+  allow_embedded_textures: true
+  require_textures_exist: false
+  allow_missing_materials: true
+
+  # Skip file naming enforcement — demo assets have spaces in names
+  # file_name_case: snake_case
+
+report:
+  fail_on: error

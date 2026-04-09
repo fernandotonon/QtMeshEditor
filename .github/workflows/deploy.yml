@@ -1196,10 +1196,9 @@ jobs:
           echo "No QtMeshEditor binary found, skipping scan"
           exit 0
         fi
-        echo "Scanning repository media/ assets..."
-        "$TEST_BIN" --cli scan media/ --include "*.mesh" --fail-on error || {
-          echo "::warning::Asset scan found errors in media/"
-          # Don't fail the build — informational for now
+        echo "Scanning repository assets using qtmesh.yml..."
+        "$TEST_BIN" --cli scan || {
+          echo "::warning::Asset scan found errors (see qtmesh.yml)"
           true
         }
 
@@ -1215,8 +1214,9 @@ jobs:
         run: |
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
             ghcr.io/fernandotonon/qtmesh:latest \
-            scan /workspace/media/ --include "*.mesh" --json || {
+            scan --config /workspace/qtmesh.yml --json || {
             echo "::warning::Docker asset scan reported issues (using latest published image)"
             true
           }
@@ -1226,8 +1226,8 @@ jobs:
         uses: ./.github/actions/qtmesh
         with:
           command: scan
-          input-file: media/
-          options: --include "*.mesh" --fail-on never --json
+          input-file: .
+          options: --config /workspace/qtmesh.yml --json
         continue-on-error: true
 
 ####################################################################
@@ -2000,7 +2000,7 @@ jobs:
           echo "=== Scanning repository assets via Docker ==="
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
-            "$IMAGE" scan /workspace/media/ --include "*.mesh" --json || {
+            "$IMAGE" scan --config /workspace/qtmesh.yml --json || {
             echo "::warning::Docker asset scan reported issues"
             true
           }
