@@ -1176,6 +1176,33 @@ jobs:
         fi
         echo "All test suites passed"
 
+    - name: Scan repository assets with qtmesh scan
+      if: success()
+      env:
+        DISPLAY: :99
+        QT_QPA_PLATFORM: xcb
+        LIBGL_ALWAYS_SOFTWARE: 1
+        MESA_GL_VERSION_OVERRIDE: "3.3"
+      run: |
+        TEST_BIN=""
+        if [ -f "./build/debug/QtMeshEditor" ]; then
+          TEST_BIN="./build/debug/QtMeshEditor"
+        elif [ -f "./build/bin/QtMeshEditor" ]; then
+          TEST_BIN="./build/bin/QtMeshEditor"
+        elif [ -f "./bin/QtMeshEditor" ]; then
+          TEST_BIN="./bin/QtMeshEditor"
+        fi
+        if [ -z "$TEST_BIN" ]; then
+          echo "No QtMeshEditor binary found, skipping scan"
+          exit 0
+        fi
+        echo "Scanning repository media/ assets..."
+        "$TEST_BIN" --cli scan media/ --include "*.mesh" --fail-on error || {
+          echo "::warning::Asset scan found errors in media/"
+          # Don't fail the build — informational for now
+          true
+        }
+
 ####################################################################
 # MacOS Deploy
 ####################################################################
@@ -1939,3 +1966,14 @@ jobs:
             'LD_LIBRARY_PATH=/usr/lib/qtmesheditor ldd /usr/share/qtmesheditor/qtmesheditor 2>&1 | grep "not found" && exit 1 || echo "All libraries found"'
           # Run --help to verify CLI works end-to-end
           docker run --rm "$IMAGE" --help
+
+      - name: Scan repository assets via Docker
+        run: |
+          IMAGE="${{ env.REGISTRY_GHCR }}/${{ env.GHCR_IMAGE }}:${{ steps.version.outputs.version }}"
+          echo "=== Scanning repository assets via Docker ==="
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            "$IMAGE" scan /workspace/media/ --include "*.mesh" --json || {
+            echo "::warning::Docker asset scan reported issues"
+            true
+          }

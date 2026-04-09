@@ -6,6 +6,8 @@
 #include "MeshLodController.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "ScanConfig.h"
+#include "ScanEngine.h"
 #include <QApplication>
 #include <QWidget>
 #include <QDir>
@@ -110,6 +112,18 @@ void CLIPipeline::printUsage()
         "                                    Export a single posed frame as static mesh\n"
         "  pose <file> --animation <name> --count N -o <pattern>\n"
         "                                    Export N evenly spaced frames (use %02d in pattern)\n"
+        "  scan [path] [options]             Scan directory for 3D asset issues (CI linting)\n"
+        "\n"
+        "Scan options:\n"
+        "  --config <file>           Config file (default: qtmesh.yml, qtmesh.json)\n"
+        "  --json                    Output as JSON\n"
+        "  --report <file>           Write JSON report to file\n"
+        "  --sarif <file>            Write SARIF report to file\n"
+        "  --fix                     Enable auto-fixes\n"
+        "  --dry-run                 Show what fixes would be applied\n"
+        "  --include <patterns>      File patterns, comma-separated (e.g. *.fbx,*.glb)\n"
+        "  --exclude <patterns>      Exclude patterns, comma-separated\n"
+        "  --fail-on <level>         Exit 1 threshold: info, warning, error, never\n"
         "\n"
         "Fix flags:\n"
         "  --remove-degenerates  Remove degenerate triangles\n"
@@ -456,6 +470,7 @@ int CLIPipeline::run(int argc, char* argv[])
     else if (cmd == "validate") rc = cmdValidate(argc, argv);
     else if (cmd == "lod") rc = cmdLod(argc, argv);
     else if (cmd == "pose") rc = cmdPose(argc, argv);
+    else if (cmd == "scan") rc = cmdScan(argc, argv);
 
     if (rc < 0) {
         err() << "Error: Unknown command '" << cmd << "'" << Qt::endl;
@@ -1575,4 +1590,139 @@ int CLIPipeline::cmdPose(int argc, char* argv[])
             .arg(QFileInfo(outputPath).fileName()));
         return 0;
     }
+}
+
+int CLIPipeline::cmdScan(int argc, char* argv[])
+{
+    // Parse: scan [path] [options]
+    QString scanRoot;
+    QString configPath;
+    bool jsonOutput = false;
+    QString reportPath;
+    QString sarifPath;
+    bool fix = false;
+    bool dryRun = false;
+    QString includeArg;
+    QString excludeArg;
+    QString failOn;
+
+    for (int i = 1; i < argc; ++i) {
+        QString arg(argv[i]);
+        if (arg == "scan" || arg == "--cli" || arg == "--verbose" || arg == "--no-telemetry")
+            continue;
+        if (arg == "--json")    { jsonOutput = true; continue; }
+        if (arg == "--fix")     { fix = true; continue; }
+        if (arg == "--dry-run") { dryRun = true; continue; }
+        if (arg == "--config"  && i + 1 < argc) { configPath  = argv[++i]; continue; }
+        if (arg == "--report"  && i + 1 < argc) { reportPath  = argv[++i]; continue; }
+        if (arg == "--sarif"   && i + 1 < argc) { sarifPath   = argv[++i]; continue; }
+        if (arg == "--include" && i + 1 < argc) { includeArg  = argv[++i]; continue; }
+        if (arg == "--exclude" && i + 1 < argc) { excludeArg  = argv[++i]; continue; }
+        if (arg == "--fail-on" && i + 1 < argc) { failOn      = argv[++i]; continue; }
+        if (!arg.startsWith("-") && scanRoot.isEmpty()) { scanRoot = arg; continue; }
+    }
+
+    // Load config: explicit file → auto-detect → defaults
+    ScanConfig config;
+    if (!configPath.isEmpty()) {
+        if (!QFileInfo::exists(configPath)) {
+            err() << "Error: Config file not found: " << configPath << Qt::endl;
+            return 2;
+        }
+        config = ScanConfig::loadFromFile(configPath);
+    } else if (QFileInfo::exists("qtmesh.yml")) {
+        config = ScanConfig::loadFromFile("qtmesh.yml");
+    } else if (QFileInfo::exists("qtmesh.yaml")) {
+        config = ScanConfig::loadFromFile("qtmesh.yaml");
+    } else if (QFileInfo::exists("qtmesh.json")) {
+        config = ScanConfig::loadFromFile("qtmesh.json");
+    } else {
+        config = ScanConfig::defaults();
+    }
+
+    // CLI overrides
+    if (fix)     config.fixEnabled = true;
+    if (dryRun)  config.dryRun = true;
+    if (!failOn.isEmpty()) config.failOn = failOn;
+
+    if (!includeArg.isEmpty()) {
+        config.includePatterns.clear();
+        for (const auto& p : includeArg.split(",")) {
+            QString pattern = p.trimmed();
+            // Normalize bare extension patterns: *.fbx → **/*.fbx
+            if (!pattern.contains("/") && !pattern.startsWith("**/"))
+                pattern = "**/" + pattern;
+            config.includePatterns.append(pattern);
+        }
+    }
+    if (!excludeArg.isEmpty()) {
+        for (const auto& p : excludeArg.split(",")) {
+            QString pattern = p.trimmed();
+            if (!pattern.contains("/") && !pattern.startsWith("**/"))
+                pattern = "**/" + pattern;
+            config.excludePatterns.append(pattern);
+        }
+    }
+
+    // Validate scan root
+    if (!scanRoot.isEmpty() && !QFileInfo(scanRoot).isDir()) {
+        err() << "Error: Not a directory: " << scanRoot << Qt::endl;
+        return 2;
+    }
+
+    SentryReporter::addBreadcrumb("cli.scan",
+        QString("Scan root=%1 json=%2 fix=%3")
+            .arg(scanRoot.isEmpty() ? "(default)" : scanRoot)
+            .arg(jsonOutput).arg(fix));
+
+    // Run the scan
+    ScanResult result = ScanEngine::run(config, scanRoot);
+
+    // Output to terminal
+    if (jsonOutput) {
+        cliWrite(ScanEngine::formatJson(result) + "\n");
+    } else {
+        cliWrite(ScanEngine::formatText(result, config));
+    }
+
+    // Write report files
+    if (!reportPath.isEmpty()) {
+        QFile f(reportPath);
+        QDir().mkpath(QFileInfo(reportPath).path());
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(ScanEngine::formatJson(result).toUtf8());
+        else
+            err() << "Warning: Could not write report to " << reportPath << Qt::endl;
+    }
+
+    if (!sarifPath.isEmpty()) {
+        QFile f(sarifPath);
+        QDir().mkpath(QFileInfo(sarifPath).path());
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(ScanEngine::formatSarif(result).toUtf8());
+        else
+            err() << "Warning: Could not write SARIF report to " << sarifPath << Qt::endl;
+    }
+
+    // Also write reports if configured in the config file
+    if (reportPath.isEmpty() && !config.reportOutput.isEmpty()) {
+        QFile f(config.reportOutput);
+        QDir().mkpath(QFileInfo(config.reportOutput).path());
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(ScanEngine::formatJson(result).toUtf8());
+    }
+    if (sarifPath.isEmpty() && !config.sarifOutput.isEmpty()) {
+        QFile f(config.sarifOutput);
+        QDir().mkpath(QFileInfo(config.sarifOutput).path());
+        if (f.open(QIODevice::WriteOnly | QIODevice::Text))
+            f.write(ScanEngine::formatSarif(result).toUtf8());
+    }
+
+    // Exit code based on fail_on threshold
+    if (config.failOn == "never") return 0;
+    if (config.failOn == "error"   && result.errors > 0)                               return 1;
+    if (config.failOn == "warning" && (result.errors > 0 || result.warnings > 0))      return 1;
+    if (config.failOn == "info"    && (result.errors > 0 || result.warnings > 0 || result.infos > 0)) return 1;
+
+    return 0;
 }

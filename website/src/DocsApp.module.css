@@ -1,0 +1,422 @@
+/* ── Layout ─────────────────────────────────────────────── */
+
+.layout {
+  display: flex;
+  min-height: 100vh;
+  background: var(--surface-0);
+  color: var(--text-0);
+}
+
+/* ── Sidebar ────────────────────────────────────────────── */
+
+.sidebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 280px;
+  height: 100vh;
+  background: var(--surface-1);
+  border-right: 1px solid var(--stroke);
+  overflow-y: auto;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+}
+
+.sidebarHeader {
+  padding: 1.25rem 1.2rem 0.8rem;
+  border-bottom: 1px solid var(--stroke);
+}
+
+.sidebarHeader a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-1);
+  text-decoration: none;
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition: color 140ms ease;
+}
+
+.sidebarHeader a:hover {
+  color: var(--accent-1);
+}
+
+.sidebarNav {
+  flex: 1;
+  padding: 0.75rem 0 1.5rem;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Nav section group ──────────────────────────────────── */
+
+.navSection {
+  margin: 0;
+  padding: 1rem 1.2rem 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.navLink {
+  display: block;
+  padding: 0.42rem 1.2rem;
+  font-size: 0.9rem;
+  color: var(--text-1);
+  text-decoration: none;
+  border-left: 3px solid transparent;
+  transition: color 120ms ease, background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.navLink:hover {
+  color: var(--text-0);
+  background: rgba(120, 141, 179, 0.08);
+}
+
+.navLink.active {
+  color: var(--accent-1);
+  border-left-color: var(--accent-1);
+  background: rgba(103, 211, 255, 0.06);
+  font-weight: 600;
+}
+
+/* ── Main content ───────────────────────────────────────── */
+
+.main {
+  flex: 1;
+  margin-left: 280px;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+.mainInner {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 2rem 2.5rem 4rem;
+}
+
+/* ── Top bar ────────────────────────────────────────────── */
+
+.topBar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 2.5rem;
+  margin-left: 280px;
+  background: rgba(5, 10, 20, 0.85);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--stroke);
+}
+
+.topBar h1 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text-0);
+}
+
+.topBar a {
+  color: var(--accent-1);
+  text-decoration: none;
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition: color 140ms ease;
+}
+
+.topBar a:hover {
+  color: #9cdfff;
+}
+
+/* ── Breadcrumb ─────────────────────────────────────────── */
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0 0 1.5rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.breadcrumb a {
+  color: var(--accent-1);
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+
+.breadcrumb a:hover {
+  color: #9cdfff;
+}
+
+.breadcrumb li + li::before {
+  content: '/';
+  margin-right: 0.35rem;
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+
+/* ── Sections ───────────────────────────────────────────── */
+
+.section {
+  padding-top: 2.5rem;
+  scroll-margin-top: 4rem;
+}
+
+.section + .section {
+  border-top: 1px solid var(--stroke);
+  margin-top: 2rem;
+}
+
+.sectionTitle {
+  margin: 0 0 1rem;
+  font-size: 1.55rem;
+  font-weight: 700;
+  color: var(--text-0);
+  padding-bottom: 0.55rem;
+  border-bottom: 2px solid var(--accent-2);
+}
+
+.subsection {
+  margin: 1.8rem 0 0.6rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-0);
+}
+
+/* ── Typography ─────────────────────────────────────────── */
+
+.para {
+  margin: 0.6rem 0;
+  color: var(--text-1);
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.code {
+  font-family: var(--mono);
+  font-size: 0.84em;
+  background: var(--surface-3);
+  color: #b8e5ff;
+  padding: 0.15em 0.4em;
+  border-radius: 0.3rem;
+}
+
+/* ── Code blocks ────────────────────────────────────────── */
+
+.codeBlock {
+  margin: 1rem 0;
+  padding: 0.9rem 1.1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--stroke);
+  border-radius: 0.75rem;
+  font-family: var(--mono);
+  font-size: 0.84rem;
+  line-height: 1.55;
+  color: #dce8ff;
+  overflow-x: auto;
+  white-space: pre;
+}
+
+.yamlExample {
+  composes: codeBlock;
+  border-left: 3px solid var(--accent-2);
+}
+
+/* ── Tables ─────────────────────────────────────────────── */
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1rem 0;
+  font-size: 0.9rem;
+  overflow-x: auto;
+  display: block;
+}
+
+.table thead {
+  background: var(--surface-1);
+}
+
+.table th,
+.table td {
+  padding: 0.6rem 0.85rem;
+  text-align: left;
+  border: 1px solid var(--stroke);
+}
+
+.table th {
+  font-weight: 700;
+  color: var(--text-0);
+  font-size: 0.84rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.table td {
+  color: var(--text-1);
+}
+
+.table tbody tr:hover {
+  background: rgba(120, 141, 179, 0.06);
+}
+
+/* ── Badges ─────────────────────────────────────────────── */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 0.12rem 0.55rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.badgeError {
+  composes: badge;
+  background: rgba(255, 80, 80, 0.14);
+  border: 1px solid rgba(255, 80, 80, 0.35);
+  color: #ff6b6b;
+}
+
+.badgeWarning {
+  composes: badge;
+  background: rgba(255, 193, 50, 0.14);
+  border: 1px solid rgba(255, 193, 50, 0.35);
+  color: #ffc132;
+}
+
+.badgeInfo {
+  composes: badge;
+  background: rgba(91, 143, 255, 0.14);
+  border: 1px solid rgba(91, 143, 255, 0.35);
+  color: var(--accent-2);
+}
+
+/* ── Rule card ──────────────────────────────────────────── */
+
+.ruleCard {
+  background: var(--surface-2);
+  border: 1px solid var(--stroke);
+  border-radius: 0.85rem;
+  padding: 1.1rem 1.2rem;
+  margin: 0.75rem 0;
+}
+
+.ruleCard + .ruleCard {
+  margin-top: 0.75rem;
+}
+
+.ruleCard h4 {
+  margin: 0 0 0.4rem;
+  font-size: 1rem;
+  color: var(--text-0);
+}
+
+.ruleCard p {
+  margin: 0.35rem 0 0;
+  color: var(--text-1);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+/* ── Mobile toggle ──────────────────────────────────────── */
+
+.mobileToggle {
+  display: none;
+  position: fixed;
+  top: 0.65rem;
+  left: 0.65rem;
+  z-index: 40;
+  width: 2.4rem;
+  height: 2.4rem;
+  border: 1px solid var(--stroke);
+  border-radius: 0.55rem;
+  background: var(--surface-2);
+  color: var(--text-0);
+  font-size: 1.2rem;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  transition: background-color 120ms ease;
+}
+
+.mobileToggle:hover {
+  background: var(--surface-3);
+}
+
+/* ── Mobile overlay (backdrop behind sidebar) ───────────── */
+
+.mobileOverlay {
+  display: none;
+}
+
+/* ── Responsive ─────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+  .mobileToggle {
+    display: flex;
+  }
+
+  .sidebar {
+    transform: translateX(-100%);
+    transition: transform 260ms ease;
+    box-shadow: none;
+  }
+
+  .sidebarOpen {
+    transform: translateX(0);
+    box-shadow: 8px 0 30px rgba(0, 0, 0, 0.45);
+  }
+
+  .mobileOverlay {
+    position: fixed;
+    inset: 0;
+    z-index: 25;
+    background: rgba(2, 7, 14, 0.6);
+    backdrop-filter: blur(4px);
+  }
+
+  .sidebarOpen ~ .mobileOverlay,
+  .mobileOverlayVisible {
+    display: block;
+  }
+
+  .main {
+    margin-left: 0;
+  }
+
+  .topBar {
+    margin-left: 0;
+    padding-left: 3.5rem;
+  }
+
+  .mainInner {
+    padding: 1.5rem 1.2rem 3rem;
+  }
+
+  .sectionTitle {
+    font-size: 1.3rem;
+  }
+
+  .table {
+    font-size: 0.82rem;
+  }
+
+  .table th,
+  .table td {
+    padding: 0.45rem 0.6rem;
+  }
+}

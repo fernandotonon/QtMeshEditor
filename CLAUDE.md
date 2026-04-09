@@ -59,9 +59,17 @@ qtmesh lod model.fbx --count 3                 # generate 3 LODs → model_lod1.
 qtmesh lod model.fbx --count 2 --reductions 0.25,0.5 -o out.fbx  # custom reductions, named output
 qtmesh lod model.fbx --auto                    # auto-generate LODs
 qtmesh lod model.fbx --remove -o clean.fbx     # strip LODs and save
+qtmesh scan ./assets                           # scan directory for asset issues
+qtmesh scan ./assets --config qtmesh.yml       # use YAML config file
+qtmesh scan ./assets --json                    # JSON output
+qtmesh scan ./assets --report report.json      # write JSON report to file
+qtmesh scan ./assets --sarif report.sarif      # write SARIF report to file
+qtmesh scan ./assets --fix --dry-run           # preview auto-fixes
+qtmesh scan ./assets --include "*.fbx,*.glb"   # filter by extension
+qtmesh scan ./assets --fail-on warning         # exit 1 on warnings or errors
 ```
 
-CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
+CLI mode is activated by: (1) invoking via the `qtmesh` symlink, (2) passing `--cli`, or (3) using a recognized subcommand (`info`, `fix`, `convert`, `anim`, `validate`, `lod`, `pose`, `scan`) as the first argument. Use `--verbose` to see Ogre/engine debug output. Use `--no-telemetry` to permanently opt out of anonymous usage data collection.
 
 If Xcode SDK is updated, clear CMake cache (`rm build_local/CMakeCache.txt`) and reconfigure.
 
@@ -152,10 +160,12 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 ### CLI Pipeline
 
 - **CLIPipeline** (`src/CLIPipeline.h/cpp`): Headless command-line interface for mesh operations. All static methods — entry point is `CLIPipeline::run(argc, argv)`.
-- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`.
+- Subcommands: `info`, `fix`, `convert`, `anim` (list/rename/merge), `validate`, `lod`, `pose`, `scan`.
 - Activated via `qtmesh` symlink (created at build time), `--cli` flag, or recognized subcommand as first arg.
 - Redirects stdout to stderr (Ogre/Qt noise) and writes CLI output to the original stdout fd. Uses `_exit()` to avoid Ogre static destructor crashes on macOS.
 - **AnimationMerger** (`src/AnimationMerger.h/cpp`): Public `renameAnimation()` static method used by both CLI and GUI for animation renaming.
+- **ScanEngine** (`src/ScanEngine.h/cpp`): Directory scanner for 3D asset linting. Uses Assimp directly (no Ogre needed) for lightweight metadata extraction. Enumerates files via glob patterns, evaluates configurable rules (format restrictions, size/complexity limits, naming conventions, texture existence), produces text/JSON/SARIF reports. Supports auto-fix for naming convention violations.
+- **ScanConfig** (`src/ScanConfig.h/cpp`): Config loader for `qtmesh.yml`/`.json`. Includes a minimal YAML parser for the specific config schema (scalars, inline/block lists, one level of section nesting). Supports scan paths, rule configuration, fix behavior, and report output settings.
 
 ### Mesh Import/Export
 

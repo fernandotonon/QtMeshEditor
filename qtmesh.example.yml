@@ -1,0 +1,103 @@
+# qtmesh.yml — 3D asset pipeline linting configuration
+# Copy this file as qtmesh.yml in your project root and customize.
+# See: https://github.com/nickvdp/QtMeshEditor
+#
+# The scan command picks up qtmesh.yml (or qtmesh.yaml / qtmesh.json)
+# automatically from the current directory. Override with --config <path>.
+#
+# Run:
+#   qtmesh scan ./assets
+#   qtmesh scan ./assets --json
+#   qtmesh scan ./assets --fix --dry-run
+
+version: 1
+
+scan:
+  roots:
+    - assets/
+  include:
+    - "**/*.fbx"
+    - "**/*.glb"
+    - "**/*.gltf"
+    - "**/*.obj"
+  exclude:
+    - "**/third_party/**"
+    - "**/vendor/**"
+    - "**/.git/**"
+    - "**/build/**"
+
+rules:
+  # Format restrictions
+  allowed_formats: [fbx, glb, gltf, obj]
+  forbidden_extensions: [dae, 3ds]
+
+  # Size & complexity limits
+  max_file_size_mb: 50
+  max_mesh_count: 8
+  max_material_count: 16
+  max_vertex_count: 100000
+
+  # Skeleton & animation existence checks
+  require_skeleton: false
+  require_animations: false
+
+  # Animation content limits
+  max_anim_keyframes: 500
+  max_anim_duration: 30.0
+
+  # Animation & bone name requirements (wildcard: * = any, ? = one char)
+  # These are checked globally. Use scopes for path-specific requirements.
+  # require_animation_names: [idle, walk, run]
+  # require_bone_names: [Hips, Spine, Head]
+
+  # Texture & material hygiene
+  allow_embedded_textures: true
+  require_textures_exist: true
+  allow_missing_materials: false
+
+  # Naming convention: snake_case, kebab-case, camelCase, PascalCase, lowercase
+  file_name_case: snake_case
+
+# Scoped rules — override global rules for specific paths.
+# Each key is a glob pattern matched against the asset's relative path.
+# Only rule fields present in the scope override the global value.
+scopes:
+  "characters/**":
+    require_skeleton: true
+    require_animations: true
+    max_anim_keyframes: 300
+    max_anim_duration: 10.0
+    require_animation_names:
+      - idle
+      - walk
+      - run
+      - jump
+      - "attack*"
+      - "dance_*"
+    require_bone_names:
+      - r_hand_attach
+      - l_hand_attach
+      - backpack
+      - top_head
+  "props/**":
+    require_skeleton: false
+    require_animations: false
+    max_vertex_count: 5000
+    max_material_count: 4
+  "environments/**":
+    max_vertex_count: 500000
+    max_material_count: 32
+
+fix:
+  enabled: false
+  dry_run: false
+  optimize_meshes: false
+  rename_animations: false
+  convert_to_format: ""
+  output_dir: ""
+
+report:
+  format: both
+  output: .qtmesh/scan-report.json
+  sarif_output: .qtmesh/scan-report.sarif
+  fail_on: error
