@@ -33,9 +33,9 @@ jobs:
         working-directory: website
         run: npm ci
 
-      - name: Build docs site
+      - name: Build website
         working-directory: website
-        run: npm run build:docs
+        run: npm run build
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
@@ -43,7 +43,7 @@ jobs:
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./docs
+          path: ./website/dist
 
   deploy:
     needs: build
