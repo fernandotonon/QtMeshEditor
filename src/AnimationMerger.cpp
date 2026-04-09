@@ -2,6 +2,7 @@
 #include <OgreSkeleton.h>
 #include <OgreSkeletonInstance.h>
 #include <OgreAnimation.h>
+#include <OgreKeyFrame.h>
 #include <QSet>
 #include <QMap>
 #include <QRegularExpression>
@@ -224,6 +225,182 @@ void AnimationMerger::renameAnimation(Ogre::Skeleton* skel,
     }
 
     skel->removeAnimation(oldName);
+}
+
+int AnimationMerger::resampleAnimation(Ogre::Skeleton* skel,
+                                       const std::string& animName,
+                                       int targetKeyframes)
+{
+    if (!skel || !skel->hasAnimation(animName) || targetKeyframes < 2)
+        return 0;
+
+    Ogre::Animation* srcAnim = skel->getAnimation(animName);
+    float length = srcAnim->getLength();
+
+    // Count original keyframes across all tracks (use max track keyframe count)
+    int originalMaxKeyframes = 0;
+    for (const auto& [handle, track] : srcAnim->_getNodeTrackList())
+    {
+        int numKf = static_cast<int>(track->getNumKeyFrames());
+        if (numKf > originalMaxKeyframes)
+            originalMaxKeyframes = numKf;
+    }
+
+    // Collect track data: for each track, evaluate interpolated T/R/S at N evenly-spaced times
+    struct TrackData {
+        unsigned short handle;
+        Ogre::Node* associatedNode;
+        bool useShortestPath;
+        struct KeyframeData {
+            float time;
+            Ogre::Vector3 translate;
+            Ogre::Quaternion rotation;
+            Ogre::Vector3 scale;
+        };
+        std::vector<KeyframeData> keyframes;
+    };
+    std::vector<TrackData> tracks;
+
+    for (const auto& [handle, srcTrack] : srcAnim->_getNodeTrackList())
+    {
+        TrackData td;
+        td.handle = handle;
+        td.associatedNode = srcTrack->getAssociatedNode();
+        td.useShortestPath = srcTrack->getUseShortestRotationPath();
+
+        for (int i = 0; i < targetKeyframes; ++i)
+        {
+            float t = (targetKeyframes > 1)
+                ? (static_cast<float>(i) * length / static_cast<float>(targetKeyframes - 1))
+                : 0.0f;
+
+            Ogre::TransformKeyFrame interpKf(nullptr, t);
+            srcTrack->getInterpolatedKeyFrame(t, &interpKf);
+
+            td.keyframes.push_back({
+                t,
+                interpKf.getTranslate(),
+                interpKf.getRotation(),
+                interpKf.getScale()
+            });
+        }
+        tracks.push_back(std::move(td));
+    }
+
+    // Save animation properties
+    float animLength = srcAnim->getLength();
+    auto interpMode = srcAnim->getInterpolationMode();
+    auto rotInterpMode = srcAnim->getRotationInterpolationMode();
+
+    // Remove old animation and create new one with same name
+    skel->removeAnimation(animName);
+    Ogre::Animation* newAnim = skel->createAnimation(animName, animLength);
+    newAnim->setInterpolationMode(interpMode);
+    newAnim->setRotationInterpolationMode(rotInterpMode);
+
+    // Recreate tracks with resampled keyframes
+    for (const auto& td : tracks)
+    {
+        auto* newTrack = newAnim->createNodeTrack(td.handle);
+        if (td.associatedNode)
+            newTrack->setAssociatedNode(td.associatedNode);
+        newTrack->setUseShortestRotationPath(td.useShortestPath);
+
+        for (const auto& kfData : td.keyframes)
+        {
+            auto* kf = newTrack->createNodeKeyFrame(kfData.time);
+            kf->setTranslate(kfData.translate);
+            kf->setRotation(kfData.rotation);
+            kf->setScale(kfData.scale);
+        }
+    }
+
+    return originalMaxKeyframes - targetKeyframes;
+}
+
+int AnimationMerger::decimateAnimation(Ogre::Skeleton* skel,
+                                       const std::string& animName,
+                                       int step)
+{
+    if (!skel || !skel->hasAnimation(animName) || step < 2)
+        return 0;
+
+    Ogre::Animation* srcAnim = skel->getAnimation(animName);
+
+    // Collect track data: for each track, keep only keyframes at indices 0, step, 2*step, ... and the last
+    struct TrackData {
+        unsigned short handle;
+        Ogre::Node* associatedNode;
+        bool useShortestPath;
+        struct KeyframeData {
+            float time;
+            Ogre::Vector3 translate;
+            Ogre::Quaternion rotation;
+            Ogre::Vector3 scale;
+        };
+        std::vector<KeyframeData> keyframes;
+        int originalCount;
+    };
+    std::vector<TrackData> tracks;
+
+    int totalRemoved = 0;
+
+    for (const auto& [handle, srcTrack] : srcAnim->_getNodeTrackList())
+    {
+        TrackData td;
+        td.handle = handle;
+        td.associatedNode = srcTrack->getAssociatedNode();
+        td.useShortestPath = srcTrack->getUseShortestRotationPath();
+        td.originalCount = static_cast<int>(srcTrack->getNumKeyFrames());
+
+        int numKf = td.originalCount;
+        for (int i = 0; i < numKf; ++i)
+        {
+            bool keep = (i % step == 0) || (i == numKf - 1);
+            if (keep)
+            {
+                const auto* kf = srcTrack->getNodeKeyFrame(static_cast<unsigned short>(i));
+                td.keyframes.push_back({
+                    kf->getTime(),
+                    kf->getTranslate(),
+                    kf->getRotation(),
+                    kf->getScale()
+                });
+            }
+        }
+
+        totalRemoved += (td.originalCount - static_cast<int>(td.keyframes.size()));
+        tracks.push_back(std::move(td));
+    }
+
+    // Save animation properties
+    float animLength = srcAnim->getLength();
+    auto interpMode = srcAnim->getInterpolationMode();
+    auto rotInterpMode = srcAnim->getRotationInterpolationMode();
+
+    // Remove old and create new
+    skel->removeAnimation(animName);
+    Ogre::Animation* newAnim = skel->createAnimation(animName, animLength);
+    newAnim->setInterpolationMode(interpMode);
+    newAnim->setRotationInterpolationMode(rotInterpMode);
+
+    for (const auto& td : tracks)
+    {
+        auto* newTrack = newAnim->createNodeTrack(td.handle);
+        if (td.associatedNode)
+            newTrack->setAssociatedNode(td.associatedNode);
+        newTrack->setUseShortestRotationPath(td.useShortestPath);
+
+        for (const auto& kfData : td.keyframes)
+        {
+            auto* kf = newTrack->createNodeKeyFrame(kfData.time);
+            kf->setTranslate(kfData.translate);
+            kf->setRotation(kfData.rotation);
+            kf->setScale(kfData.scale);
+        }
+    }
+
+    return totalRemoved;
 }
 
 bool AnimationMerger::areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const Ogre::SkeletonPtr& b)

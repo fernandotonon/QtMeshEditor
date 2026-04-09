@@ -390,7 +390,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
     // Start a performance transaction for heavy tools
     static const QStringList heavyTools = {
         "load_mesh", "export_mesh", "export_pose", "take_screenshot", "create_primitive", "create_material",
-        "merge_animations", "save_scene", "open_scene"
+        "merge_animations", "resample_animation", "save_scene", "open_scene"
     };
     uintptr_t txn = 0;
     if (heavyTools.contains(name)) {
@@ -462,6 +462,8 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolToggleMeshInfo(args);
     } else if (name == "merge_animations") {
         toolResult = toolMergeAnimations(args);
+    } else if (name == "resample_animation") {
+        toolResult = toolResampleAnimation(args);
     } else if (name == "save_scene") {
         toolResult = toolSaveScene(args);
     } else if (name == "open_scene") {
@@ -2119,6 +2121,112 @@ QJsonObject MCPServer::toolMergeAnimations(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolResampleAnimation(const QJsonObject &args)
+{
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        // Resolve entity
+        QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+
+        QList<Ogre::Entity*> allEntities = mgr->getEntities();
+        if (!entityName.isEmpty()) {
+            for (auto* ent : allEntities) {
+                if (ent && QString::fromStdString(ent->getName()) == entityName) {
+                    entity = ent;
+                    break;
+                }
+            }
+            if (!entity)
+                return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        } else {
+            // Use first entity with a skeleton
+            for (auto* ent : allEntities) {
+                if (ent && ent->hasSkeleton()) {
+                    entity = ent;
+                    break;
+                }
+            }
+        }
+
+        if (!entity || !entity->hasSkeleton())
+            return makeErrorResult("Error: No entity with skeleton found");
+
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        if (!skel)
+            return makeErrorResult("Error: No skeleton found");
+
+        QString animName = args["animation_name"].toString();
+        int targetKeyframes = args["target_keyframes"].toInt(0);
+        int decimateStep = args["decimate_step"].toInt(0);
+
+        if (targetKeyframes <= 0 && decimateStep <= 0)
+            return makeErrorResult("Error: Specify 'target_keyframes' (>= 2) for resampling or 'decimate_step' (>= 2) for decimation");
+
+        bool isResample = targetKeyframes >= 2;
+
+        if (isResample && targetKeyframes < 2)
+            return makeErrorResult("Error: target_keyframes must be >= 2");
+        if (!isResample && decimateStep < 2)
+            return makeErrorResult("Error: decimate_step must be >= 2");
+
+        // Collect animation names to process
+        std::vector<std::string> animNames;
+        if (!animName.isEmpty()) {
+            if (!skel->hasAnimation(animName.toStdString()))
+                return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+            animNames.push_back(animName.toStdString());
+        } else {
+            for (unsigned short i = 0; i < skel->getNumAnimations(); ++i)
+                animNames.push_back(skel->getAnimation(i)->getName());
+        }
+
+        int totalRemoved = 0;
+        int animsProcessed = 0;
+        for (const auto& name : animNames) {
+            int removed = isResample
+                ? AnimationMerger::resampleAnimation(skel.get(), name, targetKeyframes)
+                : AnimationMerger::decimateAnimation(skel.get(), name, decimateStep);
+            totalRemoved += removed;
+            ++animsProcessed;
+        }
+
+        entity->refreshAvailableAnimationState();
+
+        QString op = isResample ? "Resampled" : "Decimated";
+        QString detail = isResample
+            ? QString("to %1 keyframes").arg(targetKeyframes)
+            : QString("with step %1").arg(decimateStep);
+        QString result = QString("%1 %2 animation(s) %3 (removed %4 keyframes)")
+            .arg(op).arg(animsProcessed).arg(detail).arg(totalRemoved);
+
+        // List resulting animations
+        result += "\n\nAnimations:";
+        for (unsigned short i = 0; i < skel->getNumAnimations(); ++i) {
+            auto* anim = skel->getAnimation(i);
+            int maxKf = 0;
+            for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+                int kfCount = static_cast<int>(track->getNumKeyFrames());
+                if (kfCount > maxKf) maxKf = kfCount;
+            }
+            result += QString("\n  - %1 (%2s, %3 keyframes)")
+                .arg(QString::fromStdString(anim->getName()))
+                .arg(anim->getLength(), 0, 'f', 2)
+                .arg(maxKf);
+        }
+
+        return makeSuccessResult(result);
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
 QJsonObject MCPServer::toolSaveScene(const QJsonObject &args)
 {
     try {
@@ -3201,6 +3309,22 @@ QJsonArray MCPServer::buildToolsList()
             "Animations from non-base entities are prefixed with a slugified version of their scene node name. "
             "Load multiple mesh files first with load_mesh, then call this tool to combine all animations. "
             "Use list_skeletal_animations to see the result.",
+            props
+        );
+    }
+
+    // resample_animation
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
+        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to resample. If omitted, all animations are processed."}};
+        props["target_keyframes"] = QJsonObject{{"type", "integer"}, {"description", "Resample to exactly N evenly-spaced keyframes (N >= 2). Mutually exclusive with decimate_step."}};
+        props["decimate_step"] = QJsonObject{{"type", "integer"}, {"description", "Keep every Nth keyframe plus the last (N >= 2). Mutually exclusive with target_keyframes."}};
+        appendTool(
+            "resample_animation",
+            "Resample or decimate animation keyframes. Use target_keyframes for uniform resampling (interpolated) "
+            "or decimate_step to keep every Nth original keyframe. Reduces animation data size while preserving "
+            "bone hierarchy. Use list_skeletal_animations to see the result.",
             props
         );
     }

@@ -150,6 +150,7 @@ private:
     QJsonObject toolToggleNormals(const QJsonObject &args);
     QJsonObject toolToggleMeshInfo(const QJsonObject &args);
     QJsonObject toolMergeAnimations(const QJsonObject &args);
+    QJsonObject toolResampleAnimation(const QJsonObject &args);
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);
     QJsonObject toolValidateMesh(const QJsonObject &args);
