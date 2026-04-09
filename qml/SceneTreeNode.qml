@@ -41,68 +41,12 @@ Column {
                : (rowMouse.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.15)
                                          : "transparent")
 
-        // Drop highlight (shown when a valid drop target)
-        Rectangle {
-            id: dropHighlight
-            anchors.fill: parent
-            color: PropertiesPanelController.highlightColor
-            opacity: 0.3
-            visible: false
-            z: 5
-        }
-
-        // DropArea for reparenting: accepts dragged nodes
-        DropArea {
-            id: nodeDropArea
-            anchors.fill: parent
-            keys: ["application/x-qtmesheditor-node"]
-
-            property bool canDrop: false
-
-            onEntered: function(drag) {
-                var draggedName = PropertiesPanelController.draggedNodeName || ""
-                if (draggedName && treeNode.isNodeType && draggedName !== treeNode.nodeName) {
-                    canDrop = PropertiesPanelController.canReparentNode(draggedName, treeNode.nodeName)
-                } else {
-                    canDrop = false
-                }
-                dropHighlight.visible = canDrop
-                drag.accepted = canDrop
-            }
-            onExited: {
-                dropHighlight.visible = false
-                canDrop = false
-            }
-            onDropped: function(drop) {
-                dropHighlight.visible = false
-                var draggedName = PropertiesPanelController.draggedNodeName || ""
-                if (draggedName && canDrop) {
-                    PropertiesPanelController.reparentNode(draggedName, treeNode.nodeName)
-                    drop.accepted = true
-                } else {
-                    drop.accepted = false
-                }
-                canDrop = false
-                PropertiesPanelController.draggedNodeName = ""
-            }
-        }
-
-        // Full-row mouse area for selection and drag initiation
+        // Full-row mouse area for selection
         MouseArea {
             id: rowMouse
             anchors.fill: parent
             hoverEnabled: true
-            drag.target: treeNode.isNodeType ? dragProxy : undefined
-            drag.threshold: 10
 
-            onPressed: function(mouse) {
-                // Set the dragged node name so DropAreas can access it
-                if (treeNode.isNodeType)
-                    PropertiesPanelController.draggedNodeName = treeNode.nodeName
-            }
-            onReleased: function(mouse) {
-                PropertiesPanelController.draggedNodeName = ""
-            }
             onClicked: function(mouse) {
                 if (treeModel) {
                     var multiSelect = (mouse.modifiers & Qt.ControlModifier) ||
@@ -111,43 +55,6 @@ Column {
                 }
             }
 
-            // Drag proxy (invisible item that follows the mouse during drag)
-            Item {
-                id: dragProxy
-                width: 1
-                height: 1
-
-                Drag.active: rowMouse.drag.active
-                Drag.keys: ["application/x-qtmesheditor-node"]
-                Drag.mimeData: {
-                    "application/x-qtmesheditor-node": treeNode.nodeName
-                }
-                Drag.hotSpot.x: 0
-                Drag.hotSpot.y: 0
-                Drag.dragType: Drag.Internal
-            }
-        }
-
-        // Floating drag label (appears near cursor during drag)
-        Rectangle {
-            id: dragLabel
-            visible: rowMouse.drag.active
-            z: 100
-            width: dragLabelText.implicitWidth + 12
-            height: 20
-            radius: 3
-            color: PropertiesPanelController.highlightColor
-            opacity: 0.9
-            x: rowMouse.mouseX + 15
-            y: rowMouse.mouseY - 10
-
-            Text {
-                id: dragLabelText
-                anchors.centerIn: parent
-                text: treeNode.nodeName
-                color: "white"
-                font.pixelSize: 10
-            }
         }
 
         Row {

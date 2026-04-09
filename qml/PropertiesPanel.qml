@@ -114,74 +114,33 @@ Rectangle {
             property int nodeCount: treeModel ? treeModel.rowCount() : 0
             property bool delegatesActive: true
 
-            // Root drop zone — drop here to reparent to root scene node
-            Rectangle {
+            // Scene header with reparent button
+            Row {
                 width: outlinerColumn.width
                 height: 22
-                color: rootDropHighlight.visible
-                       ? Qt.lighter(PropertiesPanelController.highlightColor, 1.3)
-                       : Qt.darker(PropertiesPanelController.panelColor, 1.05)
+                spacing: 4
 
-                Rectangle {
-                    id: rootDropHighlight
-                    anchors.fill: parent
-                    color: PropertiesPanelController.highlightColor
-                    opacity: 0.25
-                    visible: false
-                }
-
-                Row {
+                Text {
+                    text: "\u25A1 Scene (Root)"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11; font.bold: true
                     anchors.verticalCenter: parent.verticalCenter
-                    anchors.left: parent.left
-                    anchors.leftMargin: 4
-                    spacing: 4
-
-                    Text {
-                        text: "\u25A1"
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 10
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Text {
-                        text: "Scene (Root)"
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 11
-                        font.bold: true
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
+                    leftPadding: 4
                 }
 
-                DropArea {
-                    anchors.fill: parent
-                    keys: ["application/x-qtmesheditor-node"]
+                Item { width: 1; height: 1; Layout.fillWidth: true }
 
-                    property bool canDrop: false
-
-                    onEntered: function(drag) {
-                        var draggedName = PropertiesPanelController.draggedNodeName || ""
-                        if (draggedName) {
-                            canDrop = PropertiesPanelController.canReparentNode(draggedName, "root")
-                        } else {
-                            canDrop = false
-                        }
-                        rootDropHighlight.visible = canDrop
-                        drag.accepted = canDrop
-                    }
-                    onExited: {
-                        rootDropHighlight.visible = false
-                        canDrop = false
-                    }
-                    onDropped: function(drop) {
-                        rootDropHighlight.visible = false
-                        var draggedName = PropertiesPanelController.draggedNodeName || ""
-                        if (draggedName && canDrop) {
-                            PropertiesPanelController.reparentNode(draggedName, "root")
-                            drop.accepted = true
-                        } else {
-                            drop.accepted = false
-                        }
-                        canDrop = false
-                        PropertiesPanelController.draggedNodeName = ""
+                // "Move to Root" button — visible when a non-root node is selected
+                Rectangle {
+                    visible: PropertiesPanelController.selectionName !== "" &&
+                             PropertiesPanelController.canReparentNode(PropertiesPanelController.selectionName, "root")
+                    width: toRootText.implicitWidth + 10; height: 18; radius: 3
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: toRootMa.containsMouse ? PropertiesPanelController.highlightColor : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor; border.width: 1
+                    Text { id: toRootText; anchors.centerIn: parent; text: "\u2191 to Root"; color: PropertiesPanelController.textColor; font.pixelSize: 9 }
+                    MouseArea { id: toRootMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                        onClicked: PropertiesPanelController.reparentNode(PropertiesPanelController.selectionName, "root")
                     }
                 }
             }
