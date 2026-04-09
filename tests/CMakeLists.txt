@@ -71,6 +71,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubEntityHighlight.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanEngine.cpp
     )
 
     set(TEST_HEADER_FILES
@@ -134,6 +136,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubEntityHighlight.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanEngine.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)

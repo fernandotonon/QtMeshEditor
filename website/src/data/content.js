@@ -169,6 +169,7 @@ export const trustItems = [
 ];
 
 export const footerLinks = [
+  { label: 'Docs', href: './docs.html' },
   { label: 'GitHub', href: links.github },
   { label: 'Releases', href: links.allReleases },
   { label: 'Issues', href: links.issues },

@@ -1,12 +1,12 @@
 name: 'qtmesh'
-description: 'Run qtmesh CLI for 3D mesh operations (info, convert, fix, anim)'
+description: 'Run qtmesh CLI for 3D mesh operations (info, convert, fix, anim, scan)'
 
 inputs:
   command:
-    description: 'Subcommand: info, fix, convert, anim'
+    description: 'Subcommand: info, fix, convert, anim, validate, lod, pose, scan'
     required: true
   input-file:
-    description: 'Input file path (relative to workspace)'
+    description: 'Input file or directory path (relative to workspace)'
     required: true
   output-file:
     description: 'Output file path (for convert/fix/anim rename/merge)'
