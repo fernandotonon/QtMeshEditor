@@ -51,8 +51,35 @@ function getStoreLabel(method) {
   return method.split('/')[0].trim();
 }
 
+async function copyText(text) {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  if (typeof document === 'undefined') {
+    throw new Error('Clipboard is not available');
+  }
+
+  const input = document.createElement('textarea');
+  input.value = text;
+  input.setAttribute('readonly', '');
+  input.style.position = 'absolute';
+  input.style.left = '-9999px';
+  document.body.appendChild(input);
+  input.select();
+
+  const copied = document.execCommand('copy');
+  document.body.removeChild(input);
+
+  if (!copied) {
+    throw new Error('Copy failed');
+  }
+}
+
 function App() {
   const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
+  const [copyState, setCopyState] = useState('idle');
   const detectedOs = useMemo(detectVisitorOs, []);
   const detectedPlatform = PLATFORM_BY_OS[detectedOs];
   const recommendedInstall = useMemo(
@@ -82,6 +109,34 @@ function App() {
       window.removeEventListener('keydown', closeOnEscape);
     };
   }, [isInstallPortalOpen]);
+
+  useEffect(() => {
+    if (!isInstallPortalOpen) {
+      setCopyState('idle');
+    }
+  }, [isInstallPortalOpen]);
+
+  useEffect(() => {
+    if (copyState === 'idle') {
+      return undefined;
+    }
+
+    const timer = window.setTimeout(() => setCopyState('idle'), 2000);
+    return () => window.clearTimeout(timer);
+  }, [copyState]);
+
+  async function handleCopyInstallCommand() {
+    if (!recommendedInstall) {
+      return;
+    }
+
+    try {
+      await copyText(recommendedInstall.command);
+      setCopyState('copied');
+    } catch {
+      setCopyState('error');
+    }
+  }
 
   return (
     <>
@@ -359,7 +414,16 @@ function App() {
                   >
                     <div className={styles.installPortalCardTop}>
                       <h3>{recommendedInstall.platform}</h3>
-                      <span>{recommendedInstall.method}</span>
+                      <div className={styles.installPortalCardActions}>
+                        <span>{recommendedInstall.method}</span>
+                        <button
+                          type="button"
+                          className={styles.installPortalCopyButton}
+                          onClick={handleCopyInstallCommand}
+                        >
+                          {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Retry' : 'Copy'}
+                        </button>
+                      </div>
                     </div>
                     <pre>
                       <code>{recommendedInstall.command}</code>

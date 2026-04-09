@@ -215,6 +215,12 @@
   font-size: 1rem;
 }
 
+.installPortalCardActions {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
 .installPortalCardTop span {
   color: var(--accent-1);
   border: 1px solid rgba(46, 188, 255, 0.35);
@@ -222,6 +228,21 @@
   padding: 0.15rem 0.5rem;
   font-size: 0.74rem;
   font-weight: 600;
+}
+
+.installPortalCopyButton {
+  border: 1px solid var(--stroke-strong);
+  background: var(--surface-2);
+  color: var(--text-0);
+  border-radius: 0.55rem;
+  padding: 0.2rem 0.55rem;
+  font-size: 0.74rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.installPortalCopyButton:hover {
+  background: var(--surface-3);
 }
 
 .installPortalCard pre {
