@@ -105,6 +105,56 @@ private:
     bool mFirstRedo = true;
 };
 
+// Group selected nodes under a new parent node
+class GroupCommand : public QUndoCommand
+{
+public:
+    GroupCommand(const QList<Ogre::SceneNode*>& nodes,
+                 QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    struct NodeParentInfo {
+        std::string nodeName;
+        std::string oldParentName;  // empty string means root scene node
+        Ogre::Vector3 oldPosition;
+        Ogre::Quaternion oldOrientation;
+        Ogre::Vector3 oldScale;
+    };
+    QList<NodeParentInfo> mNodeInfos;
+    std::string mGroupNodeName;
+    Ogre::Vector3 mGroupPosition;
+    bool mFirstRedo = true;
+};
+
+// Ungroup: move children to group's parent, destroy group node
+class UngroupCommand : public QUndoCommand
+{
+public:
+    UngroupCommand(Ogre::SceneNode* groupNode,
+                   QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    struct ChildInfo {
+        std::string childName;
+        Ogre::Vector3 localPosition;
+        Ogre::Quaternion localOrientation;
+        Ogre::Vector3 localScale;
+    };
+    std::string mGroupNodeName;
+    std::string mGroupParentName;  // empty string means root scene node
+    Ogre::Vector3 mGroupPosition;
+    Ogre::Quaternion mGroupOrientation;
+    Ogre::Vector3 mGroupScale;
+    QList<ChildInfo> mChildInfos;
+    bool mFirstRedo = true;
+};
+
 // Sub-mesh vertex transform (stores full vertex snapshot for undo)
 class SubMeshTransformCommand : public QUndoCommand
 {

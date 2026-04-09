@@ -389,6 +389,134 @@ Ogre::SceneNode* Manager::duplicateSceneNode(Ogre::SceneNode* source)
     return newNode;
 }
 
+Ogre::SceneNode* Manager::groupNodes(const QList<Ogre::SceneNode*>& nodes)
+{
+    if (nodes.isEmpty() || !mSceneMgr) return nullptr;
+
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Group %1 nodes").arg(nodes.size()));
+
+    // Compute centroid of selected nodes (world positions)
+    Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+    for (Ogre::SceneNode* node : nodes)
+        centroid += node->_getDerivedPosition();
+    centroid /= static_cast<Ogre::Real>(nodes.size());
+
+    // Find a common parent — use the parent of the first node
+    Ogre::SceneNode* commonParent = static_cast<Ogre::SceneNode*>(nodes.first()->getParent());
+    if (!commonParent)
+        commonParent = mSceneMgr->getRootSceneNode();
+
+    // Create the group node under the common parent
+    QString baseName = "Group";
+    unsigned int number = 0;
+    while (mSceneMgr->hasSceneNode(QString(baseName + (number ? QString::number(number) : "")).toStdString()))
+        ++number;
+
+    QString groupName = baseName + (number ? QString::number(number) : "");
+    Ogre::SceneNode* groupNode = commonParent->createChildSceneNode(groupName.toStdString());
+
+    // Position the group at the centroid (in parent space)
+    Ogre::Vector3 groupWorldPos = centroid;
+    // Convert world position to local position relative to commonParent
+    Ogre::Vector3 groupLocalPos = groupWorldPos;
+    if (commonParent != mSceneMgr->getRootSceneNode()) {
+        Ogre::Vector3 parentWorldPos = commonParent->_getDerivedPosition();
+        Ogre::Quaternion parentWorldOrient = commonParent->_getDerivedOrientation();
+        Ogre::Vector3 parentWorldScale = commonParent->_getDerivedScale();
+        groupLocalPos = parentWorldOrient.Inverse() * ((groupWorldPos - parentWorldPos) / parentWorldScale);
+    }
+    groupNode->setPosition(groupLocalPos);
+
+    // Reparent each selected node under the group, preserving world transform
+    for (Ogre::SceneNode* node : nodes) {
+        // Save the world transform
+        Ogre::Vector3 worldPos = node->_getDerivedPosition();
+        Ogre::Quaternion worldOrient = node->_getDerivedOrientation();
+        Ogre::Vector3 worldScale = node->_getDerivedScale();
+
+        // Remove from old parent
+        Ogre::SceneNode* oldParent = static_cast<Ogre::SceneNode*>(node->getParent());
+        if (oldParent)
+            oldParent->removeChild(node);
+
+        // Add to group
+        groupNode->addChild(node);
+
+        // Restore world transform by computing new local transform
+        Ogre::Quaternion groupWorldOrient = groupNode->_getDerivedOrientation();
+        Ogre::Vector3 groupWorldScale = groupNode->_getDerivedScale();
+        Ogre::Vector3 groupDerivedPos = groupNode->_getDerivedPosition();
+
+        node->setOrientation(groupWorldOrient.Inverse() * worldOrient);
+        node->setScale(worldScale / groupWorldScale);
+        node->setPosition(groupWorldOrient.Inverse() *
+            ((worldPos - groupDerivedPos) / groupWorldScale));
+    }
+
+    emit sceneNodeCreated(groupNode);
+    SelectionSet::getSingleton()->selectOne(groupNode);
+    return groupNode;
+}
+
+void Manager::ungroupNode(Ogre::SceneNode* groupNode)
+{
+    if (!groupNode || !mSceneMgr) return;
+
+    SentryReporter::addBreadcrumb("ui.action", "Ungroup node");
+
+    Ogre::SceneNode* parentNode = static_cast<Ogre::SceneNode*>(groupNode->getParent());
+    if (!parentNode)
+        parentNode = mSceneMgr->getRootSceneNode();
+
+    // Collect children (cannot modify during iteration)
+    QList<Ogre::SceneNode*> children;
+    for (auto& child : groupNode->getChildren()) {
+        Ogre::SceneNode* childNode = static_cast<Ogre::SceneNode*>(child);
+        if (!isForbiddenNodeName(QString::fromStdString(childNode->getName())))
+            children.append(childNode);
+    }
+
+    // Reparent children to the group's parent, preserving world transforms
+    for (Ogre::SceneNode* child : children) {
+        Ogre::Vector3 worldPos = child->_getDerivedPosition();
+        Ogre::Quaternion worldOrient = child->_getDerivedOrientation();
+        Ogre::Vector3 worldScale = child->_getDerivedScale();
+
+        groupNode->removeChild(child);
+        parentNode->addChild(child);
+
+        // Compute local transform relative to the new parent
+        Ogre::Quaternion parentWorldOrient = parentNode->_getDerivedOrientation();
+        Ogre::Vector3 parentWorldScale = parentNode->_getDerivedScale();
+        Ogre::Vector3 parentDerivedPos = parentNode->_getDerivedPosition();
+
+        child->setOrientation(parentWorldOrient.Inverse() * worldOrient);
+        child->setScale(worldScale / parentWorldScale);
+        child->setPosition(parentWorldOrient.Inverse() *
+            ((worldPos - parentDerivedPos) / parentWorldScale));
+    }
+
+    // Destroy the now-empty group node
+    emit sceneNodeDestroyed(groupNode);
+    destroyAllAttachedMovableObjects(groupNode);
+    mSceneMgr->destroySceneNode(groupNode);
+
+    // Select the ungrouped children
+    if (!children.isEmpty()) {
+        SelectionSet::getSingleton()->selectOne(children.first());
+        for (int i = 1; i < children.size(); ++i)
+            SelectionSet::getSingleton()->append(children[i]);
+    }
+}
+
+bool Manager::isGroupNode(Ogre::SceneNode* node) const
+{
+    if (!node) return false;
+    // A group node has no attached objects (entities) and has children
+    return node->numAttachedObjects() == 0 && node->numChildren() > 0;
+}
+
 void Manager::destroySceneNode(const QString & name)
 {
     SentryReporter::addBreadcrumb("scene", "Destroy scene node");
@@ -524,49 +652,61 @@ Ogre::SceneNode *Manager::getSceneNode(const QString &_name)
 
 bool Manager::hasSceneNode(const QString &_name)
 {
-    auto children = getSceneMgr()->getRootSceneNode()->getChildren();
-    for(auto node : children)
-    {
-        if(_name==node->getName().data())
-            return true;
+    try {
+        return mSceneMgr->hasSceneNode(_name.toStdString());
+    } catch (...) {
+        return false;
     }
-    return false;
+}
+
+static void collectSceneNodesRecursive(Ogre::SceneNode* parent, QList<Ogre::SceneNode*>& out)
+{
+    for (Ogre::Node* child : parent->getChildren())
+    {
+        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(child);
+        QString name = pSN->getName().data();
+        if (!Manager::getSingletonPtr()->isForbiddenNodeName(name))
+        {
+            out.append(pSN);
+            // Recurse into children (groups)
+            if (pSN->numChildren() > 0)
+                collectSceneNodesRecursive(pSN, out);
+        }
+    }
 }
 
 QList<Ogre::SceneNode *> &Manager::getSceneNodes()
 {
     mSceneNodesList.clear();
-
-    auto nodes = getSceneMgr()->getRootSceneNode()->getChildren();
-    for(Ogre::Node* node : nodes)
-    {
-        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(node);
-        QString name = pSN->getName().data();
-        if(!(isForbiddenNodeName(name)))
-            mSceneNodesList.append(pSN);
-    }
-
+    collectSceneNodesRecursive(getSceneMgr()->getRootSceneNode(), mSceneNodesList);
     return mSceneNodesList;
+}
+
+static void collectEntitiesRecursive(Ogre::SceneNode* parent, QList<Ogre::Entity*>& out)
+{
+    for (Ogre::Node* child : parent->getChildren())
+    {
+        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(child);
+        QString name = pSN->getName().data();
+        if (!Manager::getSingletonPtr()->isForbiddenNodeName(name))
+        {
+            for (int entIndex = 0; entIndex < static_cast<int>(pSN->numAttachedObjects()); entIndex++)
+            {
+                Ogre::MovableObject* obj = pSN->getAttachedObject(entIndex);
+                if (obj->getMovableType() == "Entity")
+                    out.append(static_cast<Ogre::Entity*>(obj));
+            }
+            // Recurse into children (groups)
+            if (pSN->numChildren() > 0)
+                collectEntitiesRecursive(pSN, out);
+        }
+    }
 }
 
 QList<Ogre::Entity *> &Manager::getEntities()
 {
     mEntitiesList.clear();
-
-    auto nodes = getSceneMgr()->getRootSceneNode()->getChildren();
-    for(Ogre::Node* node : nodes)
-    {
-        Ogre::SceneNode* pSN = static_cast<Ogre::SceneNode*>(node);
-        QString name = pSN->getName().data();
-        if(!(isForbiddenNodeName(name)))
-        {
-            Ogre::SceneNode *parentNode = pSN;
-            for(int entIndex = 0;  entIndex < parentNode->numAttachedObjects();entIndex++)
-            {
-                mEntitiesList.append(static_cast<Ogre::Entity*>(parentNode->getAttachedObject(entIndex)));
-            }
-        }
-    }
+    collectEntitiesRecursive(getSceneMgr()->getRootSceneNode(), mEntitiesList);
     return mEntitiesList;
 }
 

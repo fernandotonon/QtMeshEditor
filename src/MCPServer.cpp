@@ -498,6 +498,10 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         toolResult = toolGetSnapSettings(args);
     } else if (name == "export_pose") {
         toolResult = toolExportPose(args);
+    } else if (name == "group_nodes") {
+        toolResult = toolGroupNodes(args);
+    } else if (name == "ungroup_node") {
+        toolResult = toolUngroupNode(args);
     } else {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
@@ -2827,6 +2831,88 @@ QJsonObject MCPServer::toolExportPose(const QJsonObject &args)
     }
 }
 
+QJsonObject MCPServer::toolGroupNodes(const QJsonObject &args)
+{
+    try {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        QList<Ogre::SceneNode*> nodes;
+
+        if (args.contains("names")) {
+            QJsonArray names = args["names"].toArray();
+            for (const auto& nameVal : names) {
+                QString name = nameVal.toString();
+                Ogre::SceneNode* node = mgr->getSceneNode(name);
+                if (!node)
+                    return makeErrorResult(QString("Error: Scene node '%1' not found").arg(name));
+                nodes.append(node);
+            }
+        } else {
+            // Use current selection
+            SelectionSet* sel = SelectionSet::getSingleton();
+            if (!sel || sel->getNodesCount() < 2)
+                return makeErrorResult("Error: At least 2 nodes must be selected or specified");
+            nodes = sel->getNodesSelectionList();
+        }
+
+        if (nodes.size() < 2)
+            return makeErrorResult("Error: At least 2 nodes are required to create a group");
+
+        Ogre::SceneNode* groupNode = mgr->groupNodes(nodes);
+        if (!groupNode)
+            return makeErrorResult("Error: Failed to create group node");
+
+        UndoManager::getSingleton()->push(new GroupCommand(nodes));
+
+        return makeSuccessResult(QString("Created group '%1' with %2 child nodes")
+            .arg(QString::fromStdString(groupNode->getName()))
+            .arg(nodes.size()));
+
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error grouping nodes: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolUngroupNode(const QJsonObject &args)
+{
+    try {
+        auto* mgr = Manager::getSingletonPtr();
+        if (!mgr) return makeErrorResult("Error: Manager not available");
+
+        Ogre::SceneNode* groupNode = nullptr;
+
+        if (args.contains("name")) {
+            QString name = args["name"].toString();
+            groupNode = mgr->getSceneNode(name);
+            if (!groupNode)
+                return makeErrorResult(QString("Error: Scene node '%1' not found").arg(name));
+        } else {
+            // Use current selection
+            SelectionSet* sel = SelectionSet::getSingleton();
+            if (!sel || sel->getNodesCount() != 1)
+                return makeErrorResult("Error: Select exactly one group node, or specify a name");
+            groupNode = sel->getSceneNode(0);
+        }
+
+        if (!mgr->isGroupNode(groupNode))
+            return makeErrorResult(QString("Error: '%1' is not a group node (must have children and no attached meshes)")
+                .arg(QString::fromStdString(groupNode->getName())));
+
+        int childCount = static_cast<int>(groupNode->numChildren());
+        QString groupName = QString::fromStdString(groupNode->getName());
+
+        UndoManager::getSingleton()->push(new UngroupCommand(groupNode));
+        mgr->ungroupNode(groupNode);
+
+        return makeSuccessResult(QString("Ungrouped '%1': %2 children moved to parent")
+            .arg(groupName).arg(childCount));
+
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error ungrouping node: %1").arg(e.what()));
+    }
+}
+
 QJsonArray MCPServer::buildToolsList()
 {
     QJsonArray tools;
@@ -3524,6 +3610,31 @@ QJsonArray MCPServer::buildToolsList()
             "Binary files (images, meshes) will be rejected. Max 500 lines.",
             props,
             QJsonArray{"path"}
+        );
+    }
+
+    // group_nodes
+    {
+        QJsonObject props;
+        props["names"] = QJsonObject{{"type", "array"}, {"description", "Array of scene node names to group. If omitted, groups the current selection."},
+                                      {"items", QJsonObject{{"type", "string"}}}};
+        appendTool(
+            "group_nodes",
+            "Group scene nodes under a new parent node. The group node is positioned at the centroid of the selected nodes. "
+            "Transforming the group transforms all children. Requires at least 2 nodes.",
+            props
+        );
+    }
+
+    // ungroup_node
+    {
+        QJsonObject props;
+        props["name"] = QJsonObject{{"type", "string"}, {"description", "Name of the group node to ungroup. If omitted, ungroups the current selection."}};
+        appendTool(
+            "ungroup_node",
+            "Ungroup a group node: move its children to the group's parent and delete the empty group. "
+            "Only works on group nodes (scene nodes with children and no attached meshes).",
+            props
         );
     }
 

@@ -286,6 +286,10 @@ void MainWindow::initToolBar()
     // Duplicate
     connect(ui->actionDuplicate, &QAction::triggered, this, &MainWindow::duplicateSelected);
 
+    // Group / Ungroup
+    connect(ui->actionGroup, &QAction::triggered, this, &MainWindow::groupSelected);
+    connect(ui->actionUngroup, &QAction::triggered, this, &MainWindow::ungroupSelected);
+
     // Refresh gizmo position after undo/redo (deferred to avoid re-entrant scene access)
     connect(UndoManager::getSingleton()->stack(), &QUndoStack::indexChanged, this, [](int) {
         QTimer::singleShot(0, []() {
@@ -707,6 +711,33 @@ void MainWindow::duplicateSelected()
         for (Ogre::SceneNode* clone : clones)
             sel->append(clone);
     }
+}
+
+void MainWindow::groupSelected()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Group selected nodes");
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel || sel->getNodesCount() < 2) return;
+
+    QList<Ogre::SceneNode*> nodes = sel->getNodesSelectionList();
+    Ogre::SceneNode* groupNode = Manager::getSingleton()->groupNodes(nodes);
+    if (groupNode)
+        UndoManager::getSingleton()->push(new GroupCommand(nodes, nullptr));
+}
+
+void MainWindow::ungroupSelected()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Ungroup selected node");
+
+    SelectionSet* sel = SelectionSet::getSingleton();
+    if (!sel || sel->getNodesCount() != 1) return;
+
+    Ogre::SceneNode* node = sel->getSceneNode(0);
+    if (!Manager::getSingleton()->isGroupNode(node)) return;
+
+    UndoManager::getSingleton()->push(new UngroupCommand(node));
+    Manager::getSingleton()->ungroupNode(node);
 }
 
 void MainWindow::keyPressEvent(QKeyEvent *event)

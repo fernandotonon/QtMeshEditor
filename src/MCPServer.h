@@ -168,6 +168,8 @@ private:
     QJsonObject toolSetSnapSettings(const QJsonObject &args);
     QJsonObject toolGetSnapSettings(const QJsonObject &args);
     QJsonObject toolExportPose(const QJsonObject &args);
+    QJsonObject toolGroupNodes(const QJsonObject &args);
+    QJsonObject toolUngroupNode(const QJsonObject &args);
 
     // Animation
     struct NodeAnimation {

@@ -56,6 +56,8 @@ private slots:
     void on_actionMerge_Animations_triggered();
 
     void duplicateSelected();
+    void groupSelected();
+    void ungroupSelected();
 
     void on_actionObjects_Toolbar_toggled(bool arg1);
     void on_actionTools_Toolbar_toggled(bool arg1);

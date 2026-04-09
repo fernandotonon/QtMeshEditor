@@ -43,7 +43,13 @@ QString SceneTreeItem::typeLabel() const
 {
     switch (mType) {
     case Root:      return "Scene";
-    case Node:      return "Node";
+    case Node: {
+        // Show "Group" for empty scene nodes that have children (groups)
+        auto* sn = static_cast<Ogre::SceneNode*>(mOgrePtr);
+        if (sn && sn->numAttachedObjects() == 0 && sn->numChildren() > 0)
+            return "Group";
+        return "Node";
+    }
     case Entity:    return "Mesh";
     case SubEntity: return "Submesh";
     }
