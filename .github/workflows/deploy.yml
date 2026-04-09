@@ -1203,6 +1203,33 @@ jobs:
           true
         }
 
+ scan-assets-docker:
+    # Validate repo assets using the published Docker image (latest).
+    # Runs on PRs and pushes to demonstrate CI/Docker integration.
+    if: github.event_name != 'release'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan media/ via Docker (ghcr.io/fernandotonon/qtmesh:latest)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            ghcr.io/fernandotonon/qtmesh:latest \
+            scan /workspace/media/ --include "*.mesh" --json || {
+            echo "::warning::Docker asset scan reported issues (using latest published image)"
+            true
+          }
+        continue-on-error: true
+
+      - name: Scan media/ via GitHub Action
+        uses: ./.github/actions/qtmesh
+        with:
+          command: scan
+          input-file: media/
+          options: --include "*.mesh" --fail-on never --json
+        continue-on-error: true
+
 ####################################################################
 # MacOS Deploy
 ####################################################################
