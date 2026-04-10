@@ -5,6 +5,7 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSettings>
+#include <QTemporaryDir>
 #include <vector>
 #include <OgreMeshManager.h>
 #include <OgreHardwareBufferManager.h>
@@ -26,6 +27,23 @@ QString testDataDir()
     dir.cdUp(); // bin -> build_local
     dir.cdUp(); // build_local -> project root
     return dir.absoluteFilePath("media/models");
+}
+
+QString writeMinimalObj(const QString& dirPath, const QString& fileName)
+{
+    const QString path = QDir(dirPath).filePath(fileName);
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+        return QString();
+
+    f.write(
+        "o Tri\n"
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 0 1 0\n"
+        "f 1 2 3\n");
+    f.close();
+    return path;
 }
 
 Ogre::MeshPtr createTwoSubmeshSharedMesh(const std::string& name)
@@ -1748,4 +1766,180 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_InfoAndRemoveFromGeneratedMesh)
     QFile::remove(QDir::tempPath() + "/cli_lod_generated.material");
     QFile::remove(removedOut);
     QFile::remove(QDir::tempPath() + "/cli_lod_removed.material");
+}
+
+// -- cmdPose error paths (argument validation) --
+
+TEST(CLIPipelineCmdPoseError, NoFile)
+{
+    TestArgv args({"qtmesh", "pose"});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdPoseError, MissingAnimation)
+{
+    TestArgv args({"qtmesh", "pose", "some_file.fbx", "--time", "0.0", "-o", "pose.obj"});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdPoseError, MissingOutput)
+{
+    TestArgv args({"qtmesh", "pose", "some_file.fbx", "--animation", "Idle", "--time", "0.0"});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdPoseError, MissingTimeAndCount)
+{
+    TestArgv args({"qtmesh", "pose", "some_file.fbx", "--animation", "Idle", "-o", "pose.obj"});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdPoseError, NonexistentFile)
+{
+    TestArgv args({"qtmesh", "pose", "/tmp/qtmesh_pose_missing_12345.fbx", "--animation", "Idle", "--time", "0.0", "-o", "pose.obj"});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 1);
+}
+
+// -- cmdScan tests --
+
+TEST(CLIPipelineCmdScanError, InvalidFailOn)
+{
+    TestArgv args({"qtmesh", "scan", "--fail-on", "fatal"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdScanError, MissingConfigFile)
+{
+    TestArgv args({"qtmesh", "scan", "--config", "/tmp/qtmesh_scan_missing_config.yml"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdScanError, ScanRootMustBeDirectory)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString filePath = QDir(tmpDir.path()).filePath("not_a_dir.txt");
+    QFile file(filePath);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("x");
+    file.close();
+
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n");
+    cfg.close();
+
+    QByteArray filePathBa = filePath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", filePathBa.constData(), "--config", configBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdScan, WritesJsonAndSarifReports)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "rules:\n"
+        "  allow_missing_materials: true\n");
+    cfg.close();
+
+    const QString reportPath = QDir(tmpDir.path()).filePath("reports/out/scan.json");
+    const QString sarifPath = QDir(tmpDir.path()).filePath("reports/out/scan.sarif");
+    QFile::remove(reportPath);
+    QFile::remove(sarifPath);
+
+    QByteArray rootBa = rootPath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    QByteArray reportBa = reportPath.toUtf8();
+    QByteArray sarifBa = sarifPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
+                   "--json", "--report", reportBa.constData(), "--sarif", sarifBa.constData(),
+                   "--fail-on", "never"});
+
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+    ASSERT_TRUE(QFile::exists(reportPath));
+    ASSERT_TRUE(QFile::exists(sarifPath));
+
+    QFile reportFile(reportPath);
+    ASSERT_TRUE(reportFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString reportContent = QString::fromUtf8(reportFile.readAll());
+    EXPECT_TRUE(reportContent.contains("\"summary\""));
+    EXPECT_TRUE(reportContent.contains("\"assets\""));
+
+    QFile sarifFile(sarifPath);
+    ASSERT_TRUE(sarifFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString sarifContent = QString::fromUtf8(sarifFile.readAll());
+    EXPECT_TRUE(sarifContent.contains("\"runs\""));
+    EXPECT_TRUE(sarifContent.contains("qtmesh scan"));
+}
+
+TEST(CLIPipelineCmdScan, FailOnWarningReturnsFailure)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "PlayerModel.obj").isEmpty());
+
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "rules:\n"
+        "  file_name_case: snake_case\n");
+    cfg.close();
+
+    QByteArray rootBa = rootPath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
+                   "--fail-on", "warning"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, FailOnNeverAllowsWarnings)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "PlayerModel.obj").isEmpty());
+
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "rules:\n"
+        "  file_name_case: snake_case\n");
+    cfg.close();
+
+    QByteArray rootBa = rootPath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
+                   "--fail-on", "never"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
 }

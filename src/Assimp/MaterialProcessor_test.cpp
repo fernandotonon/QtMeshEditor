@@ -196,3 +196,58 @@ TEST(MaterialProcessorTest, ProcessMaterialReturnsExistingMaterialIfAlreadyCreat
 
     Ogre::MaterialManager::getSingleton().remove(name);
 }
+
+TEST(MaterialProcessorTest, ExistingMaterialWithoutNormalMapIsReturnedUnchanged) {
+    auto ogreRoot = std::make_unique<Ogre::Root>();
+    ensureMaterialManagerInitialised();
+
+    const std::string name = "MaterialProcessorExistingNoNormal";
+    Ogre::MaterialPtr existing = Ogre::MaterialManager::getSingleton().create(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(existing);
+    ASSERT_NE(existing->getTechnique(0), nullptr);
+    ASSERT_NE(existing->getTechnique(0)->getPass(0), nullptr);
+    EXPECT_EQ(existing->getTechnique(0)->getPass(0)->getNumTextureUnitStates(), 0u);
+
+    MaterialProcessor processor;
+    aiScene scene{};
+    aiMaterial material;
+    aiString matName(name);
+    material.AddProperty(&matName, AI_MATKEY_NAME);
+
+    Ogre::MaterialPtr out = processor.processMaterial(&material, &scene);
+    ASSERT_TRUE(out);
+    EXPECT_EQ(out.get(), existing.get());
+    EXPECT_EQ(out->getTechnique(0)->getPass(0)->getNumTextureUnitStates(), 0u);
+
+    Ogre::MaterialManager::getSingleton().remove(name);
+}
+
+TEST(MaterialProcessorTest, LoadSceneUnnamedMaterialsGetSequentialImportedNames) {
+    auto ogreRoot = std::make_unique<Ogre::Root>();
+    ensureMaterialManagerInitialised();
+
+    // Ensure predictable names even if previous tests left materials around.
+    if (Ogre::MaterialManager::getSingleton().getByName("importedMaterial0"))
+        Ogre::MaterialManager::getSingleton().remove("importedMaterial0");
+    if (Ogre::MaterialManager::getSingleton().getByName("importedMaterial1"))
+        Ogre::MaterialManager::getSingleton().remove("importedMaterial1");
+
+    MaterialProcessor processor;
+    aiScene scene{};
+    scene.mNumMaterials = 2;
+    scene.mMaterials = new aiMaterial*[2];
+    scene.mMaterials[0] = new aiMaterial();
+    scene.mMaterials[1] = new aiMaterial();
+
+    processor.loadScene(&scene);
+
+    ASSERT_EQ(processor.size(), 2UL);
+    EXPECT_EQ(processor[0]->getName(), "importedMaterial0");
+    EXPECT_EQ(processor[1]->getName(), "importedMaterial1");
+
+    if (Ogre::MaterialManager::getSingleton().getByName("importedMaterial0"))
+        Ogre::MaterialManager::getSingleton().remove("importedMaterial0");
+    if (Ogre::MaterialManager::getSingleton().getByName("importedMaterial1"))
+        Ogre::MaterialManager::getSingleton().remove("importedMaterial1");
+}

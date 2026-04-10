@@ -1281,3 +1281,15 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_GlbFormat_CorrectExtensio
     QString result = MeshImporterExporter::formatFileURI("/tmp/model", "glTF 2.0 Binary (*.glb)");
     EXPECT_EQ(result, "/tmp/model.glb");
 }
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_HumanReadableUnknownFormatDoesNotAppend)
+{
+    QString result = MeshImporterExporter::formatFileURI("/tmp/model", "Custom Export Format");
+    EXPECT_EQ(result, "/tmp/model");
+}
+
+TEST(MeshImporterExporterStandaloneTest, FormatFileURI_ShortAliasUppercaseIsAppendedAsGiven)
+{
+    QString result = MeshImporterExporter::formatFileURI("/tmp/model", "FBX");
+    EXPECT_EQ(result, "/tmp/model.FBX");
+}
