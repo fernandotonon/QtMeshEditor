@@ -1222,8 +1222,8 @@ jobs:
           }
         continue-on-error: true
 
-      - name: Scan media/ via GitHub Action (marketplace)
-        uses: fernandotonon/qtmesh@v1
+      - name: Scan media/ via GitHub Action (root action.yml)
+        uses: ./
         with:
           command: scan
           input-file: .

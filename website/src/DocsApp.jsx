@@ -357,7 +357,7 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
             ]}
           />
 
-          <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON output, and auto-fix. Also available as a <a href="https://github.com/marketplace/actions/qtmesh" className={s.link}>GitHub Action</a>: <Code>fernandotonon/qtmesh@v1</Code>.</>}
+          <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON output, and auto-fix. Also available as a <a href="https://github.com/marketplace/actions/qtmesh" className={s.link}>GitHub Action</a>: <Code>fernandotonon/QtMeshEditor@v1</Code>.</>}
             synopsis={`qtmesh scan [path] [options]`}
             options={[
               ['--config <file>', 'Config file path (default: qtmesh.yml, qtmesh.yaml, qtmesh.json)'],
@@ -695,25 +695,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: fernandotonon/qtmesh@v1
+      - uses: fernandotonon/QtMeshEditor@v1
         with:
           command: scan
           input-file: ./assets
           options: --fail-on warning`}</CodeBlock>
 
             <h3 className={s.subsection}>Convert and validate</h3>
-            <CodeBlock lang="yaml">{`- uses: fernandotonon/qtmesh@v1
+            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor@v1
   with:
     command: validate
     input-file: ./models/character.fbx
 
-- uses: fernandotonon/qtmesh@v1
+- uses: fernandotonon/QtMeshEditor@v1
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.glb2
 
-- uses: fernandotonon/qtmesh@v1
+- uses: fernandotonon/QtMeshEditor@v1
   with:
     command: anim
     input-file: ./animations/dance.fbx
@@ -721,7 +721,7 @@ jobs:
     options: --resample 30`}</CodeBlock>
 
             <h3 className={s.subsection}>Get mesh info as JSON</h3>
-            <CodeBlock lang="yaml">{`- uses: fernandotonon/qtmesh@v1
+            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor@v1
   id: info
   with:
     command: info

@@ -1,0 +1,74 @@
+name: 'qtmesh'
+description: 'Validate, convert, and optimize 3D assets in CI. Scan for issues, convert 40+ formats, and more.'
+author: 'Fernando Tonon'
+
+branding:
+  icon: 'box'
+  color: 'blue'
+
+inputs:
+  command:
+    description: 'Subcommand: scan, info, validate, convert, fix, anim, lod, pose'
+    required: true
+  input-file:
+    description: 'Input file or directory path (relative to workspace)'
+    required: true
+  output-file:
+    description: 'Output file path (for convert/fix/anim/pose)'
+    required: false
+  options:
+    description: 'Additional CLI flags (e.g. --json, --fail-on warning, --resample 30)'
+    required: false
+  image-tag:
+    description: 'Docker image tag (default: latest)'
+    required: false
+    default: 'latest'
+
+outputs:
+  result:
+    description: 'Command stdout (text or JSON depending on --json flag)'
+    value: ${{ steps.run.outputs.result }}
+  exit-code:
+    description: 'Exit code (0 = success, 1 = issues found for scan/validate)'
+    value: ${{ steps.run.outputs.exit-code }}
+
+runs:
+  using: 'composite'
+  steps:
+    - id: run
+      shell: bash
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_FILE: ${{ inputs.input-file }}
+        INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
+        INPUT_OPTIONS: ${{ inputs.options }}
+      run: |
+        # Build command args safely via arrays to prevent injection
+        cmd=("$INPUT_COMMAND" "/workspace/$INPUT_FILE")
+        if [ -n "$INPUT_OUTPUT_FILE" ]; then
+          cmd+=("-o" "/workspace/$INPUT_OUTPUT_FILE")
+        fi
+        if [ -n "$INPUT_OPTIONS" ]; then
+          read -r -a opts <<< "$INPUT_OPTIONS"
+          cmd+=("${opts[@]}")
+        fi
+
+        set +e
+        OUTPUT=$(docker run --rm \
+          --user "$(id -u):$(id -g)" \
+          -v "${{ github.workspace }}:/workspace" \
+          "ghcr.io/fernandotonon/qtmesh:${{ inputs.image-tag }}" \
+          "${cmd[@]}" 2>&1)
+        EXIT_CODE=$?
+        set -e
+
+        echo "result<<EOF" >> "$GITHUB_OUTPUT"
+        echo "$OUTPUT" >> "$GITHUB_OUTPUT"
+        echo "EOF" >> "$GITHUB_OUTPUT"
+        echo "exit-code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
+
+        # Print output for workflow logs
+        echo "$OUTPUT"
+
+        # Propagate exit code for scan/validate (exit 1 = issues found)
+        exit $EXIT_CODE

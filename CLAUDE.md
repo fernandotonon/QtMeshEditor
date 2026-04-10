@@ -261,10 +261,10 @@ Manual alternative: `./scripts/update-winget.sh <version>` generates the manifes
 
 ## GitHub Action (Marketplace)
 
-The `qtmesh` CLI is published as a GitHub Action at [`fernandotonon/qtmesh`](https://github.com/fernandotonon/qtmesh) for use in any CI pipeline:
+The `qtmesh` CLI is published as a GitHub Action on the [GitHub Actions Marketplace](https://github.com/marketplace/actions/qtmesh). The `action.yml` lives at the repo root.
 
 ```yaml
-- uses: fernandotonon/qtmesh@v1
+- uses: fernandotonon/QtMeshEditor@v1
   with:
     command: scan
     input-file: ./assets
@@ -272,16 +272,20 @@ The `qtmesh` CLI is published as a GitHub Action at [`fernandotonon/qtmesh`](htt
 ```
 
 **Key files:**
-- Action repo: `fernandotonon/qtmesh` (separate repo, thin wrapper around the Docker image)
+- `action.yml` — root-level action definition (required for marketplace)
+- `.github/actions/qtmesh/action.yml` — legacy local action (kept for backward compatibility)
 - Docker image: `ghcr.io/fernandotonon/qtmesh` (built from this repo on each release)
+- Redirect repo: `fernandotonon/qtmesh` points users to this repo
 
-**When to update the action repo:**
-- New CLI subcommand added → update action.yml `command` description and README examples
-- Subcommand flags change → update README
-- Docker image name/registry changes → update action.yml
-- **No update needed** for: bug fixes, GUI changes, MCP tools, or new features that don't change the CLI interface
+**When to update action.yml:**
+- New CLI subcommand added → update `command` description
+- Subcommand flags change → update `options` description
+- Docker image name/registry changes → update the `docker run` command
+- **No update needed** for: bug fixes, GUI changes, MCP tools, or features that don't change CLI interface
 
-The action uses `image-tag: latest` by default, so users automatically get new fixes without action repo updates.
+The action uses `image-tag: latest` by default, so users automatically get fixes without version bumps.
+
+**Marketplace publishing:** When creating a GitHub Release, check "Publish this Action to the GitHub Marketplace". The `v1` tag should be kept pointing to the latest stable commit (force-push tag on each release).
 
 ## CI/CD
 

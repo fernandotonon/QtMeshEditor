@@ -78,7 +78,7 @@ export const useCases = [
   },
   {
     title: 'GitHub Actions (Marketplace)',
-    body: 'Add `fernandotonon/qtmesh@v1` to any workflow. Scan assets on every PR, convert formats, validate meshes — one line in your YAML.'
+    body: 'Add `fernandotonon/QtMeshEditor@v1` to any workflow. Scan assets on every PR, convert formats, validate meshes — one line in your YAML.'
   }
 ];
 
@@ -88,7 +88,7 @@ export const pipelineExamples = {
   convert: `qtmesh convert model.fbx -o model.glb2\nqtmesh convert model.dae -o model.mesh`,
   merge: `qtmesh anim base.fbx \\\n  --merge walk.fbx run.fbx jump.fbx idle.fbx \\\n  -o merged.fbx`,
   docker: `docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \\\n  ghcr.io/fernandotonon/qtmesh scan ./assets --fail-on error`,
-  githubAction: `# GitHub Actions Marketplace: fernandotonon/qtmesh\n- uses: fernandotonon/qtmesh@v1\n  with:\n    command: scan\n    input-file: ./assets\n    options: --fail-on warning`,
+  githubAction: `# GitHub Actions Marketplace: fernandotonon/qtmesh\n- uses: fernandotonon/QtMeshEditor@v1\n  with:\n    command: scan\n    input-file: ./assets\n    options: --fail-on warning`,
   scanFixConvert: `qtmesh scan ./assets --fail-on error\nqtmesh fix character.fbx --all -o character_fixed.fbx\nqtmesh convert character_fixed.fbx -o character.glb2`
 };
 
