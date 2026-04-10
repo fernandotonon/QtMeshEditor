@@ -684,7 +684,7 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
           <section className={s.section} id="github-actions">
             <h2 className={s.sectionTitle}>GitHub Actions</h2>
             <h3 className={s.subsection}>Reusable Action (scan example)</h3>
-            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@master
+            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@9cfc829e8b255994ef92ba228c687e3dd2254119
   with:
     command: scan
     input-file: assets
@@ -718,10 +718,10 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
 
 asset_scan:
   stage: lint
-  image: ghcr.io/fernandotonon/qtmesh:latest
+  image: ghcr.io/fernandotonon/qtmesh:2.23.0
   entrypoint: [""]
   script:
-    - scan \${CI_PROJECT_DIR}/assets \\
+    - qtmesheditor --cli scan \${CI_PROJECT_DIR}/assets \\
         --config \${CI_PROJECT_DIR}/qtmesh.yml \\
         --sarif \${CI_PROJECT_DIR}/scan-report.sarif \\
         --report \${CI_PROJECT_DIR}/scan-report.json \\
