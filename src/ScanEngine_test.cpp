@@ -250,7 +250,7 @@ TEST(ScanEngineTest, ConvertNameToCase_KebabCase)
 TEST(ScanEngineTest, ConvertNameToCase_LowercaseAndUnknown)
 {
     EXPECT_EQ(ScanEngine::convertNameToCase("PlayerModel.FBX", "lowercase"), "playermodel.FBX");
-    EXPECT_EQ(ScanEngine::convertNameToCase("PlayerModel.fbx", "camelCase"), "PlayerModel.fbx");
+    EXPECT_EQ(ScanEngine::convertNameToCase("PlayerModel.fbx", "unknown_case"), "PlayerModel.fbx");
 }
 
 // ---------------------------------------------------------------------------
@@ -303,11 +303,17 @@ TEST(ScanEngineTest, EnumerateFiles_ExcludePattern)
 
 TEST(ScanEngineTest, EnumerateFiles_NonexistentRootReturnsEmpty)
 {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
     ScanConfig config;
     config.includePatterns = {"**/*.fbx"};
     config.excludePatterns = {};
 
-    const QStringList files = ScanEngine::enumerateFiles(config, "/tmp/definitely_missing_qtmesh_scan_root");
+    const QString missingRoot = QDir(tmpDir.path()).filePath("definitely_missing_qtmesh_scan_root");
+    ASSERT_FALSE(QDir(missingRoot).exists());
+
+    const QStringList files = ScanEngine::enumerateFiles(config, missingRoot);
     EXPECT_TRUE(files.isEmpty());
 }
 

@@ -1796,7 +1796,11 @@ TEST(CLIPipelineCmdPoseError, MissingTimeAndCount)
 
 TEST(CLIPipelineCmdPoseError, NonexistentFile)
 {
-    TestArgv args({"qtmesh", "pose", "/tmp/qtmesh_pose_missing_12345.fbx", "--animation", "Idle", "--time", "0.0", "-o", "pose.obj"});
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString missingFile = QDir(tmpDir.path()).filePath("qtmesh_pose_missing.fbx");
+    QByteArray missingFileBa = missingFile.toUtf8();
+    TestArgv args({"qtmesh", "pose", missingFileBa.constData(), "--animation", "Idle", "--time", "0.0", "-o", "pose.obj"});
     EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 1);
 }
 
@@ -1810,7 +1814,11 @@ TEST(CLIPipelineCmdScanError, InvalidFailOn)
 
 TEST(CLIPipelineCmdScanError, MissingConfigFile)
 {
-    TestArgv args({"qtmesh", "scan", "--config", "/tmp/qtmesh_scan_missing_config.yml"});
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString missingConfig = QDir(tmpDir.path()).filePath("qtmesh_scan_missing_config.yml");
+    QByteArray missingConfigBa = missingConfig.toUtf8();
+    TestArgv args({"qtmesh", "scan", "--config", missingConfigBa.constData()});
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
 }
 
