@@ -259,6 +259,30 @@ The `winget-publish` CI job uses `wingetcreate --submit` to automatically submit
 
 Manual alternative: `./scripts/update-winget.sh <version>` generates the manifest locally.
 
+## GitHub Action (Marketplace)
+
+The `qtmesh` CLI is published as a GitHub Action at [`fernandotonon/qtmesh`](https://github.com/fernandotonon/qtmesh) for use in any CI pipeline:
+
+```yaml
+- uses: fernandotonon/qtmesh@v1
+  with:
+    command: scan
+    input-file: ./assets
+    options: --fail-on warning
+```
+
+**Key files:**
+- Action repo: `fernandotonon/qtmesh` (separate repo, thin wrapper around the Docker image)
+- Docker image: `ghcr.io/fernandotonon/qtmesh` (built from this repo on each release)
+
+**When to update the action repo:**
+- New CLI subcommand added → update action.yml `command` description and README examples
+- Subcommand flags change → update README
+- Docker image name/registry changes → update action.yml
+- **No update needed** for: bug fixes, GUI changes, MCP tools, or new features that don't change the CLI interface
+
+The action uses `image-tag: latest` by default, so users automatically get new fixes without action repo updates.
+
 ## CI/CD
 
-GitHub Actions workflow in `.github/workflows/deploy.yml` builds for Windows (MinGW), macOS, and Linux. Tests run on Linux with SonarCloud coverage. Releases auto-update the Homebrew cask, WinGet package, Snap Store, and Docker image.
+GitHub Actions workflow in `.github/workflows/deploy.yml` builds for Windows (MinGW), macOS, and Linux. Tests run on Linux with SonarCloud coverage. Releases auto-update the Homebrew cask, WinGet package, Snap Store, and Docker image. A `scan-assets-docker` job runs the `fernandotonon/qtmesh` action on the repo's own test assets to validate the Docker image and scan pipeline on every push/PR.
