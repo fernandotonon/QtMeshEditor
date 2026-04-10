@@ -45,7 +45,6 @@ protected:
     void setUiIcoSphere();
     void setUiRoundedBox();
     void setUiSpring();
-    void createPrimitive(PrimitiveObject::PrimitiveType newPrimitive, const QString& name);
     PrimitiveObject::PrimitiveType getSelectedPrimitive();
     void blockEditSignals(bool block);
     void setUVTileVisible(bool visible = true);

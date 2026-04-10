@@ -141,18 +141,31 @@ void CLIPipeline::printUsage()
 
 QString CLIPipeline::formatForExtension(const QString& path)
 {
-    if (path.endsWith(".fbx", Qt::CaseInsensitive)) return "FBX Binary (*.fbx)";
-    if (path.endsWith(".glb2", Qt::CaseInsensitive)) return "glTF 2.0 Binary (*.glb2)";
-    if (path.endsWith(".gltf2", Qt::CaseInsensitive)) return "glTF 2.0 (*.gltf2)";
-    if (path.endsWith(".dae", Qt::CaseInsensitive)) return "Collada (*.dae)";
-    if (path.endsWith(".obj", Qt::CaseInsensitive)) return "OBJ (*.obj)";
-    if (path.endsWith(".stl", Qt::CaseInsensitive)) return "STL (*.stl)";
-    if (path.endsWith(".ply", Qt::CaseInsensitive)) return "PLY (*.ply)";
-    if (path.endsWith(".3ds", Qt::CaseInsensitive)) return "3DS (*.3ds)";
-    if (path.endsWith(".x", Qt::CaseInsensitive)) return "X (*.x)";
-    if (path.endsWith(".mesh.xml", Qt::CaseInsensitive)) return "Ogre XML (*.mesh.xml)";
-    if (path.endsWith(".mesh", Qt::CaseInsensitive)) return "Ogre Mesh (*.mesh)";
-    if (path.endsWith(".assbin", Qt::CaseInsensitive)) return "Assimp Binary (*.assbin)";
+    struct ExtensionFormat {
+        const char* extension;
+        const char* format;
+    };
+    static const ExtensionFormat extensionFormats[] = {
+        {".fbx", "FBX Binary (*.fbx)"},
+        {".glb2", "glTF 2.0 Binary (*.glb2)"},
+        {".gltf2", "glTF 2.0 (*.gltf2)"},
+        {".dae", "Collada (*.dae)"},
+        {".obj", "OBJ (*.obj)"},
+        {".stl", "STL (*.stl)"},
+        {".ply", "PLY (*.ply)"},
+        {".3ds", "3DS (*.3ds)"},
+        {".x", "X (*.x)"},
+        {".mesh.xml", "Ogre XML (*.mesh.xml)"},
+        {".mesh", "Ogre Mesh (*.mesh)"},
+        {".assbin", "Assimp Binary (*.assbin)"}
+    };
+
+    for (const ExtensionFormat& entry : extensionFormats) {
+        if (path.endsWith(QString::fromLatin1(entry.extension), Qt::CaseInsensitive)) {
+            return QString::fromLatin1(entry.format);
+        }
+    }
+
     return "Ogre Mesh (*.mesh)";
 }
 

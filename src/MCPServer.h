@@ -108,6 +108,8 @@ private slots:
     void onHttpConnection();
 
 private:
+    using ToolHandler = QJsonObject (MCPServer::*)(const QJsonObject &);
+
     // Message handling
     void processMessage(const QByteArray &data);
     void sendResponse(const QJsonObject &response);
@@ -196,6 +198,8 @@ private:
     // Helper methods
     static QJsonObject makeErrorResult(const QString &message);
     static QJsonObject makeSuccessResult(const QString &message);
+    static const QMap<QString, ToolHandler>& toolHandlers();
+    static bool isHeavyTool(const QString &name);
     bool ensureOgreInitialized();
     QJsonObject buildToolDefinition(const QString &name, const QString &description,
                                      const QJsonObject &inputSchema);

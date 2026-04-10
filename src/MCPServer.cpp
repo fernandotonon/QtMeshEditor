@@ -24,6 +24,7 @@
 #include <QDateTime>
 #include <QMetaObject>
 #include <QPixmap>
+#include <QSet>
 #include <OgreException.h>
 #include <OgreMaterialManager.h>
 #include <OgreMaterial.h>
@@ -381,19 +382,89 @@ QJsonObject MCPServer::makeSuccessResult(const QString &message)
     return result;
 }
 
+const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
+{
+    static const QMap<QString, ToolHandler> handlers = {
+        {QStringLiteral("create_material"), &MCPServer::toolCreateMaterial},
+        {QStringLiteral("modify_material"), &MCPServer::toolModifyMaterial},
+        {QStringLiteral("get_material"), &MCPServer::toolGetMaterial},
+        {QStringLiteral("list_materials"), &MCPServer::toolListMaterials},
+        {QStringLiteral("apply_material"), &MCPServer::toolApplyMaterial},
+        {QStringLiteral("load_mesh"), &MCPServer::toolLoadMesh},
+        {QStringLiteral("get_mesh_info"), &MCPServer::toolGetMeshInfo},
+        {QStringLiteral("transform_mesh"), &MCPServer::toolTransformMesh},
+        {QStringLiteral("transform_submesh"), &MCPServer::toolTransformSubMesh},
+        {QStringLiteral("list_textures"), &MCPServer::toolListTextures},
+        {QStringLiteral("set_texture"), &MCPServer::toolSetTexture},
+        {QStringLiteral("export_mesh"), &MCPServer::toolExportMesh},
+        {QStringLiteral("get_scene_info"), &MCPServer::toolGetSceneInfo},
+        {QStringLiteral("take_screenshot"), &MCPServer::toolTakeScreenshot},
+        {QStringLiteral("create_primitive"), &MCPServer::toolCreatePrimitive},
+        {QStringLiteral("animate"), &MCPServer::toolAnimate},
+        {QStringLiteral("list_skeletal_animations"), &MCPServer::toolListSkeletalAnimations},
+        {QStringLiteral("get_animation_info"), &MCPServer::toolGetAnimationInfo},
+        {QStringLiteral("set_animation_length"), &MCPServer::toolSetAnimationLength},
+        {QStringLiteral("set_animation_time"), &MCPServer::toolSetAnimationTime},
+        {QStringLiteral("add_keyframe"), &MCPServer::toolAddKeyframe},
+        {QStringLiteral("remove_keyframe"), &MCPServer::toolRemoveKeyframe},
+        {QStringLiteral("play_animation"), &MCPServer::toolPlayAnimation},
+        {QStringLiteral("toggle_skeleton_debug"), &MCPServer::toolToggleSkeletonDebug},
+        {QStringLiteral("toggle_bone_weights"), &MCPServer::toolToggleBoneWeights},
+        {QStringLiteral("toggle_normals"), &MCPServer::toolToggleNormals},
+        {QStringLiteral("toggle_mesh_info"), &MCPServer::toolToggleMeshInfo},
+        {QStringLiteral("merge_animations"), &MCPServer::toolMergeAnimations},
+        {QStringLiteral("resample_animation"), &MCPServer::toolResampleAnimation},
+        {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
+        {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
+        {QStringLiteral("validate_mesh"), &MCPServer::toolValidateMesh},
+        {QStringLiteral("generate_lods"), &MCPServer::toolGenerateLods},
+        {QStringLiteral("generate_auto_lods"), &MCPServer::toolGenerateAutoLods},
+        {QStringLiteral("remove_lods"), &MCPServer::toolRemoveLods},
+        {QStringLiteral("get_lod_info"), &MCPServer::toolGetLodInfo},
+        {QStringLiteral("list_files"), &MCPServer::toolListFiles},
+        {QStringLiteral("search_files"), &MCPServer::toolSearchFiles},
+        {QStringLiteral("read_file"), &MCPServer::toolReadFile},
+        {QStringLiteral("delete_entity"), &MCPServer::toolDeleteEntity},
+        {QStringLiteral("duplicate_entity"), &MCPServer::toolDuplicateEntity},
+        {QStringLiteral("camera_control"), &MCPServer::toolCameraControl},
+        {QStringLiteral("get_camera_info"), &MCPServer::toolGetCameraInfo},
+        {QStringLiteral("set_snap_settings"), &MCPServer::toolSetSnapSettings},
+        {QStringLiteral("get_snap_settings"), &MCPServer::toolGetSnapSettings},
+        {QStringLiteral("export_pose"), &MCPServer::toolExportPose},
+        {QStringLiteral("group_nodes"), &MCPServer::toolGroupNodes},
+        {QStringLiteral("ungroup_node"), &MCPServer::toolUngroupNode},
+        {QStringLiteral("reparent_node"), &MCPServer::toolReparentNode},
+        {QStringLiteral("set_pivot_mode"), &MCPServer::toolSetPivotMode},
+        {QStringLiteral("get_pivot_mode"), &MCPServer::toolGetPivotMode}
+    };
+    return handlers;
+}
+
+bool MCPServer::isHeavyTool(const QString &name)
+{
+    static const QSet<QString> heavyTools = {
+        QStringLiteral("load_mesh"),
+        QStringLiteral("export_mesh"),
+        QStringLiteral("export_pose"),
+        QStringLiteral("take_screenshot"),
+        QStringLiteral("create_primitive"),
+        QStringLiteral("create_material"),
+        QStringLiteral("merge_animations"),
+        QStringLiteral("resample_animation"),
+        QStringLiteral("save_scene"),
+        QStringLiteral("open_scene")
+    };
+    return heavyTools.contains(name);
+}
+
 QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 {
     qDebug() << "MCP Tool Call:" << name << args;
 
     SentryReporter::addBreadcrumb("mcp.tool", QStringLiteral("Tool call: %1").arg(name));
 
-    // Start a performance transaction for heavy tools
-    static const QStringList heavyTools = {
-        "load_mesh", "export_mesh", "export_pose", "take_screenshot", "create_primitive", "create_material",
-        "merge_animations", "resample_animation", "save_scene", "open_scene"
-    };
     uintptr_t txn = 0;
-    if (heavyTools.contains(name)) {
+    if (isHeavyTool(name)) {
         txn = SentryReporter::startTransaction(QStringLiteral("mcp.%1").arg(name), "mcp.tool");
     }
 
@@ -403,115 +474,14 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
         return makeErrorResult("Error: Ogre 3D engine could not be initialized (no OpenGL available)");
     }
 
-    QJsonObject toolResult;
-
-    // Dispatch to appropriate tool handler
-    if (name == "create_material") {
-        toolResult = toolCreateMaterial(args);
-    } else if (name == "modify_material") {
-        toolResult = toolModifyMaterial(args);
-    } else if (name == "get_material") {
-        toolResult = toolGetMaterial(args);
-    } else if (name == "list_materials") {
-        toolResult = toolListMaterials(args);
-    } else if (name == "apply_material") {
-        toolResult = toolApplyMaterial(args);
-    } else if (name == "load_mesh") {
-        toolResult = toolLoadMesh(args);
-    } else if (name == "get_mesh_info") {
-        toolResult = toolGetMeshInfo(args);
-    } else if (name == "transform_mesh") {
-        toolResult = toolTransformMesh(args);
-    } else if (name == "transform_submesh") {
-        toolResult = toolTransformSubMesh(args);
-    } else if (name == "list_textures") {
-        toolResult = toolListTextures(args);
-    } else if (name == "set_texture") {
-        toolResult = toolSetTexture(args);
-    } else if (name == "export_mesh") {
-        toolResult = toolExportMesh(args);
-    } else if (name == "get_scene_info") {
-        toolResult = toolGetSceneInfo(args);
-    } else if (name == "take_screenshot") {
-        toolResult = toolTakeScreenshot(args);
-    } else if (name == "create_primitive") {
-        toolResult = toolCreatePrimitive(args);
-    } else if (name == "animate") {
-        toolResult = toolAnimate(args);
-    } else if (name == "list_skeletal_animations") {
-        toolResult = toolListSkeletalAnimations(args);
-    } else if (name == "get_animation_info") {
-        toolResult = toolGetAnimationInfo(args);
-    } else if (name == "set_animation_length") {
-        toolResult = toolSetAnimationLength(args);
-    } else if (name == "set_animation_time") {
-        toolResult = toolSetAnimationTime(args);
-    } else if (name == "add_keyframe") {
-        toolResult = toolAddKeyframe(args);
-    } else if (name == "remove_keyframe") {
-        toolResult = toolRemoveKeyframe(args);
-    } else if (name == "play_animation") {
-        toolResult = toolPlayAnimation(args);
-    } else if (name == "toggle_skeleton_debug") {
-        toolResult = toolToggleSkeletonDebug(args);
-    } else if (name == "toggle_bone_weights") {
-        toolResult = toolToggleBoneWeights(args);
-    } else if (name == "toggle_normals") {
-        toolResult = toolToggleNormals(args);
-    } else if (name == "toggle_mesh_info") {
-        toolResult = toolToggleMeshInfo(args);
-    } else if (name == "merge_animations") {
-        toolResult = toolMergeAnimations(args);
-    } else if (name == "resample_animation") {
-        toolResult = toolResampleAnimation(args);
-    } else if (name == "save_scene") {
-        toolResult = toolSaveScene(args);
-    } else if (name == "open_scene") {
-        toolResult = toolOpenScene(args);
-    } else if (name == "validate_mesh") {
-        toolResult = toolValidateMesh(args);
-    } else if (name == "generate_lods") {
-        toolResult = toolGenerateLods(args);
-    } else if (name == "generate_auto_lods") {
-        toolResult = toolGenerateAutoLods(args);
-    } else if (name == "remove_lods") {
-        toolResult = toolRemoveLods(args);
-    } else if (name == "get_lod_info") {
-        toolResult = toolGetLodInfo(args);
-    } else if (name == "list_files") {
-        toolResult = toolListFiles(args);
-    } else if (name == "search_files") {
-        toolResult = toolSearchFiles(args);
-    } else if (name == "read_file") {
-        toolResult = toolReadFile(args);
-    } else if (name == "delete_entity") {
-        toolResult = toolDeleteEntity(args);
-    } else if (name == "duplicate_entity") {
-        toolResult = toolDuplicateEntity(args);
-    } else if (name == "camera_control") {
-        toolResult = toolCameraControl(args);
-    } else if (name == "get_camera_info") {
-        toolResult = toolGetCameraInfo(args);
-    } else if (name == "set_snap_settings") {
-        toolResult = toolSetSnapSettings(args);
-    } else if (name == "get_snap_settings") {
-        toolResult = toolGetSnapSettings(args);
-    } else if (name == "export_pose") {
-        toolResult = toolExportPose(args);
-    } else if (name == "group_nodes") {
-        toolResult = toolGroupNodes(args);
-    } else if (name == "ungroup_node") {
-        toolResult = toolUngroupNode(args);
-    } else if (name == "reparent_node") {
-        toolResult = toolReparentNode(args);
-    } else if (name == "set_pivot_mode") {
-        toolResult = toolSetPivotMode(args);
-    } else if (name == "get_pivot_mode") {
-        toolResult = toolGetPivotMode(args);
-    } else {
+    const auto& handlers = toolHandlers();
+    const auto handlerIt = handlers.constFind(name);
+    if (handlerIt == handlers.constEnd()) {
         if (txn) SentryReporter::finishTransaction(txn);
         return makeErrorResult(QString("Unknown tool: %1").arg(name));
     }
+
+    QJsonObject toolResult = (this->*(handlerIt.value()))(args);
 
     // Track errors as breadcrumbs
     if (toolResult.contains("isError") && toolResult["isError"].toBool()) {
@@ -3118,17 +3088,10 @@ QJsonArray MCPServer::buildToolsList()
     }
 
     // list_materials
-    {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
-        inputSchema["properties"] = QJsonObject();
-
-        tools.append(buildToolDefinition(
-            "list_materials",
-            "List all materials currently loaded in the Ogre3D resource system, including their names and resource groups.",
-            inputSchema
-        ));
-    }
+    appendTool(
+        "list_materials",
+        "List all materials currently loaded in the Ogre3D resource system, including their names and resource groups.",
+        QJsonObject());
 
     // apply_material
     {
@@ -3164,17 +3127,10 @@ QJsonArray MCPServer::buildToolsList()
     }
 
     // get_mesh_info
-    {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
-        inputSchema["properties"] = QJsonObject();
-
-        tools.append(buildToolDefinition(
-            "get_mesh_info",
-            "Get detailed information about loaded meshes: vertex/index counts, submeshes, materials, bounding box, and skeleton data. Reports selected entities if any, otherwise all entities in the scene.",
-            inputSchema
-        ));
-    }
+    appendTool(
+        "get_mesh_info",
+        "Get detailed information about loaded meshes: vertex/index counts, submeshes, materials, bounding box, and skeleton data. Reports selected entities if any, otherwise all entities in the scene.",
+        QJsonObject());
 
     // transform_mesh
     {
@@ -3216,17 +3172,10 @@ QJsonArray MCPServer::buildToolsList()
     }
 
     // list_textures
-    {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
-        inputSchema["properties"] = QJsonObject();
-
-        tools.append(buildToolDefinition(
-            "list_textures",
-            "List all textures currently loaded in the Ogre3D texture manager, including their names. Use these names with set_texture to apply textures to materials.",
-            inputSchema
-        ));
-    }
+    appendTool(
+        "list_textures",
+        "List all textures currently loaded in the Ogre3D texture manager, including their names. Use these names with set_texture to apply textures to materials.",
+        QJsonObject());
 
     // set_texture
     {
@@ -3289,17 +3238,10 @@ QJsonArray MCPServer::buildToolsList()
     }
 
     // get_scene_info
-    {
-        QJsonObject inputSchema;
-        inputSchema["type"] = "object";
-        inputSchema["properties"] = QJsonObject();
-
-        tools.append(buildToolDefinition(
-            "get_scene_info",
-            "Get a summary of the current scene: all scene nodes (with names), entities (with materials), and material count. Use this to discover node/entity names for other tools.",
-            inputSchema
-        ));
-    }
+    appendTool(
+        "get_scene_info",
+        "Get a summary of the current scene: all scene nodes (with names), entities (with materials), and material count. Use this to discover node/entity names for other tools.",
+        QJsonObject());
 
     // take_screenshot
     {

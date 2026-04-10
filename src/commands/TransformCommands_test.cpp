@@ -380,6 +380,34 @@ TEST_F(TransformCommandsTests, DeleteCommand_SecondRedoHidesNode) {
     delete cmd;
 }
 
+TEST_F(TransformCommandsTests, DeleteCommand_SecondRedoHidesAttachedEntity) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node = mgr->addSceneNode("DelCmdNodeEntity");
+    ASSERT_NE(node, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("DelCmdEntityMesh");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    node->attachObject(entity);
+    EXPECT_TRUE(entity->getVisible());
+
+    QList<Ogre::SceneNode*> nodes = {node};
+    auto* cmd = new DeleteCommand(nodes);
+
+    cmd->redo();  // first redo: no-op
+    cmd->undo();  // restore snapshot state
+    EXPECT_TRUE(entity->getVisible());
+
+    cmd->redo();  // second redo: hide
+    EXPECT_FALSE(entity->getVisible());
+
+    cmd->undo();
+    EXPECT_TRUE(entity->getVisible());
+
+    delete cmd;
+}
+
 TEST_F(TransformCommandsTests, DeleteCommand_SnapshotPreservesTransform) {
     Manager* mgr = Manager::getSingleton();
     Ogre::SceneNode* node = mgr->addSceneNode("DelCmdSnap");
@@ -540,6 +568,318 @@ TEST_F(TransformCommandsTests, DuplicateCommand_EmptyCloneList) {
     // Should not crash with empty list
     EXPECT_NO_THROW(cmd->redo());
     EXPECT_NO_THROW(cmd->undo());
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, DuplicateCommand_RedoSkipsMissingSource) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* srcNode = mgr->addSceneNode("DupCmdMissingSrc");
+    ASSERT_NE(srcNode, nullptr);
+    const QString srcName = QString::fromStdString(srcNode->getName());
+
+    Ogre::SceneNode* cloneNode = mgr->duplicateSceneNode(srcNode);
+    ASSERT_NE(cloneNode, nullptr);
+    const QString cloneName = QString::fromStdString(cloneNode->getName());
+
+    QList<Ogre::SceneNode*> sources = {srcNode};
+    QList<Ogre::SceneNode*> clones = {cloneNode};
+    auto* cmd = new DuplicateCommand(sources, clones);
+
+    cmd->redo();  // first redo: no-op
+    cmd->undo();  // destroy initial clone
+    EXPECT_FALSE(mgr->hasSceneNode(cloneName));
+
+    mgr->destroySceneNode(srcName);
+    EXPECT_FALSE(mgr->hasSceneNode(srcName));
+
+    cmd->redo();  // should skip missing source
+    EXPECT_FALSE(mgr->hasSceneNode(cloneName));
+    EXPECT_TRUE(SelectionSet::getSingleton()->isEmpty());
+
+    delete cmd;
+}
+
+// ---- GroupCommand / UngroupCommand / ReparentCommand ----
+
+TEST_F(TransformCommandsTests, GroupCommand_UndoRedoRoundTrip) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* nodeA = mgr->addSceneNode("GroupCmdNodeA");
+    Ogre::SceneNode* nodeB = mgr->addSceneNode("GroupCmdNodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+    nodeA->setPosition(1, 0, 0);
+    nodeB->setPosition(0, 1, 0);
+
+    QList<Ogre::SceneNode*> nodes = {nodeA, nodeB};
+    auto* cmd = new GroupCommand(nodes);
+
+    Ogre::SceneNode* initialGroup = mgr->groupNodes(nodes);
+    ASSERT_NE(initialGroup, nullptr);
+    const std::string groupName = initialGroup->getName();
+
+    // First redo captures initial state only.
+    cmd->redo();
+    EXPECT_TRUE(mgr->getSceneMgr()->hasSceneNode(groupName));
+
+    cmd->undo();
+    EXPECT_FALSE(mgr->getSceneMgr()->hasSceneNode(groupName));
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), mgr->getSceneMgr()->getRootSceneNode());
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeB->getParent()), mgr->getSceneMgr()->getRootSceneNode());
+
+    cmd->redo();
+    ASSERT_TRUE(mgr->getSceneMgr()->hasSceneNode(groupName));
+    Ogre::SceneNode* recreatedGroup = mgr->getSceneMgr()->getSceneNode(groupName);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), recreatedGroup);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeB->getParent()), recreatedGroup);
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, GroupCommand_RedoSkipsDestroyedChild) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* nodeA = mgr->addSceneNode("GroupCmdSkipNodeA");
+    Ogre::SceneNode* nodeB = mgr->addSceneNode("GroupCmdSkipNodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    QList<Ogre::SceneNode*> nodes = {nodeA, nodeB};
+    auto* cmd = new GroupCommand(nodes);
+
+    Ogre::SceneNode* initialGroup = mgr->groupNodes(nodes);
+    ASSERT_NE(initialGroup, nullptr);
+    const std::string groupName = initialGroup->getName();
+
+    cmd->redo();  // first redo: capture group name
+    cmd->undo();  // remove group, restore nodes
+
+    mgr->destroySceneNode("GroupCmdSkipNodeB");
+    EXPECT_FALSE(mgr->hasSceneNode("GroupCmdSkipNodeB"));
+
+    cmd->redo();
+    ASSERT_TRUE(mgr->getSceneMgr()->hasSceneNode(groupName));
+    Ogre::SceneNode* recreatedGroup = mgr->getSceneMgr()->getSceneNode(groupName);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), recreatedGroup);
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, UngroupCommand_UndoRedoRoundTrip) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* nodeA = mgr->addSceneNode("UngroupCmdNodeA");
+    Ogre::SceneNode* nodeB = mgr->addSceneNode("UngroupCmdNodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+    QList<Ogre::SceneNode*> nodes = {nodeA, nodeB};
+
+    Ogre::SceneNode* groupNode = mgr->groupNodes(nodes);
+    ASSERT_NE(groupNode, nullptr);
+    const std::string groupName = groupNode->getName();
+
+    auto* cmd = new UngroupCommand(groupNode);
+
+    mgr->ungroupNode(groupNode);
+    EXPECT_FALSE(mgr->getSceneMgr()->hasSceneNode(groupName));
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), mgr->getSceneMgr()->getRootSceneNode());
+
+    // First redo is a no-op.
+    cmd->redo();
+
+    cmd->undo();
+    ASSERT_TRUE(mgr->getSceneMgr()->hasSceneNode(groupName));
+    Ogre::SceneNode* recreatedGroup = mgr->getSceneMgr()->getSceneNode(groupName);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), recreatedGroup);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeB->getParent()), recreatedGroup);
+
+    cmd->redo();
+    EXPECT_FALSE(mgr->getSceneMgr()->hasSceneNode(groupName));
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), mgr->getSceneMgr()->getRootSceneNode());
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeB->getParent()), mgr->getSceneMgr()->getRootSceneNode());
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, UngroupCommand_RedoWithMissingGroupNodeNoOp) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* nodeA = mgr->addSceneNode("UngroupCmdMissingGroupA");
+    Ogre::SceneNode* nodeB = mgr->addSceneNode("UngroupCmdMissingGroupB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+    QList<Ogre::SceneNode*> nodes = {nodeA, nodeB};
+
+    Ogre::SceneNode* groupNode = mgr->groupNodes(nodes);
+    ASSERT_NE(groupNode, nullptr);
+    const std::string groupName = groupNode->getName();
+
+    auto* cmd = new UngroupCommand(groupNode);
+
+    mgr->ungroupNode(groupNode);
+    cmd->redo();  // first redo: no-op
+
+    cmd->undo();
+    ASSERT_TRUE(mgr->getSceneMgr()->hasSceneNode(groupName));
+    Ogre::SceneNode* recreatedGroup = mgr->getSceneMgr()->getSceneNode(groupName);
+
+    // Remove group externally so command redo hits missing-group early return.
+    mgr->ungroupNode(recreatedGroup);
+    ASSERT_FALSE(mgr->getSceneMgr()->hasSceneNode(groupName));
+
+    EXPECT_NO_THROW(cmd->redo());
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), mgr->getSceneMgr()->getRootSceneNode());
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeB->getParent()), mgr->getSceneMgr()->getRootSceneNode());
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, ReparentCommand_UndoRedoRoundTrip) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneManager* sceneMgr = mgr->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+
+    Ogre::SceneNode* oldParent = sceneMgr->getRootSceneNode()->createChildSceneNode("ReparentCmdOldParent");
+    Ogre::SceneNode* newParent = sceneMgr->getRootSceneNode()->createChildSceneNode("ReparentCmdNewParent");
+    Ogre::SceneNode* child = oldParent->createChildSceneNode("ReparentCmdChild");
+    // Keep oldParent non-empty after reparent so Manager::reparentNode does not auto-destroy it.
+    Ogre::SceneNode* oldParentKeeper = oldParent->createChildSceneNode("ReparentCmdOldParentKeeper");
+    ASSERT_NE(oldParent, nullptr);
+    ASSERT_NE(newParent, nullptr);
+    ASSERT_NE(child, nullptr);
+    ASSERT_NE(oldParentKeeper, nullptr);
+
+    child->setPosition(1, 2, 3);
+    child->setOrientation(Ogre::Quaternion(Ogre::Degree(15), Ogre::Vector3::UNIT_Z));
+    child->setScale(1.2f, 1.3f, 1.4f);
+
+    const Ogre::Vector3 oldLocalPos = child->getPosition();
+    const Ogre::Quaternion oldLocalOrient = child->getOrientation();
+    const Ogre::Vector3 oldLocalScale = child->getScale();
+
+    ASSERT_TRUE(mgr->reparentNode(child, newParent));
+    const Ogre::Vector3 newLocalPos = child->getPosition();
+    const Ogre::Quaternion newLocalOrient = child->getOrientation();
+    const Ogre::Vector3 newLocalScale = child->getScale();
+
+    auto* cmd = new ReparentCommand(
+        "ReparentCmdChild",
+        "ReparentCmdOldParent",
+        "ReparentCmdNewParent",
+        oldLocalPos, oldLocalOrient, oldLocalScale,
+        newLocalPos, newLocalOrient, newLocalScale);
+
+    // First redo is a no-op.
+    cmd->redo();
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), newParent);
+
+    cmd->undo();
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), oldParent);
+    EXPECT_EQ(child->getPosition(), oldLocalPos);
+    EXPECT_EQ(child->getOrientation(), oldLocalOrient);
+    EXPECT_EQ(child->getScale(), oldLocalScale);
+
+    cmd->redo();
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), newParent);
+    EXPECT_EQ(child->getPosition(), newLocalPos);
+    EXPECT_EQ(child->getOrientation(), newLocalOrient);
+    EXPECT_EQ(child->getScale(), newLocalScale);
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, ReparentCommand_UndoWithMissingOldParentNoOp) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneManager* sceneMgr = mgr->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+
+    Ogre::SceneNode* oldParent = sceneMgr->getRootSceneNode()->createChildSceneNode("ReparentCmdMissingOldParent");
+    Ogre::SceneNode* newParent = sceneMgr->getRootSceneNode()->createChildSceneNode("ReparentCmdMissingOldNewParent");
+    Ogre::SceneNode* child = oldParent->createChildSceneNode("ReparentCmdMissingOldChild");
+    Ogre::SceneNode* keeper = oldParent->createChildSceneNode("ReparentCmdMissingOldKeeper");
+    ASSERT_NE(oldParent, nullptr);
+    ASSERT_NE(newParent, nullptr);
+    ASSERT_NE(child, nullptr);
+    ASSERT_NE(keeper, nullptr);
+
+    child->setPosition(2, 3, 4);
+    child->setOrientation(Ogre::Quaternion(Ogre::Degree(20), Ogre::Vector3::UNIT_Y));
+    child->setScale(1.1f, 1.2f, 1.3f);
+
+    const Ogre::Vector3 oldLocalPos = child->getPosition();
+    const Ogre::Quaternion oldLocalOrient = child->getOrientation();
+    const Ogre::Vector3 oldLocalScale = child->getScale();
+
+    ASSERT_TRUE(mgr->reparentNode(child, newParent));
+    const Ogre::Vector3 newLocalPos = child->getPosition();
+    const Ogre::Quaternion newLocalOrient = child->getOrientation();
+    const Ogre::Vector3 newLocalScale = child->getScale();
+
+    auto* cmd = new ReparentCommand(
+        "ReparentCmdMissingOldChild",
+        "ReparentCmdMissingOldParent",
+        "ReparentCmdMissingOldNewParent",
+        oldLocalPos, oldLocalOrient, oldLocalScale,
+        newLocalPos, newLocalOrient, newLocalScale);
+
+    cmd->redo();  // first redo: no-op
+    mgr->destroySceneNode("ReparentCmdMissingOldParent");
+    ASSERT_FALSE(sceneMgr->hasSceneNode("ReparentCmdMissingOldParent"));
+
+    // undo should early-return because old parent no longer exists
+    cmd->undo();
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), newParent);
+    EXPECT_EQ(child->getPosition(), newLocalPos);
+    EXPECT_EQ(child->getOrientation(), newLocalOrient);
+    EXPECT_EQ(child->getScale(), newLocalScale);
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, ReparentCommand_RedoWithMissingNewParentNoOp) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneManager* sceneMgr = mgr->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+
+    Ogre::SceneNode* oldParent = sceneMgr->getRootSceneNode()->createChildSceneNode("ReparentCmdMissingNewOldParent");
+    Ogre::SceneNode* newParent = sceneMgr->getRootSceneNode()->createChildSceneNode("ReparentCmdMissingNewParent");
+    Ogre::SceneNode* child = oldParent->createChildSceneNode("ReparentCmdMissingNewChild");
+    Ogre::SceneNode* keeper = oldParent->createChildSceneNode("ReparentCmdMissingNewKeeper");
+    ASSERT_NE(oldParent, nullptr);
+    ASSERT_NE(newParent, nullptr);
+    ASSERT_NE(child, nullptr);
+    ASSERT_NE(keeper, nullptr);
+
+    child->setPosition(3, 4, 5);
+    child->setOrientation(Ogre::Quaternion(Ogre::Degree(25), Ogre::Vector3::UNIT_X));
+    child->setScale(1.4f, 1.5f, 1.6f);
+
+    const Ogre::Vector3 oldLocalPos = child->getPosition();
+    const Ogre::Quaternion oldLocalOrient = child->getOrientation();
+    const Ogre::Vector3 oldLocalScale = child->getScale();
+
+    ASSERT_TRUE(mgr->reparentNode(child, newParent));
+    const Ogre::Vector3 newLocalPos = child->getPosition();
+    const Ogre::Quaternion newLocalOrient = child->getOrientation();
+    const Ogre::Vector3 newLocalScale = child->getScale();
+
+    auto* cmd = new ReparentCommand(
+        "ReparentCmdMissingNewChild",
+        "ReparentCmdMissingNewOldParent",
+        "ReparentCmdMissingNewParent",
+        oldLocalPos, oldLocalOrient, oldLocalScale,
+        newLocalPos, newLocalOrient, newLocalScale);
+
+    cmd->redo();  // first redo: no-op
+    cmd->undo();  // move back to old parent
+    ASSERT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), oldParent);
+
+    mgr->destroySceneNode("ReparentCmdMissingNewParent");
+    ASSERT_FALSE(sceneMgr->hasSceneNode("ReparentCmdMissingNewParent"));
+
+    // redo should early-return because new parent no longer exists
+    cmd->redo();
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), oldParent);
+    EXPECT_EQ(child->getPosition(), oldLocalPos);
+    EXPECT_EQ(child->getOrientation(), oldLocalOrient);
+    EXPECT_EQ(child->getScale(), oldLocalScale);
 
     delete cmd;
 }

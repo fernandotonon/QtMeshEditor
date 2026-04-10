@@ -6,15 +6,15 @@ import CodePanel from './components/CodePanel';
 import FeatureCard from './components/FeatureCard';
 import Section from './components/Section';
 import {
+  comparisonItems,
   footerLinks,
   hero,
   highlightFeatures,
   installOptions,
   links,
   media,
-  mixamoSteps,
+  mergeSteps,
   pipelineExamples,
-  pipelineFlow,
   proofPoints,
   trustItems,
   useCases
@@ -230,11 +230,11 @@ function App() {
                 >
                   {primaryCtaLabel}
                 </button>
-                <ButtonLink href={links.github} variant="secondary">
-                  {hero.ctaSecondary}
-                </ButtonLink>
                 <ButtonLink href={links.docs} variant="secondary">
                   {hero.ctaDocs}
+                </ButtonLink>
+                <ButtonLink href={links.github} variant="secondary">
+                  {hero.ctaSecondary}
                 </ButtonLink>
               </div>
 
@@ -248,161 +248,142 @@ function App() {
             </div>
 
             <figure className={styles.heroMediaCard}>
-              <img className={styles.heroImage} src={media.skeletonPreview.src} alt={media.skeletonPreview.alt} />
-              <figcaption className={styles.mediaCaption}>Pipeline validation and inspection workflow</figcaption>
+              <img className={styles.heroImage} src={media.mergeDemo.src} alt={media.mergeDemo.alt} />
+              <figcaption className={styles.mediaCaption}>Merge workflow in action</figcaption>
             </figure>
           </header>
 
-          <Section
-            id="pipeline"
-            eyebrow="Pipeline Overview"
-            title="CI/CD for 3D assets"
-            subtitle="One toolchain for scan, validate, fix, convert, and publish across local scripts and automation workflows. Scan and validation are being expanded as first-class pipeline checks."
-          >
-            <div className={styles.pipelineFlow}>
-              {pipelineFlow.map((item, index) => (
-                <article key={item.title} className={styles.pipelineNode}>
-                  <span className={styles.pipelineNodeIndex}>{index + 1}</span>
-                  <h3 className={styles.pipelineNodeTitle}>{item.title}</h3>
-                  <p className={styles.pipelineNodeBody}>{item.body}</p>
-                </article>
+        <Section
+          id="demo"
+          eyebrow="Visual Proof"
+          title="Merge animation clips without pipeline friction"
+          subtitle="The main workflow stays focused: load assets, merge clips, export to the format your engine needs."
+        >
+          <div className={styles.demoLayout}>
+            <figure className={`${styles.demoMain} reveal`}>
+              <img className={styles.demoImage} src={media.mergeDemo.src} alt={media.mergeDemo.alt} loading="lazy" />
+            </figure>
+
+            <ol className={styles.steps}>
+              {mergeSteps.map((step, index) => (
+                <li key={step.title} className={styles.stepItem}>
+                  <span className={styles.stepIndex}>{index + 1}</span>
+                  <div>
+                    <h3 className={styles.stepTitle}>{step.title}</h3>
+                    <p className={styles.stepBody}>{step.body}</p>
+                  </div>
+                </li>
               ))}
-            </div>
+            </ol>
+          </div>
 
-            <div className={styles.demoLayout}>
-              <figure className={`${styles.demoMain} reveal`}>
-                <img
-                  className={styles.demoImage}
-                  src={media.skeletonPreview.src}
-                  alt={media.skeletonPreview.alt}
-                  loading="lazy"
-                />
-              </figure>
+          <div className={styles.previewStrip}>
+            <figure className={styles.previewCard}>
+              <img src={media.skeletonPreview.src} alt={media.skeletonPreview.alt} loading="lazy" />
+              <figcaption>Skeleton and weight inspection</figcaption>
+            </figure>
+            <figure className={styles.previewCard}>
+              <img src={media.aiMaterials.src} alt={media.aiMaterials.alt} loading="lazy" />
+              <figcaption>AI-assisted materials</figcaption>
+            </figure>
+            <figure className={styles.previewCard}>
+              <img src={media.mcpPreview.src} alt={media.mcpPreview.alt} loading="lazy" />
+              <figcaption>MCP tool integration</figcaption>
+            </figure>
+          </div>
+        </Section>
 
-              <article className={styles.pipelinePanel}>
-                <h3>Pipeline run in three commands</h3>
-                <p>
-                  Use the same command sequence in local checks and CI jobs to keep asset handling deterministic.
-                </p>
-                <pre className={styles.pipelineSnippet}>
-                  <code>{pipelineExamples.scanFixConvert}</code>
-                </pre>
-              </article>
-            </div>
-          </Section>
+        <Section
+          id="use-cases"
+          eyebrow="Core Workflows"
+          title="Built for daily gamedev asset tasks"
+          subtitle="QtMeshEditor prioritizes real production tasks over generic feature sprawl."
+        >
+          <div className={styles.useCaseGrid}>
+            {useCases.map((item) => (
+              <FeatureCard key={item.title} title={item.title} body={item.body} tag="Core" />
+            ))}
+          </div>
+        </Section>
 
-          <Section
-            id="use-cases"
-            eyebrow="Core Use Cases"
-            title="Built for real asset production tasks"
-            subtitle="Pipeline-focused workflows for technical artists, indie teams, and studios shipping content continuously."
-          >
-            <div className={styles.useCaseGrid}>
-              {useCases.map((item) => (
-                <FeatureCard key={item.title} title={item.title} body={item.body} tag="Pipeline" />
-              ))}
-            </div>
-          </Section>
+        <Section
+          id="cli"
+          eyebrow="Scriptable Pipeline"
+          title="Use qtmesh in local scripts, Docker, and CI"
+          subtitle="Run the same commands locally and in build pipelines to keep asset processing repeatable and team-friendly."
+        >
+          <div className={styles.cliIntro}>
+            <p>
+              The <code>qtmesh</code> CLI ships with QtMeshEditor and is designed for production automation.
+              Use it for format conversion, asset inspection, and animation merge tasks without opening the GUI.
+            </p>
+            <p>
+              Docker image and GitHub Action support are available for containerized workflows and CI/CD pipelines.
+            </p>
+          </div>
 
-          <Section
-            id="cli"
-            eyebrow="CLI + CI"
-            title="Script your 3D asset pipeline"
-            subtitle="Run the same `qtmesh` operations locally, in Docker, and inside GitHub Actions."
-          >
-            <div className={styles.cliIntro}>
-              <p>
-                Repo-wide scan and validation commands are expanding. The examples below show the intended pipeline
-                shape while keeping fix, convert, merge, and automation fully scriptable today.
-              </p>
-            </div>
+          <div className={styles.codeGrid}>
+            <CodePanel title="Inspect meshes" code={pipelineExamples.inspect} />
+            <CodePanel title="Convert formats" code={pipelineExamples.convert} />
+            <CodePanel title="Merge animations" code={pipelineExamples.merge} />
+            <CodePanel title="Docker CLI" code={pipelineExamples.docker} label="docker" />
+            <CodePanel title="GitHub Actions" code={pipelineExamples.githubAction} label="ci" />
+          </div>
 
-            <div className={styles.codeGrid}>
-              <CodePanel title="Scan repo assets" code={pipelineExamples.scan} label="scan" />
-              <CodePanel title="Fix and optimize" code={pipelineExamples.fix} label="fix" />
-              <CodePanel title="Convert formats" code={pipelineExamples.convert} label="convert" />
-              <CodePanel title="Merge animations" code={pipelineExamples.merge} label="anim" />
-              <CodePanel title="Docker" code={pipelineExamples.docker} label="docker" />
-              <CodePanel title="GitHub Actions" code={pipelineExamples.githubAction} label="ci" />
-            </div>
+          <div className={styles.cliLinks}>
+            <a href={links.actions} target="_blank" rel="noreferrer">
+              GitHub Action
+            </a>
+            <a href={links.releases} target="_blank" rel="noreferrer">
+              Latest release binaries
+            </a>
+            <a href={links.docs} target="_blank" rel="noreferrer">
+              Full documentation
+            </a>
+          </div>
+        </Section>
 
-            <div className={styles.cliLinks}>
-              <a href={links.actions} target="_blank" rel="noreferrer">
-                GitHub Action
-              </a>
-              <a href={links.docs} target="_blank" rel="noreferrer">
-                CLI Documentation
-              </a>
-              <a href={links.releases} target="_blank" rel="noreferrer">
-                Latest release binaries
-              </a>
-            </div>
-          </Section>
+        <Section
+          id="comparison"
+          eyebrow="Why It Works"
+          title="Pick the right mode for each step"
+          subtitle="Manual edits, scripted tasks, and CI pipelines can all use the same toolchain."
+        >
+          <div className={styles.comparisonGrid}>
+            {comparisonItems.map((item) => (
+              <FeatureCard key={item.title} title={item.title} body={item.body} />
+            ))}
+          </div>
+        </Section>
 
-          <Section
-            id="mixamo"
-            eyebrow="Animation Merge Workflow"
-            title="Fast Mixamo and Unreal animation merging"
-            subtitle="Use QtMeshEditor as a practical entry-point workflow, then plug output directly into the broader pipeline."
-          >
-            <div className={styles.demoLayout}>
-              <figure className={`${styles.demoMain} reveal`}>
-                <img className={styles.demoImage} src={media.mergeDemo.src} alt={media.mergeDemo.alt} loading="lazy" />
-              </figure>
-
-              <ol className={styles.steps}>
-                {mixamoSteps.map((step, index) => (
-                  <li key={step.title} className={styles.stepItem}>
-                    <span className={styles.stepIndex}>{index + 1}</span>
-                    <div>
-                      <h3 className={styles.stepTitle}>{step.title}</h3>
-                      <p className={styles.stepBody}>{step.body}</p>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          </Section>
-
-          <Section
-            id="features"
-            eyebrow="Advanced Features"
-            title="Extended capabilities for specialized workflows"
-            subtitle="Advanced tools stay available without overshadowing the core pipeline flow."
-          >
-            <div className={styles.highlightGrid}>
-              {highlightFeatures.map((feature) => (
-                <FeatureCard
-                  key={feature.title}
-                  title={feature.title}
-                  body={feature.body}
-                  tag={feature.title.includes('AI') || feature.title.includes('MCP') ? 'Advanced' : 'Feature'}
-                />
-              ))}
-            </div>
-
-            <div className={styles.previewStrip}>
-              <figure className={styles.previewCard}>
-                <img src={media.aiMaterials.src} alt={media.aiMaterials.alt} loading="lazy" />
-                <figcaption>Material editing workflows for look-dev and technical review.</figcaption>
-              </figure>
-              <figure className={styles.previewCard}>
-                <img src={media.mcpPreview.src} alt={media.mcpPreview.alt} loading="lazy" />
-                <figcaption>MCP integration for advanced agent-driven automation.</figcaption>
-              </figure>
-            </div>
-          </Section>
+        <Section
+          id="features"
+          eyebrow="Extended Features"
+          title="Advanced capabilities when you need them"
+          subtitle="AI and integration features are available without obscuring the core asset workflow."
+        >
+          <div className={styles.highlightGrid}>
+            {highlightFeatures.map((feature) => (
+              <FeatureCard
+                key={feature.title}
+                title={feature.title}
+                body={feature.body}
+                tag={feature.title.includes('AI') || feature.title.includes('MCP') ? 'Advanced' : 'Feature'}
+              />
+            ))}
+          </div>
+        </Section>
 
           <Section
             id="install"
             eyebrow="Install"
             title="Install QtMeshEditor your way"
-            subtitle="Store-first installs with winget, Homebrew, and snap, plus Docker and release binaries."
+            subtitle="Open the install portal to get store-first commands for your platform."
           >
             <div className={styles.installPortalEntry}>
               <p>
                 Store options include <code>winget</code>, <code>Homebrew</code>, and <code>snap</code>. You can also
-                use Docker or download binaries from the latest release.
+                download binaries directly from the latest release.
               </p>
               <div className={styles.installPortalEntryActions}>
                 <button
@@ -423,7 +404,7 @@ function App() {
             id="trust"
             eyebrow="Open Source Trust"
             title="Built in public for long-term production use"
-            subtitle="Open source, multi-platform, and focused on practical pipeline outcomes for small teams and studios."
+            subtitle="Used by developers around the world for practical 3D asset preparation and pipeline automation."
           >
             <div className={styles.trustLead}>
               <a href="https://github.com/fernandotonon/QtMeshEditor/stargazers" target="_blank" rel="noreferrer">
@@ -505,7 +486,9 @@ function App() {
 
               <div className={styles.installPortalGrid}>
                 {recommendedInstall ? (
-                  <article className={`${styles.installPortalCard} ${styles.installPortalCardRecommended}`}>
+                  <article
+                    className={`${styles.installPortalCard} ${styles.installPortalCardRecommended}`}
+                  >
                     <div className={styles.installPortalCardTop}>
                       <h3>{recommendedInstall.platform}</h3>
                       <div className={styles.installPortalCardActions}>

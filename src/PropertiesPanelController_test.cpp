@@ -4,12 +4,15 @@
 #include <QCoreApplication>
 #include <QPalette>
 #include <QSignalSpy>
+#include <QUndoCommand>
 
 #include "Manager.h"
 #include "PrimitiveObject.h"
 #include "PropertiesPanelController.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
+#include "TransformOperator.h"
+#include "UndoManager.h"
 
 class PropertiesPanelControllerTests : public ::testing::Test
 {
@@ -417,4 +420,108 @@ TEST_F(PropertiesPanelControllerTests, PlayingStateOnlyEmitsWhenValueChanges)
 
     EXPECT_FALSE(controller->isPlaying());
     EXPECT_EQ(playingSpy.count(), 2);
+}
+
+TEST_F(PropertiesPanelControllerTests, PivotModeSetCycleAndInvalidInput)
+{
+    QSignalSpy pivotSpy(controller, &PropertiesPanelController::pivotModeChanged);
+    ASSERT_TRUE(pivotSpy.isValid());
+
+    controller->setPivotMode(TransformOperator::PIVOT_BOTTOM);
+    EXPECT_EQ(controller->pivotMode(), static_cast<int>(TransformOperator::PIVOT_BOTTOM));
+
+    const int emitsAfterValidSet = pivotSpy.count();
+    controller->setPivotMode(-1);
+    controller->setPivotMode(999);
+    EXPECT_EQ(controller->pivotMode(), static_cast<int>(TransformOperator::PIVOT_BOTTOM));
+    EXPECT_EQ(pivotSpy.count(), emitsAfterValidSet);
+
+    controller->cyclePivotMode();
+    EXPECT_NE(controller->pivotMode(), static_cast<int>(TransformOperator::PIVOT_BOTTOM));
+    EXPECT_GE(pivotSpy.count(), emitsAfterValidSet + 1);
+}
+
+TEST_F(PropertiesPanelControllerTests, SnapSettingsRoundTripAndPresetExposure)
+{
+    QSignalSpy enabledSpy(controller, &PropertiesPanelController::snapEnabledChanged);
+    QSignalSpy gridSpy(controller, &PropertiesPanelController::snapGridSizeChanged);
+    QSignalSpy angleSpy(controller, &PropertiesPanelController::snapAngleStepChanged);
+    QSignalSpy scaleSpy(controller, &PropertiesPanelController::snapScaleStepChanged);
+    ASSERT_TRUE(enabledSpy.isValid());
+    ASSERT_TRUE(gridSpy.isValid());
+    ASSERT_TRUE(angleSpy.isValid());
+    ASSERT_TRUE(scaleSpy.isValid());
+
+    controller->setSnapEnabled(true);
+    controller->setSnapGridSize(0.25);
+    controller->setSnapAngleStep(15.0);
+    controller->setSnapScaleStep(0.5);
+
+    EXPECT_TRUE(controller->snapEnabled());
+    EXPECT_DOUBLE_EQ(controller->snapGridSize(), 0.25);
+    EXPECT_DOUBLE_EQ(controller->snapAngleStep(), 15.0);
+    EXPECT_DOUBLE_EQ(controller->snapScaleStep(), 0.5);
+
+    EXPECT_GE(enabledSpy.count(), 1);
+    EXPECT_GE(gridSpy.count(), 1);
+    EXPECT_GE(angleSpy.count(), 1);
+    EXPECT_GE(scaleSpy.count(), 1);
+
+    const QVariantList gridPresets = controller->gridSizePresets();
+    const QVariantList anglePresets = controller->angleStepPresets();
+    const QVariantList scalePresets = controller->scaleStepPresets();
+    EXPECT_FALSE(gridPresets.isEmpty());
+    EXPECT_FALSE(anglePresets.isEmpty());
+    EXPECT_FALSE(scalePresets.isEmpty());
+    EXPECT_TRUE(gridPresets.contains(0.25));
+    EXPECT_TRUE(anglePresets.contains(15.0));
+    EXPECT_TRUE(scalePresets.contains(0.5));
+}
+
+TEST_F(PropertiesPanelControllerTests, UndoHistoryApisTrackStackAndBounds)
+{
+    UndoManager::getSingleton()->clear();
+
+    auto* stack = UndoManager::getSingleton()->stack();
+    ASSERT_NE(stack, nullptr);
+    stack->push(new QUndoCommand("First Action"));
+    stack->push(new QUndoCommand("Second Action"));
+
+    const QVariantList history = controller->undoHistory();
+    ASSERT_EQ(history.size(), 2);
+    EXPECT_EQ(history[0].toMap().value("text").toString(), QString("First Action"));
+    EXPECT_EQ(history[1].toMap().value("text").toString(), QString("Second Action"));
+    EXPECT_EQ(controller->undoIndex(), 2);
+    EXPECT_TRUE(history[1].toMap().value("isCurrent").toBool());
+
+    controller->undoToIndex(1);
+    EXPECT_EQ(controller->undoIndex(), 1);
+    EXPECT_TRUE(controller->undoHistory()[0].toMap().value("isCurrent").toBool());
+
+    controller->undoToIndex(-1);
+    EXPECT_EQ(controller->undoIndex(), 1);
+    controller->undoToIndex(999);
+    EXPECT_EQ(controller->undoIndex(), 1);
+
+    controller->clearUndoHistory();
+    EXPECT_EQ(stack->count(), 0);
+    EXPECT_TRUE(controller->undoHistory().isEmpty());
+}
+
+TEST_F(PropertiesPanelControllerTests, SceneTreeReparentWrappersHandleValidAndInvalidRequests)
+{
+    auto* mgr = Manager::getSingleton();
+    ASSERT_NE(mgr, nullptr);
+
+    Ogre::SceneNode* node = mgr->addSceneNode("PanelReparentNode");
+    Ogre::SceneNode* parent = mgr->addSceneNode("PanelReparentParent");
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(parent, nullptr);
+
+    EXPECT_FALSE(controller->canReparentNode("MissingNode", "PanelReparentParent"));
+    EXPECT_FALSE(controller->reparentNode("MissingNode", "PanelReparentParent"));
+
+    EXPECT_TRUE(controller->canReparentNode("PanelReparentNode", "PanelReparentParent"));
+    EXPECT_TRUE(controller->reparentNode("PanelReparentNode", "PanelReparentParent"));
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(node->getParent()), parent);
 }

@@ -325,86 +325,11 @@
   font-size: 0.83rem;
 }
 
-.pipelineFlow {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 0.8rem;
-  margin-bottom: 1rem;
-}
-
-.pipelineNode {
-  border: 1px solid var(--stroke);
-  border-radius: 0.95rem;
-  background: linear-gradient(180deg, rgba(16, 24, 40, 0.95), rgba(11, 17, 30, 0.96));
-  padding: 0.9rem;
-  min-height: 154px;
-}
-
-.pipelineNodeIndex {
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 999px;
-  border: 1px solid rgba(46, 188, 255, 0.4);
-  background: rgba(46, 188, 255, 0.16);
-  color: var(--accent-1);
-  font-size: 0.82rem;
-  font-weight: 700;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.pipelineNodeTitle {
-  margin: 0.5rem 0 0;
-  font-size: 1rem;
-}
-
-.pipelineNodeBody {
-  margin: 0.4rem 0 0;
-  color: var(--text-1);
-  font-size: 0.9rem;
-  line-height: 1.48;
-}
-
 .demoLayout {
   display: grid;
   grid-template-columns: 1.2fr 0.8fr;
   gap: 1rem;
   align-items: start;
-}
-
-.pipelinePanel {
-  border: 1px solid var(--stroke);
-  border-radius: 0.95rem;
-  padding: 0.9rem;
-  background: linear-gradient(180deg, rgba(13, 21, 35, 0.98), rgba(10, 15, 26, 0.98));
-}
-
-.pipelinePanel h3 {
-  margin: 0;
-  font-size: 1.03rem;
-}
-
-.pipelinePanel p {
-  margin: 0.5rem 0 0;
-  color: var(--text-1);
-  font-size: 0.91rem;
-}
-
-.pipelineSnippet {
-  margin: 0.75rem 0 0;
-  border: 1px solid var(--stroke-strong);
-  border-radius: 0.75rem;
-  padding: 0.7rem 0.8rem;
-  overflow-x: auto;
-  background: rgba(7, 12, 20, 0.9);
-}
-
-.pipelineSnippet code {
-  color: #baf6ff;
-  font-size: 0.82rem;
-  line-height: 1.5;
-  white-space: pre;
 }
 
 .demoMain {
@@ -469,7 +394,7 @@
 .previewStrip {
   margin-top: 1rem;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 0.8rem;
 }
 
@@ -525,7 +450,7 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.codeGrid > :nth-child(6) {
+.codeGrid > :nth-child(5) {
   grid-column: span 2;
 }
 
@@ -631,7 +556,6 @@
     grid-template-columns: 1fr;
   }
 
-  .pipelineFlow,
   .useCaseGrid,
   .comparisonGrid,
   .trustGrid {
@@ -661,7 +585,6 @@
   }
 
   .previewStrip,
-  .pipelineFlow,
   .useCaseGrid,
   .codeGrid,
   .comparisonGrid,
@@ -671,7 +594,7 @@
     grid-template-columns: 1fr;
   }
 
-  .codeGrid > :nth-child(6) {
+  .codeGrid > :nth-child(5) {
     grid-column: auto;
   }
 

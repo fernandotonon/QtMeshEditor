@@ -2897,28 +2897,14 @@ TEST_F(MCPServerTest, ServerFunctionalAfterConstruction)
 
 TEST_F(MCPServerTest, AllToolNamesAreRecognized)
 {
-    // Verify every known tool name is recognized (not "Unknown tool")
-    QStringList allTools = {
-        "create_material", "modify_material", "get_material", "list_materials",
-        "apply_material", "load_mesh", "get_mesh_info", "transform_mesh",
-        "transform_submesh", "list_textures", "set_texture", "export_mesh",
-        "get_scene_info", "take_screenshot", "create_primitive", "animate",
-        "list_skeletal_animations", "get_animation_info", "set_animation_length",
-        "set_animation_time", "add_keyframe", "remove_keyframe",
-        "play_animation", "toggle_skeleton_debug", "toggle_bone_weights",
-        "toggle_normals", "toggle_mesh_info", "merge_animations",
-        "resample_animation",
-        "save_scene", "open_scene", "validate_mesh",
-        "generate_lods", "generate_auto_lods", "remove_lods", "get_lod_info",
-        "delete_entity", "duplicate_entity", "get_camera_info", "camera_control",
-        "set_snap_settings", "get_snap_settings", "export_pose",
-        "list_files", "search_files", "read_file",
-        "group_nodes", "ungroup_node", "reparent_node",
-        "set_pivot_mode", "get_pivot_mode"
-    };
-    EXPECT_EQ(allTools.size(), 51);
+    // Verify every tool from tools/list is callable and not "Unknown tool"
+    const QJsonArray tools = server->buildToolsList();
+    EXPECT_EQ(tools.size(), 51);
 
-    for (const QString &tool : allTools) {
+    for (const QJsonValue& toolValue : tools) {
+        const QString tool = toolValue.toObject().value("name").toString();
+        ASSERT_FALSE(tool.isEmpty());
+
         QJsonObject result = server->callTool(tool, QJsonObject());
         EXPECT_FALSE(getResultText(result).contains("Unknown tool"))
             << "Tool should be recognized: " << tool.toStdString();

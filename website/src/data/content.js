@@ -16,7 +16,7 @@ export const media = {
   },
   skeletonPreview: {
     src: 'https://github.com/user-attachments/assets/289403ac-8952-488c-bc65-0a768ab278e1',
-    alt: 'Bone weight and skeleton validation preview in QtMeshEditor'
+    alt: 'Bone weight visualization inside QtMeshEditor'
   },
   mcpPreview: {
     src: 'https://github.com/user-attachments/assets/ed3b7e9d-22ba-4e6e-a06c-868570db7a07',
@@ -29,99 +29,106 @@ export const media = {
 };
 
 export const hero = {
-  title: 'Automate your 3D asset pipeline.',
+  title: 'Merge Mixamo animations and ship 3D assets faster.',
   subtitle:
-    'QtMeshEditor gives indie teams and studios one technical workflow to fix, convert, merge, and automate 3D assets with GUI + CLI + CI/CD support, with repo-wide scanning and validation evolving quickly.',
+    'QtMeshEditor is a focused GUI + CLI toolkit for indie teams: merge animation clips, convert 40+ formats, inspect skeletons, and automate repeatable asset tasks.',
   ctaPrimary: 'Download Latest',
   ctaSecondary: 'View on GitHub',
   ctaDocs: 'Documentation'
 };
 
-export const proofPoints = ['Free & open source', 'Windows / macOS / Linux', 'GUI + CLI', 'Docker + GitHub Actions'];
+export const proofPoints = ['Free & open source', 'Windows / macOS / Linux', 'GUI + CLI', '40+ formats'];
 
-export const pipelineFlow = [
+export const mergeSteps = [
   {
-    title: 'Scan',
-    body: 'Pipeline scanning is in active development, focused on repo-wide checks for broken files and policy issues.'
+    title: 'Load files',
+    body: 'Import your base character and animation clips from Mixamo, Unreal export, or DCC tools.'
   },
   {
-    title: 'Validate',
-    body: 'Evolving validation workflows enforce consistency for geometry, naming, and structure before integration.'
+    title: 'Merge animations',
+    body: 'Select clips and merge them into one clean character file in seconds.'
   },
   {
-    title: 'Fix & Optimize',
-    body: 'Apply deterministic cleanup and optimization steps so assets remain stable across machines and CI jobs.'
-  },
-  {
-    title: 'Convert & Ship',
-    body: 'Export to engine-ready formats and publish artifacts from local scripts, Docker, or GitHub Actions.'
+    title: 'Export to your engine',
+    body: 'Export to glTF, FBX-compatible workflows, Collada, OBJ, or Ogre Mesh and keep moving.'
   }
 ];
 
 export const useCases = [
   {
-    title: 'Scan assets in repositories (in progress)',
-    body: 'Add repo-wide checks that surface pipeline issues early and support stricter CI gates over time.'
+    title: 'Merge animations',
+    body: 'Combine separate animation clips into one asset to simplify import and iteration.'
   },
   {
-    title: 'Fix and optimize meshes',
-    body: 'Repair and optimize imported assets to keep runtime and tooling behavior predictable.'
+    title: 'Convert formats',
+    body: 'Move assets across DCC tools and engines with import/export support for 40+ formats.'
   },
   {
-    title: 'Convert across formats',
-    body: 'Move assets between DCC tools and engines with import/export support for 40+ formats.'
+    title: 'Inspect skeletons and weights',
+    body: 'Audit bone hierarchies, inspect skinning, and catch rig problems before runtime.'
   },
   {
-    title: 'Merge animation clips',
-    body: 'Combine Mixamo, Unreal exports, and DCC clips into clean output files for engine ingestion.'
-  },
-  {
-    title: 'Run in CI/CD',
-    body: 'Use the same commands in local scripts, Docker containers, and GitHub Actions workflows.'
+    title: 'Automate with qtmesh CLI',
+    body: 'Run conversions, merges, and checks from scripts, CI jobs, and build pipelines.'
   }
 ];
 
 export const pipelineExamples = {
-  scan: `# Preview workflow (actively evolving)\nqtmesh scan ./assets --fail-on error\nqtmesh scan ./assets --sarif reports/qtmesh.sarif --report reports/qtmesh.json`,
-  fix: `qtmesh fix model.fbx -o fixed.fbx\nqtmesh fix model.fbx --all -o fixed.fbx`,
-  convert: `qtmesh convert model.fbx -o model.glb2\nqtmesh convert model.dae -o model.mesh`,
-  merge: `qtmesh anim base.fbx \\\n  --merge walk.fbx run.fbx jump.fbx idle.fbx \\\n  -o merged.fbx`,
-  docker: `docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \\\n  ghcr.io/fernandotonon/qtmesh scan ./assets --fail-on error`,
-  githubAction: `- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@c56db1ce3f2b29960cc1c9f82f5be98a51594138\n  with:\n    command: scan\n    input-file: assets\n    options: --fail-on error`,
-  scanFixConvert: `qtmesh scan ./assets --fail-on error\nqtmesh fix character.fbx --all -o character_fixed.fbx\nqtmesh convert character_fixed.fbx -o character.glb2`
+  inspect: `qtmesh info model.fbx
+qtmesh info model.fbx --json`,
+  convert: `qtmesh convert model.fbx -o model.gltf2
+qtmesh convert model.dae -o model.mesh`,
+  merge: `qtmesh anim base.fbx \\
+  --merge walk.fbx run.fbx jump.fbx idle.fbx \\
+  -o merged.fbx`,
+  docker: `docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \\
+  ghcr.io/fernandotonon/qtmesh convert model.fbx -o model.gltf2`,
+  githubAction: `- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@master
+  with:
+    command: anim
+    input-file: assets/base.fbx
+    options: --merge assets/walk.fbx assets/run.fbx -o assets/merged.fbx`
 };
 
-export const mixamoSteps = [
+export const comparisonItems = [
   {
-    title: 'Import base + clips',
-    body: 'Load a base character and animation clips from Mixamo, Unreal export, or DCC tools.'
+    title: 'GUI for manual work',
+    body: 'Visual editing for skeleton fixes, material tweaks, and export validation.'
   },
   {
-    title: 'Merge into one asset',
-    body: 'Compose multiple actions into one predictable output file for gameplay integration.'
+    title: 'CLI for automation',
+    body: 'Scriptable commands for repeatable conversion and merge jobs.'
   },
   {
-    title: 'Export to your runtime format',
-    body: 'Export to glTF, FBX-compatible workflows, Collada, OBJ, or Ogre Mesh and continue the pipeline.'
+    title: 'Docker + Actions for pipelines',
+    body: 'Containerize qtmesh and run asset steps inside GitHub Actions CI/CD.'
   }
 ];
 
 export const highlightFeatures = [
   {
     title: 'Scene save/load',
-    body: 'Store full scenes with meshes, transforms, materials, skeletons, and animations for repeatable edits.'
+    body: 'Store complete scenes with meshes, transforms, materials, skeletons, and animations.'
   },
   {
-    title: 'Material tools',
-    body: 'Adjust materials visually with realtime feedback during look-dev and technical review.'
+    title: 'Material editor',
+    body: 'Adjust material values with realtime visual feedback during look-dev.'
+  },
+  {
+    title: 'AI-assisted materials',
+    body: 'Generate or refine material setups quickly when exploration speed matters.'
+  },
+  {
+    title: 'MCP / AI agent integration',
+    body: 'Expose editor tools through MCP for advanced scripted agent workflows.'
   },
   {
     title: 'REST API',
     body: 'Drive mesh and scene operations from external tools and automation scripts.'
   },
   {
-    title: 'MCP / AI agent integration',
-    body: 'Expose pipeline tools through MCP for advanced scripted and agent-driven workflows.'
+    title: 'Multi-platform distribution',
+    body: 'Available via winget, Homebrew, snap, .deb packages, Docker, and release binaries.'
   }
 ];
 
@@ -155,11 +162,11 @@ export const trustItems = [
   },
   {
     title: 'Active since 2012',
-    body: 'Long-running project with continuous evolution across GUI, CLI, and pipeline tooling.'
+    body: 'Long-running project with continuous evolution across GUI, CLI, and formats.'
   },
   {
-    title: 'Pipeline-first by design',
-    body: 'Built around practical asset flow outcomes: validate, fix, convert, merge, and automate.'
+    title: 'Indie-friendly',
+    body: 'Built for practical day-to-day asset work in small teams and solo projects.'
   }
 ];
 

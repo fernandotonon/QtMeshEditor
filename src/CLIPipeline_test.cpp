@@ -320,62 +320,34 @@ TEST_F(CLIPipelineOgreTest, ExtractMeshInfo_NullEntity)
 
 // --- FixOptions tests ---
 
-TEST(FixOptionsTest, AnySet_DefaultIsFalse)
+struct FixOptionsCase {
+    bool removeDegenerates;
+    bool mergeMaterials;
+    bool anySet;
+    unsigned int assimpFlags;
+};
+
+class FixOptionsTest : public ::testing::TestWithParam<FixOptionsCase> {};
+
+TEST_P(FixOptionsTest, AnySetAndAssimpFlagsMatchOptions)
 {
+    const FixOptionsCase c = GetParam();
     FixOptions opts;
-    EXPECT_FALSE(opts.anySet());
+    opts.removeDegenerates = c.removeDegenerates;
+    opts.mergeMaterials = c.mergeMaterials;
+
+    EXPECT_EQ(opts.anySet(), c.anySet);
+    EXPECT_EQ(opts.toAssimpFlags(), c.assimpFlags);
 }
 
-TEST(FixOptionsTest, AnySet_RemoveDegenerates)
-{
-    FixOptions opts;
-    opts.removeDegenerates = true;
-    EXPECT_TRUE(opts.anySet());
-}
-
-TEST(FixOptionsTest, AnySet_MergeMaterials)
-{
-    FixOptions opts;
-    opts.mergeMaterials = true;
-    EXPECT_TRUE(opts.anySet());
-}
-
-TEST(FixOptionsTest, AnySet_AllFlags)
-{
-    FixOptions opts;
-    opts.removeDegenerates = true;
-    opts.mergeMaterials = true;
-    EXPECT_TRUE(opts.anySet());
-}
-
-TEST(FixOptionsTest, ToAssimpFlags_Default)
-{
-    FixOptions opts;
-    EXPECT_EQ(opts.toAssimpFlags(), 0u);
-}
-
-TEST(FixOptionsTest, ToAssimpFlags_RemoveDegenerates)
-{
-    FixOptions opts;
-    opts.removeDegenerates = true;
-    EXPECT_EQ(opts.toAssimpFlags(), static_cast<unsigned int>(aiProcess_FindDegenerates));
-}
-
-TEST(FixOptionsTest, ToAssimpFlags_MergeMaterials)
-{
-    FixOptions opts;
-    opts.mergeMaterials = true;
-    EXPECT_EQ(opts.toAssimpFlags(), static_cast<unsigned int>(aiProcess_RemoveRedundantMaterials));
-}
-
-TEST(FixOptionsTest, ToAssimpFlags_All)
-{
-    FixOptions opts;
-    opts.removeDegenerates = true;
-    opts.mergeMaterials = true;
-    unsigned int expected = aiProcess_FindDegenerates | aiProcess_RemoveRedundantMaterials;
-    EXPECT_EQ(opts.toAssimpFlags(), expected);
-}
+INSTANTIATE_TEST_SUITE_P(
+    AllCombinations,
+    FixOptionsTest,
+    ::testing::Values(
+        FixOptionsCase{false, false, false, 0u},
+        FixOptionsCase{true, false, true, static_cast<unsigned int>(aiProcess_FindDegenerates)},
+        FixOptionsCase{false, true, true, static_cast<unsigned int>(aiProcess_RemoveRedundantMaterials)},
+        FixOptionsCase{true, true, true, static_cast<unsigned int>(aiProcess_FindDegenerates | aiProcess_RemoveRedundantMaterials)}));
 
 // --- Formatting edge cases ---
 
@@ -406,85 +378,89 @@ TEST_F(CLIPipelineFormatTest, FormatMeshInfoJson_WithTextures)
     EXPECT_EQ(obj["textures"].toArray()[0].toString(), "color.png");
 }
 
+TEST_F(CLIPipelineFormatTest, FormatMeshInfoText_UpAxisVariantsAndBones)
+{
+    MeshInfo zUpInfo;
+    zUpInfo.file = "zup.mesh";
+    zUpInfo.upAxis = 2;
+    zUpInfo.skeletonName = "skel.skeleton";
+    zUpInfo.boneCount = 2;
+    zUpInfo.bones << "Root" << "Spine";
+
+    const QString zUpText = CLIPipeline::formatMeshInfoText(zUpInfo);
+    EXPECT_TRUE(zUpText.contains("Coordinate system: Z-up (Unreal Engine)"));
+    EXPECT_TRUE(zUpText.contains("Bones:"));
+    EXPECT_TRUE(zUpText.contains("  Root"));
+    EXPECT_TRUE(zUpText.contains("  Spine"));
+
+    MeshInfo unknownAxisInfo;
+    unknownAxisInfo.file = "unknown.mesh";
+    unknownAxisInfo.upAxis = 99;
+    const QString unknownAxisText = CLIPipeline::formatMeshInfoText(unknownAxisInfo);
+    EXPECT_TRUE(unknownAxisText.contains("Coordinate system: unknown"));
+}
+
+TEST_F(CLIPipelineFormatTest, FormatMeshInfoJson_UpAxisAndBones)
+{
+    MeshInfo info;
+    info.file = "bones.mesh";
+    info.upAxis = 0;
+    info.skeletonName = "bones.skeleton";
+    info.boneCount = 2;
+    info.bones << "Hip" << "Leg";
+
+    const QString json = CLIPipeline::formatMeshInfoJson(info);
+    const QJsonObject obj = QJsonDocument::fromJson(json.toUtf8()).object();
+
+    EXPECT_EQ(obj["upAxis"].toString(), "unknown");
+    ASSERT_TRUE(obj["skeleton"].isObject());
+    const QJsonObject skeletonObj = obj["skeleton"].toObject();
+    ASSERT_TRUE(skeletonObj["bones"].isArray());
+    const QJsonArray bones = skeletonObj["bones"].toArray();
+    ASSERT_EQ(bones.size(), 2);
+    EXPECT_EQ(bones[0].toString(), "Hip");
+    EXPECT_EQ(bones[1].toString(), "Leg");
+}
+
 // --- formatForExtension tests (no Ogre needed) ---
 
-TEST(CLIPipelineFormatForExtension, FBX)
+struct FormatForExtensionCase {
+    const char* path;
+    const char* expectedFormat;
+};
+
+class CLIPipelineFormatForExtensionTest : public ::testing::TestWithParam<FormatForExtensionCase> {};
+
+TEST_P(CLIPipelineFormatForExtensionTest, MapsExtensionToExporterFormat)
 {
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.fbx"), "FBX Binary (*.fbx)");
+    const FormatForExtensionCase c = GetParam();
+    EXPECT_EQ(CLIPipeline::formatForExtension(c.path), c.expectedFormat);
 }
 
-TEST(CLIPipelineFormatForExtension, GLB2)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.glb2"), "glTF 2.0 Binary (*.glb2)");
-}
-
-TEST(CLIPipelineFormatForExtension, GLTF2)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.gltf2"), "glTF 2.0 (*.gltf2)");
-}
-
-TEST(CLIPipelineFormatForExtension, DAE)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.dae"), "Collada (*.dae)");
-}
-
-TEST(CLIPipelineFormatForExtension, OBJ)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.obj"), "OBJ (*.obj)");
-}
-
-TEST(CLIPipelineFormatForExtension, STL)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.stl"), "STL (*.stl)");
-}
-
-TEST(CLIPipelineFormatForExtension, PLY)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.ply"), "PLY (*.ply)");
-}
-
-TEST(CLIPipelineFormatForExtension, ThreeDS)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.3ds"), "3DS (*.3ds)");
-}
-
-TEST(CLIPipelineFormatForExtension, X)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.x"), "X (*.x)");
-}
-
-TEST(CLIPipelineFormatForExtension, MeshXML)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.mesh.xml"), "Ogre XML (*.mesh.xml)");
-}
-
-TEST(CLIPipelineFormatForExtension, Mesh)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.mesh"), "Ogre Mesh (*.mesh)");
-}
-
-TEST(CLIPipelineFormatForExtension, Assbin)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.assbin"), "Assimp Binary (*.assbin)");
-}
-
-TEST(CLIPipelineFormatForExtension, UnknownDefaultsToMesh)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.xyz"), "Ogre Mesh (*.mesh)");
-}
-
-TEST(CLIPipelineFormatForExtension, CaseInsensitive)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("MODEL.FBX"), "FBX Binary (*.fbx)");
-    EXPECT_EQ(CLIPipeline::formatForExtension("test.DAE"), "Collada (*.dae)");
-    EXPECT_EQ(CLIPipeline::formatForExtension("FILE.OBJ"), "OBJ (*.obj)");
-}
-
-TEST(CLIPipelineFormatForExtension, PathWithDirectories)
-{
-    EXPECT_EQ(CLIPipeline::formatForExtension("/tmp/dir/model.fbx"), "FBX Binary (*.fbx)");
-    EXPECT_EQ(CLIPipeline::formatForExtension("C:\\dir\\model.gltf2"), "glTF 2.0 (*.gltf2)");
-}
+INSTANTIATE_TEST_SUITE_P(
+    AllFormats,
+    CLIPipelineFormatForExtensionTest,
+    ::testing::Values(
+        FormatForExtensionCase{"model.fbx", "FBX Binary (*.fbx)"},
+        FormatForExtensionCase{"model.glb2", "glTF 2.0 Binary (*.glb2)"},
+        FormatForExtensionCase{"model.gltf2", "glTF 2.0 (*.gltf2)"},
+        FormatForExtensionCase{"model.dae", "Collada (*.dae)"},
+        FormatForExtensionCase{"model.obj", "OBJ (*.obj)"},
+        FormatForExtensionCase{"model.stl", "STL (*.stl)"},
+        FormatForExtensionCase{"model.ply", "PLY (*.ply)"},
+        FormatForExtensionCase{"model.3ds", "3DS (*.3ds)"},
+        FormatForExtensionCase{"model.x", "X (*.x)"},
+        FormatForExtensionCase{"model.mesh.xml", "Ogre XML (*.mesh.xml)"},
+        FormatForExtensionCase{"model.mesh", "Ogre Mesh (*.mesh)"},
+        FormatForExtensionCase{"model.assbin", "Assimp Binary (*.assbin)"},
+        FormatForExtensionCase{"model.xyz", "Ogre Mesh (*.mesh)"},
+        FormatForExtensionCase{"model", "Ogre Mesh (*.mesh)"},
+        FormatForExtensionCase{"MODEL.FBX", "FBX Binary (*.fbx)"},
+        FormatForExtensionCase{"MODEL.MESH.XML", "Ogre XML (*.mesh.xml)"},
+        FormatForExtensionCase{"test.DAE", "Collada (*.dae)"},
+        FormatForExtensionCase{"FILE.OBJ", "OBJ (*.obj)"},
+        FormatForExtensionCase{"/tmp/dir/model.fbx", "FBX Binary (*.fbx)"},
+        FormatForExtensionCase{"C:\\dir\\model.gltf2", "glTF 2.0 (*.gltf2)"}));
 
 // --- printUsage / printVersion smoke tests ---
 
@@ -1942,4 +1918,47 @@ TEST(CLIPipelineCmdScan, FailOnNeverAllowsWarnings)
     TestArgv args({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
                    "--fail-on", "never"});
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+}
+
+TEST(CLIPipelineCmdScan, IncludeExcludeOverridesAndConfigReportOutputs)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+    ASSERT_FALSE(writeMinimalObj(rootPath, "PlayerModel.obj").isEmpty());
+
+    const QString reportPath = QDir(tmpDir.path()).filePath("reports/config/report.json");
+    const QString sarifPath = QDir(tmpDir.path()).filePath("reports/config/report.sarif");
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(QString(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "rules:\n"
+        "  file_name_case: snake_case\n"
+        "report:\n"
+        "  format: json\n"
+        "  output: \"%1\"\n"
+        "  sarif_output: \"%2\"\n"
+        "  fail_on: warning\n")
+        .arg(reportPath, sarifPath)
+        .toUtf8());
+    cfg.close();
+
+    QFile::remove(reportPath);
+    QFile::remove(sarifPath);
+
+    QByteArray rootBa = rootPath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
+                   "--include", "*.obj", "--exclude", "PlayerModel.obj"});
+
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(reportPath));
+    EXPECT_TRUE(QFile::exists(sarifPath));
 }
