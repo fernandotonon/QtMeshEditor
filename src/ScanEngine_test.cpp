@@ -2,9 +2,39 @@
 #include "ScanConfig.h"
 #include "ScanEngine.h"
 
+#include <QCoreApplication>
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
+
+namespace {
+QString writeMinimalObj(const QString& dirPath, const QString& fileName)
+{
+    const QString path = QDir(dirPath).filePath(fileName);
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
+        return QString();
+
+    const QByteArray obj =
+        "o Tri\n"
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 0 1 0\n"
+        "f 1 2 3\n";
+    f.write(obj);
+    f.close();
+    return path;
+}
+
+QString testDataDir()
+{
+    QString binDir = QCoreApplication::applicationDirPath();
+    QDir dir(binDir);
+    dir.cdUp(); // debug -> build_*
+    dir.cdUp(); // build_* -> project root
+    return dir.absoluteFilePath("media/models");
+}
+} // namespace
 
 // ---------------------------------------------------------------------------
 // YAML parser tests
@@ -194,6 +224,11 @@ TEST(ScanEngineTest, CheckNameCase_Lowercase)
     EXPECT_FALSE(ScanEngine::checkNameCase("PlayerModel.fbx", "lowercase"));
 }
 
+TEST(ScanEngineTest, CheckNameCase_UnknownConventionPasses)
+{
+    EXPECT_TRUE(ScanEngine::checkNameCase("AnyName.fbx", "unknown_case"));
+}
+
 // ---------------------------------------------------------------------------
 // Name conversion tests
 // ---------------------------------------------------------------------------
@@ -210,6 +245,12 @@ TEST(ScanEngineTest, ConvertNameToCase_KebabCase)
     EXPECT_EQ(ScanEngine::convertNameToCase("PlayerModel.fbx", "kebab-case"), "player-model.fbx");
     // Underscores are replaced with hyphens in kebab conversion
     EXPECT_EQ(ScanEngine::convertNameToCase("player_model.fbx", "kebab-case"), "player-model.fbx");
+}
+
+TEST(ScanEngineTest, ConvertNameToCase_LowercaseAndUnknown)
+{
+    EXPECT_EQ(ScanEngine::convertNameToCase("PlayerModel.FBX", "lowercase"), "playermodel.FBX");
+    EXPECT_EQ(ScanEngine::convertNameToCase("PlayerModel.fbx", "unknown_case"), "PlayerModel.fbx");
 }
 
 // ---------------------------------------------------------------------------
@@ -258,6 +299,22 @@ TEST(ScanEngineTest, EnumerateFiles_ExcludePattern)
     QStringList files = ScanEngine::enumerateFiles(config, tmpDir.path());
     EXPECT_EQ(files.size(), 1);
     EXPECT_TRUE(files[0].endsWith("model.fbx"));
+}
+
+TEST(ScanEngineTest, EnumerateFiles_NonexistentRootReturnsEmpty)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    ScanConfig config;
+    config.includePatterns = {"**/*.fbx"};
+    config.excludePatterns = {};
+
+    const QString missingRoot = QDir(tmpDir.path()).filePath("definitely_missing_qtmesh_scan_root");
+    ASSERT_FALSE(QDir(missingRoot).exists());
+
+    const QStringList files = ScanEngine::enumerateFiles(config, missingRoot);
+    EXPECT_TRUE(files.isEmpty());
 }
 
 // ---------------------------------------------------------------------------
@@ -309,6 +366,19 @@ TEST(ScanEngineTest, EvaluateRules_AllowedFormats)
     auto findings = ScanEngine::evaluateRules(asset, config);
     EXPECT_GE(findings.size(), 1);
     EXPECT_EQ(findings[0].rule, "allowed_formats");
+}
+
+TEST(ScanEngineTest, EvaluateRules_AllowedFormatsCaseInsensitivePasses)
+{
+    AssetInfo asset;
+    asset.relativePath = "model.FBX";
+    asset.format = "FBX";
+
+    ScanConfig config = ScanConfig::defaults();
+    config.allowedFormats = {"fbx", "glb"};
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    EXPECT_TRUE(findings.isEmpty());
 }
 
 TEST(ScanEngineTest, EvaluateRules_MaxFileSize)
@@ -400,6 +470,86 @@ TEST(ScanEngineTest, EvaluateRules_MissingMaterials)
     EXPECT_TRUE(found);
 }
 
+TEST(ScanEngineTest, EvaluateRules_LoadErrorShortCircuitsOtherRules)
+{
+    AssetInfo asset;
+    asset.relativePath = "broken.fbx";
+    asset.format = "fbx";
+    asset.loadError = true;
+    asset.errorMessage = "mock parse failure";
+
+    ScanConfig config = ScanConfig::defaults();
+    config.maxVertexCount = 1;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    ASSERT_EQ(findings.size(), 1);
+    EXPECT_EQ(findings[0].rule, "load_error");
+    EXPECT_EQ(findings[0].severity, Severity::Error);
+    EXPECT_TRUE(findings[0].message.contains("mock parse failure"));
+}
+
+TEST(ScanEngineTest, EvaluateRules_MinThresholdsAndRequirements)
+{
+    AssetInfo asset;
+    asset.filePath = "/tmp/asset/model.fbx";
+    asset.relativePath = "model.fbx";
+    asset.format = "fbx";
+    asset.fileSize = 8; // bytes
+    asset.meshCount = 0;
+    asset.materialCount = 0;
+    asset.vertexCount = 0;
+    asset.animationCount = 0;
+    asset.hasEmbeddedTextures = true;
+
+    ScanConfig config = ScanConfig::defaults();
+    config.minFileSizeMb = 0.1;
+    config.minMeshCount = 1;
+    config.minMaterialCount = 1;
+    config.minVertexCount = 1;
+    config.requireAnimations = true;
+    config.allowEmbeddedTextures = false;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    QStringList rules;
+    for (const auto& f : findings)
+        rules.append(f.rule);
+
+    EXPECT_TRUE(rules.contains("min_file_size_mb"));
+    EXPECT_TRUE(rules.contains("min_mesh_count"));
+    EXPECT_TRUE(rules.contains("min_material_count"));
+    EXPECT_TRUE(rules.contains("min_vertex_count"));
+    EXPECT_TRUE(rules.contains("require_animations"));
+    EXPECT_TRUE(rules.contains("allow_embedded_textures"));
+}
+
+TEST(ScanEngineTest, EvaluateRules_RequireTexturesExistWarnsForMissingOnly)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString assetPath = writeMinimalObj(tmpDir.path(), "mesh.obj");
+    ASSERT_FALSE(assetPath.isEmpty());
+    ASSERT_TRUE(QFile(assetPath).exists());
+
+    QFile existing(QDir(tmpDir.path()).filePath("existing.png"));
+    ASSERT_TRUE(existing.open(QIODevice::WriteOnly));
+    existing.close();
+
+    AssetInfo asset;
+    asset.filePath = assetPath;
+    asset.relativePath = "mesh.obj";
+    asset.format = "obj";
+    asset.texturePaths = {"existing.png", "missing.png"};
+
+    ScanConfig config = ScanConfig::defaults();
+    config.requireTexturesExist = true;
+
+    const auto findings = ScanEngine::evaluateRules(asset, config);
+    ASSERT_EQ(findings.size(), 1);
+    EXPECT_EQ(findings[0].rule, "require_textures_exist");
+    EXPECT_TRUE(findings[0].message.contains("missing.png"));
+}
+
 // ---------------------------------------------------------------------------
 // Formatter tests
 // ---------------------------------------------------------------------------
@@ -436,6 +586,39 @@ TEST(ScanEngineTest, FormatJson_Structure)
     EXPECT_TRUE(json.contains("bad.fbx"));
 }
 
+TEST(ScanEngineTest, FormatJson_IncludesAnimationsBonesAndLoadError)
+{
+    ScanResult result;
+
+    AssetInfo asset;
+    asset.relativePath = "anim.fbx";
+    asset.format = "fbx";
+    asset.animationNames = {"Walk"};
+    asset.animationDurations = {1.25};
+    asset.animationKeyframeCounts = {42};
+    asset.boneNames = {"Hips", "Spine"};
+    asset.loadError = true;
+    asset.errorMessage = "mock error";
+    result.assets.append(asset);
+
+    Finding finding;
+    finding.file = "anim.fbx";
+    finding.rule = "file_name_case";
+    finding.severity = Severity::Warning;
+    finding.message = "warn";
+    finding.fixable = true;
+    finding.fixed = true;
+    result.findings.append(finding);
+
+    const QString json = ScanEngine::formatJson(result);
+    EXPECT_TRUE(json.contains("\"animations\""));
+    EXPECT_TRUE(json.contains("\"bones\""));
+    EXPECT_TRUE(json.contains("\"loadError\": true"));
+    EXPECT_TRUE(json.contains("\"errorMessage\": \"mock error\""));
+    EXPECT_TRUE(json.contains("\"fixable\": true"));
+    EXPECT_TRUE(json.contains("\"fixed\": true"));
+}
+
 TEST(ScanEngineTest, FormatText_ContainsSummary)
 {
     ScanResult result;
@@ -454,6 +637,38 @@ TEST(ScanEngineTest, FormatText_ContainsSummary)
     EXPECT_TRUE(text.contains("Passed:"));
 }
 
+TEST(ScanEngineTest, FormatText_IncludesFixedAndSkippedWhenPresent)
+{
+    ScanResult result;
+    result.fixed = 2;
+    result.skipped = 1;
+    result.elapsedMs = 250.0;
+
+    ScanConfig config;
+    const QString text = ScanEngine::formatText(result, config);
+    EXPECT_TRUE(text.contains("Fixed:"));
+    EXPECT_TRUE(text.contains("Skipped:"));
+}
+
+TEST(ScanEngineTest, FormatText_ShowsInfoFindingLabel)
+{
+    ScanResult result;
+    AssetInfo asset;
+    asset.relativePath = "asset.fbx";
+    result.assets.append(asset);
+
+    Finding infoFinding;
+    infoFinding.file = "asset.fbx";
+    infoFinding.rule = "advice";
+    infoFinding.severity = Severity::Info;
+    infoFinding.message = "informational";
+    result.findings.append(infoFinding);
+
+    ScanConfig config;
+    const QString text = ScanEngine::formatText(result, config);
+    EXPECT_TRUE(text.contains("[info] advice: informational"));
+}
+
 TEST(ScanEngineTest, FormatSarif_ValidStructure)
 {
     ScanResult result;
@@ -468,6 +683,37 @@ TEST(ScanEngineTest, FormatSarif_ValidStructure)
     EXPECT_TRUE(sarif.contains("\"version\": \"2.1.0\""));
     EXPECT_TRUE(sarif.contains("qtmesh scan"));
     EXPECT_TRUE(sarif.contains("max_vertex_count"));
+}
+
+TEST(ScanEngineTest, FormatSarif_FixableProperties)
+{
+    ScanResult result;
+    Finding f;
+    f.file = "model.fbx";
+    f.rule = "file_name_case";
+    f.severity = Severity::Warning;
+    f.message = "Expected snake_case";
+    f.fixable = true;
+    f.fixed = true;
+    result.findings.append(f);
+
+    const QString sarif = ScanEngine::formatSarif(result);
+    EXPECT_TRUE(sarif.contains("\"fixable\": true"));
+    EXPECT_TRUE(sarif.contains("\"fixed\": true"));
+}
+
+TEST(ScanEngineTest, FormatSarif_InfoSeverityUsesNoteLevel)
+{
+    ScanResult result;
+    Finding f;
+    f.file = "model.fbx";
+    f.rule = "note_rule";
+    f.severity = Severity::Info;
+    f.message = "info message";
+    result.findings.append(f);
+
+    const QString sarif = ScanEngine::formatSarif(result);
+    EXPECT_TRUE(sarif.contains("\"level\": \"note\""));
 }
 
 // ---------------------------------------------------------------------------
@@ -494,6 +740,12 @@ TEST(ScanEngineTest, MatchesWildcard_CaseInsensitive)
 {
     EXPECT_TRUE(ScanEngine::matchesWildcard("walk", "Walk"));
     EXPECT_TRUE(ScanEngine::matchesWildcard("ATTACK1", "attack*"));
+}
+
+TEST(ScanEngineTest, MatchesGlob_QuestionMark)
+{
+    EXPECT_TRUE(ScanEngine::matchesGlob("ab.fbx", "a?.fbx"));
+    EXPECT_FALSE(ScanEngine::matchesGlob("abc.fbx", "a?.fbx"));
 }
 
 // ---------------------------------------------------------------------------
@@ -811,4 +1063,255 @@ TEST(ScanEngineTest, ScopedRules_OverlappingLastWins)
     // Only first scope matches
     ScanConfig effective2 = config.withScopeOverrides("characters/hero.fbx");
     EXPECT_EQ(effective2.maxVertexCount, 50000);
+}
+
+// ---------------------------------------------------------------------------
+// applyFixes / run integration tests
+// ---------------------------------------------------------------------------
+
+TEST(ScanEngineTest, ApplyFixes_DisabledDoesNotChangeFindingsOrPath)
+{
+    AssetInfo asset;
+    asset.filePath = "/tmp/PlayerModel.fbx";
+    asset.relativePath = "PlayerModel.fbx";
+
+    Finding finding;
+    finding.file = asset.relativePath;
+    finding.rule = "file_name_case";
+    finding.severity = Severity::Warning;
+    finding.message = "Expected snake_case";
+    finding.fixable = true;
+    QList<Finding> findings{finding};
+
+    ScanConfig config = ScanConfig::defaults();
+    config.fixEnabled = false;
+    config.fileNameCase = "snake_case";
+
+    ScanEngine::applyFixes(config, asset, findings);
+    EXPECT_EQ(asset.filePath, "/tmp/PlayerModel.fbx");
+    EXPECT_FALSE(findings[0].fixed);
+    EXPECT_FALSE(findings[0].message.contains("dry-run"));
+}
+
+TEST(ScanEngineTest, ApplyFixes_DryRunDoesNotRename)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString oldPath = writeMinimalObj(tmpDir.path(), "PlayerModel.obj");
+    ASSERT_FALSE(oldPath.isEmpty());
+
+    AssetInfo asset;
+    asset.filePath = oldPath;
+    asset.relativePath = "PlayerModel.obj";
+
+    Finding finding;
+    finding.file = asset.relativePath;
+    finding.rule = "file_name_case";
+    finding.severity = Severity::Warning;
+    finding.message = "Expected snake_case";
+    finding.fixable = true;
+    QList<Finding> findings{finding};
+
+    ScanConfig config = ScanConfig::defaults();
+    config.fixEnabled = true;
+    config.dryRun = true;
+    config.fileNameCase = "snake_case";
+
+    ScanEngine::applyFixes(config, asset, findings);
+
+    const QString newPath = QDir(tmpDir.path()).filePath("player_model.obj");
+    EXPECT_TRUE(QFile::exists(oldPath));
+    EXPECT_FALSE(QFile::exists(newPath));
+    EXPECT_FALSE(findings[0].fixed);
+    EXPECT_TRUE(findings[0].message.contains("dry-run"));
+}
+
+TEST(ScanEngineTest, ApplyFixes_RenameSuccessUpdatesAssetPaths)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QDir(tmpDir.path()).mkpath("nested");
+    const QString oldPath = writeMinimalObj(QDir(tmpDir.path()).filePath("nested"), "PlayerModel.obj");
+    ASSERT_FALSE(oldPath.isEmpty());
+
+    AssetInfo asset;
+    asset.filePath = oldPath;
+    asset.relativePath = "nested/PlayerModel.obj";
+
+    Finding finding;
+    finding.file = asset.relativePath;
+    finding.rule = "file_name_case";
+    finding.severity = Severity::Warning;
+    finding.message = "Expected snake_case";
+    finding.fixable = true;
+    QList<Finding> findings{finding};
+
+    ScanConfig config = ScanConfig::defaults();
+    config.fixEnabled = true;
+    config.fileNameCase = "snake_case";
+
+    ScanEngine::applyFixes(config, asset, findings);
+
+    const QString newPath = QDir(tmpDir.path()).filePath("nested/player_model.obj");
+    EXPECT_FALSE(QFile::exists(oldPath));
+    EXPECT_TRUE(QFile::exists(newPath));
+    EXPECT_TRUE(findings[0].fixed);
+    EXPECT_TRUE(findings[0].message.contains("renamed"));
+    EXPECT_EQ(asset.filePath, newPath);
+    EXPECT_EQ(asset.relativePath, "nested/player_model.obj");
+}
+
+TEST(ScanEngineTest, ApplyFixes_RenameFailureAddsFailureMessage)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString oldPath = writeMinimalObj(tmpDir.path(), "PlayerModel.obj");
+    const QString newPath = writeMinimalObj(tmpDir.path(), "player_model.obj");
+    ASSERT_FALSE(oldPath.isEmpty());
+    ASSERT_FALSE(newPath.isEmpty());
+
+    AssetInfo asset;
+    asset.filePath = oldPath;
+    asset.relativePath = "PlayerModel.obj";
+
+    Finding finding;
+    finding.file = asset.relativePath;
+    finding.rule = "file_name_case";
+    finding.severity = Severity::Warning;
+    finding.message = "Expected snake_case";
+    finding.fixable = true;
+    QList<Finding> findings{finding};
+
+    ScanConfig config = ScanConfig::defaults();
+    config.fixEnabled = true;
+    config.fileNameCase = "snake_case";
+
+    ScanEngine::applyFixes(config, asset, findings);
+
+    EXPECT_TRUE(QFile::exists(oldPath));
+    EXPECT_TRUE(QFile::exists(newPath));
+    EXPECT_FALSE(findings[0].fixed);
+    EXPECT_TRUE(findings[0].message.contains("fix failed"));
+}
+
+TEST(ScanEngineTest, Run_AggregatesPassedAndSkippedCounts)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString validObj = writeMinimalObj(tmpDir.path(), "good.obj");
+    ASSERT_FALSE(validObj.isEmpty());
+
+    QFile invalidFbx(QDir(tmpDir.path()).filePath("broken.fbx"));
+    ASSERT_TRUE(invalidFbx.open(QIODevice::WriteOnly | QIODevice::Text));
+    invalidFbx.write("not an fbx");
+    invalidFbx.close();
+
+    ScanConfig config = ScanConfig::defaults();
+    config.includePatterns = {"**/*.obj", "**/*.fbx"};
+    config.excludePatterns = {};
+    config.failOn = "never";
+
+    const ScanResult result = ScanEngine::run(config, tmpDir.path());
+    EXPECT_EQ(result.scanned, 2);
+    EXPECT_EQ(result.passed, 1);
+    EXPECT_EQ(result.skipped, 1);
+    EXPECT_GE(result.errors, 1);
+    EXPECT_EQ(result.assets.size(), 2);
+}
+
+TEST(ScanEngineTest, Run_UsesConfiguredRootsWhenNoOverrideProvided)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootA = QDir(tmpDir.path()).filePath("a");
+    const QString rootB = QDir(tmpDir.path()).filePath("b");
+    ASSERT_TRUE(QDir().mkpath(rootA));
+    ASSERT_TRUE(QDir().mkpath(rootB));
+    ASSERT_FALSE(writeMinimalObj(rootA, "a.obj").isEmpty());
+    ASSERT_FALSE(writeMinimalObj(rootB, "b.obj").isEmpty());
+
+    ScanConfig config = ScanConfig::defaults();
+    config.roots = {rootA, rootB};
+    config.includePatterns = {"**/*.obj"};
+    config.excludePatterns = {};
+
+    const ScanResult result = ScanEngine::run(config);
+    EXPECT_EQ(result.scanned, 2);
+    EXPECT_EQ(result.passed, 2);
+    EXPECT_EQ(result.errors, 0);
+}
+
+TEST(ScanEngineTest, InspectAsset_InvalidFileSetsLoadError)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString path = QDir(tmpDir.path()).filePath("broken.fbx");
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    f.write("not an fbx file");
+    f.close();
+
+    const AssetInfo info = ScanEngine::inspectAsset(path, tmpDir.path());
+    EXPECT_TRUE(info.loadError);
+    EXPECT_FALSE(info.errorMessage.isEmpty());
+}
+
+TEST(ScanEngineTest, InspectAsset_ObjParsesGeometryAndTextureReferences)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QFile mtl(QDir(tmpDir.path()).filePath("mesh.mtl"));
+    ASSERT_TRUE(mtl.open(QIODevice::WriteOnly | QIODevice::Text));
+    mtl.write(
+        "newmtl testmat\n"
+        "Kd 1.0 1.0 1.0\n"
+        "map_Kd texture.png\n");
+    mtl.close();
+
+    QFile obj(QDir(tmpDir.path()).filePath("mesh.obj"));
+    ASSERT_TRUE(obj.open(QIODevice::WriteOnly | QIODevice::Text));
+    obj.write(
+        "mtllib mesh.mtl\n"
+        "usemtl testmat\n"
+        "v 0 0 0\n"
+        "v 1 0 0\n"
+        "v 0 1 0\n"
+        "vt 0 0\n"
+        "vt 1 0\n"
+        "vt 0 1\n"
+        "f 1/1 2/2 3/3\n");
+    obj.close();
+
+    const AssetInfo info = ScanEngine::inspectAsset(obj.fileName(), tmpDir.path());
+    ASSERT_FALSE(info.loadError);
+    EXPECT_EQ(info.relativePath, "mesh.obj");
+    EXPECT_EQ(info.meshCount, 1u);
+    EXPECT_EQ(info.vertexCount, 3u);
+    EXPECT_EQ(info.faceCount, 1u);
+    EXPECT_GE(info.materialCount, 1u);
+    EXPECT_GE(info.textureRefCount, 1u);
+    EXPECT_TRUE(info.texturePaths.contains("texture.png"));
+    EXPECT_FALSE(info.hasEmbeddedTextures);
+}
+
+TEST(ScanEngineTest, InspectAsset_AnimatedFixtureCollectsAnimationMetadata)
+{
+    const QString filePath = testDataDir() + "/Twist Dance.fbx";
+    ASSERT_TRUE(QFile::exists(filePath)) << "Animated fixture missing: " << filePath.toStdString();
+
+    const AssetInfo info = ScanEngine::inspectAsset(filePath, QFileInfo(filePath).absolutePath());
+    ASSERT_FALSE(info.loadError);
+    EXPECT_GT(info.meshCount, 0u);
+    EXPECT_GT(info.animationCount, 0u);
+    EXPECT_FALSE(info.animationNames.isEmpty());
+    EXPECT_FALSE(info.animationDurations.isEmpty());
+    EXPECT_FALSE(info.animationKeyframeCounts.isEmpty());
+    EXPECT_EQ(info.animationNames.size(), info.animationDurations.size());
 }

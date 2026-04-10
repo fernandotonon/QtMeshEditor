@@ -177,6 +177,54 @@ TEST_F(TransformOperatorTests, SelectionBoxColourRoundTrips)
     EXPECT_FLOAT_EQ(current.a, colour.a);
 }
 
+TEST_F(TransformOperatorTests, PivotModeCycleWrapsAndEmitsSignal)
+{
+    op->setPivotMode(TransformOperator::PIVOT_CENTER);
+
+    QSignalSpy spy(op, &TransformOperator::pivotModeChanged);
+    ASSERT_TRUE(spy.isValid());
+    spy.clear();
+
+    op->cyclePivotMode();
+    EXPECT_EQ(op->pivotMode(), TransformOperator::PIVOT_BOTTOM);
+    op->cyclePivotMode();
+    EXPECT_EQ(op->pivotMode(), TransformOperator::PIVOT_ORIGIN);
+    op->cyclePivotMode();
+    EXPECT_EQ(op->pivotMode(), TransformOperator::PIVOT_CENTER);
+
+    EXPECT_EQ(spy.count(), 3);
+}
+
+TEST_F(TransformOperatorTests, PivotPointWithEmptySelectionIsZero)
+{
+    SelectionSet::getSingleton()->clear();
+    EXPECT_EQ(op->getPivotPoint(), Ogre::Vector3::ZERO);
+}
+
+TEST_F(TransformOperatorTests, PivotPointForNodeSelectionSupportsCenterBottomAndOrigin)
+{
+    Ogre::SceneNode* nodeA = createSelectedNode("PivotNodeA");
+    Ogre::SceneNode* nodeB = Manager::getSingleton()->addSceneNode("PivotNodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(nodeA);
+    SelectionSet::getSingleton()->append(nodeB);
+
+    nodeA->setPosition(Ogre::Vector3(0.0f, 4.0f, 10.0f));
+    nodeB->setPosition(Ogre::Vector3(6.0f, 2.0f, 2.0f));
+
+    op->setPivotMode(TransformOperator::PIVOT_CENTER);
+    expectVectorNear(op->getPivotPoint(), Ogre::Vector3(3.0f, 3.0f, 6.0f));
+
+    op->setPivotMode(TransformOperator::PIVOT_BOTTOM);
+    expectVectorNear(op->getPivotPoint(), Ogre::Vector3(3.0f, 2.0f, 6.0f));
+
+    op->setPivotMode(TransformOperator::PIVOT_ORIGIN);
+    expectVectorNear(op->getPivotPoint(), Ogre::Vector3(3.0f, 3.0f, 6.0f));
+}
+
 TEST_F(TransformOperatorTests, UpdateGizmoWithoutSelectionHidesEveryGizmo)
 {
     op->m_pRotationGizmo->setVisible(true);

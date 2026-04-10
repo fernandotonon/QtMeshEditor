@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <cmath>
 #include "BoneProcessor.h"
 
 class BoneProcessorTest : public ::testing::Test {
@@ -154,4 +155,91 @@ TEST_F(BoneProcessorTest, BoneTransformation) {
     EXPECT_EQ(testBone->getPosition(), expectedPosition);
     EXPECT_EQ(testBone->getOrientation(), expectedOrientation);
     EXPECT_EQ(testBone->getScale(), expectedScale);
+}
+
+TEST_F(BoneProcessorTest, BakeZupToYupRotatesOnlyRootBones)
+{
+    Ogre::SkeletonPtr skeleton = Ogre::SkeletonManager::getSingleton().create(
+        "BakeZupToYupSkeleton",
+        Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME,
+        true);
+    ASSERT_TRUE(skeleton);
+
+    Ogre::Bone* root = skeleton->createBone("Root");
+    Ogre::Bone* child = skeleton->createBone("Child");
+    root->addChild(child);
+
+    root->setPosition(Ogre::Vector3(0.0f, 0.0f, 2.0f));
+    root->setOrientation(Ogre::Quaternion::IDENTITY);
+    child->setPosition(Ogre::Vector3(1.0f, 2.0f, 3.0f));
+    child->setOrientation(Ogre::Quaternion::IDENTITY);
+
+    BoneProcessor::bakeZupToYup(skeleton);
+
+    const Ogre::Quaternion rx90(Ogre::Degree(90), Ogre::Vector3::UNIT_X);
+    const Ogre::Vector3 expectedRootPos = rx90 * Ogre::Vector3(0.0f, 0.0f, 2.0f);
+    EXPECT_NEAR(root->getPosition().x, expectedRootPos.x, 1e-5);
+    EXPECT_NEAR(root->getPosition().y, expectedRootPos.y, 1e-5);
+    EXPECT_NEAR(root->getPosition().z, expectedRootPos.z, 1e-5);
+    EXPECT_NEAR(std::abs(root->getOrientation().Dot(rx90)), 1.0f, 1e-5);
+
+    // Child local transforms are preserved.
+    EXPECT_EQ(child->getPosition(), Ogre::Vector3(1.0f, 2.0f, 3.0f));
+    EXPECT_EQ(child->getOrientation(), Ogre::Quaternion::IDENTITY);
+}
+
+TEST_F(BoneProcessorTest, AnimationOnlyHierarchyCreatesAnimatedBonesAndLeafChildren)
+{
+    mockScene.mNumMeshes = 0;
+    mockScene.mMeshes = nullptr;
+
+    aiNode* rootNode = new aiNode();
+    rootNode->mName = aiString("Root");
+    rootNode->mTransformation = aiMatrix4x4();
+
+    aiNode* armatureNode = new aiNode();
+    armatureNode->mName = aiString("Armature");
+    armatureNode->mTransformation = aiMatrix4x4();
+    armatureNode->mParent = rootNode;
+
+    aiNode* hipsNode = new aiNode();
+    hipsNode->mName = aiString("Hips");
+    hipsNode->mTransformation = aiMatrix4x4();
+    hipsNode->mParent = armatureNode;
+
+    aiNode* tipNode = new aiNode();
+    tipNode->mName = aiString("HandTip");
+    tipNode->mTransformation = aiMatrix4x4();
+    tipNode->mParent = hipsNode;
+
+    rootNode->mNumChildren = 1;
+    rootNode->mChildren = new aiNode*[1]{armatureNode};
+    armatureNode->mNumChildren = 1;
+    armatureNode->mChildren = new aiNode*[1]{hipsNode};
+    hipsNode->mNumChildren = 1;
+    hipsNode->mChildren = new aiNode*[1]{tipNode};
+    tipNode->mNumChildren = 0;
+    tipNode->mChildren = nullptr;
+
+    mockScene.mRootNode = rootNode;
+
+    aiAnimation* anim = new aiAnimation();
+    anim->mName = aiString("Take001");
+    anim->mNumChannels = 1;
+    anim->mChannels = new aiNodeAnim*[1];
+    anim->mChannels[0] = new aiNodeAnim();
+    anim->mChannels[0]->mNodeName = aiString("Hips");
+    anim->mChannels[0]->mNumPositionKeys = 0;
+    anim->mChannels[0]->mNumRotationKeys = 0;
+    anim->mChannels[0]->mNumScalingKeys = 0;
+
+    mockScene.mNumAnimations = 1;
+    mockScene.mAnimations = new aiAnimation*[1]{anim};
+
+    processor.processBones(mockSkeleton, &mockScene);
+
+    EXPECT_TRUE(mockSkeleton->hasBone("Hips"));
+    EXPECT_TRUE(mockSkeleton->hasBone("HandTip"));
+    EXPECT_FALSE(mockSkeleton->hasBone("Armature"));
+    EXPECT_EQ(mockSkeleton->getBone("HandTip")->getParent(), mockSkeleton->getBone("Hips"));
 }
