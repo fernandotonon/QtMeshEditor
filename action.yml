@@ -1,4 +1,4 @@
-name: 'qtmesh'
+name: 'QtMesh'
 description: 'Validate, convert, and optimize 3D assets in CI. Scan for issues, convert 40+ formats, and more.'
 author: 'Fernando Tonon'
 
