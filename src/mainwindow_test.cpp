@@ -555,3 +555,89 @@ TEST_F(MainWindowTest, UpdateMergeAnimationsButtonResolvesEntitiesFromSelectedNo
 
     EXPECT_TRUE(window->ui->actionMerge_Animations->isEnabled());
 }
+
+TEST_F(MainWindowTest, KeyPCyclesPivotMode) {
+    auto* transformOperator = TransformOperator::getSingleton();
+    ASSERT_NE(transformOperator, nullptr);
+    const auto before = transformOperator->pivotMode();
+
+    QKeyEvent event(QEvent::KeyPress, Qt::Key_P, Qt::NoModifier);
+    window->keyPressEvent(&event);
+
+    EXPECT_NE(transformOperator->pivotMode(), before);
+}
+
+TEST_F(MainWindowTest, GroupActionsEnablementFollowsSelectionState) {
+    auto* manager = Manager::getSingleton();
+    ASSERT_NE(manager, nullptr);
+
+    Ogre::SceneNode* nodeA = manager->addSceneNode("GroupEnableNodeA");
+    Ogre::SceneNode* nodeB = manager->addSceneNode("GroupEnableNodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    app->processEvents();
+    EXPECT_FALSE(window->ui->actionGroup->isEnabled());
+    EXPECT_FALSE(window->ui->actionUngroup->isEnabled());
+
+    SelectionSet::getSingleton()->append(nodeA);
+    app->processEvents();
+    EXPECT_FALSE(window->ui->actionGroup->isEnabled());
+    EXPECT_FALSE(window->ui->actionUngroup->isEnabled());
+
+    SelectionSet::getSingleton()->append(nodeB);
+    app->processEvents();
+    EXPECT_TRUE(window->ui->actionGroup->isEnabled());
+    EXPECT_FALSE(window->ui->actionUngroup->isEnabled());
+}
+
+TEST_F(MainWindowTest, GroupThenUngroupSelectedNodesUpdatesSelectionAndActions) {
+    auto* manager = Manager::getSingleton();
+    ASSERT_NE(manager, nullptr);
+
+    Ogre::SceneNode* nodeA = manager->addSceneNode("GroupFlowNodeA");
+    Ogre::SceneNode* nodeB = manager->addSceneNode("GroupFlowNodeB");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(nodeA);
+    SelectionSet::getSingleton()->append(nodeB);
+    app->processEvents();
+    ASSERT_EQ(SelectionSet::getSingleton()->getNodesCount(), 2);
+
+    window->groupSelected();
+    app->processEvents();
+
+    ASSERT_EQ(SelectionSet::getSingleton()->getNodesCount(), 1);
+    Ogre::SceneNode* groupNode = SelectionSet::getSingleton()->getSceneNode(0);
+    ASSERT_NE(groupNode, nullptr);
+    EXPECT_TRUE(manager->isGroupNode(groupNode));
+    EXPECT_TRUE(window->ui->actionUngroup->isEnabled());
+
+    window->ungroupSelected();
+    app->processEvents();
+
+    EXPECT_EQ(SelectionSet::getSingleton()->getNodesCount(), 2);
+    EXPECT_TRUE(window->ui->actionGroup->isEnabled());
+    EXPECT_FALSE(window->ui->actionUngroup->isEnabled());
+}
+
+TEST_F(MainWindowTest, UngroupSelectedIgnoresNonGroupNode) {
+    auto* manager = Manager::getSingleton();
+    ASSERT_NE(manager, nullptr);
+
+    Ogre::SceneNode* node = manager->addSceneNode("UngroupNoopNode");
+    ASSERT_NE(node, nullptr);
+    ASSERT_FALSE(manager->isGroupNode(node));
+
+    SelectionSet::getSingleton()->selectOne(node);
+    app->processEvents();
+    EXPECT_FALSE(window->ui->actionUngroup->isEnabled());
+
+    window->ungroupSelected();
+
+    EXPECT_TRUE(manager->hasSceneNode("UngroupNoopNode"));
+    EXPECT_EQ(SelectionSet::getSingleton()->getNodesCount(), 1);
+}
