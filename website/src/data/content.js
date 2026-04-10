@@ -6,7 +6,8 @@ export const links = {
   issues: 'https://github.com/fernandotonon/QtMeshEditor/issues',
   forum: 'https://forums.ogre3d.org/viewtopic.php?t=76016',
   license: 'https://opensource.org/license/mit',
-  actions: 'https://github.com/fernandotonon/QtMeshEditor/tree/master/.github/actions/qtmesh'
+  actions: 'https://github.com/fernandotonon/qtmesh',
+  marketplace: 'https://github.com/marketplace/actions/qtmesh'
 };
 
 export const media = {
@@ -76,18 +77,18 @@ export const useCases = [
     body: 'Combine Mixamo, Unreal exports, and DCC clips into clean output files for engine ingestion.'
   },
   {
-    title: 'Run in CI/CD',
-    body: 'Use the same commands in local scripts, Docker containers, and GitHub Actions workflows.'
+    title: 'GitHub Actions (Marketplace)',
+    body: 'Add `fernandotonon/QtMeshEditor@v1` to any workflow. Scan assets on every PR, convert formats, validate meshes — one line in your YAML.'
   }
 ];
 
 export const pipelineExamples = {
-  scan: `# Preview workflow (actively evolving)\nqtmesh scan ./assets --fail-on error\nqtmesh scan ./assets --sarif reports/qtmesh.sarif --report reports/qtmesh.json`,
+  scan: `qtmesh scan ./assets --fail-on error\nqtmesh scan ./assets --json --report reports/qtmesh.json`,
   fix: `qtmesh fix model.fbx -o fixed.fbx\nqtmesh fix model.fbx --all -o fixed.fbx`,
   convert: `qtmesh convert model.fbx -o model.glb2\nqtmesh convert model.dae -o model.mesh`,
   merge: `qtmesh anim base.fbx \\\n  --merge walk.fbx run.fbx jump.fbx idle.fbx \\\n  -o merged.fbx`,
   docker: `docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \\\n  ghcr.io/fernandotonon/qtmesh scan ./assets --fail-on error`,
-  githubAction: `- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@c56db1ce3f2b29960cc1c9f82f5be98a51594138\n  with:\n    command: scan\n    input-file: assets\n    options: --fail-on error`,
+  githubAction: `# GitHub Actions Marketplace: fernandotonon/qtmesh\n- uses: fernandotonon/QtMeshEditor@v1\n  with:\n    command: scan\n    input-file: ./assets\n    options: --fail-on warning`,
   scanFixConvert: `qtmesh scan ./assets --fail-on error\nqtmesh fix character.fbx --all -o character_fixed.fbx\nqtmesh convert character_fixed.fbx -o character.glb2`
 };
 

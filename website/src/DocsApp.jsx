@@ -357,7 +357,7 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
             ]}
           />
 
-          <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON/SARIF output, and auto-fix.</>}
+          <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON output, and auto-fix. Also available as a <a href="https://github.com/marketplace/actions/qtmesh" className={s.link}>GitHub Action</a>: <Code>fernandotonon/QtMeshEditor@v1</Code>.</>}
             synopsis={`qtmesh scan [path] [options]`}
             options={[
               ['--config <file>', 'Config file path (default: qtmesh.yml, qtmesh.yaml, qtmesh.json)'],
@@ -373,8 +373,7 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
             examples={[
               'qtmesh scan ./assets',
               'qtmesh scan ./assets --config qtmesh.yml --fail-on warning',
-              'qtmesh scan ./assets --json --report .qtmesh/report.json',
-              'qtmesh scan ./assets --sarif report.sarif',
+              'qtmesh scan ./assets --json --report report.json',
               'qtmesh scan ./assets --fix --dry-run',
               'qtmesh scan ./assets --include "*.fbx,*.glb" --exclude "**/vendor/**"',
             ]}
@@ -683,14 +682,55 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
 
           <section className={s.section} id="github-actions">
             <h2 className={s.sectionTitle}>GitHub Actions</h2>
-            <h3 className={s.subsection}>Reusable Action (scan example)</h3>
-            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@9cfc829e8b255994ef92ba228c687e3dd2254119
-  with:
-    command: scan
-    input-file: assets
-    options: --config qtmesh.yml --sarif scan-report.sarif --report scan-report.json --fail-on error`}</CodeBlock>
+            <p className={s.para}>
+              The <Code>qtmesh</Code> action is available on the <a href="https://github.com/marketplace/actions/qtmesh" className={s.link}>GitHub Actions Marketplace</a>. Add it to any workflow with one line.
+            </p>
 
-            <h3 className={s.subsection}>Direct Docker Usage</h3>
+            <h3 className={s.subsection}>Scan assets on every PR</h3>
+            <CodeBlock lang="yaml">{`name: Validate 3D Assets
+on: [pull_request]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fernandotonon/QtMeshEditor@v1
+        with:
+          command: scan
+          input-file: ./assets
+          options: --fail-on warning`}</CodeBlock>
+
+            <h3 className={s.subsection}>Convert and validate</h3>
+            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor@v1
+  with:
+    command: validate
+    input-file: ./models/character.fbx
+
+- uses: fernandotonon/QtMeshEditor@v1
+  with:
+    command: convert
+    input-file: ./models/character.fbx
+    output-file: ./output/character.glb2
+
+- uses: fernandotonon/QtMeshEditor@v1
+  with:
+    command: anim
+    input-file: ./animations/dance.fbx
+    output-file: ./output/dance_optimized.fbx
+    options: --resample 30`}</CodeBlock>
+
+            <h3 className={s.subsection}>Get mesh info as JSON</h3>
+            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor@v1
+  id: info
+  with:
+    command: info
+    input-file: ./models/character.fbx
+    options: --json
+
+- run: echo "\${{ steps.info.outputs.result }}"`}</CodeBlock>
+
+            <h3 className={s.subsection}>Direct Docker usage</h3>
             <CodeBlock lang="yaml">{`- name: Scan assets
   run: |
     docker run --rm \\
@@ -698,14 +738,7 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
       ghcr.io/fernandotonon/qtmesh:latest \\
       scan /workspace/assets \\
       --config /workspace/qtmesh.yml \\
-      --sarif /workspace/scan-report.sarif \\
-      --fail-on error
-
-- name: Upload SARIF to GitHub
-  if: always()
-  uses: github/codeql-action/upload-sarif@v3
-  with:
-    sarif_file: scan-report.sarif`}</CodeBlock>
+      --fail-on error`}</CodeBlock>
           </section>
 
           <section className={s.section} id="gitlab-ci">
