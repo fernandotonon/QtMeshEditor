@@ -261,7 +261,7 @@ Manual alternative: `./scripts/update-winget.sh <version>` generates the manifes
 
 ## GitHub Action (Marketplace)
 
-The `qtmesh` CLI is published as a GitHub Action on the [GitHub Actions Marketplace](https://github.com/marketplace/actions/qtmesh). The `action.yml` lives at the repo root.
+The `qtmesh` CLI is published as a GitHub Action on the [GitHub Actions Marketplace](https://github.com/marketplace/actions/qtmesheditor). The `action.yml` lives at the repo root.
 
 ```yaml
 - uses: fernandotonon/QtMeshEditor@v1

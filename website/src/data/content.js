@@ -7,7 +7,7 @@ export const links = {
   forum: 'https://forums.ogre3d.org/viewtopic.php?t=76016',
   license: 'https://opensource.org/license/mit',
   actions: 'https://github.com/fernandotonon/qtmesh',
-  marketplace: 'https://github.com/marketplace/actions/qtmesh'
+  marketplace: 'https://github.com/marketplace/actions/qtmesheditor'
 };
 
 export const media = {

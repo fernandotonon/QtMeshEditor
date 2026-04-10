@@ -357,7 +357,7 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
             ]}
           />
 
-          <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON output, and auto-fix. Also available as a <a href="https://github.com/marketplace/actions/qtmesh" className={s.link}>GitHub Action</a>: <Code>fernandotonon/QtMeshEditor@v1</Code>.</>}
+          <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON output, and auto-fix. Also available as a <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Action</a>: <Code>fernandotonon/QtMeshEditor@v1</Code>.</>}
             synopsis={`qtmesh scan [path] [options]`}
             options={[
               ['--config <file>', 'Config file path (default: qtmesh.yml, qtmesh.yaml, qtmesh.json)'],
@@ -683,7 +683,7 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
           <section className={s.section} id="github-actions">
             <h2 className={s.sectionTitle}>GitHub Actions</h2>
             <p className={s.para}>
-              The <Code>qtmesh</Code> action is available on the <a href="https://github.com/marketplace/actions/qtmesh" className={s.link}>GitHub Actions Marketplace</a>. Add it to any workflow with one line.
+              The <Code>qtmesh</Code> action is available on the <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Actions Marketplace</a>. Add it to any workflow with one line.
             </p>
 
             <h3 className={s.subsection}>Scan assets on every PR</h3>
