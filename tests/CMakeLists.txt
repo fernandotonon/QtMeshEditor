@@ -75,6 +75,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubEntityHighlight.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanEngine.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetBrowserController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.cpp
     )
 
     set(TEST_HEADER_FILES
@@ -142,6 +144,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubEntityHighlight.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanEngine.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetBrowserController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)
