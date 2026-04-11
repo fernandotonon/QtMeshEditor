@@ -102,12 +102,14 @@ WelcomeDialog::WelcomeDialog(QWidget* parent)
                 recentList->addItem(item);
             }
         }
-        connect(recentList, &QListWidget::itemDoubleClicked, this, [this](QListWidgetItem* item) {
+        auto openRecent = [this](QListWidgetItem* item) {
             m_action = OpenRecent;
             m_selectedFile = item->data(Qt::UserRole).toString();
             SentryReporter::addBreadcrumb("ui.action", "Welcome: Open Recent");
             accept();
-        });
+        };
+        connect(recentList, &QListWidget::itemDoubleClicked, this, openRecent);
+        connect(recentList, &QListWidget::itemActivated, this, openRecent);
         mainLayout->addWidget(recentList);
     }
 
@@ -128,15 +130,19 @@ WelcomeDialog::WelcomeDialog(QWidget* parent)
     auto* dontShowCheck = new QCheckBox("Don't show again");
     bottomLayout->addWidget(dontShowCheck);
 
-    bottomLayout->addStretch();
-
-    auto* getStartedBtn = new QPushButton("Get Started");
-    getStartedBtn->setMinimumHeight(32);
-    connect(getStartedBtn, &QPushButton::clicked, this, [this, dontShowCheck]() {
+    // Persist "Don't show again" on ANY exit path (New Scene, Open File, Recent, Get Started)
+    connect(this, &QDialog::accepted, this, [dontShowCheck]() {
         if (dontShowCheck->isChecked()) {
             QSettings settings;
             settings.setValue("WelcomeScreen/dontShowAgain", true);
         }
+    });
+
+    bottomLayout->addStretch();
+
+    auto* getStartedBtn = new QPushButton("Get Started");
+    getStartedBtn->setMinimumHeight(32);
+    connect(getStartedBtn, &QPushButton::clicked, this, [this]() {
         m_action = Dismissed;
         SentryReporter::addBreadcrumb("ui.action", "Welcome: Dismissed");
         accept();

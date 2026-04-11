@@ -132,6 +132,16 @@ bool MaterialPreviewRenderer::ensureScene()
         m_initialized = true;
         return true;
     } catch (const Ogre::Exception&) {
+        // Clean up partial state on failure
+        if (m_sceneMgr) {
+            Ogre::Root::getSingletonPtr()->destroySceneManager(m_sceneMgr);
+            m_sceneMgr = nullptr;
+        }
+        m_camera = nullptr;
+        m_light = nullptr;
+        m_sphere = nullptr;
+        m_sphereNode = nullptr;
+        m_renderTarget = nullptr;
         return false;
     } catch (...) {
         return false;
