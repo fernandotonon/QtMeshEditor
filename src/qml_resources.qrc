@@ -34,4 +34,7 @@
   <qresource prefix="/ShortcutReference">
     <file alias="ShortcutReference.qml">../qml/ShortcutReference.qml</file>
   </qresource>
+  <qresource prefix="/PreferencesDialog">
+    <file alias="PreferencesDialog.qml">../qml/PreferencesDialog.qml</file>
+  </qresource>
 </RCC>

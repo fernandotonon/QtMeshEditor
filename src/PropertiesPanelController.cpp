@@ -11,6 +11,7 @@
 #include "SentryReporter.h"
 #include <QApplication>
 #include <QFileDialog>
+#include <QSettings>
 #include <QPalette>
 #include <Ogre.h>
 
@@ -271,6 +272,7 @@ QVariantList PropertiesPanelController::shortcutData() const
     data << entry("File", "Ctrl + S",       "Save scene");
     data << entry("File", "Ctrl + Z",       "Undo");
     data << entry("File", "Ctrl + Shift + Z", "Redo");
+    data << entry("File", "Ctrl + ,",       "Open preferences");
 
     // View
     data << entry("View", "Show Grid",       "Toggle grid display (Options menu)");
@@ -748,4 +750,19 @@ QVariantList PropertiesPanelController::scaleStepPresets() const
     for (double v : TransformOperator::scaleStepPresets())
         result.append(v);
     return result;
+}
+
+// Generic QSettings accessors for Preferences dialog
+QVariant PropertiesPanelController::getSetting(const QString& key, const QVariant& defaultValue) const
+{
+    QSettings settings;
+    return settings.value(key, defaultValue);
+}
+
+void PropertiesPanelController::setSetting(const QString& key, const QVariant& value)
+{
+    QSettings settings;
+    settings.setValue(key, value);
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Preference changed: %1").arg(key));
 }

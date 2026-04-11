@@ -113,6 +113,8 @@
     <addaction name="separator"/>
     <addaction name="actionGroup"/>
     <addaction name="actionUngroup"/>
+    <addaction name="separator"/>
+    <addaction name="actionPreferences"/>
    </widget>
    <widget class="QMenu" name="menuHelp">
     <property name="title">
@@ -251,6 +253,9 @@
    <property name="text">
     <string>Show Grid</string>
    </property>
+   <property name="toolTip">
+    <string>Toggle Grid Visibility</string>
+   </property>
   </action>
   <action name="actionShow_Normals">
    <property name="checkable">
@@ -261,6 +266,9 @@
    </property>
    <property name="text">
     <string>Show Normals</string>
+   </property>
+   <property name="toolTip">
+    <string>Toggle Vertex Normals Display</string>
    </property>
   </action>
   <action name="actionShow_Mesh_Info">
@@ -273,9 +281,15 @@
    <property name="text">
     <string>Show Mesh Info</string>
    </property>
+   <property name="toolTip">
+    <string>Toggle Mesh Info Overlay</string>
+   </property>
   </action>
   <action name="actionImport">
    <property name="text">
+    <string>Import Mesh</string>
+   </property>
+   <property name="toolTip">
     <string>Import Mesh</string>
    </property>
   </action>
@@ -294,6 +308,9 @@
   <action name="actionMaterial_Editor">
    <property name="text">
     <string>Material Editor</string>
+   </property>
+   <property name="toolTip">
+    <string>Open Material Editor</string>
    </property>
   </action>
   <action name="actionAbout">
@@ -357,7 +374,7 @@
     <string>Move Object</string>
    </property>
    <property name="toolTip">
-    <string>Move Object (W)</string>
+    <string>Translate Mode (W)</string>
    </property>
    <property name="autoRepeat">
     <bool>true</bool>
@@ -375,7 +392,7 @@
     <string>Rotate Object</string>
    </property>
    <property name="toolTip">
-    <string>Rotate Object (E)</string>
+    <string>Rotate Mode (E)</string>
    </property>
   </action>
   <action name="actionSelect_Object">
@@ -393,7 +410,7 @@
     <string>Select Object</string>
    </property>
    <property name="toolTip">
-    <string>Select Object (Q)</string>
+    <string>Select Mode (Q)</string>
    </property>
   </action>
   <action name="actionRemove_Object">
@@ -405,12 +422,15 @@
     <string>Remove Object</string>
    </property>
    <property name="toolTip">
-    <string>Remove Object (Del)</string>
+    <string>Delete Selected (Del)</string>
    </property>
   </action>
   <action name="actionExport_Selected">
    <property name="text">
     <string>Export Selected</string>
+   </property>
+   <property name="toolTip">
+    <string>Export Selected Mesh</string>
    </property>
   </action>
   <action name="actionChange_BG_Color">
@@ -504,6 +524,9 @@
    <property name="text">
     <string>Undo</string>
    </property>
+   <property name="toolTip">
+    <string>Undo (Ctrl+Z)</string>
+   </property>
    <property name="shortcut">
     <string>Ctrl+Z</string>
    </property>
@@ -512,6 +535,9 @@
    <property name="text">
     <string>Redo</string>
    </property>
+   <property name="toolTip">
+    <string>Redo (Ctrl+Shift+Z)</string>
+   </property>
    <property name="shortcut">
     <string>Ctrl+Shift+Z</string>
    </property>
@@ -519,6 +545,9 @@
   <action name="actionDuplicate">
    <property name="text">
     <string>Duplicate</string>
+   </property>
+   <property name="toolTip">
+    <string>Duplicate (Ctrl+D)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+D</string>
@@ -536,7 +565,7 @@
     <string>Scale Object</string>
    </property>
    <property name="toolTip">
-    <string>Scale Object (R)</string>
+    <string>Scale Mode (R)</string>
    </property>
   </action>
   <action name="actionToggle_Transform_Space">
@@ -571,10 +600,27 @@
    <property name="text">
     <string>Show View Cube</string>
    </property>
+   <property name="toolTip">
+    <string>Toggle 3D View Cube</string>
+   </property>
+  </action>
+  <action name="actionPreferences">
+   <property name="text">
+    <string>Preferences...</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+,</string>
+   </property>
+   <property name="toolTip">
+    <string>Open Preferences (Ctrl+,)</string>
+   </property>
   </action>
   <action name="actionOpen_Scene">
    <property name="text">
     <string>Open Scene</string>
+   </property>
+   <property name="toolTip">
+    <string>Open Scene (Ctrl+O)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+O</string>
@@ -583,6 +629,9 @@
   <action name="actionSave_Scene">
    <property name="text">
     <string>Save Scene</string>
+   </property>
+   <property name="toolTip">
+    <string>Save Scene (Ctrl+S)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+S</string>
@@ -595,6 +644,9 @@
    <property name="text">
     <string>Group Nodes</string>
    </property>
+   <property name="toolTip">
+    <string>Group Nodes (Ctrl+G)</string>
+   </property>
    <property name="shortcut">
     <string>Ctrl+G</string>
    </property>
@@ -605,6 +657,9 @@
    </property>
    <property name="text">
     <string>Ungroup Nodes</string>
+   </property>
+   <property name="toolTip">
+    <string>Ungroup Nodes (Ctrl+Shift+G)</string>
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+G</string>

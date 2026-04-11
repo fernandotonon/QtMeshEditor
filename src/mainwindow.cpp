@@ -648,6 +648,21 @@ void MainWindow::initToolBar()
         widget->show();
     });
 
+    // Preferences dialog (Edit > Preferences, Ctrl+,)
+    connect(ui->actionPreferences, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb("ui.action", "Edit > Preferences opened");
+
+        auto* widget = new QQuickWidget(this);
+        widget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        widget->setSource(QUrl("qrc:/PreferencesDialog/PreferencesDialog.qml"));
+        widget->setAttribute(Qt::WA_DeleteOnClose);
+        widget->setMinimumSize(480, 520);
+        widget->resize(480, 520);
+        widget->setWindowFlags(Qt::Dialog);
+        widget->setWindowTitle(tr("Preferences"));
+        widget->show();
+    });
+
     // Crash reporting toggle in Help menu
     ui->menuHelp->addSeparator();
     QAction* crashReportAction = ui->menuHelp->addAction(tr("Send Crash Reports"));
