@@ -142,6 +142,9 @@ TEST(EditModeControllerGeometry, RayTriangleIntersectOriginOnTriangle) {
 
 class EditModeControllerSelectionTest : public ::testing::Test {
 protected:
+    Ogre::SceneNode* m_node = nullptr;
+    static int s_counter;
+
     void SetUp() override {
         if (!tryInitOgre()) {
             GTEST_SKIP() << "Ogre not available";
@@ -152,8 +155,26 @@ protected:
             return;
         }
         createStandardOgreMaterials();
+
+        // Create a triangle mesh entity and select it (required for enterEditMode)
+        std::string meshName = "EditSelTestMesh_" + std::to_string(++s_counter);
+        auto mesh = createInMemoryTriangleMesh(meshName);
+        m_node = Manager::getSingleton()->addSceneNode("EditSelTestNode");
+        Manager::getSingleton()->createEntity(m_node, mesh);
+        SelectionSet::getSingleton()->selectOne(m_node);
+    }
+
+    void TearDown() override {
+        auto* ctrl = EditModeController::instance();
+        if (ctrl->isEditModeActive())
+            ctrl->exitEditMode(false);
+        if (m_node) {
+            Manager::getSingleton()->destroySceneNode(m_node);
+            m_node = nullptr;
+        }
     }
 };
+int EditModeControllerSelectionTest::s_counter = 0;
 
 TEST_F(EditModeControllerSelectionTest, InitialSelectionState) {
     auto* ctrl = EditModeController::instance();
