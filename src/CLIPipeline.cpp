@@ -1763,6 +1763,11 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     QString fileNameCaseOverride;
     QString requiredAnimationNamesArg;
     QString requiredBoneNamesArg;
+    bool hasAllowedFormatsOverride = false;
+    bool hasForbiddenExtensionsOverride = false;
+    bool hasFileNameCaseOverride = false;
+    bool hasRequiredAnimationNamesOverride = false;
+    bool hasRequiredBoneNamesOverride = false;
 
     int maxVerticesOverride = -1;
     int minVerticesOverride = -1;
@@ -1860,19 +1865,39 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (parseResult == ParseValueResult::Matched) { failOn = value; continue; }
         parseResult = parseValueArg(arg, "--allowed-formats", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
-        if (parseResult == ParseValueResult::Matched) { allowedFormatsArg = value; continue; }
+        if (parseResult == ParseValueResult::Matched) {
+            allowedFormatsArg = value;
+            hasAllowedFormatsOverride = true;
+            continue;
+        }
         parseResult = parseValueArg(arg, "--forbidden-extensions", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
-        if (parseResult == ParseValueResult::Matched) { forbiddenExtensionsArg = value; continue; }
+        if (parseResult == ParseValueResult::Matched) {
+            forbiddenExtensionsArg = value;
+            hasForbiddenExtensionsOverride = true;
+            continue;
+        }
         parseResult = parseValueArg(arg, "--file-name-case", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
-        if (parseResult == ParseValueResult::Matched) { fileNameCaseOverride = value; continue; }
+        if (parseResult == ParseValueResult::Matched) {
+            fileNameCaseOverride = value;
+            hasFileNameCaseOverride = true;
+            continue;
+        }
         parseResult = parseValueArg(arg, "--require-animation-names", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
-        if (parseResult == ParseValueResult::Matched) { requiredAnimationNamesArg = value; continue; }
+        if (parseResult == ParseValueResult::Matched) {
+            requiredAnimationNamesArg = value;
+            hasRequiredAnimationNamesOverride = true;
+            continue;
+        }
         parseResult = parseValueArg(arg, "--require-bone-names", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
-        if (parseResult == ParseValueResult::Matched) { requiredBoneNamesArg = value; continue; }
+        if (parseResult == ParseValueResult::Matched) {
+            requiredBoneNamesArg = value;
+            hasRequiredBoneNamesOverride = true;
+            continue;
+        }
 
         parseResult = parseValueArg(arg, "--max-vertices", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
@@ -1983,7 +2008,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (fix)     config.fixEnabled = true;
     if (dryRun)  config.dryRun = true;
 
-    if (!allowedFormatsArg.isEmpty()) {
+    if (hasAllowedFormatsOverride) {
         config.allowedFormats.clear();
         for (auto fmt : splitCsv(allowedFormatsArg)) {
             if (fmt.startsWith("."))
@@ -1991,7 +2016,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
             config.allowedFormats.append(fmt.toLower());
         }
     }
-    if (!forbiddenExtensionsArg.isEmpty()) {
+    if (hasForbiddenExtensionsOverride) {
         config.forbiddenExtensions.clear();
         for (auto ext : splitCsv(forbiddenExtensionsArg)) {
             if (ext.startsWith("."))
@@ -2019,9 +2044,9 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (requireTexturesExistOverride >= 0) config.requireTexturesExist = (requireTexturesExistOverride == 1);
     if (allowMissingMaterialsOverride >= 0) config.allowMissingMaterials = (allowMissingMaterialsOverride == 1);
 
-    if (!fileNameCaseOverride.isEmpty()) {
+    if (hasFileNameCaseOverride) {
         const QString c = fileNameCaseOverride.trimmed();
-        if (c != "snake_case" && c != "kebab-case" && c != "camelCase" &&
+        if (!c.isEmpty() && c != "snake_case" && c != "kebab-case" && c != "camelCase" &&
             c != "PascalCase" && c != "lowercase") {
             err() << "Error: --file-name-case must be one of: snake_case, kebab-case, camelCase, PascalCase, lowercase" << Qt::endl;
             return 2;
@@ -2029,16 +2054,16 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         config.fileNameCase = c;
     }
 
-    if (!requiredAnimationNamesArg.isEmpty())
+    if (hasRequiredAnimationNamesOverride)
         config.requireAnimationNames = splitCsv(requiredAnimationNamesArg);
-    if (!requiredBoneNamesArg.isEmpty())
+    if (hasRequiredBoneNamesOverride)
         config.requireBoneNames = splitCsv(requiredBoneNamesArg);
 
     // Ensure CLI rule overrides have highest precedence even when scoped rules are present.
     // Append a catch-all scope last so withScopeOverrides() reapplies CLI values after file scopes.
     QVariantMap cliRuleOverrides;
-    if (!allowedFormatsArg.isEmpty())          cliRuleOverrides["allowed_formats"] = config.allowedFormats;
-    if (!forbiddenExtensionsArg.isEmpty())     cliRuleOverrides["forbidden_extensions"] = config.forbiddenExtensions;
+    if (hasAllowedFormatsOverride)             cliRuleOverrides["allowed_formats"] = config.allowedFormats;
+    if (hasForbiddenExtensionsOverride)        cliRuleOverrides["forbidden_extensions"] = config.forbiddenExtensions;
     if (maxFileSizeMbOverride >= 0.0)          cliRuleOverrides["max_file_size_mb"] = config.maxFileSizeMb;
     if (minFileSizeMbOverride >= 0.0)          cliRuleOverrides["min_file_size_mb"] = config.minFileSizeMb;
     if (maxMeshesOverride >= 0)                cliRuleOverrides["max_mesh_count"] = config.maxMeshCount;
@@ -2056,9 +2081,9 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (allowEmbeddedTexturesOverride >= 0)    cliRuleOverrides["allow_embedded_textures"] = config.allowEmbeddedTextures;
     if (requireTexturesExistOverride >= 0)     cliRuleOverrides["require_textures_exist"] = config.requireTexturesExist;
     if (allowMissingMaterialsOverride >= 0)    cliRuleOverrides["allow_missing_materials"] = config.allowMissingMaterials;
-    if (!fileNameCaseOverride.isEmpty())       cliRuleOverrides["file_name_case"] = config.fileNameCase;
-    if (!requiredAnimationNamesArg.isEmpty())  cliRuleOverrides["require_animation_names"] = config.requireAnimationNames;
-    if (!requiredBoneNamesArg.isEmpty())       cliRuleOverrides["require_bone_names"] = config.requireBoneNames;
+    if (hasFileNameCaseOverride)               cliRuleOverrides["file_name_case"] = config.fileNameCase;
+    if (hasRequiredAnimationNamesOverride)     cliRuleOverrides["require_animation_names"] = config.requireAnimationNames;
+    if (hasRequiredBoneNamesOverride)          cliRuleOverrides["require_bone_names"] = config.requireBoneNames;
     if (!cliRuleOverrides.isEmpty()) {
         ScanScope cliOverrideScope;
         cliOverrideScope.pathPattern = "**/*";

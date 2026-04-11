@@ -405,7 +405,7 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
           >
             <p className={s.para}>
               Most value flags accept both styles: <Code>--flag value</Code> and <Code>--flag=value</Code>.
-              CLI overrides are applied after loading <Code>qtmesh.yml</Code>/<Code>qtmesh.json</Code> for quick one-off validation checks.
+              CLI overrides are applied after loading <Code>qtmesh.yml</Code>/<Code>qtmesh.yaml</Code>/<Code>qtmesh.json</Code> for quick one-off validation checks.
             </p>
             <h3 className={s.subsection}>Example Output</h3>
             <CodeBlock>{`  OK    models/player.fbx
