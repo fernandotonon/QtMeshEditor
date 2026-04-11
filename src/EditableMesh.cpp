@@ -28,8 +28,10 @@ THE SOFTWARE.
 
 #include "EditableMesh.h"
 #include "SubMeshTransform.h"
+#include <OgreSubEntity.h>
 #include <limits>
 #include <cmath>
+#include <cstring>
 
 bool EditableMesh::loadFromEntity(Ogre::Entity* entity)
 {
@@ -135,6 +137,43 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
 
     // Recalculate mesh bounds
     SubMeshTransform::recalculateMeshBounds(mesh);
+
+    // For skeletal entities, also update the SubEntity animation blend buffers
+    // (Ogre renders from these, not the mesh VBO). Same pattern as SubMeshTransform.
+    if (entity->hasSkeleton()) {
+        for (unsigned short i = 0; i < entity->getNumSubEntities(); ++i) {
+            Ogre::SubEntity* sub = entity->getSubEntity(i);
+            Ogre::VertexData* animData = sub->_getSkelAnimVertexData();
+            if (!animData || animData->vertexCount == 0) continue;
+
+            const auto* posElem = animData->vertexDeclaration
+                ->findElementBySemantic(Ogre::VES_POSITION);
+            if (!posElem) continue;
+
+            unsigned short source = posElem->getSource();
+            auto animBuf = animData->vertexBufferBinding->getBuffer(source);
+            size_t animBufSize = animBuf->getSizeInBytes();
+            size_t animVertSize = animBuf->getVertexSize();
+
+            std::vector<unsigned char> animCopy(animBufSize);
+            animBuf->readData(0, animBufSize, animCopy.data());
+
+            const auto& verts = m_subMeshes[i].vertices;
+            size_t count = std::min(verts.size(), static_cast<size_t>(animData->vertexCount));
+            for (size_t j = 0; j < count; ++j) {
+                Ogre::Real* pReal;
+                posElem->baseVertexPointerToElement(animCopy.data() + j * animVertSize, &pReal);
+                pReal[0] = verts[j].position.x;
+                pReal[1] = verts[j].position.y;
+                pReal[2] = verts[j].position.z;
+            }
+
+            auto* dest = static_cast<unsigned char*>(
+                animBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            memcpy(dest, animCopy.data(), animBufSize);
+            animBuf->unlock();
+        }
+    }
 
     return true;
 }
