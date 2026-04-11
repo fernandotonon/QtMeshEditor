@@ -421,7 +421,7 @@ Summary:
   • Scanned:  4
   ✓ Passed:   1
   ▲ Warnings: 1
-  ✗ Errors:   4
+  ✗ Errors:   3
   ⏱ Time:     0.3s`}</CodeBlock>
           </CmdSection>
 
