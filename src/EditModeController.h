@@ -111,6 +111,11 @@ public:
     /// Returns true if the current selection allows entering edit mode
     /// (exactly one mesh entity selected).
     bool canEnterEditMode() const;
+
+    /// Wireframe overlay toggle for edit mode
+    Q_PROPERTY(bool wireframeEnabled READ wireframeEnabled WRITE setWireframeEnabled NOTIFY wireframeChanged)
+    bool wireframeEnabled() const { return m_wireframeEnabled; }
+    void setWireframeEnabled(bool enabled);
     /// @}
 
     /// @name Mesh info (only valid when in edit mode)
@@ -350,6 +355,8 @@ signals:
     void selectionStateChanged();
     /// Emitted when the component selection mode changes (Vertex/Edge/Face).
     void selectionModeChanged();
+    /// Emitted when wireframe mode is toggled.
+    void wireframeChanged();
     /// Emitted when the edit-mode selection (vertices/edges/faces) changes.
     void editSelectionChanged();
     /// Emitted when soft selection settings change.
@@ -399,6 +406,10 @@ private:
     int m_softSelectionFalloff = 0; ///< 0=linear, 1=smooth (cosine)
     Ogre::Entity* m_softSelSphere = nullptr;
     Ogre::SceneNode* m_softSelSphereNode = nullptr;
+
+    // Wireframe mode
+    bool m_wireframeEnabled = false;
+    std::map<unsigned int, Ogre::String> m_savedMaterials; ///< SubEntity index → original material name
 
     // Normals mode: 0=smooth (default), 1=flat
     int m_normalsMode = 0;

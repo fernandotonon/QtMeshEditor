@@ -549,6 +549,121 @@ TEST_F(EditModeControllerSelectionTest, SelectOperationsNotInEditMode) {
 }
 
 // ===========================================================================
+// Wireframe toggle tests
+// ===========================================================================
+
+TEST_F(EditModeControllerSelectionTest, WireframeDefaultOff) {
+    auto* ctrl = EditModeController::instance();
+    EXPECT_FALSE(ctrl->wireframeEnabled());
+}
+
+TEST_F(EditModeControllerSelectionTest, WireframeToggleNotInEditMode) {
+    auto* ctrl = EditModeController::instance();
+    EXPECT_FALSE(ctrl->isEditModeActive());
+
+    // Toggling wireframe outside edit mode should still update the property
+    ctrl->setWireframeEnabled(true);
+    EXPECT_TRUE(ctrl->wireframeEnabled());
+
+    ctrl->setWireframeEnabled(false);
+    EXPECT_FALSE(ctrl->wireframeEnabled());
+}
+
+TEST_F(EditModeControllerSelectionTest, WireframeToggleInEditMode) {
+    auto meshPtr = createInMemoryTriangleMesh("EditCtrl_wireframe");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_wireframe_node");
+    auto* entity = sceneMgr->createEntity("EditCtrl_wireframe_ent", meshPtr);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+
+    // Save original material name
+    Ogre::String origMat = entity->getSubEntity(0)->getMaterialName();
+
+    // Enable wireframe
+    ctrl->setWireframeEnabled(true);
+    EXPECT_TRUE(ctrl->wireframeEnabled());
+    // Material should have changed to a wireframe clone
+    Ogre::String wireMat = entity->getSubEntity(0)->getMaterialName();
+    EXPECT_NE(wireMat, origMat);
+    EXPECT_TRUE(wireMat.find("_EditWireframe") != Ogre::String::npos);
+
+    // Disable wireframe — should restore original material
+    ctrl->setWireframeEnabled(false);
+    EXPECT_FALSE(ctrl->wireframeEnabled());
+    EXPECT_EQ(entity->getSubEntity(0)->getMaterialName(), origMat);
+
+    ctrl->exitEditMode(false);
+    Manager::getSingleton()->destroySceneNode("EditCtrl_wireframe_node");
+}
+
+TEST_F(EditModeControllerSelectionTest, WireframeRestoredOnExitEditMode) {
+    auto meshPtr = createInMemoryTriangleMesh("EditCtrl_wire_exit");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_wire_exit_node");
+    auto* entity = sceneMgr->createEntity("EditCtrl_wire_exit_ent", meshPtr);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+
+    Ogre::String origMat = entity->getSubEntity(0)->getMaterialName();
+
+    // Enable wireframe then exit edit mode without disabling it
+    ctrl->setWireframeEnabled(true);
+    EXPECT_TRUE(ctrl->wireframeEnabled());
+
+    ctrl->exitEditMode(false);
+
+    // Material should be restored and wireframe should be off
+    EXPECT_FALSE(ctrl->wireframeEnabled());
+    EXPECT_EQ(entity->getSubEntity(0)->getMaterialName(), origMat);
+
+    Manager::getSingleton()->destroySceneNode("EditCtrl_wire_exit_node");
+}
+
+TEST_F(EditModeControllerSelectionTest, WireframeSignalEmission) {
+    auto meshPtr = createInMemoryTriangleMesh("EditCtrl_wire_signal");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_wire_signal_node");
+    auto* entity = sceneMgr->createEntity("EditCtrl_wire_signal_ent", meshPtr);
+    node->attachObject(entity);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+
+    int wireframeChanges = 0;
+    auto conn = QObject::connect(ctrl, &EditModeController::wireframeChanged,
+                                  [&]() { ++wireframeChanges; });
+
+    ctrl->setWireframeEnabled(true);
+    EXPECT_EQ(wireframeChanges, 1);
+
+    // Setting same value should not emit
+    ctrl->setWireframeEnabled(true);
+    EXPECT_EQ(wireframeChanges, 1);
+
+    ctrl->setWireframeEnabled(false);
+    EXPECT_EQ(wireframeChanges, 2);
+
+    QObject::disconnect(conn);
+
+    ctrl->exitEditMode(false);
+    Manager::getSingleton()->destroySceneNode("EditCtrl_wire_signal_node");
+}
+
+// ===========================================================================
 // Signal emission tests
 // ===========================================================================
 
