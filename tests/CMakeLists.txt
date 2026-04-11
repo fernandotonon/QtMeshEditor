@@ -69,6 +69,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubEntityHighlight.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.cpp
@@ -134,6 +135,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshLodController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MeshValidator.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AIChatManager.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/WelcomeScreenController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubMeshTransform.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SubEntityHighlight.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanConfig.h

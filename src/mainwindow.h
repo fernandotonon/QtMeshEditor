@@ -17,6 +17,7 @@ class NormalVisualizer;
 class MeshInfoOverlay;
 class ViewCubeController;
 class PropertiesPanelController;
+class WelcomeScreenController;
 class QQuickWidget;
 
 namespace Ui {
@@ -125,6 +126,7 @@ protected:
     void closeEvent(QCloseEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     void initToolBar();
@@ -142,6 +144,12 @@ private:
     void addToRecentFiles(const QString& filePath);
     void updateRecentFilesMenu();
     void openRecentFile();
+
+    WelcomeScreenController* m_welcomeController = nullptr;
+    QQuickWidget* m_welcomeScreen = nullptr;
+    void showWelcomeScreen();
+    void hideWelcomeScreen();
+    void repositionWelcomeScreen();
 };
 
 #endif // MAINWINDOW_H

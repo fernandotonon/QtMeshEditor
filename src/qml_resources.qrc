@@ -28,4 +28,7 @@
   <qresource prefix="/AIChatPanel">
     <file alias="AIChatPanel.qml">../qml/AIChatPanel.qml</file>
   </qresource>
+  <qresource prefix="/WelcomeScreen">
+    <file alias="WelcomeScreen.qml">../qml/WelcomeScreen.qml</file>
+  </qresource>
 </RCC>

@@ -58,6 +58,7 @@
 #include "MeshValidator.h"
 #include "MaterialPresetLibrary.h"
 #include "AIChatManager.h"
+#include "WelcomeScreenController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -360,6 +361,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AIChatManager::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<WelcomeScreenController>("WelcomeScreen", 1, 0, "WelcomeScreenController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return WelcomeScreenController::qmlInstance(engine, nullptr);
+            });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
 
@@ -419,6 +424,58 @@ void MainWindow::initToolBar()
                     QTimer::singleShot(0, chatWidget, [chatWidget]() { chatWidget->setFocus(); });
             }
         });
+    }
+
+    // Welcome Screen overlay — shown on first launch or when user hasn't opted out
+    {
+        m_welcomeController = WelcomeScreenController::instance();
+        m_welcomeController->setMainWindow(this);
+
+        m_welcomeScreen = new QQuickWidget(this);
+        m_welcomeScreen->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        m_welcomeScreen->setAttribute(Qt::WA_TranslucentBackground);
+        m_welcomeScreen->setClearColor(Qt::transparent);
+        m_welcomeScreen->setSource(QUrl("qrc:/WelcomeScreen/WelcomeScreen.qml"));
+        m_welcomeScreen->setFocusPolicy(Qt::StrongFocus);
+        m_welcomeScreen->raise();
+
+        // Connect controller signals to MainWindow actions
+        connect(m_welcomeController, &WelcomeScreenController::requestOpenFile,
+                this, [this](const QString& path) {
+            if (QFileInfo::exists(path)) {
+                addToRecentFiles(path);
+                if (path.endsWith(".scene.glb") || path.endsWith(".scene.gltf"))
+                    MeshImporterExporter::sceneImporter(path);
+                else
+                    mUriList.append(path);
+            }
+        });
+        connect(m_welcomeController, &WelcomeScreenController::requestOpenFileDialog,
+                this, &MainWindow::on_actionImport_triggered);
+        connect(m_welcomeController, &WelcomeScreenController::requestNewScene,
+                this, [this]() {
+            Manager::getSingleton()->CreateEmptyScene();
+        });
+
+        // Show/hide the overlay widget when controller visibility changes
+        connect(m_welcomeController, &WelcomeScreenController::visibleChanged,
+                this, [this]() {
+            if (m_welcomeController->isVisible()) {
+                showWelcomeScreen();
+            } else {
+                hideWelcomeScreen();
+            }
+        });
+
+        // Show on startup if the user hasn't opted out
+        if (m_welcomeController->shouldShow()) {
+            // Defer to after the window is fully laid out
+            QTimer::singleShot(0, this, [this]() {
+                m_welcomeController->setVisible(true);
+            });
+        } else {
+            m_welcomeScreen->hide();
+        }
     }
 
     // Animation Control dock is created below and auto-shown when animated entity is selected
@@ -660,6 +717,10 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
 {
     if(mUriList.size())
     {
+        // Auto-hide the welcome screen when a file is loaded
+        if (m_welcomeController && m_welcomeController->isVisible())
+            m_welcomeController->setVisible(false);
+
         importMeshs(mUriList);
         mUriList.clear();
     }
@@ -847,6 +908,13 @@ void MainWindow::closeEvent(QCloseEvent *event)
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 {
     event->acceptProposedAction();
+}
+
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    if (m_welcomeScreen && m_welcomeScreen->isVisible())
+        repositionWelcomeScreen();
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1714,6 +1782,10 @@ void MainWindow::addToRecentFiles(const QString& filePath)
         files.removeLast();
     settings.setValue("RecentFiles/files", files);
     updateRecentFilesMenu();
+
+    // Keep the welcome screen's recent files list in sync
+    if (m_welcomeController)
+        emit m_welcomeController->recentFilesChanged();
 }
 
 void MainWindow::updateRecentFilesMenu()
@@ -1740,6 +1812,8 @@ void MainWindow::updateRecentFilesMenu()
         QSettings settings;
         settings.remove("RecentFiles/files");
         updateRecentFilesMenu();
+        if (m_welcomeController)
+            emit m_welcomeController->recentFilesChanged();
     });
 }
 
@@ -1764,6 +1838,45 @@ void MainWindow::openRecentFile()
         files.removeAll(filePath);
         settings.setValue("RecentFiles/files", files);
         updateRecentFilesMenu();
+        if (m_welcomeController)
+            emit m_welcomeController->recentFilesChanged();
     }
 }
+
+// LCOV_EXCL_START — requires display
+void MainWindow::showWelcomeScreen()
+{
+    if (!m_welcomeScreen) return;
+    repositionWelcomeScreen();
+    m_welcomeScreen->show();
+    m_welcomeScreen->raise();
+    m_welcomeScreen->setFocus();
+}
+
+void MainWindow::hideWelcomeScreen()
+{
+    if (m_welcomeScreen)
+        m_welcomeScreen->hide();
+}
+
+void MainWindow::repositionWelcomeScreen()
+{
+    if (!m_welcomeScreen) return;
+
+    // Cover the entire main window area (over the viewport docks)
+    QRect geom = rect();
+    // Offset by the menu bar + toolbar heights to avoid covering them
+    int topOffset = 0;
+    if (menuBar() && menuBar()->isVisible())
+        topOffset += menuBar()->height();
+    // Find the first visible toolbar to account for its height
+    for (auto* tb : findChildren<QToolBar*>()) {
+        if (tb->isVisible() && toolBarArea(tb) == Qt::TopToolBarArea) {
+            topOffset += tb->height();
+            break;
+        }
+    }
+    m_welcomeScreen->setGeometry(0, topOffset, geom.width(), geom.height() - topOffset);
+}
+// LCOV_EXCL_STOP
 

@@ -60,6 +60,7 @@ MaterialPresetLibrary.cpp
 MeshLodController.cpp
 MeshValidator.cpp
 AIChatManager.cpp
+WelcomeScreenController.cpp
 ScanConfig.cpp
 ScanEngine.cpp
 )
@@ -125,6 +126,7 @@ MaterialPresetLibrary.h
 MeshLodController.h
 MeshValidator.h
 AIChatManager.h
+WelcomeScreenController.h
 ScanConfig.h
 ScanEngine.h
 )
