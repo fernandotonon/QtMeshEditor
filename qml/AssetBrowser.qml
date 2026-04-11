@@ -232,19 +232,34 @@ Rectangle {
                     anchors.rightMargin: 8
                     spacing: 8
 
-                    // Type icon
-                    Text {
-                        Layout.preferredWidth: 20
-                        horizontalAlignment: Text.AlignHCenter
-                        text: {
-                            var type = modelData.type
-                            if (modelData.isDir) return "\uD83D\uDCC1"     // folder
-                            if (type === "mesh") return "\uD83D\uDFE6"     // blue square (cube-like)
-                            if (type === "texture") return "\uD83D\uDDBC"  // framed picture
-                            if (type === "material") return "\uD83D\uDD35" // blue circle
-                            return "\uD83D\uDCC4"                          // generic document
+                    // Type icon / thumbnail
+                    Item {
+                        Layout.preferredWidth: 28
+                        Layout.preferredHeight: 28
+
+                        // Image thumbnail for textures
+                        Image {
+                            anchors.fill: parent
+                            visible: modelData.type === "texture"
+                            source: modelData.type === "texture" ? "file:///" + modelData.path : ""
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: true
+                            sourceSize.width: 28
+                            sourceSize.height: 28
                         }
-                        font.pixelSize: 14
+
+                        // Emoji icon for non-texture files
+                        Text {
+                            anchors.centerIn: parent
+                            visible: modelData.type !== "texture"
+                            text: {
+                                if (modelData.isDir) return "\uD83D\uDCC1"
+                                if (modelData.type === "mesh") return "\uD83D\uDFE6"
+                                if (modelData.type === "material") return "\uD83D\uDD35"
+                                return "\uD83D\uDCC4"
+                            }
+                            font.pixelSize: 14
+                        }
                     }
 
                     // File name
@@ -276,10 +291,15 @@ Rectangle {
                     id: delegateMouse
                     anchors.fill: parent
                     hoverEnabled: true
-                    onClicked: AssetBrowserController.openFile(modelData.path)
-                    onDoubleClicked: {
+                    onClicked: {
+                        // Single click navigates into directories
                         if (modelData.isDir)
                             AssetBrowserController.navigateToDirectory(modelData.path)
+                    }
+                    onDoubleClicked: {
+                        // Double click opens/loads files
+                        if (!modelData.isDir)
+                            AssetBrowserController.openFile(modelData.path)
                     }
                 }
             }
