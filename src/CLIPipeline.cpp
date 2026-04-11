@@ -235,6 +235,7 @@ void CLIPipeline::printUsage()
         "  --dry-run                 Show what fixes would be applied\n"
         "  --include <patterns>      File patterns, comma-separated (e.g. *.fbx,*.glb)\n"
         "  --exclude <patterns>      Exclude patterns, comma-separated\n"
+        "  --max-vertices <n>        Override max_vertex_count rule for this run (0 = no limit)\n"
         "  --fail-on <level>         Exit 1 threshold: info, warning, error, never\n"
         "\n"
         "Fix flags:\n"
@@ -1732,6 +1733,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     QString includeArg;
     QString excludeArg;
     QString failOn;
+    int maxVerticesOverride = -1;
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -1746,6 +1748,20 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (arg == "--include" && i + 1 < argc) { includeArg  = argv[++i]; continue; }
         if (arg == "--exclude" && i + 1 < argc) { excludeArg  = argv[++i]; continue; }
         if (arg == "--fail-on" && i + 1 < argc) { failOn      = argv[++i]; continue; }
+        if (arg == "--max-vertices") {
+            if (i + 1 >= argc) {
+                err() << "Error: --max-vertices requires an integer value" << Qt::endl;
+                return 2;
+            }
+            bool ok = false;
+            const int parsed = QString(argv[++i]).toInt(&ok);
+            if (!ok || parsed < 0) {
+                err() << "Error: --max-vertices must be an integer >= 0" << Qt::endl;
+                return 2;
+            }
+            maxVerticesOverride = parsed;
+            continue;
+        }
         if (!arg.startsWith("-") && scanRoot.isEmpty()) { scanRoot = arg; continue; }
     }
 
@@ -1770,6 +1786,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     // CLI overrides
     if (fix)     config.fixEnabled = true;
     if (dryRun)  config.dryRun = true;
+    if (maxVerticesOverride >= 0) config.maxVertexCount = maxVerticesOverride;
     if (!failOn.isEmpty()) {
         failOn = failOn.toLower();
         if (failOn != "info" && failOn != "warning" && failOn != "error" && failOn != "never") {
