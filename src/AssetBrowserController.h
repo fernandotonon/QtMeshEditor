@@ -55,6 +55,9 @@ public:
     /// Returns the file-type category for a given file extension.
     Q_INVOKABLE QString fileTypeForPath(const QString& path) const;
 
+    /// Returns a data-URI preview image for a material file, or "" if unavailable.
+    Q_INVOKABLE QString materialPreview(const QString& filePath) const;
+
 signals:
     void rootPathChanged();
     void filesChanged();

@@ -57,6 +57,7 @@
 #include "MeshLodController.h"
 #include "MeshValidator.h"
 #include "MaterialPresetLibrary.h"
+#include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
@@ -238,6 +239,7 @@ MainWindow::~MainWindow()
     MeshLodController::kill();
     MeshValidator::kill();
     MaterialPresetLibrary::kill();
+    MaterialPreviewRenderer::kill();
     AIChatManager::kill();
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)

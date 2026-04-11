@@ -1,6 +1,8 @@
 #include "AssetBrowserController.h"
+#include "MaterialPreviewRenderer.h"
 #include "SentryReporter.h"
 
+#include <Ogre.h>
 #include <QDir>
 #include <QFileInfo>
 #include <QSettings>
@@ -228,6 +230,14 @@ void AssetBrowserController::refreshFiles()
         entry["type"] = type;
         entry["size"] = fi.isDir() ? 0 : fi.size();
         entry["isDir"] = fi.isDir();
+
+        // Generate a material preview for .material files
+        if (type == "material") {
+            QString previewUrl = materialPreview(fi.absoluteFilePath());
+            if (!previewUrl.isEmpty())
+                entry["previewUrl"] = previewUrl;
+        }
+
         m_files.append(entry);
     }
 
@@ -244,6 +254,35 @@ void AssetBrowserController::setupWatcher()
     // Watch the current root path
     if (!m_rootPath.isEmpty() && QDir(m_rootPath).exists())
         m_watcher->addPath(m_rootPath);
+}
+
+QString AssetBrowserController::materialPreview(const QString& filePath) const
+{
+    // Parse the .material file for the first material name
+    QString matName = MaterialPreviewRenderer::firstMaterialNameInFile(filePath);
+    if (matName.isEmpty())
+        return {};
+
+    // Try to load the material if it doesn't already exist in Ogre
+    auto* matMgr = Ogre::MaterialManager::getSingletonPtr();
+    if (!matMgr)
+        return {};
+
+    if (!matMgr->resourceExists(matName.toStdString())) {
+        // Ensure the directory containing the .material file is an Ogre resource location
+        QFileInfo fi(filePath);
+        try {
+            Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+                fi.absolutePath().toStdString(), "FileSystem",
+                Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false);
+            // Parse all .material scripts in the resource group
+            Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+        } catch (...) {
+            // Ignore errors from duplicate resource locations or parse failures
+        }
+    }
+
+    return MaterialPreviewRenderer::instance()->renderPreviewAsDataUri(matName);
 }
 
 QString AssetBrowserController::classifyExtension(const QString& ext) const

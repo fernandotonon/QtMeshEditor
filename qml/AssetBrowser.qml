@@ -248,10 +248,22 @@ Rectangle {
                             sourceSize.height: 28
                         }
 
-                        // Emoji icon for non-texture files
+                        // Material preview sphere (RTT)
+                        Image {
+                            anchors.fill: parent
+                            visible: modelData.type === "material" && !!modelData.previewUrl
+                            source: (modelData.type === "material" && modelData.previewUrl) ? modelData.previewUrl : ""
+                            fillMode: Image.PreserveAspectFit
+                            asynchronous: true
+                            sourceSize.width: 28
+                            sourceSize.height: 28
+                        }
+
+                        // Emoji icon for non-texture files (fallback for materials without preview)
                         Text {
                             anchors.centerIn: parent
                             visible: modelData.type !== "texture"
+                                     && !(modelData.type === "material" && !!modelData.previewUrl)
                             text: {
                                 if (modelData.isDir) return "\uD83D\uDCC1"
                                 if (modelData.type === "mesh") return "\uD83D\uDFE6"

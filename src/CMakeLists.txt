@@ -64,6 +64,7 @@ WelcomeScreenController.cpp
 ScanConfig.cpp
 ScanEngine.cpp
 AssetBrowserController.cpp
+MaterialPreviewRenderer.cpp
 )
 
 set(HEADER_FILES
@@ -131,6 +132,7 @@ WelcomeScreenController.h
 ScanConfig.h
 ScanEngine.h
 AssetBrowserController.h
+MaterialPreviewRenderer.h
 )
 
 set(TEST_SOURCES "")
