@@ -877,6 +877,7 @@ void EditModeController::setSoftSelectionEnabled(bool enabled)
         SentryReporter::addBreadcrumb("edit_mode",
             QString("Soft selection %1").arg(enabled ? "enabled" : "disabled"));
         emit softSelectionChanged();
+        updateSelectionOverlay();
     }
 }
 
@@ -885,6 +886,7 @@ void EditModeController::setSoftSelectionRadius(double radius)
     if (radius > 0.0 && m_softSelectionRadius != radius) {
         m_softSelectionRadius = radius;
         emit softSelectionChanged();
+        updateSelectionOverlay();
     }
 }
 
@@ -893,6 +895,7 @@ void EditModeController::setSoftSelectionFalloff(int falloff)
     if (falloff >= 0 && falloff <= 1 && m_softSelectionFalloff != falloff) {
         m_softSelectionFalloff = falloff;
         emit softSelectionChanged();
+        updateSelectionOverlay();
     }
 }
 
