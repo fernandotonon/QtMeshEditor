@@ -234,6 +234,56 @@ static PrimitiveObject* getSelectedPrimitive()
     return nullptr;
 }
 
+QVariantList PropertiesPanelController::shortcutData() const
+{
+    QVariantList data;
+
+    auto entry = [](const QString& cat, const QString& key, const QString& desc) {
+        QVariantMap m;
+        m["category"] = cat;
+        m["key"] = key;
+        m["description"] = desc;
+        return m;
+    };
+
+    // Transform
+    data << entry("Transform", "Q",       "Select mode");
+    data << entry("Transform", "W",       "Translate mode");
+    data << entry("Transform", "E",       "Rotate mode");
+    data << entry("Transform", "R",       "Scale mode");
+    data << entry("Transform", "X",       "Toggle World / Local space");
+    data << entry("Transform", "P",       "Cycle pivot mode");
+
+    // Navigation
+    data << entry("Navigation", "F",               "Frame selection");
+    data << entry("Navigation", "Middle Mouse",     "Orbit camera");
+    data << entry("Navigation", "Right Mouse",      "Pan camera");
+    data << entry("Navigation", "Scroll Wheel",     "Zoom camera");
+
+    // Editing
+    data << entry("Editing", "Ctrl + D",       "Duplicate selection");
+    data << entry("Editing", "Ctrl + G",       "Group nodes");
+    data << entry("Editing", "Ctrl + Shift + G", "Ungroup nodes");
+    data << entry("Editing", "Delete",         "Remove selected");
+
+    // File
+    data << entry("File", "Ctrl + O",       "Open scene");
+    data << entry("File", "Ctrl + S",       "Save scene");
+    data << entry("File", "Ctrl + Z",       "Undo");
+    data << entry("File", "Ctrl + Shift + Z", "Redo");
+
+    // View
+    data << entry("View", "Show Grid",       "Toggle grid display (Options menu)");
+    data << entry("View", "Show Normals",    "Toggle vertex normals (Options menu)");
+    data << entry("View", "Show Mesh Info",  "Toggle mesh info overlay (Options menu)");
+    data << entry("View", "Show View Cube",  "Toggle 3D view cube (Options menu)");
+
+    // Help
+    data << entry("Help", "Ctrl + /", "Open keyboard shortcut reference");
+
+    return data;
+}
+
 void PropertiesPanelController::selectNodeByName(const QString& name)
 {
     auto* mgr = Manager::getSingletonPtr();

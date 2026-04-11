@@ -631,6 +631,23 @@ void MainWindow::initToolBar()
     QAction* mcpSettingsAction = aiMenu->addAction(tr("MCP Server Settings..."));
     connect(mcpSettingsAction, &QAction::triggered, this, &MainWindow::showMCPSettings);
 
+    // Keyboard Shortcuts reference in Help menu
+    QAction* shortcutsAction = ui->menuHelp->addAction(tr("Keyboard Shortcuts"));
+    shortcutsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Slash));
+    connect(shortcutsAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb("ui.action", "Help > Keyboard Shortcuts opened");
+
+        auto* widget = new QQuickWidget(this);
+        widget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        widget->setSource(QUrl("qrc:/ShortcutReference/ShortcutReference.qml"));
+        widget->setAttribute(Qt::WA_DeleteOnClose);
+        widget->setMinimumSize(520, 560);
+        widget->resize(520, 560);
+        widget->setWindowFlags(Qt::Dialog);
+        widget->setWindowTitle(tr("Keyboard Shortcuts"));
+        widget->show();
+    });
+
     // Crash reporting toggle in Help menu
     ui->menuHelp->addSeparator();
     QAction* crashReportAction = ui->menuHelp->addAction(tr("Send Crash Reports"));

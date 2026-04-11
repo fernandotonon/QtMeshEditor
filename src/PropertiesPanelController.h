@@ -177,6 +177,8 @@ public:
     Q_INVOKABLE void undoToIndex(int index);
     Q_INVOKABLE void clearUndoHistory();
 
+    Q_INVOKABLE QVariantList shortcutData() const;
+
     Q_INVOKABLE void selectNodeByName(const QString& name);
     Q_INVOKABLE bool canReparentNode(const QString& nodeName, const QString& newParentName);
     Q_INVOKABLE bool reparentNode(const QString& nodeName, const QString& newParentName);

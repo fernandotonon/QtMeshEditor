@@ -31,4 +31,7 @@
   <qresource prefix="/WelcomeScreen">
     <file alias="WelcomeScreen.qml">../qml/WelcomeScreen.qml</file>
   </qresource>
+  <qresource prefix="/ShortcutReference">
+    <file alias="ShortcutReference.qml">../qml/ShortcutReference.qml</file>
+  </qresource>
 </RCC>
