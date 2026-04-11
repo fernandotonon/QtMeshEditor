@@ -775,19 +775,30 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
         auto* grid = Manager::getSingleton()->getViewportGrid();
         if (grid) grid->setVisible(value.toBool());
     } else if (key == "Viewport/cameraSpeed") {
-        // Apply to all viewports via EditorViewport list
-        for (auto* ew : Manager::getSingleton()->getMainWindow()->findChildren<EditorViewport*>()) {
-            auto* cam = ew->getOgreWidget()->getSpaceCamera();
-            if (cam) cam->setCameraSpeed(value.toReal());
+        Ogre::Real speed = value.toReal();
+        if (speed <= 0) speed = 0.5f;
+        // Apply to the active viewport (TransformOperator tracks it)
+        auto* activeWidget = TransformOperator::getSingleton()->getActiveWidget();
+        if (activeWidget && activeWidget->getSpaceCamera())
+            activeWidget->getSpaceCamera()->setCameraSpeed(speed);
+        // Also apply to all viewports
+        auto* mainWin = Manager::getSingleton()->getMainWindow();
+        if (mainWin) {
+            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
+                if (ow->getSpaceCamera())
+                    ow->getSpaceCamera()->setCameraSpeed(speed);
+            }
         }
     } else if (key == "Viewport/nearClip" || key == "Viewport/farClip") {
-        for (auto* ew : Manager::getSingleton()->getMainWindow()->findChildren<EditorViewport*>()) {
-            auto* cam = ew->getOgreWidget()->getSpaceCamera();
-            if (cam && cam->getCamera()) {
-                if (key == "Viewport/nearClip")
-                    cam->getCamera()->setNearClipDistance(value.toReal());
-                else
-                    cam->getCamera()->setFarClipDistance(value.toReal());
+        auto* mainWin = Manager::getSingleton()->getMainWindow();
+        if (mainWin) {
+            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
+                if (ow->getSpaceCamera() && ow->getSpaceCamera()->getCamera()) {
+                    if (key == "Viewport/nearClip")
+                        ow->getSpaceCamera()->getCamera()->setNearClipDistance(value.toReal());
+                    else
+                        ow->getSpaceCamera()->getCamera()->setFarClipDistance(value.toReal());
+                }
             }
         }
     } else if (key == "Telemetry/enabled") {
