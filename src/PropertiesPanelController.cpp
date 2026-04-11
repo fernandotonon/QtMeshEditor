@@ -11,6 +11,7 @@
 #include "SentryReporter.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
+#include "EditorViewport.h"
 #include "ViewportGrid.h"
 #include <QApplication>
 #include <QFileDialog>
@@ -774,21 +775,44 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
         auto* grid = Manager::getSingleton()->getViewportGrid();
         if (grid) grid->setVisible(value.toBool());
     } else if (key == "Viewport/cameraSpeed") {
-        // Apply to all viewports
-        for (auto* vp : Manager::getSingleton()->getMainWindow()->findChildren<OgreWidget*>()) {
-            if (vp->getSpaceCamera())
-                vp->getSpaceCamera()->setCameraSpeed(value.toReal());
+        // Apply to all viewports via EditorViewport list
+        for (auto* ew : Manager::getSingleton()->getMainWindow()->findChildren<EditorViewport*>()) {
+            auto* cam = ew->getOgreWidget()->getSpaceCamera();
+            if (cam) cam->setCameraSpeed(value.toReal());
         }
     } else if (key == "Viewport/nearClip" || key == "Viewport/farClip") {
-        for (auto* vp : Manager::getSingleton()->getMainWindow()->findChildren<OgreWidget*>()) {
-            if (vp->getSpaceCamera() && vp->getSpaceCamera()->getCamera()) {
+        for (auto* ew : Manager::getSingleton()->getMainWindow()->findChildren<EditorViewport*>()) {
+            auto* cam = ew->getOgreWidget()->getSpaceCamera();
+            if (cam && cam->getCamera()) {
                 if (key == "Viewport/nearClip")
-                    vp->getSpaceCamera()->getCamera()->setNearClipDistance(value.toReal());
+                    cam->getCamera()->setNearClipDistance(value.toReal());
                 else
-                    vp->getSpaceCamera()->getCamera()->setFarClipDistance(value.toReal());
+                    cam->getCamera()->setFarClipDistance(value.toReal());
             }
         }
     } else if (key == "Telemetry/enabled") {
         SentryReporter::setEnabled(value.toBool());
+    } else if (key == "Appearance/theme") {
+        QString theme = value.toString();
+        if (theme == "Dark") {
+            // Match MainWindow::on_actionDark_toggled — use dark palette
+            QPalette dark;
+            dark.setColor(QPalette::Window, QColor(53, 53, 53));
+            dark.setColor(QPalette::WindowText, Qt::white);
+            dark.setColor(QPalette::Base, QColor(35, 35, 35));
+            dark.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
+            dark.setColor(QPalette::ToolTipBase, QColor(25, 25, 25));
+            dark.setColor(QPalette::ToolTipText, Qt::white);
+            dark.setColor(QPalette::Text, Qt::white);
+            dark.setColor(QPalette::Button, QColor(53, 53, 53));
+            dark.setColor(QPalette::ButtonText, Qt::white);
+            dark.setColor(QPalette::Link, QColor(42, 130, 218));
+            dark.setColor(QPalette::Highlight, QColor(42, 130, 218));
+            dark.setColor(QPalette::HighlightedText, Qt::black);
+            QApplication::setPalette(dark);
+        } else if (theme == "Light") {
+            QApplication::setPalette(QColor("ghostwhite"));
+        }
+        // System = use platform default (requires restart)
     }
 }
