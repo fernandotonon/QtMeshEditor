@@ -31,6 +31,8 @@ THE SOFTWARE.
 #include "SelectionSet.h"
 #include "SentryReporter.h"
 #include "Manager.h"
+#include "NormalVisualizer.h"
+#include "mainwindow.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
 #include <Ogre.h>
@@ -180,6 +182,7 @@ void EditModeController::exitEditMode(bool commitChanges)
 
     if (commitChanges && m_editableMesh && m_editEntity) {
         m_editableMesh->commitToEntity(m_editEntity);
+    refreshNormalVisualizer();
         SentryReporter::addBreadcrumb("edit_mode", "Exited Edit Mode: changes committed");
     } else {
         SentryReporter::addBreadcrumb("edit_mode", "Exited Edit Mode: changes discarded");
@@ -992,6 +995,7 @@ void EditModeController::recalculateNormals(bool smooth)
 
     // Write normals back to the GPU buffers for immediate visual feedback
     m_editableMesh->commitToEntity(m_editEntity);
+    refreshNormalVisualizer();
 
     emit meshDataChanged();
 }
@@ -1027,6 +1031,7 @@ void EditModeController::removeDegenerateTriangles()
         // Recalculate normals and commit
         recalculateNormals(m_normalsMode == 0);
         m_editableMesh->commitToEntity(m_editEntity);
+    refreshNormalVisualizer();
         updateSelectionOverlay();
         emit meshDataChanged();
     }
@@ -1088,6 +1093,7 @@ void EditModeController::translateSelectedVertices(const Ogre::Vector3& delta)
         m_editableMesh->recalculateNormalsFlat();
 
     m_editableMesh->commitToEntity(m_editEntity);
+    refreshNormalVisualizer();
     updateSelectionOverlay();
     emit meshDataChanged();
 }
@@ -1120,6 +1126,7 @@ void EditModeController::rotateSelectedVertices(const Ogre::Quaternion& rotation
         m_editableMesh->recalculateNormalsFlat();
 
     m_editableMesh->commitToEntity(m_editEntity);
+    refreshNormalVisualizer();
     updateSelectionOverlay();
     emit meshDataChanged();
 }
@@ -1153,6 +1160,7 @@ void EditModeController::scaleSelectedVertices(const Ogre::Vector3& scaleFactor)
         m_editableMesh->recalculateNormalsFlat();
 
     m_editableMesh->commitToEntity(m_editEntity);
+    refreshNormalVisualizer();
     updateSelectionOverlay();
     emit meshDataChanged();
 }
@@ -1191,6 +1199,7 @@ void EditModeController::restoreVertexPositions(const std::map<int, Ogre::Vector
 
     if (m_editEntity) {
         m_editableMesh->commitToEntity(m_editEntity);
+    refreshNormalVisualizer();
         updateSelectionOverlay();
         emit meshDataChanged();
     }
@@ -1467,4 +1476,14 @@ void EditModeController::destroySelectionOverlay()
         sceneMgr->destroySceneNode(m_overlayNode);
         m_overlayNode = nullptr;
     }
+}
+
+
+void EditModeController::refreshNormalVisualizer()
+{
+    if (!m_editEntity) return;
+    auto* mainWin = Manager::getSingletonPtr() ? Manager::getSingleton()->getMainWindow() : nullptr;
+    if (!mainWin) return;
+    auto* nv = mainWin->findChild<NormalVisualizer*>();
+    if (nv) nv->refreshEntity(m_editEntity);
 }

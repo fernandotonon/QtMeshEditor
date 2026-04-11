@@ -74,6 +74,13 @@ void NormalVisualizer::setVisible(bool visible)
     }
 }
 
+void NormalVisualizer::refreshEntity(Ogre::Entity* entity)
+{
+    if (!mVisible || !entity) return;
+    destroyOverlayForEntity(entity);
+    buildOverlayForEntity(entity);
+}
+
 void NormalVisualizer::onEntityCreated(Ogre::Entity* const& entity)
 {
     if (mVisible)

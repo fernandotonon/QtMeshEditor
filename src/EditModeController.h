@@ -379,6 +379,8 @@ private:
     std::unique_ptr<EditableMesh> m_editableMesh;
     Ogre::Entity* m_editEntity = nullptr;
 
+    void refreshNormalVisualizer();
+
     // Component selection state
     SelectionMode m_selectionMode = VertexMode;
     std::set<int> m_selectedVertices;              ///< Global vertex indices
