@@ -177,6 +177,12 @@ public:
     Q_INVOKABLE void undoToIndex(int index);
     Q_INVOKABLE void clearUndoHistory();
 
+    Q_INVOKABLE QVariantList shortcutData() const;
+
+    // Generic QSettings accessors for Preferences dialog
+    Q_INVOKABLE QVariant getSetting(const QString& key, const QVariant& defaultValue) const;
+    Q_INVOKABLE void setSetting(const QString& key, const QVariant& value);
+
     Q_INVOKABLE void selectNodeByName(const QString& name);
     Q_INVOKABLE bool canReparentNode(const QString& nodeName, const QString& newParentName);
     Q_INVOKABLE bool reparentNode(const QString& nodeName, const QString& newParentName);

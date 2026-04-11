@@ -1,6 +1,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QMessageBox>
+#include "WelcomeDialog.h"
 #include <QPalette>
 #include <QDebug>
 #include <QTimer>
@@ -244,12 +245,33 @@ int main(int argc, char *argv[])
             return ThemeManager::qmlInstance(engine, scriptEngine);
         });
 
+    // Show welcome dialog before creating MainWindow
+    QString welcomeOpenFile;
+    bool welcomeNewScene = false;
+    if (WelcomeDialog::shouldShow()) {
+        WelcomeDialog welcome;
+        welcome.exec();
+        if (welcome.userAction() == WelcomeDialog::OpenFile ||
+            welcome.userAction() == WelcomeDialog::OpenRecent) {
+            welcomeOpenFile = welcome.selectedFile();
+        } else if (welcome.userAction() == WelcomeDialog::NewScene) {
+            welcomeNewScene = true;
+        }
+    }
+
     int result = 0;
     try {
         auto startupTxn = SentryReporter::startTransaction("app.startup", "app.load");
         auto startupTxnClose = qScopeGuard([&] { SentryReporter::finishTransaction(startupTxn); });
         MainWindow w;
         w.show();
+
+        // Act on welcome dialog choice
+        if (!welcomeOpenFile.isEmpty()) {
+            QTimer::singleShot(0, &w, [&w, welcomeOpenFile]() {
+                w.loadFile(welcomeOpenFile);
+            });
+        }
 
         // Start MCP server alongside GUI if requested
         if (mcpWithGuiMode) {

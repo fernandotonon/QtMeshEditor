@@ -60,8 +60,12 @@ MaterialPresetLibrary.cpp
 MeshLodController.cpp
 MeshValidator.cpp
 AIChatManager.cpp
+WelcomeScreenController.cpp
+WelcomeDialog.cpp
 ScanConfig.cpp
 ScanEngine.cpp
+AssetBrowserController.cpp
+MaterialPreviewRenderer.cpp
 )
 
 set(HEADER_FILES
@@ -125,8 +129,12 @@ MaterialPresetLibrary.h
 MeshLodController.h
 MeshValidator.h
 AIChatManager.h
+WelcomeScreenController.h
+WelcomeDialog.h
 ScanConfig.h
 ScanEngine.h
+AssetBrowserController.h
+MaterialPreviewRenderer.h
 )
 
 set(TEST_SOURCES "")
