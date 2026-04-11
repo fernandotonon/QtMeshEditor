@@ -77,6 +77,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanEngine.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetBrowserController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.cpp
     )
 
     set(TEST_HEADER_FILES
@@ -146,6 +148,8 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScanEngine.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AssetBrowserController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)

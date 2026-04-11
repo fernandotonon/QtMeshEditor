@@ -866,6 +866,333 @@ void EditModeController::handleBoxSelect(const QPoint& startPos, const QPoint& e
 // LCOV_EXCL_STOP
 
 // ===========================================================================
+// Soft selection
+// ===========================================================================
+
+void EditModeController::setSoftSelectionEnabled(bool enabled)
+{
+    if (m_softSelectionEnabled != enabled) {
+        m_softSelectionEnabled = enabled;
+        SentryReporter::addBreadcrumb("edit_mode",
+            QString("Soft selection %1").arg(enabled ? "enabled" : "disabled"));
+        emit softSelectionChanged();
+    }
+}
+
+void EditModeController::setSoftSelectionRadius(double radius)
+{
+    if (radius > 0.0 && m_softSelectionRadius != radius) {
+        m_softSelectionRadius = radius;
+        emit softSelectionChanged();
+    }
+}
+
+void EditModeController::setSoftSelectionFalloff(int falloff)
+{
+    if (falloff >= 0 && falloff <= 1 && m_softSelectionFalloff != falloff) {
+        m_softSelectionFalloff = falloff;
+        emit softSelectionChanged();
+    }
+}
+
+std::map<int, float> EditModeController::getSoftSelectionWeights() const
+{
+    std::map<int, float> weights;
+    if (!m_editableMesh || m_selectedVertices.empty())
+        return weights;
+
+    // All selected vertices get weight 1.0
+    for (int gi : m_selectedVertices)
+        weights[gi] = 1.0f;
+
+    if (!m_softSelectionEnabled || m_softSelectionRadius <= 0.0)
+        return weights;
+
+    // Collect positions of selected vertices
+    std::vector<Ogre::Vector3> selectedPositions;
+    selectedPositions.reserve(m_selectedVertices.size());
+    for (int gi : m_selectedVertices) {
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx < m_editableMesh->subMeshes().size() &&
+            localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+        {
+            selectedPositions.push_back(
+                m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position);
+        }
+    }
+
+    float radius = static_cast<float>(m_softSelectionRadius);
+    int totalVerts = static_cast<int>(m_editableMesh->totalVertexCount());
+
+    for (int gi = 0; gi < totalVerts; ++gi) {
+        if (m_selectedVertices.count(gi))
+            continue; // Already weight 1.0
+
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx >= m_editableMesh->subMeshes().size())
+            continue;
+        const auto& pos = m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
+
+        // Find minimum distance to any selected vertex
+        float minDist = std::numeric_limits<float>::max();
+        for (const auto& selPos : selectedPositions) {
+            float dist = pos.distance(selPos);
+            if (dist < minDist)
+                minDist = dist;
+        }
+
+        if (minDist < radius) {
+            float t = minDist / radius; // 0 at selected vertex, 1 at radius boundary
+            float weight = 0.0f;
+            if (m_softSelectionFalloff == 0) {
+                // Linear falloff
+                weight = 1.0f - t;
+            } else {
+                // Smooth (cosine) falloff
+                weight = 0.5f * (1.0f + std::cos(t * static_cast<float>(M_PI)));
+            }
+            if (weight > 0.001f)
+                weights[gi] = weight;
+        }
+    }
+
+    return weights;
+}
+
+// ===========================================================================
+// Normals recalculation
+// ===========================================================================
+
+void EditModeController::setNormalsMode(int mode)
+{
+    if (mode >= 0 && mode <= 1 && m_normalsMode != mode) {
+        m_normalsMode = mode;
+        SentryReporter::addBreadcrumb("edit_mode",
+            QString("Normals mode changed to %1").arg(mode == 0 ? "smooth" : "flat"));
+        emit normalsModeChanged();
+    }
+}
+
+void EditModeController::recalculateNormals(bool smooth)
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+        return;
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Recalculate normals (%1)").arg(smooth ? "smooth" : "flat"));
+
+    if (smooth)
+        m_editableMesh->recalculateNormals();
+    else
+        m_editableMesh->recalculateNormalsFlat();
+
+    // Write normals back to the GPU buffers for immediate visual feedback
+    m_editableMesh->commitToEntity(m_editEntity);
+
+    emit meshDataChanged();
+}
+
+// ===========================================================================
+// Mesh validation after edits
+// ===========================================================================
+
+void EditModeController::validateMesh()
+{
+    if (!m_editableMesh) {
+        m_degenerateTriangleCount = 0;
+        emit validationChanged();
+        return;
+    }
+
+    int oldCount = m_degenerateTriangleCount;
+    m_degenerateTriangleCount = m_editableMesh->countDegenerateTriangles();
+    if (m_degenerateTriangleCount != oldCount)
+        emit validationChanged();
+}
+
+void EditModeController::removeDegenerateTriangles()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+        return;
+
+    SentryReporter::addBreadcrumb("edit_mode", "Remove degenerate triangles");
+
+    int removed = m_editableMesh->removeDegenerateTriangles();
+
+    if (removed > 0) {
+        // Recalculate normals and commit
+        recalculateNormals(m_normalsMode == 0);
+        m_editableMesh->commitToEntity(m_editEntity);
+        updateSelectionOverlay();
+        emit meshDataChanged();
+    }
+
+    // Re-validate
+    validateMesh();
+}
+
+// ===========================================================================
+// Vertex transform support
+// ===========================================================================
+
+Ogre::Vector3 EditModeController::getSelectedVerticesCentroid() const
+{
+    if (!m_editableMesh || m_selectedVertices.empty())
+        return Ogre::Vector3::ZERO;
+
+    Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+    int count = 0;
+
+    for (int gi : m_selectedVertices) {
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx < m_editableMesh->subMeshes().size() &&
+            localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+        {
+            centroid += m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
+            ++count;
+        }
+    }
+
+    if (count > 0)
+        centroid /= static_cast<Ogre::Real>(count);
+
+    return centroid;
+}
+
+void EditModeController::translateSelectedVertices(const Ogre::Vector3& delta)
+{
+    if (!m_editableMesh || m_selectedVertices.empty())
+        return;
+
+    auto weights = getSoftSelectionWeights();
+
+    for (const auto& [gi, weight] : weights) {
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx < m_editableMesh->subMeshes().size() &&
+            localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+        {
+            Ogre::Vector3 pos = m_editableMesh->getVertexPosition(subIdx, localIdx);
+            pos += delta * weight;
+            m_editableMesh->setVertexPosition(subIdx, localIdx, pos);
+        }
+    }
+
+    // Recalculate normals and commit to GPU
+    if (m_normalsMode == 0)
+        m_editableMesh->recalculateNormals();
+    else
+        m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->commitToEntity(m_editEntity);
+    updateSelectionOverlay();
+    emit meshDataChanged();
+}
+
+void EditModeController::rotateSelectedVertices(const Ogre::Quaternion& rotation)
+{
+    if (!m_editableMesh || m_selectedVertices.empty())
+        return;
+
+    Ogre::Vector3 pivot = getSelectedVerticesCentroid();
+    auto weights = getSoftSelectionWeights();
+
+    for (const auto& [gi, weight] : weights) {
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx < m_editableMesh->subMeshes().size() &&
+            localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+        {
+            Ogre::Vector3 pos = m_editableMesh->getVertexPosition(subIdx, localIdx);
+            Ogre::Vector3 offset = pos - pivot;
+            // Interpolate rotation by weight
+            Ogre::Quaternion weightedRot = Ogre::Quaternion::Slerp(weight, Ogre::Quaternion::IDENTITY, rotation);
+            Ogre::Vector3 rotatedOffset = weightedRot * offset;
+            m_editableMesh->setVertexPosition(subIdx, localIdx, pivot + rotatedOffset);
+        }
+    }
+
+    if (m_normalsMode == 0)
+        m_editableMesh->recalculateNormals();
+    else
+        m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->commitToEntity(m_editEntity);
+    updateSelectionOverlay();
+    emit meshDataChanged();
+}
+
+void EditModeController::scaleSelectedVertices(const Ogre::Vector3& scaleFactor)
+{
+    if (!m_editableMesh || m_selectedVertices.empty())
+        return;
+
+    Ogre::Vector3 pivot = getSelectedVerticesCentroid();
+    auto weights = getSoftSelectionWeights();
+
+    for (const auto& [gi, weight] : weights) {
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx < m_editableMesh->subMeshes().size() &&
+            localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+        {
+            Ogre::Vector3 pos = m_editableMesh->getVertexPosition(subIdx, localIdx);
+            Ogre::Vector3 offset = pos - pivot;
+            // Interpolate scale by weight
+            Ogre::Vector3 weightedScale = Ogre::Vector3::UNIT_SCALE +
+                (scaleFactor - Ogre::Vector3::UNIT_SCALE) * weight;
+            Ogre::Vector3 scaledOffset = offset * weightedScale;
+            m_editableMesh->setVertexPosition(subIdx, localIdx, pivot + scaledOffset);
+        }
+    }
+
+    if (m_normalsMode == 0)
+        m_editableMesh->recalculateNormals();
+    else
+        m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->commitToEntity(m_editEntity);
+    updateSelectionOverlay();
+    emit meshDataChanged();
+}
+
+std::map<int, Ogre::Vector3> EditModeController::snapshotVertexPositions() const
+{
+    std::map<int, Ogre::Vector3> snapshot;
+    if (!m_editableMesh)
+        return snapshot;
+
+    auto weights = getSoftSelectionWeights();
+    for (const auto& [gi, weight] : weights) {
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx < m_editableMesh->subMeshes().size() &&
+            localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+        {
+            snapshot[gi] = m_editableMesh->getVertexPosition(subIdx, localIdx);
+        }
+    }
+    return snapshot;
+}
+
+void EditModeController::restoreVertexPositions(const std::map<int, Ogre::Vector3>& snapshot)
+{
+    if (!m_editableMesh)
+        return;
+
+    for (const auto& [gi, pos] : snapshot) {
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx < m_editableMesh->subMeshes().size() &&
+            localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+        {
+            m_editableMesh->setVertexPosition(subIdx, localIdx, pos);
+        }
+    }
+
+    if (m_editEntity) {
+        m_editableMesh->commitToEntity(m_editEntity);
+        updateSelectionOverlay();
+        emit meshDataChanged();
+    }
+}
+
+// ===========================================================================
 // Selection overlay
 // ===========================================================================
 

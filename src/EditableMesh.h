@@ -155,6 +155,25 @@ public:
     void recalculateNormals();
 
     /**
+     * @brief Recalculate all vertex normals using flat shading.
+     *
+     * Each vertex gets the face normal of its triangle (no averaging).
+     * Note: this means shared vertices get the normal of the last triangle processed.
+     */
+    void recalculateNormalsFlat();
+
+    /**
+     * @brief Count the number of degenerate triangles (area below epsilon).
+     */
+    int countDegenerateTriangles(float epsilon = 1e-6f) const;
+
+    /**
+     * @brief Remove degenerate triangles (area below epsilon).
+     * @return Number of triangles removed.
+     */
+    int removeDegenerateTriangles(float epsilon = 1e-6f);
+
+    /**
      * @brief Calculate the axis-aligned bounding box of the entire mesh.
      */
     Ogre::AxisAlignedBox calculateBounds() const;

@@ -63,6 +63,15 @@ Rectangle {
                 }
             }
 
+            // ---- Edit Mode Tools ----
+            CollapsibleSection {
+                title: "Edit Mode Tools"
+                sectionVisible: EditModeController.editModeActive
+                expanded: true
+
+                Component.onCompleted: content = editModeToolsComponent
+            }
+
             // ---- Scene Outliner ----
             CollapsibleSection {
                 title: "Scene"
@@ -218,6 +227,230 @@ Rectangle {
                         ? outlinerColumn.treeModel.rowCount() : 0
                     Qt.callLater(function() { outlinerColumn.delegatesActive = true })
                 }
+            }
+        }
+    }
+
+    // ---- Edit Mode Tools Content ----
+    Component {
+        id: editModeToolsComponent
+
+        Column {
+            width: parent ? parent.width : 200
+            padding: 8
+            spacing: 6
+
+            // Selection mode buttons
+            Row {
+                spacing: 4
+                width: parent.width - 16
+
+                Text {
+                    text: "Select:"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Repeater {
+                    model: [
+                        { label: "Vertex", mode: 0 },
+                        { label: "Edge", mode: 1 },
+                        { label: "Face", mode: 2 }
+                    ]
+
+                    Rectangle {
+                        width: 52; height: 22; radius: 3
+                        color: EditModeController.selectionMode === modelData.mode
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.buttonColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: EditModeController.selectionMode = modelData.mode
+                        }
+                    }
+                }
+            }
+
+            // Selected count display
+            Text {
+                text: "Selected: " + EditModeController.selectedVertexCount + " vertices, "
+                    + EditModeController.selectedEdgeCount + " edges, "
+                    + EditModeController.selectedFaceCount + " faces"
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 10; opacity: 0.8
+                width: parent.width - 16
+                wrapMode: Text.Wrap
+            }
+
+            // Soft selection toggle
+            Row {
+                spacing: 6; width: parent.width - 16
+
+                CheckBox {
+                    id: softSelCheck
+                    text: "Soft Selection"
+                    checked: EditModeController.softSelectionEnabled
+                    onCheckedChanged: EditModeController.softSelectionEnabled = checked
+                    font.pixelSize: 10
+
+                    contentItem: Text {
+                        text: softSelCheck.text
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        leftPadding: softSelCheck.indicator.width + 4
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+            }
+
+            // Soft selection radius slider
+            Column {
+                width: parent.width - 16
+                visible: EditModeController.softSelectionEnabled
+                spacing: 2
+
+                Text {
+                    text: "Radius: " + softRadiusSlider.value.toFixed(2)
+                    color: PropertiesPanelController.textColor; font.pixelSize: 10
+                }
+                Slider {
+                    id: softRadiusSlider
+                    width: parent.width
+                    from: 0.1; to: 20.0; stepSize: 0.1
+                    value: EditModeController.softSelectionRadius
+                    onValueChanged: EditModeController.softSelectionRadius = value
+                }
+
+                // Falloff mode
+                Row {
+                    spacing: 4
+
+                    Text {
+                        text: "Falloff:"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+
+                    Repeater {
+                        model: [
+                            { label: "Linear", mode: 0 },
+                            { label: "Smooth", mode: 1 }
+                        ]
+
+                        Rectangle {
+                            width: 50; height: 20; radius: 3
+                            color: EditModeController.softSelectionFalloff === modelData.mode
+                                ? PropertiesPanelController.highlightColor
+                                : PropertiesPanelController.buttonColor
+                            border.color: PropertiesPanelController.borderColor; border.width: 1
+
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: PropertiesPanelController.textColor; font.pixelSize: 9
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: EditModeController.softSelectionFalloff = modelData.mode
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Separator
+            Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor }
+
+            // Normals recalculation
+            Row {
+                spacing: 4; width: parent.width - 16
+
+                Text {
+                    text: "Normals:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                Repeater {
+                    model: [
+                        { label: "Smooth", mode: 0 },
+                        { label: "Flat", mode: 1 }
+                    ]
+
+                    Rectangle {
+                        width: 52; height: 22; radius: 3
+                        color: EditModeController.normalsMode === modelData.mode
+                            ? PropertiesPanelController.highlightColor
+                            : PropertiesPanelController.buttonColor
+                        border.color: PropertiesPanelController.borderColor; border.width: 1
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: modelData.label
+                            color: PropertiesPanelController.textColor; font.pixelSize: 10
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: EditModeController.normalsMode = modelData.mode
+                        }
+                    }
+                }
+            }
+
+            // Recalc Normals button
+            Rectangle {
+                width: parent.width - 16; height: 26; radius: 3
+                color: recalcMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                     : recalcMouse.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                     : PropertiesPanelController.highlightColor
+                Text { anchors.centerIn: parent; text: "Recalculate Normals"; color: "white"; font.pixelSize: 11 }
+                MouseArea {
+                    id: recalcMouse; anchors.fill: parent; hoverEnabled: true
+                    onClicked: EditModeController.recalculateNormals(EditModeController.normalsMode === 0)
+                }
+            }
+
+            // Separator
+            Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor }
+
+            // Mesh validation warnings
+            Text {
+                width: parent.width - 16
+                visible: EditModeController.hasValidationWarnings
+                text: "\u26A0 " + EditModeController.degenerateTriangleCount + " degenerate triangle(s)"
+                color: "#e0a030"; font.pixelSize: 11; font.bold: true
+                wrapMode: Text.Wrap
+            }
+
+            // Remove degenerates button
+            Rectangle {
+                width: parent.width - 16; height: 26; radius: 3
+                visible: EditModeController.hasValidationWarnings
+                color: removeDegMouse.pressed ? Qt.darker("#c04040", 1.2)
+                     : removeDegMouse.containsMouse ? Qt.lighter("#c04040", 1.2)
+                     : "#c04040"
+                Text { anchors.centerIn: parent; text: "Remove Degenerates"; color: "white"; font.pixelSize: 11 }
+                MouseArea {
+                    id: removeDegMouse; anchors.fill: parent; hoverEnabled: true
+                    onClicked: EditModeController.removeDegenerateTriangles()
+                }
+            }
+
+            // Validation OK
+            Text {
+                width: parent.width - 16
+                visible: EditModeController.editModeActive && !EditModeController.hasValidationWarnings
+                text: "\u2714 No degenerate triangles"
+                color: "#60c060"; font.pixelSize: 10
             }
         }
     }

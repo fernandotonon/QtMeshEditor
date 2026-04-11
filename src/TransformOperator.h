@@ -5,6 +5,7 @@
 #include <QPoint>
 #include <QList>
 #include <vector>
+#include <map>
 #include <OgreRay.h>
 #include <OgreVector.h>
 #include "QtInputManager.h"
@@ -185,6 +186,10 @@ private:
     // Sub-entity undo state: vertex positions captured at drag start
     QList<Ogre::SubEntity*>                 mUndoSubEntities;
     QList<std::vector<Ogre::Vector3>>       mUndoSubMeshPositions;
+
+    // Edit mode undo state: vertex positions captured at drag start
+    std::map<int, Ogre::Vector3>            mEditModeStartPositions;
+    bool                                    mEditModeTransformActive = false;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;
 #else

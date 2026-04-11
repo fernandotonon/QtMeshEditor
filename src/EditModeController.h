@@ -35,8 +35,10 @@ THE SOFTWARE.
 #include <QRect>
 #include <memory>
 #include <set>
+#include <map>
 #include <utility>
 #include <OgreVector.h>
+#include <OgreQuaternion.h>
 
 class EditableMesh;
 class OgreWidget;
@@ -79,6 +81,18 @@ class EditModeController : public QObject
     Q_PROPERTY(int selectedVertexCount READ selectedVertexCount NOTIFY editSelectionChanged)
     Q_PROPERTY(int selectedEdgeCount READ selectedEdgeCount NOTIFY editSelectionChanged)
     Q_PROPERTY(int selectedFaceCount READ selectedFaceCount NOTIFY editSelectionChanged)
+
+    // Soft selection (proportional editing)
+    Q_PROPERTY(bool softSelectionEnabled READ softSelectionEnabled WRITE setSoftSelectionEnabled NOTIFY softSelectionChanged)
+    Q_PROPERTY(double softSelectionRadius READ softSelectionRadius WRITE setSoftSelectionRadius NOTIFY softSelectionChanged)
+    Q_PROPERTY(int softSelectionFalloff READ softSelectionFalloff WRITE setSoftSelectionFalloff NOTIFY softSelectionChanged)
+
+    // Normals recalculation
+    Q_PROPERTY(int normalsMode READ normalsMode WRITE setNormalsMode NOTIFY normalsModeChanged)
+
+    // Mesh validation after edits
+    Q_PROPERTY(int degenerateTriangleCount READ degenerateTriangleCount NOTIFY validationChanged)
+    Q_PROPERTY(bool hasValidationWarnings READ hasValidationWarnings NOTIFY validationChanged)
 
 public:
     /// Selection component mode for edit mode.
@@ -125,6 +139,58 @@ public:
     const std::set<int>& selectedVertices() const { return m_selectedVertices; }
     const std::set<std::pair<int,int>>& selectedEdges() const { return m_selectedEdges; }
     const std::set<int>& selectedFaces() const { return m_selectedFaces; }
+    /// @}
+
+    /// @name Soft selection (proportional editing)
+    /// @{
+    bool softSelectionEnabled() const { return m_softSelectionEnabled; }
+    void setSoftSelectionEnabled(bool enabled);
+    double softSelectionRadius() const { return m_softSelectionRadius; }
+    void setSoftSelectionRadius(double radius);
+    int softSelectionFalloff() const { return m_softSelectionFalloff; }
+    void setSoftSelectionFalloff(int falloff);
+
+    /// Compute soft selection weights for all vertices.
+    /// Returns a map of global vertex index -> weight (0.0 to 1.0).
+    /// Selected vertices get weight 1.0; nearby vertices get falloff weight.
+    std::map<int, float> getSoftSelectionWeights() const;
+    /// @}
+
+    /// @name Normals recalculation
+    /// @{
+    int normalsMode() const { return m_normalsMode; }
+    void setNormalsMode(int mode);
+    Q_INVOKABLE void recalculateNormals(bool smooth = true);
+    /// @}
+
+    /// @name Mesh validation after edits
+    /// @{
+    int degenerateTriangleCount() const { return m_degenerateTriangleCount; }
+    bool hasValidationWarnings() const { return m_degenerateTriangleCount > 0; }
+    Q_INVOKABLE void validateMesh();
+    Q_INVOKABLE void removeDegenerateTriangles();
+    /// @}
+
+    /// @name Vertex transform support
+    /// @{
+    /// Get the centroid of selected vertices in local mesh space.
+    Ogre::Vector3 getSelectedVerticesCentroid() const;
+
+    /// Apply a translation delta to selected vertices (with optional soft selection).
+    void translateSelectedVertices(const Ogre::Vector3& delta);
+
+    /// Apply a rotation to selected vertices around the centroid (with optional soft selection).
+    void rotateSelectedVertices(const Ogre::Quaternion& rotation);
+
+    /// Apply a scale to selected vertices around the centroid (with optional soft selection).
+    void scaleSelectedVertices(const Ogre::Vector3& scaleFactor);
+
+    /// Snapshot current positions of all affected vertices (selected + soft selection).
+    /// Call before starting a transform drag.
+    std::map<int, Ogre::Vector3> snapshotVertexPositions() const;
+
+    /// Restore vertex positions from a snapshot.
+    void restoreVertexPositions(const std::map<int, Ogre::Vector3>& snapshot);
     /// @}
 
     /// @name Selection operations
@@ -286,6 +352,12 @@ signals:
     void selectionModeChanged();
     /// Emitted when the edit-mode selection (vertices/edges/faces) changes.
     void editSelectionChanged();
+    /// Emitted when soft selection settings change.
+    void softSelectionChanged();
+    /// Emitted when normals mode changes.
+    void normalsModeChanged();
+    /// Emitted when mesh validation results change.
+    void validationChanged();
 
 private slots:
     void onSelectionChanged();
@@ -318,6 +390,17 @@ private:
     Ogre::ManualObject* m_overlayEdges = nullptr;
     Ogre::ManualObject* m_overlayFaces = nullptr;
     Ogre::SceneNode* m_overlayNode = nullptr;
+
+    // Soft selection (proportional editing)
+    bool m_softSelectionEnabled = false;
+    double m_softSelectionRadius = 2.0;
+    int m_softSelectionFalloff = 0; ///< 0=linear, 1=smooth (cosine)
+
+    // Normals mode: 0=smooth (default), 1=flat
+    int m_normalsMode = 0;
+
+    // Mesh validation
+    int m_degenerateTriangleCount = 0;
 };
 
 #endif // EDITMODECONTROLLER_H

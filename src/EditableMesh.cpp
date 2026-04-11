@@ -232,6 +232,91 @@ void EditableMesh::recalculateNormals()
     }
 }
 
+void EditableMesh::recalculateNormalsFlat()
+{
+    for (auto& sub : m_subMeshes) {
+        // Zero out all normals
+        for (auto& v : sub.vertices) {
+            v.normal = Ogre::Vector3::ZERO;
+            v.hasNormal = true;
+        }
+
+        // Assign face normal to each vertex of each triangle
+        for (const auto& tri : sub.triangles) {
+            if (tri.indices[0] >= sub.vertices.size() ||
+                tri.indices[1] >= sub.vertices.size() ||
+                tri.indices[2] >= sub.vertices.size())
+                continue;
+
+            const Ogre::Vector3& v0 = sub.vertices[tri.indices[0]].position;
+            const Ogre::Vector3& v1 = sub.vertices[tri.indices[1]].position;
+            const Ogre::Vector3& v2 = sub.vertices[tri.indices[2]].position;
+
+            Ogre::Vector3 faceNormal = (v1 - v0).crossProduct(v2 - v0);
+            Ogre::Real len = faceNormal.length();
+            if (len > 1e-8f)
+                faceNormal /= len;
+
+            // Flat shading: each vertex gets the face normal directly
+            sub.vertices[tri.indices[0]].normal = faceNormal;
+            sub.vertices[tri.indices[1]].normal = faceNormal;
+            sub.vertices[tri.indices[2]].normal = faceNormal;
+        }
+    }
+}
+
+int EditableMesh::countDegenerateTriangles(float epsilon) const
+{
+    int count = 0;
+    for (const auto& sub : m_subMeshes) {
+        for (const auto& tri : sub.triangles) {
+            if (tri.indices[0] >= sub.vertices.size() ||
+                tri.indices[1] >= sub.vertices.size() ||
+                tri.indices[2] >= sub.vertices.size())
+                continue;
+
+            const Ogre::Vector3& v0 = sub.vertices[tri.indices[0]].position;
+            const Ogre::Vector3& v1 = sub.vertices[tri.indices[1]].position;
+            const Ogre::Vector3& v2 = sub.vertices[tri.indices[2]].position;
+
+            float area = (v1 - v0).crossProduct(v2 - v0).length();
+            if (area < epsilon)
+                ++count;
+        }
+    }
+    return count;
+}
+
+int EditableMesh::removeDegenerateTriangles(float epsilon)
+{
+    int totalRemoved = 0;
+    for (auto& sub : m_subMeshes) {
+        std::vector<EditableTriangle> kept;
+        kept.reserve(sub.triangles.size());
+        for (const auto& tri : sub.triangles) {
+            if (tri.indices[0] >= sub.vertices.size() ||
+                tri.indices[1] >= sub.vertices.size() ||
+                tri.indices[2] >= sub.vertices.size()) {
+                ++totalRemoved;
+                continue;
+            }
+
+            const Ogre::Vector3& v0 = sub.vertices[tri.indices[0]].position;
+            const Ogre::Vector3& v1 = sub.vertices[tri.indices[1]].position;
+            const Ogre::Vector3& v2 = sub.vertices[tri.indices[2]].position;
+
+            float area = (v1 - v0).crossProduct(v2 - v0).length();
+            if (area < epsilon) {
+                ++totalRemoved;
+            } else {
+                kept.push_back(tri);
+            }
+        }
+        sub.triangles = std::move(kept);
+    }
+    return totalRemoved;
+}
+
 Ogre::AxisAlignedBox EditableMesh::calculateBounds() const
 {
     Ogre::Vector3 minimum(std::numeric_limits<Ogre::Real>::max());
