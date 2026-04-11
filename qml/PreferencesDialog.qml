@@ -191,8 +191,8 @@ Rectangle {
                             spacing: 6
                             width: parent.width
 
-                            property bool telemetryOn: readSetting("Telemetry/enabled", true) === true
-                                                    || readSetting("Telemetry/enabled", true) === "true"
+                            property bool telemetryOn: readSetting("Sentry/enabled", true) === true
+                                                    || readSetting("Sentry/enabled", true) === "true"
 
                             Rectangle {
                                 width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
@@ -200,7 +200,7 @@ Rectangle {
                                 color: parent.telemetryOn ? highlightColor : "transparent"
                                 Text { anchors.centerIn: parent; text: parent.parent.telemetryOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
                                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                                    onClicked: { parent.parent.telemetryOn = !parent.parent.telemetryOn; writeSetting("Telemetry/enabled", parent.parent.telemetryOn) }
+                                    onClicked: { parent.parent.telemetryOn = !parent.parent.telemetryOn; writeSetting("Sentry/enabled", parent.parent.telemetryOn) }
                                 }
                             }
                             Text { text: "Enable anonymous telemetry"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }

@@ -801,7 +801,7 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
                 }
             }
         }
-    } else if (key == "Telemetry/enabled") {
+    } else if (key == "Sentry/enabled" || key == "Telemetry/enabled") {
         SentryReporter::setEnabled(value.toBool());
     } else if (key == "Appearance/theme" || key == "palette") {
         QString theme = value.toString().toLower();
