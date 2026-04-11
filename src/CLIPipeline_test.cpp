@@ -2138,3 +2138,17 @@ TEST(CLIPipelineCmdScan, MaxVerticesOverrideReturnsFailure)
     TestArgv args({"qtmesh", "scan", rootBa.constData(), "--max-vertices", "2"});
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
 }
+
+TEST(CLIPipelineCmdScan, MaxVerticesOverrideWithEqualsReturnsFailure)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty()); // 3 vertices
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--max-vertices=2"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}

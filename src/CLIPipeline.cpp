@@ -1748,6 +1748,16 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (arg == "--include" && i + 1 < argc) { includeArg  = argv[++i]; continue; }
         if (arg == "--exclude" && i + 1 < argc) { excludeArg  = argv[++i]; continue; }
         if (arg == "--fail-on" && i + 1 < argc) { failOn      = argv[++i]; continue; }
+        if (arg.startsWith("--max-vertices=")) {
+            bool ok = false;
+            const int parsed = arg.mid(QStringLiteral("--max-vertices=").size()).toInt(&ok);
+            if (!ok || parsed < 0) {
+                err() << "Error: --max-vertices must be an integer >= 0" << Qt::endl;
+                return 2;
+            }
+            maxVerticesOverride = parsed;
+            continue;
+        }
         if (arg == "--max-vertices") {
             if (i + 1 >= argc) {
                 err() << "Error: --max-vertices requires an integer value" << Qt::endl;
