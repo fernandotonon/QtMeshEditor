@@ -167,6 +167,9 @@ bool EditModeController::enterEditMode()
             .arg(m_editableMesh->totalTriangleCount())
             .arg(m_editableMesh->subMeshCount()));
 
+    // Run initial validation
+    validateMesh();
+
     emit editModeChanged();
     emit meshDataChanged();
     emit selectionModeChanged();
@@ -181,9 +184,11 @@ void EditModeController::exitEditMode(bool commitChanges)
         return;
 
     if (commitChanges && m_editableMesh && m_editEntity) {
-        m_editableMesh->commitToEntity(m_editEntity);
-    refreshNormalVisualizer();
-        SentryReporter::addBreadcrumb("edit_mode", "Exited Edit Mode: changes committed");
+        bool ok = m_editableMesh->commitToEntity(m_editEntity);
+        refreshNormalVisualizer();
+        SentryReporter::addBreadcrumb("edit_mode",
+            ok ? "Exited Edit Mode: changes committed"
+               : "Exited Edit Mode: commit failed");
     } else {
         SentryReporter::addBreadcrumb("edit_mode", "Exited Edit Mode: changes discarded");
     }
@@ -216,9 +221,13 @@ void EditModeController::exitEditMode(bool commitChanges)
     m_editEntity = nullptr;
     m_editModeActive = false;
 
+    // Reset validation state for next session
+    m_degenerateTriangleCount = 0;
+
     emit editModeChanged();
     emit meshDataChanged();
     emit editSelectionChanged();
+    emit validationChanged();
 }
 
 void EditModeController::onSelectionChanged()
@@ -1044,12 +1053,9 @@ void EditModeController::removeDegenerateTriangles()
     int removed = m_editableMesh->removeDegenerateTriangles();
 
     if (removed > 0) {
-        // Recalculate normals and commit
+        // recalculateNormals() already calls commitToEntity + refreshNormalVisualizer
         recalculateNormals(m_normalsMode == 0);
-        m_editableMesh->commitToEntity(m_editEntity);
-    refreshNormalVisualizer();
         updateSelectionOverlay();
-        emit meshDataChanged();
     }
 
     // Re-validate
