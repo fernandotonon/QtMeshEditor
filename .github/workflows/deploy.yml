@@ -32,6 +32,7 @@ jobs:
 ####################################################################
 
  build-n-cache-assimp-windows:
+   needs: scan-assets-qtmesh
    runs-on: windows-latest
    steps:
     - name: Cache Assimp
@@ -397,6 +398,7 @@ jobs:
 ####################################################################
 
  build-n-cache-assimp-linux:
+    needs: scan-assets-qtmesh
     runs-on: ubuntu-latest
     steps:
     - name: change folder permissions
@@ -1202,7 +1204,7 @@ jobs:
           true
         }
 
- scan-assets-docker:
+ scan-assets-qtmesh:
     # Validate repo assets using the published Docker image (latest).
     # Runs on PRs and pushes to demonstrate CI/Docker integration.
     if: github.event_name != 'release'
@@ -1220,21 +1222,20 @@ jobs:
             echo "::warning::Docker asset scan reported issues (using latest published image)"
             true
           }
-        continue-on-error: true
 
       - name: Scan media/ via GitHub Action (root action.yml)
         uses: ./
         with:
           command: scan
           input-file: .
-          options: --config /workspace/qtmesh.yml --json
-        continue-on-error: true
+          options: --config /workspace/qtmesh.yml
 
 ####################################################################
 # MacOS Deploy
 ####################################################################
 
  build-n-cache-assimp-macos:
+    needs: scan-assets-qtmesh
     runs-on: macos-latest
     steps:
     - name: change folder permissions
