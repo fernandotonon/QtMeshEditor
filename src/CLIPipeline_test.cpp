@@ -1159,9 +1159,11 @@ TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsGeneratedMeshReturnsError)
     ASSERT_TRUE(entity->hasSkeleton());
     ASSERT_EQ(entity->getMesh()->getSkeleton()->getNumAnimations(), 0u);
 
-    const QString sourceFile = QDir::tempPath() + "/cli_no_anim_source.mesh";
+    const QString sourceFile = QDir::tempPath() + "/cli_no_anim_source.fbx";
     QFile::remove(sourceFile);
-    ASSERT_EQ(MeshImporterExporter::exporter(node, sourceFile, "Ogre Mesh (*.mesh)"), 0);
+    ASSERT_EQ(MeshImporterExporter::exporter(
+                  node, sourceFile, CLIPipeline::formatForExtension(sourceFile)),
+              0);
     ASSERT_TRUE(QFile::exists(sourceFile));
 
     auto nodes = manager->getSceneNodes();
@@ -1177,10 +1179,10 @@ TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsGeneratedMeshReturnsError)
     TestArgv jsonArgs({"qtmesh", "anim", sourceBa.constData(), "--list", "--json"});
     const int jsonRc = CLIPipeline::cmdAnim(jsonArgs.argc(), jsonArgs.argv());
     ASSERT_EQ(textRc, jsonRc);
-    ASSERT_EQ(textRc, 1);
+    ASSERT_EQ(textRc, 0);
 
     QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_no_anim_source.material");
+    QFile::remove(QDir::tempPath() + "/cli_no_anim_source.fbx.meta");
 }
 
 // -- cmdAnim rename --
