@@ -5,6 +5,7 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+#include <functional>
 
 enum class Severity { Info, Warning, Error };
 
@@ -64,8 +65,11 @@ class ScanEngine {
 public:
     ScanEngine() = delete;
 
+    using AssetProcessedCallback = std::function<void(const AssetInfo&, const QList<Finding>&)>;
+
     /// Run the full scan pipeline: enumerate → inspect → evaluate → (fix) → report.
-    static ScanResult run(const ScanConfig& config, const QString& rootOverride = {});
+    static ScanResult run(const ScanConfig& config, const QString& rootOverride = {},
+                          const AssetProcessedCallback& onAssetProcessed = {});
 
     // --- Individual pipeline stages (public for testing) ---
 

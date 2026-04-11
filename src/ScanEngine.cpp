@@ -502,7 +502,8 @@ void ScanEngine::applyFixes(const ScanConfig& config, AssetInfo& asset,
 // Main scan pipeline
 // ---------------------------------------------------------------------------
 
-ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride)
+ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride,
+                           const AssetProcessedCallback& onAssetProcessed)
 {
     ScanResult result;
     QElapsedTimer timer;
@@ -534,6 +535,9 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
 
             // Apply fixes where possible
             applyFixes(config, asset, findings);
+
+            if (onAssetProcessed)
+                onAssetProcessed(asset, findings);
 
             // Tally — fixed findings don't count toward error/warning totals
             bool hasError = false, hasWarning = false;

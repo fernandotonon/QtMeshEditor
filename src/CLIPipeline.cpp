@@ -55,9 +55,8 @@ static bool cliSupportsColor()
     if (qEnvironmentVariableIsSet("NO_COLOR"))
         return false;
 
-    bool forceOk = false;
-    const int forceColor = qEnvironmentVariableIntValue("CLICOLOR_FORCE", &forceOk);
-    if (forceOk && forceColor > 0)
+    const QByteArray forceColor = qgetenv("CLICOLOR_FORCE");
+    if (!forceColor.isEmpty() && forceColor != "0")
         return true;
 
 #ifdef Q_OS_WIN
@@ -67,6 +66,82 @@ static bool cliSupportsColor()
     const int fd = (s_savedStdoutFd >= 0) ? s_savedStdoutFd : fileno(stdout);
     return fd >= 0 && ::isatty(fd);
 #endif
+}
+
+static QString colorizeWord(const QString& text, const char* ansiColor, bool enabled)
+{
+    if (!enabled)
+        return text;
+    return QStringLiteral("\x1b[%1m%2\x1b[0m").arg(QString::fromLatin1(ansiColor), text);
+}
+
+static QString scanStatusLabel(bool hasError, bool hasWarning, bool colorize)
+{
+    if (hasError)
+        return colorizeWord("ERROR", "31", colorize);
+    if (hasWarning)
+        return colorizeWord("WARN", "33", colorize);
+    return colorizeWord("OK", "32", colorize);
+}
+
+static QString findingSeverityTag(Severity severity)
+{
+    switch (severity) {
+    case Severity::Error:   return "error";
+    case Severity::Warning: return "warn";
+    case Severity::Info:    return "info";
+    }
+    return "info";
+}
+
+static QString formatScanAssetLine(const AssetInfo& asset, const QList<Finding>& findings, bool colorize)
+{
+    bool hasError = false;
+    bool hasWarning = false;
+    for (const auto& f : findings) {
+        if (f.fixed)
+            continue;
+        if (f.severity == Severity::Error)
+            hasError = true;
+        else if (f.severity == Severity::Warning)
+            hasWarning = true;
+    }
+
+    QString out;
+    QTextStream s(&out);
+    const QString status = scanStatusLabel(hasError, hasWarning, colorize);
+    if (!hasError && !hasWarning)
+        s << "  " << status << "    " << asset.relativePath << "\n";
+    else if (hasWarning)
+        s << status << "    " << asset.relativePath << "\n";
+    else
+        s << status << "   " << asset.relativePath << "\n";
+
+    for (const auto& f : findings) {
+        s << "         [" << findingSeverityTag(f.severity) << "] "
+          << f.rule << ": " << f.message << "\n";
+    }
+    return out;
+}
+
+static QString formatScanSummary(const ScanResult& result)
+{
+    QString out;
+    QTextStream s(&out);
+    s << "\n";
+    s << "Summary:\n";
+    s << "  • Scanned:  " << result.scanned  << "\n";
+    s << "  ✓ Passed:   " << result.passed   << "\n";
+    s << "  ▲ Warnings: " << result.warnings << "\n";
+    s << "  ✗ Errors:   " << result.errors   << "\n";
+    if (result.infos > 0)
+        s << "  ℹ Info:     " << result.infos << "\n";
+    if (result.fixed > 0)
+        s << "  🔧 Fixed:    " << result.fixed << "\n";
+    if (result.skipped > 0)
+        s << "  ⏭ Skipped:  " << result.skipped << "\n";
+    s << "  ⏱ Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
+    return out;
 }
 
 static QTextStream& err()
@@ -1718,14 +1793,24 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
             .arg(scanRoot.isEmpty() ? "(default)" : scanRoot)
             .arg(jsonOutput).arg(fix));
 
+    const bool streamTextOutput = !jsonOutput;
+    const bool colorizeTextOutput = streamTextOutput && cliSupportsColor();
+
     // Run the scan
-    ScanResult result = ScanEngine::run(config, scanRoot);
+    ScanResult result = ScanEngine::run(
+        config, scanRoot,
+        streamTextOutput
+            ? ScanEngine::AssetProcessedCallback(
+                  [colorizeTextOutput](const AssetInfo& asset, const QList<Finding>& findings) {
+                      cliWrite(formatScanAssetLine(asset, findings, colorizeTextOutput));
+                  })
+            : ScanEngine::AssetProcessedCallback());
 
     // Output to terminal
     if (jsonOutput) {
         cliWrite(ScanEngine::formatJson(result) + "\n");
     } else {
-        cliWrite(ScanEngine::formatText(result, config, cliSupportsColor()));
+        cliWrite(formatScanSummary(result));
     }
 
     // Write report files
