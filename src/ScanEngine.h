@@ -84,7 +84,7 @@ public:
 
     // --- Formatters ---
 
-    static QString formatText(const ScanResult& result, const ScanConfig& config);
+    static QString formatText(const ScanResult& result, const ScanConfig& config, bool colorize = false);
     static QString formatJson(const ScanResult& result);
     static QString formatSarif(const ScanResult& result);
 

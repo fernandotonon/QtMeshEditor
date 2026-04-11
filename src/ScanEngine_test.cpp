@@ -679,6 +679,58 @@ TEST(ScanEngineTest, FormatText_ShowsInfoFindingLabel)
     EXPECT_TRUE(text.contains("[info] advice: informational"));
 }
 
+TEST(ScanEngineTest, FormatText_SummaryUsesIcons)
+{
+    ScanResult result;
+    result.scanned = 4;
+    result.passed = 2;
+    result.warnings = 1;
+    result.errors = 1;
+    result.infos = 1;
+    result.fixed = 1;
+    result.skipped = 1;
+    result.elapsedMs = 1234;
+
+    ScanConfig config;
+    const QString text = ScanEngine::formatText(result, config);
+    EXPECT_TRUE(text.contains("• Scanned:"));
+    EXPECT_TRUE(text.contains("✓ Passed:"));
+    EXPECT_TRUE(text.contains("▲ Warnings:"));
+    EXPECT_TRUE(text.contains("✗ Errors:"));
+    EXPECT_TRUE(text.contains("ℹ Info:"));
+    EXPECT_TRUE(text.contains("🔧 Fixed:"));
+    EXPECT_TRUE(text.contains("⏭ Skipped:"));
+    EXPECT_TRUE(text.contains("⏱ Time:"));
+}
+
+TEST(ScanEngineTest, FormatText_ColorizesStatusWhenEnabled)
+{
+    ScanResult result;
+
+    AssetInfo okAsset;
+    okAsset.relativePath = "ok.fbx";
+    result.assets.append(okAsset);
+
+    AssetInfo badAsset;
+    badAsset.relativePath = "bad.fbx";
+    result.assets.append(badAsset);
+
+    Finding errFinding;
+    errFinding.file = "bad.fbx";
+    errFinding.rule = "load_error";
+    errFinding.severity = Severity::Error;
+    errFinding.message = "failed to load";
+    result.findings.append(errFinding);
+
+    ScanConfig config;
+    const QString plainText = ScanEngine::formatText(result, config);
+    const QString colorText = ScanEngine::formatText(result, config, true);
+
+    EXPECT_FALSE(plainText.contains("\x1b["));
+    EXPECT_TRUE(colorText.contains("\x1b[32mOK\x1b[0m"));
+    EXPECT_TRUE(colorText.contains("\x1b[31mERROR\x1b[0m"));
+}
+
 TEST(ScanEngineTest, FormatSarif_ValidStructure)
 {
     ScanResult result;

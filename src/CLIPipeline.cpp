@@ -27,6 +27,8 @@
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
+#else
+#include <io.h>
 #endif
 
 // Saved original stdout fd — Ogre's stdout gets redirected to stderr
@@ -46,6 +48,25 @@ static void cliWrite(const QString& text)
         fwrite(utf8.constData(), 1, utf8.size(), stdout);
         fflush(stdout);
     }
+}
+
+static bool cliSupportsColor()
+{
+    if (qEnvironmentVariableIsSet("NO_COLOR"))
+        return false;
+
+    bool forceOk = false;
+    const int forceColor = qEnvironmentVariableIntValue("CLICOLOR_FORCE", &forceOk);
+    if (forceOk && forceColor > 0)
+        return true;
+
+#ifdef Q_OS_WIN
+    const int fd = (s_savedStdoutFd >= 0) ? s_savedStdoutFd : _fileno(stdout);
+    return fd >= 0 && _isatty(fd);
+#else
+    const int fd = (s_savedStdoutFd >= 0) ? s_savedStdoutFd : fileno(stdout);
+    return fd >= 0 && ::isatty(fd);
+#endif
 }
 
 static QTextStream& err()
@@ -1704,7 +1725,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (jsonOutput) {
         cliWrite(ScanEngine::formatJson(result) + "\n");
     } else {
-        cliWrite(ScanEngine::formatText(result, config));
+        cliWrite(ScanEngine::formatText(result, config, cliSupportsColor()));
     }
 
     // Write report files
@@ -1732,7 +1753,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         QDir().mkpath(QFileInfo(config.reportOutput).path());
         if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
             if (config.reportFormat == "text")
-                f.write(ScanEngine::formatText(result, config).toUtf8());
+                f.write(ScanEngine::formatText(result, config, false).toUtf8());
             else
                 f.write(ScanEngine::formatJson(result).toUtf8());
         }

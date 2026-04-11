@@ -575,7 +575,14 @@ static QString severityLabel(Severity s)
     return "     ";
 }
 
-QString ScanEngine::formatText(const ScanResult& result, const ScanConfig& config)
+static QString colorizeToken(const QString& text, const char* ansiColor, bool enabled)
+{
+    if (!enabled)
+        return text;
+    return QStringLiteral("\x1b[%1m%2\x1b[0m").arg(QString::fromLatin1(ansiColor), text);
+}
+
+QString ScanEngine::formatText(const ScanResult& result, const ScanConfig& config, bool colorize)
 {
     Q_UNUSED(config);
     QString out;
@@ -598,11 +605,11 @@ QString ScanEngine::formatText(const ScanResult& result, const ScanConfig& confi
 
         // Status label
         if (hasError)
-            s << "ERROR   " << asset.relativePath << "\n";
+            s << colorizeToken("ERROR", "31", colorize) << "   " << asset.relativePath << "\n";
         else if (hasWarning)
-            s << "WARN    " << asset.relativePath << "\n";
+            s << colorizeToken("WARN", "33", colorize) << "    " << asset.relativePath << "\n";
         else
-            s << "  OK    " << asset.relativePath << "\n";
+            s << "  " << colorizeToken("OK", "32", colorize) << "    " << asset.relativePath << "\n";
 
         // Findings detail
         for (const auto& f : assetFindings) {
@@ -615,15 +622,17 @@ QString ScanEngine::formatText(const ScanResult& result, const ScanConfig& confi
     // Summary
     s << "\n";
     s << "Summary:\n";
-    s << "  Scanned:  " << result.scanned  << "\n";
-    s << "  Passed:   " << result.passed   << "\n";
-    s << "  Warnings: " << result.warnings << "\n";
-    s << "  Errors:   " << result.errors   << "\n";
+    s << "  • Scanned:  " << result.scanned  << "\n";
+    s << "  ✓ Passed:   " << result.passed   << "\n";
+    s << "  ▲ Warnings: " << result.warnings << "\n";
+    s << "  ✗ Errors:   " << result.errors   << "\n";
+    if (result.infos > 0)
+        s << "  ℹ Info:     " << result.infos << "\n";
     if (result.fixed > 0)
-        s << "  Fixed:    " << result.fixed << "\n";
+        s << "  🔧 Fixed:    " << result.fixed << "\n";
     if (result.skipped > 0)
-        s << "  Skipped:  " << result.skipped << "\n";
-    s << "  Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
+        s << "  ⏭ Skipped:  " << result.skipped << "\n";
+    s << "  ⏱ Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
 
     return out;
 }
