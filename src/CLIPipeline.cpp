@@ -75,6 +75,13 @@ static QString colorizeWord(const QString& text, const char* ansiColor, bool ena
     return QStringLiteral("\x1b[%1m%2\x1b[0m").arg(QString::fromLatin1(ansiColor), text);
 }
 
+static QString colorizeIconWhenPositive(const QString& icon, int value, const char* ansiColor, bool enabled)
+{
+    if (value <= 0)
+        return icon;
+    return colorizeWord(icon, ansiColor, enabled);
+}
+
 static QString scanStatusLabel(bool hasError, bool hasWarning, bool colorize)
 {
     if (hasError)
@@ -124,22 +131,30 @@ static QString formatScanAssetLine(const AssetInfo& asset, const QList<Finding>&
     return out;
 }
 
-static QString formatScanSummary(const ScanResult& result)
+static QString formatScanSummary(const ScanResult& result, bool colorize)
 {
     QString out;
     QTextStream s(&out);
+
+    const QString passIcon = colorizeIconWhenPositive(QStringLiteral("✓"), result.passed, "32", colorize);
+    const QString warnIcon = colorizeIconWhenPositive(QStringLiteral("▲"), result.warnings, "33", colorize);
+    const QString errorIcon = colorizeIconWhenPositive(QStringLiteral("✗"), result.errors, "31", colorize);
+    const QString infoIcon = colorizeIconWhenPositive(QStringLiteral("ℹ"), result.infos, "36", colorize);
+    const QString fixedIcon = colorizeIconWhenPositive(QStringLiteral("🔧"), result.fixed, "32", colorize);
+    const QString skippedIcon = colorizeIconWhenPositive(QStringLiteral("⏭"), result.skipped, "33", colorize);
+
     s << "\n";
     s << "Summary:\n";
     s << "  • Scanned:  " << result.scanned  << "\n";
-    s << "  ✓ Passed:   " << result.passed   << "\n";
-    s << "  ▲ Warnings: " << result.warnings << "\n";
-    s << "  ✗ Errors:   " << result.errors   << "\n";
+    s << "  " << passIcon << " Passed:   " << result.passed   << "\n";
+    s << "  " << warnIcon << " Warnings: " << result.warnings << "\n";
+    s << "  " << errorIcon << " Errors:   " << result.errors   << "\n";
     if (result.infos > 0)
-        s << "  ℹ Info:     " << result.infos << "\n";
+        s << "  " << infoIcon << " Info:     " << result.infos << "\n";
     if (result.fixed > 0)
-        s << "  🔧 Fixed:    " << result.fixed << "\n";
+        s << "  " << fixedIcon << " Fixed:    " << result.fixed << "\n";
     if (result.skipped > 0)
-        s << "  ⏭ Skipped:  " << result.skipped << "\n";
+        s << "  " << skippedIcon << " Skipped:  " << result.skipped << "\n";
     s << "  ⏱ Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
     return out;
 }
@@ -1810,7 +1825,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (jsonOutput) {
         cliWrite(ScanEngine::formatJson(result) + "\n");
     } else {
-        cliWrite(formatScanSummary(result));
+        cliWrite(formatScanSummary(result, colorizeTextOutput));
     }
 
     // Write report files
