@@ -395,6 +395,8 @@ private:
     bool m_softSelectionEnabled = false;
     double m_softSelectionRadius = 2.0;
     int m_softSelectionFalloff = 0; ///< 0=linear, 1=smooth (cosine)
+    Ogre::Entity* m_softSelSphere = nullptr;
+    Ogre::SceneNode* m_softSelSphereNode = nullptr;
 
     // Normals mode: 0=smooth (default), 1=flat
     int m_normalsMode = 0;

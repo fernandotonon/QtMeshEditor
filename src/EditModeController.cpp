@@ -34,6 +34,7 @@ THE SOFTWARE.
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
 #include <Ogre.h>
+#include <ProceduralSphereGenerator.h>
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -1377,6 +1378,51 @@ void EditModeController::updateSelectionOverlay()
 
         m_overlayFaces->end();
     }
+
+    // -- Soft selection radius sphere --
+    if (m_softSelectionEnabled && !m_selectedVertices.empty()) {
+        Ogre::Vector3 centroid = getSelectedVerticesCentroid();
+
+        // Create sphere entity on first use
+        if (!m_softSelSphere) {
+            const std::string meshName = "__SoftSelSphere__";
+            if (!Ogre::MeshManager::getSingleton().resourceExists(meshName)) {
+                Procedural::SphereGenerator()
+                    .setRadius(1.0f)
+                    .setNumRings(16)
+                    .setNumSegments(16)
+                    .realizeMesh(meshName);
+            }
+
+            // Create a transparent glass-like material
+            const std::string matName = "EditMode/SoftSelRadius";
+            auto& matMgr = Ogre::MaterialManager::getSingleton();
+            if (!matMgr.resourceExists(matName)) {
+                auto mat = matMgr.create(matName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+                auto* pass = mat->getTechnique(0)->getPass(0);
+                pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+                pass->setDepthWriteEnabled(false);
+                pass->setDiffuse(Ogre::ColourValue(0.3f, 0.6f, 1.0f, 0.08f));
+                pass->setAmbient(Ogre::ColourValue(0.2f, 0.4f, 0.8f, 0.08f));
+                pass->setSpecular(Ogre::ColourValue(1.0f, 1.0f, 1.0f, 0.15f));
+                pass->setShininess(60.0f);
+                pass->setCullingMode(Ogre::CULL_NONE);
+            }
+
+            m_softSelSphereNode = m_overlayNode->createChildSceneNode();
+            m_softSelSphere = sceneMgr->createEntity("EditMode_SoftSelSphere", meshName);
+            m_softSelSphere->setMaterialName(matName);
+            m_softSelSphere->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY - 1);
+            m_softSelSphereNode->attachObject(m_softSelSphere);
+        }
+
+        m_softSelSphereNode->setPosition(centroid);
+        float r = static_cast<float>(m_softSelectionRadius);
+        m_softSelSphereNode->setScale(r, r, r);
+        m_softSelSphereNode->setVisible(true);
+    } else if (m_softSelSphereNode) {
+        m_softSelSphereNode->setVisible(false);
+    }
 }
 
 void EditModeController::destroySelectionOverlay()
@@ -1403,6 +1449,16 @@ void EditModeController::destroySelectionOverlay()
         if (m_overlayFaces) {
             sceneMgr->destroyManualObject(m_overlayFaces);
             m_overlayFaces = nullptr;
+        }
+        if (m_softSelSphere) {
+            if (m_softSelSphereNode)
+                m_softSelSphereNode->detachAllObjects();
+            sceneMgr->destroyEntity(m_softSelSphere);
+            m_softSelSphere = nullptr;
+            if (m_softSelSphereNode) {
+                sceneMgr->destroySceneNode(m_softSelSphereNode);
+                m_softSelSphereNode = nullptr;
+            }
         }
 
         sceneMgr->destroySceneNode(m_overlayNode);
