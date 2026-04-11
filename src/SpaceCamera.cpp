@@ -218,8 +218,9 @@ void SpaceCamera::mouseMoveEvent(QMouseEvent *event)
 
 void SpaceCamera::wheelEvent(QWheelEvent *event)
 {
-    Ogre::Real xDelta = event->angleDelta().x() / 120.0f;
-    Ogre::Real yDelta = event->angleDelta().y() / 120.0f;
+    Ogre::Real speedScale = mCameraSpeed / 0.5f; // normalize around default 0.5
+    Ogre::Real xDelta = event->angleDelta().x() / 120.0f * speedScale;
+    Ogre::Real yDelta = event->angleDelta().y() / 120.0f * speedScale;
 
     if (event->modifiers().testFlag(Qt::ControlModifier))
     {
