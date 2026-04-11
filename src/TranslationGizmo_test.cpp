@@ -108,6 +108,15 @@ TEST_F(TranslationGizmoTests, SetVisible) {
     EXPECT_FALSE(mTranslationGizmo->getZAxis().isVisible());
 }
 
+TEST_F(TranslationGizmoTests, SetQueryFlagsAppliesToAllAxes) {
+    const Ogre::uint32 queryFlags = GIZMO_QUERY_FLAGS;
+    mTranslationGizmo->setQueryFlags(queryFlags);
+    EXPECT_EQ(mTranslationGizmo->getQueryFlags(), queryFlags);
+    EXPECT_EQ(mTranslationGizmo->getXAxis().getQueryFlags(), queryFlags);
+    EXPECT_EQ(mTranslationGizmo->getYAxis().getQueryFlags(), queryFlags);
+    EXPECT_EQ(mTranslationGizmo->getZAxis().getQueryFlags(), queryFlags);
+}
+
 TEST_F(TranslationGizmoTests, SetColour) {
     mTranslationGizmo->setXaxisColour(Ogre::ColourValue::Red);
     EXPECT_EQ(mTranslationGizmo->getXaxisColour(), Ogre::ColourValue::Red);
@@ -146,4 +155,16 @@ TEST_F(TranslationGizmoTests, SetScale) {
 TEST_F(TranslationGizmoTests, SetFading) {
     mTranslationGizmo->setFading(0.5);
     EXPECT_EQ(mTranslationGizmo->getFading(), 0.5);
+}
+
+TEST_F(TranslationGizmoTests, HighlightUnknownObjectReturnsZeroAndClearsHighlight) {
+    mTranslationGizmo->highlightAxis(&mTranslationGizmo->getYAxis());
+    EXPECT_TRUE(mTranslationGizmo->isHighlighted());
+
+    Ogre::ManualObject* unrelated = mSceneMgr->createManualObject("TranslationGizmoUnrelated");
+    ASSERT_NE(unrelated, nullptr);
+    auto result = mTranslationGizmo->highlightAxis(unrelated);
+    EXPECT_EQ(result, Ogre::Vector3::ZERO);
+    EXPECT_FALSE(mTranslationGizmo->isHighlighted());
+    mSceneMgr->destroyManualObject(unrelated);
 }

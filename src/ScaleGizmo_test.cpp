@@ -114,6 +114,9 @@ TEST_F(ScaleGizmoTests, SetColour) {
 TEST_F(ScaleGizmoTests, SetQueryFlags) {
     mScaleGizmo->setQueryFlags(GIZMO_QUERY_FLAGS);
     EXPECT_EQ(mScaleGizmo->getQueryFlags(), GIZMO_QUERY_FLAGS);
+    EXPECT_EQ(mScaleGizmo->getXAxis().getQueryFlags(), GIZMO_QUERY_FLAGS);
+    EXPECT_EQ(mScaleGizmo->getYAxis().getQueryFlags(), GIZMO_QUERY_FLAGS);
+    EXPECT_EQ(mScaleGizmo->getZAxis().getQueryFlags(), GIZMO_QUERY_FLAGS);
 }
 
 TEST_F(ScaleGizmoTests, CreateAxis) {
@@ -162,6 +165,18 @@ TEST_F(ScaleGizmoTests, HighlightNullReturnsZero) {
     auto result = mScaleGizmo->highlightAxis(nullptr);
     EXPECT_EQ(result, Ogre::Vector3::ZERO);
     EXPECT_FALSE(mScaleGizmo->isHighlighted());
+}
+
+TEST_F(ScaleGizmoTests, HighlightUnknownObjectReturnsZeroAndClearsHighlight) {
+    mScaleGizmo->highlightAxis(&mScaleGizmo->getXAxis());
+    EXPECT_TRUE(mScaleGizmo->isHighlighted());
+
+    Ogre::ManualObject* unrelated = mSceneMgr->createManualObject("ScaleGizmoUnrelated");
+    ASSERT_NE(unrelated, nullptr);
+    auto result = mScaleGizmo->highlightAxis(unrelated);
+    EXPECT_EQ(result, Ogre::Vector3::ZERO);
+    EXPECT_FALSE(mScaleGizmo->isHighlighted());
+    mSceneMgr->destroyManualObject(unrelated);
 }
 
 TEST_F(ScaleGizmoTests, SetScaleMultipleTimes) {
