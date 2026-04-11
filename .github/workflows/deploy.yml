@@ -1784,8 +1784,8 @@ jobs:
 
       - name: Generate WinGet manifest
         run: |
-          # Install wingetcreate (Linux .NET tool)
-          dotnet tool install --global wingetcreate
+          # Install wingetcreate (.NET global tool — package name is Microsoft.WingetCreate)
+          dotnet tool install --global Microsoft.WingetCreate
           export PATH="$PATH:$HOME/.dotnet/tools"
 
           RAW_TAG="${{ github.event.release.tag_name }}"
