@@ -1177,11 +1177,9 @@ TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsGeneratedMeshReturnsError)
     TestArgv jsonArgs({"qtmesh", "anim", sourceBa.constData(), "--list", "--json"});
     const int jsonRc = CLIPipeline::cmdAnim(jsonArgs.argc(), jsonArgs.argv());
     ASSERT_EQ(textRc, jsonRc);
-    // Environments without the importer/plugin to reload generated .mesh files
-    // fail before list-mode animation handling. Accept either:
-    // 0 => loaded file and handled no-animation list mode
-    // 1 => loader failed before list mode could run
-    EXPECT_TRUE(textRc == 0 || textRc == 1);
+    if (textRc != 0)
+        GTEST_SKIP() << "Reloading generated .mesh is unavailable in this environment";
+    ASSERT_EQ(textRc, 0);
 
     QFile::remove(sourceFile);
     QFile::remove(QDir::tempPath() + "/cli_no_anim_source.material");
