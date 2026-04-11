@@ -31,11 +31,23 @@ THE SOFTWARE.
 
 #include <QObject>
 #include <QQmlEngine>
+#include <QPoint>
+#include <QRect>
 #include <memory>
+#include <set>
+#include <utility>
+#include <OgreVector.h>
 
 class EditableMesh;
+class OgreWidget;
 
-namespace Ogre { class Entity; }
+namespace Ogre {
+    class Entity;
+    class Camera;
+    class SceneManager;
+    class SceneNode;
+    class ManualObject;
+}
 
 /**
  * @brief QML_SINGLETON that manages Object Mode / Edit Mode state.
@@ -48,7 +60,8 @@ namespace Ogre { class Entity; }
  * editable representation (EditableMesh). Exiting Edit Mode commits
  * the changes back to the Ogre buffers and recalculates normals/bounds.
  *
- * The Tab key toggles between modes.
+ * The Tab key toggles between modes. In edit mode, 1/2/3 keys switch
+ * between Vertex/Edge/Face selection modes.
  */
 class EditModeController : public QObject
 {
@@ -62,8 +75,16 @@ class EditModeController : public QObject
     Q_PROPERTY(int vertexCount READ vertexCount NOTIFY meshDataChanged)
     Q_PROPERTY(int triangleCount READ triangleCount NOTIFY meshDataChanged)
     Q_PROPERTY(int subMeshCount READ subMeshCount NOTIFY meshDataChanged)
+    Q_PROPERTY(int selectionMode READ selectionMode WRITE setSelectionMode NOTIFY selectionModeChanged)
+    Q_PROPERTY(int selectedVertexCount READ selectedVertexCount NOTIFY editSelectionChanged)
+    Q_PROPERTY(int selectedEdgeCount READ selectedEdgeCount NOTIFY editSelectionChanged)
+    Q_PROPERTY(int selectedFaceCount READ selectedFaceCount NOTIFY editSelectionChanged)
 
 public:
+    /// Selection component mode for edit mode.
+    enum SelectionMode { VertexMode = 0, EdgeMode = 1, FaceMode = 2 };
+    Q_ENUM(SelectionMode)
+
     static EditModeController* instance();
     static EditModeController* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
     static void kill();
@@ -92,11 +113,167 @@ public:
     Q_INVOKABLE void exitEditMode(bool commitChanges = true);
     /// @}
 
+    /// @name Component selection mode (Vertex/Edge/Face)
+    /// @{
+    int selectionMode() const { return static_cast<int>(m_selectionMode); }
+    void setSelectionMode(int mode);
+
+    int selectedVertexCount() const { return static_cast<int>(m_selectedVertices.size()); }
+    int selectedEdgeCount() const { return static_cast<int>(m_selectedEdges.size()); }
+    int selectedFaceCount() const { return static_cast<int>(m_selectedFaces.size()); }
+
+    const std::set<int>& selectedVertices() const { return m_selectedVertices; }
+    const std::set<std::pair<int,int>>& selectedEdges() const { return m_selectedEdges; }
+    const std::set<int>& selectedFaces() const { return m_selectedFaces; }
+    /// @}
+
+    /// @name Selection operations
+    /// @{
+    Q_INVOKABLE void selectAll();
+    Q_INVOKABLE void deselectAll();
+
+    /// Select a vertex by global index. If addToSelection is false, clears
+    /// prior selection first.
+    void selectVertex(int globalIndex, bool addToSelection = false);
+
+    /// Deselect a vertex by global index.
+    void deselectVertex(int globalIndex);
+
+    /// Select an edge (pair of global vertex indices, stored min-first).
+    void selectEdge(int v1, int v2, bool addToSelection = false);
+
+    /// Deselect an edge by vertex pair.
+    void deselectEdge(int v1, int v2);
+
+    /// Select a face (triangle) by global triangle index.
+    void selectFace(int triIndex, bool addToSelection = false);
+
+    /// Deselect a face by global triangle index.
+    void deselectFace(int triIndex);
+    /// @}
+
+    /// @name Hit testing
+    /// @{
+    /**
+     * @brief Find the closest vertex to a screen-space point.
+     *
+     * Projects each vertex from local to world to screen space and returns
+     * the global vertex index of the nearest within a pixel radius, or -1.
+     *
+     * @param screenPos Click position in widget coordinates.
+     * @param camera The Ogre camera used for projection.
+     * @param viewportWidth Width of the viewport in pixels.
+     * @param viewportHeight Height of the viewport in pixels.
+     * @param pixelRadius Maximum screen-space distance in pixels (default 10).
+     * @return Global vertex index or -1 if none within radius.
+     */
+    int hitTestVertex(const QPoint& screenPos, Ogre::Camera* camera,
+                      int viewportWidth, int viewportHeight,
+                      float pixelRadius = 10.0f) const;
+
+    /**
+     * @brief Find the closest face (triangle) to a screen-space point via ray intersection.
+     *
+     * Casts a ray from the camera through the click point and tests against
+     * each triangle in the EditableMesh (in local space, transformed by entity node).
+     *
+     * @return Global triangle index or -1 if no hit.
+     */
+    int hitTestFace(const QPoint& screenPos, Ogre::Camera* camera,
+                    int viewportWidth, int viewportHeight) const;
+
+    /**
+     * @brief Find the closest edge to a screen-space point.
+     *
+     * Projects edge endpoints to screen space and returns the edge with
+     * minimum screen-space distance below threshold. The edge is returned
+     * as a pair (min vertex index, max vertex index).
+     *
+     * @return Vertex pair or (-1, -1) if no edge within threshold.
+     */
+    std::pair<int,int> hitTestEdge(const QPoint& screenPos, Ogre::Camera* camera,
+                                   int viewportWidth, int viewportHeight,
+                                   float pixelRadius = 10.0f) const;
+
+    /**
+     * @brief Select vertices within a screen-space rectangle (box select).
+     *
+     * @param rect Screen-space rectangle.
+     * @param camera The Ogre camera used for projection.
+     * @param viewportWidth Width of the viewport in pixels.
+     * @param viewportHeight Height of the viewport in pixels.
+     * @param addToSelection If true, adds to existing selection.
+     */
+    void boxSelectVertices(const QRect& rect, Ogre::Camera* camera,
+                           int viewportWidth, int viewportHeight,
+                           bool addToSelection = false);
+    /// @}
+
+    /// @name Mouse handling (called from TransformOperator when in edit mode)
+    /// @{
+    /**
+     * @brief Handle a mouse click in edit mode.
+     *
+     * Performs hit testing based on current selection mode and updates
+     * the selection accordingly.
+     *
+     * @param screenPos Click position in widget coordinates.
+     * @param widget The active OgreWidget.
+     * @param shiftHeld True if Shift modifier is held (add to selection).
+     * @param ctrlHeld True if Ctrl modifier is held (remove from selection).
+     */
+    void handleMouseClick(const QPoint& screenPos, OgreWidget* widget,
+                          bool shiftHeld, bool ctrlHeld);
+
+    /**
+     * @brief Handle box selection completion in edit mode.
+     *
+     * @param startPos Starting corner of the selection box.
+     * @param endPos Ending corner of the selection box.
+     * @param widget The active OgreWidget.
+     * @param shiftHeld True if Shift modifier is held.
+     */
+    void handleBoxSelect(const QPoint& startPos, const QPoint& endPos,
+                         OgreWidget* widget, bool shiftHeld);
+    /// @}
+
     /// Access the current editable mesh (nullptr if not in edit mode).
     EditableMesh* currentMesh() const { return m_editableMesh.get(); }
 
     /// Returns the entity being edited (nullptr if not in edit mode).
     Ogre::Entity* editEntity() const { return m_editEntity; }
+
+    /// @name Geometry helpers (public for testing)
+    /// @{
+
+    /// Convert a local-space vertex position to screen-space using entity transform and camera.
+    static QPoint worldToScreen(const Ogre::Vector3& worldPos, Ogre::Camera* camera,
+                                int viewportWidth, int viewportHeight);
+
+    /// Compute the distance from a point to a line segment in 2D.
+    static float pointToSegmentDistance(const QPoint& point,
+                                        const QPoint& segA, const QPoint& segB);
+
+    /// Ray-triangle intersection (Moller-Trumbore algorithm).
+    /// Returns the distance t along the ray, or -1 if no intersection.
+    static float rayTriangleIntersect(const Ogre::Vector3& rayOrigin,
+                                      const Ogre::Vector3& rayDir,
+                                      const Ogre::Vector3& v0,
+                                      const Ogre::Vector3& v1,
+                                      const Ogre::Vector3& v2);
+
+    /// Convert a global vertex index to (subMeshIndex, localVertexIndex) pair.
+    std::pair<size_t, size_t> globalToLocal(int globalIndex) const;
+
+    /// Convert (subMeshIndex, localVertexIndex) to a global vertex index.
+    int localToGlobal(size_t subMeshIndex, size_t localVertexIndex) const;
+
+    /// Convert a global triangle index to (subMeshIndex, localTriangleIndex) pair.
+    std::pair<size_t, size_t> globalTriToLocal(int globalTriIndex) const;
+
+    /// Convert (subMeshIndex, localTriangleIndex) to a global triangle index.
+    int localTriToGlobal(size_t subMeshIndex, size_t localTriIndex) const;
+    /// @}
 
 signals:
     /// Emitted when entering or exiting edit mode.
@@ -105,6 +282,10 @@ signals:
     void meshDataChanged();
     /// Emitted when the selection changes (to update canEnterEditMode).
     void selectionStateChanged();
+    /// Emitted when the component selection mode changes (Vertex/Edge/Face).
+    void selectionModeChanged();
+    /// Emitted when the edit-mode selection (vertices/edges/faces) changes.
+    void editSelectionChanged();
 
 private slots:
     void onSelectionChanged();
@@ -113,11 +294,30 @@ private:
     EditModeController();
     ~EditModeController() override;
 
+    /// Build or rebuild the selection overlay ManualObject.
+    void updateSelectionOverlay();
+    /// Destroy the selection overlay ManualObject and scene node.
+    void destroySelectionOverlay();
+    /// Create the materials used for selection overlays.
+    void createOverlayMaterials();
+
     static EditModeController* m_pSingleton;
 
     bool m_editModeActive = false;
     std::unique_ptr<EditableMesh> m_editableMesh;
     Ogre::Entity* m_editEntity = nullptr;
+
+    // Component selection state
+    SelectionMode m_selectionMode = VertexMode;
+    std::set<int> m_selectedVertices;              ///< Global vertex indices
+    std::set<std::pair<int,int>> m_selectedEdges;  ///< Edges as (min, max) vertex pairs
+    std::set<int> m_selectedFaces;                 ///< Global triangle indices
+
+    // Selection overlay
+    Ogre::ManualObject* m_overlayVertices = nullptr;
+    Ogre::ManualObject* m_overlayEdges = nullptr;
+    Ogre::ManualObject* m_overlayFaces = nullptr;
+    Ogre::SceneNode* m_overlayNode = nullptr;
 };
 
 #endif // EDITMODECONTROLLER_H

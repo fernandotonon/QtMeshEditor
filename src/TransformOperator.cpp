@@ -22,6 +22,7 @@
 #include "ViewportGrid.h"
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
+#include "EditModeController.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -820,6 +821,14 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 {
     if (e->button()==Qt::LeftButton)
     {
+        // In edit mode, delegate selection to EditModeController
+        if (EditModeController::instance()->isEditModeActive() && mTransformState == TS_SELECT)
+        {
+            mScreenStart = e->pos();
+            m_pSelectionBox->clear();
+            m_pSelectionBox->setVisible(true);
+            return;
+        }
 
         if(mTransformState == TS_SELECT)
         {
@@ -1274,6 +1283,32 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 
     if(m_pSelectionBox->isVisible())
     {
+        // In edit mode, delegate to EditModeController for component selection
+        if (EditModeController::instance()->isEditModeActive())
+        {
+            bool shiftHeld = e->modifiers().testFlag(Qt::ShiftModifier);
+            bool ctrlHeld = e->modifiers().testFlag(Qt::ControlModifier);
+
+            // If the rectangle is very small, treat as a click
+            QRect rect(mScreenStart, e->pos());
+            rect = rect.normalized();
+
+            if (rect.width() < 5 && rect.height() < 5) {
+                // Point select
+                EditModeController::instance()->handleMouseClick(
+                    mScreenStart, m_pActiveWidget, shiftHeld, ctrlHeld);
+            } else {
+                // Box select
+                EditModeController::instance()->handleBoxSelect(
+                    mScreenStart, e->pos(), m_pActiveWidget, shiftHeld);
+            }
+
+            mScreenStart = QPoint(invalidPosition);
+            m_pSelectionBox->clear();
+            m_pSelectionBox->setVisible(false);
+            return;
+        }
+
         // Perform a box selection
         SelectionMode   selectionMode = NEW_SELECT;
         if(e->modifiers().testFlag(Qt::ControlModifier))

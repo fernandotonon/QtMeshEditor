@@ -914,6 +914,43 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 {
     QtInputManager::getInstance().keyPressEvent(event);
 
+    // Edit mode shortcuts take priority when edit mode is active
+    auto* editCtrl = EditModeController::instance();
+    if (editCtrl->isEditModeActive()) {
+        switch (event->key()) {
+        case Qt::Key_1:
+            SentryReporter::addBreadcrumb("ui.shortcut", "1 — Vertex selection mode");
+            editCtrl->setSelectionMode(EditModeController::VertexMode);
+            event->accept();
+            return;
+        case Qt::Key_2:
+            SentryReporter::addBreadcrumb("ui.shortcut", "2 — Edge selection mode");
+            editCtrl->setSelectionMode(EditModeController::EdgeMode);
+            event->accept();
+            return;
+        case Qt::Key_3:
+            SentryReporter::addBreadcrumb("ui.shortcut", "3 — Face selection mode");
+            editCtrl->setSelectionMode(EditModeController::FaceMode);
+            event->accept();
+            return;
+        case Qt::Key_A:
+            if (event->modifiers() & Qt::ControlModifier) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "Ctrl+A — Select All (edit mode)");
+                editCtrl->selectAll();
+                event->accept();
+                return;
+            } else if (event->modifiers() & Qt::AltModifier) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "Alt+A — Deselect All (edit mode)");
+                editCtrl->deselectAll();
+                event->accept();
+                return;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
     switch(event->key()){
     case Qt::Key_Q:
         SentryReporter::addBreadcrumb("ui.shortcut", "Q — Select mode");
