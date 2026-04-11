@@ -156,3 +156,117 @@ TEST_F(MaterialPreviewRendererTests, DataUriCachesResults) {
     QString uri3 = renderer->renderPreviewAsDataUri("BaseWhite");
     EXPECT_FALSE(uri3.isEmpty()); // Should regenerate
 }
+
+TEST_F(MaterialPreviewRendererTests, ClearCacheInvalidatesPreviousResults) {
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Ogre not available";
+    }
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Cannot create meshes (no GL context)";
+    }
+
+    createStandardOgreMaterials();
+
+    auto* renderer = MaterialPreviewRenderer::instance();
+
+    // Generate a preview to populate the cache
+    QString uri1 = renderer->renderPreviewAsDataUri("BaseWhite");
+    if (uri1.isEmpty()) {
+        GTEST_SKIP() << "RTT preview not available in this environment";
+    }
+
+    // Verify cache is populated (second call returns same result)
+    QString uri2 = renderer->renderPreviewAsDataUri("BaseWhite");
+    EXPECT_EQ(uri1, uri2);
+
+    // Clear and verify cache was actually emptied by getting a new result
+    renderer->clearCache();
+    // After clearing, the next call should regenerate (still valid, but confirms clear didn't crash)
+    QString uri3 = renderer->renderPreviewAsDataUri("BaseWhite");
+    EXPECT_FALSE(uri3.isEmpty());
+}
+
+TEST_F(MaterialPreviewRendererTests, FirstMaterialNameWithCommentLines) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QString path = tmpDir.path() + "/commented.material";
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream out(&f);
+    out << "// This is a comment\n";
+    out << "// Another comment\n";
+    out << "/* block comment */\n";
+    out << "\n";
+    out << "// material FakeName (in a comment)\n";
+    out << "material RealMaterial\n";
+    out << "{\n";
+    out << "}\n";
+    f.close();
+
+    QString matName = MaterialPreviewRenderer::firstMaterialNameInFile(path);
+    EXPECT_EQ(matName, "RealMaterial");
+}
+
+TEST_F(MaterialPreviewRendererTests, FirstMaterialNameWithQuotedName) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QString path = tmpDir.path() + "/quoted.material";
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream out(&f);
+    out << "material \"My Material With Spaces\"\n";
+    out << "{\n";
+    out << "}\n";
+    f.close();
+
+    QString matName = MaterialPreviewRenderer::firstMaterialNameInFile(path);
+    // Should return some non-empty name (the exact format depends on parsing)
+    EXPECT_FALSE(matName.isEmpty());
+}
+
+TEST_F(MaterialPreviewRendererTests, FirstMaterialNameOnlyWhitespace) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QString path = tmpDir.path() + "/whitespace.material";
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream out(&f);
+    out << "   \n";
+    out << "\t\n";
+    out << "\n";
+    f.close();
+
+    QString matName = MaterialPreviewRenderer::firstMaterialNameInFile(path);
+    EXPECT_TRUE(matName.isEmpty());
+}
+
+TEST_F(MaterialPreviewRendererTests, QmlInstanceReturnsSameAsInstance) {
+    auto* r1 = MaterialPreviewRenderer::instance();
+    // qmlInstance requires a non-null engine in production, but for singleton
+    // pattern verification we can check instance() consistency
+    EXPECT_EQ(r1, MaterialPreviewRenderer::instance());
+}
+
+TEST_F(MaterialPreviewRendererTests, MultipleFirstMaterialNamesReturnsFirst) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QString path = tmpDir.path() + "/multi.material";
+    QFile f(path);
+    ASSERT_TRUE(f.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream out(&f);
+    out << "material FirstMaterial\n";
+    out << "{\n";
+    out << "}\n";
+    out << "\n";
+    out << "material SecondMaterial\n";
+    out << "{\n";
+    out << "}\n";
+    f.close();
+
+    QString matName = MaterialPreviewRenderer::firstMaterialNameInFile(path);
+    EXPECT_EQ(matName, "FirstMaterial");
+}

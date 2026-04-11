@@ -49,3 +49,35 @@ TEST_F(WelcomeDialogTests, DefaultSelectedFileIsEmpty) {
     WelcomeDialog dialog;
     EXPECT_TRUE(dialog.selectedFile().isEmpty());
 }
+
+TEST_F(WelcomeDialogTests, ShouldShowRespectsDontShowAgainSetting) {
+    // Explicitly set the setting and verify shouldShow reads it
+    QSettings settings;
+    settings.setValue("WelcomeScreen/dontShowAgain", true);
+    settings.sync();
+    EXPECT_FALSE(WelcomeDialog::shouldShow());
+
+    settings.setValue("WelcomeScreen/dontShowAgain", false);
+    settings.sync();
+    EXPECT_TRUE(WelcomeDialog::shouldShow());
+}
+
+TEST_F(WelcomeDialogTests, ShouldShowReturnsTrueWhenSettingIsNonBooleanFalsy) {
+    // When the setting is set to a value that converts to false, shouldShow returns true
+    QSettings settings;
+    settings.setValue("WelcomeScreen/dontShowAgain", 0);
+    // QVariant(0).toBool() == false, so shouldShow should return true
+    EXPECT_TRUE(WelcomeDialog::shouldShow());
+}
+
+TEST_F(WelcomeDialogTests, MultipleDialogInstancesShareSameSettingsState) {
+    QSettings settings;
+    settings.setValue("WelcomeScreen/dontShowAgain", true);
+
+    // Both calls should return the same result since they read from QSettings
+    EXPECT_FALSE(WelcomeDialog::shouldShow());
+    EXPECT_FALSE(WelcomeDialog::shouldShow());
+
+    settings.remove("WelcomeScreen/dontShowAgain");
+    EXPECT_TRUE(WelcomeDialog::shouldShow());
+}

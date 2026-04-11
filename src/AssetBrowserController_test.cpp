@@ -295,3 +295,94 @@ TEST_F(AssetBrowserControllerTests, RootPathPersistedInSettings) {
     QSettings settings;
     EXPECT_EQ(settings.value("AssetBrowser/rootPath").toString(), tmpDir.path());
 }
+
+// --- Additional file type classification tests ---
+
+TEST_F(AssetBrowserControllerTests, ClassifyExtensionForDotX) {
+    auto* abc = AssetBrowserController::instance();
+    EXPECT_EQ(abc->fileTypeForPath("/foo/model.x"), "mesh");
+}
+
+TEST_F(AssetBrowserControllerTests, ClassifyExtensionForMeshXml) {
+    auto* abc = AssetBrowserController::instance();
+    // .mesh.xml files: fileTypeForPath uses suffix which gives "xml"
+    // Verify the behavior for the .mesh extension itself
+    EXPECT_EQ(abc->fileTypeForPath("/foo/model.mesh"), "mesh");
+}
+
+TEST_F(AssetBrowserControllerTests, ClassifyExtensionForStl) {
+    auto* abc = AssetBrowserController::instance();
+    EXPECT_EQ(abc->fileTypeForPath("/foo/part.stl"), "mesh");
+}
+
+TEST_F(AssetBrowserControllerTests, ClassifyExtensionFor3ds) {
+    auto* abc = AssetBrowserController::instance();
+    EXPECT_EQ(abc->fileTypeForPath("/foo/scene.3ds"), "mesh");
+}
+
+TEST_F(AssetBrowserControllerTests, ClassifyExtensionForDds) {
+    auto* abc = AssetBrowserController::instance();
+    EXPECT_EQ(abc->fileTypeForPath("/foo/texture.dds"), "texture");
+}
+
+TEST_F(AssetBrowserControllerTests, ClassifyExtensionForHdr) {
+    auto* abc = AssetBrowserController::instance();
+    EXPECT_EQ(abc->fileTypeForPath("/foo/env.hdr"), "texture");
+}
+
+TEST_F(AssetBrowserControllerTests, ClassifyExtensionForExr) {
+    auto* abc = AssetBrowserController::instance();
+    EXPECT_EQ(abc->fileTypeForPath("/foo/light.exr"), "texture");
+}
+
+TEST_F(AssetBrowserControllerTests, ClassifyExtensionCaseInsensitive) {
+    auto* abc = AssetBrowserController::instance();
+    EXPECT_EQ(abc->fileTypeForPath("/foo/Model.FBX"), "mesh");
+    EXPECT_EQ(abc->fileTypeForPath("/foo/Texture.PNG"), "texture");
+    EXPECT_EQ(abc->fileTypeForPath("/foo/Mat.MATERIAL"), "material");
+}
+
+TEST_F(AssetBrowserControllerTests, MaterialPreviewReturnsEmptyForNonMaterialFile) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    // Create a non-material file
+    QString path = tmpDir.path() + "/model.fbx";
+    QFile f(path);
+    f.open(QIODevice::WriteOnly);
+    f.write("not a material");
+    f.close();
+
+    auto* abc = AssetBrowserController::instance();
+    // materialPreview on a non-material file (or one with no valid material name)
+    // should return empty
+    QString preview = abc->materialPreview(path);
+    EXPECT_TRUE(preview.isEmpty());
+}
+
+TEST_F(AssetBrowserControllerTests, MaterialPreviewReturnsEmptyForNonexistentFile) {
+    auto* abc = AssetBrowserController::instance();
+    QString preview = abc->materialPreview("/nonexistent/path/foo.material");
+    EXPECT_TRUE(preview.isEmpty());
+}
+
+TEST_F(AssetBrowserControllerTests, FilterMaterialsOnly) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QFile(tmpDir.path() + "/model.fbx").open(QIODevice::WriteOnly);
+    QFile(tmpDir.path() + "/texture.png").open(QIODevice::WriteOnly);
+    QFile(tmpDir.path() + "/shader.material").open(QIODevice::WriteOnly);
+
+    auto* abc = AssetBrowserController::instance();
+    abc->setRootPath(tmpDir.path());
+    abc->setFilter("materials");
+
+    int materialCount = 0;
+    for (const QVariant& v : abc->files()) {
+        QVariantMap m = v.toMap();
+        if (!m["isDir"].toBool() && m["type"].toString() == "material")
+            materialCount++;
+    }
+    EXPECT_EQ(materialCount, 1);
+}

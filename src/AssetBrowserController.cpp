@@ -88,7 +88,7 @@ void AssetBrowserController::setRootPath(const QString& path)
 
     m_rootPath = dir.absolutePath();
 
-    SentryReporter::addBreadcrumb("asset_browser", "Root directory changed: " + m_rootPath);
+    SentryReporter::addBreadcrumb("ui.action", "Root directory changed: " + m_rootPath);
 
     // Persist to settings
     QSettings settings;
@@ -134,7 +134,7 @@ void AssetBrowserController::setSearchQuery(const QString& query)
 
 void AssetBrowserController::browseForDirectory()
 {
-    SentryReporter::addBreadcrumb("asset_browser", "Browse for directory requested");
+    SentryReporter::addBreadcrumb("ui.action", "Browse for directory requested");
     emit browseRequested();
 }
 
@@ -145,7 +145,7 @@ void AssetBrowserController::openFile(const QString& path)
         return;
 
     if (fi.isDir()) {
-        SentryReporter::addBreadcrumb("asset_browser",
+        SentryReporter::addBreadcrumb("ui.action",
             QString("Navigate into directory: %1").arg(fi.fileName()));
         navigateToDirectory(path);
         return;
@@ -153,7 +153,7 @@ void AssetBrowserController::openFile(const QString& path)
 
     QString type = classifyExtension(fi.suffix().toLower());
 
-    SentryReporter::addBreadcrumb("asset_browser",
+    SentryReporter::addBreadcrumb("ui.action",
         QString("Open file: %1 (type: %2)").arg(fi.fileName(), type));
 
     if (type == "mesh") {

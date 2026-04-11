@@ -19,8 +19,8 @@ Rectangle {
     Rectangle {
         id: card
         anchors.centerIn: parent
-        width: Math.min(parent.width - 60, 560)
-        height: Math.min(cardLayout.implicitHeight + 48, parent.height - 40)
+        width: Math.min(Math.max(parent.width - 60, 200), 560)
+        height: Math.min(cardLayout.implicitHeight + 48, Math.max(parent.height - 40, 200))
         radius: 12
         color: PropertiesPanelController.panelColor
         border.color: PropertiesPanelController.borderColor

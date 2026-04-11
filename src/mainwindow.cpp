@@ -451,7 +451,7 @@ void MainWindow::initToolBar()
         // (QFileDialog needs a proper parent widget on macOS)
         auto* abController = AssetBrowserController::instance();
         connect(abController, &AssetBrowserController::importMeshRequested, this, [this](const QStringList& paths) {
-            SentryReporter::addBreadcrumb("asset_browser", "Importing mesh from Asset Browser");
+            SentryReporter::addBreadcrumb("ui.action", "Asset Browser: import mesh");
             importMeshs(paths);
         });
     }
