@@ -81,7 +81,6 @@ static QString colorizeIconWhenPositive(const QString& icon, int value, const ch
         return icon;
     return colorizeWord(icon, ansiColor, enabled);
 }
-
 static QString scanStatusLabel(bool hasError, bool hasWarning, bool colorize)
 {
     if (hasError)
