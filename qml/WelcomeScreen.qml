@@ -20,7 +20,7 @@ Rectangle {
         id: card
         anchors.centerIn: parent
         width: Math.min(parent.width - 60, 560)
-        height: cardLayout.implicitHeight + 48
+        height: Math.min(cardLayout.implicitHeight + 48, parent.height - 40)
         radius: 12
         color: PropertiesPanelController.panelColor
         border.color: PropertiesPanelController.borderColor
@@ -32,13 +32,19 @@ Rectangle {
             onClicked: {} // absorb click
         }
 
+        Flickable {
+            anchors {
+                fill: parent; topMargin: 24; bottomMargin: 24
+                leftMargin: 28; rightMargin: 28
+            }
+            contentHeight: cardLayout.implicitHeight
+            clip: true
+            flickableDirection: Flickable.VerticalFlick
+            boundsBehavior: Flickable.StopAtBounds
+
         ColumnLayout {
             id: cardLayout
-            anchors {
-                top: parent.top; topMargin: 24
-                left: parent.left; leftMargin: 28
-                right: parent.right; rightMargin: 28
-            }
+            width: parent.width
             spacing: 16
 
             // ---- Header: Title ----
@@ -387,6 +393,7 @@ Rectangle {
             // Bottom spacer for padding
             Item { height: 4 }
         }
+        } // Flickable
     }
 
     // Dismiss on Escape key
