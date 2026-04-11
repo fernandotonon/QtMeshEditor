@@ -236,9 +236,23 @@ Rectangle {
         id: editModeToolsComponent
 
         Column {
+            id: editToolsCol
             width: parent ? parent.width : 200
             padding: 8
             spacing: 6
+
+            property int activeSelMode: EditModeController.selectionMode
+            property int activeFalloff: EditModeController.softSelectionFalloff
+            property int activeNormals: EditModeController.normalsMode
+            property bool softSelOn: EditModeController.softSelectionEnabled
+
+            Connections {
+                target: EditModeController
+                function onSelectionModeChanged() { editToolsCol.activeSelMode = EditModeController.selectionMode }
+                function onSoftSelectionFalloffChanged() { editToolsCol.activeFalloff = EditModeController.softSelectionFalloff }
+                function onNormalsModeChanged() { editToolsCol.activeNormals = EditModeController.normalsMode }
+                function onSoftSelectionEnabledChanged() { editToolsCol.softSelOn = EditModeController.softSelectionEnabled }
+            }
 
             // Selection mode buttons
             Row {
@@ -261,10 +275,12 @@ Rectangle {
 
                     Rectangle {
                         width: 52; height: 22; radius: 3
-                        color: EditModeController.selectionMode === modelData.mode
+                        color: editToolsCol.activeSelMode === modelData.mode
                             ? PropertiesPanelController.highlightColor
-                            : PropertiesPanelController.buttonColor
+                            : selMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                            : PropertiesPanelController.headerColor
                         border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Behavior on color { ColorAnimation { duration: 50 } }
 
                         Text {
                             anchors.centerIn: parent
@@ -273,8 +289,8 @@ Rectangle {
                             font.pixelSize: 10
                         }
                         MouseArea {
-                            anchors.fill: parent
-                            onClicked: EditModeController.selectionMode = modelData.mode
+                            id: selMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: { editToolsCol.activeSelMode = modelData.mode; EditModeController.selectionMode = modelData.mode }
                         }
                     }
                 }
@@ -291,25 +307,21 @@ Rectangle {
                 wrapMode: Text.Wrap
             }
 
-            // Soft selection toggle
+            // Soft selection toggle (themed checkbox)
             Row {
                 spacing: 6; width: parent.width - 16
 
-                CheckBox {
-                    id: softSelCheck
-                    text: "Soft Selection"
-                    checked: EditModeController.softSelectionEnabled
-                    onCheckedChanged: EditModeController.softSelectionEnabled = checked
-                    font.pixelSize: 10
-
-                    contentItem: Text {
-                        text: softSelCheck.text
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 10
-                        leftPadding: softSelCheck.indicator.width + 4
-                        verticalAlignment: Text.AlignVCenter
+                Rectangle {
+                    width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                    border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                    color: editToolsCol.softSelOn ? PropertiesPanelController.highlightColor : "transparent"
+                    Behavior on color { ColorAnimation { duration: 50 } }
+                    Text { anchors.centerIn: parent; text: editToolsCol.softSelOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: { editToolsCol.softSelOn = !editToolsCol.softSelOn; EditModeController.softSelectionEnabled = editToolsCol.softSelOn }
                     }
                 }
+                Text { text: "Soft Selection"; font.pixelSize: 11; color: PropertiesPanelController.textColor; anchors.verticalCenter: parent.verticalCenter }
             }
 
             // Soft selection radius slider
@@ -348,10 +360,12 @@ Rectangle {
 
                         Rectangle {
                             width: 50; height: 20; radius: 3
-                            color: EditModeController.softSelectionFalloff === modelData.mode
+                            color: editToolsCol.activeFalloff === modelData.mode
                                 ? PropertiesPanelController.highlightColor
-                                : PropertiesPanelController.buttonColor
+                                : fallMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                                : PropertiesPanelController.headerColor
                             border.color: PropertiesPanelController.borderColor; border.width: 1
+                            Behavior on color { ColorAnimation { duration: 50 } }
 
                             Text {
                                 anchors.centerIn: parent
@@ -359,8 +373,8 @@ Rectangle {
                                 color: PropertiesPanelController.textColor; font.pixelSize: 9
                             }
                             MouseArea {
-                                anchors.fill: parent
-                                onClicked: EditModeController.softSelectionFalloff = modelData.mode
+                                id: fallMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                onClicked: { editToolsCol.activeFalloff = modelData.mode; EditModeController.softSelectionFalloff = modelData.mode }
                             }
                         }
                     }
@@ -388,10 +402,12 @@ Rectangle {
 
                     Rectangle {
                         width: 52; height: 22; radius: 3
-                        color: EditModeController.normalsMode === modelData.mode
+                        color: editToolsCol.activeNormals === modelData.mode
                             ? PropertiesPanelController.highlightColor
-                            : PropertiesPanelController.buttonColor
+                            : normMa.containsMouse ? Qt.lighter(PropertiesPanelController.panelColor, 1.5)
+                            : PropertiesPanelController.headerColor
                         border.color: PropertiesPanelController.borderColor; border.width: 1
+                        Behavior on color { ColorAnimation { duration: 50 } }
 
                         Text {
                             anchors.centerIn: parent
@@ -399,8 +415,8 @@ Rectangle {
                             color: PropertiesPanelController.textColor; font.pixelSize: 10
                         }
                         MouseArea {
-                            anchors.fill: parent
-                            onClicked: EditModeController.normalsMode = modelData.mode
+                            id: normMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                            onClicked: { editToolsCol.activeNormals = modelData.mode; EditModeController.normalsMode = modelData.mode }
                         }
                     }
                 }
