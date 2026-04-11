@@ -3,6 +3,7 @@
 #include "SentryReporter.h"
 
 #include <Ogre.h>
+#include <OgreScriptCompiler.h>
 #include <QDir>
 #include <QFileInfo>
 #include <QSettings>
@@ -269,17 +270,30 @@ QString AssetBrowserController::materialPreview(const QString& filePath) const
         return {};
 
     if (!matMgr->resourceExists(matName.toStdString())) {
-        // Ensure the directory containing the .material file is an Ogre resource location
         QFileInfo fi(filePath);
         try {
+            // Register the material's directory so Ogre can find referenced textures
             Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
                 fi.absolutePath().toStdString(), "FileSystem",
                 Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, false);
-            // Parse all .material scripts in the resource group
-            Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
-        } catch (...) {
-            // Ignore errors from duplicate resource locations or parse failures
-        }
+        } catch (...) {}
+
+        // Parse the .material script via Ogre's script compiler
+        try {
+            std::string scriptContent;
+            QFile f(filePath);
+            if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                scriptContent = f.readAll().toStdString();
+                f.close();
+            }
+            if (!scriptContent.empty()) {
+                Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+                    const_cast<char*>(scriptContent.c_str()),
+                    scriptContent.size(), false));
+                Ogre::ScriptCompilerManager::getSingleton().parseScript(
+                    ds, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            }
+        } catch (...) {}
     }
 
     return MaterialPreviewRenderer::instance()->renderPreviewAsDataUri(matName);
