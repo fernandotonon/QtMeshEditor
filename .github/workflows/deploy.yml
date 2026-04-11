@@ -32,7 +32,7 @@ jobs:
 ####################################################################
 
  build-n-cache-assimp-windows:
-   needs: scan-assets-qtmesh
+   # scan-assets-qtmesh runs independently (no artifact dependency)
    runs-on: windows-latest
    steps:
     - name: Cache Assimp
@@ -398,7 +398,7 @@ jobs:
 ####################################################################
 
  build-n-cache-assimp-linux:
-    needs: scan-assets-qtmesh
+    # scan-assets-qtmesh runs independently (no artifact dependency)
     runs-on: ubuntu-latest
     steps:
     - name: change folder permissions
@@ -1235,7 +1235,7 @@ jobs:
 ####################################################################
 
  build-n-cache-assimp-macos:
-    needs: scan-assets-qtmesh
+    # scan-assets-qtmesh runs independently (no artifact dependency)
     runs-on: macos-latest
     steps:
     - name: change folder permissions
