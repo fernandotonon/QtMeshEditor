@@ -368,6 +368,28 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
               ['--dry-run', 'Show what fixes would be applied without making changes'],
               ['--include <patterns>', 'File patterns to include (comma-separated, e.g. *.fbx,*.glb)'],
               ['--exclude <patterns>', 'File patterns to exclude (comma-separated)'],
+              ['--allowed-formats <list>', 'Allowed formats CSV (e.g. fbx,glb,obj)'],
+              ['--forbidden-extensions <list>', 'Forbidden formats CSV (e.g. dae,3ds)'],
+              ['--max-file-size-mb <n>', 'Override max_file_size_mb for this run (0 = no limit)'],
+              ['--min-file-size-mb <n>', 'Override min_file_size_mb for this run (0 = no limit)'],
+              ['--max-meshes <n>', 'Override max_mesh_count for this run (0 = no limit)'],
+              ['--min-meshes <n>', 'Override min_mesh_count for this run (0 = no limit)'],
+              ['--max-materials <n>', 'Override max_material_count for this run (0 = no limit)'],
+              ['--min-materials <n>', 'Override min_material_count for this run (0 = no limit)'],
+              ['--max-vertices <n>', 'Override max_vertex_count for this run (0 = no limit)'],
+              ['--min-vertices <n>', 'Override min_vertex_count for this run (0 = no limit)'],
+              ['--require-skeleton / --no-require-skeleton', 'Enable/disable require_skeleton for this run'],
+              ['--require-animations / --no-require-animations', 'Enable/disable require_animations for this run'],
+              ['--allow-embedded-textures / --disallow-embedded-textures', 'Enable/disable embedded textures for this run'],
+              ['--require-textures-exist / --no-require-textures-exist', 'Enable/disable texture existence checks'],
+              ['--allow-missing-materials / --disallow-missing-materials', 'Enable/disable missing material checks'],
+              ['--file-name-case <name>', 'snake_case, kebab-case, camelCase, PascalCase, lowercase'],
+              ['--max-anim-keyframes <n>', 'Override max_anim_keyframes for this run (0 = no limit)'],
+              ['--min-anim-keyframes <n>', 'Override min_anim_keyframes for this run (0 = no limit)'],
+              ['--max-anim-duration <n>', 'Override max_anim_duration in seconds (0 = no limit)'],
+              ['--min-anim-duration <n>', 'Override min_anim_duration in seconds (0 = no limit)'],
+              ['--require-animation-names <list>', 'Required animation names/patterns CSV'],
+              ['--require-bone-names <list>', 'Required bone names/patterns CSV'],
               ['--fail-on <level>', 'Exit code 1 threshold: info, warning, error, or never'],
             ]}
             examples={[
@@ -376,8 +398,15 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
               'qtmesh scan ./assets --json --report report.json',
               'qtmesh scan ./assets --fix --dry-run',
               'qtmesh scan ./assets --include "*.fbx,*.glb" --exclude "**/vendor/**"',
+              'qtmesh scan ./assets --max-vertices 120000 --max-materials=16',
+              'qtmesh scan ./assets --no-require-skeleton --allowed-formats fbx,glb,obj',
+              'qtmesh scan ./assets --require-animation-names "walk,run,idle*"',
             ]}
           >
+            <p className={s.para}>
+              Most value flags accept both styles: <Code>--flag value</Code> and <Code>--flag=value</Code>.
+              CLI overrides are applied after loading <Code>qtmesh.yml</Code>/<Code>qtmesh.yaml</Code>/<Code>qtmesh.json</Code> for quick one-off validation checks.
+            </p>
             <h3 className={s.subsection}>Example Output</h3>
             <CodeBlock>{`  OK    models/player.fbx
 ERROR   models/enemy.fbx
@@ -389,11 +418,11 @@ ERROR   props/Barrel.dae
          [error] forbidden_extensions: .dae is a forbidden format
 
 Summary:
-  Scanned:  4
-  Passed:   1
-  Warnings: 1
-  Errors:   4
-  Time:     0.3s`}</CodeBlock>
+  • Scanned:  4
+  ✓ Passed:   1
+  ▲ Warnings: 1
+  ✗ Errors:   3
+  ⏱ Time:     0.3s`}</CodeBlock>
           </CmdSection>
 
           {/* ─── Scan Reference ─── */}

@@ -1159,9 +1159,11 @@ TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsGeneratedMeshReturnsError)
     ASSERT_TRUE(entity->hasSkeleton());
     ASSERT_EQ(entity->getMesh()->getSkeleton()->getNumAnimations(), 0u);
 
-    const QString sourceFile = QDir::tempPath() + "/cli_no_anim_source.mesh";
+    const QString sourceFile = QDir::tempPath() + "/cli_no_anim_source.fbx";
     QFile::remove(sourceFile);
-    ASSERT_EQ(MeshImporterExporter::exporter(node, sourceFile, "Ogre Mesh (*.mesh)"), 0);
+    ASSERT_EQ(MeshImporterExporter::exporter(
+                  node, sourceFile, CLIPipeline::formatForExtension(sourceFile)),
+              0);
     ASSERT_TRUE(QFile::exists(sourceFile));
 
     auto nodes = manager->getSceneNodes();
@@ -1177,14 +1179,10 @@ TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsGeneratedMeshReturnsError)
     TestArgv jsonArgs({"qtmesh", "anim", sourceBa.constData(), "--list", "--json"});
     const int jsonRc = CLIPipeline::cmdAnim(jsonArgs.argc(), jsonArgs.argv());
     ASSERT_EQ(textRc, jsonRc);
-    // Environments without the importer/plugin to reload generated .mesh files
-    // fail before list-mode animation handling. Accept either:
-    // 0 => loaded file and handled no-animation list mode
-    // 1 => loader failed before list mode could run
-    EXPECT_TRUE(textRc == 0 || textRc == 1);
+    ASSERT_EQ(textRc, 0);
 
     QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_no_anim_source.material");
+    QFile::remove(QDir::tempPath() + "/cli_no_anim_source.fbx.meta");
 }
 
 // -- cmdAnim rename --
@@ -1866,6 +1864,18 @@ TEST(CLIPipelineCmdScanError, InvalidFailOnReturns2)
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
 }
 
+TEST(CLIPipelineCmdScanError, InvalidMaxVerticesReturns2)
+{
+    TestArgv args({"qtmesh", "scan", "--max-vertices", "abc"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
+TEST(CLIPipelineCmdScanError, InvalidFileNameCaseReturns2)
+{
+    TestArgv args({"qtmesh", "scan", "--file-name-case", "bad_case"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
 TEST(CLIPipelineCmdScanError, NonDirectoryScanRootReturns2)
 {
     QTemporaryDir tmpDir;
@@ -2117,4 +2127,161 @@ TEST(CLIPipelineCmdScan, AutoDetectConfigWritesConfiguredReports)
     ASSERT_TRUE(reportFile.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString report = QString::fromUtf8(reportFile.readAll());
     EXPECT_TRUE(report.contains("\"summary\""));
+}
+
+TEST(CLIPipelineCmdScan, MaxVerticesOverrideReturnsFailure)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty()); // 3 vertices
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--max-vertices", "2"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, MaxVerticesOverrideWithEqualsReturnsFailure)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty()); // 3 vertices
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--max-vertices=2"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, MaxFileSizeOverrideReturnsFailure)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--max-file-size-mb", "0.000001"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, AllowedFormatsOverrideReturnsFailure)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--allowed-formats=fbx"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, RequireSkeletonAndAnimationsCanBeDisabledFromCli)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    QFile cfg(tmpDir.filePath("qtmesh.yml"));
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "rules:\n"
+        "  require_skeleton: true\n"
+        "  require_animations: true\n"
+        "report:\n"
+        "  fail_on: error\n");
+    cfg.close();
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(),
+                   "--no-require-skeleton", "--no-require-animations"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+}
+
+TEST(CLIPipelineCmdScan, CliOverridesTakePrecedenceOverScopedRules)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty()); // 3 vertices
+
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "scopes:\n"
+        "  \"**/*.obj\":\n"
+        "    max_vertex_count: 100\n");
+    cfg.close();
+
+    QByteArray rootBa = rootPath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
+                   "--max-vertices", "2", "--no-require-skeleton", "--no-require-animations"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, EmptyCliOverridesCanClearScopedRules)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "BadName.obj").isEmpty());
+
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "report:\n"
+        "  fail_on: warning\n"
+        "scopes:\n"
+        "  \"**/*.obj\":\n"
+        "    forbidden_extensions: [obj]\n"
+        "    file_name_case: snake_case\n"
+        "    require_animation_names: [walk]\n"
+        "    require_bone_names: [Hips]\n");
+    cfg.close();
+
+    QByteArray rootBa = rootPath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    TestArgv failArgs({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
+                       "--no-require-skeleton", "--no-require-animations"});
+    EXPECT_EQ(CLIPipeline::cmdScan(failArgs.argc(), failArgs.argv()), 1);
+
+    TestArgv clearArgs({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
+                        "--no-require-skeleton", "--no-require-animations",
+                        "--forbidden-extensions=", "--file-name-case=",
+                        "--require-animation-names=", "--require-bone-names="});
+    EXPECT_EQ(CLIPipeline::cmdScan(clearArgs.argc(), clearArgs.argv()), 0);
 }
