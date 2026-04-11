@@ -129,8 +129,6 @@ public:
     void setSnapAngleStep(double degrees);
     void setSnapScaleStep(double step);
 
-    Q_INVOKABLE QString materialPresetPreview(const QString& presetName) const;
-
     Q_INVOKABLE QVariantList gridSizePresets() const;
     Q_INVOKABLE QVariantList angleStepPresets() const;
     Q_INVOKABLE QVariantList scaleStepPresets() const;

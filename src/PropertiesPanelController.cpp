@@ -9,8 +9,6 @@
 #include "UndoManager.h"
 #include "Manager.h"
 #include "SentryReporter.h"
-#include "MaterialPresetLibrary.h"
-#include "MaterialPreviewRenderer.h"
 #include <QApplication>
 #include <QFileDialog>
 #include <QSettings>
@@ -728,22 +726,6 @@ void PropertiesPanelController::setSnapScaleStep(double step)
 {
     TransformOperator::getSingleton()->setSnapScaleStep(step);
     emit snapScaleStepChanged();
-}
-
-QString PropertiesPanelController::materialPresetPreview(const QString& presetName) const
-{
-    // MaterialPresetLibrary creates materials as "Preset/<name>"
-    QString ogreMatName = "Preset/" + presetName;
-
-    // Ensure the material exists (applyPreset creates it if needed,
-    // but also applies to selection — we just want creation)
-    auto* mgr = Ogre::MaterialManager::getSingletonPtr();
-    if (mgr && !mgr->resourceExists(ogreMatName.toStdString())) {
-        // Force creation by calling applyPreset (it's safe with no selection)
-        MaterialPresetLibrary::instance()->applyPreset(presetName);
-    }
-
-    return MaterialPreviewRenderer::instance()->renderPreviewAsDataUri(ogreMatName);
 }
 
 QVariantList PropertiesPanelController::gridSizePresets() const
