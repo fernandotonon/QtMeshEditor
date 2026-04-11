@@ -351,7 +351,8 @@ void SpaceCamera::keyReleaseEvent(QKeyEvent *event)
 
 void SpaceCamera::zoomByDelta(Ogre::Real delta)
 {
-    zoom(delta);
+    Ogre::Real speedScale = mCameraSpeed / 0.5f;
+    zoom(delta * speedScale);
 }
 
 void SpaceCamera::zoom(Ogre::Real delta)
