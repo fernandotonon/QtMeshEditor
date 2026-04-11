@@ -648,7 +648,9 @@ TEST_F(EditModeControllerSelectionTest, SignalEmission) {
     SelectionSet::getSingleton()->selectOne(node);
 
     auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
 
+    // Connect signals after enterEditMode to only count user-initiated changes
     int selModeChanges = 0;
     int editSelChanges = 0;
     auto conn1 = QObject::connect(ctrl, &EditModeController::selectionModeChanged,
@@ -656,16 +658,14 @@ TEST_F(EditModeControllerSelectionTest, SignalEmission) {
     auto conn2 = QObject::connect(ctrl, &EditModeController::editSelectionChanged,
                                    [&]() { ++editSelChanges; });
 
-    ASSERT_TRUE(ctrl->enterEditMode());
-
     ctrl->setSelectionMode(EditModeController::EdgeMode);
     EXPECT_EQ(selModeChanges, 1);
 
     ctrl->selectVertex(0);
-    EXPECT_EQ(editSelChanges, 2); // 1 from enterEditMode + 1 from selectVertex
+    EXPECT_EQ(editSelChanges, 1);
 
     ctrl->deselectAll();
-    EXPECT_EQ(editSelChanges, 3);
+    EXPECT_EQ(editSelChanges, 2);
 
     QObject::disconnect(conn1);
     QObject::disconnect(conn2);

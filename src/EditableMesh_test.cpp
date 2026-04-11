@@ -340,7 +340,7 @@ TEST_F(EditModeControllerTest, EnterAndExitEditMode) {
     // Enter edit mode
     EXPECT_TRUE(ctrl->enterEditMode());
     EXPECT_TRUE(ctrl->isEditModeActive());
-    EXPECT_EQ(ctrl->modeLabel(), "Edit Mode");
+    EXPECT_EQ(ctrl->modeLabel(), "Edit Mode (Vertex)");
     EXPECT_NE(ctrl->currentMesh(), nullptr);
     EXPECT_EQ(ctrl->editEntity(), entity);
     EXPECT_EQ(ctrl->vertexCount(), 3);

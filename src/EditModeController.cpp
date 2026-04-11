@@ -341,11 +341,12 @@ void EditModeController::selectVertex(int globalIndex, bool addToSelection)
 {
     if (!m_editModeActive || !m_editableMesh)
         return;
-    if (globalIndex < 0 || globalIndex >= static_cast<int>(m_editableMesh->totalVertexCount()))
-        return;
 
     if (!addToSelection)
         m_selectedVertices.clear();
+
+    if (globalIndex < 0 || globalIndex >= static_cast<int>(m_editableMesh->totalVertexCount()))
+        return;
 
     m_selectedVertices.insert(globalIndex);
     updateSelectionOverlay();
