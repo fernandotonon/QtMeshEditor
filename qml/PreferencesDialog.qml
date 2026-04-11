@@ -73,7 +73,7 @@ Rectangle {
                 spacing: 2
 
                 Repeater {
-                    model: ["General", "Appearance", "Viewport", "AI"]
+                    model: ["General", "Appearance", "Viewport"]
 
                     Rectangle {
                         Layout.fillWidth: true
@@ -222,45 +222,49 @@ Rectangle {
                             }
                         }
 
-                        // Telemetry opt-out
-                        Rectangle {
+                        // Telemetry opt-out (themed checkbox matching snap settings)
+                        Row {
+                            spacing: 6
                             width: parent.width
-                            height: 40
-                            color: "transparent"
 
-                            RowLayout {
-                                anchors.fill: parent
-                                spacing: 8
+                            property bool telemetryOn: readSetting("Telemetry/enabled", true) === true
+                                                    || readSetting("Telemetry/enabled", true) === "true"
 
-                                CheckBox {
-                                    id: telemetryCheck
-                                    checked: readSetting("Telemetry/enabled", true) === true
-                                           || readSetting("Telemetry/enabled", true) === "true"
-                                    onToggled: writeSetting("Telemetry/enabled", checked)
-                                }
-
-                                Text {
-                                    text: "Enable anonymous telemetry"
-                                    font.pixelSize: 12
-                                    color: textColor
-                                    Layout.fillWidth: true
-
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: telemetryCheck.toggle()
-                                    }
+                            Rectangle {
+                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                                border.color: borderColor; border.width: 1; radius: 2
+                                color: parent.telemetryOn ? highlightColor : "transparent"
+                                Text { anchors.centerIn: parent; text: parent.parent.telemetryOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: { parent.parent.telemetryOn = !parent.parent.telemetryOn; writeSetting("Telemetry/enabled", parent.parent.telemetryOn) }
                                 }
                             }
+                            Text { text: "Enable anonymous telemetry"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
                         }
 
                         Text {
                             text: "Telemetry helps improve QtMeshEditor by sending anonymous usage data."
-                            font.pixelSize: 11
-                            font.italic: true
-                            color: dimTextColor
-                            wrapMode: Text.WordWrap
+                            font.pixelSize: 11; font.italic: true; color: dimTextColor; wrapMode: Text.WordWrap; width: parent.width
+                        }
+
+                        // Welcome screen toggle
+                        Row {
+                            spacing: 6
                             width: parent.width
+
+                            property bool welcomeOn: !(readSetting("WelcomeScreen/dontShowAgain", false) === true
+                                                    || readSetting("WelcomeScreen/dontShowAgain", false) === "true")
+
+                            Rectangle {
+                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                                border.color: borderColor; border.width: 1; radius: 2
+                                color: parent.welcomeOn ? highlightColor : "transparent"
+                                Text { anchors.centerIn: parent; text: parent.parent.welcomeOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: { parent.parent.welcomeOn = !parent.parent.welcomeOn; writeSetting("WelcomeScreen/dontShowAgain", !parent.parent.welcomeOn) }
+                                }
+                            }
+                            Text { text: "Show welcome screen on startup"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
                         }
                     }
 
@@ -349,36 +353,24 @@ Rectangle {
                         spacing: 12
                         visible: currentTab === 2
 
-                        // Grid visibility
-                        Rectangle {
+                        // Grid visibility (themed checkbox)
+                        Row {
+                            spacing: 6
                             width: parent.width
-                            height: 40
-                            color: "transparent"
 
-                            RowLayout {
-                                anchors.fill: parent
-                                spacing: 8
+                            property bool gridOn: readSetting("Viewport/gridVisible", true) === true
+                                               || readSetting("Viewport/gridVisible", true) === "true"
 
-                                CheckBox {
-                                    id: gridCheck
-                                    checked: readSetting("Viewport/gridVisible", true) === true
-                                           || readSetting("Viewport/gridVisible", true) === "true"
-                                    onToggled: writeSetting("Viewport/gridVisible", checked)
-                                }
-
-                                Text {
-                                    text: "Show Grid by Default"
-                                    font.pixelSize: 12
-                                    color: textColor
-                                    Layout.fillWidth: true
-
-                                    MouseArea {
-                                        anchors.fill: parent
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: gridCheck.toggle()
-                                    }
+                            Rectangle {
+                                width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                                border.color: borderColor; border.width: 1; radius: 2
+                                color: parent.gridOn ? highlightColor : "transparent"
+                                Text { anchors.centerIn: parent; text: parent.parent.gridOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                                MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                                    onClicked: { parent.parent.gridOn = !parent.parent.gridOn; writeSetting("Viewport/gridVisible", parent.parent.gridOn) }
                                 }
                             }
+                            Text { text: "Show Grid"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
                         }
 
                         // Camera speed
@@ -492,142 +484,6 @@ Rectangle {
                         }
                     }
 
-                    // --- AI Tab ---
-                    Column {
-                        width: parent.width - 32
-                        spacing: 12
-                        visible: currentTab === 3
-
-                        // Max tokens
-                        Column {
-                            width: parent.width
-                            spacing: 4
-
-                            Text {
-                                text: "Default Max Tokens"
-                                font.pixelSize: 12
-                                font.bold: true
-                                color: textColor
-                            }
-
-                            Rectangle {
-                                width: 120
-                                height: 30
-                                color: inputBgColor
-                                border.color: maxTokensField.activeFocus ? highlightColor : borderColor
-                                border.width: 1
-                                radius: 3
-
-                                TextInput {
-                                    id: maxTokensField
-                                    anchors.fill: parent
-                                    anchors.margins: 6
-                                    verticalAlignment: TextInput.AlignVCenter
-                                    font.pixelSize: 12
-                                    color: textColor
-                                    clip: true
-                                    selectByMouse: true
-                                    validator: IntValidator { bottom: 64; top: 8192 }
-                                    text: readSetting("AI/maxTokens", 512).toString()
-
-                                    onEditingFinished: writeSetting("AI/maxTokens", parseInt(text) || 512)
-                                }
-                            }
-
-                            Text {
-                                text: "Maximum number of tokens to generate (64-8192)"
-                                font.pixelSize: 11
-                                color: dimTextColor
-                            }
-                        }
-
-                        // Temperature
-                        Column {
-                            width: parent.width
-                            spacing: 4
-
-                            Text {
-                                text: "Temperature"
-                                font.pixelSize: 12
-                                font.bold: true
-                                color: textColor
-                            }
-
-                            RowLayout {
-                                width: parent.width
-                                spacing: 8
-
-                                Slider {
-                                    id: temperatureSlider
-                                    Layout.fillWidth: true
-                                    from: 0.0
-                                    to: 1.0
-                                    stepSize: 0.05
-                                    value: parseFloat(readSetting("AI/temperature", 0.7)) || 0.7
-                                    onMoved: writeSetting("AI/temperature", value.toFixed(2))
-                                }
-
-                                Text {
-                                    text: temperatureSlider.value.toFixed(2)
-                                    font.pixelSize: 12
-                                    color: textColor
-                                    Layout.preferredWidth: 35
-                                    horizontalAlignment: Text.AlignRight
-                                }
-                            }
-
-                            Text {
-                                text: "Lower values produce more deterministic output; higher values are more creative."
-                                font.pixelSize: 11
-                                color: dimTextColor
-                                wrapMode: Text.WordWrap
-                                width: parent.width
-                            }
-                        }
-
-                        // Context size
-                        Column {
-                            width: parent.width
-                            spacing: 4
-
-                            Text {
-                                text: "Context Size"
-                                font.pixelSize: 12
-                                font.bold: true
-                                color: textColor
-                            }
-
-                            Rectangle {
-                                width: 120
-                                height: 30
-                                color: inputBgColor
-                                border.color: contextSizeField.activeFocus ? highlightColor : borderColor
-                                border.width: 1
-                                radius: 3
-
-                                TextInput {
-                                    id: contextSizeField
-                                    anchors.fill: parent
-                                    anchors.margins: 6
-                                    verticalAlignment: TextInput.AlignVCenter
-                                    font.pixelSize: 12
-                                    color: textColor
-                                    clip: true
-                                    selectByMouse: true
-                                    validator: IntValidator { bottom: 512; top: 32768 }
-                                    text: readSetting("AI/contextSize", 2048).toString()
-
-                                    onEditingFinished: writeSetting("AI/contextSize", parseInt(text) || 2048)
-                                }
-                            }
-
-                            Text {
-                                text: "Number of context tokens for inference (512-32768)"
-                                font.pixelSize: 11
-                                color: dimTextColor
-                            }
-                        }
-                    }
                 }
             }
         }

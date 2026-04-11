@@ -9,6 +9,9 @@
 #include "UndoManager.h"
 #include "Manager.h"
 #include "SentryReporter.h"
+#include "OgreWidget.h"
+#include "SpaceCamera.h"
+#include "ViewportGrid.h"
 #include <QApplication>
 #include <QFileDialog>
 #include <QSettings>
@@ -765,4 +768,27 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
     settings.setValue(key, value);
     SentryReporter::addBreadcrumb("ui.action",
         QString("Preference changed: %1").arg(key));
+
+    // Apply settings immediately to the running app
+    if (key == "Viewport/gridVisible") {
+        auto* grid = Manager::getSingleton()->getViewportGrid();
+        if (grid) grid->setVisible(value.toBool());
+    } else if (key == "Viewport/cameraSpeed") {
+        // Apply to all viewports
+        for (auto* vp : Manager::getSingleton()->getMainWindow()->findChildren<OgreWidget*>()) {
+            if (vp->getSpaceCamera())
+                vp->getSpaceCamera()->setCameraSpeed(value.toReal());
+        }
+    } else if (key == "Viewport/nearClip" || key == "Viewport/farClip") {
+        for (auto* vp : Manager::getSingleton()->getMainWindow()->findChildren<OgreWidget*>()) {
+            if (vp->getSpaceCamera() && vp->getSpaceCamera()->getCamera()) {
+                if (key == "Viewport/nearClip")
+                    vp->getSpaceCamera()->getCamera()->setNearClipDistance(value.toReal());
+                else
+                    vp->getSpaceCamera()->getCamera()->setFarClipDistance(value.toReal());
+            }
+        }
+    } else if (key == "Telemetry/enabled") {
+        SentryReporter::setEnabled(value.toBool());
+    }
 }
