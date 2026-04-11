@@ -162,6 +162,10 @@ public:
      */
     void recalculateNormalsFlat();
 
+    /// Set the normals mode (true=flat, false=smooth). Used by commitToEntity().
+    void setFlatNormals(bool flat) { m_flatNormals = flat; }
+    bool isFlatNormals() const { return m_flatNormals; }
+
     /**
      * @brief Count the number of degenerate triangles (area below epsilon).
      */
@@ -210,6 +214,7 @@ private:
 
     std::vector<EditableSubMesh> m_subMeshes;
     Ogre::Entity* m_sourceEntity = nullptr;
+    bool m_flatNormals = false; // true = flat normals, false = smooth
 };
 
 #endif // EDITABLEMESH_H

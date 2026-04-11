@@ -107,8 +107,11 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     if (m_subMeshes.size() != static_cast<size_t>(mesh->getNumSubMeshes()))
         return false;
 
-    // Recalculate normals before writing back
-    recalculateNormals();
+    // Recalculate normals before writing back (respects current mode)
+    if (m_flatNormals)
+        recalculateNormalsFlat();
+    else
+        recalculateNormals();
 
     // For submeshes that use shared vertices, write the first such submesh's
     // data back to the shared buffer (all such submeshes share the same vertex data).
