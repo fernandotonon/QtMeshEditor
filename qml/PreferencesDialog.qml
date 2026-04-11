@@ -78,15 +78,18 @@ Rectangle {
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        color: currentTab === index ? highlightColor : (tabMouse.containsMouse ? Qt.lighter(backgroundColor, 1.1) : "transparent")
-                        radius: 4
+                        color: currentTab === index ? highlightColor
+                             : tabMouse.containsMouse ? Qt.lighter(panelColor, 1.5)
+                             : Qt.darker(panelColor, 1.1)
+                        border.color: borderColor; border.width: 1
+                        radius: 3
+                        Behavior on color { ColorAnimation { duration: 50 } }
 
                         Text {
                             anchors.centerIn: parent
                             text: modelData
-                            font.pixelSize: 12
-                            font.bold: currentTab === index
-                            color: currentTab === index ? "white" : textColor
+                            font.pixelSize: 11
+                            color: textColor
                         }
 
                         MouseArea {
@@ -94,7 +97,13 @@ Rectangle {
                             anchors.fill: parent
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: currentTab = index
+                            onClicked: {
+                                currentTab = index
+                                // Force repaint of all tabs
+                                var m = parent.parent.parent.model
+                                parent.parent.parent.model = null
+                                parent.parent.parent.model = m
+                            }
                         }
                     }
                 }
@@ -270,9 +279,17 @@ Rectangle {
 
                     // --- Appearance Tab ---
                     Column {
+                        id: appearanceCol
                         width: parent.width - 32
                         spacing: 12
                         visible: currentTab === 1
+
+                        property int activeThemeIdx: {
+                            var saved = readSetting("palette", "dark")
+                            if (saved === "light") return 0
+                            if (saved === "dark") return 1
+                            return 1
+                        }
 
                         Column {
                             width: parent.width
@@ -280,55 +297,33 @@ Rectangle {
 
                             Text {
                                 text: "Theme"
-                                font.pixelSize: 12
-                                font.bold: true
-                                color: textColor
+                                font.pixelSize: 12; font.bold: true; color: textColor
                             }
 
-                            Rectangle {
+                            Flow {
+                                spacing: 3
                                 width: parent.width
-                                height: 30
-                                color: inputBgColor
-                                border.color: borderColor
-                                border.width: 1
-                                radius: 3
 
-                                RowLayout {
-                                    anchors.fill: parent
-                                    anchors.margins: 4
-                                    spacing: 4
+                                Repeater {
+                                    model: ["Light", "Dark"]
 
-                                    Repeater {
-                                        model: ["light", "dark", "custom"]
+                                    Rectangle {
+                                        width: Math.max(60, (parent.width - 3) / 2)
+                                        height: 22; radius: 3
+                                        color: index === appearanceCol.activeThemeIdx ? highlightColor
+                                             : themeBtnMa.containsMouse ? Qt.lighter(panelColor, 1.5)
+                                             : Qt.darker(panelColor, 1.1)
+                                        border.color: borderColor; border.width: 1
+                                        Behavior on color { ColorAnimation { duration: 50 } }
 
-                                        Rectangle {
-                                            Layout.fillWidth: true
-                                            Layout.fillHeight: true
-                                            radius: 2
-                                            color: {
-                                                var current = readSetting("palette", "dark");
-                                                return current === modelData ? highlightColor : (themeMouse.containsMouse ? Qt.lighter(backgroundColor, 1.1) : "transparent");
-                                            }
+                                        Text { anchors.centerIn: parent; text: modelData; color: textColor; font.pixelSize: 11 }
 
-                                            Text {
-                                                anchors.centerIn: parent
-                                                text: modelData.charAt(0).toUpperCase() + modelData.slice(1)
-                                                font.pixelSize: 11
-                                                color: {
-                                                    var current = readSetting("palette", "dark");
-                                                    return current === modelData ? "white" : textColor;
-                                                }
-                                            }
-
-                                            MouseArea {
-                                                id: themeMouse
-                                                anchors.fill: parent
-                                                hoverEnabled: true
-                                                cursorShape: Qt.PointingHandCursor
-                                                onClicked: {
-                                                    writeSetting("palette", modelData);
-                                                    themeNote.visible = true;
-                                                }
+                                        MouseArea {
+                                            id: themeBtnMa; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                appearanceCol.activeThemeIdx = index
+                                                writeSetting("palette", modelData.toLowerCase())
+                                                writeSetting("Appearance/theme", modelData)
                                             }
                                         }
                                     }
@@ -336,13 +331,8 @@ Rectangle {
                             }
 
                             Text {
-                                id: themeNote
-                                text: "Restart the application to apply the theme change."
-                                font.pixelSize: 11
-                                font.italic: true
-                                color: highlightColor
-                                visible: false
-                                topPadding: 4
+                                text: "Theme is applied immediately."
+                                font.pixelSize: 11; font.italic: true; color: dimTextColor; topPadding: 4
                             }
                         }
                     }

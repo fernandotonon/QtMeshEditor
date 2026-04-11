@@ -792,9 +792,9 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
         }
     } else if (key == "Telemetry/enabled") {
         SentryReporter::setEnabled(value.toBool());
-    } else if (key == "Appearance/theme") {
-        QString theme = value.toString();
-        if (theme == "Dark") {
+    } else if (key == "Appearance/theme" || key == "palette") {
+        QString theme = value.toString().toLower();
+        if (theme == "dark") {
             // Match MainWindow::on_actionDark_toggled — use dark palette
             QPalette dark;
             dark.setColor(QPalette::Window, QColor(53, 53, 53));
@@ -810,7 +810,7 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
             dark.setColor(QPalette::Highlight, QColor(42, 130, 218));
             dark.setColor(QPalette::HighlightedText, Qt::black);
             QApplication::setPalette(dark);
-        } else if (theme == "Light") {
+        } else if (theme == "light") {
             QApplication::setPalette(QColor("ghostwhite"));
         }
         // System = use platform default (requires restart)
