@@ -139,51 +139,6 @@ Rectangle {
                         spacing: 12
                         visible: currentTab === 0
 
-                        // Default save directory
-                        Column {
-                            width: parent.width
-                            spacing: 4
-
-                            Text {
-                                text: "Default Save Directory"
-                                font.pixelSize: 12
-                                font.bold: true
-                                color: textColor
-                            }
-
-                            Rectangle {
-                                width: parent.width
-                                height: 30
-                                color: inputBgColor
-                                border.color: saveDirField.activeFocus ? highlightColor : borderColor
-                                border.width: 1
-                                radius: 3
-
-                                TextInput {
-                                    id: saveDirField
-                                    anchors.fill: parent
-                                    anchors.margins: 6
-                                    verticalAlignment: TextInput.AlignVCenter
-                                    font.pixelSize: 12
-                                    color: textColor
-                                    clip: true
-                                    selectByMouse: true
-                                    text: readSetting("General/defaultSaveDir", "")
-
-                                    onEditingFinished: writeSetting("General/defaultSaveDir", text)
-
-                                    Text {
-                                        anchors.fill: parent
-                                        text: "Browse or type a path..."
-                                        color: dimTextColor
-                                        font.pixelSize: 12
-                                        visible: !saveDirField.text && !saveDirField.activeFocus
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                }
-                            }
-                        }
-
                         // Recent files count
                         Column {
                             width: parent.width

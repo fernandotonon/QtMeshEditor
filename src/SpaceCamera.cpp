@@ -118,7 +118,10 @@ const Ogre::Real& SpaceCamera::getCameraSpeed()    const
 //Mutators
 
 void SpaceCamera::setCameraSpeed(const Ogre::Real& newSpeed)
-{    mCameraSpeed = newSpeed; }
+{
+    mCameraSpeed = newSpeed;
+    mBaseCameraSpeed = newSpeed;
+}
 
 void SpaceCamera::setCameraPosition(const Ogre::Vector3 &pos)
 {
@@ -304,7 +307,7 @@ void SpaceCamera::keyPressEvent(QKeyEvent *event)
     // TODO add some customization in the UI for Camera speed
     if(event->key() == Qt::Key_Control)
     {
-        setCameraSpeed(0.01f);
+        mCameraSpeed = mBaseCameraSpeed * 0.1f; // Ctrl = 10x slower (don't update base)
         event->accept();
     }
 }
@@ -337,7 +340,7 @@ void SpaceCamera::keyReleaseEvent(QKeyEvent *event)
 
     if(event->key() == Qt::Key_Control)
     {
-        setCameraSpeed(0.1f);
+        setCameraSpeed(mBaseCameraSpeed); // Restore base speed
         event->accept();
     }
 }

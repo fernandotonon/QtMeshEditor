@@ -1873,7 +1873,8 @@ void MainWindow::addToRecentFiles(const QString& filePath)
     QStringList files = settings.value("RecentFiles/files").toStringList();
     files.removeAll(filePath);
     files.prepend(filePath);
-    while (files.size() > 10)
+    int maxRecent = settings.value("General/recentFilesCount", 10).toInt();
+    while (files.size() > maxRecent)
         files.removeLast();
     settings.setValue("RecentFiles/files", files);
     updateRecentFilesMenu();
