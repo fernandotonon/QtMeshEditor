@@ -461,7 +461,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 {
     qDebug() << "MCP Tool Call:" << name << args;
 
-    SentryReporter::addBreadcrumb("mcp.tool", QStringLiteral("Tool call: %1").arg(name));
+    SentryReporter::addBreadcrumb("ai.tool_call", QStringLiteral("Tool call: %1").arg(name));
 
     uintptr_t txn = 0;
     if (isHeavyTool(name)) {
@@ -485,7 +485,7 @@ QJsonObject MCPServer::callTool(const QString &name, const QJsonObject &args)
 
     // Track errors as breadcrumbs
     if (toolResult.contains("isError") && toolResult["isError"].toBool()) {
-        SentryReporter::addBreadcrumb("mcp.tool",
+        SentryReporter::addBreadcrumb("ai.tool_call",
             QStringLiteral("Tool error: %1").arg(name), "error");
     }
 
@@ -1069,7 +1069,7 @@ QJsonObject MCPServer::toolTransformSubMesh(const QJsonObject &args)
         if (transforms.isEmpty())
             return makeErrorResult("Error: No transform specified. Provide translate, rotate, or scale.");
 
-        SentryReporter::addBreadcrumb("mcp.tool",
+        SentryReporter::addBreadcrumb("ai.tool_call",
             QString("transform_submesh: %1[%2]").arg(entityName).arg(subIdx));
 
         return makeSuccessResult(QString("Applied sub-mesh transforms to '%1' submesh %2:\n%3")

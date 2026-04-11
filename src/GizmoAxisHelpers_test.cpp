@@ -4,6 +4,8 @@
 #include <vector>
 
 #include "GizmoAxisHelpers.h"
+#include "Manager.h"
+#include "TestHelpers.h"
 
 TEST(GizmoAxisHelpersTest, ForEachAxisVisitsAllAxesInOrder)
 {
@@ -46,14 +48,32 @@ TEST(GizmoAxisHelpersTest, ForEachAxisIndexedVisitsAllAxesWithIndices)
 
 TEST(GizmoAxisHelpersTest, AxisFromObjectIdentifiesMatchingAxis)
 {
-    auto* xAxis = reinterpret_cast<Ogre::ManualObject*>(0x100);
-    auto* yAxis = reinterpret_cast<Ogre::ManualObject*>(0x200);
-    auto* zAxis = reinterpret_cast<Ogre::ManualObject*>(0x300);
+    if (!tryInitOgre()) {
+        GTEST_SKIP() << "Skipping: Ogre initialization failed";
+    }
+
+    Manager* manager = Manager::getSingletonPtr();
+    ASSERT_NE(manager, nullptr);
+    Ogre::SceneManager* sceneMgr = manager->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+
+    static int counter = 0;
+    const Ogre::String suffix = Ogre::StringConverter::toString(counter++);
+    Ogre::ManualObject* xAxis = sceneMgr->createManualObject("GizmoAxisHelpersTestX_" + suffix);
+    Ogre::ManualObject* yAxis = sceneMgr->createManualObject("GizmoAxisHelpersTestY_" + suffix);
+    Ogre::ManualObject* zAxis = sceneMgr->createManualObject("GizmoAxisHelpersTestZ_" + suffix);
+    ASSERT_NE(xAxis, nullptr);
+    ASSERT_NE(yAxis, nullptr);
+    ASSERT_NE(zAxis, nullptr);
 
     EXPECT_EQ(GizmoAxisHelpers::axisFromObject(xAxis, xAxis, yAxis, zAxis), GizmoAxisHelpers::Axis::X);
     EXPECT_EQ(GizmoAxisHelpers::axisFromObject(yAxis, xAxis, yAxis, zAxis), GizmoAxisHelpers::Axis::Y);
     EXPECT_EQ(GizmoAxisHelpers::axisFromObject(zAxis, xAxis, yAxis, zAxis), GizmoAxisHelpers::Axis::Z);
     EXPECT_EQ(GizmoAxisHelpers::axisFromObject(nullptr, xAxis, yAxis, zAxis), GizmoAxisHelpers::Axis::None);
+
+    sceneMgr->destroyManualObject(xAxis);
+    sceneMgr->destroyManualObject(yAxis);
+    sceneMgr->destroyManualObject(zAxis);
 }
 
 TEST(GizmoAxisHelpersTest, AxisToUnitVectorMapsAllAxes)

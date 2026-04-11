@@ -188,6 +188,45 @@ TEST_F(TransformCommandsTests, RotateCommand_UndoRestoresState) {
     delete cmd;
 }
 
+TEST_F(TransformCommandsTests, RotateCommand_MultipleNodesUndoRestoresState) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* node1 = mgr->addSceneNode("RotCmdMulti1");
+    Ogre::SceneNode* node2 = mgr->addSceneNode("RotCmdMulti2");
+    ASSERT_NE(node1, nullptr);
+    ASSERT_NE(node2, nullptr);
+
+    node1->setPosition(1, 0, 0);
+    node2->setPosition(0, 2, 0);
+    node1->setOrientation(Ogre::Quaternion(Ogre::Degree(10), Ogre::Vector3::UNIT_X));
+    node2->setOrientation(Ogre::Quaternion(Ogre::Degree(20), Ogre::Vector3::UNIT_Y));
+
+    const Ogre::Vector3 origPos1 = node1->getPosition();
+    const Ogre::Vector3 origPos2 = node2->getPosition();
+    const Ogre::Quaternion origOrient1 = node1->getOrientation();
+    const Ogre::Quaternion origOrient2 = node2->getOrientation();
+
+    QList<Ogre::SceneNode*> nodes = {node1, node2};
+    Ogre::Quaternion rotation(Ogre::Degree(90), Ogre::Vector3::UNIT_Z);
+    Ogre::Vector3 pivot(0, 0, 0);
+    auto* cmd = new RotateCommand(nodes, rotation, pivot);
+
+    cmd->redo();
+    cmd->undo();
+
+    EXPECT_EQ(node1->getPosition(), origPos1);
+    EXPECT_EQ(node2->getPosition(), origPos2);
+    EXPECT_NEAR(node1->getOrientation().w, origOrient1.w, 0.0001f);
+    EXPECT_NEAR(node1->getOrientation().x, origOrient1.x, 0.0001f);
+    EXPECT_NEAR(node1->getOrientation().y, origOrient1.y, 0.0001f);
+    EXPECT_NEAR(node1->getOrientation().z, origOrient1.z, 0.0001f);
+    EXPECT_NEAR(node2->getOrientation().w, origOrient2.w, 0.0001f);
+    EXPECT_NEAR(node2->getOrientation().x, origOrient2.x, 0.0001f);
+    EXPECT_NEAR(node2->getOrientation().y, origOrient2.y, 0.0001f);
+    EXPECT_NEAR(node2->getOrientation().z, origOrient2.z, 0.0001f);
+
+    delete cmd;
+}
+
 TEST_F(TransformCommandsTests, RotateCommand_EmptyNodeList) {
     QList<Ogre::SceneNode*> nodes;
     Ogre::Quaternion rotation(Ogre::Degree(45), Ogre::Vector3::UNIT_Z);
@@ -880,6 +919,95 @@ TEST_F(TransformCommandsTests, ReparentCommand_RedoWithMissingNewParentNoOp) {
     EXPECT_EQ(child->getPosition(), oldLocalPos);
     EXPECT_EQ(child->getOrientation(), oldLocalOrient);
     EXPECT_EQ(child->getScale(), oldLocalScale);
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, ReparentCommand_UndoToRootWhenOldParentNameEmpty) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneManager* sceneMgr = mgr->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+
+    Ogre::SceneNode* newParent = sceneMgr->getRootSceneNode()->createChildSceneNode("ReparentCmdRootUndoNewParent");
+    Ogre::SceneNode* child = sceneMgr->getRootSceneNode()->createChildSceneNode("ReparentCmdRootUndoChild");
+    ASSERT_NE(newParent, nullptr);
+    ASSERT_NE(child, nullptr);
+
+    child->setPosition(1, 2, 3);
+    child->setOrientation(Ogre::Quaternion(Ogre::Degree(35), Ogre::Vector3::UNIT_Z));
+    child->setScale(1.2f, 1.3f, 1.4f);
+
+    const Ogre::Vector3 oldLocalPos = child->getPosition();
+    const Ogre::Quaternion oldLocalOrient = child->getOrientation();
+    const Ogre::Vector3 oldLocalScale = child->getScale();
+
+    ASSERT_TRUE(mgr->reparentNode(child, newParent));
+    const Ogre::Vector3 newLocalPos = child->getPosition();
+    const Ogre::Quaternion newLocalOrient = child->getOrientation();
+    const Ogre::Vector3 newLocalScale = child->getScale();
+
+    auto* cmd = new ReparentCommand(
+        "ReparentCmdRootUndoChild",
+        "",
+        "ReparentCmdRootUndoNewParent",
+        oldLocalPos, oldLocalOrient, oldLocalScale,
+        newLocalPos, newLocalOrient, newLocalScale);
+
+    cmd->redo();  // first redo: no-op
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), newParent);
+
+    cmd->undo();
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), sceneMgr->getRootSceneNode());
+    EXPECT_EQ(child->getPosition(), oldLocalPos);
+    EXPECT_EQ(child->getOrientation(), oldLocalOrient);
+    EXPECT_EQ(child->getScale(), oldLocalScale);
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, ReparentCommand_RedoToRootWhenNewParentNameEmpty) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneManager* sceneMgr = mgr->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+
+    Ogre::SceneNode* oldParent = sceneMgr->getRootSceneNode()->createChildSceneNode("ReparentCmdRootRedoOldParent");
+    Ogre::SceneNode* child = oldParent->createChildSceneNode("ReparentCmdRootRedoChild");
+    Ogre::SceneNode* keeper = oldParent->createChildSceneNode("ReparentCmdRootRedoKeeper");
+    ASSERT_NE(oldParent, nullptr);
+    ASSERT_NE(child, nullptr);
+    ASSERT_NE(keeper, nullptr);
+
+    child->setPosition(2, 3, 4);
+    child->setOrientation(Ogre::Quaternion(Ogre::Degree(15), Ogre::Vector3::UNIT_X));
+    child->setScale(1.1f, 1.2f, 1.3f);
+
+    const Ogre::Vector3 oldLocalPos = child->getPosition();
+    const Ogre::Quaternion oldLocalOrient = child->getOrientation();
+    const Ogre::Vector3 oldLocalScale = child->getScale();
+
+    ASSERT_TRUE(mgr->reparentNode(child, sceneMgr->getRootSceneNode()));
+    const Ogre::Vector3 newLocalPos = child->getPosition();
+    const Ogre::Quaternion newLocalOrient = child->getOrientation();
+    const Ogre::Vector3 newLocalScale = child->getScale();
+
+    auto* cmd = new ReparentCommand(
+        "ReparentCmdRootRedoChild",
+        "ReparentCmdRootRedoOldParent",
+        "",
+        oldLocalPos, oldLocalOrient, oldLocalScale,
+        newLocalPos, newLocalOrient, newLocalScale);
+
+    cmd->redo();  // first redo: no-op
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), sceneMgr->getRootSceneNode());
+
+    cmd->undo();
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), oldParent);
+
+    cmd->redo();
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(child->getParent()), sceneMgr->getRootSceneNode());
+    EXPECT_EQ(child->getPosition(), newLocalPos);
+    EXPECT_EQ(child->getOrientation(), newLocalOrient);
+    EXPECT_EQ(child->getScale(), newLocalScale);
 
     delete cmd;
 }

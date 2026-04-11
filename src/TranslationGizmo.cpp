@@ -352,8 +352,12 @@ void TranslationGizmo::createAxis(void)
 
     GizmoAxisHelpers::forEachAxisIndexed(m_pXaxis, m_pYaxis, m_pZaxis,
                                          [this, bbSize](GizmoAxisHelpers::Axis axis, Ogre::ManualObject* axisObject) {
+                                             const Ogre::Real axisMin =
+                                                 (axis == GizmoAxisHelpers::Axis::Z && mLeftHandCs) ? -mScale : 0.0f;
+                                             const Ogre::Real axisMax =
+                                                 (axis == GizmoAxisHelpers::Axis::Z && mLeftHandCs) ? 0.0f : mScale;
                                              axisObject->setBoundingBox(
-                                                 GizmoAxisHelpers::makeAxisBoundingBox(axis, 0.0f, mScale, bbSize));
+                                                 GizmoAxisHelpers::makeAxisBoundingBox(axis, axisMin, axisMax, bbSize));
                                          });
 
     mHighlighted = false;

@@ -691,12 +691,14 @@ PrimitiveObject::PrimitiveType PrimitivesWidget::getSelectedPrimitive()
 void PrimitivesWidget::onSelectionChanged()
 {
     if (!SelectionSet::getSingleton()->hasNodes()) {
+        mSelectedPrimitive.clear();
         setUiEmpty();
         return;
     }
 
     const PrimitiveObject::PrimitiveType selectedPrimitive = getSelectedPrimitive();
     if (selectedPrimitive == PrimitiveObject::AP_NONE) {
+        mSelectedPrimitive.clear();
         setUiEmpty();
         return;
     }
@@ -741,8 +743,9 @@ void PrimitivesWidget::onSelectionChanged()
         return;
     }
 
-    updateUiFromParams();
+    setUiEmpty();
     (this->*setUiForPrimitive)();
+    updateUiFromParams();
 }
 
 void PrimitivesWidget::onEditSizeX()

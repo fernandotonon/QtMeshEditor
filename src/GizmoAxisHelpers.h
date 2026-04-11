@@ -39,6 +39,9 @@ inline Axis axisFromObject(const Ogre::MovableObject* obj,
                            const Ogre::ManualObject* yAxis,
                            const Ogre::ManualObject* zAxis)
 {
+    if (!obj) {
+        return Axis::None;
+    }
     if (obj == static_cast<const Ogre::MovableObject*>(xAxis)) {
         return Axis::X;
     }

@@ -1,193 +1,174 @@
 
 # <img width=30 align="top" src="https://user-images.githubusercontent.com/996529/209745977-7b797223-46ce-4bce-aa70-707a88f2aaf2.png"> QtMeshEditor
-A free, open-source 3D asset tool for indie game developers — merge animations from multiple files, convert between 40+ formats, edit materials with AI, and more.
+
+Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D assets with GUI + CLI + CI/CD support.
 
 [![GitHub stars](https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star&maxAge=2592000)](https://GitHub.com/fernandotonon/QtMeshEditor/stargazers) Star if you like it!
 
 [![Github All Releases](https://img.shields.io/github/downloads/fernandotonon/QtMeshEditor/total.svg)]()
-[![Deploy](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml/badge.svg)](https://github.com/fernandotonon/QtMeshEditor/actions/workflows/deploy.yml)
 [![qtmesheditor](https://snapcraft.io/qtmesheditor/badge.svg)](https://snapcraft.io/qtmesheditor)
 [![Coverage](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=coverage)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=sqale_rating)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
-[![Technical Debt](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=sqale_index)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
-### :sparkles: Merge Mixamo Animations in Seconds
+---
 
-Download individual animations from [Mixamo](https://www.mixamo.com), drop them into QtMeshEditor, and merge them into a single mesh — export as glTF, Collada, OBJ, or Ogre Mesh for your game engine of choice.
+### 🔌 CI/CD — Validate Assets on Every PR
+
+Available on the [GitHub Actions Marketplace](https://github.com/marketplace/actions/qtmesheditor). Scan, validate, convert, and optimize 3D assets in any workflow:
+
+```yaml
+# Scan all assets for issues (fails on warnings)
+- uses: fernandotonon/QtMeshEditor@v1
+  with:
+    command: scan
+    input-file: ./assets
+    options: --fail-on warning
+```
+
+<details>
+<summary>More CI examples</summary>
+
+```yaml
+# Validate a specific mesh
+- uses: fernandotonon/QtMeshEditor@v1
+  with:
+    command: validate
+    input-file: ./models/character.fbx
+
+# Convert FBX → glTF
+- uses: fernandotonon/QtMeshEditor@v1
+  with:
+    command: convert
+    input-file: ./models/character.fbx
+    output-file: ./output/character.gltf2
+
+# Resample Mixamo animations (200+ keyframes → 30)
+- uses: fernandotonon/QtMeshEditor@v1
+  with:
+    command: anim
+    input-file: ./animations/dance.fbx
+    output-file: ./output/dance_optimized.fbx
+    options: --resample 30
+
+# Get mesh info as JSON
+- uses: fernandotonon/QtMeshEditor@v1
+  id: info
+  with:
+    command: info
+    input-file: ./models/character.fbx
+    options: --json
+
+# Docker (alternative)
+docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh scan ./assets --fail-on error
+```
+
+</details>
+
+---
+
+### 🔧 CLI Pipeline (`qtmesh`)
+
+Same commands locally, in Docker, or in CI:
+
+```bash
+# Scan a directory for asset issues
+qtmesh scan ./assets --fail-on warning
+qtmesh scan ./assets --json --report report.json
+
+# Inspect a mesh
+qtmesh info model.fbx --json
+
+# Validate geometry
+qtmesh validate model.fbx
+
+# Convert between formats
+qtmesh convert model.fbx -o model.gltf2
+
+# Fix / optimize
+qtmesh fix model.fbx -o fixed.fbx --all
+
+# Animation tools
+qtmesh anim model.fbx --list
+qtmesh anim model.fbx --rename "Take 001" "Idle" -o renamed.fbx
+qtmesh anim model.fbx --resample 30 -o optimized.fbx
+qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
+
+# Export animation pose as static mesh (3D printing)
+qtmesh pose model.fbx --animation "Dance" --count 4 -o pose_%02d.stl
+
+# LOD generation
+qtmesh lod model.fbx --auto
+```
+
+---
+
+### ✨ Merge Mixamo Animations in Seconds
+
+Download animations from [Mixamo](https://www.mixamo.com), drop them into QtMeshEditor, and merge into a single file — export as glTF, FBX, Collada, OBJ, or Ogre Mesh.
 
 ![Merge Animations Demo](https://github.com/user-attachments/assets/441f90c5-1968-4838-8001-4ca24856a501)
 
-### :movie_camera: More in Action
+### 🎬 More in Action
 
 Split View|Skeleton Animation Controls
 ---|---
 ![QtMeshEditor1 5 0](https://user-images.githubusercontent.com/996529/210196572-7b49da4c-c5db-406d-9ab4-7fa20bacb6ae.gif)|![QtMeshEditor1 6 0](https://user-images.githubusercontent.com/996529/218779819-0a61156d-c014-4ad1-aa8b-cee900c9da56.gif)
 **MCP tools (AI Agent Control)**|**Bone Weight Visualization**
-![Gravação de Tela 2026-02-18 às 20 57 42 (1)](https://github.com/user-attachments/assets/ed3b7e9d-22ba-4e6e-a06c-868570db7a07)|![Gravação de Tela 2026-02-18 às 21 20 55](https://github.com/user-attachments/assets/289403ac-8952-488c-bc65-0a768ab278e1)
+![MCP Demo](https://github.com/user-attachments/assets/ed3b7e9d-22ba-4e6e-a06c-868570db7a07)|![Bone Weights](https://github.com/user-attachments/assets/289403ac-8952-488c-bc65-0a768ab278e1)
 
+#### 🤖 AI-enhanced Material Editor
 
-#### :robot: AI-enhanced Material Editor
+![AI Materials](https://github.com/user-attachments/assets/c58978d7-7564-41f2-8c95-527ddf7ae78e)
 
-![Screencast From 2025-06-26 23-35-53](https://github.com/user-attachments/assets/c58978d7-7564-41f2-8c95-527ddf7ae78e)
+---
 
+### 🎮 Features
 
-### :video_game: Built for Indie Game Developers
+- **Asset scanning** — ESLint for 3D assets: check naming, complexity, skeletons, formats
+- **40+ format support** — FBX, glTF, OBJ, Collada, STL, Ogre Mesh, and more
+- **Animation merge** — combine Mixamo clips into one file
+- **Animation resampling** — reduce keyframe density for game engines
+- **Pose export** — bake animation frames as static meshes (3D printing)
+- **LOD generation** — automatic level-of-detail mesh reduction
+- **Material editor** — visual editing with AI-assisted generation
+- **Skeleton inspection** — bone weights, debug overlays, animation preview
+- **Scene management** — duplicate (Ctrl+D), group (Ctrl+G), snap, pivot modes
+- **AI chat** — natural language scene editing via local LLMs
+- **MCP server** — 51 tools for AI agents (Claude, Cursor, etc.)
+- **REST API** — HTTP interface for external automation
 
-QtMeshEditor helps you prepare 3D assets for your game or project:
+---
 
-- **Merge animations** — Combine multiple animation files (e.g. from Mixamo) into one mesh with all animations
-- **Save & load scenes** — Persist your entire scene (meshes, transforms, materials, skeletons, animations) to a single glTF file
-- **Convert between 40+ formats** — Import FBX, glTF, OBJ, Collada, STL, and more; export to what your engine needs
-- **Edit materials visually** — Real-time material preview with AI-assisted generation
-- **Inspect skeletons & animations** — Visualize bones, bone weights, preview animations, rename them
-- **AI agent integration** — Let AI tools like Claude, Cursor, or custom scripts control the editor via MCP protocol
-- **Batch process via CLI** — Automate your asset pipeline from the command line
+### 📦 Install
 
-### :wrench: CLI Pipeline (`qtmesh`)
+| Platform | Command |
+|----------|---------|
+| **Windows** | `winget install FernandoTonon.QtMeshEditor` |
+| **macOS** | `brew tap fernandotonon/qtmesheditor && brew install qtmesheditor` |
+| **Linux** | `sudo snap install qtmesheditor` |
+| **Docker** | `docker run --rm ghcr.io/fernandotonon/qtmesh --help` |
 
-A `qtmesh` command is created alongside the GUI binary during build. Use it to automate your 3D asset pipeline without launching the editor.
-On Windows, use the bundled `qtmesh.cmd` wrapper (or add the install directory to `PATH`):
+📥 [Download latest release](https://github.com/fernandotonon/QtMeshEditor/releases/latest) · 📖 [Website & docs](https://fernandotonon.github.io/QtMeshEditor/)
 
-```bash
-# Inspect a mesh
-qtmesh info model.fbx                # human-readable summary
-qtmesh info model.fbx --json         # JSON output for scripting
+---
 
-# Convert between formats
-qtmesh convert model.fbx -o model.gltf2
-qtmesh convert model.dae -o model.mesh
-
-# Fix / optimize a mesh
-qtmesh fix model.fbx -o fixed.fbx              # standard optimizations
-qtmesh fix model.fbx -o fixed.fbx --all        # all fixes (remove degenerates, merge materials)
-
-# Animation tools
-qtmesh anim model.fbx --list                   # list animations
-qtmesh anim model.fbx --list --json            # list as JSON
-qtmesh anim model.fbx --rename "Take 001" "Idle" -o renamed.fbx
-
-# Merge animations from multiple files
-qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
-```
-
-Use `--verbose` for engine debug output, `--no-telemetry` to opt out of anonymous usage data, `--help` for full usage.
-
-### :package: Format Support
+### 📋 Format Support
 
 | Format | Extension | Import | Export | Skeleton/Animation |
 |--------|-----------|--------|--------|--------------------|
-| FBX Binary | .fbx | Yes | Yes | Yes |
-| glTF 2.0 | .gltf2 | Yes | Yes | Yes |
-| glTF 2.0 Binary | .glb2 | Yes | Yes | Yes |
-| Collada | .dae | Yes | Yes | Yes |
-| OBJ | .obj | Yes | Yes | No |
-| STL | .stl | Yes | Yes | No |
-| Ogre Mesh | .mesh | Yes | Yes | Yes |
-| Ogre XML | .mesh.xml | Yes | Yes | Yes |
-| DirectX X | .x | Yes | Yes | Yes |
-| PLY | .ply | Yes | Yes | No |
-| 3DS | .3ds | Yes | Yes | No |
-| Assimp Binary | .assbin | No | Yes | Yes |
+| FBX Binary | .fbx | ✅ | ✅ | ✅ |
+| glTF 2.0 | .gltf2 / .glb2 | ✅ | ✅ | ✅ |
+| Collada | .dae | ✅ | ✅ | ✅ |
+| OBJ | .obj | ✅ | ✅ | — |
+| STL | .stl | ✅ | ✅ | — |
+| Ogre Mesh | .mesh / .mesh.xml | ✅ | ✅ | ✅ |
+| 3DS | .3ds | ✅ | ✅ | — |
+| PLY | .ply | ✅ | ✅ | — |
 
-Import supports all formats provided by Assimp (40+). Export to older Ogre Mesh versions (v1.0-v1.10) is also available.
+Import supports all formats provided by Assimp (40+).
 
-### :computer: Install from release binaries
+---
 
-#### :whale: Docker (any platform)
-
-Run `qtmesh` without installing anything locally:
-
-```bash
-# Show help
-docker run --rm ghcr.io/fernandotonon/qtmesh --help
-
-# Inspect a mesh
-docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh info model.fbx --json
-
-# Convert between formats (--user ensures output files are owned by you)
-docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \
-  ghcr.io/fernandotonon/qtmesh convert model.fbx -o model.gltf2
-
-# Fix / optimize
-docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \
-  ghcr.io/fernandotonon/qtmesh fix model.fbx -o fixed.fbx --all
-
-# Merge animations
-docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \
-  ghcr.io/fernandotonon/qtmesh anim base.fbx --merge walk.fbx run.fbx -o merged.fbx
-```
-
-Also available on Docker Hub: `docker pull fernandotr1/qtmesh`
-
-#### :apple: macOS
-##### Homebrew
-`brew tap fernandotonon/qtmesheditor`
-
-`brew install qtmesheditor`
-
-Remove with
-
-`brew remove qtmesheditor`
-
-Upgrade with
-
-`brew upgrade qtmesheditor`
-
-<img width="502" alt="image" src="https://github.com/fernandotonon/QtMeshEditor/assets/996529/84f56be3-4522-45a7-9039-5a143de7313c">
-
-
-##### DMG file
-* Download and open the .dmg file;
-* Drag and drop the QtMeshEditor to the Applications folder:
-
-![install_macOS](https://user-images.githubusercontent.com/996529/216797862-2592a40b-5f3d-4907-bcad-dc1feae4ff2f.gif)
-
-#### :penguin: Linux
-##### Snap Store (recommended)
-```bash
-sudo snap install qtmesheditor
-```
-
-##### Ubuntu App Center
-Search for QtMeshEditor, and install it directly from the Ubuntu App Center
-
-<img width="1318" height="842" alt="image" src="https://github.com/user-attachments/assets/fbaa9a4e-becb-4b38-9f5a-ecda5898e8ea" />
-
-
-##### .deb package (Ubuntu/Debian)
-Download the .deb file from the [releases page](https://github.com/fernandotonon/QtMeshEditor/releases), then:
-* Using apt:
-`sudo apt install ./qtmesheditor_amd64.deb`
-
-* Using dpkg:
-`sudo dpkg -i qtmesheditor_amd64.deb`
-
-Remove with `sudo apt remove qtmesheditor` or `sudo snap remove qtmesheditor`
-
-Run it calling `qtmesheditor`
-
-#### :window: Windows (WinGet)
-```
-winget install FernandoTonon.QtMeshEditor
-```
-Update with `winget upgrade FernandoTonon.QtMeshEditor`.
-
-Or download the `.zip` from the [releases page](https://github.com/fernandotonon/QtMeshEditor/releases), unpack, and run `QtMeshEditor.exe`.
-
-#### :hammer_and_wrench: GitHub Action
-
-Use `qtmesh` directly in your CI/CD pipeline:
-
-```yaml
-- uses: fernandotonon/QtMeshEditor/.github/actions/qtmesh@master
-  with:
-    command: info
-    input-file: assets/player.fbx
-    options: --json
-```
-
-### [Build-from-source](https://github.com/fernandotonon/QtMeshEditor/wiki/How-to-build)
-
-Feel free to contact me, create issues or to contribute ;)
+📖 [Documentation](https://fernandotonon.github.io/QtMeshEditor/docs.html) · 🛠 [Build from source](https://github.com/fernandotonon/QtMeshEditor/wiki/How-to-build) · 🐛 [Report issues](https://github.com/fernandotonon/QtMeshEditor/issues) · 💬 [Contribute](https://github.com/fernandotonon/QtMeshEditor)

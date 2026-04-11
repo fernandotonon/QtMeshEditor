@@ -259,6 +259,34 @@ The `winget-publish` CI job uses `wingetcreate --submit` to automatically submit
 
 Manual alternative: `./scripts/update-winget.sh <version>` generates the manifest locally.
 
+## GitHub Action (Marketplace)
+
+The `qtmesh` CLI is published as a GitHub Action on the [GitHub Actions Marketplace](https://github.com/marketplace/actions/qtmesheditor). The `action.yml` lives at the repo root.
+
+```yaml
+- uses: fernandotonon/QtMeshEditor@v1
+  with:
+    command: scan
+    input-file: ./assets
+    options: --fail-on warning
+```
+
+**Key files:**
+- `action.yml` — root-level action definition (required for marketplace)
+- `.github/actions/qtmesh/action.yml` — legacy local action (kept for backward compatibility)
+- Docker image: `ghcr.io/fernandotonon/qtmesh` (built from this repo on each release)
+- Redirect repo: `fernandotonon/qtmesh` points users to this repo
+
+**When to update action.yml:**
+- New CLI subcommand added → update `command` description
+- Subcommand flags change → update `options` description
+- Docker image name/registry changes → update the `docker run` command
+- **No update needed** for: bug fixes, GUI changes, MCP tools, or features that don't change CLI interface
+
+The action uses `image-tag: latest` by default, so users automatically get fixes without version bumps.
+
+**Marketplace publishing:** When creating a GitHub Release, check "Publish this Action to the GitHub Marketplace". The `v1` tag should be kept pointing to the latest stable commit (force-push tag on each release).
+
 ## CI/CD
 
-GitHub Actions workflow in `.github/workflows/deploy.yml` builds for Windows (MinGW), macOS, and Linux. Tests run on Linux with SonarCloud coverage. Releases auto-update the Homebrew cask, WinGet package, Snap Store, and Docker image.
+GitHub Actions workflow in `.github/workflows/deploy.yml` builds for Windows (MinGW), macOS, and Linux. Tests run on Linux with SonarCloud coverage. Releases auto-update the Homebrew cask, WinGet package, Snap Store, and Docker image. A `scan-assets-docker` job runs the `fernandotonon/qtmesh` action on the repo's own test assets to validate the Docker image and scan pipeline on every push/PR.

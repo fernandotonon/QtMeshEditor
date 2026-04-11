@@ -147,7 +147,9 @@ QString CLIPipeline::formatForExtension(const QString& path)
     };
     static const ExtensionFormat extensionFormats[] = {
         {".fbx", "FBX Binary (*.fbx)"},
+        {".glb", "glTF 2.0 Binary (*.glb)"},
         {".glb2", "glTF 2.0 Binary (*.glb2)"},
+        {".gltf", "glTF 2.0 (*.gltf)"},
         {".gltf2", "glTF 2.0 (*.gltf2)"},
         {".dae", "Collada (*.dae)"},
         {".obj", "OBJ (*.obj)"},
