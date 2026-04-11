@@ -1938,32 +1938,29 @@ void MainWindow::showWelcomeScreen()
     m_welcomeScreen->show();
     m_welcomeScreen->raise();
     m_welcomeScreen->setFocus();
+
+    // Hide the ViewCube while welcome screen is showing (it has WindowStaysOnTopHint)
+    if (m_viewCubeController)
+        m_viewCubeController->setVisible(false);
 }
 
 void MainWindow::hideWelcomeScreen()
 {
     if (m_welcomeScreen)
         m_welcomeScreen->hide();
+
+    // Restore ViewCube visibility based on the menu toggle state
+    if (m_viewCubeController && ui->actionShow_View_Cube->isChecked())
+        m_viewCubeController->setVisible(true);
 }
 
 void MainWindow::repositionWelcomeScreen()
 {
     if (!m_welcomeScreen) return;
 
-    // Cover the entire main window area (over the viewport docks)
-    QRect geom = rect();
-    // Offset by the menu bar + toolbar heights to avoid covering them
-    int topOffset = 0;
-    if (menuBar() && menuBar()->isVisible())
-        topOffset += menuBar()->height();
-    // Find the first visible toolbar to account for its height
-    for (auto* tb : findChildren<QToolBar*>()) {
-        if (tb->isVisible() && toolBarArea(tb) == Qt::TopToolBarArea) {
-            topOffset += tb->height();
-            break;
-        }
-    }
-    m_welcomeScreen->setGeometry(0, topOffset, geom.width(), geom.height() - topOffset);
+    // Cover the entire main window — the QML overlay has its own
+    // semi-transparent background that handles the visual layering.
+    m_welcomeScreen->setGeometry(rect());
 }
 // LCOV_EXCL_STOP
 
