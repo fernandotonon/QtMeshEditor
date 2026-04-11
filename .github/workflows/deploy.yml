@@ -1220,15 +1220,13 @@ jobs:
             echo "::warning::Docker asset scan reported issues (using latest published image)"
             true
           }
-        continue-on-error: true
 
       - name: Scan media/ via GitHub Action (root action.yml)
         uses: ./
         with:
           command: scan
           input-file: .
-          options: --config /workspace/qtmesh.yml --json
-        continue-on-error: true
+          options: --config /workspace/qtmesh.yml
 
 ####################################################################
 # MacOS Deploy
