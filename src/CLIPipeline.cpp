@@ -141,7 +141,8 @@ static QString formatScanSummary(const ScanResult& result, bool colorize)
     const QString errorIcon = colorizeIconWhenPositive(QStringLiteral("✗"), result.errors, "31", colorize);
     const QString infoIcon = colorizeIconWhenPositive(QStringLiteral("ℹ"), result.infos, "36", colorize);
     const QString fixedIcon = colorizeIconWhenPositive(QStringLiteral("🔧"), result.fixed, "32", colorize);
-    const QString skippedIcon = colorizeIconWhenPositive(QStringLiteral("⏭"), result.skipped, "33", colorize);
+    const QString skippedIcon = colorizeWord(QStringLiteral("⏭"), "90", colorize);
+    const QString timeIcon = colorizeWord(QStringLiteral("⏱"), "34", colorize);
 
     s << "\n";
     s << "Summary:\n";
@@ -155,7 +156,7 @@ static QString formatScanSummary(const ScanResult& result, bool colorize)
         s << "  " << fixedIcon << " Fixed:    " << result.fixed << "\n";
     if (result.skipped > 0)
         s << "  " << skippedIcon << " Skipped:  " << result.skipped << "\n";
-    s << "  ⏱ Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
+    s << "  " << timeIcon << " Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
     return out;
 }
 
