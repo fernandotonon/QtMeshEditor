@@ -17,6 +17,8 @@ class NormalVisualizer;
 class MeshInfoOverlay;
 class ViewCubeController;
 class PropertiesPanelController;
+class WelcomeScreenController;
+class AssetBrowserController;
 class QQuickWidget;
 
 namespace Ui {
@@ -42,6 +44,7 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
+    void loadFile(const QString& filePath);
     void setMCPServer(MCPServer* server);
 
     void keyPressEvent(QKeyEvent *event) override;
@@ -125,6 +128,7 @@ protected:
     void closeEvent(QCloseEvent *event) override;
     void keyReleaseEvent(QKeyEvent *event) override;
     void dragEnterEvent(QDragEnterEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private:
     void initToolBar();
@@ -137,11 +141,18 @@ private:
     MCPServer* m_mcpServer = nullptr;
     QQuickWidget* m_propertiesPanel = nullptr;
     QDockWidget* m_chatDock = nullptr;
+    QDockWidget* m_assetBrowserDock = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
     void addToRecentFiles(const QString& filePath);
     void updateRecentFilesMenu();
     void openRecentFile();
+
+    WelcomeScreenController* m_welcomeController = nullptr;
+    QQuickWidget* m_welcomeScreen = nullptr;
+    void showWelcomeScreen();
+    void hideWelcomeScreen();
+    void repositionWelcomeScreen();
 };
 
 #endif // MAINWINDOW_H

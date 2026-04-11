@@ -139,7 +139,7 @@ TEST(SpaceCamera, KeyPressControlChangesSpeed)
 
     QKeyEvent pressCtrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
     spaceCamera.keyPressEvent(&pressCtrl);
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.05f); // base 0.5 * 0.1
 }
 
 TEST(SpaceCamera, KeyReleaseControlRestoresSpeed)
@@ -150,12 +150,12 @@ TEST(SpaceCamera, KeyReleaseControlRestoresSpeed)
     // Press Control
     QKeyEvent pressCtrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
     spaceCamera.keyPressEvent(&pressCtrl);
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.05f); // base 0.5 * 0.1
 
     // Release Control
     QKeyEvent releaseCtrl(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
     spaceCamera.keyReleaseEvent(&releaseCtrl);
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.5f); // restores base speed
 }
 
 TEST(SpaceCamera, MousePressLeftButtonIgnored)
@@ -251,7 +251,7 @@ TEST(SpaceCamera, KeyPressControlModifier)
     QKeyEvent pressEvent(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
     spaceCamera.keyPressEvent(&pressEvent);
     // Control sets precision mode speed to 0.01
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.05f); // base 0.5 * 0.1
 }
 
 TEST(SpaceCamera, KeyReleaseControlModifier)
@@ -264,7 +264,7 @@ TEST(SpaceCamera, KeyReleaseControlModifier)
     spaceCamera.keyReleaseEvent(&releaseCtrl);
     // After releasing Control, speed is restored to 0.1
     EXPECT_GT(spaceCamera.getCameraSpeed(), speedWithCtrl);
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.5f); // restores base speed
 }
 
 TEST(SpaceCamera, MultipleKeyPressesInSequence)
@@ -554,21 +554,21 @@ TEST(SpaceCamera, ControlKeySpeedTransitionCycle)
     spaceCamera.setCameraSpeed(1.0f);
     EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 1.0f);
 
-    // Press Control → precision mode
+    // Press Control → precision mode (base 1.0 * 0.1 = 0.1)
     QKeyEvent pressCtrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
     spaceCamera.keyPressEvent(&pressCtrl);
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
 
-    // Release Control → restored speed
+    // Release Control → restored speed (base 1.0)
     QKeyEvent releaseCtrl(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
     spaceCamera.keyReleaseEvent(&releaseCtrl);
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 1.0f);
 
     // Press again
     spaceCamera.keyPressEvent(&pressCtrl);
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
-    spaceCamera.keyReleaseEvent(&releaseCtrl);
     EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
+    spaceCamera.keyReleaseEvent(&releaseCtrl);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 1.0f);
 }
 
 TEST(SpaceCamera, SetCameraSpeedExtremeValues)
@@ -604,16 +604,15 @@ TEST(SpaceCamera, SpeedChangesWithControlKey)
     spaceCamera.setCameraSpeed(2.0f);
     EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 2.0f);
 
-    // Press control
+    // Press control (base 2.0 * 0.1 = 0.2)
     QKeyEvent pressCtrl(QEvent::KeyPress, Qt::Key_Control, Qt::ControlModifier);
     spaceCamera.keyPressEvent(&pressCtrl);
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.01f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.2f);
 
-    // Release control
+    // Release control → restores base speed (2.0)
     QKeyEvent releaseCtrl(QEvent::KeyRelease, Qt::Key_Control, Qt::NoModifier);
     spaceCamera.keyReleaseEvent(&releaseCtrl);
-    // Speed restored to default (0.1f)
-    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 0.1f);
+    EXPECT_FLOAT_EQ(spaceCamera.getCameraSpeed(), 2.0f);
 }
 
 // ==========================================================================

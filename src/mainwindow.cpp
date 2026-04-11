@@ -57,7 +57,10 @@
 #include "MeshLodController.h"
 #include "MeshValidator.h"
 #include "MaterialPresetLibrary.h"
+#include "MaterialPreviewRenderer.h"
 #include "AIChatManager.h"
+#include "WelcomeScreenController.h"
+#include "AssetBrowserController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -236,6 +239,7 @@ MainWindow::~MainWindow()
     MeshLodController::kill();
     MeshValidator::kill();
     MaterialPresetLibrary::kill();
+    MaterialPreviewRenderer::kill();
     AIChatManager::kill();
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
@@ -360,6 +364,14 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AIChatManager::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<WelcomeScreenController>("WelcomeScreen", 1, 0, "WelcomeScreenController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return WelcomeScreenController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AssetBrowserController>("AssetBrowser", 1, 0, "AssetBrowserController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AssetBrowserController::qmlInstance(engine, nullptr);
+            });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
 
@@ -419,6 +431,77 @@ void MainWindow::initToolBar()
                     QTimer::singleShot(0, chatWidget, [chatWidget]() { chatWidget->setFocus(); });
             }
         });
+    }
+
+    // Asset Browser dock
+    {
+        auto* assetBrowserWidget = new QQuickWidget();
+        assetBrowserWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        assetBrowserWidget->setMinimumWidth(250);
+        assetBrowserWidget->setMinimumHeight(200);
+        assetBrowserWidget->setFocusPolicy(Qt::StrongFocus);
+        assetBrowserWidget->setSource(QUrl("qrc:/AssetBrowser/AssetBrowser.qml"));
+        m_assetBrowserDock = new QDockWidget(tr("Asset Browser"), this);
+        m_assetBrowserDock->setWidget(assetBrowserWidget);
+        m_assetBrowserDock->setObjectName("AssetBrowserDock");
+        addDockWidget(Qt::BottomDockWidgetArea, m_assetBrowserDock);
+        m_assetBrowserDock->hide();
+
+        // Connect Browse button — open a native directory picker from MainWindow
+        // (QFileDialog needs a proper parent widget on macOS)
+        auto* abController = AssetBrowserController::instance();
+        connect(abController, &AssetBrowserController::importMeshRequested, this, [this](const QStringList& paths) {
+            SentryReporter::addBreadcrumb("ui.action", "Asset Browser: import mesh");
+            importMeshs(paths);
+        });
+    }
+
+    // Welcome Screen overlay — shown on first launch or when user hasn't opted out
+    {
+        m_welcomeController = WelcomeScreenController::instance();
+        m_welcomeController->setMainWindow(this);
+
+        m_welcomeScreen = new QQuickWidget(this);
+        m_welcomeScreen->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        m_welcomeScreen->setAttribute(Qt::WA_TranslucentBackground);
+        m_welcomeScreen->setClearColor(Qt::transparent);
+        m_welcomeScreen->setSource(QUrl("qrc:/WelcomeScreen/WelcomeScreen.qml"));
+        m_welcomeScreen->setFocusPolicy(Qt::StrongFocus);
+        m_welcomeScreen->raise();
+
+        // Connect controller signals to MainWindow actions
+        connect(m_welcomeController, &WelcomeScreenController::requestOpenFile,
+                this, [this](const QString& path) {
+            if (QFileInfo::exists(path)) {
+                addToRecentFiles(path);
+                if (path.endsWith(".scene.glb") || path.endsWith(".scene.gltf"))
+                    MeshImporterExporter::sceneImporter(path);
+                else
+                    mUriList.append(path);
+            }
+        });
+        connect(m_welcomeController, &WelcomeScreenController::requestOpenFileDialog,
+                this, &MainWindow::on_actionImport_triggered);
+        connect(m_welcomeController, &WelcomeScreenController::requestNewScene,
+                this, [this]() {
+            Manager::getSingleton()->CreateEmptyScene();
+        });
+
+        // Show/hide the overlay widget when controller visibility changes
+        connect(m_welcomeController, &WelcomeScreenController::visibleChanged,
+                this, [this]() {
+            if (m_welcomeController->isVisible()) {
+                showWelcomeScreen();
+            } else {
+                hideWelcomeScreen();
+            }
+        });
+
+        // Welcome screen is now a standalone dialog shown before MainWindow (in main.cpp).
+        // The QML overlay is kept for programmatic use but not shown on startup.
+        {
+            m_welcomeScreen->hide();
+        }
     }
 
     // Animation Control dock is created below and auto-shown when animated entity is selected
@@ -534,6 +617,33 @@ void MainWindow::initToolBar()
     for (EditorViewport* vp : mDockWidgetList)
         connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
 
+    // Asset Browser dock toggle via View menu
+    connect(ui->actionAsset_Browser, &QAction::toggled, this, [this](bool checked) {
+        SentryReporter::addBreadcrumb("ui.action",
+            checked ? "Asset Browser shown" : "Asset Browser hidden");
+        if (m_assetBrowserDock) {
+            m_assetBrowserDock->setVisible(checked);
+        }
+    });
+    // Sync menu checkmark when dock is closed via its title bar
+    if (m_assetBrowserDock) {
+        connect(m_assetBrowserDock, &QDockWidget::visibilityChanged,
+                ui->actionAsset_Browser, &QAction::setChecked);
+    }
+
+    // Connect Browse button to a native file dialog (must be parented to MainWindow on macOS)
+    connect(AssetBrowserController::instance(), &AssetBrowserController::browseRequested,
+            this, [this]() {
+        QTimer::singleShot(0, this, [this]() {
+            QString dir = QFileDialog::getExistingDirectory(
+                this, tr("Select Asset Directory"),
+                AssetBrowserController::instance()->rootPath(),
+                QFileDialog::DontUseNativeDialog | QFileDialog::ShowDirsOnly);
+            if (!dir.isEmpty())
+                AssetBrowserController::instance()->setRootPath(dir);
+        });
+    });
+
     // ViewCube (3D navigation gizmo) — top-level window positioned over the active viewport
     m_viewCubeController = new ViewCubeController(this);
     // Force software rendering for the ViewCube QML widget (avoid GL conflicts with Ogre)
@@ -573,6 +683,38 @@ void MainWindow::initToolBar()
 
     QAction* mcpSettingsAction = aiMenu->addAction(tr("MCP Server Settings..."));
     connect(mcpSettingsAction, &QAction::triggered, this, &MainWindow::showMCPSettings);
+
+    // Keyboard Shortcuts reference in Help menu
+    QAction* shortcutsAction = ui->menuHelp->addAction(tr("Keyboard Shortcuts"));
+    shortcutsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Slash));
+    connect(shortcutsAction, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb("ui.action", "Help > Keyboard Shortcuts opened");
+
+        auto* widget = new QQuickWidget(this);
+        widget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        widget->setSource(QUrl("qrc:/ShortcutReference/ShortcutReference.qml"));
+        widget->setAttribute(Qt::WA_DeleteOnClose);
+        widget->setMinimumSize(520, 560);
+        widget->resize(520, 560);
+        widget->setWindowFlags(Qt::Dialog);
+        widget->setWindowTitle(tr("Keyboard Shortcuts"));
+        widget->show();
+    });
+
+    // Preferences dialog (Edit > Preferences, Ctrl+,)
+    connect(ui->actionPreferences, &QAction::triggered, this, [this]() {
+        SentryReporter::addBreadcrumb("ui.action", "Edit > Preferences opened");
+
+        auto* widget = new QQuickWidget(this);
+        widget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        widget->setSource(QUrl("qrc:/PreferencesDialog/PreferencesDialog.qml"));
+        widget->setAttribute(Qt::WA_DeleteOnClose);
+        widget->setMinimumSize(480, 520);
+        widget->resize(480, 520);
+        widget->setWindowFlags(Qt::Dialog);
+        widget->setWindowTitle(tr("Preferences"));
+        widget->show();
+    });
 
     // Crash reporting toggle in Help menu
     ui->menuHelp->addSeparator();
@@ -660,6 +802,10 @@ bool MainWindow::frameEnded(const Ogre::FrameEvent &evt)
 {
     if(mUriList.size())
     {
+        // Auto-hide the welcome screen when a file is loaded
+        if (m_welcomeController && m_welcomeController->isVisible())
+            m_welcomeController->setVisible(false);
+
         importMeshs(mUriList);
         mUriList.clear();
     }
@@ -849,6 +995,13 @@ void MainWindow::dragEnterEvent(QDragEnterEvent *event)
     event->acceptProposedAction();
 }
 
+void MainWindow::resizeEvent(QResizeEvent *event)
+{
+    QMainWindow::resizeEvent(event);
+    if (m_welcomeScreen && m_welcomeScreen->isVisible())
+        repositionWelcomeScreen();
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////////
 // LCOV_EXCL_START — opens QFileDialog
 void MainWindow::on_actionImport_triggered()
@@ -865,6 +1018,16 @@ void MainWindow::on_actionImport_triggered()
     mUriList.append(fileNames);
 }
 // LCOV_EXCL_STOP
+
+void MainWindow::loadFile(const QString& filePath)
+{
+    if (filePath.isEmpty()) return;
+    addToRecentFiles(filePath);
+    if (filePath.endsWith(".scene.glb") || filePath.endsWith(".scene.gltf"))
+        MeshImporterExporter::sceneImporter(filePath);
+    else
+        mUriList.append(filePath);
+}
 
 void MainWindow::importMeshs(const QStringList &_uriList)
 {
@@ -1710,10 +1873,15 @@ void MainWindow::addToRecentFiles(const QString& filePath)
     QStringList files = settings.value("RecentFiles/files").toStringList();
     files.removeAll(filePath);
     files.prepend(filePath);
-    while (files.size() > 10)
+    int maxRecent = settings.value("General/recentFilesCount", 10).toInt();
+    while (files.size() > maxRecent)
         files.removeLast();
     settings.setValue("RecentFiles/files", files);
     updateRecentFilesMenu();
+
+    // Keep the welcome screen's recent files list in sync
+    if (m_welcomeController)
+        emit m_welcomeController->recentFilesChanged();
 }
 
 void MainWindow::updateRecentFilesMenu()
@@ -1740,6 +1908,8 @@ void MainWindow::updateRecentFilesMenu()
         QSettings settings;
         settings.remove("RecentFiles/files");
         updateRecentFilesMenu();
+        if (m_welcomeController)
+            emit m_welcomeController->recentFilesChanged();
     });
 }
 
@@ -1764,6 +1934,42 @@ void MainWindow::openRecentFile()
         files.removeAll(filePath);
         settings.setValue("RecentFiles/files", files);
         updateRecentFilesMenu();
+        if (m_welcomeController)
+            emit m_welcomeController->recentFilesChanged();
     }
 }
+
+// LCOV_EXCL_START — requires display
+void MainWindow::showWelcomeScreen()
+{
+    if (!m_welcomeScreen) return;
+    repositionWelcomeScreen();
+    m_welcomeScreen->show();
+    m_welcomeScreen->raise();
+    m_welcomeScreen->setFocus();
+
+    // Hide the ViewCube while welcome screen is showing (it has WindowStaysOnTopHint)
+    if (m_viewCubeController)
+        m_viewCubeController->setVisible(false);
+}
+
+void MainWindow::hideWelcomeScreen()
+{
+    if (m_welcomeScreen)
+        m_welcomeScreen->hide();
+
+    // Restore ViewCube visibility based on the menu toggle state
+    if (m_viewCubeController && ui->actionShow_View_Cube->isChecked())
+        m_viewCubeController->setVisible(true);
+}
+
+void MainWindow::repositionWelcomeScreen()
+{
+    if (!m_welcomeScreen) return;
+
+    // Cover the entire main window — the QML overlay has its own
+    // semi-transparent background that handles the visual layering.
+    m_welcomeScreen->setGeometry(rect());
+}
+// LCOV_EXCL_STOP
 

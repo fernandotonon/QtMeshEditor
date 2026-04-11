@@ -363,6 +363,7 @@ public slots:
     
     // Material list operations
     Q_INVOKABLE QStringList getMaterialList() const;
+    Q_INVOKABLE QString materialPreview(const QString& materialName) const;
     Q_INVOKABLE void importMaterialFile(const QString &filePath);
     Q_INVOKABLE void exportMaterial(const QString &fileName, const QString &materialName);
     Q_INVOKABLE void openMaterialEditorWindow(const QString &materialName = "");

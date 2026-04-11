@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QCoreApplication>
 #include <QPalette>
+#include <QSettings>
 #include <QSignalSpy>
 #include <QUndoCommand>
 
@@ -524,4 +525,206 @@ TEST_F(PropertiesPanelControllerTests, SceneTreeReparentWrappersHandleValidAndIn
     EXPECT_TRUE(controller->canReparentNode("PanelReparentNode", "PanelReparentParent"));
     EXPECT_TRUE(controller->reparentNode("PanelReparentNode", "PanelReparentParent"));
     EXPECT_EQ(static_cast<Ogre::SceneNode*>(node->getParent()), parent);
+}
+
+// ---- shortcutData tests ----
+
+TEST_F(PropertiesPanelControllerTests, ShortcutDataReturnsNonEmptyList)
+{
+    QVariantList shortcuts = controller->shortcutData();
+    EXPECT_FALSE(shortcuts.isEmpty());
+    EXPECT_GE(shortcuts.size(), 10); // There are many shortcuts defined
+}
+
+TEST_F(PropertiesPanelControllerTests, ShortcutDataEntriesHaveRequiredKeys)
+{
+    QVariantList shortcuts = controller->shortcutData();
+    for (const QVariant& entry : shortcuts) {
+        QVariantMap m = entry.toMap();
+        EXPECT_TRUE(m.contains("category")) << "Missing 'category' key";
+        EXPECT_TRUE(m.contains("key")) << "Missing 'key' key";
+        EXPECT_TRUE(m.contains("description")) << "Missing 'description' key";
+        EXPECT_FALSE(m["category"].toString().isEmpty());
+        EXPECT_FALSE(m["key"].toString().isEmpty());
+        EXPECT_FALSE(m["description"].toString().isEmpty());
+    }
+}
+
+TEST_F(PropertiesPanelControllerTests, ShortcutDataContainsExpectedTransformShortcuts)
+{
+    QVariantList shortcuts = controller->shortcutData();
+
+    auto findShortcut = [&](const QString& key) -> QVariantMap {
+        for (const QVariant& entry : shortcuts) {
+            QVariantMap m = entry.toMap();
+            if (m["key"].toString() == key)
+                return m;
+        }
+        return QVariantMap();
+    };
+
+    // Check for the Unity-style transform shortcuts
+    QVariantMap qShortcut = findShortcut("Q");
+    EXPECT_FALSE(qShortcut.isEmpty());
+    EXPECT_EQ(qShortcut["category"].toString(), "Transform");
+    EXPECT_EQ(qShortcut["description"].toString(), "Select mode");
+
+    QVariantMap wShortcut = findShortcut("W");
+    EXPECT_FALSE(wShortcut.isEmpty());
+    EXPECT_EQ(wShortcut["category"].toString(), "Transform");
+    EXPECT_EQ(wShortcut["description"].toString(), "Translate mode");
+
+    QVariantMap eShortcut = findShortcut("E");
+    EXPECT_FALSE(eShortcut.isEmpty());
+    EXPECT_EQ(eShortcut["category"].toString(), "Transform");
+    EXPECT_EQ(eShortcut["description"].toString(), "Rotate mode");
+
+    QVariantMap rShortcut = findShortcut("R");
+    EXPECT_FALSE(rShortcut.isEmpty());
+    EXPECT_EQ(rShortcut["category"].toString(), "Transform");
+    EXPECT_EQ(rShortcut["description"].toString(), "Scale mode");
+}
+
+TEST_F(PropertiesPanelControllerTests, ShortcutDataHasAllSixCategories)
+{
+    QVariantList shortcuts = controller->shortcutData();
+    QSet<QString> categories;
+    for (const QVariant& entry : shortcuts) {
+        categories.insert(entry.toMap()["category"].toString());
+    }
+
+    EXPECT_TRUE(categories.contains("Transform"));
+    EXPECT_TRUE(categories.contains("Navigation"));
+    EXPECT_TRUE(categories.contains("Editing"));
+    EXPECT_TRUE(categories.contains("File"));
+    EXPECT_TRUE(categories.contains("View"));
+    EXPECT_TRUE(categories.contains("Help"));
+    EXPECT_EQ(categories.size(), 6);
+}
+
+// ---- getSetting / setSetting tests ----
+
+TEST_F(PropertiesPanelControllerTests, GetSetSettingStringRoundTrip)
+{
+    const QString key = "TestSuite/testStringKey";
+    QSettings settings;
+    QVariant saved = settings.value(key);
+
+    controller->setSetting(key, QVariant("hello world"));
+    EXPECT_EQ(controller->getSetting(key, QVariant()).toString(), "hello world");
+
+    // Cleanup
+    if (saved.isValid())
+        settings.setValue(key, saved);
+    else
+        settings.remove(key);
+}
+
+TEST_F(PropertiesPanelControllerTests, GetSetSettingIntRoundTrip)
+{
+    const QString key = "TestSuite/testIntKey";
+    QSettings settings;
+    QVariant saved = settings.value(key);
+
+    controller->setSetting(key, QVariant(42));
+    EXPECT_EQ(controller->getSetting(key, QVariant()).toInt(), 42);
+
+    // Cleanup
+    if (saved.isValid())
+        settings.setValue(key, saved);
+    else
+        settings.remove(key);
+}
+
+TEST_F(PropertiesPanelControllerTests, GetSetSettingBoolRoundTrip)
+{
+    const QString key = "TestSuite/testBoolKey";
+    QSettings settings;
+    QVariant saved = settings.value(key);
+
+    controller->setSetting(key, QVariant(true));
+    EXPECT_EQ(controller->getSetting(key, QVariant()).toBool(), true);
+
+    controller->setSetting(key, QVariant(false));
+    EXPECT_EQ(controller->getSetting(key, QVariant()).toBool(), false);
+
+    // Cleanup
+    if (saved.isValid())
+        settings.setValue(key, saved);
+    else
+        settings.remove(key);
+}
+
+TEST_F(PropertiesPanelControllerTests, GetSetSettingDoubleRoundTrip)
+{
+    const QString key = "TestSuite/testDoubleKey";
+    QSettings settings;
+    QVariant saved = settings.value(key);
+
+    controller->setSetting(key, QVariant(3.14));
+    EXPECT_DOUBLE_EQ(controller->getSetting(key, QVariant()).toDouble(), 3.14);
+
+    // Cleanup
+    if (saved.isValid())
+        settings.setValue(key, saved);
+    else
+        settings.remove(key);
+}
+
+TEST_F(PropertiesPanelControllerTests, GetSettingReturnsDefaultWhenKeyMissing)
+{
+    const QString key = "TestSuite/nonExistentKeyForTest_12345";
+    QSettings settings;
+    settings.remove(key);
+
+    EXPECT_EQ(controller->getSetting(key, QVariant("defaultVal")).toString(), "defaultVal");
+    EXPECT_EQ(controller->getSetting(key, QVariant(99)).toInt(), 99);
+    EXPECT_EQ(controller->getSetting(key, QVariant(true)).toBool(), true);
+}
+
+// ---- undoHistory / undoIndex / clearUndoHistory (additional tests) ----
+
+TEST_F(PropertiesPanelControllerTests, UndoHistoryInitiallyEmptyAfterClear)
+{
+    controller->clearUndoHistory();
+
+    EXPECT_TRUE(controller->undoHistory().isEmpty());
+    EXPECT_EQ(controller->undoIndex(), 0);
+}
+
+TEST_F(PropertiesPanelControllerTests, ClearUndoHistoryEmitsSignal)
+{
+    auto* stack = UndoManager::getSingleton()->stack();
+    stack->push(new QUndoCommand("TestCmd"));
+
+    QSignalSpy spy(controller, &PropertiesPanelController::undoHistoryChanged);
+    ASSERT_TRUE(spy.isValid());
+
+    controller->clearUndoHistory();
+    EXPECT_GE(spy.count(), 1);
+    EXPECT_EQ(stack->count(), 0);
+}
+
+TEST_F(PropertiesPanelControllerTests, UndoIndexTracksPushAndUndoOperations)
+{
+    controller->clearUndoHistory();
+    auto* stack = UndoManager::getSingleton()->stack();
+
+    stack->push(new QUndoCommand("A"));
+    EXPECT_EQ(controller->undoIndex(), 1);
+
+    stack->push(new QUndoCommand("B"));
+    EXPECT_EQ(controller->undoIndex(), 2);
+
+    stack->push(new QUndoCommand("C"));
+    EXPECT_EQ(controller->undoIndex(), 3);
+
+    stack->undo();
+    EXPECT_EQ(controller->undoIndex(), 2);
+
+    stack->undo();
+    EXPECT_EQ(controller->undoIndex(), 1);
+
+    stack->redo();
+    EXPECT_EQ(controller->undoIndex(), 2);
 }

@@ -9,8 +9,13 @@
 #include "UndoManager.h"
 #include "Manager.h"
 #include "SentryReporter.h"
+#include "OgreWidget.h"
+#include "SpaceCamera.h"
+#include "EditorViewport.h"
+#include "ViewportGrid.h"
 #include <QApplication>
 #include <QFileDialog>
+#include <QSettings>
 #include <QPalette>
 #include <Ogre.h>
 
@@ -232,6 +237,57 @@ static PrimitiveObject* getSelectedPrimitive()
             return PrimitiveObject::getPrimitiveFromSceneNode(node);
     }
     return nullptr;
+}
+
+QVariantList PropertiesPanelController::shortcutData() const
+{
+    QVariantList data;
+
+    auto entry = [](const QString& cat, const QString& key, const QString& desc) {
+        QVariantMap m;
+        m["category"] = cat;
+        m["key"] = key;
+        m["description"] = desc;
+        return m;
+    };
+
+    // Transform
+    data << entry("Transform", "Q",       "Select mode");
+    data << entry("Transform", "W",       "Translate mode");
+    data << entry("Transform", "E",       "Rotate mode");
+    data << entry("Transform", "R",       "Scale mode");
+    data << entry("Transform", "X",       "Toggle World / Local space");
+    data << entry("Transform", "P",       "Cycle pivot mode");
+
+    // Navigation
+    data << entry("Navigation", "F",               "Frame selection");
+    data << entry("Navigation", "Middle Mouse",     "Orbit camera");
+    data << entry("Navigation", "Right Mouse",      "Pan camera");
+    data << entry("Navigation", "Scroll Wheel",     "Zoom camera");
+
+    // Editing
+    data << entry("Editing", "Ctrl + D",       "Duplicate selection");
+    data << entry("Editing", "Ctrl + G",       "Group nodes");
+    data << entry("Editing", "Ctrl + Shift + G", "Ungroup nodes");
+    data << entry("Editing", "Delete",         "Remove selected");
+
+    // File
+    data << entry("File", "Ctrl + O",       "Open scene");
+    data << entry("File", "Ctrl + S",       "Save scene");
+    data << entry("File", "Ctrl + Z",       "Undo");
+    data << entry("File", "Ctrl + Shift + Z", "Redo");
+    data << entry("File", "Ctrl + ,",       "Open preferences");
+
+    // View
+    data << entry("View", "Show Grid",       "Toggle grid display (Options menu)");
+    data << entry("View", "Show Normals",    "Toggle vertex normals (Options menu)");
+    data << entry("View", "Show Mesh Info",  "Toggle mesh info overlay (Options menu)");
+    data << entry("View", "Show View Cube",  "Toggle 3D view cube (Options menu)");
+
+    // Help
+    data << entry("Help", "Ctrl + /", "Open keyboard shortcut reference");
+
+    return data;
 }
 
 void PropertiesPanelController::selectNodeByName(const QString& name)
@@ -698,4 +754,76 @@ QVariantList PropertiesPanelController::scaleStepPresets() const
     for (double v : TransformOperator::scaleStepPresets())
         result.append(v);
     return result;
+}
+
+// Generic QSettings accessors for Preferences dialog
+QVariant PropertiesPanelController::getSetting(const QString& key, const QVariant& defaultValue) const
+{
+    QSettings settings;
+    return settings.value(key, defaultValue);
+}
+
+void PropertiesPanelController::setSetting(const QString& key, const QVariant& value)
+{
+    QSettings settings;
+    settings.setValue(key, value);
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("Preference changed: %1").arg(key));
+
+    // Apply settings immediately to the running app
+    if (key == "Viewport/gridVisible") {
+        auto* grid = Manager::getSingleton()->getViewportGrid();
+        if (grid) grid->setVisible(value.toBool());
+    } else if (key == "Viewport/cameraSpeed") {
+        Ogre::Real speed = value.toReal();
+        if (speed <= 0) speed = 0.5f;
+        // Apply to the active viewport (TransformOperator tracks it)
+        auto* activeWidget = TransformOperator::getSingleton()->getActiveWidget();
+        if (activeWidget && activeWidget->getSpaceCamera())
+            activeWidget->getSpaceCamera()->setCameraSpeed(speed);
+        // Also apply to all viewports
+        auto* mainWin = Manager::getSingleton()->getMainWindow();
+        if (mainWin) {
+            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
+                if (ow->getSpaceCamera())
+                    ow->getSpaceCamera()->setCameraSpeed(speed);
+            }
+        }
+    } else if (key == "Viewport/nearClip" || key == "Viewport/farClip") {
+        auto* mainWin = Manager::getSingleton()->getMainWindow();
+        if (mainWin) {
+            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
+                if (ow->getSpaceCamera() && ow->getSpaceCamera()->getCamera()) {
+                    if (key == "Viewport/nearClip")
+                        ow->getSpaceCamera()->getCamera()->setNearClipDistance(value.toReal());
+                    else
+                        ow->getSpaceCamera()->getCamera()->setFarClipDistance(value.toReal());
+                }
+            }
+        }
+    } else if (key == "Sentry/enabled" || key == "Telemetry/enabled") {
+        SentryReporter::setEnabled(value.toBool());
+    } else if (key == "Appearance/theme" || key == "palette") {
+        QString theme = value.toString().toLower();
+        if (theme == "dark") {
+            // Match MainWindow::on_actionDark_toggled — use dark palette
+            QPalette dark;
+            dark.setColor(QPalette::Window, QColor(53, 53, 53));
+            dark.setColor(QPalette::WindowText, Qt::white);
+            dark.setColor(QPalette::Base, QColor(35, 35, 35));
+            dark.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
+            dark.setColor(QPalette::ToolTipBase, QColor(25, 25, 25));
+            dark.setColor(QPalette::ToolTipText, Qt::white);
+            dark.setColor(QPalette::Text, Qt::white);
+            dark.setColor(QPalette::Button, QColor(53, 53, 53));
+            dark.setColor(QPalette::ButtonText, Qt::white);
+            dark.setColor(QPalette::Link, QColor(42, 130, 218));
+            dark.setColor(QPalette::Highlight, QColor(42, 130, 218));
+            dark.setColor(QPalette::HighlightedText, Qt::black);
+            QApplication::setPalette(dark);
+        } else if (theme == "light") {
+            QApplication::setPalette(QColor("ghostwhite"));
+        }
+        // System = use platform default (requires restart)
+    }
 }

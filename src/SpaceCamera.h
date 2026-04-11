@@ -87,6 +87,7 @@ class SpaceCamera : Ogre::FrameListener
         Ogre::SceneNode*        mTarget = nullptr;
         Ogre::Camera*           mCamera = nullptr; // Ogre camera
         Ogre::Real              mCameraSpeed = 0.0f;
+        Ogre::Real              mBaseCameraSpeed = 0.5f;
         Ogre::SceneManager*     mSceneMgr=nullptr; //SceneManager
 
         static const QPoint     invalidPoint;
