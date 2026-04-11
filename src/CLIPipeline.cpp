@@ -27,6 +27,8 @@
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
+#else
+#include <io.h>
 #endif
 
 // Saved original stdout fd — Ogre's stdout gets redirected to stderr
@@ -46,6 +48,100 @@ static void cliWrite(const QString& text)
         fwrite(utf8.constData(), 1, utf8.size(), stdout);
         fflush(stdout);
     }
+}
+
+static bool cliSupportsColor()
+{
+    if (qEnvironmentVariableIsSet("NO_COLOR"))
+        return false;
+
+    const QByteArray forceColor = qgetenv("CLICOLOR_FORCE");
+    if (!forceColor.isEmpty() && forceColor != "0")
+        return true;
+
+#ifdef Q_OS_WIN
+    const int fd = (s_savedStdoutFd >= 0) ? s_savedStdoutFd : _fileno(stdout);
+    return fd >= 0 && _isatty(fd);
+#else
+    const int fd = (s_savedStdoutFd >= 0) ? s_savedStdoutFd : fileno(stdout);
+    return fd >= 0 && ::isatty(fd);
+#endif
+}
+
+static QString colorizeWord(const QString& text, const char* ansiColor, bool enabled)
+{
+    if (!enabled)
+        return text;
+    return QStringLiteral("\x1b[%1m%2\x1b[0m").arg(QString::fromLatin1(ansiColor), text);
+}
+
+static QString scanStatusLabel(bool hasError, bool hasWarning, bool colorize)
+{
+    if (hasError)
+        return colorizeWord("ERROR", "31", colorize);
+    if (hasWarning)
+        return colorizeWord("WARN", "33", colorize);
+    return colorizeWord("OK", "32", colorize);
+}
+
+static QString findingSeverityTag(Severity severity)
+{
+    switch (severity) {
+    case Severity::Error:   return "error";
+    case Severity::Warning: return "warn";
+    case Severity::Info:    return "info";
+    }
+    return "info";
+}
+
+static QString formatScanAssetLine(const AssetInfo& asset, const QList<Finding>& findings, bool colorize)
+{
+    bool hasError = false;
+    bool hasWarning = false;
+    for (const auto& f : findings) {
+        if (f.fixed)
+            continue;
+        if (f.severity == Severity::Error)
+            hasError = true;
+        else if (f.severity == Severity::Warning)
+            hasWarning = true;
+    }
+
+    QString out;
+    QTextStream s(&out);
+    const QString status = scanStatusLabel(hasError, hasWarning, colorize);
+    if (!hasError && !hasWarning)
+        s << "  " << status << "    " << asset.relativePath << "\n";
+    else if (hasWarning)
+        s << status << "    " << asset.relativePath << "\n";
+    else
+        s << status << "   " << asset.relativePath << "\n";
+
+    for (const auto& f : findings) {
+        s << "         [" << findingSeverityTag(f.severity) << "] "
+          << f.rule << ": " << f.message << "\n";
+    }
+    return out;
+}
+
+static QString formatScanSummary(const ScanResult& result)
+{
+    QString out;
+    QTextStream s(&out);
+    s << "\n";
+    s << "Summary:\n";
+    s << "  • Scanned:  " << result.scanned  << "\n";
+    s << "  ✓ Passed:   " << result.passed   << "\n";
+    s << "  ▲ Warnings: " << result.warnings << "\n";
+    s << "  ✗ Errors:   " << result.errors   << "\n";
+    if (result.infos > 0)
+        s << "  ℹ Info:     " << result.infos << "\n";
+    if (result.fixed > 0)
+        s << "  🔧 Fixed:    " << result.fixed << "\n";
+    if (result.skipped > 0)
+        s << "  ⏭ Skipped:  " << result.skipped << "\n";
+    s << "  ⏱ Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
+    return out;
 }
 
 static QTextStream& err()
@@ -141,18 +237,33 @@ void CLIPipeline::printUsage()
 
 QString CLIPipeline::formatForExtension(const QString& path)
 {
-    if (path.endsWith(".fbx", Qt::CaseInsensitive)) return "FBX Binary (*.fbx)";
-    if (path.endsWith(".glb2", Qt::CaseInsensitive)) return "glTF 2.0 Binary (*.glb2)";
-    if (path.endsWith(".gltf2", Qt::CaseInsensitive)) return "glTF 2.0 (*.gltf2)";
-    if (path.endsWith(".dae", Qt::CaseInsensitive)) return "Collada (*.dae)";
-    if (path.endsWith(".obj", Qt::CaseInsensitive)) return "OBJ (*.obj)";
-    if (path.endsWith(".stl", Qt::CaseInsensitive)) return "STL (*.stl)";
-    if (path.endsWith(".ply", Qt::CaseInsensitive)) return "PLY (*.ply)";
-    if (path.endsWith(".3ds", Qt::CaseInsensitive)) return "3DS (*.3ds)";
-    if (path.endsWith(".x", Qt::CaseInsensitive)) return "X (*.x)";
-    if (path.endsWith(".mesh.xml", Qt::CaseInsensitive)) return "Ogre XML (*.mesh.xml)";
-    if (path.endsWith(".mesh", Qt::CaseInsensitive)) return "Ogre Mesh (*.mesh)";
-    if (path.endsWith(".assbin", Qt::CaseInsensitive)) return "Assimp Binary (*.assbin)";
+    struct ExtensionFormat {
+        const char* extension;
+        const char* format;
+    };
+    static const ExtensionFormat extensionFormats[] = {
+        {".fbx", "FBX Binary (*.fbx)"},
+        {".glb", "glTF 2.0 Binary (*.glb)"},
+        {".glb2", "glTF 2.0 Binary (*.glb2)"},
+        {".gltf", "glTF 2.0 (*.gltf)"},
+        {".gltf2", "glTF 2.0 (*.gltf2)"},
+        {".dae", "Collada (*.dae)"},
+        {".obj", "OBJ (*.obj)"},
+        {".stl", "STL (*.stl)"},
+        {".ply", "PLY (*.ply)"},
+        {".3ds", "3DS (*.3ds)"},
+        {".x", "X (*.x)"},
+        {".mesh.xml", "Ogre XML (*.mesh.xml)"},
+        {".mesh", "Ogre Mesh (*.mesh)"},
+        {".assbin", "Assimp Binary (*.assbin)"}
+    };
+
+    for (const ExtensionFormat& entry : extensionFormats) {
+        if (path.endsWith(QString::fromLatin1(entry.extension), Qt::CaseInsensitive)) {
+            return QString::fromLatin1(entry.format);
+        }
+    }
+
     return "Ogre Mesh (*.mesh)";
 }
 
@@ -1682,14 +1793,24 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
             .arg(scanRoot.isEmpty() ? "(default)" : scanRoot)
             .arg(jsonOutput).arg(fix));
 
+    const bool streamTextOutput = !jsonOutput;
+    const bool colorizeTextOutput = streamTextOutput && cliSupportsColor();
+
     // Run the scan
-    ScanResult result = ScanEngine::run(config, scanRoot);
+    ScanResult result = ScanEngine::run(
+        config, scanRoot,
+        streamTextOutput
+            ? ScanEngine::AssetProcessedCallback(
+                  [colorizeTextOutput](const AssetInfo& asset, const QList<Finding>& findings) {
+                      cliWrite(formatScanAssetLine(asset, findings, colorizeTextOutput));
+                  })
+            : ScanEngine::AssetProcessedCallback());
 
     // Output to terminal
     if (jsonOutput) {
         cliWrite(ScanEngine::formatJson(result) + "\n");
     } else {
-        cliWrite(ScanEngine::formatText(result, config));
+        cliWrite(formatScanSummary(result));
     }
 
     // Write report files
@@ -1717,7 +1838,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         QDir().mkpath(QFileInfo(config.reportOutput).path());
         if (f.open(QIODevice::WriteOnly | QIODevice::Text)) {
             if (config.reportFormat == "text")
-                f.write(ScanEngine::formatText(result, config).toUtf8());
+                f.write(ScanEngine::formatText(result, config, false).toUtf8());
             else
                 f.write(ScanEngine::formatJson(result).toUtf8());
         }

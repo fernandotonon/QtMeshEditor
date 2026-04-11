@@ -2,6 +2,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 
+#include <array>
+
 #include <OgreAny.h>
 #include <OgreUserObjectBindings.h>
 
@@ -17,6 +19,57 @@
 // TODO fix the bug in the num of segment for rounded box
 
 // TODO switchUV doesn't seems to work
+
+namespace {
+
+template <typename Setter>
+void applyToSelectedPrimitives(const QList<PrimitiveObject*>& selected, Setter&& setter)
+{
+    for (PrimitiveObject* primitive : selected) {
+        setter(primitive);
+    }
+}
+
+template <typename Value, typename Setter>
+void applyPrimitiveValue(const QList<PrimitiveObject*>& selected, const Value& value, Setter setter)
+{
+    applyToSelectedPrimitives(selected, [value, setter](PrimitiveObject* primitive) {
+        (primitive->*setter)(value);
+    });
+}
+
+template <typename Widget, typename Setter>
+void applyWidgetValue(const QList<PrimitiveObject*>& selected, const Widget* widget, Setter setter)
+{
+    applyPrimitiveValue(selected, widget->value(), setter);
+}
+
+template <typename Creator>
+void promptAndCreatePrimitive(const QString& dialogTitle,
+                              const QString& fieldLabel,
+                              const QString& defaultName,
+                              const QString& breadcrumbName,
+                              Creator&& creator)
+{
+    bool ok = false;
+    QString name = QInputDialog::getText(
+        Manager::getSingleton()->getMainWindow(),
+        dialogTitle,
+        fieldLabel,
+        QLineEdit::Normal,
+        "",
+        &ok);
+    name = (ok && !name.isEmpty()) ? name : defaultName;
+
+    if (!ok) {
+        return;
+    }
+
+    SentryReporter::addBreadcrumb("ui.action", QString("Create primitive: %1").arg(breadcrumbName));
+    creator(name);
+}
+
+} // namespace
 
 PrimitivesWidget::PrimitivesWidget(QWidget *parent)
     :QWidget(parent)
@@ -587,21 +640,16 @@ const QList<PrimitiveObject *> &PrimitivesWidget::getSelectedPrimitiveList()
 
 void PrimitivesWidget::blockEditSignals(bool block)
 {
-    edit_sizeX->blockSignals(block);
-    edit_sizeY->blockSignals(block);
-    edit_sizeZ->blockSignals(block);
+    const std::array<QObject*, 12> editors = {
+        edit_sizeX, edit_sizeY, edit_sizeZ,
+        edit_radius, edit_radius2, edit_height,
+        edit_numSegX, edit_numSegY, edit_numSegZ,
+        edit_UTile, edit_VTile, pb_switchUV
+    };
 
-    edit_radius->blockSignals(block);
-    edit_radius2->blockSignals(block);
-    edit_height->blockSignals(block);
-
-    edit_numSegX->blockSignals(block);
-    edit_numSegY->blockSignals(block);
-    edit_numSegZ->blockSignals(block);
-
-    edit_UTile->blockSignals(block);
-    edit_VTile->blockSignals(block);
-    pb_switchUV->blockSignals(block);
+    for (QObject* editor : editors) {
+        editor->blockSignals(block);
+    }
 }
 
 PrimitiveObject::PrimitiveType PrimitivesWidget::getSelectedPrimitive()
@@ -642,336 +690,179 @@ PrimitiveObject::PrimitiveType PrimitivesWidget::getSelectedPrimitive()
 
 void PrimitivesWidget::onSelectionChanged()
 {
-    if(SelectionSet::getSingleton()->hasNodes())
-    {
-        switch (getSelectedPrimitive())
-        {
-            case PrimitiveObject::AP_NONE:
-                    setUiEmpty();
-                break;
-            case PrimitiveObject::AP_CUBE:
-                        updateUiFromParams(); setUiCube();
-                    break;
-            case PrimitiveObject::AP_SPHERE:
-                        updateUiFromParams();setUiSphere();
-                    break;
-            case PrimitiveObject::AP_PLANE:
-                        updateUiFromParams();setUiPlane();
-                    break;
-            case PrimitiveObject::AP_CYLINDER:
-                        updateUiFromParams();setUiCylinder();
-                    break;
-            case PrimitiveObject::AP_CONE:
-                        updateUiFromParams();setUiCone();
-                    break;
-            case PrimitiveObject::AP_TORUS:
-                        updateUiFromParams();setUiTorus();
-                    break;
-            case PrimitiveObject::AP_TUBE:
-                        updateUiFromParams();setUiTube();
-                    break;
-            case PrimitiveObject::AP_CAPSULE:
-                        updateUiFromParams();setUiCapsule();
-                    break;
-            case PrimitiveObject::AP_ICOSPHERE:
-                        updateUiFromParams();setUiIcoSphere();
-                    break;
-            case PrimitiveObject::AP_ROUNDEDBOX:
-                        updateUiFromParams();setUiRoundedBox();
-                    break;
-            case PrimitiveObject::AP_SPRING:
-                        updateUiFromParams();setUiSpring();
-                    break;
-            default:
-                        setUiMesh();
-            break;
-
-        }//switch
-    }//if selection has node
-    else
+    if (!SelectionSet::getSingleton()->hasNodes()) {
+        mSelectedPrimitive.clear();
         setUiEmpty();
+        return;
+    }
+
+    const PrimitiveObject::PrimitiveType selectedPrimitive = getSelectedPrimitive();
+    if (selectedPrimitive == PrimitiveObject::AP_NONE) {
+        mSelectedPrimitive.clear();
+        setUiEmpty();
+        return;
+    }
+
+    void (PrimitivesWidget::*setUiForPrimitive)() = nullptr;
+    switch (selectedPrimitive) {
+    case PrimitiveObject::AP_CUBE:
+        setUiForPrimitive = &PrimitivesWidget::setUiCube;
+        break;
+    case PrimitiveObject::AP_SPHERE:
+        setUiForPrimitive = &PrimitivesWidget::setUiSphere;
+        break;
+    case PrimitiveObject::AP_PLANE:
+        setUiForPrimitive = &PrimitivesWidget::setUiPlane;
+        break;
+    case PrimitiveObject::AP_CYLINDER:
+        setUiForPrimitive = &PrimitivesWidget::setUiCylinder;
+        break;
+    case PrimitiveObject::AP_CONE:
+        setUiForPrimitive = &PrimitivesWidget::setUiCone;
+        break;
+    case PrimitiveObject::AP_TORUS:
+        setUiForPrimitive = &PrimitivesWidget::setUiTorus;
+        break;
+    case PrimitiveObject::AP_TUBE:
+        setUiForPrimitive = &PrimitivesWidget::setUiTube;
+        break;
+    case PrimitiveObject::AP_CAPSULE:
+        setUiForPrimitive = &PrimitivesWidget::setUiCapsule;
+        break;
+    case PrimitiveObject::AP_ICOSPHERE:
+        setUiForPrimitive = &PrimitivesWidget::setUiIcoSphere;
+        break;
+    case PrimitiveObject::AP_ROUNDEDBOX:
+        setUiForPrimitive = &PrimitivesWidget::setUiRoundedBox;
+        break;
+    case PrimitiveObject::AP_SPRING:
+        setUiForPrimitive = &PrimitivesWidget::setUiSpring;
+        break;
+    default:
+        setUiMesh();
+        return;
+    }
+
+    setUiEmpty();
+    (this->*setUiForPrimitive)();
+    updateUiFromParams();
 }
 
 void PrimitivesWidget::onEditSizeX()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setSizeX(edit_sizeX->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_sizeX, &PrimitiveObject::setSizeX);
 }
 
 void PrimitivesWidget::onEditSizeY()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setSizeY(edit_sizeY->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_sizeY, &PrimitiveObject::setSizeY);
 }
 
 void PrimitivesWidget::onEditSizeZ()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setSizeZ(edit_sizeZ->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_sizeZ, &PrimitiveObject::setSizeZ);
 }
 
 void PrimitivesWidget::onEditRadius()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setRadius(edit_radius->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_radius, &PrimitiveObject::setRadius);
 }
 
 void PrimitivesWidget::onEditRadius2()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setInnerRadius(edit_radius2->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_radius2, &PrimitiveObject::setInnerRadius);
 }
 
 void PrimitivesWidget::onEditHeight()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setHeight(edit_height->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_height, &PrimitiveObject::setHeight);
 }
 
 void PrimitivesWidget::onEditNumSegX()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setNumSegX(edit_numSegX->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_numSegX, &PrimitiveObject::setNumSegX);
 }
 
 void PrimitivesWidget::onEditNumSegY()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setNumSegY(edit_numSegY->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_numSegY, &PrimitiveObject::setNumSegY);
 }
 
 void PrimitivesWidget::onEditNumSegZ()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setNumSegZ(edit_numSegZ->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_numSegZ, &PrimitiveObject::setNumSegZ);
 }
 
 void PrimitivesWidget::onEditUTile()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setUTile(edit_UTile->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_UTile, &PrimitiveObject::setUTile);
 }
 
 void PrimitivesWidget::onEditVTile()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setVTile(edit_VTile->value());
-
+    applyWidgetValue(mSelectedPrimitive, edit_VTile, &PrimitiveObject::setVTile);
 }
 
 void PrimitivesWidget::onToggleSwitchUV()
 {
-    if(mSelectedPrimitive.empty()) return;
-
-    foreach(PrimitiveObject* primitive, mSelectedPrimitive)
-        primitive->setUVSwitch(pb_switchUV->isChecked());
-
-}
-
-void PrimitivesWidget::createPrimitive(PrimitiveObject::PrimitiveType newPrimitive, const QString& name)
-{
-   PrimitiveObject* primitive = new PrimitiveObject(name, newPrimitive);
-   primitive->createPrimitive();
+    applyPrimitiveValue(mSelectedPrimitive, pb_switchUV->isChecked(), &PrimitiveObject::setUVSwitch);
 }
 
 void PrimitivesWidget::createCube()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Cube"),
-                                         tr("Cube name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("Cube");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Cube");
-    PrimitiveObject::createCube(name);
+    promptAndCreatePrimitive(tr("New Cube"), tr("Cube name:"), tr("Cube"), "Cube",
+                             [](const QString& name) { PrimitiveObject::createCube(name); });
 }
 
 void PrimitivesWidget::createSphere()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Sphere"),
-                                         tr("Sphere name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("Sphere");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Sphere");
-    PrimitiveObject::createSphere(name);
-    //createPrimitive(PrimitiveObject::AP_SPHERE, name);
+    promptAndCreatePrimitive(tr("New Sphere"), tr("Sphere name:"), tr("Sphere"), "Sphere",
+                             [](const QString& name) { PrimitiveObject::createSphere(name); });
 }
 
 void PrimitivesWidget::createPlane()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Plane"),
-                                         tr("Plane name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("Plane");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Plane");
-    PrimitiveObject::createPlane(name);
-    //createPrimitive(PrimitiveObject::AP_PLAN, name);
+    promptAndCreatePrimitive(tr("New Plane"), tr("Plane name:"), tr("Plane"), "Plane",
+                             [](const QString& name) { PrimitiveObject::createPlane(name); });
 }
 
 void PrimitivesWidget::createCylinder()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Cylinder"),
-                                         tr("Cylinder name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("Cylinder");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Cylinder");
-    PrimitiveObject::createCylinder(name);
-    //createPrimitive(PrimitiveObject::AP_CYLINDER, name);
+    promptAndCreatePrimitive(tr("New Cylinder"), tr("Cylinder name:"), tr("Cylinder"), "Cylinder",
+                             [](const QString& name) { PrimitiveObject::createCylinder(name); });
 }
 void PrimitivesWidget::createCone()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Cone"),
-                                         tr("Cone name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("Cone");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Cone");
-    PrimitiveObject::createCone(name);
-    //createPrimitive(PrimitiveObject::AP_CONE, name);
+    promptAndCreatePrimitive(tr("New Cone"), tr("Cone name:"), tr("Cone"), "Cone",
+                             [](const QString& name) { PrimitiveObject::createCone(name); });
 }
 void PrimitivesWidget::createTorus()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Torus"),
-                                         tr("Torus name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("Torus");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Torus");
-    PrimitiveObject::createTorus(name);
-    //createPrimitive(PrimitiveObject::AP_TORUS, name);
+    promptAndCreatePrimitive(tr("New Torus"), tr("Torus name:"), tr("Torus"), "Torus",
+                             [](const QString& name) { PrimitiveObject::createTorus(name); });
 }
 void PrimitivesWidget::createTube()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Tube"),
-                                         tr("Tube name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("Tube");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Tube");
-    PrimitiveObject::createTube(name);
-    //createPrimitive(PrimitiveObject::AP_TUBE, name);
+    promptAndCreatePrimitive(tr("New Tube"), tr("Tube name:"), tr("Tube"), "Tube",
+                             [](const QString& name) { PrimitiveObject::createTube(name); });
 }
 void PrimitivesWidget::createCapsule()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Capsule"),
-                                         tr("Capsule name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("Capsule");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Capsule");
-    PrimitiveObject::createCapsule(name);
-    //createPrimitive(PrimitiveObject::AP_CAPSULE, name);
+    promptAndCreatePrimitive(tr("New Capsule"), tr("Capsule name:"), tr("Capsule"), "Capsule",
+                             [](const QString& name) { PrimitiveObject::createCapsule(name); });
 }
 void PrimitivesWidget::createIcoSphere()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New IcoSphere"),
-                                         tr("IcoSphere name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("IcoSphere");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: IcoSphere");
-    PrimitiveObject::createIcoSphere(name);
-    //createPrimitive(PrimitiveObject::AP_ICOSPHERE, name);
+    promptAndCreatePrimitive(tr("New IcoSphere"), tr("IcoSphere name:"), tr("IcoSphere"), "IcoSphere",
+                             [](const QString& name) { PrimitiveObject::createIcoSphere(name); });
 }
 void PrimitivesWidget::createRoundedBox()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New RoundedBox"),
-                                         tr("RoundedBox name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("RoundedBox");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: RoundedBox");
-    PrimitiveObject::createRoundedBox(name);
-    //createPrimitive(PrimitiveObject::AP_ROUNDEDBOX, name);
+    promptAndCreatePrimitive(tr("New RoundedBox"), tr("RoundedBox name:"), tr("RoundedBox"), "RoundedBox",
+                             [](const QString& name) { PrimitiveObject::createRoundedBox(name); });
 }
 void PrimitivesWidget::createSpring()
 {
-    bool ok;
-    QString name = QInputDialog::getText(Manager::getSingleton()->getMainWindow(), tr("New Spring"),
-                                         tr("Spring name:"), QLineEdit::Normal,
-                                         "", &ok);
-    name=(ok&&name.size())?name:tr("Spring");
-
-    if(!ok)
-        return;
-
-    SentryReporter::addBreadcrumb("ui.action", "Create primitive: Spring");
-    PrimitiveObject::createSpring(name);
-    //createPrimitive(PrimitiveObject::AP_SPRING, name);
+    promptAndCreatePrimitive(tr("New Spring"), tr("Spring name:"), tr("Spring"), "Spring",
+                             [](const QString& name) { PrimitiveObject::createSpring(name); });
 }
-
-

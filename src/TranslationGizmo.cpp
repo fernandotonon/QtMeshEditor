@@ -1,6 +1,7 @@
 #include "GlobalDefinitions.h"
 
 #include "TranslationGizmo.h"
+#include "GizmoAxisHelpers.h"
 #include "Manager.h"
 #include <Ogre.h>
 
@@ -25,15 +26,17 @@ TranslationGizmo::TranslationGizmo(Ogre::SceneNode* linkNode, const Ogre::String
     mYaxisColor = Ogre::ColourValue(0, solid, 0, solid);
     mZaxisColor = Ogre::ColourValue(0, 0, solid, solid);
 
-    m_pXaxis->setRenderQueueGroup(ZORDER_OVERLAY); // when using this, ensure Depth Check is Off in the material
-    m_pYaxis->setRenderQueueGroup(ZORDER_OVERLAY);
-    m_pZaxis->setRenderQueueGroup(ZORDER_OVERLAY);
+    GizmoAxisHelpers::forEachAxis(m_pXaxis, m_pYaxis, m_pZaxis,
+                                  [](Ogre::ManualObject* axis) {
+                                      axis->setRenderQueueGroup(ZORDER_OVERLAY);
+                                  }); // ensure Depth Check is Off in the material
 
     setQueryFlags(0);
 
-    linkNode->attachObject(m_pXaxis);
-    linkNode->attachObject(m_pYaxis);
-    linkNode->attachObject(m_pZaxis);
+    GizmoAxisHelpers::forEachAxis(m_pXaxis, m_pYaxis, m_pZaxis,
+                                  [linkNode](Ogre::ManualObject* axis) {
+                                      linkNode->attachObject(axis);
+                                  });
 }
 
 TranslationGizmo::~TranslationGizmo()
@@ -41,9 +44,10 @@ TranslationGizmo::~TranslationGizmo()
     Ogre::SceneManager* pSceneMgr = m_pXaxis->getParentSceneNode()->getCreator();
     //TODO unload material ??
 
-    pSceneMgr->destroyManualObject(m_pXaxis);
-    pSceneMgr->destroyManualObject(m_pYaxis);
-    pSceneMgr->destroyManualObject(m_pZaxis);
+    GizmoAxisHelpers::forEachAxis(m_pXaxis, m_pYaxis, m_pZaxis,
+                                  [pSceneMgr](Ogre::ManualObject* axis) {
+                                      pSceneMgr->destroyManualObject(axis);
+                                  });
 }
 
 void TranslationGizmo::createXaxis(const Ogre::ColourValue& colour)
@@ -296,17 +300,18 @@ void TranslationGizmo::setVisible(bool visible)
 {
     if(visible)
         createAxis();
-    m_pXaxis->setVisible(visible);
-    m_pYaxis->setVisible(visible);
-    m_pZaxis->setVisible(visible);
+    GizmoAxisHelpers::forEachAxis(m_pXaxis, m_pYaxis, m_pZaxis,
+                                  [visible](Ogre::ManualObject* axis) {
+                                      axis->setVisible(visible);
+                                  });
 }
 
 void TranslationGizmo::setQueryFlags(Ogre::uint32 flags)
 {
-    m_pXaxis->setQueryFlags(flags);
-    m_pYaxis->setQueryFlags(flags);
-    m_pZaxis->setQueryFlags(flags);
-
+    GizmoAxisHelpers::forEachAxis(m_pXaxis, m_pYaxis, m_pZaxis,
+                                  [flags](Ogre::ManualObject* axis) {
+                                      axis->setQueryFlags(flags);
+                                  });
 }
 
 void TranslationGizmo::setFading(const Ogre::Real& fade)
@@ -345,56 +350,47 @@ void TranslationGizmo::createAxis(void)
     // Update bounding boxes for the 3D arrows with arrow heads
     float bbSize = (mScale / mSolidThickness) * 2.5f; // Account for arrow head thickness
 
-    Ogre::AxisAlignedBox boundingBox = m_pXaxis->getBoundingBox();
-    boundingBox.setExtents(Ogre::Vector3(0,-bbSize,-bbSize),Ogre::Vector3(mScale,bbSize,bbSize));
-    m_pXaxis->setBoundingBox(boundingBox);
-
-    boundingBox = m_pYaxis->getBoundingBox();
-    boundingBox.setExtents(Ogre::Vector3(-bbSize,0,-bbSize),Ogre::Vector3(bbSize,mScale,bbSize));
-    m_pYaxis->setBoundingBox(boundingBox);
-
-    boundingBox = m_pZaxis->getBoundingBox();
-    boundingBox.setExtents(Ogre::Vector3(-bbSize,-bbSize,0),Ogre::Vector3(bbSize,bbSize,mScale));
-    m_pZaxis->setBoundingBox(boundingBox);
+    GizmoAxisHelpers::forEachAxisIndexed(m_pXaxis, m_pYaxis, m_pZaxis,
+                                         [this, bbSize](GizmoAxisHelpers::Axis axis, Ogre::ManualObject* axisObject) {
+                                             const Ogre::Real axisMin =
+                                                 (axis == GizmoAxisHelpers::Axis::Z && mLeftHandCs) ? -mScale : 0.0f;
+                                             const Ogre::Real axisMax =
+                                                 (axis == GizmoAxisHelpers::Axis::Z && mLeftHandCs) ? 0.0f : mScale;
+                                             axisObject->setBoundingBox(
+                                                 GizmoAxisHelpers::makeAxisBoundingBox(axis, axisMin, axisMax, bbSize));
+                                         });
 
     mHighlighted = false;
 }
 
 Ogre::Vector3 TranslationGizmo::highlightAxis(const Ogre::MovableObject* obj)
 {
-    Ogre::Vector3 result = Ogre::Vector3::ZERO;
+    const GizmoAxisHelpers::Axis highlightedAxis =
+        GizmoAxisHelpers::axisFromObject(obj, m_pXaxis, m_pYaxis, m_pZaxis);
 
-    if(obj == m_pXaxis)
-    {
-        createSolidXaxis(mXaxisColor);
-        createYaxis(mYaxisColor*mFade);
-        createZaxis(mZaxisColor*mFade);
-        mHighlighted = true;
-        result =  Ogre::Vector3::UNIT_X;
-    }
-    else if(obj == m_pYaxis)
-    {
-        createSolidYaxis(mYaxisColor);
-        createXaxis(mXaxisColor*mFade);
-        createZaxis(mZaxisColor*mFade);
-        result =  Ogre::Vector3::UNIT_Y;
-        mHighlighted = true;
-    }
-    else if(obj == m_pZaxis)
-    {
-        createSolidZaxis(mZaxisColor);
-        createXaxis(mXaxisColor*mFade);
-        createYaxis(mYaxisColor*mFade);
-        result =  Ogre::Vector3::UNIT_Z;
-        mHighlighted = true;
-    }
-    else
-    {
-        createAxis();
+    GizmoAxisHelpers::dispatchAxis(
+        highlightedAxis,
+        [this]() {
+            createSolidXaxis(mXaxisColor);
+            createYaxis(mYaxisColor * mFade);
+            createZaxis(mZaxisColor * mFade);
+        },
+        [this]() {
+            createSolidYaxis(mYaxisColor);
+            createXaxis(mXaxisColor * mFade);
+            createZaxis(mZaxisColor * mFade);
+        },
+        [this]() {
+            createSolidZaxis(mZaxisColor);
+            createXaxis(mXaxisColor * mFade);
+            createYaxis(mYaxisColor * mFade);
+        },
+        [this]() { createAxis(); });
 
+    if (highlightedAxis == GizmoAxisHelpers::Axis::None) {
+        return Ogre::Vector3::ZERO;
     }
 
-    return result;
+    mHighlighted = true;
+    return GizmoAxisHelpers::axisToUnitVector(highlightedAxis);
 }
-
-
