@@ -61,6 +61,7 @@
 #include "AIChatManager.h"
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
+#include "EditModeController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -153,6 +154,14 @@ MainWindow::MainWindow(QWidget *parent) :
     });
     m_pTimer->start(0);
 
+    // Edit Mode indicator in status bar
+    m_editModeLabel = new QLabel("Object Mode", this);
+    m_editModeLabel->setStyleSheet("QLabel { font-weight: bold; padding: 2px 8px; }");
+    statusBar()->addPermanentWidget(m_editModeLabel);
+    connect(EditModeController::instance(), &EditModeController::editModeChanged,
+            this, &MainWindow::updateEditModeIndicator);
+    updateEditModeIndicator();
+
     // Auto-start MCP HTTP server if enabled in settings
     QSettings mcpSettings;
     bool mcpEnabled = mcpSettings.value("MCP/enabled", false).toBool();
@@ -234,6 +243,7 @@ MainWindow::~MainWindow()
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
     // These singletons are safe to destroy unconditionally.
+    EditModeController::kill();
     SubEntityHighlight::kill();
     AnimationControlController::kill();
     MeshLodController::kill();
@@ -371,6 +381,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<AssetBrowserController>("AssetBrowser", 1, 0, "AssetBrowserController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AssetBrowserController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<EditModeController>("PropertiesPanel", 1, 0, "EditModeController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return EditModeController::qmlInstance(engine, nullptr);
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
@@ -945,6 +959,11 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         SentryReporter::addBreadcrumb("ui.shortcut", "Delete — Remove selected");
         TransformOperator::getSingleton()->removeSelected();
        break;
+    case Qt::Key_Tab:
+        SentryReporter::addBreadcrumb("ui.shortcut", "Tab — Toggle Edit Mode");
+        EditModeController::instance()->toggleEditMode();
+        event->accept();
+       break;
     default:
        break;
     }
@@ -1417,6 +1436,22 @@ void MainWindow::setTransformState(TransformOperator::TransformState newState)
     ui->actionScale_Object->setChecked(newState == TransformOperator::TS_SCALE);
 
     TransformOperator::getSingleton()->onTransformStateChange(newState);
+}
+
+void MainWindow::updateEditModeIndicator()
+{
+    if (!m_editModeLabel) return;
+    auto* ctrl = EditModeController::instance();
+    if (ctrl->isEditModeActive()) {
+        m_editModeLabel->setText("Edit Mode");
+        m_editModeLabel->setStyleSheet(
+            "QLabel { font-weight: bold; padding: 2px 8px; "
+            "background-color: #3d6b3d; color: white; border-radius: 3px; }");
+    } else {
+        m_editModeLabel->setText("Object Mode");
+        m_editModeLabel->setStyleSheet(
+            "QLabel { font-weight: bold; padding: 2px 8px; }");
+    }
 }
 
 // LCOV_EXCL_START — creates OgreWidget, requires display

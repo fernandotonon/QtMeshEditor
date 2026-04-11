@@ -16,6 +16,53 @@ Rectangle {
             width: root.width
             spacing: 0
 
+            // ---- Edit Mode Indicator ----
+            Rectangle {
+                width: parent.width
+                height: 32
+                color: EditModeController.editModeActive
+                    ? "#3d6b3d" : PropertiesPanelController.headerColor
+                visible: true
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 8
+                    anchors.rightMargin: 8
+                    spacing: 8
+
+                    Text {
+                        text: EditModeController.modeLabel
+                        color: PropertiesPanelController.textColor
+                        font.bold: true
+                        font.pixelSize: 12
+                        Layout.fillWidth: true
+                    }
+
+                    Text {
+                        text: EditModeController.editModeActive
+                            ? "V:" + EditModeController.vertexCount +
+                              " T:" + EditModeController.triangleCount +
+                              " S:" + EditModeController.subMeshCount
+                            : ""
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 10
+                        opacity: 0.7
+                        visible: EditModeController.editModeActive
+                    }
+
+                    Button {
+                        text: EditModeController.editModeActive ? "Exit" : "Edit"
+                        enabled: EditModeController.editModeActive || EditModeController.canEnterEditMode
+                        implicitWidth: 48
+                        implicitHeight: 24
+                        font.pixelSize: 10
+                        ToolTip.text: "Toggle Edit Mode (Tab)"
+                        ToolTip.visible: hovered
+                        onClicked: EditModeController.toggleEditMode()
+                    }
+                }
+            }
+
             // ---- Scene Outliner ----
             CollapsibleSection {
                 title: "Scene"
