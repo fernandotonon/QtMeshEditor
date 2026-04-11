@@ -4409,6 +4409,41 @@ TEST_F(MCPServerTest, ReadFile_MaxLinesRespected)
     EXPECT_TRUE(getResultText(result).contains("truncated"));
 }
 
+TEST_F(MCPServerTest, ReadFile_MaxLinesIsClampedToSupportedBounds)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    QFile small(tmpDir.filePath("small.txt"));
+    ASSERT_TRUE(small.open(QIODevice::WriteOnly));
+    small.write("a\nb\nc\n");
+    small.close();
+
+    QJsonObject minArgs;
+    minArgs["path"] = small.fileName();
+    minArgs["max_lines"] = 0;
+    QJsonObject minResult = server->callTool("read_file", minArgs);
+    ASSERT_FALSE(isError(minResult));
+    const QString minText = getResultText(minResult);
+    EXPECT_TRUE(minText.contains("(1 lines, truncated)"));
+    EXPECT_TRUE(minText.contains("\na"));
+    EXPECT_FALSE(minText.contains("\nb\n"));
+
+    QFile large(tmpDir.filePath("large.txt"));
+    ASSERT_TRUE(large.open(QIODevice::WriteOnly));
+    for (int i = 0; i < 600; ++i) {
+        large.write(QStringLiteral("line %1\n").arg(i).toUtf8());
+    }
+    large.close();
+
+    QJsonObject maxArgs;
+    maxArgs["path"] = large.fileName();
+    maxArgs["max_lines"] = 9999;
+    QJsonObject maxResult = server->callTool("read_file", maxArgs);
+    ASSERT_FALSE(isError(maxResult));
+    EXPECT_TRUE(getResultText(maxResult).contains("(500 lines, truncated)"));
+}
+
 // ---- Delete entity ----
 
 TEST_F(MCPServerTest, DeleteEntity_MissingName)

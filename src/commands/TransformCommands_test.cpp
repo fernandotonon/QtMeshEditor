@@ -30,6 +30,75 @@ protected:
     }
 };
 
+static inline Ogre::MeshPtr createInMemoryTwoSubMeshMesh(const std::string& name)
+{
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* sharedDecl = mesh->sharedVertexData->vertexDeclaration;
+    size_t sharedOffset = 0;
+    sharedDecl->addElement(0, sharedOffset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    sharedOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    sharedDecl->addElement(0, sharedOffset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+    sharedOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    sharedDecl->addElement(0, sharedOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+
+    auto sharedVbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        sharedDecl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    float sharedVerts[] = {
+        0,0,0,   0,0,1,  0.0f,0.0f,
+        1,0,0,   0,0,1,  1.0f,0.0f,
+        0,1,0,   0,0,1,  0.0f,1.0f,
+    };
+    sharedVbuf->writeData(0, sizeof(sharedVerts), sharedVerts);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, sharedVbuf);
+    mesh->sharedVertexData->vertexCount = 3;
+
+    auto* sub0 = mesh->createSubMesh();
+    auto sharedIbuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint16_t sharedIdx[] = {0, 1, 2};
+    sharedIbuf->writeData(0, sizeof(sharedIdx), sharedIdx);
+    sub0->useSharedVertices = true;
+    sub0->indexData->indexBuffer = sharedIbuf;
+    sub0->indexData->indexCount = 3;
+
+    auto* sub1 = mesh->createSubMesh();
+    sub1->useSharedVertices = false;
+    sub1->vertexData = new Ogre::VertexData();
+    auto* decl1 = sub1->vertexData->vertexDeclaration;
+    size_t offset1 = 0;
+    decl1->addElement(0, offset1, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    offset1 += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl1->addElement(0, offset1, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+    offset1 += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl1->addElement(0, offset1, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+
+    auto sub1Vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl1->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    float sub1Verts[] = {
+        10,0,0,  0,0,1,  0.0f,0.0f,
+        11,0,0,  0,0,1,  1.0f,0.0f,
+        10,1,0,  0,0,1,  0.0f,1.0f,
+    };
+    sub1Vbuf->writeData(0, sizeof(sub1Verts), sub1Verts);
+    sub1->vertexData->vertexBufferBinding->setBinding(0, sub1Vbuf);
+    sub1->vertexData->vertexCount = 3;
+
+    auto sub1Ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint16_t sub1Idx[] = {0, 1, 2};
+    sub1Ibuf->writeData(0, sizeof(sub1Idx), sub1Idx);
+    sub1->indexData->indexBuffer = sub1Ibuf;
+    sub1->indexData->indexCount = 3;
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1, -1, -1, 12, 2, 2));
+    mesh->_setBoundingSphereRadius(12.0);
+    mesh->load();
+    return mesh;
+}
+
 // ---- TranslateCommand ----
 
 TEST_F(TransformCommandsTests, TranslateCommand_RedoMovesNode) {
@@ -639,6 +708,35 @@ TEST_F(TransformCommandsTests, DuplicateCommand_RedoSkipsMissingSource) {
     delete cmd;
 }
 
+TEST_F(TransformCommandsTests, DuplicateCommand_RedoRecreatesAndSelectsCloneWithoutEntity) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneNode* srcNode = mgr->addSceneNode("DupCmdPlainSrc");
+    ASSERT_NE(srcNode, nullptr);
+
+    Ogre::SceneNode* initialClone = mgr->duplicateSceneNode(srcNode);
+    ASSERT_NE(initialClone, nullptr);
+    const QString initialCloneName = QString::fromStdString(initialClone->getName());
+
+    QList<Ogre::SceneNode*> sources = {srcNode};
+    QList<Ogre::SceneNode*> clones = {initialClone};
+    auto* cmd = new DuplicateCommand(sources, clones);
+
+    cmd->redo();  // first redo: no-op
+    cmd->undo();
+    EXPECT_FALSE(mgr->hasSceneNode(initialCloneName));
+    EXPECT_TRUE(SelectionSet::getSingleton()->isEmpty());
+
+    cmd->redo();
+    ASSERT_EQ(SelectionSet::getSingleton()->getNodesCount(), 1);
+    Ogre::SceneNode* selectedClone = SelectionSet::getSingleton()->getSceneNode(0);
+    ASSERT_NE(selectedClone, nullptr);
+    EXPECT_NE(selectedClone, srcNode);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(selectedClone->getParent()),
+              static_cast<Ogre::SceneNode*>(srcNode->getParent()));
+
+    delete cmd;
+}
+
 // ---- GroupCommand / UngroupCommand / ReparentCommand ----
 
 TEST_F(TransformCommandsTests, GroupCommand_UndoRedoRoundTrip) {
@@ -699,6 +797,35 @@ TEST_F(TransformCommandsTests, GroupCommand_RedoSkipsDestroyedChild) {
     ASSERT_TRUE(mgr->getSceneMgr()->hasSceneNode(groupName));
     Ogre::SceneNode* recreatedGroup = mgr->getSceneMgr()->getSceneNode(groupName);
     EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), recreatedGroup);
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, GroupCommand_UndoRestoresChildrenToOriginalNonRootParent) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneManager* sceneMgr = mgr->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+
+    Ogre::SceneNode* container = sceneMgr->getRootSceneNode()->createChildSceneNode("GroupCmdNestedParent");
+    Ogre::SceneNode* nodeA = container->createChildSceneNode("GroupCmdNestedChildA");
+    Ogre::SceneNode* nodeB = container->createChildSceneNode("GroupCmdNestedChildB");
+    ASSERT_NE(container, nullptr);
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    QList<Ogre::SceneNode*> nodes = {nodeA, nodeB};
+    auto* cmd = new GroupCommand(nodes);
+
+    Ogre::SceneNode* initialGroup = mgr->groupNodes(nodes);
+    ASSERT_NE(initialGroup, nullptr);
+    const std::string groupName = initialGroup->getName();
+
+    cmd->redo();  // first redo: capture state
+    cmd->undo();
+
+    EXPECT_FALSE(sceneMgr->hasSceneNode(groupName));
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), container);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeB->getParent()), container);
 
     delete cmd;
 }
@@ -766,6 +893,40 @@ TEST_F(TransformCommandsTests, UngroupCommand_RedoWithMissingGroupNodeNoOp) {
     EXPECT_NO_THROW(cmd->redo());
     EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), mgr->getSceneMgr()->getRootSceneNode());
     EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeB->getParent()), mgr->getSceneMgr()->getRootSceneNode());
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, UngroupCommand_UndoRestoresGroupUnderOriginalParentAndSkipsForbiddenChild) {
+    Manager* mgr = Manager::getSingleton();
+    Ogre::SceneManager* sceneMgr = mgr->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+
+    Ogre::SceneNode* parent = sceneMgr->getRootSceneNode()->createChildSceneNode("UngroupCmdNestedParent");
+    Ogre::SceneNode* nodeA = parent->createChildSceneNode("UngroupCmdNestedA");
+    Ogre::SceneNode* nodeB = parent->createChildSceneNode("UngroupCmdNestedB");
+    ASSERT_NE(parent, nullptr);
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    QList<Ogre::SceneNode*> nodes = {nodeA, nodeB};
+    Ogre::SceneNode* groupNode = mgr->groupNodes(nodes);
+    ASSERT_NE(groupNode, nullptr);
+    const std::string groupName = groupNode->getName();
+
+    Ogre::SceneNode* forbiddenChild = groupNode->createChildSceneNode("Unnamed_ForbiddenForUngroupCommand");
+    ASSERT_NE(forbiddenChild, nullptr);
+
+    auto* cmd = new UngroupCommand(groupNode);
+    mgr->ungroupNode(groupNode);
+    cmd->redo();  // first redo: no-op
+    cmd->undo();
+
+    ASSERT_TRUE(sceneMgr->hasSceneNode(groupName));
+    Ogre::SceneNode* recreatedGroup = sceneMgr->getSceneNode(groupName);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(recreatedGroup->getParent()), parent);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeA->getParent()), recreatedGroup);
+    EXPECT_EQ(static_cast<Ogre::SceneNode*>(nodeB->getParent()), recreatedGroup);
 
     delete cmd;
 }
@@ -1076,6 +1237,60 @@ TEST_F(TransformCommandsTests, SubMeshTransformCommand_NullSubEntity) {
 
     EXPECT_NO_THROW(cmd->redo());
     EXPECT_NO_THROW(cmd->undo());
+
+    delete cmd;
+}
+
+TEST_F(TransformCommandsTests, SubMeshTransformCommand_NonZeroSubMeshIndexTargetsCorrectSubMesh) {
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+
+    Manager* mgr = Manager::getSingleton();
+    auto mesh = createInMemoryTwoSubMeshMesh("SubMeshCmdTwoSubMeshIndex");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    auto* node = mgr->addSceneNode("SubMeshCmdTwoSubMeshNode");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_NE(node, nullptr);
+    node->attachObject(entity);
+    ASSERT_EQ(entity->getNumSubEntities(), 2u);
+
+    Ogre::SubEntity* secondSub = entity->getSubEntity(1);
+    ASSERT_NE(secondSub, nullptr);
+
+    const auto originalSub0 = SubMeshTransform::readPositions(entity, 0);
+    const auto originalSub1 = SubMeshTransform::readPositions(entity, 1);
+    ASSERT_EQ(originalSub0.size(), 3u);
+    ASSERT_EQ(originalSub1.size(), 3u);
+
+    const Ogre::Vector3 delta(2.0f, -1.0f, 0.5f);
+    SubMeshTransform::translateSubMesh(entity, 1, delta);
+
+    auto* cmd = new SubMeshTransformCommand(secondSub, originalSub1, "SubMesh index 1");
+    cmd->redo();  // first redo: capture transformed positions
+    cmd->undo();  // restore original positions for submesh 1
+
+    const auto undoneSub0 = SubMeshTransform::readPositions(entity, 0);
+    const auto undoneSub1 = SubMeshTransform::readPositions(entity, 1);
+    ASSERT_EQ(undoneSub0.size(), originalSub0.size());
+    ASSERT_EQ(undoneSub1.size(), originalSub1.size());
+    for (size_t i = 0; i < originalSub0.size(); ++i) {
+        EXPECT_NEAR(undoneSub0[i].x, originalSub0[i].x, 0.001f);
+        EXPECT_NEAR(undoneSub0[i].y, originalSub0[i].y, 0.001f);
+        EXPECT_NEAR(undoneSub0[i].z, originalSub0[i].z, 0.001f);
+    }
+    for (size_t i = 0; i < originalSub1.size(); ++i) {
+        EXPECT_NEAR(undoneSub1[i].x, originalSub1[i].x, 0.001f);
+        EXPECT_NEAR(undoneSub1[i].y, originalSub1[i].y, 0.001f);
+        EXPECT_NEAR(undoneSub1[i].z, originalSub1[i].z, 0.001f);
+    }
+
+    cmd->redo();  // reapply captured transformed positions on submesh 1
+    const auto redoneSub1 = SubMeshTransform::readPositions(entity, 1);
+    ASSERT_EQ(redoneSub1.size(), originalSub1.size());
+    for (size_t i = 0; i < originalSub1.size(); ++i) {
+        EXPECT_NEAR(redoneSub1[i].x, originalSub1[i].x + delta.x, 0.001f);
+        EXPECT_NEAR(redoneSub1[i].y, originalSub1[i].y + delta.y, 0.001f);
+        EXPECT_NEAR(redoneSub1[i].z, originalSub1[i].z + delta.z, 0.001f);
+    }
 
     delete cmd;
 }
