@@ -211,10 +211,8 @@ TEST_F(EditModeControllerSelectionTest, SetSelectionModeInvalid) {
 
 TEST_F(EditModeControllerSelectionTest, ModeLabelShowsSelectionMode) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_modelabel");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_modelabel_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_modelabel_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -238,10 +236,8 @@ TEST_F(EditModeControllerSelectionTest, ModeLabelShowsSelectionMode) {
 
 TEST_F(EditModeControllerSelectionTest, VertexSelection) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_vertsel");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_vertsel_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_vertsel_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -282,10 +278,8 @@ TEST_F(EditModeControllerSelectionTest, VertexSelection) {
 
 TEST_F(EditModeControllerSelectionTest, EdgeSelection) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_edgesel");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_edgesel_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_edgesel_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -319,10 +313,8 @@ TEST_F(EditModeControllerSelectionTest, EdgeSelection) {
 
 TEST_F(EditModeControllerSelectionTest, FaceSelection) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_facesel");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_facesel_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_facesel_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -351,10 +343,8 @@ TEST_F(EditModeControllerSelectionTest, FaceSelection) {
 
 TEST_F(EditModeControllerSelectionTest, SelectAllDeselectAll) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_selectall");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_selectall_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_selectall_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -380,10 +370,8 @@ TEST_F(EditModeControllerSelectionTest, SelectAllDeselectAll) {
 
 TEST_F(EditModeControllerSelectionTest, ExitEditModeClearsSelection) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_exitclears");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_exitclears_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_exitclears_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -408,10 +396,8 @@ TEST_F(EditModeControllerSelectionTest, ExitEditModeClearsSelection) {
 
 TEST_F(EditModeControllerSelectionTest, GlobalToLocalConversion) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_g2l");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_g2l_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_g2l_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -443,10 +429,8 @@ TEST_F(EditModeControllerSelectionTest, GlobalToLocalConversion) {
 
 TEST_F(EditModeControllerSelectionTest, GlobalTriToLocalConversion) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_gt2l");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_gt2l_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_gt2l_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -470,10 +454,8 @@ TEST_F(EditModeControllerSelectionTest, GlobalTriToLocalConversion) {
 
 TEST_F(EditModeControllerSelectionTest, HitTestVertexNullCamera) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_hitvert_null");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_hitvert_null_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_hitvert_null_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -491,10 +473,8 @@ TEST_F(EditModeControllerSelectionTest, HitTestVertexNullCamera) {
 
 TEST_F(EditModeControllerSelectionTest, HitTestFaceNullCamera) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_hitface_null");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_hitface_null_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_hitface_null_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -511,10 +491,8 @@ TEST_F(EditModeControllerSelectionTest, HitTestFaceNullCamera) {
 
 TEST_F(EditModeControllerSelectionTest, HitTestEdgeNullCamera) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_hitedge_null");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_hitedge_null_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_hitedge_null_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -571,10 +549,8 @@ TEST_F(EditModeControllerSelectionTest, WireframeToggleNotInEditMode) {
 
 TEST_F(EditModeControllerSelectionTest, WireframeToggleInEditMode) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_wireframe");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_wireframe_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_wireframe_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -604,10 +580,8 @@ TEST_F(EditModeControllerSelectionTest, WireframeToggleInEditMode) {
 
 TEST_F(EditModeControllerSelectionTest, WireframeRestoredOnExitEditMode) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_wire_exit");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_wire_exit_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_wire_exit_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -632,10 +606,8 @@ TEST_F(EditModeControllerSelectionTest, WireframeRestoredOnExitEditMode) {
 
 TEST_F(EditModeControllerSelectionTest, WireframeSignalEmission) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_wire_signal");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_wire_signal_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_wire_signal_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -669,10 +641,8 @@ TEST_F(EditModeControllerSelectionTest, WireframeSignalEmission) {
 
 TEST_F(EditModeControllerSelectionTest, SignalEmission) {
     auto meshPtr = createInMemoryTriangleMesh("EditCtrl_signals");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_signals_node");
-    auto* entity = sceneMgr->createEntity("EditCtrl_signals_ent", meshPtr);
-    node->attachObject(entity);
+    Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);

@@ -82,10 +82,8 @@ TEST(EditableMeshStandalone, OutOfBoundsAccessReturnsZero) {
 
 TEST_F(EditableMeshTest, LoadFromEntityTriangleMesh) {
     auto meshPtr = createInMemoryTriangleMesh("EditableMesh_triangle");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_triangle_node");
-    auto* entity = sceneMgr->createEntity("EditableMesh_triangle_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     EditableMesh editMesh;
     ASSERT_TRUE(editMesh.loadFromEntity(entity));
@@ -137,10 +135,8 @@ TEST_F(EditableMeshTest, LoadFromEntityTriangleMesh) {
 
 TEST_F(EditableMeshTest, VertexManipulation) {
     auto meshPtr = createInMemoryTriangleMesh("EditableMesh_manip");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_manip_node");
-    auto* entity = sceneMgr->createEntity("EditableMesh_manip_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     EditableMesh editMesh;
     ASSERT_TRUE(editMesh.loadFromEntity(entity));
@@ -165,10 +161,8 @@ TEST_F(EditableMeshTest, VertexManipulation) {
 
 TEST_F(EditableMeshTest, RecalculateNormals) {
     auto meshPtr = createInMemoryTriangleMesh("EditableMesh_normals");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_normals_node");
-    auto* entity = sceneMgr->createEntity("EditableMesh_normals_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     EditableMesh editMesh;
     ASSERT_TRUE(editMesh.loadFromEntity(entity));
@@ -203,10 +197,8 @@ TEST_F(EditableMeshTest, RecalculateNormals) {
 
 TEST_F(EditableMeshTest, CalculateBoundsTriangle) {
     auto meshPtr = createInMemoryTriangleMesh("EditableMesh_bounds");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_bounds_node");
-    auto* entity = sceneMgr->createEntity("EditableMesh_bounds_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     EditableMesh editMesh;
     ASSERT_TRUE(editMesh.loadFromEntity(entity));
@@ -229,10 +221,8 @@ TEST_F(EditableMeshTest, CalculateBoundsTriangle) {
 
 TEST_F(EditableMeshTest, CommitToEntity) {
     auto meshPtr = createInMemoryTriangleMesh("EditableMesh_commit");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_commit_node");
-    auto* entity = sceneMgr->createEntity("EditableMesh_commit_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     EditableMesh editMesh;
     ASSERT_TRUE(editMesh.loadFromEntity(entity));
@@ -257,10 +247,8 @@ TEST_F(EditableMeshTest, CommitToEntity) {
 
 TEST_F(EditableMeshTest, LoadSkeletonMeshWithBoneAssignments) {
     auto meshPtr = createInMemorySkeletonMesh("EditableMesh_skel");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_skel_node");
-    auto* entity = sceneMgr->createEntity("EditableMesh_skel_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     EditableMesh editMesh;
     ASSERT_TRUE(editMesh.loadFromEntity(entity));
@@ -282,10 +270,8 @@ TEST_F(EditableMeshTest, LoadSkeletonMeshWithBoneAssignments) {
 
 TEST_F(EditableMeshTest, UVManipulation) {
     auto meshPtr = createInMemoryTriangleMesh("EditableMesh_uv");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_uv_node");
-    auto* entity = sceneMgr->createEntity("EditableMesh_uv_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     EditableMesh editMesh;
     ASSERT_TRUE(editMesh.loadFromEntity(entity));
@@ -341,10 +327,8 @@ TEST_F(EditModeControllerTest, CannotEnterWithoutSelection) {
 
 TEST_F(EditModeControllerTest, EnterAndExitEditMode) {
     auto meshPtr = createInMemoryTriangleMesh("EditMode_enter_exit");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditMode_enter_exit_node");
-    auto* entity = sceneMgr->createEntity("EditMode_enter_exit_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     // Select the node
     SelectionSet::getSingleton()->clear();
@@ -376,10 +360,8 @@ TEST_F(EditModeControllerTest, EnterAndExitEditMode) {
 
 TEST_F(EditModeControllerTest, ToggleEditMode) {
     auto meshPtr = createInMemoryTriangleMesh("EditMode_toggle");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditMode_toggle_node");
-    auto* entity = sceneMgr->createEntity("EditMode_toggle_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -399,15 +381,12 @@ TEST_F(EditModeControllerTest, ToggleEditMode) {
 
 TEST_F(EditModeControllerTest, AutoExitOnSelectionChange) {
     auto meshPtr1 = createInMemoryTriangleMesh("EditMode_auto_exit1");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node1 = Manager::getSingleton()->addSceneNode("EditMode_auto_exit1_node");
-    auto* entity1 = sceneMgr->createEntity("EditMode_auto_exit1_ent", meshPtr1);
-    node1->attachObject(entity1);
+    auto* entity1 = Manager::getSingleton()->createEntity(node1, meshPtr1);
 
     auto meshPtr2 = createInMemoryTriangleMesh("EditMode_auto_exit2");
     auto* node2 = Manager::getSingleton()->addSceneNode("EditMode_auto_exit2_node");
-    auto* entity2 = sceneMgr->createEntity("EditMode_auto_exit2_ent", meshPtr2);
-    node2->attachObject(entity2);
+    Manager::getSingleton()->createEntity(node2, meshPtr2);
 
     // Select first node and enter edit mode
     SelectionSet::getSingleton()->clear();
@@ -439,10 +418,8 @@ TEST(EditableMeshStandalone, RecalculateNormalsFlatEmpty) {
 
 TEST_F(EditableMeshTest, RecalculateNormalsFlat) {
     auto meshPtr = createInMemoryTriangleMesh("EditableMesh_flat_normals");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_flat_normals_node");
-    auto* entity = sceneMgr->createEntity("EditableMesh_flat_normals_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     EditableMesh editMesh;
     ASSERT_TRUE(editMesh.loadFromEntity(entity));
@@ -581,10 +558,8 @@ TEST_F(EditModeControllerTest, SoftSelectionWeightsWithoutSelection) {
 
 TEST_F(EditModeControllerTest, VertexCentroid) {
     auto meshPtr = createInMemoryTriangleMesh("EditMode_centroid");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditMode_centroid_node");
-    auto* entity = sceneMgr->createEntity("EditMode_centroid_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -607,10 +582,8 @@ TEST_F(EditModeControllerTest, VertexCentroid) {
 
 TEST_F(EditModeControllerTest, TranslateSelectedVertices) {
     auto meshPtr = createInMemoryTriangleMesh("EditMode_translate_vert");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditMode_translate_vert_node");
-    auto* entity = sceneMgr->createEntity("EditMode_translate_vert_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -641,10 +614,8 @@ TEST_F(EditModeControllerTest, TranslateSelectedVertices) {
 
 TEST_F(EditModeControllerTest, SnapshotAndRestore) {
     auto meshPtr = createInMemoryTriangleMesh("EditMode_snapshot");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditMode_snapshot_node");
-    auto* entity = sceneMgr->createEntity("EditMode_snapshot_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -692,10 +663,8 @@ TEST_F(EditModeControllerTest, NormalsMode) {
 // ---- Item 8: Mesh validation ----
 TEST_F(EditModeControllerTest, ValidateMesh) {
     auto meshPtr = createInMemoryTriangleMesh("EditMode_validate");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditMode_validate_node");
-    auto* entity = sceneMgr->createEntity("EditMode_validate_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
@@ -721,10 +690,8 @@ TEST_F(EditModeControllerTest, ValidateMesh) {
 
 TEST_F(EditModeControllerTest, SoftSelectionWeightsInEditMode) {
     auto meshPtr = createInMemoryTriangleMesh("EditMode_soft_weights");
-    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
     auto* node = Manager::getSingleton()->addSceneNode("EditMode_soft_weights_node");
-    auto* entity = sceneMgr->createEntity("EditMode_soft_weights_ent", meshPtr);
-    node->attachObject(entity);
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->selectOne(node);
