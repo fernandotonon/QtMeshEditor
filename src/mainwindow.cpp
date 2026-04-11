@@ -59,6 +59,7 @@
 #include "MaterialPresetLibrary.h"
 #include "AIChatManager.h"
 #include "WelcomeScreenController.h"
+#include "AssetBrowserController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -365,6 +366,10 @@ void MainWindow::initToolBar()
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return WelcomeScreenController::qmlInstance(engine, nullptr);
             });
+        qmlRegisterSingletonType<AssetBrowserController>("AssetBrowser", 1, 0, "AssetBrowserController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AssetBrowserController::qmlInstance(engine, nullptr);
+            });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
 
@@ -423,6 +428,29 @@ void MainWindow::initToolBar()
                 if (now != chatWidget)
                     QTimer::singleShot(0, chatWidget, [chatWidget]() { chatWidget->setFocus(); });
             }
+        });
+    }
+
+    // Asset Browser dock
+    {
+        auto* assetBrowserWidget = new QQuickWidget();
+        assetBrowserWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        assetBrowserWidget->setMinimumWidth(250);
+        assetBrowserWidget->setMinimumHeight(200);
+        assetBrowserWidget->setFocusPolicy(Qt::StrongFocus);
+        assetBrowserWidget->setSource(QUrl("qrc:/AssetBrowser/AssetBrowser.qml"));
+        m_assetBrowserDock = new QDockWidget(tr("Asset Browser"), this);
+        m_assetBrowserDock->setWidget(assetBrowserWidget);
+        m_assetBrowserDock->setObjectName("AssetBrowserDock");
+        addDockWidget(Qt::BottomDockWidgetArea, m_assetBrowserDock);
+        m_assetBrowserDock->hide();
+
+        // Connect Browse button — open a native directory picker from MainWindow
+        // (QFileDialog needs a proper parent widget on macOS)
+        auto* abController = AssetBrowserController::instance();
+        connect(abController, &AssetBrowserController::importMeshRequested, this, [this](const QStringList& paths) {
+            SentryReporter::addBreadcrumb("asset_browser", "Importing mesh from Asset Browser");
+            importMeshs(paths);
         });
     }
 
@@ -590,6 +618,33 @@ void MainWindow::initToolBar()
     // Connect viewports created before the overlay existed
     for (EditorViewport* vp : mDockWidgetList)
         connect(vp->getOgreWidget(), &OgreWidget::focusOnWidget, m_meshInfoOverlay, &MeshInfoOverlay::setActiveWidget);
+
+    // Asset Browser dock toggle via View menu
+    connect(ui->actionAsset_Browser, &QAction::toggled, this, [this](bool checked) {
+        SentryReporter::addBreadcrumb("ui.action",
+            checked ? "Asset Browser shown" : "Asset Browser hidden");
+        if (m_assetBrowserDock) {
+            m_assetBrowserDock->setVisible(checked);
+        }
+    });
+    // Sync menu checkmark when dock is closed via its title bar
+    if (m_assetBrowserDock) {
+        connect(m_assetBrowserDock, &QDockWidget::visibilityChanged,
+                ui->actionAsset_Browser, &QAction::setChecked);
+    }
+
+    // Connect Browse button to a native file dialog (must be parented to MainWindow on macOS)
+    connect(AssetBrowserController::instance(), &AssetBrowserController::browseRequested,
+            this, [this]() {
+        QTimer::singleShot(0, this, [this]() {
+            QString dir = QFileDialog::getExistingDirectory(
+                this, tr("Select Asset Directory"),
+                AssetBrowserController::instance()->rootPath(),
+                QFileDialog::DontUseNativeDialog | QFileDialog::ShowDirsOnly);
+            if (!dir.isEmpty())
+                AssetBrowserController::instance()->setRootPath(dir);
+        });
+    });
 
     // ViewCube (3D navigation gizmo) — top-level window positioned over the active viewport
     m_viewCubeController = new ViewCubeController(this);

@@ -37,4 +37,7 @@
   <qresource prefix="/PreferencesDialog">
     <file alias="PreferencesDialog.qml">../qml/PreferencesDialog.qml</file>
   </qresource>
+  <qresource prefix="/AssetBrowser">
+    <file alias="AssetBrowser.qml">../qml/AssetBrowser.qml</file>
+  </qresource>
 </RCC>

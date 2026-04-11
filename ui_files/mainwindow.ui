@@ -61,6 +61,7 @@
      <addaction name="actionTools_Toolbar"/>
      <addaction name="actionView_Toolbar"/>
      <addaction name="actionMeshEditor"/>
+     <addaction name="actionAsset_Browser"/>
     </widget>
     <widget class="QMenu" name="menuViewport_Layout">
      <property name="title">
@@ -663,6 +664,20 @@
    </property>
    <property name="shortcut">
     <string>Ctrl+Shift+G</string>
+   </property>
+  </action>
+  <action name="actionAsset_Browser">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>false</bool>
+   </property>
+   <property name="text">
+    <string>Asset Browser</string>
+   </property>
+   <property name="toolTip">
+    <string>Toggle Asset Browser Panel</string>
    </property>
   </action>
  </widget>

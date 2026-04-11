@@ -18,6 +18,7 @@ class MeshInfoOverlay;
 class ViewCubeController;
 class PropertiesPanelController;
 class WelcomeScreenController;
+class AssetBrowserController;
 class QQuickWidget;
 
 namespace Ui {
@@ -139,6 +140,7 @@ private:
     MCPServer* m_mcpServer = nullptr;
     QQuickWidget* m_propertiesPanel = nullptr;
     QDockWidget* m_chatDock = nullptr;
+    QDockWidget* m_assetBrowserDock = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
     void addToRecentFiles(const QString& filePath);

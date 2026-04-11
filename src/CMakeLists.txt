@@ -63,6 +63,7 @@ AIChatManager.cpp
 WelcomeScreenController.cpp
 ScanConfig.cpp
 ScanEngine.cpp
+AssetBrowserController.cpp
 )
 
 set(HEADER_FILES
@@ -129,6 +130,7 @@ AIChatManager.h
 WelcomeScreenController.h
 ScanConfig.h
 ScanEngine.h
+AssetBrowserController.h
 )
 
 set(TEST_SOURCES "")
