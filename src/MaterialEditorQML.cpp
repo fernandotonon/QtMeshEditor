@@ -1,4 +1,5 @@
 #include "MaterialEditorQML.h"
+#include "MaterialPreviewRenderer.h"
 #include "Manager.h"
 #include "SentryReporter.h"
 #include "LLMManager.h"
@@ -3122,6 +3123,11 @@ QStringList MaterialEditorQML::getMaterialList() const
     }
     
     return materialList;
+}
+
+QString MaterialEditorQML::materialPreview(const QString& materialName) const
+{
+    return MaterialPreviewRenderer::instance()->renderPreviewAsDataUri(materialName);
 }
 
 void MaterialEditorQML::importMaterialFile(const QString &filePath)

@@ -6,11 +6,11 @@ import MaterialEditorQML 1.0
 ApplicationWindow {
     id: materialListModal
     title: "Material List"
-    width: 600
-    height: 500
+    width: 700
+    height: 550
     visible: true
     color: backgroundColor
-    
+
     // Theme colors
     readonly property color backgroundColor: palette.window
     readonly property color panelColor: palette.base
@@ -21,276 +21,300 @@ ApplicationWindow {
     readonly property color buttonTextColor: palette.buttonText
     readonly property color alternateColor: palette.alternateBase
     readonly property color disabledTextColor: palette.placeholderText
-    
+
     SystemPalette {
         id: palette
         colorGroup: SystemPalette.Active
     }
-    
-    // Material list model
-    ListModel {
-        id: materialListModel
-    }
-    
-    // Selected material index
-    property int selectedIndex: -1
+
     property string selectedMaterial: ""
-    
-    // Signals
-    signal materialSelected(string materialName)
+
     signal editMaterial(string materialName)
     signal exportMaterial(string materialName)
     signal createNewMaterial()
     signal importMaterials()
-    
-    // Main content
+
+    // Filtered material list
+    property var allMaterials: []
+    property var filteredMaterials: []
+    property string searchText: ""
+
+    function refreshMaterialList() {
+        allMaterials = MaterialEditorQML.getMaterialList()
+        applyFilter()
+    }
+
+    function applyFilter() {
+        if (searchText === "") {
+            filteredMaterials = allMaterials
+        } else {
+            var result = []
+            var lower = searchText.toLowerCase()
+            for (var i = 0; i < allMaterials.length; i++) {
+                if (allMaterials[i].toLowerCase().indexOf(lower) !== -1)
+                    result.push(allMaterials[i])
+            }
+            filteredMaterials = result
+        }
+    }
+
     ColumnLayout {
         anchors.fill: parent
-        spacing: 10
-        
-        // Material list
+        anchors.margins: 10
+        spacing: 8
+
+        // Search bar
+        Rectangle {
+            Layout.fillWidth: true
+            height: 32
+            color: panelColor
+            border.color: borderColor
+            border.width: 1
+            radius: 4
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.margins: 4
+                spacing: 4
+
+                Text {
+                    text: "\uD83D\uDD0D"
+                    font.pixelSize: 14
+                    verticalAlignment: Text.AlignVCenter
+                }
+
+                TextInput {
+                    id: searchField
+                    Layout.fillWidth: true
+                    color: textColor
+                    font.pixelSize: 12
+                    clip: true
+                    onTextChanged: {
+                        materialListModal.searchText = text
+                        materialListModal.applyFilter()
+                    }
+
+                    Text {
+                        anchors.fill: parent
+                        text: "Search materials..."
+                        color: disabledTextColor
+                        font.pixelSize: 12
+                        visible: !searchField.text && !searchField.activeFocus
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+
+                Text {
+                    text: filteredMaterials.length + " materials"
+                    color: disabledTextColor
+                    font.pixelSize: 10
+                }
+            }
+        }
+
+        // Material grid
         ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            Layout.preferredHeight: 300
-            
-            ListView {
-                id: materialListView
-                model: materialListModel
+
+            GridView {
+                id: materialGrid
                 clip: true
-                
-                delegate: Rectangle {
-                    width: materialListView.width
-                    height: 30
-                    color: index === selectedIndex ? highlightColor : 
-                           (index % 2 === 0 ? panelColor : alternateColor)
-                    border.color: borderColor
-                    border.width: 1
-                    
-                    Text {
-                        anchors.left: parent.left
-                        anchors.leftMargin: 10
-                        anchors.verticalCenter: parent.verticalCenter
-                        text: model.name
-                        color: textColor
-                        font.pixelSize: 12
-                    }
-                    
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: {
-                            selectedIndex = index
-                            selectedMaterial = model.name
-                            materialSelected(model.name)
+                cellWidth: Math.max(90, (width - 20) / Math.floor((width - 20) / 90))
+                cellHeight: 100
+
+                model: filteredMaterials
+
+                delegate: Item {
+                    width: materialGrid.cellWidth
+                    height: materialGrid.cellHeight
+
+                    Rectangle {
+                        id: card
+                        anchors.centerIn: parent
+                        width: parent.width - 6
+                        height: parent.height - 6
+                        radius: 6
+                        color: selectedMaterial === modelData ? Qt.lighter(highlightColor, 1.6)
+                             : cardMa.containsMouse ? Qt.lighter(panelColor, 1.3)
+                             : panelColor
+                        border.color: selectedMaterial === modelData ? highlightColor : borderColor
+                        border.width: selectedMaterial === modelData ? 2 : 1
+
+                        Column {
+                            anchors.centerIn: parent
+                            spacing: 4
+
+                            // RTT sphere preview
+                            Image {
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                width: 52; height: 52
+                                source: MaterialEditorQML.materialPreview(modelData)
+                                fillMode: Image.PreserveAspectFit
+                                asynchronous: true
+                                sourceSize.width: 52
+                                sourceSize.height: 52
+
+                                // Fallback circle if preview fails
+                                Rectangle {
+                                    anchors.centerIn: parent
+                                    width: 44; height: 44; radius: 22
+                                    color: Qt.darker(highlightColor, 1.5)
+                                    visible: parent.status !== Image.Ready
+                                    Text {
+                                        anchors.centerIn: parent
+                                        text: "\uD83D\uDD35"
+                                        font.pixelSize: 20
+                                    }
+                                }
+                            }
+
+                            // Material name
+                            Text {
+                                width: card.width - 8
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                text: modelData
+                                color: textColor
+                                font.pixelSize: 9
+                                elide: Text.ElideMiddle
+                                horizontalAlignment: Text.AlignHCenter
+                            }
                         }
-                        onDoubleClicked: {
-                            selectedIndex = index
-                            selectedMaterial = model.name
-                            editMaterial(model.name)
+
+                        MouseArea {
+                            id: cardMa
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: selectedMaterial = modelData
+                            onDoubleClicked: {
+                                selectedMaterial = modelData
+                                editMaterial(modelData)
+                            }
                         }
                     }
                 }
             }
         }
-        
+
         // Button row
         RowLayout {
             Layout.fillWidth: true
-            Layout.alignment: Qt.AlignHCenter
-            spacing: 10
-            
+            spacing: 8
+
             Item { Layout.fillWidth: true }
-            
+
             Button {
                 text: "New"
                 background: Rectangle {
-                    color: parent.enabled ? (parent.hovered ? Qt.lighter(buttonColor, 1.2) : buttonColor) : Qt.darker(buttonColor, 1.5)
-                    border.color: borderColor
-                    border.width: 1
-                    radius: 3
+                    color: parent.hovered ? Qt.lighter(buttonColor, 1.2) : buttonColor
+                    border.color: borderColor; border.width: 1; radius: 3
                 }
-                contentItem: Text {
-                    text: parent.text
-                    color: parent.enabled ? buttonTextColor : Qt.darker(buttonTextColor, 2.0)
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                onClicked: {
-                    newMaterialDialog.open()
-                }
+                contentItem: Text { text: parent.text; color: buttonTextColor; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                onClicked: newMaterialDialog.open()
             }
-            
+
             Button {
                 text: "Import"
                 background: Rectangle {
-                    color: parent.enabled ? (parent.hovered ? Qt.lighter(buttonColor, 1.2) : buttonColor) : Qt.darker(buttonColor, 1.5)
-                    border.color: borderColor
-                    border.width: 1
-                    radius: 3
+                    color: parent.hovered ? Qt.lighter(buttonColor, 1.2) : buttonColor
+                    border.color: borderColor; border.width: 1; radius: 3
                 }
-                contentItem: Text {
-                    text: parent.text
-                    color: parent.enabled ? buttonTextColor : Qt.darker(buttonTextColor, 2.0)
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
-                onClicked: {
-                    console.log("Import button clicked")
-                    importMaterials()
-                }
+                contentItem: Text { text: parent.text; color: buttonTextColor; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                onClicked: importMaterials()
             }
-            
+
             Button {
                 text: "Edit"
-                enabled: selectedIndex >= 0
+                enabled: selectedMaterial !== ""
                 background: Rectangle {
-                    color: parent.enabled ? (parent.hovered ? Qt.lighter(buttonColor, 1.2) : buttonColor) : Qt.darker(buttonColor, 1.5)
-                    border.color: borderColor
-                    border.width: 1
-                    radius: 3
+                    color: parent.enabled ? (parent.hovered ? Qt.lighter(highlightColor, 1.2) : highlightColor) : Qt.darker(buttonColor, 1.5)
+                    border.color: borderColor; border.width: 1; radius: 3
                 }
-                contentItem: Text {
-                    text: parent.text
-                    color: parent.enabled ? buttonTextColor : Qt.darker(buttonTextColor, 2.0)
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
+                contentItem: Text { text: parent.text; color: parent.enabled ? "white" : disabledTextColor; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 onClicked: {
-                    if (selectedIndex >= 0) {
+                    if (selectedMaterial !== "") {
                         editMaterial(selectedMaterial)
                         materialListModal.close()
                     }
                 }
             }
-            
+
             Button {
                 text: "Export"
-                enabled: selectedIndex >= 0
+                enabled: selectedMaterial !== ""
                 background: Rectangle {
                     color: parent.enabled ? (parent.hovered ? Qt.lighter(buttonColor, 1.2) : buttonColor) : Qt.darker(buttonColor, 1.5)
-                    border.color: borderColor
-                    border.width: 1
-                    radius: 3
+                    border.color: borderColor; border.width: 1; radius: 3
                 }
-                contentItem: Text {
-                    text: parent.text
-                    color: parent.enabled ? buttonTextColor : Qt.darker(buttonTextColor, 2.0)
-                    horizontalAlignment: Text.AlignHCenter
-                    verticalAlignment: Text.AlignVCenter
-                }
+                contentItem: Text { text: parent.text; color: parent.enabled ? buttonTextColor : disabledTextColor; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
                 onClicked: {
-                    console.log("Export button clicked, selectedMaterial:", selectedMaterial)
-                    if (selectedIndex >= 0) {
-                        exportMaterial(selectedMaterial)
-                    }
+                    if (selectedMaterial !== "") exportMaterial(selectedMaterial)
                 }
             }
-            
+
             Item { Layout.fillWidth: true }
         }
     }
-    
-    // Note: Using C++ file dialogs instead of QML FileDialog for better compatibility
-    
+
     // New Material Dialog
     Dialog {
         id: newMaterialDialog
         title: "New Material"
         modal: true
         anchors.centerIn: parent
-        
+
         ColumnLayout {
-            Label { 
-                text: "Material Name:"
-                color: textColor
-            }
+            Label { text: "Material Name:"; color: textColor }
             TextField {
                 id: newMaterialNameField
                 placeholderText: "Enter material name"
-                background: Rectangle {
-                    color: panelColor
-                    border.color: borderColor
-                    border.width: 1
-                    radius: 3
-                }
+                background: Rectangle { color: panelColor; border.color: borderColor; border.width: 1; radius: 3 }
                 color: textColor
                 placeholderTextColor: disabledTextColor
             }
         }
-        
+
         standardButtons: Dialog.Ok | Dialog.Cancel
         onAccepted: {
             if (newMaterialNameField.text.trim() !== "") {
-                // Create the new material and open the editor
                 MaterialEditorQML.createNewMaterial(newMaterialNameField.text)
                 openMaterialEditor(newMaterialNameField.text)
                 newMaterialNameField.text = ""
                 materialListModal.close()
-            } else {
-                // Show error message for empty name
-                console.log("Material name cannot be empty")
             }
         }
-        onRejected: {
-            // Clear the field when cancelled
-            newMaterialNameField.text = ""
-        }
+        onRejected: newMaterialNameField.text = ""
     }
-    
-    // Functions
-    function refreshMaterialList() {
-        materialListModel.clear()
-        var materials = MaterialEditorQML.getMaterialList()
-        for (var i = 0; i < materials.length; i++) {
-            materialListModel.append({"name": materials[i]})
-        }
-    }
-    
+
     function openImportDialog() {
-        console.log("Opening material import dialog...")
         var selectedFile = MaterialEditorQML.openMaterialImportDialog()
         if (selectedFile !== "") {
-            console.log("Material file selected for import:", selectedFile)
             MaterialEditorQML.importMaterialFile(selectedFile)
             refreshMaterialList()
-        } else {
-            console.log("Import cancelled")
         }
     }
-    
+
     function openExportDialog() {
-        console.log("Opening material export dialog...")
         if (selectedMaterial !== "") {
             var selectedFile = MaterialEditorQML.openMaterialExportDialog(selectedMaterial)
             if (selectedFile !== "") {
-                console.log("File selected for export:", selectedFile)
                 MaterialEditorQML.exportMaterial(selectedFile, selectedMaterial)
-            } else {
-                console.log("Export cancelled")
             }
-        } else {
-            console.log("No material selected for export")
         }
     }
-    
+
     function openMaterialEditor(materialName) {
-        // Use the C++ function to open the material editor
-        MaterialEditorQML.openMaterialEditorWindow(materialName);
+        MaterialEditorQML.openMaterialEditorWindow(materialName)
     }
-    
-    // Initialize on component completion
+
     Component.onCompleted: {
         refreshMaterialList()
-        selectedIndex = -1
         selectedMaterial = ""
     }
-    
-    // Connect signals
+
     onImportMaterials: openImportDialog()
     onExportMaterial: openExportDialog()
     onCreateNewMaterial: newMaterialDialog.open()
     onEditMaterial: openMaterialEditor(materialName)
-    onMaterialSelected: {
-        // Just update selection, no action needed
-    }
 }
