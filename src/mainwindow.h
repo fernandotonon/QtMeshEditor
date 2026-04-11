@@ -44,6 +44,7 @@ public:
     explicit MainWindow(QWidget *parent = nullptr);
     virtual ~MainWindow();
     void importMeshs(const QStringList &_uriList);
+    void loadFile(const QString& filePath);
     void setMCPServer(MCPServer* server);
 
     void keyPressEvent(QKeyEvent *event) override;

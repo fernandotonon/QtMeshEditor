@@ -61,6 +61,7 @@ MeshLodController.cpp
 MeshValidator.cpp
 AIChatManager.cpp
 WelcomeScreenController.cpp
+WelcomeDialog.cpp
 ScanConfig.cpp
 ScanEngine.cpp
 AssetBrowserController.cpp
@@ -129,6 +130,7 @@ MeshLodController.h
 MeshValidator.h
 AIChatManager.h
 WelcomeScreenController.h
+WelcomeDialog.h
 ScanConfig.h
 ScanEngine.h
 AssetBrowserController.h

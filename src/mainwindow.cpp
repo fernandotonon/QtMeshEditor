@@ -497,13 +497,9 @@ void MainWindow::initToolBar()
             }
         });
 
-        // Show on startup if the user hasn't opted out
-        if (m_welcomeController->shouldShow()) {
-            // Defer to after the window is fully laid out
-            QTimer::singleShot(0, this, [this]() {
-                m_welcomeController->setVisible(true);
-            });
-        } else {
+        // Welcome screen is now a standalone dialog shown before MainWindow (in main.cpp).
+        // The QML overlay is kept for programmatic use but not shown on startup.
+        {
             m_welcomeScreen->hide();
         }
     }
@@ -1022,6 +1018,16 @@ void MainWindow::on_actionImport_triggered()
     mUriList.append(fileNames);
 }
 // LCOV_EXCL_STOP
+
+void MainWindow::loadFile(const QString& filePath)
+{
+    if (filePath.isEmpty()) return;
+    addToRecentFiles(filePath);
+    if (filePath.endsWith(".scene.glb") || filePath.endsWith(".scene.gltf"))
+        MeshImporterExporter::sceneImporter(filePath);
+    else
+        mUriList.append(filePath);
+}
 
 void MainWindow::importMeshs(const QStringList &_uriList)
 {
