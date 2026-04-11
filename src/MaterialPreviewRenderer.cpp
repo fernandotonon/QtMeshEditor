@@ -75,7 +75,7 @@ bool MaterialPreviewRenderer::ensureScene()
         m_sceneMgr = root->createSceneManager("DefaultSceneManager", "MaterialPreviewSM");
 
         // Ambient light for base illumination
-        m_sceneMgr->setAmbientLight(Ogre::ColourValue(0.3f, 0.3f, 0.3f));
+        m_sceneMgr->setAmbientLight(Ogre::ColourValue(0.55f, 0.55f, 0.55f));
 
         // Camera looking at the origin (Ogre 14: position via scene node)
         m_camera = m_sceneMgr->createCamera("PreviewCam");
