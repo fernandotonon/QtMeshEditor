@@ -2034,6 +2034,38 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (!requiredBoneNamesArg.isEmpty())
         config.requireBoneNames = splitCsv(requiredBoneNamesArg);
 
+    // Ensure CLI rule overrides have highest precedence even when scoped rules are present.
+    // Append a catch-all scope last so withScopeOverrides() reapplies CLI values after file scopes.
+    QVariantMap cliRuleOverrides;
+    if (!allowedFormatsArg.isEmpty())          cliRuleOverrides["allowed_formats"] = config.allowedFormats;
+    if (!forbiddenExtensionsArg.isEmpty())     cliRuleOverrides["forbidden_extensions"] = config.forbiddenExtensions;
+    if (maxFileSizeMbOverride >= 0.0)          cliRuleOverrides["max_file_size_mb"] = config.maxFileSizeMb;
+    if (minFileSizeMbOverride >= 0.0)          cliRuleOverrides["min_file_size_mb"] = config.minFileSizeMb;
+    if (maxMeshesOverride >= 0)                cliRuleOverrides["max_mesh_count"] = config.maxMeshCount;
+    if (minMeshesOverride >= 0)                cliRuleOverrides["min_mesh_count"] = config.minMeshCount;
+    if (maxMaterialsOverride >= 0)             cliRuleOverrides["max_material_count"] = config.maxMaterialCount;
+    if (minMaterialsOverride >= 0)             cliRuleOverrides["min_material_count"] = config.minMaterialCount;
+    if (maxVerticesOverride >= 0)              cliRuleOverrides["max_vertex_count"] = config.maxVertexCount;
+    if (minVerticesOverride >= 0)              cliRuleOverrides["min_vertex_count"] = config.minVertexCount;
+    if (maxAnimKeyframesOverride >= 0)         cliRuleOverrides["max_anim_keyframes"] = config.maxAnimKeyframes;
+    if (minAnimKeyframesOverride >= 0)         cliRuleOverrides["min_anim_keyframes"] = config.minAnimKeyframes;
+    if (maxAnimDurationOverride >= 0.0)        cliRuleOverrides["max_anim_duration"] = config.maxAnimDuration;
+    if (minAnimDurationOverride >= 0.0)        cliRuleOverrides["min_anim_duration"] = config.minAnimDuration;
+    if (requireSkeletonOverride >= 0)          cliRuleOverrides["require_skeleton"] = config.requireSkeleton;
+    if (requireAnimationsOverride >= 0)        cliRuleOverrides["require_animations"] = config.requireAnimations;
+    if (allowEmbeddedTexturesOverride >= 0)    cliRuleOverrides["allow_embedded_textures"] = config.allowEmbeddedTextures;
+    if (requireTexturesExistOverride >= 0)     cliRuleOverrides["require_textures_exist"] = config.requireTexturesExist;
+    if (allowMissingMaterialsOverride >= 0)    cliRuleOverrides["allow_missing_materials"] = config.allowMissingMaterials;
+    if (!fileNameCaseOverride.isEmpty())       cliRuleOverrides["file_name_case"] = config.fileNameCase;
+    if (!requiredAnimationNamesArg.isEmpty())  cliRuleOverrides["require_animation_names"] = config.requireAnimationNames;
+    if (!requiredBoneNamesArg.isEmpty())       cliRuleOverrides["require_bone_names"] = config.requireBoneNames;
+    if (!cliRuleOverrides.isEmpty()) {
+        ScanScope cliOverrideScope;
+        cliOverrideScope.pathPattern = "**/*";
+        cliOverrideScope.rules = cliRuleOverrides;
+        config.scopes.append(cliOverrideScope);
+    }
+
     if (!failOn.isEmpty()) {
         failOn = failOn.toLower();
         if (failOn != "info" && failOn != "warning" && failOn != "error" && failOn != "never") {

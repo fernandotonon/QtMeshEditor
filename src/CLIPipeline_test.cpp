@@ -2215,3 +2215,31 @@ TEST(CLIPipelineCmdScan, RequireSkeletonAndAnimationsCanBeDisabledFromCli)
                    "--no-require-skeleton", "--no-require-animations"});
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
 }
+
+TEST(CLIPipelineCmdScan, CliOverridesTakePrecedenceOverScopedRules)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty()); // 3 vertices
+
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "scopes:\n"
+        "  \"**/*.obj\":\n"
+        "    max_vertex_count: 100\n");
+    cfg.close();
+
+    QByteArray rootBa = rootPath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--config", configBa.constData(),
+                   "--max-vertices", "2", "--no-require-skeleton", "--no-require-animations"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
