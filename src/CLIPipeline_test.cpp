@@ -1872,6 +1872,12 @@ TEST(CLIPipelineCmdScanError, InvalidMaxVerticesReturns2)
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
 }
 
+TEST(CLIPipelineCmdScanError, InvalidFileNameCaseReturns2)
+{
+    TestArgv args({"qtmesh", "scan", "--file-name-case", "bad_case"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
 TEST(CLIPipelineCmdScanError, NonDirectoryScanRootReturns2)
 {
     QTemporaryDir tmpDir;
@@ -2151,4 +2157,61 @@ TEST(CLIPipelineCmdScan, MaxVerticesOverrideWithEqualsReturnsFailure)
     QByteArray rootBa = rootPath.toUtf8();
     TestArgv args({"qtmesh", "scan", rootBa.constData(), "--max-vertices=2"});
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, MaxFileSizeOverrideReturnsFailure)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--max-file-size-mb", "0.000001"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, AllowedFormatsOverrideReturnsFailure)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(), "--allowed-formats=fbx"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, RequireSkeletonAndAnimationsCanBeDisabledFromCli)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    QFile cfg(tmpDir.filePath("qtmesh.yml"));
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "rules:\n"
+        "  require_skeleton: true\n"
+        "  require_animations: true\n"
+        "report:\n"
+        "  fail_on: error\n");
+    cfg.close();
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(),
+                   "--no-require-skeleton", "--no-require-animations"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
 }

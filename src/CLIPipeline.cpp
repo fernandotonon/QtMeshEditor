@@ -235,7 +235,33 @@ void CLIPipeline::printUsage()
         "  --dry-run                 Show what fixes would be applied\n"
         "  --include <patterns>      File patterns, comma-separated (e.g. *.fbx,*.glb)\n"
         "  --exclude <patterns>      Exclude patterns, comma-separated\n"
-        "  --max-vertices <n>        Override max_vertex_count rule for this run (0 = no limit)\n"
+        "  --allowed-formats <list>  Allowed formats CSV (e.g. fbx,glb,obj)\n"
+        "  --forbidden-extensions <list> Forbidden formats CSV\n"
+        "  --max-file-size-mb <n>    Override max_file_size_mb (0 = no limit)\n"
+        "  --min-file-size-mb <n>    Override min_file_size_mb (0 = no limit)\n"
+        "  --max-meshes <n>          Override max_mesh_count (0 = no limit)\n"
+        "  --min-meshes <n>          Override min_mesh_count (0 = no limit)\n"
+        "  --max-materials <n>       Override max_material_count (0 = no limit)\n"
+        "  --min-materials <n>       Override min_material_count (0 = no limit)\n"
+        "  --max-vertices <n>        Override max_vertex_count (0 = no limit)\n"
+        "  --min-vertices <n>        Override min_vertex_count (0 = no limit)\n"
+        "  --require-skeleton / --no-require-skeleton\n"
+        "                            Override require_skeleton\n"
+        "  --require-animations / --no-require-animations\n"
+        "                            Override require_animations\n"
+        "  --allow-embedded-textures / --disallow-embedded-textures\n"
+        "                            Override allow_embedded_textures\n"
+        "  --require-textures-exist / --no-require-textures-exist\n"
+        "                            Override require_textures_exist\n"
+        "  --allow-missing-materials / --disallow-missing-materials\n"
+        "                            Override allow_missing_materials\n"
+        "  --file-name-case <name>   snake_case, kebab-case, camelCase, PascalCase, lowercase\n"
+        "  --max-anim-keyframes <n>  Override max_anim_keyframes (0 = no limit)\n"
+        "  --min-anim-keyframes <n>  Override min_anim_keyframes (0 = no limit)\n"
+        "  --max-anim-duration <n>   Override max_anim_duration seconds (0 = no limit)\n"
+        "  --min-anim-duration <n>   Override min_anim_duration seconds (0 = no limit)\n"
+        "  --require-animation-names <list> Required animation names/patterns CSV\n"
+        "  --require-bone-names <list> Required bone names/patterns CSV\n"
         "  --fail-on <level>         Exit 1 threshold: info, warning, error, never\n"
         "\n"
         "Fix flags:\n"
@@ -1733,7 +1759,79 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     QString includeArg;
     QString excludeArg;
     QString failOn;
+    QString allowedFormatsArg;
+    QString forbiddenExtensionsArg;
+    QString fileNameCaseOverride;
+    QString requiredAnimationNamesArg;
+    QString requiredBoneNamesArg;
+
     int maxVerticesOverride = -1;
+    int minVerticesOverride = -1;
+    int maxMeshesOverride = -1;
+    int minMeshesOverride = -1;
+    int maxMaterialsOverride = -1;
+    int minMaterialsOverride = -1;
+    int maxAnimKeyframesOverride = -1;
+    int minAnimKeyframesOverride = -1;
+    double maxFileSizeMbOverride = -1.0;
+    double minFileSizeMbOverride = -1.0;
+    double maxAnimDurationOverride = -1.0;
+    double minAnimDurationOverride = -1.0;
+    int requireSkeletonOverride = -1;        // -1 = unchanged
+    int requireAnimationsOverride = -1;      // -1 = unchanged
+    int allowEmbeddedTexturesOverride = -1;  // -1 = unchanged
+    int requireTexturesExistOverride = -1;   // -1 = unchanged
+    int allowMissingMaterialsOverride = -1;  // -1 = unchanged
+
+    enum class ParseValueResult { NoMatch, Matched, Error };
+    auto parseValueArg = [&](const QString& arg, const QString& option, int& argIndex, QString& outValue) -> ParseValueResult {
+        if (arg == option) {
+            if (argIndex + 1 >= argc) {
+                err() << "Error: " << option << " requires a value" << Qt::endl;
+                return ParseValueResult::Error;
+            }
+            outValue = QString::fromUtf8(argv[++argIndex]);
+            return ParseValueResult::Matched;
+        }
+        const QString withEquals = option + "=";
+        if (arg.startsWith(withEquals)) {
+            outValue = arg.mid(withEquals.size());
+            return ParseValueResult::Matched;
+        }
+        return ParseValueResult::NoMatch;
+    };
+
+    auto parseNonNegativeInt = [&](const QString& option, const QString& value, int& outValue) -> bool {
+        bool ok = false;
+        const int parsed = value.toInt(&ok);
+        if (!ok || parsed < 0) {
+            err() << "Error: " << option << " must be an integer >= 0" << Qt::endl;
+            return false;
+        }
+        outValue = parsed;
+        return true;
+    };
+
+    auto parseNonNegativeDouble = [&](const QString& option, const QString& value, double& outValue) -> bool {
+        bool ok = false;
+        const double parsed = value.toDouble(&ok);
+        if (!ok || parsed < 0.0) {
+            err() << "Error: " << option << " must be a number >= 0" << Qt::endl;
+            return false;
+        }
+        outValue = parsed;
+        return true;
+    };
+
+    auto splitCsv = [](const QString& csv) -> QStringList {
+        QStringList out;
+        for (const auto& part : csv.split(",", Qt::SkipEmptyParts)) {
+            QString value = part.trimmed();
+            if (!value.isEmpty())
+                out.append(value);
+        }
+        return out;
+    };
 
     for (int i = 1; i < argc; ++i) {
         QString arg(argv[i]);
@@ -1742,36 +1840,125 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (arg == "--json")    { jsonOutput = true; continue; }
         if (arg == "--fix")     { fix = true; continue; }
         if (arg == "--dry-run") { dryRun = true; continue; }
-        if (arg == "--config"  && i + 1 < argc) { configPath  = argv[++i]; continue; }
-        if (arg == "--report"  && i + 1 < argc) { reportPath  = argv[++i]; continue; }
-        if (arg == "--sarif"   && i + 1 < argc) { sarifPath   = argv[++i]; continue; }
-        if (arg == "--include" && i + 1 < argc) { includeArg  = argv[++i]; continue; }
-        if (arg == "--exclude" && i + 1 < argc) { excludeArg  = argv[++i]; continue; }
-        if (arg == "--fail-on" && i + 1 < argc) { failOn      = argv[++i]; continue; }
-        if (arg.startsWith("--max-vertices=")) {
-            bool ok = false;
-            const int parsed = arg.mid(QStringLiteral("--max-vertices=").size()).toInt(&ok);
-            if (!ok || parsed < 0) {
-                err() << "Error: --max-vertices must be an integer >= 0" << Qt::endl;
-                return 2;
-            }
-            maxVerticesOverride = parsed;
+        QString value;
+        ParseValueResult parseResult = parseValueArg(arg, "--config", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { configPath = value; continue; }
+        parseResult = parseValueArg(arg, "--report", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { reportPath = value; continue; }
+        parseResult = parseValueArg(arg, "--sarif", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { sarifPath = value; continue; }
+        parseResult = parseValueArg(arg, "--include", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { includeArg = value; continue; }
+        parseResult = parseValueArg(arg, "--exclude", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { excludeArg = value; continue; }
+        parseResult = parseValueArg(arg, "--fail-on", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { failOn = value; continue; }
+        parseResult = parseValueArg(arg, "--allowed-formats", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { allowedFormatsArg = value; continue; }
+        parseResult = parseValueArg(arg, "--forbidden-extensions", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { forbiddenExtensionsArg = value; continue; }
+        parseResult = parseValueArg(arg, "--file-name-case", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { fileNameCaseOverride = value; continue; }
+        parseResult = parseValueArg(arg, "--require-animation-names", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { requiredAnimationNamesArg = value; continue; }
+        parseResult = parseValueArg(arg, "--require-bone-names", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { requiredBoneNamesArg = value; continue; }
+
+        parseResult = parseValueArg(arg, "--max-vertices", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--max-vertices", value, maxVerticesOverride)) return 2;
             continue;
         }
-        if (arg == "--max-vertices") {
-            if (i + 1 >= argc) {
-                err() << "Error: --max-vertices requires an integer value" << Qt::endl;
-                return 2;
-            }
-            bool ok = false;
-            const int parsed = QString(argv[++i]).toInt(&ok);
-            if (!ok || parsed < 0) {
-                err() << "Error: --max-vertices must be an integer >= 0" << Qt::endl;
-                return 2;
-            }
-            maxVerticesOverride = parsed;
+        parseResult = parseValueArg(arg, "--min-vertices", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--min-vertices", value, minVerticesOverride)) return 2;
             continue;
         }
+        parseResult = parseValueArg(arg, "--max-meshes", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--max-meshes", value, maxMeshesOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--min-meshes", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--min-meshes", value, minMeshesOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-materials", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--max-materials", value, maxMaterialsOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--min-materials", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--min-materials", value, minMaterialsOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-anim-keyframes", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--max-anim-keyframes", value, maxAnimKeyframesOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--min-anim-keyframes", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeInt("--min-anim-keyframes", value, minAnimKeyframesOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-file-size-mb", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeDouble("--max-file-size-mb", value, maxFileSizeMbOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--min-file-size-mb", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeDouble("--min-file-size-mb", value, minFileSizeMbOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--max-anim-duration", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeDouble("--max-anim-duration", value, maxAnimDurationOverride)) return 2;
+            continue;
+        }
+        parseResult = parseValueArg(arg, "--min-anim-duration", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) {
+            if (!parseNonNegativeDouble("--min-anim-duration", value, minAnimDurationOverride)) return 2;
+            continue;
+        }
+
+        if (arg == "--require-skeleton") { requireSkeletonOverride = 1; continue; }
+        if (arg == "--no-require-skeleton") { requireSkeletonOverride = 0; continue; }
+        if (arg == "--require-animations") { requireAnimationsOverride = 1; continue; }
+        if (arg == "--no-require-animations") { requireAnimationsOverride = 0; continue; }
+        if (arg == "--allow-embedded-textures") { allowEmbeddedTexturesOverride = 1; continue; }
+        if (arg == "--disallow-embedded-textures") { allowEmbeddedTexturesOverride = 0; continue; }
+        if (arg == "--require-textures-exist") { requireTexturesExistOverride = 1; continue; }
+        if (arg == "--no-require-textures-exist") { requireTexturesExistOverride = 0; continue; }
+        if (arg == "--allow-missing-materials") { allowMissingMaterialsOverride = 1; continue; }
+        if (arg == "--disallow-missing-materials") { allowMissingMaterialsOverride = 0; continue; }
+
         if (!arg.startsWith("-") && scanRoot.isEmpty()) { scanRoot = arg; continue; }
     }
 
@@ -1796,7 +1983,58 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     // CLI overrides
     if (fix)     config.fixEnabled = true;
     if (dryRun)  config.dryRun = true;
+
+    if (!allowedFormatsArg.isEmpty()) {
+        config.allowedFormats.clear();
+        for (auto fmt : splitCsv(allowedFormatsArg)) {
+            if (fmt.startsWith("."))
+                fmt.remove(0, 1);
+            config.allowedFormats.append(fmt.toLower());
+        }
+    }
+    if (!forbiddenExtensionsArg.isEmpty()) {
+        config.forbiddenExtensions.clear();
+        for (auto ext : splitCsv(forbiddenExtensionsArg)) {
+            if (ext.startsWith("."))
+                ext.remove(0, 1);
+            config.forbiddenExtensions.append(ext.toLower());
+        }
+    }
+
+    if (maxFileSizeMbOverride >= 0.0) config.maxFileSizeMb = maxFileSizeMbOverride;
+    if (minFileSizeMbOverride >= 0.0) config.minFileSizeMb = minFileSizeMbOverride;
+    if (maxMeshesOverride >= 0) config.maxMeshCount = maxMeshesOverride;
+    if (minMeshesOverride >= 0) config.minMeshCount = minMeshesOverride;
+    if (maxMaterialsOverride >= 0) config.maxMaterialCount = maxMaterialsOverride;
+    if (minMaterialsOverride >= 0) config.minMaterialCount = minMaterialsOverride;
     if (maxVerticesOverride >= 0) config.maxVertexCount = maxVerticesOverride;
+    if (minVerticesOverride >= 0) config.minVertexCount = minVerticesOverride;
+    if (maxAnimKeyframesOverride >= 0) config.maxAnimKeyframes = maxAnimKeyframesOverride;
+    if (minAnimKeyframesOverride >= 0) config.minAnimKeyframes = minAnimKeyframesOverride;
+    if (maxAnimDurationOverride >= 0.0) config.maxAnimDuration = maxAnimDurationOverride;
+    if (minAnimDurationOverride >= 0.0) config.minAnimDuration = minAnimDurationOverride;
+
+    if (requireSkeletonOverride >= 0) config.requireSkeleton = (requireSkeletonOverride == 1);
+    if (requireAnimationsOverride >= 0) config.requireAnimations = (requireAnimationsOverride == 1);
+    if (allowEmbeddedTexturesOverride >= 0) config.allowEmbeddedTextures = (allowEmbeddedTexturesOverride == 1);
+    if (requireTexturesExistOverride >= 0) config.requireTexturesExist = (requireTexturesExistOverride == 1);
+    if (allowMissingMaterialsOverride >= 0) config.allowMissingMaterials = (allowMissingMaterialsOverride == 1);
+
+    if (!fileNameCaseOverride.isEmpty()) {
+        const QString c = fileNameCaseOverride.trimmed();
+        if (c != "snake_case" && c != "kebab-case" && c != "camelCase" &&
+            c != "PascalCase" && c != "lowercase") {
+            err() << "Error: --file-name-case must be one of: snake_case, kebab-case, camelCase, PascalCase, lowercase" << Qt::endl;
+            return 2;
+        }
+        config.fileNameCase = c;
+    }
+
+    if (!requiredAnimationNamesArg.isEmpty())
+        config.requireAnimationNames = splitCsv(requiredAnimationNamesArg);
+    if (!requiredBoneNamesArg.isEmpty())
+        config.requireBoneNames = splitCsv(requiredBoneNamesArg);
+
     if (!failOn.isEmpty()) {
         failOn = failOn.toLower();
         if (failOn != "info" && failOn != "warning" && failOn != "error" && failOn != "never") {
