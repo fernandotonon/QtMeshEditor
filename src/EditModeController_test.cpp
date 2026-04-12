@@ -123,6 +123,51 @@ TEST(EditModeControllerGeometry, RayTriangleIntersectOutsideTriangle) {
     EXPECT_LT(t, 0.0f);
 }
 
+// ===========================================================================
+// Weight-to-color heat map tests
+// ===========================================================================
+
+TEST(EditModeControllerGeometry, WeightToColorFullWeight) {
+    // weight 1.0 → red (R=1, G≈0, B=0)
+    auto c = EditModeController::weightToColor(1.0f);
+    EXPECT_FLOAT_EQ(c.r, 1.0f);
+    EXPECT_NEAR(c.g, 0.0f, 0.01f);
+    EXPECT_FLOAT_EQ(c.b, 0.0f);
+}
+
+TEST(EditModeControllerGeometry, WeightToColorZeroWeight) {
+    // weight 0.0 → blue (R=0, G=0, B=1)
+    auto c = EditModeController::weightToColor(0.0f);
+    EXPECT_FLOAT_EQ(c.r, 0.0f);
+    EXPECT_FLOAT_EQ(c.g, 0.0f);
+    EXPECT_FLOAT_EQ(c.b, 1.0f);
+}
+
+TEST(EditModeControllerGeometry, WeightToColorMidWeight) {
+    // weight 0.5 → green-ish (R≈0.5, G=1, B=0)
+    auto c = EditModeController::weightToColor(0.5f);
+    EXPECT_NEAR(c.r, 0.5f, 0.01f);
+    EXPECT_FLOAT_EQ(c.g, 1.0f);
+    EXPECT_FLOAT_EQ(c.b, 0.0f);
+}
+
+TEST(EditModeControllerGeometry, WeightToColorAlwaysOpaque) {
+    // All weights produce alpha = 1.0
+    for (float w : {0.0f, 0.1f, 0.25f, 0.5f, 0.75f, 0.9f, 1.0f}) {
+        auto c = EditModeController::weightToColor(w);
+        EXPECT_FLOAT_EQ(c.a, 1.0f);
+    }
+}
+
+TEST(EditModeControllerGeometry, WeightToColorGradientMonotonic) {
+    // Red channel should generally increase with weight
+    auto cLow = EditModeController::weightToColor(0.1f);
+    auto cMid = EditModeController::weightToColor(0.5f);
+    auto cHigh = EditModeController::weightToColor(0.9f);
+    EXPECT_LE(cLow.r, cMid.r);
+    EXPECT_LE(cMid.r, cHigh.r);
+}
+
 TEST(EditModeControllerGeometry, RayTriangleIntersectOriginOnTriangle) {
     // Ray origin is on the triangle, direction is perpendicular
     Ogre::Vector3 origin(0.1f, 0.0f, 0.1f);

@@ -496,6 +496,27 @@ int EditModeController::localTriToGlobal(size_t subMeshIndex, size_t localTriInd
 // Geometry helpers
 // ===========================================================================
 
+Ogre::ColourValue EditModeController::weightToColor(float weight)
+{
+    // Heat map: red (1.0) → orange → yellow → green → cyan → blue (0.0)
+    if (weight > 0.8f) {
+        float t = (weight - 0.8f) / 0.2f;
+        return Ogre::ColourValue(1.0f, 0.4f * (1.0f - t), 0.0f, 1.0f);
+    } else if (weight > 0.6f) {
+        float t = (weight - 0.6f) / 0.2f;
+        return Ogre::ColourValue(1.0f, 0.6f + 0.4f * (1.0f - t), 0.0f, 1.0f);
+    } else if (weight > 0.4f) {
+        float t = (weight - 0.4f) / 0.2f;
+        return Ogre::ColourValue(1.0f - t, 1.0f, 0.0f, 1.0f);
+    } else if (weight > 0.2f) {
+        float t = (weight - 0.2f) / 0.2f;
+        return Ogre::ColourValue(0.0f, 1.0f, 1.0f - t, 1.0f);
+    } else {
+        float t = weight / 0.2f;
+        return Ogre::ColourValue(0.0f, t, 1.0f, 1.0f);
+    }
+}
+
 QPoint EditModeController::worldToScreen(const Ogre::Vector3& worldPos,
                                           Ogre::Camera* camera,
                                           int viewportWidth, int viewportHeight)
@@ -1307,17 +1328,17 @@ void EditModeController::updateSelectionOverlay()
     {
         m_overlayVertices->begin("EditMode/VertexSelection", Ogre::RenderOperation::OT_POINT_LIST);
 
-        // Orange color for selected vertices
-        Ogre::ColourValue vertColor(1.0f, 0.6f, 0.0f, 1.0f);
+        // When soft selection is active, render all influenced vertices with heat map colors
+        auto weights = getSoftSelectionWeights();
 
-        for (int gi : m_selectedVertices) {
+        for (const auto& [gi, weight] : weights) {
             auto [subIdx, localIdx] = globalToLocal(gi);
             if (subIdx < m_editableMesh->subMeshes().size() &&
                 localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
             {
                 const auto& pos = m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
                 m_overlayVertices->position(pos);
-                m_overlayVertices->colour(vertColor);
+                m_overlayVertices->colour(weightToColor(weight));
             }
         }
 
