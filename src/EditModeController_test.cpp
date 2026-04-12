@@ -597,9 +597,12 @@ TEST_F(EditModeControllerSelectionTest, WireframeRestoredOnExitEditMode) {
 
     ctrl->exitEditMode(false);
 
-    // Material should be restored and wireframe should be off
-    EXPECT_FALSE(ctrl->wireframeEnabled());
+    // Material should be restored, but wireframe state persists
+    EXPECT_TRUE(ctrl->wireframeEnabled());
     EXPECT_EQ(entity->getSubEntity(0)->getMaterialName(), origMat);
+
+    // Reset for other tests
+    ctrl->setWireframeEnabled(false);
 
     Manager::getSingleton()->destroySceneNode("EditCtrl_wire_exit_node");
 }
@@ -633,6 +636,80 @@ TEST_F(EditModeControllerSelectionTest, WireframeSignalEmission) {
 
     ctrl->exitEditMode(false);
     Manager::getSingleton()->destroySceneNode("EditCtrl_wire_signal_node");
+}
+
+// ===========================================================================
+// Selection mode change clears selection
+// ===========================================================================
+
+TEST_F(EditModeControllerSelectionTest, SelectionModeSwitchClearsSelection) {
+    auto meshPtr = createInMemoryTriangleMesh("EditCtrl_modeswitch");
+    auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_modeswitch_node");
+    Manager::getSingleton()->createEntity(node, meshPtr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+
+    // Select a vertex in vertex mode
+    ctrl->selectVertex(0);
+    EXPECT_EQ(ctrl->selectedVertexCount(), 1);
+
+    // Switch to edge mode — selection should be cleared
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    EXPECT_EQ(ctrl->selectedVertexCount(), 0);
+    EXPECT_EQ(ctrl->selectedEdgeCount(), 0);
+    EXPECT_EQ(ctrl->selectedFaceCount(), 0);
+
+    // Select an edge, then switch to face mode
+    ctrl->selectEdge(0, 1);
+    EXPECT_EQ(ctrl->selectedEdgeCount(), 1);
+
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+    EXPECT_EQ(ctrl->selectedVertexCount(), 0);
+    EXPECT_EQ(ctrl->selectedEdgeCount(), 0);
+    EXPECT_EQ(ctrl->selectedFaceCount(), 0);
+
+    ctrl->exitEditMode(false);
+    Manager::getSingleton()->destroySceneNode("EditCtrl_modeswitch_node");
+}
+
+// ===========================================================================
+// Wireframe persists across edit mode sessions
+// ===========================================================================
+
+TEST_F(EditModeControllerSelectionTest, WireframePersistsAcrossSessions) {
+    auto meshPtr = createInMemoryTriangleMesh("EditCtrl_wire_persist");
+    auto* node = Manager::getSingleton()->addSceneNode("EditCtrl_wire_persist_node");
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    auto* ctrl = EditModeController::instance();
+
+    // First session: enable wireframe
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setWireframeEnabled(true);
+    EXPECT_TRUE(ctrl->wireframeEnabled());
+    Ogre::String origMat = ctrl->editEntity()->getSubEntity(0)->getMaterialName();
+    EXPECT_TRUE(origMat.find("_EditWireframe") != Ogre::String::npos);
+    ctrl->exitEditMode(false);
+
+    // Wireframe state persists after exit
+    EXPECT_TRUE(ctrl->wireframeEnabled());
+
+    // Second session: wireframe should be re-applied automatically
+    ASSERT_TRUE(ctrl->enterEditMode());
+    EXPECT_TRUE(ctrl->wireframeEnabled());
+    Ogre::String matAfterReenter = ctrl->editEntity()->getSubEntity(0)->getMaterialName();
+    EXPECT_TRUE(matAfterReenter.find("_EditWireframe") != Ogre::String::npos);
+
+    ctrl->exitEditMode(false);
+    ctrl->setWireframeEnabled(false);
+    Manager::getSingleton()->destroySceneNode("EditCtrl_wire_persist_node");
 }
 
 // ===========================================================================

@@ -161,6 +161,10 @@ bool EditModeController::enterEditMode()
     // Create overlay materials and initial (empty) overlays
     createOverlayMaterials();
 
+    // Re-apply wireframe if it was enabled in a previous session
+    if (m_wireframeEnabled)
+        applyWireframeMaterials();
+
     SentryReporter::addBreadcrumb("edit_mode",
         QString("Entered Edit Mode: %1 vertices, %2 triangles, %3 submeshes")
             .arg(m_editableMesh->totalVertexCount())
@@ -193,21 +197,9 @@ void EditModeController::exitEditMode(bool commitChanges)
         SentryReporter::addBreadcrumb("edit_mode", "Exited Edit Mode: changes discarded");
     }
 
-    // Restore wireframe materials if enabled
-    if (m_wireframeEnabled) {
-        for (const auto& [idx, matName] : m_savedMaterials) {
-            if (m_editEntity && idx < m_editEntity->getNumSubEntities()) {
-                m_editEntity->getSubEntity(idx)->setMaterialName(matName);
-                Ogre::String wireName = matName + "_EditWireframe";
-                auto& matMgr = Ogre::MaterialManager::getSingleton();
-                if (matMgr.resourceExists(wireName))
-                    matMgr.remove(wireName);
-            }
-        }
-        m_savedMaterials.clear();
-        m_wireframeEnabled = false;
-        emit wireframeChanged();
-    }
+    // Restore original materials (keep m_wireframeEnabled so it persists)
+    if (!m_savedMaterials.empty())
+        removeWireframeMaterials();
 
     // Clean up selection overlays
     destroySelectionOverlay();
@@ -260,6 +252,11 @@ void EditModeController::setSelectionMode(int mode)
         return;
 
     m_selectionMode = newMode;
+
+    // Clear selection from previous mode
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
 
     QString modeName;
     switch (m_selectionMode) {
@@ -1506,6 +1503,48 @@ void EditModeController::destroySelectionOverlay()
 // Wireframe toggle
 // ===========================================================================
 
+void EditModeController::applyWireframeMaterials()
+{
+    if (!m_editEntity)
+        return;
+
+    m_savedMaterials.clear();
+    for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+        auto* subEnt = m_editEntity->getSubEntity(i);
+        m_savedMaterials[i] = subEnt->getMaterialName();
+
+        Ogre::String wireName = subEnt->getMaterialName() + "_EditWireframe";
+        auto& matMgr = Ogre::MaterialManager::getSingleton();
+        auto wireMat = matMgr.getByName(wireName);
+        if (!wireMat)
+            wireMat = subEnt->getMaterial()->clone(wireName);
+
+        for (unsigned short ti = 0; ti < wireMat->getNumTechniques(); ++ti) {
+            for (unsigned short pi = 0; pi < wireMat->getTechnique(ti)->getNumPasses(); ++pi) {
+                wireMat->getTechnique(ti)->getPass(pi)->setPolygonMode(Ogre::PM_WIREFRAME);
+            }
+        }
+        subEnt->setMaterialName(wireName);
+    }
+}
+
+void EditModeController::removeWireframeMaterials()
+{
+    if (!m_editEntity)
+        return;
+
+    for (const auto& [idx, matName] : m_savedMaterials) {
+        if (idx < m_editEntity->getNumSubEntities()) {
+            m_editEntity->getSubEntity(idx)->setMaterialName(matName);
+            Ogre::String wireName = matName + "_EditWireframe";
+            auto& matMgr = Ogre::MaterialManager::getSingleton();
+            if (matMgr.resourceExists(wireName))
+                matMgr.remove(wireName);
+        }
+    }
+    m_savedMaterials.clear();
+}
+
 void EditModeController::setWireframeEnabled(bool enabled)
 {
     if (m_wireframeEnabled == enabled)
@@ -1513,45 +1552,11 @@ void EditModeController::setWireframeEnabled(bool enabled)
 
     m_wireframeEnabled = enabled;
 
-    if (!m_editModeActive || !m_editEntity) {
-        emit wireframeChanged();
-        return;
-    }
-
-    if (enabled) {
-        // Save original materials and switch all sub-entities to wireframe
-        m_savedMaterials.clear();
-        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
-            auto* subEnt = m_editEntity->getSubEntity(i);
-            m_savedMaterials[i] = subEnt->getMaterialName();
-
-            // Clone the material so we don't modify the original
-            Ogre::String wireName = subEnt->getMaterialName() + "_EditWireframe";
-            auto& matMgr = Ogre::MaterialManager::getSingleton();
-            auto wireMat = matMgr.getByName(wireName);
-            if (!wireMat) {
-                wireMat = subEnt->getMaterial()->clone(wireName);
-            }
-            for (unsigned short ti = 0; ti < wireMat->getNumTechniques(); ++ti) {
-                for (unsigned short pi = 0; pi < wireMat->getTechnique(ti)->getNumPasses(); ++pi) {
-                    wireMat->getTechnique(ti)->getPass(pi)->setPolygonMode(Ogre::PM_WIREFRAME);
-                }
-            }
-            subEnt->setMaterialName(wireName);
-        }
-    } else {
-        // Restore original materials
-        for (const auto& [idx, matName] : m_savedMaterials) {
-            if (idx < m_editEntity->getNumSubEntities()) {
-                m_editEntity->getSubEntity(idx)->setMaterialName(matName);
-                // Clean up the cloned wireframe material
-                Ogre::String wireName = matName + "_EditWireframe";
-                auto& matMgr = Ogre::MaterialManager::getSingleton();
-                if (matMgr.resourceExists(wireName))
-                    matMgr.remove(wireName);
-            }
-        }
-        m_savedMaterials.clear();
+    if (m_editModeActive && m_editEntity) {
+        if (enabled)
+            applyWireframeMaterials();
+        else
+            removeWireframeMaterials();
     }
 
     SentryReporter::addBreadcrumb("edit_mode",

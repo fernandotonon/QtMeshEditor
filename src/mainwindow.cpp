@@ -284,7 +284,10 @@ void MainWindow::initToolBar()
     connect(ui->actionTranslate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_TRANSLATE);});
     connect(ui->actionRotate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_ROTATE);});
     connect(ui->actionScale_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_SCALE);});
-    connect(ui->actionRemove_Object, SIGNAL(triggered()), TransformOperator::getSingleton(), SLOT(removeSelected()));
+    connect(ui->actionRemove_Object, &QAction::triggered, this, []{
+        if (!EditModeController::instance()->isEditModeActive())
+            TransformOperator::getSingleton()->removeSelected();
+    });
     connect(ui->actionToggle_Transform_Space, &QAction::toggled, this, [this](bool checked){
         TransformOperator::getSingleton()->setTransformSpace(
             checked ? TransformOperator::SPACE_LOCAL : TransformOperator::SPACE_WORLD);
@@ -993,8 +996,10 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         TransformOperator::getSingleton()->cyclePivotMode();
        break;
     case Qt::Key_Delete:
-        SentryReporter::addBreadcrumb("ui.shortcut", "Delete — Remove selected");
-        TransformOperator::getSingleton()->removeSelected();
+        if (!EditModeController::instance()->isEditModeActive()) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Delete — Remove selected");
+            TransformOperator::getSingleton()->removeSelected();
+        }
        break;
     case Qt::Key_Tab:
         SentryReporter::addBreadcrumb("ui.shortcut", "Tab — Toggle Edit Mode");

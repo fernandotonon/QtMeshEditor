@@ -407,6 +407,10 @@ private:
     Ogre::Entity* m_softSelSphere = nullptr;
     Ogre::SceneNode* m_softSelSphereNode = nullptr;
 
+    // Wireframe helpers
+    void applyWireframeMaterials();
+    void removeWireframeMaterials();
+
     // Wireframe mode
     bool m_wireframeEnabled = false;
     std::map<unsigned int, Ogre::String> m_savedMaterials; ///< SubEntity index → original material name
