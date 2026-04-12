@@ -1781,42 +1781,46 @@ jobs:
  winget-publish:
     needs: build-windows
     if: github.event_name == 'release' && github.event.action == 'published'
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Generate WinGet manifest
+        shell: pwsh
         run: |
-          # Install wingetcreate (.NET global tool — package name is Microsoft.WingetCreate)
-          dotnet tool install --global Microsoft.WingetCreate
-          export PATH="$PATH:$HOME/.dotnet/tools"
+          # Download wingetcreate standalone exe from GitHub releases
+          $wgcUrl = "https://github.com/microsoft/winget-create/releases/latest/download/wingetcreate.exe"
+          Invoke-WebRequest -Uri $wgcUrl -OutFile wingetcreate.exe
 
-          RAW_TAG="${{ github.event.release.tag_name }}"
-          VER="${RAW_TAG#v}"
-          URL="https://github.com/fernandotonon/QtMeshEditor/releases/download/${RAW_TAG}/QtMeshEditor-${RAW_TAG}-bin-Windows.zip"
+          $rawTag = "${{ github.event.release.tag_name }}"
+          $ver = $rawTag -replace '^v', ''
+          $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${rawTag}/QtMeshEditor-${rawTag}-bin-Windows.zip"
 
           # Wait for the release asset to be downloadable (GitHub CDN propagation)
-          echo "Waiting for release asset to be available..."
-          for attempt in $(seq 1 10); do
-            if curl -fsSL -o /dev/null "$URL" 2>/dev/null; then
-              echo "Asset available (attempt $attempt)"
+          Write-Host "Waiting for release asset to be available..."
+          for ($attempt = 1; $attempt -le 10; $attempt++) {
+            try {
+              $resp = Invoke-WebRequest -Uri $url -Method Head -ErrorAction Stop
+              Write-Host "Asset available (attempt $attempt)"
               break
-            fi
-            echo "Attempt $attempt: asset not yet available, waiting 30s..."
-            sleep 30
-          done
+            } catch {
+              Write-Host "Attempt ${attempt}: asset not yet available, waiting 30s..."
+              Start-Sleep -Seconds 30
+            }
+          }
 
-          echo "Generating WinGet manifest for version $VER..."
-          wingetcreate update FernandoTonon.QtMeshEditor \
-            --version "$VER" \
-            --urls "$URL" \
+          Write-Host "Generating WinGet manifest for version $ver..."
+          .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
+            --version $ver `
+            --urls $url `
             --out manifests
 
-          echo "Manifest generated:"
-          find manifests -type f -exec cat {} +
+          Write-Host "Manifest generated:"
+          Get-ChildItem -Recurse manifests | Get-Content
 
       - name: Submit PR to winget-pkgs
         continue-on-error: true   # don't fail the release if submission fails
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
@@ -1852,7 +1856,7 @@ jobs:
           mkdir -p "manifests/f/FernandoTonon/QtMeshEditor/${VER}"
           cp -r "../${MANIFEST_DIR}/." "manifests/f/FernandoTonon/QtMeshEditor/${VER}/"
 
-          # Commit and push (--allow-empty handles no-diff reruns)
+          # Commit and push
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
