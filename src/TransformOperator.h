@@ -188,7 +188,8 @@ private:
     QList<std::vector<Ogre::Vector3>>       mUndoSubMeshPositions;
 
     // Edit mode undo state: vertex positions captured at drag start
-    std::map<int, Ogre::Vector3>            mEditModeStartPositions;
+    std::map<int, Ogre::Vector3>            mEditModeStartPositions;   ///< Rolling snapshot (updated each frame)
+    std::map<int, Ogre::Vector3>            mEditModeUndoSnapshot;     ///< Immutable snapshot from press (for undo)
     bool                                    mEditModeTransformActive = false;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;

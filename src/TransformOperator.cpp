@@ -586,7 +586,17 @@ void TransformOperator::updateGizmoPosition()
     Ogre::Vector3 currentOrientation = Ogre::Vector3::ZERO;
     Ogre::Vector3 currentScale = Ogre::Vector3::UNIT_SCALE;
 
-    if(SelectionSet::getSingleton()->hasNodes())
+    // Edit mode: position gizmo at selected vertices centroid (world space)
+    auto* editCtrl = EditModeController::instance();
+    if (editCtrl->isEditModeActive() && !editCtrl->selectedVertices().empty()
+        && editCtrl->editEntity() && editCtrl->editEntity()->getParentSceneNode())
+    {
+        Ogre::Vector3 localCentroid = editCtrl->getSelectedVerticesCentroid();
+        Ogre::SceneNode* node = editCtrl->editEntity()->getParentSceneNode();
+        Ogre::Vector3 worldCentroid = node->convertLocalToWorldPosition(localCentroid);
+        m_pTransformNode->setPosition(worldCentroid);
+    }
+    else if(SelectionSet::getSingleton()->hasNodes())
     {
         currentOrientation  = SelectionSet::getSingleton()->getSelectionOrientation();
         currentScale        = SelectionSet::getSingleton()->getSelectionScale();
@@ -872,6 +882,7 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
             // Snapshot vertex positions for undo
             mEditModeStartPositions = editCtrl->snapshotVertexPositions();
+            mEditModeUndoSnapshot = mEditModeStartPositions; // immutable copy for undo
             mEditModeTransformActive = true;
 
             // Reset snap accumulators
@@ -1349,9 +1360,9 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
             // Snapshot current (post-transform) positions
             auto newPositions = editCtrl->snapshotVertexPositions();
 
-            // Check if anything actually changed
+            // Check if anything actually changed (compare against immutable undo snapshot)
             bool changed = false;
-            for (const auto& [gi, pos] : mEditModeStartPositions) {
+            for (const auto& [gi, pos] : mEditModeUndoSnapshot) {
                 auto it = newPositions.find(gi);
                 if (it != newPositions.end() && it->second != pos) {
                     changed = true;
@@ -1367,7 +1378,7 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 else desc = "Edit Vertex Transform";
 
                 UndoManager::getSingleton()->push(
-                    new EditVertexTransformCommand(mEditModeStartPositions, newPositions, desc));
+                    new EditVertexTransformCommand(mEditModeUndoSnapshot, newPositions, desc));
 
                 // Validate mesh after edit
                 editCtrl->validateMesh();
@@ -1376,6 +1387,7 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 
         mEditModeTransformActive = false;
         mEditModeStartPositions.clear();
+        mEditModeUndoSnapshot.clear();
         mStartPoint = Ogre::Vector3::ZERO;
         mScaleStartDistance = 0.0f;
 
