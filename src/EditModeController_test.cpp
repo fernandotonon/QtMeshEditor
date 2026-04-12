@@ -168,6 +168,18 @@ TEST(EditModeControllerGeometry, WeightToColorGradientMonotonic) {
     EXPECT_LE(cMid.r, cHigh.r);
 }
 
+TEST(EditModeControllerGeometry, WeightToColorBoundaryContinuity) {
+    // Check boundaries are continuous (no color jumps)
+    float boundaries[] = {0.2f, 0.4f, 0.6f, 0.8f};
+    for (float b : boundaries) {
+        auto cBelow = EditModeController::weightToColor(b - 0.001f);
+        auto cAbove = EditModeController::weightToColor(b + 0.001f);
+        EXPECT_NEAR(cBelow.r, cAbove.r, 0.05f) << "R discontinuity at " << b;
+        EXPECT_NEAR(cBelow.g, cAbove.g, 0.05f) << "G discontinuity at " << b;
+        EXPECT_NEAR(cBelow.b, cAbove.b, 0.05f) << "B discontinuity at " << b;
+    }
+}
+
 TEST(EditModeControllerGeometry, RayTriangleIntersectOriginOnTriangle) {
     // Ray origin is on the triangle, direction is perpendicular
     Ogre::Vector3 origin(0.1f, 0.0f, 0.1f);

@@ -362,7 +362,7 @@ Rectangle {
                     }
                     Connections {
                         target: EditModeController
-                        function onSoftSelectionRadiusChanged() {
+                        function onSoftSelectionChanged() {
                             softRadiusSlider.updating = true;
                             softRadiusSlider.value = Math.log(EditModeController.softSelectionRadius / softRadiusSlider.minVal) / Math.log(softRadiusSlider.maxVal / softRadiusSlider.minVal);
                             softRadiusSlider.updating = false;

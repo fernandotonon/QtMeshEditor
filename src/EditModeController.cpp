@@ -498,23 +498,27 @@ int EditModeController::localTriToGlobal(size_t subMeshIndex, size_t localTriInd
 
 Ogre::ColourValue EditModeController::weightToColor(float weight)
 {
-    // Heat map: red (1.0) → orange → yellow → green → cyan → blue (0.0)
-    if (weight > 0.8f) {
-        float t = (weight - 0.8f) / 0.2f;
-        return Ogre::ColourValue(1.0f, 0.4f * (1.0f - t), 0.0f, 1.0f);
-    } else if (weight > 0.6f) {
-        float t = (weight - 0.6f) / 0.2f;
-        return Ogre::ColourValue(1.0f, 0.6f + 0.4f * (1.0f - t), 0.0f, 1.0f);
-    } else if (weight > 0.4f) {
-        float t = (weight - 0.4f) / 0.2f;
-        return Ogre::ColourValue(1.0f - t, 1.0f, 0.0f, 1.0f);
-    } else if (weight > 0.2f) {
-        float t = (weight - 0.2f) / 0.2f;
-        return Ogre::ColourValue(0.0f, 1.0f, 1.0f - t, 1.0f);
-    } else {
+    weight = std::clamp(weight, 0.0f, 1.0f);
+
+    // Heat map: blue (0.0) → cyan → green → yellow → orange → red (1.0)
+    if (weight < 0.2f) {
         float t = weight / 0.2f;
-        return Ogre::ColourValue(0.0f, t, 1.0f, 1.0f);
+        return Ogre::ColourValue(0.0f, t, 1.0f, 1.0f);             // blue → cyan
     }
+    if (weight < 0.4f) {
+        float t = (weight - 0.2f) / 0.2f;
+        return Ogre::ColourValue(0.0f, 1.0f, 1.0f - t, 1.0f);      // cyan → green
+    }
+    if (weight < 0.6f) {
+        float t = (weight - 0.4f) / 0.2f;
+        return Ogre::ColourValue(t, 1.0f, 0.0f, 1.0f);             // green → yellow
+    }
+    if (weight < 0.8f) {
+        float t = (weight - 0.6f) / 0.2f;
+        return Ogre::ColourValue(1.0f, 1.0f - 0.6f * t, 0.0f, 1.0f); // yellow → orange
+    }
+    float t = (weight - 0.8f) / 0.2f;
+    return Ogre::ColourValue(1.0f, 0.4f * (1.0f - t), 0.0f, 1.0f); // orange → red
 }
 
 QPoint EditModeController::worldToScreen(const Ogre::Vector3& worldPos,
