@@ -2,6 +2,8 @@
 #include "../Manager.h"
 #include "../SelectionSet.h"
 #include "../SubMeshTransform.h"
+#include "../EditModeController.h"
+#include "../EditableMesh.h"
 #include <Ogre.h>
 
 // Check if a scene node pointer is still valid (not destroyed)
@@ -530,4 +532,45 @@ void SubMeshTransformCommand::redo()
     {
         SubMeshTransform::writePositions(mEntity, mSubMeshIndex, mNewPositions);
     }
+}
+
+// ---- EditVertexTransformCommand ----
+
+EditVertexTransformCommand::EditVertexTransformCommand(
+    const std::map<int, Ogre::Vector3>& oldPositions,
+    const std::map<int, Ogre::Vector3>& newPositions,
+    const QString& description,
+    QUndoCommand* parent)
+    : QUndoCommand(description, parent)
+    , mOldPositions(oldPositions)
+    , mNewPositions(newPositions)
+    , mFirstRedo(true)
+{
+}
+
+void EditVertexTransformCommand::undo()
+{
+    auto* ctrl = EditModeController::instance();
+    if (!ctrl->isEditModeActive() || !ctrl->currentMesh())
+        return;
+
+    ctrl->restoreVertexPositions(mOldPositions);
+    ctrl->recalculateNormals(ctrl->normalsMode() == 0);
+    ctrl->validateMesh();
+}
+
+void EditVertexTransformCommand::redo()
+{
+    if (mFirstRedo) {
+        mFirstRedo = false;
+        return;
+    }
+
+    auto* ctrl = EditModeController::instance();
+    if (!ctrl->isEditModeActive() || !ctrl->currentMesh())
+        return;
+
+    ctrl->restoreVertexPositions(mNewPositions);
+    ctrl->recalculateNormals(ctrl->normalsMode() == 0);
+    ctrl->validateMesh();
 }

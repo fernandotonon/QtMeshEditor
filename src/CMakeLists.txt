@@ -66,6 +66,8 @@ ScanConfig.cpp
 ScanEngine.cpp
 AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
+EditableMesh.cpp
+EditModeController.cpp
 )
 
 set(HEADER_FILES
@@ -135,6 +137,8 @@ ScanConfig.h
 ScanEngine.h
 AssetBrowserController.h
 MaterialPreviewRenderer.h
+EditableMesh.h
+EditModeController.h
 )
 
 set(TEST_SOURCES "")

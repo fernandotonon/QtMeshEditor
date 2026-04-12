@@ -17,6 +17,9 @@ public:
 
     bool isVisible() const { return mVisible; }
 
+    /// Rebuild the normal overlay for a specific entity (e.g. after vertex editing)
+    void refreshEntity(Ogre::Entity* entity);
+
 public slots:
     void setVisible(bool visible);
 

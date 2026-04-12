@@ -22,6 +22,7 @@
 #include "ViewportGrid.h"
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
+#include "EditModeController.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -83,6 +84,12 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     m_pRayQuery = pSceneMgr->createRayQuery(Ogre::Ray());
 
     connect(SelectionSet::getSingleton(),SIGNAL(selectionChanged()),this,SLOT(onSelectionChanged()));
+
+    // Update gizmo when edit mode selection changes (vertices selected/deselected)
+    connect(EditModeController::instance(), &EditModeController::editSelectionChanged,
+            this, &TransformOperator::onSelectionChanged);
+    connect(EditModeController::instance(), &EditModeController::editModeChanged,
+            this, &TransformOperator::onSelectionChanged);
 
     QtInputManager::getInstance().AddMouseListener(this);
 
@@ -511,7 +518,11 @@ void TransformOperator::removeSelected()
 void TransformOperator::updateGizmo()
 {
     updateGizmoPosition();
-    if(SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()||SelectionSet::getSingleton()->hasSubEntities())
+    bool editModeHasSelection = EditModeController::instance()->isEditModeActive()
+        && !EditModeController::instance()->selectedVertices().empty();
+
+    if(SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()
+       ||SelectionSet::getSingleton()->hasSubEntities()||editModeHasSelection)
     {
         // Determine gizmo orientation based on transform space
         Ogre::Quaternion gizmoOrientation;
@@ -575,7 +586,17 @@ void TransformOperator::updateGizmoPosition()
     Ogre::Vector3 currentOrientation = Ogre::Vector3::ZERO;
     Ogre::Vector3 currentScale = Ogre::Vector3::UNIT_SCALE;
 
-    if(SelectionSet::getSingleton()->hasNodes())
+    // Edit mode: position gizmo at selected vertices centroid (world space)
+    auto* editCtrl = EditModeController::instance();
+    if (editCtrl->isEditModeActive() && !editCtrl->selectedVertices().empty()
+        && editCtrl->editEntity() && editCtrl->editEntity()->getParentSceneNode())
+    {
+        Ogre::Vector3 localCentroid = editCtrl->getSelectedVerticesCentroid();
+        Ogre::SceneNode* node = editCtrl->editEntity()->getParentSceneNode();
+        Ogre::Vector3 worldCentroid = node->convertLocalToWorldPosition(localCentroid);
+        m_pTransformNode->setPosition(worldCentroid);
+    }
+    else if(SelectionSet::getSingleton()->hasNodes())
     {
         currentOrientation  = SelectionSet::getSingleton()->getSelectionOrientation();
         currentScale        = SelectionSet::getSingleton()->getSelectionScale();
@@ -626,6 +647,22 @@ void TransformOperator::updateGizmoPosition()
             // Sub-entity pointers may be stale — skip gizmo positioning
         }
     }
+
+    // In edit mode, position gizmo at the centroid of selected vertices
+    if (EditModeController::instance()->isEditModeActive()
+        && !EditModeController::instance()->selectedVertices().empty()
+        && EditModeController::instance()->editEntity())
+    {
+        auto* editCtrl = EditModeController::instance();
+        Ogre::Vector3 localCentroid = editCtrl->getSelectedVerticesCentroid();
+        Ogre::SceneNode* entityNode = editCtrl->editEntity()->getParentSceneNode();
+        if (entityNode) {
+            Ogre::Vector3 worldCentroid = entityNode->convertLocalToWorldPosition(localCentroid);
+            m_pTransformNode->setPosition(worldCentroid);
+            currentPosition = worldCentroid;
+        }
+    }
+
     emit selectedPositionChanged(currentPosition);
     emit selectedOrientationChanged(currentOrientation);
     emit selectedScaleChanged(currentScale);
@@ -820,6 +857,50 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 {
     if (e->button()==Qt::LeftButton)
     {
+        // In edit mode, delegate selection to EditModeController
+        if (EditModeController::instance()->isEditModeActive() && mTransformState == TS_SELECT)
+        {
+            mScreenStart = e->pos();
+            m_pSelectionBox->clear();
+            m_pSelectionBox->setVisible(true);
+            return;
+        }
+
+        // In edit mode with a transform tool and selected vertices: start vertex transform
+        if (EditModeController::instance()->isEditModeActive()
+            && mTransformState != TS_SELECT && mTransformState != TS_NONE
+            && !EditModeController::instance()->selectedVertices().empty())
+        {
+            auto* editCtrl = EditModeController::instance();
+
+            if (mTransformState == TS_TRANSLATE)
+                SentryReporter::addBreadcrumb("ui.transform", "Edit mode: translate vertices");
+            else if (mTransformState == TS_ROTATE)
+                SentryReporter::addBreadcrumb("ui.transform", "Edit mode: rotate vertices");
+            else if (mTransformState == TS_SCALE)
+                SentryReporter::addBreadcrumb("ui.transform", "Edit mode: scale vertices");
+
+            // Snapshot vertex positions for undo
+            mEditModeStartPositions = editCtrl->snapshotVertexPositions();
+            mEditModeUndoSnapshot = mEditModeStartPositions; // immutable copy for undo
+            mEditModeTransformActive = true;
+
+            // Reset snap accumulators
+            mSnapTranslationAccum = Ogre::Vector3::ZERO;
+            mSnapRotationAccum = Ogre::Vector3::ZERO;
+            mSnapScaleAccum = Ogre::Vector3::ZERO;
+            mSnapScaleCumulative = Ogre::Vector3::UNIT_SCALE;
+
+            Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
+            std::pair<bool, Ogre::Real> result = mouseRay.intersects(
+                Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
+            if (result.first) {
+                mStartPoint = mouseRay.getPoint(result.second);
+                if (mTransformState == TS_SCALE)
+                    mScaleStartDistance = (mStartPoint - m_pTransformNode->getPosition()).length();
+            }
+            return;
+        }
 
         if(mTransformState == TS_SELECT)
         {
@@ -897,6 +978,114 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
 void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 {
+    // Edit mode vertex transform: intercept drag and route to EditModeController
+    if (mEditModeTransformActive && EditModeController::instance()->isEditModeActive()
+        && !mStartPoint.isZeroLength())
+    {
+        auto* editCtrl = EditModeController::instance();
+        Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
+        std::pair<bool, Ogre::Real> result = mouseRay.intersects(
+            Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
+
+        if (result.first)
+        {
+            Ogre::Vector3 point = mouseRay.getPoint(result.second);
+
+            if (mTransformState == TS_TRANSLATE)
+            {
+                Ogre::Vector3 worldDelta = point - mStartPoint;
+                Ogre::Vector3 translation;
+
+                if (mTransformSpace == SPACE_LOCAL && !mTransformVector.isZeroLength()) {
+                    Ogre::Quaternion gizmoOrientation = m_pTransformNode->getOrientation();
+                    Ogre::Vector3 localDelta = gizmoOrientation.Inverse() * worldDelta;
+                    localDelta *= mTransformVector;
+                    translation = gizmoOrientation * localDelta;
+                } else {
+                    translation = worldDelta * mTransformVector;
+                }
+
+                // Convert world-space translation to local mesh space
+                Ogre::SceneNode* entityNode = editCtrl->editEntity()->getParentSceneNode();
+                if (entityNode) {
+                    Ogre::Quaternion worldOrient = entityNode->_getDerivedOrientation();
+                    Ogre::Vector3 worldScale = entityNode->_getDerivedScale();
+                    Ogre::Vector3 localTranslation = worldOrient.Inverse() * translation;
+                    localTranslation /= worldScale;
+
+                    // Restore to start positions then apply new delta
+                    editCtrl->restoreVertexPositions(mEditModeStartPositions);
+                    editCtrl->translateSelectedVertices(localTranslation);
+                }
+
+                mStartPoint = point;
+                // Re-snapshot so incremental deltas accumulate correctly
+                mEditModeStartPositions = editCtrl->snapshotVertexPositions();
+                updateGizmoPosition();
+            }
+            else if (mTransformState == TS_ROTATE)
+            {
+                Ogre::Vector3 vectorStart = mStartPoint - m_pTransformNode->getPosition();
+                Ogre::Vector3 vectorEnd = point - m_pTransformNode->getPosition();
+
+                Ogre::Quaternion rotation;
+                if (mTransformSpace == SPACE_LOCAL && !mTransformVector.isZeroLength()) {
+                    Ogre::Quaternion gizmoOri = m_pTransformNode->getOrientation();
+                    Ogre::Vector3 localStart = gizmoOri.Inverse() * vectorStart;
+                    Ogre::Vector3 localEnd = gizmoOri.Inverse() * vectorEnd;
+                    Ogre::Quaternion localRot = localStart.getRotationTo(localEnd);
+                    localRot.x *= mTransformVector.x;
+                    localRot.y *= mTransformVector.y;
+                    localRot.z *= mTransformVector.z;
+                    localRot.normalise();
+                    rotation = gizmoOri * localRot * gizmoOri.Inverse();
+                } else {
+                    rotation = vectorStart.getRotationTo(vectorEnd);
+                    rotation.x *= mTransformVector.x;
+                    rotation.y *= mTransformVector.y;
+                    rotation.z *= mTransformVector.z;
+                    rotation.normalise();
+                }
+
+                // Convert world rotation to local mesh space
+                Ogre::SceneNode* entityNode = editCtrl->editEntity()->getParentSceneNode();
+                if (entityNode) {
+                    Ogre::Quaternion worldOrient = entityNode->_getDerivedOrientation();
+                    Ogre::Quaternion localRotation = worldOrient.Inverse() * rotation * worldOrient;
+
+                    editCtrl->restoreVertexPositions(mEditModeStartPositions);
+                    editCtrl->rotateSelectedVertices(localRotation);
+                }
+
+                mStartPoint = point;
+                mEditModeStartPositions = editCtrl->snapshotVertexPositions();
+                updateGizmoPosition();
+            }
+            else if (mTransformState == TS_SCALE)
+            {
+                Ogre::Real currentDistance = (point - m_pTransformNode->getPosition()).length();
+                if (mScaleStartDistance > 0.001f)
+                {
+                    Ogre::Real ratio = currentDistance / mScaleStartDistance;
+                    Ogre::Vector3 scaleFactor = Ogre::Vector3::UNIT_SCALE;
+
+                    if (mTransformVector == Ogre::Vector3::ZERO)
+                        scaleFactor = Ogre::Vector3(ratio, ratio, ratio);
+                    else
+                        scaleFactor = Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
+
+                    editCtrl->restoreVertexPositions(mEditModeStartPositions);
+                    editCtrl->scaleSelectedVertices(scaleFactor);
+
+                    mScaleStartDistance = currentDistance;
+                    mEditModeStartPositions = editCtrl->snapshotVertexPositions();
+                    updateGizmoPosition();
+                }
+            }
+        }
+        return;
+    }
+
     if(mTransformState == TS_SELECT)
     {
         if(m_pSelectionBox->isVisible() && m_pActiveWidget)
@@ -1162,6 +1351,54 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
 void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 {
+    // Push undo command for edit mode vertex transforms
+    if (mEditModeTransformActive && (e->button() == Qt::LeftButton))
+    {
+        auto* editCtrl = EditModeController::instance();
+        if (editCtrl->isEditModeActive() && !mEditModeStartPositions.empty())
+        {
+            // Snapshot current (post-transform) positions
+            auto newPositions = editCtrl->snapshotVertexPositions();
+
+            // Check if anything actually changed (compare against immutable undo snapshot)
+            bool changed = false;
+            for (const auto& [gi, pos] : mEditModeUndoSnapshot) {
+                auto it = newPositions.find(gi);
+                if (it != newPositions.end() && it->second != pos) {
+                    changed = true;
+                    break;
+                }
+            }
+
+            if (changed) {
+                QString desc;
+                if (mTransformState == TS_TRANSLATE) desc = "Edit Vertex Translate";
+                else if (mTransformState == TS_ROTATE) desc = "Edit Vertex Rotate";
+                else if (mTransformState == TS_SCALE) desc = "Edit Vertex Scale";
+                else desc = "Edit Vertex Transform";
+
+                UndoManager::getSingleton()->push(
+                    new EditVertexTransformCommand(mEditModeUndoSnapshot, newPositions, desc));
+
+                // Validate mesh after edit
+                editCtrl->validateMesh();
+            }
+        }
+
+        mEditModeTransformActive = false;
+        mEditModeStartPositions.clear();
+        mEditModeUndoSnapshot.clear();
+        mStartPoint = Ogre::Vector3::ZERO;
+        mScaleStartDistance = 0.0f;
+
+        // Don't fall through to object-mode handlers
+        if (m_pSelectionBox->isVisible()) {
+            m_pSelectionBox->clear();
+            m_pSelectionBox->setVisible(false);
+        }
+        return;
+    }
+
     // Push undo commands for sub-entity vertex transforms
     if (SelectionSet::getSingleton()->hasSubEntities() && !mUndoSubEntities.isEmpty()
         && (e->button() == Qt::LeftButton))
@@ -1274,6 +1511,32 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 
     if(m_pSelectionBox->isVisible())
     {
+        // In edit mode, delegate to EditModeController for component selection
+        if (EditModeController::instance()->isEditModeActive())
+        {
+            bool shiftHeld = e->modifiers().testFlag(Qt::ShiftModifier);
+            bool ctrlHeld = e->modifiers().testFlag(Qt::ControlModifier);
+
+            // If the rectangle is very small, treat as a click
+            QRect rect(mScreenStart, e->pos());
+            rect = rect.normalized();
+
+            if (rect.width() < 5 && rect.height() < 5) {
+                // Point select
+                EditModeController::instance()->handleMouseClick(
+                    mScreenStart, m_pActiveWidget, shiftHeld, ctrlHeld);
+            } else {
+                // Box select
+                EditModeController::instance()->handleBoxSelect(
+                    mScreenStart, e->pos(), m_pActiveWidget, shiftHeld);
+            }
+
+            mScreenStart = QPoint(invalidPosition);
+            m_pSelectionBox->clear();
+            m_pSelectionBox->setVisible(false);
+            return;
+        }
+
         // Perform a box selection
         SelectionMode   selectionMode = NEW_SELECT;
         if(e->modifiers().testFlag(Qt::ControlModifier))

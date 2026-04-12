@@ -4,6 +4,7 @@
 #include <QUndoCommand>
 #include <QList>
 #include <vector>
+#include <map>
 #include <OgreVector.h>
 #include <OgreQuaternion.h>
 
@@ -206,6 +207,24 @@ private:
     unsigned int mSubMeshIndex;
     std::vector<Ogre::Vector3> mOriginalPositions;
     std::vector<Ogre::Vector3> mNewPositions;
+    bool mFirstRedo = true;
+};
+
+// Edit-mode vertex transform: stores full vertex position snapshot for undo/redo
+class EditVertexTransformCommand : public QUndoCommand
+{
+public:
+    EditVertexTransformCommand(const std::map<int, Ogre::Vector3>& oldPositions,
+                               const std::map<int, Ogre::Vector3>& newPositions,
+                               const QString& description = "Edit Vertex Transform",
+                               QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    std::map<int, Ogre::Vector3> mOldPositions; ///< global index -> old position
+    std::map<int, Ogre::Vector3> mNewPositions; ///< global index -> new position
     bool mFirstRedo = true;
 };
 

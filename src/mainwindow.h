@@ -17,9 +17,11 @@ class NormalVisualizer;
 class MeshInfoOverlay;
 class ViewCubeController;
 class PropertiesPanelController;
+class EditModeController;
 class WelcomeScreenController;
 class AssetBrowserController;
 class QQuickWidget;
+class QLabel;
 
 namespace Ui {
 class MainWindow;
@@ -153,6 +155,9 @@ private:
     void showWelcomeScreen();
     void hideWelcomeScreen();
     void repositionWelcomeScreen();
+
+    QLabel* m_editModeLabel = nullptr;
+    void updateEditModeIndicator();
 };
 
 #endif // MAINWINDOW_H

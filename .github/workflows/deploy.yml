@@ -28,11 +28,40 @@ jobs:
 #             SLACK_MESSAGE: "Building QtMeshEditor in GitHub Actions - works! :D"
 
 ####################################################################
+# Asset Scan (runs first, before all builds)
+####################################################################
+
+ scan-assets-qtmesh:
+    # Validate repo assets using the published Docker image (latest).
+    # Runs on PRs, pushes to master, and releases.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Scan media/ via Docker (ghcr.io/fernandotonon/qtmesh:latest)
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}:/workspace" \
+            -w /workspace \
+            ghcr.io/fernandotonon/qtmesh:latest \
+            scan --config /workspace/qtmesh.yml --json || {
+            echo "::warning::Docker asset scan reported issues (using latest published image)"
+            true
+          }
+
+      - name: Scan media/ via GitHub Action (root action.yml)
+        uses: ./
+        with:
+          command: scan
+          input-file: .
+          options: --config /workspace/qtmesh.yml
+
+####################################################################
 # Windows Deploy
 ####################################################################
 
  build-n-cache-assimp-windows:
-   # scan-assets-qtmesh runs independently (no artifact dependency)
+   needs: scan-assets-qtmesh
    runs-on: windows-latest
    steps:
     - name: Cache Assimp
@@ -398,7 +427,7 @@ jobs:
 ####################################################################
 
  build-n-cache-assimp-linux:
-    # scan-assets-qtmesh runs independently (no artifact dependency)
+    needs: scan-assets-qtmesh
     runs-on: ubuntu-latest
     steps:
     - name: change folder permissions
@@ -1204,38 +1233,12 @@ jobs:
           true
         }
 
- scan-assets-qtmesh:
-    # Validate repo assets using the published Docker image (latest).
-    # Runs on PRs and pushes to demonstrate CI/Docker integration.
-    if: github.event_name != 'release'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Scan media/ via Docker (ghcr.io/fernandotonon/qtmesh:latest)
-        run: |
-          docker run --rm \
-            -v "${{ github.workspace }}:/workspace" \
-            -w /workspace \
-            ghcr.io/fernandotonon/qtmesh:latest \
-            scan --config /workspace/qtmesh.yml --json || {
-            echo "::warning::Docker asset scan reported issues (using latest published image)"
-            true
-          }
-
-      - name: Scan media/ via GitHub Action (root action.yml)
-        uses: ./
-        with:
-          command: scan
-          input-file: .
-          options: --config /workspace/qtmesh.yml
-
 ####################################################################
 # MacOS Deploy
 ####################################################################
 
  build-n-cache-assimp-macos:
-    # scan-assets-qtmesh runs independently (no artifact dependency)
+    needs: scan-assets-qtmesh
     runs-on: macos-latest
     steps:
     - name: change folder permissions
@@ -1784,8 +1787,8 @@ jobs:
 
       - name: Generate WinGet manifest
         run: |
-          # Install wingetcreate (Linux .NET tool)
-          dotnet tool install --global wingetcreate
+          # Install wingetcreate (.NET global tool — package name is Microsoft.WingetCreate)
+          dotnet tool install --global Microsoft.WingetCreate
           export PATH="$PATH:$HOME/.dotnet/tools"
 
           RAW_TAG="${{ github.event.release.tag_name }}"

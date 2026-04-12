@@ -61,6 +61,7 @@
 #include "AIChatManager.h"
 #include "WelcomeScreenController.h"
 #include "AssetBrowserController.h"
+#include "EditModeController.h"
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
@@ -153,6 +154,14 @@ MainWindow::MainWindow(QWidget *parent) :
     });
     m_pTimer->start(0);
 
+    // Edit Mode indicator in status bar
+    m_editModeLabel = new QLabel("Object Mode", this);
+    m_editModeLabel->setStyleSheet("QLabel { font-weight: bold; padding: 2px 8px; }");
+    statusBar()->addPermanentWidget(m_editModeLabel);
+    connect(EditModeController::instance(), &EditModeController::editModeChanged,
+            this, &MainWindow::updateEditModeIndicator);
+    updateEditModeIndicator();
+
     // Auto-start MCP HTTP server if enabled in settings
     QSettings mcpSettings;
     bool mcpEnabled = mcpSettings.value("MCP/enabled", false).toBool();
@@ -234,6 +243,7 @@ MainWindow::~MainWindow()
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
     // These singletons are safe to destroy unconditionally.
+    EditModeController::kill();
     SubEntityHighlight::kill();
     AnimationControlController::kill();
     MeshLodController::kill();
@@ -274,7 +284,10 @@ void MainWindow::initToolBar()
     connect(ui->actionTranslate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_TRANSLATE);});
     connect(ui->actionRotate_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_ROTATE);});
     connect(ui->actionScale_Object, &QAction::triggered, this, [this]{setTransformState(TransformOperator::TS_SCALE);});
-    connect(ui->actionRemove_Object, SIGNAL(triggered()), TransformOperator::getSingleton(), SLOT(removeSelected()));
+    connect(ui->actionRemove_Object, &QAction::triggered, this, []{
+        if (!EditModeController::instance()->isEditModeActive())
+            TransformOperator::getSingleton()->removeSelected();
+    });
     connect(ui->actionToggle_Transform_Space, &QAction::toggled, this, [this](bool checked){
         TransformOperator::getSingleton()->setTransformSpace(
             checked ? TransformOperator::SPACE_LOCAL : TransformOperator::SPACE_WORLD);
@@ -371,6 +384,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<AssetBrowserController>("AssetBrowser", 1, 0, "AssetBrowserController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AssetBrowserController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<EditModeController>("PropertiesPanel", 1, 0, "EditModeController",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return EditModeController::qmlInstance(engine, nullptr);
             });
 
         m_propertiesPanel->setSource(QUrl("qrc:/PropertiesPanel/PropertiesPanel.qml"));
@@ -900,6 +917,43 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 {
     QtInputManager::getInstance().keyPressEvent(event);
 
+    // Edit mode shortcuts take priority when edit mode is active
+    auto* editCtrl = EditModeController::instance();
+    if (editCtrl->isEditModeActive()) {
+        switch (event->key()) {
+        case Qt::Key_1:
+            SentryReporter::addBreadcrumb("ui.shortcut", "1 — Vertex selection mode");
+            editCtrl->setSelectionMode(EditModeController::VertexMode);
+            event->accept();
+            return;
+        case Qt::Key_2:
+            SentryReporter::addBreadcrumb("ui.shortcut", "2 — Edge selection mode");
+            editCtrl->setSelectionMode(EditModeController::EdgeMode);
+            event->accept();
+            return;
+        case Qt::Key_3:
+            SentryReporter::addBreadcrumb("ui.shortcut", "3 — Face selection mode");
+            editCtrl->setSelectionMode(EditModeController::FaceMode);
+            event->accept();
+            return;
+        case Qt::Key_A:
+            if (event->modifiers() & Qt::ControlModifier) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "Ctrl+A — Select All (edit mode)");
+                editCtrl->selectAll();
+                event->accept();
+                return;
+            } else if (event->modifiers() & Qt::AltModifier) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "Alt+A — Deselect All (edit mode)");
+                editCtrl->deselectAll();
+                event->accept();
+                return;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+
     switch(event->key()){
     case Qt::Key_Q:
         SentryReporter::addBreadcrumb("ui.shortcut", "Q — Select mode");
@@ -942,8 +996,15 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         TransformOperator::getSingleton()->cyclePivotMode();
        break;
     case Qt::Key_Delete:
-        SentryReporter::addBreadcrumb("ui.shortcut", "Delete — Remove selected");
-        TransformOperator::getSingleton()->removeSelected();
+        if (!EditModeController::instance()->isEditModeActive()) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Delete — Remove selected");
+            TransformOperator::getSingleton()->removeSelected();
+        }
+       break;
+    case Qt::Key_Tab:
+        SentryReporter::addBreadcrumb("ui.shortcut", "Tab — Toggle Edit Mode");
+        EditModeController::instance()->toggleEditMode();
+        event->accept();
        break;
     default:
        break;
@@ -1417,6 +1478,22 @@ void MainWindow::setTransformState(TransformOperator::TransformState newState)
     ui->actionScale_Object->setChecked(newState == TransformOperator::TS_SCALE);
 
     TransformOperator::getSingleton()->onTransformStateChange(newState);
+}
+
+void MainWindow::updateEditModeIndicator()
+{
+    if (!m_editModeLabel) return;
+    auto* ctrl = EditModeController::instance();
+    if (ctrl->isEditModeActive()) {
+        m_editModeLabel->setText("Edit Mode");
+        m_editModeLabel->setStyleSheet(
+            "QLabel { font-weight: bold; padding: 2px 8px; "
+            "background-color: #3d6b3d; color: white; border-radius: 3px; }");
+    } else {
+        m_editModeLabel->setText("Object Mode");
+        m_editModeLabel->setStyleSheet(
+            "QLabel { font-weight: bold; padding: 2px 8px; }");
+    }
 }
 
 // LCOV_EXCL_START — creates OgreWidget, requires display
