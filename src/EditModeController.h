@@ -333,6 +333,10 @@ public:
                                       const Ogre::Vector3& v1,
                                       const Ogre::Vector3& v2);
 
+    /// Map a soft selection weight (0.0–1.0) to a heat map colour.
+    /// Red (1.0) → orange → yellow → green → cyan → blue (0.0).
+    static Ogre::ColourValue weightToColor(float weight);
+
     /// Convert a global vertex index to (subMeshIndex, localVertexIndex) pair.
     std::pair<size_t, size_t> globalToLocal(int globalIndex) const;
 

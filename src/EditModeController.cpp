@@ -496,6 +496,31 @@ int EditModeController::localTriToGlobal(size_t subMeshIndex, size_t localTriInd
 // Geometry helpers
 // ===========================================================================
 
+Ogre::ColourValue EditModeController::weightToColor(float weight)
+{
+    weight = std::clamp(weight, 0.0f, 1.0f);
+
+    // Heat map: blue (0.0) → cyan → green → yellow → orange → red (1.0)
+    if (weight < 0.2f) {
+        float t = weight / 0.2f;
+        return Ogre::ColourValue(0.0f, t, 1.0f, 1.0f);             // blue → cyan
+    }
+    if (weight < 0.4f) {
+        float t = (weight - 0.2f) / 0.2f;
+        return Ogre::ColourValue(0.0f, 1.0f, 1.0f - t, 1.0f);      // cyan → green
+    }
+    if (weight < 0.6f) {
+        float t = (weight - 0.4f) / 0.2f;
+        return Ogre::ColourValue(t, 1.0f, 0.0f, 1.0f);             // green → yellow
+    }
+    if (weight < 0.8f) {
+        float t = (weight - 0.6f) / 0.2f;
+        return Ogre::ColourValue(1.0f, 1.0f - 0.6f * t, 0.0f, 1.0f); // yellow → orange
+    }
+    float t = (weight - 0.8f) / 0.2f;
+    return Ogre::ColourValue(1.0f, 0.4f * (1.0f - t), 0.0f, 1.0f); // orange → red
+}
+
 QPoint EditModeController::worldToScreen(const Ogre::Vector3& worldPos,
                                           Ogre::Camera* camera,
                                           int viewportWidth, int viewportHeight)
@@ -1307,17 +1332,31 @@ void EditModeController::updateSelectionOverlay()
     {
         m_overlayVertices->begin("EditMode/VertexSelection", Ogre::RenderOperation::OT_POINT_LIST);
 
-        // Orange color for selected vertices
-        Ogre::ColourValue vertColor(1.0f, 0.6f, 0.0f, 1.0f);
-
-        for (int gi : m_selectedVertices) {
-            auto [subIdx, localIdx] = globalToLocal(gi);
-            if (subIdx < m_editableMesh->subMeshes().size() &&
-                localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
-            {
-                const auto& pos = m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
-                m_overlayVertices->position(pos);
-                m_overlayVertices->colour(vertColor);
+        if (m_softSelectionEnabled) {
+            // Heat map: render all influenced vertices with weight-based colors
+            auto weights = getSoftSelectionWeights();
+            for (const auto& [gi, weight] : weights) {
+                auto [subIdx, localIdx] = globalToLocal(gi);
+                if (subIdx < m_editableMesh->subMeshes().size() &&
+                    localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+                {
+                    const auto& pos = m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
+                    m_overlayVertices->position(pos);
+                    m_overlayVertices->colour(weightToColor(weight));
+                }
+            }
+        } else {
+            // Fixed orange for selected vertices only
+            Ogre::ColourValue vertColor(1.0f, 0.6f, 0.0f, 1.0f);
+            for (int gi : m_selectedVertices) {
+                auto [subIdx, localIdx] = globalToLocal(gi);
+                if (subIdx < m_editableMesh->subMeshes().size() &&
+                    localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+                {
+                    const auto& pos = m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
+                    m_overlayVertices->position(pos);
+                    m_overlayVertices->colour(vertColor);
+                }
             }
         }
 

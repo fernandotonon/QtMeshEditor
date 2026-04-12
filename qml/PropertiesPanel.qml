@@ -333,15 +333,41 @@ Rectangle {
                 spacing: 2
 
                 Text {
-                    text: "Radius: " + softRadiusSlider.value.toFixed(2)
+                    // Display the actual radius (log-mapped from slider)
+                    property real logRadius: {
+                        var minVal = 0.01; var maxVal = 20.0;
+                        return minVal * Math.pow(maxVal / minVal, softRadiusSlider.value);
+                    }
+                    text: "Radius: " + logRadius.toFixed(logRadius < 1 ? 3 : 2)
                     color: PropertiesPanelController.textColor; font.pixelSize: 10
                 }
                 Slider {
                     id: softRadiusSlider
                     width: parent.width
-                    from: 0.1; to: 20.0; stepSize: 0.1
-                    value: EditModeController.softSelectionRadius
-                    onValueChanged: EditModeController.softSelectionRadius = value
+                    from: 0.0; to: 1.0; stepSize: 0.005
+                    // Convert current radius to normalized log position
+                    property real minVal: 0.01
+                    property real maxVal: 20.0
+                    property bool updating: false
+                    Component.onCompleted: {
+                        updating = true;
+                        value = Math.log(EditModeController.softSelectionRadius / minVal) / Math.log(maxVal / minVal);
+                        updating = false;
+                    }
+                    onValueChanged: {
+                        if (!updating) {
+                            var radius = minVal * Math.pow(maxVal / minVal, value);
+                            EditModeController.softSelectionRadius = radius;
+                        }
+                    }
+                    Connections {
+                        target: EditModeController
+                        function onSoftSelectionChanged() {
+                            softRadiusSlider.updating = true;
+                            softRadiusSlider.value = Math.log(EditModeController.softSelectionRadius / softRadiusSlider.minVal) / Math.log(softRadiusSlider.maxVal / softRadiusSlider.minVal);
+                            softRadiusSlider.updating = false;
+                        }
+                    }
                 }
 
                 // Falloff mode
