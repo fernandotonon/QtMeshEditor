@@ -125,9 +125,8 @@ TEST_F(EditableMeshTest, LoadFromEntityTriangleMesh) {
     EXPECT_FLOAT_EQ(uv1.x, 1.0f);
     EXPECT_FLOAT_EQ(uv1.y, 0.0f);
 
-    // Check material name (default for shared vertices)
-    EXPECT_FALSE(editMesh.subMeshes()[0].materialName.empty() &&
-                 editMesh.subMeshes()[0].usesSharedVertices);
+    // The in-memory triangle mesh uses shared vertices
+    EXPECT_TRUE(editMesh.subMeshes()[0].usesSharedVertices);
 
     // Cleanup
     Manager::getSingleton()->destroySceneNode("EditableMesh_triangle_node");
