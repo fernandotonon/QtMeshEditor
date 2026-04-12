@@ -1332,17 +1332,31 @@ void EditModeController::updateSelectionOverlay()
     {
         m_overlayVertices->begin("EditMode/VertexSelection", Ogre::RenderOperation::OT_POINT_LIST);
 
-        // When soft selection is active, render all influenced vertices with heat map colors
-        auto weights = getSoftSelectionWeights();
-
-        for (const auto& [gi, weight] : weights) {
-            auto [subIdx, localIdx] = globalToLocal(gi);
-            if (subIdx < m_editableMesh->subMeshes().size() &&
-                localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
-            {
-                const auto& pos = m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
-                m_overlayVertices->position(pos);
-                m_overlayVertices->colour(weightToColor(weight));
+        if (m_softSelectionEnabled) {
+            // Heat map: render all influenced vertices with weight-based colors
+            auto weights = getSoftSelectionWeights();
+            for (const auto& [gi, weight] : weights) {
+                auto [subIdx, localIdx] = globalToLocal(gi);
+                if (subIdx < m_editableMesh->subMeshes().size() &&
+                    localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+                {
+                    const auto& pos = m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
+                    m_overlayVertices->position(pos);
+                    m_overlayVertices->colour(weightToColor(weight));
+                }
+            }
+        } else {
+            // Fixed orange for selected vertices only
+            Ogre::ColourValue vertColor(1.0f, 0.6f, 0.0f, 1.0f);
+            for (int gi : m_selectedVertices) {
+                auto [subIdx, localIdx] = globalToLocal(gi);
+                if (subIdx < m_editableMesh->subMeshes().size() &&
+                    localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+                {
+                    const auto& pos = m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
+                    m_overlayVertices->position(pos);
+                    m_overlayVertices->colour(vertColor);
+                }
             }
         }
 
