@@ -23,6 +23,21 @@ inputs:
     description: 'Docker image tag (default: latest)'
     required: false
     default: 'latest'
+  generate-badges:
+    description: 'When command=scan, generate Shields endpoint badge JSON files from scan summary.'
+    required: false
+    default: 'false'
+  badge-output-dir:
+    description: 'Directory to write generated badge JSON files (workspace-relative or absolute).'
+    required: false
+    default: '.qtmesh-badges'
+  badge-label-prefix:
+    description: 'Badge label/prefix (default: qtmesh).'
+    required: false
+    default: 'qtmesh'
+  badge-base-url:
+    description: 'Public base URL hosting badge JSON files (used to expose ready-to-use badge URLs in outputs).'
+    required: false
 
 outputs:
   result:
@@ -31,6 +46,30 @@ outputs:
   exit-code:
     description: 'Exit code (0 = success, 1 = issues found for scan/validate)'
     value: ${{ steps.run.outputs.exit-code }}
+  badge-status:
+    description: 'Computed scan status for generated badges: pass, warn, fail, or no-data.'
+    value: ${{ steps.run.outputs.badge-status }}
+  badge-directory:
+    description: 'Directory where badge JSON files were generated.'
+    value: ${{ steps.run.outputs.badge-directory }}
+  badge-status-url:
+    description: 'Shields endpoint URL for status badge (requires badge-base-url).'
+    value: ${{ steps.run.outputs.badge-status-url }}
+  badge-errors-url:
+    description: 'Shields endpoint URL for errors badge (requires badge-base-url).'
+    value: ${{ steps.run.outputs.badge-errors-url }}
+  badge-warnings-url:
+    description: 'Shields endpoint URL for warnings badge (requires badge-base-url).'
+    value: ${{ steps.run.outputs.badge-warnings-url }}
+  badge-passed-url:
+    description: 'Shields endpoint URL for passed badge (requires badge-base-url).'
+    value: ${{ steps.run.outputs.badge-passed-url }}
+  badge-scanned-url:
+    description: 'Shields endpoint URL for scanned badge (requires badge-base-url).'
+    value: ${{ steps.run.outputs.badge-scanned-url }}
+  badge-skipped-url:
+    description: 'Shields endpoint URL for skipped badge (requires badge-base-url).'
+    value: ${{ steps.run.outputs.badge-skipped-url }}
 
 runs:
   using: 'composite'
@@ -42,7 +81,38 @@ runs:
         INPUT_FILE: ${{ inputs.input-file }}
         INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
         INPUT_OPTIONS: ${{ inputs.options }}
+        INPUT_GENERATE_BADGES: ${{ inputs.generate-badges }}
+        INPUT_BADGE_OUTPUT_DIR: ${{ inputs.badge-output-dir }}
+        INPUT_BADGE_LABEL_PREFIX: ${{ inputs.badge-label-prefix }}
+        INPUT_BADGE_BASE_URL: ${{ inputs.badge-base-url }}
       run: |
+        set -o pipefail
+
+        parse_metric_from_text() {
+          local text="$1"
+          local key="$2"
+          printf '%s\n' "$text" | grep -Eo "${key}:[^0-9]*[0-9]+" | head -n1 | grep -Eo '[0-9]+$' || true
+        }
+
+        write_badge_json() {
+          local target_file="$1"
+          local label="$2"
+          local message="$3"
+          local color="$4"
+          jq -n \
+            --arg label "$label" \
+            --arg message "$message" \
+            --arg color "$color" \
+            '{schemaVersion: 1, label: $label, message: $message, color: $color}' > "$target_file"
+        }
+
+        to_shields_endpoint_url() {
+          local endpoint_json_url="$1"
+          local encoded
+          encoded=$(printf '%s' "$endpoint_json_url" | jq -sRr @uri)
+          printf 'https://img.shields.io/endpoint?url=%s' "$encoded"
+        }
+
         # Build command args safely via arrays to prevent injection
         cmd=("$INPUT_COMMAND" "/workspace/$INPUT_FILE")
         if [ -n "$INPUT_OUTPUT_FILE" ]; then
@@ -69,6 +139,90 @@ runs:
 
         # Print output for workflow logs
         echo "$OUTPUT"
+
+        if [ "${INPUT_GENERATE_BADGES}" = "true" ] && [ "$INPUT_COMMAND" = "scan" ]; then
+          if ! command -v jq >/dev/null 2>&1; then
+            echo "::warning::jq is required for badge generation, skipping."
+          else
+            scanned=""
+            passed=""
+            warnings=""
+            errors=""
+            skipped=""
+
+            if printf '%s\n' "$OUTPUT" | jq -e '.summary | type == "object"' >/dev/null 2>&1; then
+              scanned=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.scanned // 0')
+              passed=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.passed // 0')
+              warnings=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.warnings // 0')
+              errors=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.errors // 0')
+              skipped=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.skipped // 0')
+            else
+              clean_output=$(printf '%s\n' "$OUTPUT" | sed -E 's/\x1B\[[0-9;]*[mK]//g')
+              scanned=$(parse_metric_from_text "$clean_output" "Scanned")
+              passed=$(parse_metric_from_text "$clean_output" "Passed")
+              warnings=$(parse_metric_from_text "$clean_output" "Warnings")
+              errors=$(parse_metric_from_text "$clean_output" "Errors")
+              skipped=$(parse_metric_from_text "$clean_output" "Skipped")
+            fi
+
+            scanned=${scanned:-0}
+            passed=${passed:-0}
+            warnings=${warnings:-0}
+            errors=${errors:-0}
+            skipped=${skipped:-0}
+
+            status="pass"
+            status_color="brightgreen"
+            if [ "$scanned" -eq 0 ]; then
+              status="no-data"
+              status_color="lightgrey"
+            elif [ "$errors" -gt 0 ]; then
+              status="fail"
+              status_color="red"
+            elif [ "$warnings" -gt 0 ]; then
+              status="warn"
+              status_color="yellow"
+            fi
+
+            badge_prefix="${INPUT_BADGE_LABEL_PREFIX:-qtmesh}"
+            badge_dir="${INPUT_BADGE_OUTPUT_DIR:-.qtmesh-badges}"
+            if [ "${badge_dir#/}" = "$badge_dir" ]; then
+              badge_dir_abs="${{ github.workspace }}/${badge_dir}"
+            else
+              badge_dir_abs="${badge_dir}"
+            fi
+            mkdir -p "$badge_dir_abs"
+
+            write_badge_json "$badge_dir_abs/${badge_prefix}-status.json" "$badge_prefix" "$status" "$status_color"
+            write_badge_json "$badge_dir_abs/${badge_prefix}-errors.json" "${badge_prefix} errors" "$errors" "$( [ "$errors" -gt 0 ] && echo red || echo brightgreen )"
+            write_badge_json "$badge_dir_abs/${badge_prefix}-warnings.json" "${badge_prefix} warnings" "$warnings" "$( [ "$warnings" -gt 0 ] && echo yellow || echo brightgreen )"
+            write_badge_json "$badge_dir_abs/${badge_prefix}-passed.json" "${badge_prefix} passed" "$passed" "brightgreen"
+            write_badge_json "$badge_dir_abs/${badge_prefix}-scanned.json" "${badge_prefix} scanned" "$scanned" "blue"
+            write_badge_json "$badge_dir_abs/${badge_prefix}-skipped.json" "${badge_prefix} skipped" "$skipped" "lightgrey"
+
+            echo "badge-status=$status" >> "$GITHUB_OUTPUT"
+            echo "badge-directory=$badge_dir" >> "$GITHUB_OUTPUT"
+
+            if [ -n "$INPUT_BADGE_BASE_URL" ]; then
+              badge_base="${INPUT_BADGE_BASE_URL%/}"
+              status_url=$(to_shields_endpoint_url "$badge_base/${badge_prefix}-status.json")
+              errors_url=$(to_shields_endpoint_url "$badge_base/${badge_prefix}-errors.json")
+              warnings_url=$(to_shields_endpoint_url "$badge_base/${badge_prefix}-warnings.json")
+              passed_url=$(to_shields_endpoint_url "$badge_base/${badge_prefix}-passed.json")
+              scanned_url=$(to_shields_endpoint_url "$badge_base/${badge_prefix}-scanned.json")
+              skipped_url=$(to_shields_endpoint_url "$badge_base/${badge_prefix}-skipped.json")
+
+              echo "badge-status-url=$status_url" >> "$GITHUB_OUTPUT"
+              echo "badge-errors-url=$errors_url" >> "$GITHUB_OUTPUT"
+              echo "badge-warnings-url=$warnings_url" >> "$GITHUB_OUTPUT"
+              echo "badge-passed-url=$passed_url" >> "$GITHUB_OUTPUT"
+              echo "badge-scanned-url=$scanned_url" >> "$GITHUB_OUTPUT"
+              echo "badge-skipped-url=$skipped_url" >> "$GITHUB_OUTPUT"
+            fi
+
+            echo "Generated badges in: $badge_dir_abs"
+          fi
+        fi
 
         # Propagate exit code for scan/validate (exit 1 = issues found)
         exit $EXIT_CODE
