@@ -12,6 +12,9 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
+#### QtMesh Badges
+ [![qtmesh status](https://img.shields.io/badge/qtmesh-pass-brightgreen)](https://github.com/fernandotonon/QtMeshEditor/actions) [![qtmesh errors](https://img.shields.io/badge/qtmesh|%20errors-0-brightgreen)](https://github.com/fernandotonon/QtMeshEditor/actions) [![qtmesh warnings](https://img.shields.io/badge/qtmesh|%20warnings-2-yellow)](https://github.com/fernandotonon/QtMeshEditor/actions)
+
 ---
 
 ### 🔌 CI/CD — Validate Assets on Every PR
