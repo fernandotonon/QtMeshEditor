@@ -63,7 +63,6 @@ jobs:
         env:
           QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
           QTMESH_CLOUD_API_URL: https://api.qtmesh.ftonon.uk
-          QTMESH_CLOUD_API_URL_FALLBACK: https://qtmesh-cloud-api.misticgorram.workers.dev
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
         run: |
           if [ -z "${QTMESH_CLOUD_TOKEN:-}" ]; then
@@ -104,13 +103,7 @@ jobs:
             echo "QtMesh Cloud upload succeeded via ${QTMESH_CLOUD_API_URL}"
             cat /tmp/qtmesh-cloud-upload-response.json
           else
-            echo "::warning::Upload failed via ${QTMESH_CLOUD_API_URL}. Trying fallback URL."
-            if upload_report "${QTMESH_CLOUD_API_URL_FALLBACK}"; then
-              echo "QtMesh Cloud upload succeeded via fallback URL."
-              cat /tmp/qtmesh-cloud-upload-response.json
-            else
-              echo "::warning::QtMesh Cloud upload failed on both primary and fallback URLs."
-            fi
+            echo "::warning::QtMesh Cloud upload failed via ${QTMESH_CLOUD_API_URL}."
           fi
 
       - name: Scan media/ via GitHub Action (root action.yml)

@@ -13,7 +13,9 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
 #### QtMesh Badges
-[![qtmesh status](https://img.shields.io/endpoint?url=https%3A%2F%2Ffernandotonon.github.io%2FQtMeshEditor%2Fbadges%2Fqtmesh-status.json)](https://github.com/fernandotonon/QtMeshEditor/actions) [![qtmesh errors](https://img.shields.io/endpoint?url=https%3A%2F%2Ffernandotonon.github.io%2FQtMeshEditor%2Fbadges%2Fqtmesh-errors.json)](https://github.com/fernandotonon/QtMeshEditor/actions) [![qtmesh warnings](https://img.shields.io/endpoint?url=https%3A%2F%2Ffernandotonon.github.io%2FQtMeshEditor%2Fbadges%2Fqtmesh-warnings.json)](https://github.com/fernandotonon/QtMeshEditor/actions)
+[![qtmesh status](https://api.qtmesh.ftonon.uk/v1/projects/qtmesheditor/badges/qtmesh-status.svg)](https://github.com/fernandotonon/QtMeshEditor/actions)
+[![qtmesh errors](https://api.qtmesh.ftonon.uk/v1/projects/qtmesheditor/badges/qtmesh-errors.svg)](https://github.com/fernandotonon/QtMeshEditor/actions)
+[![qtmesh warnings](https://api.qtmesh.ftonon.uk/v1/projects/qtmesheditor/badges/qtmesh-warnings.svg)](https://github.com/fernandotonon/QtMeshEditor/actions)
 
 ---
 
