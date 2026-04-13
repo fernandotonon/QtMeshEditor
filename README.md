@@ -71,9 +71,55 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh scan ./assets 
 
 </details>
 
-### 🏷️ Shareable Scan Badges
+### ☁️ QtMesh Cloud Badges (Recommended)
 
-The action can generate Shields-compatible endpoint JSON badges from `scan` results, so you can show status/errors/warnings in your README or website.
+Register your repository in [QtMesh Cloud](https://qtmesh.ftonon.uk) to publish real scan badges from CI.
+
+1. Sign in at [qtmesh.ftonon.uk](https://qtmesh.ftonon.uk) and create a project (choose a slug like `my-game-assets`).
+2. Create a project token in QtMesh Cloud.
+3. Add the token as a GitHub secret named `QTMESH_CLOUD_TOKEN`.
+4. Upload each `scan` JSON report from CI to `https://api.qtmesh.ftonon.uk/v1/ingest/scan`.
+
+Example upload step:
+
+```yaml
+- name: Scan assets
+  run: |
+    docker run --rm \
+      -v "${{ github.workspace }}:/workspace" \
+      -w /workspace \
+      ghcr.io/fernandotonon/qtmesh:latest \
+      scan --config /workspace/qtmesh.yml --json > qtmesh-scan-report.json
+
+- name: Upload scan to QtMesh Cloud
+  env:
+    QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
+    QTMESH_CLOUD_API_URL: https://api.qtmesh.ftonon.uk
+  run: |
+    jq --arg branch "${GITHUB_REF_NAME}" \
+       --arg sha "${GITHUB_SHA}" \
+       --arg runId "${GITHUB_RUN_ID}" \
+       '. + {meta: {branch: $branch, commitSha: $sha, runId: $runId}}' \
+       qtmesh-scan-report.json > qtmesh-scan-upload.json
+
+    curl --fail --silent --show-error \
+      -X POST "${QTMESH_CLOUD_API_URL}/v1/ingest/scan" \
+      -H "Authorization: Bearer ${QTMESH_CLOUD_TOKEN}" \
+      -H "Content-Type: application/json" \
+      --data-binary @qtmesh-scan-upload.json
+```
+
+Badge markdown (replace `<project-slug>`):
+
+```md
+[![qtmesh status](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh errors](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh warnings](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.ftonon.uk)
+```
+
+### 🏷️ Self-Hosted Scan Badges (Legacy)
+
+You can also generate Shields-compatible endpoint JSON badges from `scan` results and host them yourself (for example via GitHub Pages).
 
 ```yaml
 name: QtMesh Badges

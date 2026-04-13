@@ -1,6 +1,8 @@
 export const links = {
   github: 'https://github.com/fernandotonon/QtMeshEditor',
   docs: './docs.html',
+  qtmeshCloud: 'https://qtmesh.ftonon.uk',
+  qtmeshCloudApi: 'https://api.qtmesh.ftonon.uk',
   releases: 'https://github.com/fernandotonon/QtMeshEditor/releases/latest',
   allReleases: 'https://github.com/fernandotonon/QtMeshEditor/releases',
   issues: 'https://github.com/fernandotonon/QtMeshEditor/issues',
@@ -96,6 +98,54 @@ export const pipelineExamples = {
   scanFixConvert: `qtmesh scan ./assets --fail-on error\nqtmesh fix character.fbx --all -o character_fixed.fbx\nqtmesh convert character_fixed.fbx -o character.glb2`
 };
 
+export const cloudBadgeSteps = [
+  {
+    title: 'Create your QtMesh Cloud project',
+    body: 'Sign in at qtmesh.ftonon.uk, then create a project and choose a stable slug for badge URLs.'
+  },
+  {
+    title: 'Store your token in CI secrets',
+    body: 'Generate a project token and save it as QTMESH_CLOUD_TOKEN in your GitHub repository secrets.'
+  },
+  {
+    title: 'Upload each scan report from CI',
+    body: 'POST the JSON report to /v1/ingest/scan so QtMesh Cloud tracks history and refreshes badge values.'
+  },
+  {
+    title: 'Embed live SVG badges',
+    body: 'Use the project slug in badge URLs to show real status, errors, and warnings in your README or website.'
+  }
+];
+
+export const cloudBadgeMarkdown = `[![qtmesh status](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh errors](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh warnings](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.ftonon.uk)`;
+
+export const cloudBadgeUploadExample = `- name: Scan assets
+  run: |
+    docker run --rm \\
+      -v "\${{ github.workspace }}:/workspace" \\
+      -w /workspace \\
+      ghcr.io/fernandotonon/qtmesh:latest \\
+      scan --config /workspace/qtmesh.yml --json > qtmesh-scan-report.json
+
+- name: Upload scan to QtMesh Cloud
+  env:
+    QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}
+    QTMESH_CLOUD_API_URL: https://api.qtmesh.ftonon.uk
+  run: |
+    jq --arg branch "\${GITHUB_REF_NAME}" \\
+       --arg sha "\${GITHUB_SHA}" \\
+       --arg runId "\${GITHUB_RUN_ID}" \\
+       '. + {meta: {branch: $branch, commitSha: $sha, runId: $runId}}' \\
+       qtmesh-scan-report.json > qtmesh-scan-upload.json
+
+    curl --fail --silent --show-error \\
+      -X POST "\${QTMESH_CLOUD_API_URL}/v1/ingest/scan" \\
+      -H "Authorization: Bearer \${QTMESH_CLOUD_TOKEN}" \\
+      -H "Content-Type: application/json" \\
+      --data-binary @qtmesh-scan-upload.json`;
+
 export const mixamoSteps = [
   {
     title: 'Import base + clips',
@@ -170,6 +220,7 @@ export const trustItems = [
 
 export const footerLinks = [
   { label: 'Documentation', href: links.docs },
+  { label: 'QtMesh Cloud', href: links.qtmeshCloud },
   { label: 'GitHub', href: links.github },
   { label: 'Releases', href: links.allReleases },
   { label: 'Issues', href: links.issues },

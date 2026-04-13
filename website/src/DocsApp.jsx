@@ -24,6 +24,7 @@ const NAV = [
     { id: 'scan-fix', label: 'Auto-Fix' },
   ]},
   { section: 'Integration', items: [
+    { id: 'qtmesh-cloud', label: 'QtMesh Cloud Badges' },
     { id: 'docker', label: 'Docker' },
     { id: 'github-actions', label: 'GitHub Actions' },
     { id: 'gitlab-ci', label: 'GitLab CI' },
@@ -689,6 +690,56 @@ scopes:
 
           {/* ─── Integration ─── */}
 
+          <section className={s.section} id="qtmesh-cloud">
+            <h2 className={s.sectionTitle}>QtMesh Cloud Badges</h2>
+            <p className={s.para}>
+              Use <a href="https://qtmesh.ftonon.uk" target="_blank" rel="noopener" style={{color: 'var(--accent-1)'}}>QtMesh Cloud</a> to
+              store scan history and serve live SVG badges from real CI results.
+            </p>
+
+            <h3 className={s.subsection}>1. Register project and token</h3>
+            <ol className={s.para} style={{ marginTop: '0.6rem', paddingLeft: '1.25rem' }}>
+              <li>Sign in at <Code>https://qtmesh.ftonon.uk</Code> and create your project.</li>
+              <li>Choose a project slug (for example <Code>my-game-assets</Code>).</li>
+              <li>Create a project token and save it in GitHub Secrets as <Code>QTMESH_CLOUD_TOKEN</Code>.</li>
+            </ol>
+
+            <h3 className={s.subsection}>2. Upload scan report from CI</h3>
+            <CodeBlock lang="yaml">{`- name: Scan assets
+  run: |
+    docker run --rm \\
+      -v "\${{ github.workspace }}:/workspace" \\
+      -w /workspace \\
+      ghcr.io/fernandotonon/qtmesh:latest \\
+      scan --config /workspace/qtmesh.yml --json > qtmesh-scan-report.json
+
+- name: Upload scan to QtMesh Cloud
+  env:
+    QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}
+    QTMESH_CLOUD_API_URL: https://api.qtmesh.ftonon.uk
+  run: |
+    jq --arg branch "\${GITHUB_REF_NAME}" \\
+       --arg sha "\${GITHUB_SHA}" \\
+       --arg runId "\${GITHUB_RUN_ID}" \\
+       '. + {meta: {branch: $branch, commitSha: $sha, runId: $runId}}' \\
+       qtmesh-scan-report.json > qtmesh-scan-upload.json
+
+    curl --fail --silent --show-error \\
+      -X POST "\${QTMESH_CLOUD_API_URL}/v1/ingest/scan" \\
+      -H "Authorization: Bearer \${QTMESH_CLOUD_TOKEN}" \\
+      -H "Content-Type: application/json" \\
+      --data-binary @qtmesh-scan-upload.json`}</CodeBlock>
+
+            <h3 className={s.subsection}>3. Use live badge URLs</h3>
+            <CodeBlock lang="md">{`[![qtmesh status](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh errors](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh warnings](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.ftonon.uk)`}</CodeBlock>
+
+            <p className={s.para}>
+              Badge values update after each successful upload to <Code>/v1/ingest/scan</Code>.
+            </p>
+          </section>
+
           <section className={s.section} id="docker">
             <h2 className={s.sectionTitle}>Docker</h2>
             <p className={s.para}>All CLI commands work via Docker. The image includes a headless OpenGL environment for Ogre-based operations.</p>
@@ -759,7 +810,7 @@ jobs:
 
 - run: echo "\${{ steps.info.outputs.result }}"`}</CodeBlock>
 
-            <h3 className={s.subsection}>Generate scan badges (Shields endpoint JSON)</h3>
+            <h3 className={s.subsection}>Self-hosted scan badges (legacy Shields endpoint JSON)</h3>
             <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor@v1
   id: scan
   with:

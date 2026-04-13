@@ -6,6 +6,9 @@ import CodePanel from './components/CodePanel';
 import FeatureCard from './components/FeatureCard';
 import Section from './components/Section';
 import {
+  cloudBadgeMarkdown,
+  cloudBadgeSteps,
+  cloudBadgeUploadExample,
   footerLinks,
   hero,
   highlightFeatures,
@@ -252,6 +255,40 @@ function App() {
               <figcaption className={styles.mediaCaption}>Pipeline validation and inspection workflow</figcaption>
             </figure>
           </header>
+
+          <Section
+            id="qtmesh-cloud-badges"
+            eyebrow="Main Topic"
+            title="QtMesh Cloud badges and scan history"
+            subtitle="Register your repository in QtMesh Cloud and publish real CI scan results as live SVG badges for status, errors, and warnings."
+          >
+            <div className={styles.pipelineFlow}>
+              {cloudBadgeSteps.map((item, index) => (
+                <article key={item.title} className={styles.pipelineNode}>
+                  <span className={styles.pipelineNodeIndex}>{index + 1}</span>
+                  <h3 className={styles.pipelineNodeTitle}>{item.title}</h3>
+                  <p className={styles.pipelineNodeBody}>{item.body}</p>
+                </article>
+              ))}
+            </div>
+
+            <div className={styles.codeGrid}>
+              <CodePanel title="GitHub Actions: upload scan report" code={cloudBadgeUploadExample} label="yaml" />
+              <CodePanel title="README badge snippet" code={cloudBadgeMarkdown} label="md" />
+            </div>
+
+            <div className={styles.cliLinks}>
+              <a href={links.qtmeshCloud} target="_blank" rel="noreferrer">
+                Register on QtMesh Cloud
+              </a>
+              <a href={`${links.qtmeshCloudApi}/v1/projects/qtmesheditor/badges/qtmesh-status.svg`} target="_blank" rel="noreferrer">
+                View live badge example
+              </a>
+              <a href={links.docs} target="_blank" rel="noreferrer">
+                Read integration docs
+              </a>
+            </div>
+          </Section>
 
           <Section
             id="pipeline"
