@@ -1758,10 +1758,10 @@ jobs:
 
         echo "Updating cask to version $VERSION with SHA256 $SHA256"
 
-        # Update version (Homebrew cask uses single quotes)
+        # Only update version and sha256 — the cask file contains CLI symlink
+        # stanzas (binary, postflight/uninstall_postflight for qtmesh) that
+        # must be preserved. sed only touches the matching lines.
         sed -i "s/version '.*'/version '$VERSION'/" "$CASK_FILE"
-
-        # Update sha256 (Homebrew cask uses single quotes)
         sed -i "s/sha256 '.*'/sha256 '$SHA256'/" "$CASK_FILE"
 
         echo "Updated cask file:"
