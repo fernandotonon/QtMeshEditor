@@ -37,6 +37,19 @@ jobs:
         working-directory: website
         run: npm run build
 
+      - name: Generate QtMesh badge JSON files
+        id: qtmesh-badges
+        continue-on-error: true
+        uses: ./
+        with:
+          command: scan
+          input-file: .
+          options: --config /workspace/qtmesh.yml --json
+          generate-badges: true
+          badge-output-dir: website/dist/badges
+          badge-label-prefix: qtmesh
+          badge-base-url: https://fernandotonon.github.io/QtMeshEditor/badges
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
