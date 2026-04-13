@@ -123,14 +123,28 @@ runs:
           cmd+=("${opts[@]}")
         fi
 
+        tmp_stdout=$(mktemp)
+        tmp_stderr=$(mktemp)
+        trap 'rm -f "$tmp_stdout" "$tmp_stderr"' EXIT
+
         set +e
-        OUTPUT=$(docker run --rm \
+        docker run --rm \
           --user "$(id -u):$(id -g)" \
           -v "${{ github.workspace }}:/workspace" \
           "ghcr.io/fernandotonon/qtmesh:${{ inputs.image-tag }}" \
-          "${cmd[@]}" 2>&1)
+          "${cmd[@]}" >"$tmp_stdout" 2>"$tmp_stderr"
         EXIT_CODE=$?
         set -e
+
+        STDOUT_OUTPUT=$(cat "$tmp_stdout")
+        STDERR_OUTPUT=$(cat "$tmp_stderr")
+        if [ -n "$STDOUT_OUTPUT" ] && [ -n "$STDERR_OUTPUT" ]; then
+          OUTPUT="${STDOUT_OUTPUT}"$'\n'"${STDERR_OUTPUT}"
+        elif [ -n "$STDOUT_OUTPUT" ]; then
+          OUTPUT="$STDOUT_OUTPUT"
+        else
+          OUTPUT="$STDERR_OUTPUT"
+        fi
 
         echo "result<<EOF" >> "$GITHUB_OUTPUT"
         echo "$OUTPUT" >> "$GITHUB_OUTPUT"
@@ -138,7 +152,12 @@ runs:
         echo "exit-code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
 
         # Print output for workflow logs
-        echo "$OUTPUT"
+        if [ -n "$STDOUT_OUTPUT" ]; then
+          echo "$STDOUT_OUTPUT"
+        fi
+        if [ -n "$STDERR_OUTPUT" ]; then
+          echo "$STDERR_OUTPUT" >&2
+        fi
 
         if [ "${INPUT_GENERATE_BADGES}" = "true" ] && [ "$INPUT_COMMAND" = "scan" ]; then
           if ! command -v jq >/dev/null 2>&1; then
@@ -150,12 +169,12 @@ runs:
             errors=""
             skipped=""
 
-            if printf '%s\n' "$OUTPUT" | jq -e '.summary | type == "object"' >/dev/null 2>&1; then
-              scanned=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.scanned // 0')
-              passed=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.passed // 0')
-              warnings=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.warnings // 0')
-              errors=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.errors // 0')
-              skipped=$(printf '%s\n' "$OUTPUT" | jq -r '.summary.skipped // 0')
+            if printf '%s\n' "$STDOUT_OUTPUT" | jq -e '.summary | type == "object"' >/dev/null 2>&1; then
+              scanned=$(printf '%s\n' "$STDOUT_OUTPUT" | jq -r '.summary.scanned // 0')
+              passed=$(printf '%s\n' "$STDOUT_OUTPUT" | jq -r '.summary.passed // 0')
+              warnings=$(printf '%s\n' "$STDOUT_OUTPUT" | jq -r '.summary.warnings // 0')
+              errors=$(printf '%s\n' "$STDOUT_OUTPUT" | jq -r '.summary.errors // 0')
+              skipped=$(printf '%s\n' "$STDOUT_OUTPUT" | jq -r '.summary.skipped // 0')
             else
               clean_output=$(printf '%s\n' "$OUTPUT" | sed -E 's/\x1B\[[0-9;]*[mK]//g')
               scanned=$(parse_metric_from_text "$clean_output" "Scanned")
