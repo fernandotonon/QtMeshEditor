@@ -40,14 +40,78 @@ jobs:
 
       - name: Scan media/ via Docker (ghcr.io/fernandotonon/qtmesh:latest)
         run: |
+          set +e
           docker run --rm \
             -v "${{ github.workspace }}:/workspace" \
             -w /workspace \
             ghcr.io/fernandotonon/qtmesh:latest \
-            scan --config /workspace/qtmesh.yml --json || {
+            scan --config /workspace/qtmesh.yml --json > qtmesh-scan-report.json
+          scan_exit=$?
+          set -e
+
+          if [ "$scan_exit" -ne 0 ]; then
             echo "::warning::Docker asset scan reported issues (using latest published image)"
-            true
+          fi
+
+          if ! jq -e '.summary and .version' qtmesh-scan-report.json >/dev/null 2>&1; then
+            echo "::warning::Docker scan output was not valid JSON. Cloud upload will be skipped."
+            echo '{}' > qtmesh-scan-report.json
+          fi
+
+      - name: Upload scan report to QtMesh Cloud
+        if: always()
+        env:
+          QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
+          QTMESH_CLOUD_API_URL: https://api.qtmesh.ftonon.uk
+          QTMESH_CLOUD_API_URL_FALLBACK: https://qtmesh-cloud-api.misticgorram.workers.dev
+          GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
+        run: |
+          if [ -z "${QTMESH_CLOUD_TOKEN:-}" ]; then
+            echo "::notice::QTMESH_CLOUD_TOKEN is not set. Skipping QtMesh Cloud upload."
+            exit 0
+          fi
+
+          if ! jq -e '.summary and .version' qtmesh-scan-report.json >/dev/null 2>&1; then
+            echo "::warning::No valid scan JSON payload found. Skipping QtMesh Cloud upload."
+            exit 0
+          fi
+
+          if [ -n "${GITHUB_PR_NUMBER:-}" ]; then
+            jq --arg branch "${GITHUB_REF_NAME}" \
+               --arg sha "${GITHUB_SHA}" \
+               --arg runId "${GITHUB_RUN_ID}" \
+               --argjson pr "${GITHUB_PR_NUMBER}" \
+               '. + {meta: {branch: $branch, commitSha: $sha, runId: $runId, prNumber: $pr}}' \
+               qtmesh-scan-report.json > qtmesh-scan-upload.json
+          else
+            jq --arg branch "${GITHUB_REF_NAME}" \
+               --arg sha "${GITHUB_SHA}" \
+               --arg runId "${GITHUB_RUN_ID}" \
+               '. + {meta: {branch: $branch, commitSha: $sha, runId: $runId}}' \
+               qtmesh-scan-report.json > qtmesh-scan-upload.json
+          fi
+
+          upload_report() {
+            local base_url="${1%/}"
+            curl --silent --show-error --fail \
+              -X POST "${base_url}/v1/ingest/scan" \
+              -H "Authorization: Bearer ${QTMESH_CLOUD_TOKEN}" \
+              -H "Content-Type: application/json" \
+              --data-binary @qtmesh-scan-upload.json >/tmp/qtmesh-cloud-upload-response.json
           }
+
+          if upload_report "${QTMESH_CLOUD_API_URL}"; then
+            echo "QtMesh Cloud upload succeeded via ${QTMESH_CLOUD_API_URL}"
+            cat /tmp/qtmesh-cloud-upload-response.json
+          else
+            echo "::warning::Upload failed via ${QTMESH_CLOUD_API_URL}. Trying fallback URL."
+            if upload_report "${QTMESH_CLOUD_API_URL_FALLBACK}"; then
+              echo "QtMesh Cloud upload succeeded via fallback URL."
+              cat /tmp/qtmesh-cloud-upload-response.json
+            else
+              echo "::warning::QtMesh Cloud upload failed on both primary and fallback URLs."
+            fi
+          fi
 
       - name: Scan media/ via GitHub Action (root action.yml)
         uses: ./
