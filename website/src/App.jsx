@@ -273,8 +273,8 @@ function App() {
               <figure className={`${styles.demoMain} reveal`}>
                 <img
                   className={styles.demoImage}
-                  src={media.skeletonPreview.src}
-                  alt={media.skeletonPreview.alt}
+                  src={media.pipelineCiCd.src}
+                  alt={media.pipelineCiCd.alt}
                   loading="lazy"
                 />
               </figure>

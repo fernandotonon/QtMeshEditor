@@ -15,6 +15,10 @@ export const media = {
     src: 'https://github.com/user-attachments/assets/441f90c5-1968-4838-8001-4ca24856a501',
     alt: 'QtMeshEditor animation merge workflow with imported FBX assets'
   },
+  pipelineCiCd: {
+    src: 'https://github.com/user-attachments/assets/1c7a7965-4bec-4e6d-8197-78d4435c8d46',
+    alt: 'QtMeshEditor CI/CD pipeline overview'
+  },
   skeletonPreview: {
     src: 'https://github.com/user-attachments/assets/289403ac-8952-488c-bc65-0a768ab278e1',
     alt: 'Bone weight and skeleton validation preview in QtMeshEditor'

@@ -12,6 +12,9 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
+#### QtMesh Badges
+[![qtmesh status](https://img.shields.io/endpoint?url=https%3A%2F%2Ffernandotonon.github.io%2FQtMeshEditor%2Fbadges%2Fqtmesh-status.json)](https://github.com/fernandotonon/QtMeshEditor/actions) [![qtmesh errors](https://img.shields.io/endpoint?url=https%3A%2F%2Ffernandotonon.github.io%2FQtMeshEditor%2Fbadges%2Fqtmesh-errors.json)](https://github.com/fernandotonon/QtMeshEditor/actions) [![qtmesh warnings](https://img.shields.io/endpoint?url=https%3A%2F%2Ffernandotonon.github.io%2FQtMeshEditor%2Fbadges%2Fqtmesh-warnings.json)](https://github.com/fernandotonon/QtMeshEditor/actions)
+
 ---
 
 ### 🔌 CI/CD — Validate Assets on Every PR
@@ -65,6 +68,65 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh scan ./assets 
 ```
 
 </details>
+
+### 🏷️ Shareable Scan Badges
+
+The action can generate Shields-compatible endpoint JSON badges from `scan` results, so you can show status/errors/warnings in your README or website.
+
+```yaml
+name: QtMesh Badges
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  scan-and-publish-badges:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run scan + generate badge JSON files
+        id: scan
+        uses: fernandotonon/QtMeshEditor@v1
+        with:
+          command: scan
+          input-file: .
+          options: --config /workspace/qtmesh.yml --json
+          generate-badges: true
+          badge-output-dir: badges
+          badge-label-prefix: qtmesh
+          badge-base-url: https://<USER>.github.io/<REPO>/badges
+
+      - name: Publish badges to gh-pages/badges
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./badges
+          destination_dir: badges
+          keep_files: true
+```
+
+Example badge markdown (after publishing `badges/*.json`):
+
+```md
+[![qtmesh status](https://img.shields.io/endpoint?url=https%3A%2F%2F<USER>.github.io%2F<REPO>%2Fbadges%2Fqtmesh-status.json)](https://github.com/<USER>/<REPO>/actions)
+[![qtmesh errors](https://img.shields.io/endpoint?url=https%3A%2F%2F<USER>.github.io%2F<REPO>%2Fbadges%2Fqtmesh-errors.json)](https://github.com/<USER>/<REPO>/actions)
+[![qtmesh warnings](https://img.shields.io/endpoint?url=https%3A%2F%2F<USER>.github.io%2F<REPO>%2Fbadges%2Fqtmesh-warnings.json)](https://github.com/<USER>/<REPO>/actions)
+```
+
+Generated files:
+
+- `qtmesh-status.json`
+- `qtmesh-errors.json`
+- `qtmesh-warnings.json`
+- `qtmesh-passed.json`
+- `qtmesh-scanned.json`
+- `qtmesh-skipped.json`
 
 ---
 

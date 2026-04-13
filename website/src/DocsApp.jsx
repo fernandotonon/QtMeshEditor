@@ -759,6 +759,35 @@ jobs:
 
 - run: echo "\${{ steps.info.outputs.result }}"`}</CodeBlock>
 
+            <h3 className={s.subsection}>Generate scan badges (Shields endpoint JSON)</h3>
+            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor@v1
+  id: scan
+  with:
+    command: scan
+    input-file: .
+    options: --config /workspace/qtmesh.yml --json
+    generate-badges: true
+    badge-output-dir: badges
+    badge-label-prefix: qtmesh
+    badge-base-url: https://<USER>.github.io/<REPO>/badges
+
+- name: Publish badges to gh-pages/badges
+  uses: peaceiris/actions-gh-pages@v4
+  with:
+    github_token: \${{ secrets.GITHUB_TOKEN }}
+    publish_dir: ./badges
+    destination_dir: badges
+    keep_files: true
+
+- run: |
+    echo "Status badge URL:"
+    echo "\${{ steps.scan.outputs.badge-status-url }}"`}</CodeBlock>
+
+            <h3 className={s.subsection}>README badge snippet</h3>
+            <CodeBlock lang="md">{`[![qtmesh status](https://img.shields.io/endpoint?url=https%3A%2F%2F<USER>.github.io%2F<REPO>%2Fbadges%2Fqtmesh-status.json)](https://github.com/<USER>/<REPO>/actions)
+[![qtmesh errors](https://img.shields.io/endpoint?url=https%3A%2F%2F<USER>.github.io%2F<REPO>%2Fbadges%2Fqtmesh-errors.json)](https://github.com/<USER>/<REPO>/actions)
+[![qtmesh warnings](https://img.shields.io/endpoint?url=https%3A%2F%2F<USER>.github.io%2F<REPO>%2Fbadges%2Fqtmesh-warnings.json)](https://github.com/<USER>/<REPO>/actions)`}</CodeBlock>
+
             <h3 className={s.subsection}>Direct Docker usage</h3>
             <CodeBlock lang="yaml">{`- name: Scan assets
   run: |
