@@ -3,6 +3,7 @@
 #include "ScanEngine.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
@@ -591,6 +592,9 @@ TEST(ScanEngineTest, FormatJson_Structure)
     f.message = "200000 vertices exceeds limit of 100000";
     result.findings.append(f);
 
+    result.scanStartedUtc = QStringLiteral("2024-06-15T12:00:00.000Z");
+    result.scanCompletedUtc = QStringLiteral("2024-06-15T12:00:01.000Z");
+
     QString json = ScanEngine::formatJson(result);
     EXPECT_TRUE(json.contains("\"scanned\": 2"));
     EXPECT_TRUE(json.contains("\"max_vertex_count\""));
@@ -728,6 +732,8 @@ TEST(ScanEngineTest, FormatText_SummaryUsesIcons)
     EXPECT_TRUE(text.contains("🔧 Fixed:"));
     EXPECT_TRUE(text.contains("⏭ Skipped:"));
     EXPECT_TRUE(text.contains("⏱ Time:"));
+    EXPECT_TRUE(text.contains("UTC start:"));
+    EXPECT_TRUE(text.contains("UTC end:"));
 }
 
 TEST(ScanEngineTest, FormatText_ColorizesStatusWhenEnabled)
@@ -772,6 +778,8 @@ TEST(ScanEngineTest, FormatSarif_ValidStructure)
     EXPECT_TRUE(sarif.contains("\"version\": \"2.1.0\""));
     EXPECT_TRUE(sarif.contains("qtmesh scan"));
     EXPECT_TRUE(sarif.contains("max_vertex_count"));
+    EXPECT_TRUE(sarif.contains("\"startTimeUtc\""));
+    EXPECT_TRUE(sarif.contains("\"endTimeUtc\""));
 }
 
 TEST(ScanEngineTest, FormatSarif_FixableProperties)
@@ -1310,6 +1318,15 @@ TEST(ScanEngineTest, Run_AggregatesPassedAndSkippedCounts)
     EXPECT_EQ(result.skipped, 1);
     EXPECT_GE(result.errors, 1);
     EXPECT_EQ(result.assets.size(), 2);
+    EXPECT_FALSE(result.scanStartedUtc.isEmpty());
+    EXPECT_FALSE(result.scanCompletedUtc.isEmpty());
+    EXPECT_TRUE(result.scanStartedUtc.endsWith(QLatin1Char('Z')));
+    EXPECT_TRUE(result.scanCompletedUtc.endsWith(QLatin1Char('Z')));
+    const QDateTime tStart = QDateTime::fromString(result.scanStartedUtc, Qt::ISODateWithMs);
+    const QDateTime tEnd = QDateTime::fromString(result.scanCompletedUtc, Qt::ISODateWithMs);
+    EXPECT_TRUE(tStart.isValid());
+    EXPECT_TRUE(tEnd.isValid());
+    EXPECT_LE(tStart, tEnd);
 }
 
 TEST(ScanEngineTest, Run_UsesConfiguredRootsWhenNoOverrideProvided)

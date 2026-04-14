@@ -1984,12 +1984,16 @@ TEST(CLIPipelineCmdScan, WritesJsonAndSarifReports)
     const QString reportContent = QString::fromUtf8(reportFile.readAll());
     EXPECT_TRUE(reportContent.contains("\"summary\""));
     EXPECT_TRUE(reportContent.contains("\"assets\""));
+    EXPECT_TRUE(reportContent.contains("\"scanStartedUtc\""));
+    EXPECT_TRUE(reportContent.contains("\"scanCompletedUtc\""));
 
     QFile sarifFile(sarifPath);
     ASSERT_TRUE(sarifFile.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString sarifContent = QString::fromUtf8(sarifFile.readAll());
     EXPECT_TRUE(sarifContent.contains("\"runs\""));
     EXPECT_TRUE(sarifContent.contains("qtmesh scan"));
+    EXPECT_TRUE(sarifContent.contains("\"startTimeUtc\""));
+    EXPECT_TRUE(sarifContent.contains("\"endTimeUtc\""));
 }
 
 TEST(CLIPipelineCmdScan, ReportAndSarifAreWrittenWithFailOnNever)

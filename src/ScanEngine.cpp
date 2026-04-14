@@ -1,5 +1,6 @@
 #include "ScanEngine.h"
 
+#include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
 #include <QElapsedTimer>
@@ -506,6 +507,8 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
                            const AssetProcessedCallback& onAssetProcessed)
 {
     ScanResult result;
+    const QString utcFmt = QStringLiteral("yyyy-MM-dd'T'HH:mm:ss.zzz'Z'");
+    result.scanStartedUtc = QDateTime::currentDateTimeUtc().toString(utcFmt);
     QElapsedTimer timer;
     timer.start();
 
@@ -562,6 +565,7 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
     }
 
     result.elapsedMs = timer.elapsed();
+    result.scanCompletedUtc = QDateTime::currentDateTimeUtc().toString(utcFmt);
     return result;
 }
 
@@ -637,6 +641,10 @@ QString ScanEngine::formatText(const ScanResult& result, const ScanConfig& confi
     if (result.skipped > 0)
         s << "  ⏭ Skipped:  " << result.skipped << "\n";
     s << "  ⏱ Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
+    QString utcStart, utcEnd;
+    scanReportUtcTimes(result, &utcStart, &utcEnd);
+    s << "  UTC start:  " << utcStart << "\n";
+    s << "  UTC end:    " << utcEnd << "\n";
 
     return out;
 }
@@ -663,10 +671,28 @@ static QString findingMessageForExport(const Finding& f)
     return f.message;
 }
 
+void ScanEngine::scanReportUtcTimes(const ScanResult& result, QString* scanStartedUtc,
+                                    QString* scanCompletedUtc)
+{
+    const QString fmt = QStringLiteral("yyyy-MM-dd'T'HH:mm:ss.zzz'Z'");
+    QString end = result.scanCompletedUtc;
+    QString start = result.scanStartedUtc;
+    if (end.isEmpty())
+        end = QDateTime::currentDateTimeUtc().toString(fmt);
+    if (start.isEmpty())
+        start = end;
+    *scanStartedUtc = start;
+    *scanCompletedUtc = end;
+}
+
 QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
 {
     QJsonObject root;
     root["version"] = QTMESHEDITOR_VERSION;
+    QString utcStart, utcEnd;
+    scanReportUtcTimes(result, &utcStart, &utcEnd);
+    root["scanStartedUtc"] = utcStart;
+    root["scanCompletedUtc"] = utcEnd;
 
     // Summary
     QJsonObject summary;
@@ -841,6 +867,13 @@ QString ScanEngine::formatSarif(const ScanResult& result)
     QJsonObject run;
     run["tool"] = tool;
     run["results"] = resultsArr;
+    QString sarifStart, sarifEnd;
+    scanReportUtcTimes(result, &sarifStart, &sarifEnd);
+    QJsonObject invocation;
+    invocation["startTimeUtc"] = sarifStart;
+    invocation["endTimeUtc"] = sarifEnd;
+    invocation["executionSuccessful"] = true;
+    run["invocations"] = QJsonArray{invocation};
 
     QJsonObject sarif;
     sarif["$schema"] = "https://json.schemastore.org/sarif-2.1.0.json";

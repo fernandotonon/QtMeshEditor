@@ -157,6 +157,10 @@ static QString formatScanSummary(const ScanResult& result, bool colorize)
     if (result.skipped > 0)
         s << "  " << skippedIcon << " Skipped:  " << result.skipped << "\n";
     s << "  " << timeIcon << " Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
+    QString utcStart, utcEnd;
+    ScanEngine::scanReportUtcTimes(result, &utcStart, &utcEnd);
+    s << "  UTC start:  " << utcStart << "\n";
+    s << "  UTC end:    " << utcEnd << "\n";
     return out;
 }
 
