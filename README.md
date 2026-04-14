@@ -13,9 +13,11 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
 #### QtMesh Badges
-[![qtmesh status](https://api.qtmesh.ftonon.uk/v1/projects/qtmesheditor/badges/qtmesh-status.svg)](https://github.com/fernandotonon/QtMeshEditor/actions)
-[![qtmesh errors](https://api.qtmesh.ftonon.uk/v1/projects/qtmesheditor/badges/qtmesh-errors.svg)](https://github.com/fernandotonon/QtMeshEditor/actions)
-[![qtmesh warnings](https://api.qtmesh.ftonon.uk/v1/projects/qtmesheditor/badges/qtmesh-warnings.svg)](https://github.com/fernandotonon/QtMeshEditor/actions)
+[![qtmesh status](https://api.qtmesh.ftonon.uk/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh score](https://api.qtmesh.ftonon.uk/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-score.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh errors](https://api.qtmesh.ftonon.uk/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-errors.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh warnings](https://api.qtmesh.ftonon.uk/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-warnings.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh models](https://api.qtmesh.ftonon.uk/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-models.svg)](https://qtmesh.ftonon.uk)
 
 ---
 
