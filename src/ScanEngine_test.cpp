@@ -5,6 +5,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QJsonDocument>
 #include <QTemporaryDir>
 
 namespace {
@@ -594,6 +595,10 @@ TEST(ScanEngineTest, FormatJson_Structure)
     EXPECT_TRUE(json.contains("\"scanned\": 2"));
     EXPECT_TRUE(json.contains("\"max_vertex_count\""));
     EXPECT_TRUE(json.contains("bad.fbx"));
+
+    const QJsonObject reportObj = ScanEngine::scanReportToJsonObject(result);
+    const QString fromObj = QString::fromUtf8(QJsonDocument(reportObj).toJson(QJsonDocument::Indented));
+    EXPECT_EQ(fromObj, json);
 }
 
 TEST(ScanEngineTest, FormatJson_IncludesAnimationsBonesAndLoadError)

@@ -64,6 +64,7 @@ WelcomeScreenController.cpp
 WelcomeDialog.cpp
 ScanConfig.cpp
 ScanEngine.cpp
+QtMeshCloudClient.cpp
 AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
 EditableMesh.cpp
@@ -135,6 +136,7 @@ WelcomeScreenController.h
 WelcomeDialog.h
 ScanConfig.h
 ScanEngine.h
+QtMeshCloudClient.h
 AssetBrowserController.h
 MaterialPreviewRenderer.h
 EditableMesh.h

@@ -8,6 +8,7 @@
 #include "SentryReporter.h"
 #include "ScanConfig.h"
 #include "ScanEngine.h"
+#include "QtMeshCloudClient.h"
 #include <QApplication>
 #include <QWidget>
 #include <QDir>
@@ -165,6 +166,21 @@ static QTextStream& err()
     return s;
 }
 
+/// Ingest token: `--token` overrides `QTMESH_TOKEN`, then `QTMESH_CLOUD_TOKEN`.
+static QString resolveIngestToken(const QString& flagToken)
+{
+    const QString trimmed = flagToken.trimmed();
+    if (!trimmed.isEmpty())
+        return trimmed;
+    const QByteArray a = qgetenv("QTMESH_TOKEN");
+    if (!a.isEmpty())
+        return QString::fromUtf8(a);
+    const QByteArray b = qgetenv("QTMESH_CLOUD_TOKEN");
+    if (!b.isEmpty())
+        return QString::fromUtf8(b);
+    return {};
+}
+
 static bool s_verbose = false;
 static bool s_noTelemetry = false;
 
@@ -262,6 +278,14 @@ void CLIPipeline::printUsage()
         "  --require-animation-names <list> Required animation names/patterns CSV\n"
         "  --require-bone-names <list> Required bone names/patterns CSV\n"
         "  --fail-on <level>         Exit 1 threshold: info, warning, error, never\n"
+        "  --token <token>           Ingest token (overrides QTMESH_TOKEN / QTMESH_CLOUD_TOKEN)\n"
+        "  --no-upload               Skip POSTing scan JSON to QtMesh Cloud when a token is set\n"
+        "  --strict-upload           Exit 1 if cloud upload fails (default: warn only)\n"
+        "\n"
+        "  Cloud rules: if no --config and no local qtmesh.yml|yaml|json, QTMESH_TOKEN loads\n"
+        "  remote rules from the API; otherwise built-in defaults apply if the API is unreachable.\n"
+        "  --config or a local file skips fetching remote rules; scan JSON still uploads when a\n"
+        "  token is set (unless --no-upload). Override API base with QTMESH_API_BASE.\n"
         "\n"
         "Fix flags:\n"
         "  --remove-degenerates  Remove degenerate triangles\n"
@@ -1750,6 +1774,9 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     // Parse: scan [path] [options]
     QString scanRoot;
     QString configPath;
+    QString tokenArg;
+    bool strictUpload = false;
+    bool noUpload = false;
     bool jsonOutput = false;
     QString reportPath;
     QString sarifPath;
@@ -1844,6 +1871,8 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (arg == "--json")    { jsonOutput = true; continue; }
         if (arg == "--fix")     { fix = true; continue; }
         if (arg == "--dry-run") { dryRun = true; continue; }
+        if (arg == "--strict-upload") { strictUpload = true; continue; }
+        if (arg == "--no-upload") { noUpload = true; continue; }
         QString value;
         ParseValueResult parseResult = parseValueArg(arg, "--config", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
@@ -1863,6 +1892,9 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         parseResult = parseValueArg(arg, "--fail-on", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
         if (parseResult == ParseValueResult::Matched) { failOn = value; continue; }
+        parseResult = parseValueArg(arg, "--token", i, value);
+        if (parseResult == ParseValueResult::Error) return 2;
+        if (parseResult == ParseValueResult::Matched) { tokenArg = value; continue; }
         parseResult = parseValueArg(arg, "--allowed-formats", i, value);
         if (parseResult == ParseValueResult::Error) return 2;
         if (parseResult == ParseValueResult::Matched) {
@@ -1986,7 +2018,11 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (!arg.startsWith("-") && scanRoot.isEmpty()) { scanRoot = arg; continue; }
     }
 
-    // Load config: explicit file → auto-detect → defaults
+    // Load config (precedence):
+    // 1) --config path (never fetch remote rules)
+    // 2) Else local qtmesh.yml | yaml | json in cwd (never fetch remote rules)
+    // 3) Else if ingest token set → GET /v1/ingest/rules, or defaults if API fails
+    // 4) Else built-in defaults
     ScanConfig config;
     if (!configPath.isEmpty()) {
         if (!QFileInfo::exists(configPath)) {
@@ -1994,14 +2030,40 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
             return 2;
         }
         config = ScanConfig::loadFromFile(configPath);
-    } else if (QFileInfo::exists("qtmesh.yml")) {
-        config = ScanConfig::loadFromFile("qtmesh.yml");
-    } else if (QFileInfo::exists("qtmesh.yaml")) {
-        config = ScanConfig::loadFromFile("qtmesh.yaml");
-    } else if (QFileInfo::exists("qtmesh.json")) {
-        config = ScanConfig::loadFromFile("qtmesh.json");
+        if (!resolveIngestToken(tokenArg).isEmpty()) {
+            err() << "Note: Using --config file; remote cloud rules were not fetched."
+                 << " Scan JSON is still uploaded when an ingest token is set (unless --no-upload)."
+                 << Qt::endl;
+        }
     } else {
-        config = ScanConfig::defaults();
+        QString localAutoPath;
+        if (QFileInfo::exists(QStringLiteral("qtmesh.yml")))
+            localAutoPath = QStringLiteral("qtmesh.yml");
+        else if (QFileInfo::exists(QStringLiteral("qtmesh.yaml")))
+            localAutoPath = QStringLiteral("qtmesh.yaml");
+        else if (QFileInfo::exists(QStringLiteral("qtmesh.json")))
+            localAutoPath = QStringLiteral("qtmesh.json");
+
+        if (!localAutoPath.isEmpty()) {
+            config = ScanConfig::loadFromFile(localAutoPath);
+            err() << "Note: Using local " << localAutoPath
+                 << " — QtMesh Cloud remote rules are not used for validation." << Qt::endl;
+        } else {
+            const QString ingestForRules = resolveIngestToken(tokenArg);
+            if (!ingestForRules.isEmpty()) {
+                const auto rules = QtMeshCloudClient::fetchRules(ingestForRules);
+                if (rules.ok) {
+                    config = ScanConfig::fromJson(rules.config);
+                    err() << "Note: Using QtMesh Cloud rules (source: " << rules.source << ")." << Qt::endl;
+                } else {
+                    err() << "Warning: Could not load QtMesh Cloud rules (" << rules.errorString
+                         << "). Using built-in defaults." << Qt::endl;
+                    config = ScanConfig::defaults();
+                }
+            } else {
+                config = ScanConfig::defaults();
+            }
+        }
     }
 
     // CLI overrides
@@ -2143,9 +2205,11 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
                   })
             : ScanEngine::AssetProcessedCallback());
 
+    const QJsonObject reportJson = ScanEngine::scanReportToJsonObject(result);
+
     // Output to terminal
     if (jsonOutput) {
-        cliWrite(ScanEngine::formatJson(result) + "\n");
+        cliWrite(QString::fromUtf8(QJsonDocument(reportJson).toJson(QJsonDocument::Indented)) + "\n");
     } else {
         cliWrite(formatScanSummary(result, colorizeTextOutput));
     }
@@ -2155,7 +2219,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         QFile f(reportPath);
         QDir().mkpath(QFileInfo(reportPath).path());
         if (f.open(QIODevice::WriteOnly | QIODevice::Text))
-            f.write(ScanEngine::formatJson(result).toUtf8());
+            f.write(QJsonDocument(reportJson).toJson(QJsonDocument::Indented).toUtf8());
         else
             err() << "Warning: Could not write report to " << reportPath << Qt::endl;
     }
@@ -2177,7 +2241,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
             if (config.reportFormat == "text")
                 f.write(ScanEngine::formatText(result, config, false).toUtf8());
             else
-                f.write(ScanEngine::formatJson(result).toUtf8());
+                f.write(QJsonDocument(reportJson).toJson(QJsonDocument::Indented).toUtf8());
         }
     }
     if (sarifPath.isEmpty() && !config.sarifOutput.isEmpty()) {
@@ -2187,11 +2251,29 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
             f.write(ScanEngine::formatSarif(result).toUtf8());
     }
 
-    // Exit code based on fail_on threshold
-    if (config.failOn == "never") return 0;
-    if (config.failOn == "error"   && result.errors > 0)                               return 1;
-    if (config.failOn == "warning" && (result.errors > 0 || result.warnings > 0))      return 1;
-    if (config.failOn == "info"    && (result.errors > 0 || result.warnings > 0 || result.infos > 0)) return 1;
+    bool uploadOk = true;
+    const QString ingestToken = resolveIngestToken(tokenArg);
+    if (!ingestToken.isEmpty() && !noUpload) {
+        const auto up = QtMeshCloudClient::uploadScanReport(ingestToken, reportJson);
+        uploadOk = up.ok;
+        if (!up.ok) {
+            err() << "Error: QtMesh Cloud scan upload failed (HTTP " << up.httpStatus << "): "
+                 << up.errorString << Qt::endl;
+        }
+    }
 
-    return 0;
+    // Exit code from fail_on threshold (scan/lint outcome)
+    int scanExit = 0;
+    if (config.failOn != "never") {
+        if (config.failOn == "error" && result.errors > 0)
+            scanExit = 1;
+        else if (config.failOn == "warning" && (result.errors > 0 || result.warnings > 0))
+            scanExit = 1;
+        else if (config.failOn == "info"
+                 && (result.errors > 0 || result.warnings > 0 || result.infos > 0))
+            scanExit = 1;
+    }
+    if (strictUpload && !uploadOk)
+        return 1;
+    return scanExit;
 }

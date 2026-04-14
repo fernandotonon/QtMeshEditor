@@ -6,6 +6,7 @@
 #include <QJsonArray>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QCoreApplication>
 #include <vector>
 #include <OgreMeshManager.h>
 #include <OgreHardwareBufferManager.h>
@@ -644,6 +645,30 @@ public:
 
 private:
     QString m_old;
+};
+
+class ScopedEnvVar {
+public:
+    ScopedEnvVar(const char* name, const QByteArray& value)
+        : m_name(name)
+        , m_had(qEnvironmentVariableIsSet(name))
+        , m_old(qgetenv(name))
+    {
+        qputenv(name, value);
+    }
+
+    ~ScopedEnvVar()
+    {
+        if (m_had)
+            qputenv(m_name, m_old);
+        else
+            qunsetenv(m_name);
+    }
+
+private:
+    const char* m_name = nullptr;
+    bool m_had = false;
+    QByteArray m_old;
 };
 
 } // anonymous namespace
@@ -2284,4 +2309,54 @@ TEST(CLIPipelineCmdScan, EmptyCliOverridesCanClearScopedRules)
                         "--forbidden-extensions=", "--file-name-case=",
                         "--require-animation-names=", "--require-bone-names="});
     EXPECT_EQ(CLIPipeline::cmdScan(clearArgs.argc(), clearArgs.argv()), 0);
+}
+
+TEST(CLIPipelineCmdScanCloud, StrictUploadFailsWhenApiUnreachable)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir scoped(tmpDir.path());
+    ScopedEnvVar api("QTMESH_API_BASE", "http://127.0.0.1:1");
+    ScopedEnvVar tok("QTMESH_TOKEN", "test-token");
+    TestArgv args({"qtmesh", "scan", "--strict-upload"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScanCloud, UploadFailureDoesNotChangeExitCodeWithoutStrict)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir scoped(tmpDir.path());
+    ScopedEnvVar api("QTMESH_API_BASE", "http://127.0.0.1:1");
+    ScopedEnvVar tok("QTMESH_TOKEN", "test-token");
+    TestArgv args({"qtmesh", "scan"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+}
+
+TEST(CLIPipelineCmdScanCloud, LocalYmlOverridesRemoteTokenForRules)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    const QString ymlPath = QDir(tmpDir.path()).filePath("qtmesh.yml");
+    QFile yml(ymlPath);
+    ASSERT_TRUE(yml.open(QIODevice::WriteOnly | QIODevice::Text));
+    yml.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "rules:\n"
+        "  max_vertex_count: 2\n");
+    yml.close();
+
+    ScopedCurrentDir scoped(tmpDir.path());
+    ScopedEnvVar api("QTMESH_API_BASE", "http://127.0.0.1:1");
+    ScopedEnvVar tok("QTMESH_TOKEN", "test-token");
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
 }

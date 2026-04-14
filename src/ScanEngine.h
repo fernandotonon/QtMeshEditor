@@ -2,6 +2,7 @@
 #define SCANENGINE_H
 
 #include "ScanConfig.h"
+#include <QJsonObject>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -89,6 +90,8 @@ public:
     // --- Formatters ---
 
     static QString formatText(const ScanResult& result, const ScanConfig& config, bool colorize = false);
+    /// Canonical JSON object for `--json`, report files, and QtMesh Cloud upload (identical schema).
+    static QJsonObject scanReportToJsonObject(const ScanResult& result);
     static QString formatJson(const ScanResult& result);
     static QString formatSarif(const ScanResult& result);
 

@@ -655,7 +655,7 @@ static QString severityStr(Severity s)
     return "info";
 }
 
-QString ScanEngine::formatJson(const ScanResult& result)
+QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
 {
     QJsonObject root;
     root["version"] = QTMESHEDITOR_VERSION;
@@ -730,7 +730,12 @@ QString ScanEngine::formatJson(const ScanResult& result)
     }
     root["assets"] = assetsArr;
 
-    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented));
+    return root;
+}
+
+QString ScanEngine::formatJson(const ScanResult& result)
+{
+    return QString::fromUtf8(QJsonDocument(scanReportToJsonObject(result)).toJson(QJsonDocument::Indented));
 }
 
 // ---------------------------------------------------------------------------
