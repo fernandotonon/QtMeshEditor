@@ -1,4 +1,5 @@
 #include "QtMeshCloudClient.h"
+#include "SentryReporter.h"
 
 #include <QEventLoop>
 #include <QJsonDocument>
@@ -44,9 +45,8 @@ bool QtMeshCloudClient::validateCloudConfigJson(const QJsonObject& root)
     const QJsonValue ver = root.value(QStringLiteral("version"));
     if (ver.isUndefined() || ver.isNull())
         return false;
-    if (!ver.isDouble() && !ver.isString())
-        return false;
-    if (ver.isString() && ver.toString().trimmed().isEmpty())
+    // JSON numbers only (reject strings such as "foo" — server must send numeric version)
+    if (!ver.isDouble())
         return false;
 
     const QJsonValue scan = root.value(QStringLiteral("scan"));
@@ -75,6 +75,9 @@ QtMeshCloudClient::RulesResult QtMeshCloudClient::fetchRules(const QString& bear
     }
 
     QNetworkAccessManager nam;
+
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QStringLiteral("QtMesh Cloud fetchRules: start %1").arg(url.toString()));
 
     for (int attempt = 0; attempt < 3; ++attempt) {
         QNetworkRequest req(url);
@@ -112,9 +115,13 @@ QtMeshCloudClient::RulesResult QtMeshCloudClient::fetchRules(const QString& bear
                 out.source = QStringLiteral("default");
             if (!validateCloudConfigJson(out.config)) {
                 out.errorString = QStringLiteral("remote config failed validation (need version, scan, rules)");
+                SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                    QStringLiteral("QtMesh Cloud fetchRules: validation failed"));
                 out.config = {};
                 return out;
             }
+            SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+                QStringLiteral("QtMesh Cloud fetchRules: ok source=%1").arg(out.source));
             out.ok = true;
             return out;
         }
@@ -140,10 +147,15 @@ QtMeshCloudClient::RulesResult QtMeshCloudClient::fetchRules(const QString& bear
         out.errorString = errMsg;
         if (!body.isEmpty())
             out.errorString += QStringLiteral(": ") + trimSnippet(body);
+        SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+            QStringLiteral("QtMesh Cloud fetchRules: failure %1").arg(out.errorString),
+            QStringLiteral("warning"));
         return out;
     }
 
     out.errorString = QStringLiteral("exhausted retries");
+    SentryReporter::addBreadcrumb(QStringLiteral("file.import"),
+        QStringLiteral("QtMesh Cloud fetchRules: exhausted retries"), QStringLiteral("warning"));
     return out;
 }
 
@@ -172,6 +184,9 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::uploadScanReport(const QStrin
 
     const QByteArray payload = QJsonDocument(reportJson).toJson(QJsonDocument::Compact);
 
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QStringLiteral("QtMesh Cloud uploadScan: start %1").arg(url.toString()));
+
     for (int attempt = 0; attempt < 3; ++attempt) {
         QNetworkReply* reply = nam.post(req, payload);
         QEventLoop loop;
@@ -185,6 +200,8 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::uploadScanReport(const QStrin
         reply->deleteLater();
 
         if (nerr == QNetworkReply::NoError && out.httpStatus >= 200 && out.httpStatus < 300) {
+            SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                QStringLiteral("QtMesh Cloud uploadScan: ok HTTP %1").arg(out.httpStatus));
             out.ok = true;
             return out;
         }
@@ -210,9 +227,16 @@ QtMeshCloudClient::UploadResult QtMeshCloudClient::uploadScanReport(const QStrin
         out.errorString = errMsg;
         if (!out.responseBodySnippet.isEmpty())
             out.errorString += QStringLiteral(" — ") + out.responseBodySnippet;
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("QtMesh Cloud uploadScan: failure HTTP %1 %2")
+                .arg(out.httpStatus)
+                .arg(out.responseBodySnippet.isEmpty() ? errMsg : out.responseBodySnippet),
+            QStringLiteral("warning"));
         return out;
     }
 
     out.errorString = QStringLiteral("exhausted retries");
+    SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+        QStringLiteral("QtMesh Cloud uploadScan: exhausted retries"), QStringLiteral("warning"));
     return out;
 }

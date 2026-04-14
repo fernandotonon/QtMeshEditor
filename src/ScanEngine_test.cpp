@@ -629,9 +629,31 @@ TEST(ScanEngineTest, FormatJson_IncludesAnimationsBonesAndLoadError)
     EXPECT_TRUE(json.contains("\"animations\""));
     EXPECT_TRUE(json.contains("\"bones\""));
     EXPECT_TRUE(json.contains("\"loadError\": true"));
-    EXPECT_TRUE(json.contains("\"errorMessage\": \"mock error\""));
+    EXPECT_FALSE(json.contains("\"errorMessage\""));
     EXPECT_TRUE(json.contains("\"fixable\": true"));
     EXPECT_TRUE(json.contains("\"fixed\": true"));
+}
+
+TEST(ScanEngineTest, FormatJson_RedactsLoadErrorFindingMessage)
+{
+    ScanResult result;
+    AssetInfo asset;
+    asset.relativePath = "bad.fbx";
+    asset.format = "fbx";
+    asset.loadError = true;
+    asset.errorMessage = "/secret/path/model.fbx: cannot open";
+    result.assets.append(asset);
+
+    Finding loadErr;
+    loadErr.file = "bad.fbx";
+    loadErr.rule = "load_error";
+    loadErr.severity = Severity::Error;
+    loadErr.message = QStringLiteral("Failed to load: /secret/path/model.fbx: cannot open");
+    result.findings.append(loadErr);
+
+    const QString json = ScanEngine::formatJson(result);
+    EXPECT_FALSE(json.contains("secret"));
+    EXPECT_TRUE(json.contains("Failed to load asset (see local CLI output for details)"));
 }
 
 TEST(ScanEngineTest, FormatText_ContainsSummary)

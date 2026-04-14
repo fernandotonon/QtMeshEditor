@@ -2219,7 +2219,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         QFile f(reportPath);
         QDir().mkpath(QFileInfo(reportPath).path());
         if (f.open(QIODevice::WriteOnly | QIODevice::Text))
-            f.write(QJsonDocument(reportJson).toJson(QJsonDocument::Indented).toUtf8());
+            f.write(QJsonDocument(reportJson).toJson(QJsonDocument::Indented));
         else
             err() << "Warning: Could not write report to " << reportPath << Qt::endl;
     }
@@ -2241,7 +2241,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
             if (config.reportFormat == "text")
                 f.write(ScanEngine::formatText(result, config, false).toUtf8());
             else
-                f.write(QJsonDocument(reportJson).toJson(QJsonDocument::Indented).toUtf8());
+                f.write(QJsonDocument(reportJson).toJson(QJsonDocument::Indented));
         }
     }
     if (sarifPath.isEmpty() && !config.sarifOutput.isEmpty()) {
@@ -2259,6 +2259,10 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         if (!up.ok) {
             err() << "Error: QtMesh Cloud scan upload failed (HTTP " << up.httpStatus << "): "
                  << up.errorString << Qt::endl;
+            if (!up.responseBodySnippet.isEmpty()
+                && !up.errorString.contains(up.responseBodySnippet)) {
+                err() << "         Response body: " << up.responseBodySnippet << Qt::endl;
+            }
         }
     }
 

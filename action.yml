@@ -38,6 +38,12 @@ inputs:
   badge-base-url:
     description: 'Public base URL hosting badge JSON files (used to expose ready-to-use badge URLs in outputs).'
     required: false
+  qtmesh-token:
+    description: 'Optional. Sets QTMESH_TOKEN in the container for QtMesh Cloud remote rules and scan upload.'
+    required: false
+  qtmesh-api-base:
+    description: 'Optional. Sets QTMESH_API_BASE (override API host, e.g. for self-hosted).'
+    required: false
 
 outputs:
   result:
@@ -85,6 +91,8 @@ runs:
         INPUT_BADGE_OUTPUT_DIR: ${{ inputs.badge-output-dir }}
         INPUT_BADGE_LABEL_PREFIX: ${{ inputs.badge-label-prefix }}
         INPUT_BADGE_BASE_URL: ${{ inputs.badge-base-url }}
+        INPUT_QTMESH_TOKEN: ${{ inputs.qtmesh-token }}
+        INPUT_QTMESH_API_BASE: ${{ inputs.qtmesh-api-base }}
       run: |
         set -o pipefail
 
@@ -127,10 +135,19 @@ runs:
         tmp_stderr=$(mktemp)
         trap 'rm -f "$tmp_stdout" "$tmp_stderr"' EXIT
 
+        docker_env=()
+        if [ -n "${INPUT_QTMESH_TOKEN:-}" ]; then
+          docker_env+=(--env "QTMESH_TOKEN=${INPUT_QTMESH_TOKEN}")
+        fi
+        if [ -n "${INPUT_QTMESH_API_BASE:-}" ]; then
+          docker_env+=(--env "QTMESH_API_BASE=${INPUT_QTMESH_API_BASE}")
+        fi
+
         set +e
         docker run --rm \
           --user "$(id -u):$(id -g)" \
           -v "${{ github.workspace }}:/workspace" \
+          "${docker_env[@]}" \
           "ghcr.io/fernandotonon/qtmesh:${{ inputs.image-tag }}" \
           "${cmd[@]}" >"$tmp_stdout" 2>"$tmp_stderr"
         EXIT_CODE=$?

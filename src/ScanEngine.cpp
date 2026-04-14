@@ -655,6 +655,14 @@ static QString severityStr(Severity s)
     return "info";
 }
 
+/// Exported JSON (and cloud upload) must not embed Assimp paths or other local details.
+static QString findingMessageForExport(const Finding& f)
+{
+    if (f.rule == QLatin1String("load_error"))
+        return QStringLiteral("Failed to load asset (see local CLI output for details)");
+    return f.message;
+}
+
 QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
 {
     QJsonObject root;
@@ -707,10 +715,8 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
             ao["bones"] = bones;
         }
 
-        if (asset.loadError) {
+        if (asset.loadError)
             ao["loadError"] = true;
-            ao["errorMessage"] = asset.errorMessage;
-        }
 
         // Inline findings for this asset
         QJsonArray findingsArr;
@@ -719,7 +725,7 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
             QJsonObject fo;
             fo["rule"]     = f.rule;
             fo["severity"] = severityStr(f.severity);
-            fo["message"]  = f.message;
+            fo["message"]  = findingMessageForExport(f);
             if (f.fixable) fo["fixable"] = true;
             if (f.fixed)   fo["fixed"]   = true;
             findingsArr.append(fo);

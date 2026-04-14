@@ -18,6 +18,12 @@ inputs:
     description: 'Docker image tag to use'
     required: false
     default: 'latest'
+  qtmesh-token:
+    description: 'Optional. Sets QTMESH_TOKEN in the container for QtMesh Cloud.'
+    required: false
+  qtmesh-api-base:
+    description: 'Optional. Sets QTMESH_API_BASE in the container.'
+    required: false
 
 outputs:
   result:
@@ -34,6 +40,8 @@ runs:
         INPUT_FILE: ${{ inputs.input-file }}
         INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
         INPUT_OPTIONS: ${{ inputs.options }}
+        INPUT_QTMESH_TOKEN: ${{ inputs.qtmesh-token }}
+        INPUT_QTMESH_API_BASE: ${{ inputs.qtmesh-api-base }}
       run: |
         # Build command args safely via arrays to prevent injection
         cmd=("$INPUT_COMMAND" "/workspace/$INPUT_FILE")
@@ -45,9 +53,18 @@ runs:
           cmd+=("${opts[@]}")
         fi
 
+        docker_env=()
+        if [ -n "${INPUT_QTMESH_TOKEN:-}" ]; then
+          docker_env+=(--env "QTMESH_TOKEN=${INPUT_QTMESH_TOKEN}")
+        fi
+        if [ -n "${INPUT_QTMESH_API_BASE:-}" ]; then
+          docker_env+=(--env "QTMESH_API_BASE=${INPUT_QTMESH_API_BASE}")
+        fi
+
         OUTPUT=$(docker run --rm \
           --user "$(id -u):$(id -g)" \
           -v "${{ github.workspace }}:/workspace" \
+          "${docker_env[@]}" \
           "ghcr.io/fernandotonon/qtmesh:${{ inputs.image-tag }}" \
           "${cmd[@]}")
 

@@ -12,7 +12,7 @@ public:
     /// Base URL without trailing slash. Override with env `QTMESH_API_BASE` (e.g. for tests).
     static QString apiBaseUrl();
 
-    /// Minimal validation: numeric `version`, object `scan`, object `rules`.
+    /// Minimal validation: JSON numeric `version` (not a string), object `scan`, object `rules`.
     static bool validateCloudConfigJson(const QJsonObject& root);
 
     struct RulesResult {
