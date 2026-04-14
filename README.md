@@ -13,14 +13,14 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
 #### QtMesh Badges
-[![qtmesh status](https://api.qtmesh.dev/v1/u/u-28680b9c/p/reinos-supremos/badges/qtmesh-status.svg)](https://qtmesh.dev)
-[![qtmesh score](https://api.qtmesh.dev/v1/u/u-28680b9c/p/reinos-supremos/badges/qtmesh-score.svg)](https://qtmesh.dev)
-[![qtmesh errors](https://api.qtmesh.dev/v1/u/u-28680b9c/p/reinos-supremos/badges/qtmesh-errors.svg)](https://qtmesh.dev)
-[![qtmesh warnings](https://api.qtmesh.dev/v1/u/u-28680b9c/p/reinos-supremos/badges/qtmesh-warnings.svg)](https://qtmesh.dev)
-[![qtmesh models](https://api.qtmesh.dev/v1/u/u-28680b9c/p/reinos-supremos/badges/qtmesh-models.svg)](https://qtmesh.dev)
-[![qtmesh animations](https://api.qtmesh.dev/v1/u/u-28680b9c/p/reinos-supremos/badges/qtmesh-animations.svg)](https://qtmesh.dev)
-[![qtmesh skeletons](https://api.qtmesh.dev/v1/u/u-28680b9c/p/reinos-supremos/badges/qtmesh-skeletons.svg)](https://qtmesh.dev)
-[![qtmesh materials](https://api.qtmesh.dev/v1/u/u-28680b9c/p/reinos-supremos/badges/qtmesh-materials.svg)](https://qtmesh.dev)
+[![qtmesh status](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg)](https://qtmesh.dev)
+[![qtmesh score](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-score.svg)](https://qtmesh.dev)
+[![qtmesh errors](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-errors.svg)](https://qtmesh.dev)
+[![qtmesh warnings](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-warnings.svg)](https://qtmesh.dev)
+[![qtmesh models](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-models.svg)](https://qtmesh.dev)
+[![qtmesh animations](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-animations.svg)](https://qtmesh.dev)
+[![qtmesh skeletons](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-skeletons.svg)](https://qtmesh.dev)
+[![qtmesh materials](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-materials.svg)](https://qtmesh.dev)
 
 ---
 
