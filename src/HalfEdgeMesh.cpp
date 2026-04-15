@@ -39,7 +39,6 @@ bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
     m_vertices.clear();
     m_faces.clear();
     m_edges.clear();
-    m_vertexOrigins.clear();
     m_materialNames.clear();
 
     const auto& subMeshes = editableMesh.subMeshes();
@@ -82,11 +81,6 @@ bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
             }
 
             m_vertices.push_back(std::move(hv));
-
-            VertexOrigin origin;
-            origin.subMeshIndex = s;
-            origin.localVertexIndex = static_cast<int>(v);
-            m_vertexOrigins.push_back(origin);
         }
     }
 
@@ -363,16 +357,15 @@ std::vector<int> HalfEdgeMesh::facesAroundVertex(int vertexIdx) const
     if (startHE < 0)
         return result;
 
-    // Walk around the vertex using twin->next pattern.
-    // From an outgoing half-edge, its face is the face to the "left".
-    // To get to the next outgoing half-edge, go: prev -> twin.
+    std::unordered_set<int> seen;
+
+    // Walk around the vertex using prev -> twin pattern.
     int he = startHE;
     do {
-        if (m_halfEdges[he].face >= 0) {
+        if (m_halfEdges[he].face >= 0 && seen.insert(m_halfEdges[he].face).second) {
             result.push_back(m_halfEdges[he].face);
         }
 
-        // Move to next outgoing half-edge: go to prev, then twin
         int prev = m_halfEdges[he].prev;
         if (prev < 0) break;
         int twin = m_halfEdges[prev].twin;
@@ -382,13 +375,12 @@ std::vector<int> HalfEdgeMesh::facesAroundVertex(int vertexIdx) const
 
     // If we hit a boundary, also walk the other direction
     if (he != startHE) {
-        // Walk the other way: twin -> next
         he = startHE;
         int twin = m_halfEdges[he].twin;
         if (twin >= 0) {
             he = m_halfEdges[twin].next;
             while (he != startHE && he >= 0) {
-                if (m_halfEdges[he].face >= 0) {
+                if (m_halfEdges[he].face >= 0 && seen.insert(m_halfEdges[he].face).second) {
                     result.push_back(m_halfEdges[he].face);
                 }
                 int prevHE = m_halfEdges[he].prev;

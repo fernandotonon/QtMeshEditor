@@ -4,6 +4,7 @@
 #include "../SubMeshTransform.h"
 #include "../EditModeController.h"
 #include "../EditableMesh.h"
+#include "../SentryReporter.h"
 #include <Ogre.h>
 
 // Check if a scene node pointer is still valid (not destroyed)
@@ -591,10 +592,9 @@ MaterialPresetCommand::MaterialPresetCommand(
 
 void MaterialPresetCommand::undo()
 {
-    for (const auto& em : mEntities) {
-        if (em.entity)
-            em.entity->setMaterialName(em.oldMaterialName);
-    }
+    SentryReporter::addBreadcrumb("ui.action", "Undo material preset");
+
+    // Restore per-sub-entity materials (handles mixed-material entities correctly)
     for (const auto& sm : mSubEntities) {
         if (sm.subEntity)
             sm.subEntity->setMaterialName(sm.oldMaterialName);
@@ -607,6 +607,8 @@ void MaterialPresetCommand::redo()
         mFirstRedo = false;
         return;
     }
+
+    SentryReporter::addBreadcrumb("ui.action", "Redo material preset");
 
     for (const auto& em : mEntities) {
         if (em.entity)

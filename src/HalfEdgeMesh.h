@@ -29,10 +29,12 @@ THE SOFTWARE.
 #ifndef HALFEDGEMESH_H
 #define HALFEDGEMESH_H
 
-#include <Ogre.h>
+#include <OgreVector.h>
+#include <OgreColourValue.h>
 #include <vector>
 #include <unordered_map>
 #include <utility>
+#include <string>
 
 struct EditableSubMesh;
 class EditableMesh;
@@ -129,8 +131,9 @@ public:
     /**
      * @brief Build the half-edge structure from an EditableMesh.
      *
-     * Merges vertices across submeshes that share the same position (within epsilon)
-     * to create a single connected mesh. Tracks submesh provenance per face.
+     * Creates one HEVertex per (submesh, localVertex) pair without merging
+     * vertices across submeshes, preserving UV seams, material boundaries,
+     * and bone weight differences. Tracks submesh provenance per face.
      *
      * @param editableMesh The source mesh.
      * @return true on success, false if the mesh is empty or malformed.
@@ -156,7 +159,7 @@ public:
     size_t halfEdgeCount() const { return m_halfEdges.size(); }
     /// @}
 
-    /// @name Element access
+    /// @name Element access (unchecked — caller must ensure valid indices)
     /// @{
     const HEVertex& vertex(int idx) const { return m_vertices[idx]; }
     HEVertex& vertex(int idx) { return m_vertices[idx]; }
@@ -287,14 +290,6 @@ private:
 
     int m_subMeshCount = 0;
     std::vector<std::string> m_materialNames;
-
-    /// Tracks which original submesh + local vertex index each HE vertex came from.
-    /// Used during toEditableMesh() to split vertices back into per-submesh arrays.
-    struct VertexOrigin {
-        int subMeshIndex = 0;
-        int localVertexIndex = 0;
-    };
-    std::vector<VertexOrigin> m_vertexOrigins;
 };
 
 #endif // HALFEDGEMESH_H

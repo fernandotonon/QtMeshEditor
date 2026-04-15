@@ -3,6 +3,7 @@
 
 #include <QUndoCommand>
 #include <QList>
+#include <string>
 #include <vector>
 #include <map>
 #include <OgreVector.h>
@@ -234,7 +235,6 @@ class MaterialPresetCommand : public QUndoCommand
 public:
     struct EntityMaterial {
         Ogre::Entity* entity = nullptr;
-        std::string oldMaterialName;
         std::string newMaterialName;
     };
     struct SubEntityMaterial {

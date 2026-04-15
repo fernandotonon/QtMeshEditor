@@ -112,26 +112,39 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
     if (resolvedEntities.isEmpty() && subEntities.isEmpty())
         return;
 
-    // Snapshot old materials and apply new ones
+    // Snapshot ALL sub-entity materials before applying, so undo can restore
+    // entities with mixed per-sub-entity materials correctly.
     QList<MaterialPresetCommand::EntityMaterial> entMats;
+    QList<MaterialPresetCommand::SubEntityMaterial> subMats;
+
     for (Ogre::Entity* ent : resolvedEntities) {
         MaterialPresetCommand::EntityMaterial em;
         em.entity = ent;
-        em.oldMaterialName = ent->getSubEntity(0)->getMaterialName();
         em.newMaterialName = stdMatName;
         entMats.append(em);
-        ent->setMaterialName(stdMatName);
+
+        for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+            MaterialPresetCommand::SubEntityMaterial sm;
+            sm.subEntity = ent->getSubEntity(i);
+            sm.oldMaterialName = sm.subEntity->getMaterialName();
+            sm.newMaterialName = stdMatName;
+            subMats.append(sm);
+        }
     }
 
-    QList<MaterialPresetCommand::SubEntityMaterial> subMats;
     for (Ogre::SubEntity* sub : subEntities) {
         MaterialPresetCommand::SubEntityMaterial sm;
         sm.subEntity = sub;
         sm.oldMaterialName = sub->getMaterialName();
         sm.newMaterialName = stdMatName;
         subMats.append(sm);
-        sub->setMaterialName(stdMatName);
     }
+
+    // Apply after full snapshot is captured
+    for (Ogre::Entity* ent : resolvedEntities)
+        ent->setMaterialName(stdMatName);
+    for (Ogre::SubEntity* sub : subEntities)
+        sub->setMaterialName(stdMatName);
 
     UndoManager::getSingleton()->push(
         new MaterialPresetCommand(entMats, subMats, name));
