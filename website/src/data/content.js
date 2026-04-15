@@ -1,8 +1,8 @@
 export const links = {
   github: 'https://github.com/fernandotonon/QtMeshEditor',
   docs: './docs.html',
-  qtmeshCloud: 'https://qtmesh.ftonon.uk',
-  qtmeshCloudApi: 'https://api.qtmesh.ftonon.uk',
+  qtmeshCloud: 'https://qtmesh.dev',
+  qtmeshCloudApi: 'https://api.qtmesh.dev',
   releases: 'https://github.com/fernandotonon/QtMeshEditor/releases/latest',
   allReleases: 'https://github.com/fernandotonon/QtMeshEditor/releases',
   issues: 'https://github.com/fernandotonon/QtMeshEditor/issues',
@@ -101,7 +101,7 @@ export const pipelineExamples = {
 export const cloudBadgeSteps = [
   {
     title: 'Create your QtMesh Cloud project',
-    body: 'Sign in at qtmesh.ftonon.uk, then create a project and choose a stable slug for badge URLs.'
+    body: 'Sign in at qtmesh.dev, then create a project and choose a stable slug for badge URLs.'
   },
   {
     title: 'Store your token in CI secrets',
@@ -117,9 +117,9 @@ export const cloudBadgeSteps = [
   }
 ];
 
-export const cloudBadgeMarkdown = `[![qtmesh status](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.ftonon.uk)
-[![qtmesh errors](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.ftonon.uk)
-[![qtmesh warnings](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.ftonon.uk)`;
+export const cloudBadgeMarkdown = `[![qtmesh status](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.dev)
+[![qtmesh errors](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.dev)
+[![qtmesh warnings](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.dev)`;
 
 export const cloudBadgeUploadExample = `- name: Scan assets
   run: |
@@ -132,7 +132,7 @@ export const cloudBadgeUploadExample = `- name: Scan assets
 - name: Upload scan to QtMesh Cloud
   env:
     QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}
-    QTMESH_CLOUD_API_URL: https://api.qtmesh.ftonon.uk
+    QTMESH_CLOUD_API_URL: https://api.qtmesh.dev
   run: |
     jq --arg branch "\${GITHUB_REF_NAME}" \\
        --arg sha "\${GITHUB_SHA}" \\
