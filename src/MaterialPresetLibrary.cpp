@@ -2,6 +2,8 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "UndoManager.h"
+#include "commands/TransformCommands.h"
 #include <Ogre.h>
 
 MaterialPresetLibrary* MaterialPresetLibrary::m_pSingleton = nullptr;
@@ -110,10 +112,29 @@ void MaterialPresetLibrary::applyPreset(const QString& name)
     if (resolvedEntities.isEmpty() && subEntities.isEmpty())
         return;
 
-    for (Ogre::Entity* ent : resolvedEntities)
+    // Snapshot old materials and apply new ones
+    QList<MaterialPresetCommand::EntityMaterial> entMats;
+    for (Ogre::Entity* ent : resolvedEntities) {
+        MaterialPresetCommand::EntityMaterial em;
+        em.entity = ent;
+        em.oldMaterialName = ent->getSubEntity(0)->getMaterialName();
+        em.newMaterialName = stdMatName;
+        entMats.append(em);
         ent->setMaterialName(stdMatName);
-    for (Ogre::SubEntity* sub : subEntities)
+    }
+
+    QList<MaterialPresetCommand::SubEntityMaterial> subMats;
+    for (Ogre::SubEntity* sub : subEntities) {
+        MaterialPresetCommand::SubEntityMaterial sm;
+        sm.subEntity = sub;
+        sm.oldMaterialName = sub->getMaterialName();
+        sm.newMaterialName = stdMatName;
+        subMats.append(sm);
         sub->setMaterialName(stdMatName);
+    }
+
+    UndoManager::getSingleton()->push(
+        new MaterialPresetCommand(entMats, subMats, name));
 
     emit presetApplied(name);
 }

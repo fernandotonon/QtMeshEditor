@@ -574,3 +574,46 @@ void EditVertexTransformCommand::redo()
     ctrl->recalculateNormals(ctrl->normalsMode() == 0);
     ctrl->validateMesh();
 }
+
+// ---- MaterialPresetCommand ----
+
+MaterialPresetCommand::MaterialPresetCommand(
+    const QList<EntityMaterial>& entities,
+    const QList<SubEntityMaterial>& subEntities,
+    const QString& presetName,
+    QUndoCommand* parent)
+    : QUndoCommand(QString("Apply Preset: %1").arg(presetName), parent)
+    , mEntities(entities)
+    , mSubEntities(subEntities)
+    , mFirstRedo(true)
+{
+}
+
+void MaterialPresetCommand::undo()
+{
+    for (const auto& em : mEntities) {
+        if (em.entity)
+            em.entity->setMaterialName(em.oldMaterialName);
+    }
+    for (const auto& sm : mSubEntities) {
+        if (sm.subEntity)
+            sm.subEntity->setMaterialName(sm.oldMaterialName);
+    }
+}
+
+void MaterialPresetCommand::redo()
+{
+    if (mFirstRedo) {
+        mFirstRedo = false;
+        return;
+    }
+
+    for (const auto& em : mEntities) {
+        if (em.entity)
+            em.entity->setMaterialName(em.newMaterialName);
+    }
+    for (const auto& sm : mSubEntities) {
+        if (sm.subEntity)
+            sm.subEntity->setMaterialName(sm.newMaterialName);
+    }
+}

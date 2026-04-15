@@ -68,6 +68,7 @@ AssetBrowserController.cpp
 MaterialPreviewRenderer.cpp
 EditableMesh.cpp
 EditModeController.cpp
+HalfEdgeMesh.cpp
 )
 
 set(HEADER_FILES
@@ -139,6 +140,7 @@ AssetBrowserController.h
 MaterialPreviewRenderer.h
 EditableMesh.h
 EditModeController.h
+HalfEdgeMesh.h
 )
 
 set(TEST_SOURCES "")
