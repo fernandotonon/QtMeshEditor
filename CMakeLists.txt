@@ -349,6 +349,10 @@ IF(WIN32)
                 MESSAGE(STATUS "Installing platform plugin ${platform}.dll")
                 INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/${platform}.dll DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
         ENDFOREACH(platform)
+        # Qt 6: HTTPS requires TLS backend plugins (otherwise QNetworkAccessManager: "TLS initialization failed")
+        if(IS_DIRECTORY "${QT_DIR}/../../../plugins/tls")
+                install(DIRECTORY "${QT_DIR}/../../../plugins/tls/" DESTINATION "${CMAKE_INSTALL_PREFIX}/tls")
+        endif()
 
 ELSEIF(APPLE)
 #        FOREACH(qtlib ${QTLIBLIST})
@@ -379,6 +383,10 @@ ELSEIF(UNIX)
         FOREACH(platform ${QTPLATFORMSLIST})
                 INSTALL(FILES ${QT_DIR}/../../../plugins/platforms/lib${platform}.so DESTINATION ${CMAKE_INSTALL_PREFIX}/platforms/)
         ENDFOREACH(platform)
+        # Qt 6: HTTPS requires TLS backend plugins (otherwise QNetworkAccessManager: "TLS initialization failed")
+        if(IS_DIRECTORY "${QT_DIR}/../../../plugins/tls")
+                install(DIRECTORY "${QT_DIR}/../../../plugins/tls/" DESTINATION "${CMAKE_INSTALL_PREFIX}/tls")
+        endif()
 
         # Install Qt QML modules required for Material Editor
         # When Qt libraries are bundled, Qt can't find system QML modules automatically
