@@ -1,11 +1,14 @@
 #include "ScanConfig.h"
 #include "ScanEngine.h"
 
+#include <assimp/Importer.hpp>
+
 #include <QFile>
 #include <QFileInfo>
-#include <QJsonDocument>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QRegularExpression>
+#include <QSet>
 #include <QTextStream>
 
 // ---------------------------------------------------------------------------
@@ -280,6 +283,44 @@ ScanConfig ScanConfig::withScopeOverrides(const QString& relativePath) const
 // ScanConfig loading
 // ---------------------------------------------------------------------------
 
+ScanConfig::ScanConfig()
+    : includePatterns(ScanConfig::defaultIncludePatternsForAssimpImports())
+{
+}
+
+QStringList ScanConfig::defaultIncludePatternsForAssimpImports()
+{
+    QSet<QString> extSet;
+    Assimp::Importer importer;
+    for (unsigned i = 0; i < importer.GetImporterCount(); ++i) {
+        const aiImporterDesc* desc = importer.GetImporterInfo(i);
+        if (!desc || !desc->mFileExtensions)
+            continue;
+        const QString extList = QString::fromLatin1(desc->mFileExtensions);
+        static const QRegularExpression sep(QStringLiteral("[;\\s,]+"));
+        const QStringList parts = extList.split(sep, Qt::SkipEmptyParts);
+        for (const QString& raw : parts) {
+            QString ext = raw.trimmed().toLower();
+            if (ext.startsWith(QLatin1Char('.')))
+                ext.remove(0, 1);
+            if (ext.isEmpty())
+                continue;
+            extSet.insert(ext);
+        }
+    }
+    // Ogre mesh formats used by the editor (may or may not appear as separate Assimp importers)
+    extSet.insert(QStringLiteral("mesh"));
+    extSet.insert(QStringLiteral("mesh.xml"));
+
+    QStringList globs;
+    globs.reserve(extSet.size());
+    for (const QString& ext : extSet) {
+        globs.append(QStringLiteral("**/*.") + ext);
+    }
+    globs.sort(Qt::CaseInsensitive);
+    return globs;
+}
+
 ScanConfig ScanConfig::defaults()
 {
     return ScanConfig();
@@ -319,11 +360,16 @@ ScanConfig ScanConfig::fromVariantMap(const QVariantMap& root)
     if (!scan.isEmpty()) {
         if (scan.contains("roots"))
             config.roots = scan.value("roots").toStringList();
-        if (scan.contains("include"))
+        if (scan.contains("include")) {
             config.includePatterns = scan.value("include").toStringList();
+            if (config.includePatterns.isEmpty())
+                config.includePatterns = ScanConfig::defaultIncludePatternsForAssimpImports();
+        }
         if (scan.contains("exclude"))
             config.excludePatterns = scan.value("exclude").toStringList();
     }
+    if (config.includePatterns.isEmpty())
+        config.includePatterns = ScanConfig::defaultIncludePatternsForAssimpImports();
 
     // rules section
     QVariantMap rules = root.value("rules").toMap();

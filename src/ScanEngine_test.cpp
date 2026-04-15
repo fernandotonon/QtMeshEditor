@@ -164,6 +164,23 @@ TEST(ScanConfigTest, LoadFromVariantMap)
     EXPECT_EQ(config.failOn, "warning");
 }
 
+TEST(ScanConfigTest, DefaultConstructorIncludesAssimpGlobPatterns)
+{
+    const ScanConfig c;
+    EXPECT_GT(c.includePatterns.size(), 8);
+    bool hasMeshGlob = false;
+    bool hasFbxGlob = false;
+    for (const QString& p : c.includePatterns) {
+        if (p.endsWith(QStringLiteral("/mesh"), Qt::CaseInsensitive)
+            || p.endsWith(QStringLiteral(".mesh"), Qt::CaseInsensitive))
+            hasMeshGlob = true;
+        if (p.contains(QStringLiteral("fbx"), Qt::CaseInsensitive))
+            hasFbxGlob = true;
+    }
+    EXPECT_TRUE(hasFbxGlob);
+    EXPECT_TRUE(hasMeshGlob);
+}
+
 // ---------------------------------------------------------------------------
 // Glob matching tests
 // ---------------------------------------------------------------------------

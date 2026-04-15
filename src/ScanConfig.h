@@ -18,10 +18,8 @@ struct ScanConfig {
 
     // scan section
     QStringList roots;
-    QStringList includePatterns = {
-        "**/*.fbx", "**/*.glb", "**/*.glb2", "**/*.gltf", "**/*.gltf2",
-        "**/*.obj", "**/*.dae", "**/*.stl", "**/*.ply", "**/*.3ds", "**/*.mesh"
-    };
+    /// Glob patterns; default ctor fills with all Assimp import extensions (plus Ogre .mesh / .mesh.xml).
+    QStringList includePatterns;
     QStringList excludePatterns = {
         "**/node_modules/**", "**/.git/**", "**/build/**", "**/Build/**"
     };
@@ -68,6 +66,11 @@ struct ScanConfig {
     QString reportOutput;
     QString sarifOutput;
     QString failOn = "error";         // info, warning, error, never
+
+    ScanConfig();
+
+    /// `**/*.<ext>` for every file extension registered by Assimp importers, plus `mesh` / `mesh.xml`.
+    static QStringList defaultIncludePatternsForAssimpImports();
 
     static ScanConfig defaults();
     static ScanConfig loadFromFile(const QString& path);

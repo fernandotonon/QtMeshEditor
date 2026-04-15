@@ -2337,7 +2337,36 @@ TEST(CLIPipelineCmdScanCloud, UploadFailureDoesNotChangeExitCodeWithoutStrict)
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
 }
 
-TEST(CLIPipelineCmdScanCloud, LocalYmlOverridesRemoteTokenForRules)
+TEST(CLIPipelineCmdScanCloud, LocalQtmeshYmlAppliesWhenNoToken)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    const QString ymlPath = QDir(tmpDir.path()).filePath("qtmesh.yml");
+    QFile yml(ymlPath);
+    ASSERT_TRUE(yml.open(QIODevice::WriteOnly | QIODevice::Text));
+    yml.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "rules:\n"
+        "  max_vertex_count: 2\n");
+    yml.close();
+
+    ScopedCurrentDir scoped(tmpDir.path());
+    ScopedEnvVar clearTok("QTMESH_TOKEN", "");
+    ScopedEnvVar clearCloud("QTMESH_CLOUD_TOKEN", "");
+    ScopedEnvVar api("QTMESH_API_BASE", "http://127.0.0.1:1");
+
+    QByteArray rootBa = rootPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScanCloud, TokenSkipsLocalQtmeshYmlUsesDefaultsWhenApiFails)
 {
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
@@ -2362,5 +2391,6 @@ TEST(CLIPipelineCmdScanCloud, LocalYmlOverridesRemoteTokenForRules)
 
     QByteArray rootBa = rootPath.toUtf8();
     TestArgv args({"qtmesh", "scan", rootBa.constData()});
-    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+    // Cloud fetch fails → defaults (no max_vertex_count) → scan passes.
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
 }

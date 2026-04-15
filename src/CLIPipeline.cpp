@@ -243,7 +243,7 @@ void CLIPipeline::printUsage()
         "                                    Export a single posed frame as static mesh\n"
         "  pose <file> --animation <name> --count N -o <pattern>\n"
         "                                    Export N evenly spaced frames (use %02d in pattern)\n"
-        "  scan [path] [options]             Scan directory for 3D asset issues (CI linting)\n"
+        "  scan [path] [options]           Scan directory for 3D asset issues (default path: .)\n"
         "\n"
         "Scan options:\n"
         "  --config <file>           Config file (default: qtmesh.yml, qtmesh.json)\n"
@@ -286,10 +286,11 @@ void CLIPipeline::printUsage()
         "  --no-upload               Skip POSTing scan JSON to QtMesh Cloud when a token is set\n"
         "  --strict-upload           Exit 1 if cloud upload fails (default: warn only)\n"
         "\n"
-        "  Cloud rules: if no --config and no local qtmesh.yml|yaml|json, QTMESH_TOKEN loads\n"
-        "  remote rules from the API; otherwise built-in defaults apply if the API is unreachable.\n"
-        "  --config or a local file skips fetching remote rules; scan JSON still uploads when a\n"
-        "  token is set (unless --no-upload). Override API base with QTMESH_API_BASE.\n"
+        "  Cloud rules: if no --config and QTMESH_TOKEN or --token is set, remote rules are\n"
+        "  fetched first (local qtmesh.yml is ignored). If the API fails, built-in defaults apply.\n"
+        "  Without a token, qtmesh.yml|yaml|json in the cwd is used if present.\n"
+        "  --config always wins. Scan JSON uploads when a token is set (unless --no-upload).\n"
+        "  Override API base with QTMESH_API_BASE.\n"
         "\n"
         "Fix flags:\n"
         "  --remove-degenerates  Remove degenerate triangles\n"
@@ -2024,8 +2025,8 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
 
     // Load config (precedence):
     // 1) --config path (never fetch remote rules)
-    // 2) Else local qtmesh.yml | yaml | json in cwd (never fetch remote rules)
-    // 3) Else if ingest token set → GET /v1/ingest/rules, or defaults if API fails
+    // 2) Else if ingest token set → GET /v1/ingest/rules (skips local qtmesh.yml|yaml|json)
+    // 3) Else local qtmesh.yml | yaml | json in cwd
     // 4) Else built-in defaults
     ScanConfig config;
     if (!configPath.isEmpty()) {
@@ -2040,37 +2041,36 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
                  << Qt::endl;
         }
     } else {
-        QString localAutoPath;
-        if (QFileInfo::exists(QStringLiteral("qtmesh.yml")))
-            localAutoPath = QStringLiteral("qtmesh.yml");
-        else if (QFileInfo::exists(QStringLiteral("qtmesh.yaml")))
-            localAutoPath = QStringLiteral("qtmesh.yaml");
-        else if (QFileInfo::exists(QStringLiteral("qtmesh.json")))
-            localAutoPath = QStringLiteral("qtmesh.json");
-
-        if (!localAutoPath.isEmpty()) {
-            config = ScanConfig::loadFromFile(localAutoPath);
-            err() << "Note: Using local " << localAutoPath
-                 << " — QtMesh Cloud remote rules are not used for validation." << Qt::endl;
-        } else {
-            const QString ingestForRules = resolveIngestToken(tokenArg);
-            if (!ingestForRules.isEmpty()) {
+        const QString ingestForRules = resolveIngestToken(tokenArg);
+        if (!ingestForRules.isEmpty()) {
+            SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+                QStringLiteral("QtMesh Cloud fetchRules: requested"));
+            const auto rules = QtMeshCloudClient::fetchRules(ingestForRules);
+            if (rules.ok) {
+                config = ScanConfig::fromJson(rules.config);
+                err() << "Note: Using QtMesh Cloud rules (source: " << rules.source << ")." << Qt::endl;
                 SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
-                    QStringLiteral("QtMesh Cloud fetchRules: requested"));
-                const auto rules = QtMeshCloudClient::fetchRules(ingestForRules);
-                if (rules.ok) {
-                    config = ScanConfig::fromJson(rules.config);
-                    err() << "Note: Using QtMesh Cloud rules (source: " << rules.source << ")." << Qt::endl;
-                    SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
-                        QStringLiteral("QtMesh Cloud fetchRules: ok source=%1").arg(rules.source));
-                } else {
-                    err() << "Warning: Could not load QtMesh Cloud rules (" << rules.errorString
-                         << "). Using built-in defaults." << Qt::endl;
-                    config = ScanConfig::defaults();
-                    SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
-                        QStringLiteral("QtMesh Cloud fetchRules: failed %1").arg(rules.errorString),
-                        QStringLiteral("warning"));
-                }
+                    QStringLiteral("QtMesh Cloud fetchRules: ok source=%1").arg(rules.source));
+            } else {
+                err() << "Warning: Could not load QtMesh Cloud rules (" << rules.errorString
+                     << "). Using built-in defaults." << Qt::endl;
+                config = ScanConfig::defaults();
+                SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+                    QStringLiteral("QtMesh Cloud fetchRules: failed %1").arg(rules.errorString),
+                    QStringLiteral("warning"));
+            }
+        } else {
+            QString localAutoPath;
+            if (QFileInfo::exists(QStringLiteral("qtmesh.yml")))
+                localAutoPath = QStringLiteral("qtmesh.yml");
+            else if (QFileInfo::exists(QStringLiteral("qtmesh.yaml")))
+                localAutoPath = QStringLiteral("qtmesh.yaml");
+            else if (QFileInfo::exists(QStringLiteral("qtmesh.json")))
+                localAutoPath = QStringLiteral("qtmesh.json");
+
+            if (!localAutoPath.isEmpty()) {
+                config = ScanConfig::loadFromFile(localAutoPath);
+                err() << "Note: Using local " << localAutoPath << "." << Qt::endl;
             } else {
                 config = ScanConfig::defaults();
             }
