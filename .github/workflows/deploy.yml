@@ -1893,14 +1893,14 @@ jobs:
           BRANCH="qtmesheditor-${VER}"
           DEST_DIR="manifests/f/FernandoTonon/QtMeshEditor/${VER}"
 
-          # wingetcreate --out manifests writes to manifests/manifests/f/<Publisher>/...
-          # (older layouts may use manifests/f/... only)
-          if [ -d "../manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
+          # Probe from repo root (cwd is $GITHUB_WORKSPACE). After cd winget-pkgs, sources live under ../manifests/...
+          # wingetcreate --out manifests writes to manifests/manifests/f/<Publisher>/... (or manifests/f/... on older layouts)
+          if [ -d "manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
             MANIFEST_SRC="../manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}"
-          elif [ -d "../manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
+          elif [ -d "manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
             MANIFEST_SRC="../manifests/f/FernandoTonon/QtMeshEditor/${VER}"
           else
-            echo "::error::Could not find generated WinGet manifests for ${VER} under ../manifests"
+            echo "::error::Could not find generated WinGet manifests for ${VER} under manifests/"
             exit 1
           fi
 
