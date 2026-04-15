@@ -1867,13 +1867,14 @@ jobs:
           }
 
           Write-Host "Generating WinGet manifest for version $ver..."
+          # --out manifests nests under manifests/ (output path includes manifests\f\...)
           .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
             --version $ver `
             --urls $url `
             --out manifests
 
           Write-Host "Manifest generated:"
-          Get-ChildItem -Recurse manifests | Get-Content
+          Get-ChildItem -Recurse -File manifests | Get-Content
 
       - name: Submit PR to winget-pkgs
         continue-on-error: true   # don't fail the release if submission fails
@@ -1884,7 +1885,18 @@ jobs:
           RAW_TAG="${{ github.event.release.tag_name }}"
           VER="${RAW_TAG#v}"
           BRANCH="qtmesheditor-${VER}"
-          MANIFEST_DIR="manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+          DEST_DIR="manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+
+          # wingetcreate --out manifests writes to manifests/manifests/f/<Publisher>/...
+          # (older layouts may use manifests/f/... only)
+          if [ -d "../manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
+            MANIFEST_SRC="../manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+          elif [ -d "../manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
+            MANIFEST_SRC="../manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+          else
+            echo "::error::Could not find generated WinGet manifests for ${VER} under ../manifests"
+            exit 1
+          fi
 
           # Derive fork owner from the authenticated token (may differ from repo owner)
           FORK_OWNER="$(gh api user --jq .login)"
@@ -1910,8 +1922,8 @@ jobs:
           fi
 
           # Copy manifests
-          mkdir -p "manifests/f/FernandoTonon/QtMeshEditor/${VER}"
-          cp -r "../${MANIFEST_DIR}/." "manifests/f/FernandoTonon/QtMeshEditor/${VER}/"
+          mkdir -p "${DEST_DIR}"
+          cp -r "${MANIFEST_SRC}/." "${DEST_DIR}/"
 
           # Commit and push
           git config user.name "github-actions[bot]"
