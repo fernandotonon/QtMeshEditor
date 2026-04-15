@@ -3,6 +3,7 @@
 
 #include <QUndoCommand>
 #include <QList>
+#include <string>
 #include <vector>
 #include <map>
 #include <OgreVector.h>
@@ -225,6 +226,34 @@ public:
 private:
     std::map<int, Ogre::Vector3> mOldPositions; ///< global index -> old position
     std::map<int, Ogre::Vector3> mNewPositions; ///< global index -> new position
+    bool mFirstRedo = true;
+};
+
+// Apply a material preset to entities/sub-entities with undo support
+class MaterialPresetCommand : public QUndoCommand
+{
+public:
+    struct EntityMaterial {
+        Ogre::Entity* entity = nullptr;
+        std::string newMaterialName;
+    };
+    struct SubEntityMaterial {
+        Ogre::SubEntity* subEntity = nullptr;
+        std::string oldMaterialName;
+        std::string newMaterialName;
+    };
+
+    MaterialPresetCommand(const QList<EntityMaterial>& entities,
+                          const QList<SubEntityMaterial>& subEntities,
+                          const QString& presetName,
+                          QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    QList<EntityMaterial> mEntities;
+    QList<SubEntityMaterial> mSubEntities;
     bool mFirstRedo = true;
 };
 
