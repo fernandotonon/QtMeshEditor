@@ -78,12 +78,12 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh scan ./assets 
 
 ### ☁️ QtMesh Cloud Badges (Recommended)
 
-Register your repository in [QtMesh Cloud](https://qtmesh.ftonon.uk) to publish real scan badges from CI.
+Register your repository in [QtMesh Cloud](https://qtmesh.dev) to publish real scan badges from CI.
 
-1. Sign in at [qtmesh.ftonon.uk](https://qtmesh.ftonon.uk) and create a project (choose a slug like `my-game-assets`).
+1. Sign in at [qtmesh.dev](https://qtmesh.dev) and create a project (choose a slug like `my-game-assets`).
 2. Create a project token in QtMesh Cloud.
 3. Add the token as a GitHub secret named `QTMESH_CLOUD_TOKEN`.
-4. Upload each `scan` JSON report from CI to `https://api.qtmesh.ftonon.uk/v1/ingest/scan`.
+4. Upload each `scan` JSON report from CI to `https://api.qtmesh.dev/v1/ingest/scan`.
 
 Example upload step:
 
@@ -99,7 +99,7 @@ Example upload step:
 - name: Upload scan to QtMesh Cloud
   env:
     QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
-    QTMESH_CLOUD_API_URL: https://api.qtmesh.ftonon.uk
+    QTMESH_CLOUD_API_URL: https://api.qtmesh.dev
   run: |
     jq --arg branch "${GITHUB_REF_NAME}" \
        --arg sha "${GITHUB_SHA}" \
@@ -117,9 +117,9 @@ Example upload step:
 Badge markdown (replace `<project-slug>`):
 
 ```md
-[![qtmesh status](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.ftonon.uk)
-[![qtmesh errors](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.ftonon.uk)
-[![qtmesh warnings](https://api.qtmesh.ftonon.uk/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.ftonon.uk)
+[![qtmesh status](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.dev)
+[![qtmesh errors](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.dev)
+[![qtmesh warnings](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.dev)
 ```
 
 ### 🏷️ Self-Hosted Scan Badges (Legacy)

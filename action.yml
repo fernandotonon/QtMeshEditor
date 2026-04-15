@@ -11,8 +11,9 @@ inputs:
     description: 'Subcommand: scan, info, validate, convert, fix, anim, lod, pose'
     required: true
   input-file:
-    description: 'Input file or directory path (relative to workspace)'
-    required: true
+    description: 'Directory or file to scan (relative to workspace). Defaults to . (workspace root).'
+    required: false
+    default: '.'
   output-file:
     description: 'Output file path (for convert/fix/anim/pose)'
     required: false
@@ -132,6 +133,17 @@ runs:
         }
 
         # Build command args safely via arrays to prevent injection
+        if [ "$INPUT_COMMAND" = "scan" ]; then
+          if [ -z "${INPUT_FILE:-}" ]; then
+            INPUT_FILE="."
+          fi
+        else
+          if [ -z "${INPUT_FILE:-}" ] || [ "${INPUT_FILE}" = "." ]; then
+            echo "Error: input-file is required for command '$INPUT_COMMAND' (only scan defaults to '.')"
+            exit 2
+          fi
+        fi
+
         cmd=("$INPUT_COMMAND" "/workspace/$INPUT_FILE")
         if [ -n "$INPUT_OUTPUT_FILE" ]; then
           cmd+=("-o" "/workspace/$INPUT_OUTPUT_FILE")

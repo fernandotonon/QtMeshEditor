@@ -6,8 +6,9 @@ inputs:
     description: 'Subcommand: info, fix, convert, anim, validate, lod, pose, scan'
     required: true
   input-file:
-    description: 'Input file or directory path (relative to workspace)'
-    required: true
+    description: 'Directory or file to scan (relative to workspace). Defaults to .'
+    required: false
+    default: '.'
   output-file:
     description: 'Output file path (for convert/fix/anim rename/merge)'
     required: false
