@@ -37,6 +37,17 @@ Available on the [GitHub Actions Marketplace](https://github.com/marketplace/act
     options: --fail-on warning
 ```
 
+To **POST scan results to QtMesh Cloud**, pass the ingest token into the action (recommended):
+
+```yaml
+- uses: fernandotonon/QtMeshEditor@v1
+  with:
+    command: scan
+    qtmesh-token: ${{ secrets.QTMESH_CLOUD_TOKEN }}
+```
+
+Alternatively set `QTMESH_CLOUD_TOKEN` on the step; current action versions forward it into the Docker container so the CLI can upload (same as `qtmesh-token` → `QTMESH_TOKEN`).
+
 <details>
 <summary>More CI examples</summary>
 

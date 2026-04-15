@@ -76,6 +76,9 @@ runs:
         if [ -n "${INPUT_QTMESH_TOKEN:-}" ]; then
           docker_env+=(--env "QTMESH_TOKEN=${INPUT_QTMESH_TOKEN}")
         fi
+        if [ -n "${QTMESH_CLOUD_TOKEN:-}" ]; then
+          docker_env+=(--env "QTMESH_CLOUD_TOKEN=${QTMESH_CLOUD_TOKEN}")
+        fi
         if [ -n "${INPUT_QTMESH_API_BASE:-}" ]; then
           docker_env+=(--env "QTMESH_API_BASE=${INPUT_QTMESH_API_BASE}")
         fi
