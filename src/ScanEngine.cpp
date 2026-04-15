@@ -667,7 +667,7 @@ static QString severityStr(Severity s)
 static QString findingMessageForExport(const Finding& f)
 {
     if (f.rule == QLatin1String("load_error"))
-        return QStringLiteral("Failed to load asset (see local CLI output for details)");
+        return QStringLiteral("Failed to load asset (details redacted from exported JSON)");
     return f.message;
 }
 

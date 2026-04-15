@@ -5,8 +5,9 @@
 # The scan command picks up qtmesh.yml (or qtmesh.yaml / qtmesh.json)
 # automatically from the current directory. Override with --config <path>.
 #
-# QtMesh Cloud: with QTMESH_TOKEN / QTMESH_CLOUD_TOKEN and no local file, `qtmesh scan`
-# loads remote rules from the API and uploads the scan JSON after each run (see CLI --help).
+# QtMesh Cloud: with QTMESH_TOKEN, QTMESH_CLOUD_TOKEN, or --token <ingest>, and no local
+# qtmesh.yml|yaml|json, `qtmesh scan` loads remote rules from the API and uploads the scan
+# JSON after each run unless --no-upload is set (see CLI --help).
 #
 # Run:
 #   qtmesh scan ./assets

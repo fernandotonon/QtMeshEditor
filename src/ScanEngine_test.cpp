@@ -657,7 +657,7 @@ TEST(ScanEngineTest, FormatJson_RedactsLoadErrorFindingMessage)
 
     const QString json = ScanEngine::formatJson(result);
     EXPECT_FALSE(json.contains("secret"));
-    EXPECT_TRUE(json.contains("Failed to load asset (see local CLI output for details)"));
+    EXPECT_TRUE(json.contains("Failed to load asset (details redacted from exported JSON)"));
 }
 
 TEST(ScanEngineTest, FormatText_ContainsSummary)

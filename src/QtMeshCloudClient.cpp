@@ -45,8 +45,8 @@ bool QtMeshCloudClient::validateCloudConfigJson(const QJsonObject& root)
     const QJsonValue ver = root.value(QStringLiteral("version"));
     if (ver.isUndefined() || ver.isNull())
         return false;
-    // JSON numbers only (reject strings such as "foo" — server must send numeric version)
-    if (!ver.isDouble())
+    // JSON numbers only (reject strings and bools — server must send numeric version)
+    if (ver.isString() || ver.isBool() || !ver.isDouble())
         return false;
 
     const QJsonValue scan = root.value(QStringLiteral("scan"));

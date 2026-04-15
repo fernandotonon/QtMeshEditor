@@ -2055,14 +2055,21 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         } else {
             const QString ingestForRules = resolveIngestToken(tokenArg);
             if (!ingestForRules.isEmpty()) {
+                SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+                    QStringLiteral("QtMesh Cloud fetchRules: requested"));
                 const auto rules = QtMeshCloudClient::fetchRules(ingestForRules);
                 if (rules.ok) {
                     config = ScanConfig::fromJson(rules.config);
                     err() << "Note: Using QtMesh Cloud rules (source: " << rules.source << ")." << Qt::endl;
+                    SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+                        QStringLiteral("QtMesh Cloud fetchRules: ok source=%1").arg(rules.source));
                 } else {
                     err() << "Warning: Could not load QtMesh Cloud rules (" << rules.errorString
                          << "). Using built-in defaults." << Qt::endl;
                     config = ScanConfig::defaults();
+                    SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+                        QStringLiteral("QtMesh Cloud fetchRules: failed %1").arg(rules.errorString),
+                        QStringLiteral("warning"));
                 }
             } else {
                 config = ScanConfig::defaults();
@@ -2209,6 +2216,13 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
                   })
             : ScanEngine::AssetProcessedCallback());
 
+    if (jsonOutput) {
+        for (const auto& f : result.findings) {
+            if (f.rule == QLatin1String("load_error"))
+                err() << "Load error (" << f.file << "): " << f.message << Qt::endl;
+        }
+    }
+
     const QJsonObject reportJson = ScanEngine::scanReportToJsonObject(result);
 
     // Output to terminal
@@ -2258,15 +2272,26 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     bool uploadOk = true;
     const QString ingestToken = resolveIngestToken(tokenArg);
     if (!ingestToken.isEmpty() && !noUpload) {
+        SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+            QStringLiteral("QtMesh Cloud uploadScan: posting"));
         const auto up = QtMeshCloudClient::uploadScanReport(ingestToken, reportJson);
         uploadOk = up.ok;
-        if (!up.ok) {
-            err() << "Error: QtMesh Cloud scan upload failed (HTTP " << up.httpStatus << "): "
-                 << up.errorString << Qt::endl;
+        if (up.ok) {
+            SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+                QStringLiteral("QtMesh Cloud uploadScan: ok HTTP %1").arg(up.httpStatus));
+        } else {
+            SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
+                QStringLiteral("QtMesh Cloud uploadScan: failed HTTP %1").arg(up.httpStatus),
+                QStringLiteral("warning"));
+            const QString prefix = strictUpload ? QStringLiteral("Error: ")
+                                                : QStringLiteral("Warning: ");
+            err() << prefix << "QtMesh Cloud scan upload failed (HTTP " << up.httpStatus << "): "
+                 << up.errorString;
             if (!up.responseBodySnippet.isEmpty()
                 && !up.errorString.contains(up.responseBodySnippet)) {
-                err() << "         Response body: " << up.responseBodySnippet << Qt::endl;
+                err() << " — " << up.responseBodySnippet;
             }
+            err() << Qt::endl;
         }
     }
 

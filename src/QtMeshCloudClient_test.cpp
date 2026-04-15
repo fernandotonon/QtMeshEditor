@@ -35,3 +35,12 @@ TEST(QtMeshCloudClientValidate, RejectsStringVersion)
     o["rules"] = QJsonObject{};
     EXPECT_FALSE(QtMeshCloudClient::validateCloudConfigJson(o));
 }
+
+TEST(QtMeshCloudClientValidate, RejectsBoolVersion)
+{
+    QJsonObject o;
+    o["version"] = true;
+    o["scan"] = QJsonObject{};
+    o["rules"] = QJsonObject{};
+    EXPECT_FALSE(QtMeshCloudClient::validateCloudConfigJson(o));
+}
