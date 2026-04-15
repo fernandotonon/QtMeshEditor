@@ -5,10 +5,13 @@
 *.pro
 *.pro.*
 *.docx
+*.gcov
 *Makefile
 Dependencies/*
 release/*
+build*/*
 bin/*
+test/*
 lib/*
 debug/*
 src/ogre-assimp/CMakeFiles/

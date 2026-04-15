@@ -62,7 +62,7 @@ jobs:
         if: always()
         env:
           QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
-          QTMESH_CLOUD_API_URL: https://api.qtmesh.ftonon.uk
+          QTMESH_CLOUD_API_URL: https://api.qtmesh.dev
           GITHUB_PR_NUMBER: ${{ github.event.pull_request.number || '' }}
         run: |
           if [ -z "${QTMESH_CLOUD_TOKEN:-}" ]; then

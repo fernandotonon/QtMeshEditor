@@ -18,6 +18,20 @@ inputs:
     description: 'Docker image tag to use'
     required: false
     default: 'latest'
+  qtmesh-token:
+    description: 'Optional. Sets QTMESH_TOKEN in the container (same as CLI --token). Use qtmesh-no-upload / qtmesh-strict-upload or options for other scan flags.'
+    required: false
+  qtmesh-api-base:
+    description: 'Optional. Sets QTMESH_API_BASE in the container.'
+    required: false
+  qtmesh-no-upload:
+    description: 'When true and command=scan, pass --no-upload.'
+    required: false
+    default: 'false'
+  qtmesh-strict-upload:
+    description: 'When true and command=scan, pass --strict-upload.'
+    required: false
+    default: 'false'
 
 outputs:
   result:
@@ -34,6 +48,10 @@ runs:
         INPUT_FILE: ${{ inputs.input-file }}
         INPUT_OUTPUT_FILE: ${{ inputs.output-file }}
         INPUT_OPTIONS: ${{ inputs.options }}
+        INPUT_QTMESH_TOKEN: ${{ inputs.qtmesh-token }}
+        INPUT_QTMESH_API_BASE: ${{ inputs.qtmesh-api-base }}
+        INPUT_QTMESH_NO_UPLOAD: ${{ inputs.qtmesh-no-upload }}
+        INPUT_QTMESH_STRICT_UPLOAD: ${{ inputs.qtmesh-strict-upload }}
       run: |
         # Build command args safely via arrays to prevent injection
         cmd=("$INPUT_COMMAND" "/workspace/$INPUT_FILE")
@@ -44,10 +62,27 @@ runs:
           read -r -a opts <<< "$INPUT_OPTIONS"
           cmd+=("${opts[@]}")
         fi
+        if [ "$INPUT_COMMAND" = "scan" ]; then
+          if [ "${INPUT_QTMESH_NO_UPLOAD:-false}" = "true" ]; then
+            cmd+=("--no-upload")
+          fi
+          if [ "${INPUT_QTMESH_STRICT_UPLOAD:-false}" = "true" ]; then
+            cmd+=("--strict-upload")
+          fi
+        fi
+
+        docker_env=()
+        if [ -n "${INPUT_QTMESH_TOKEN:-}" ]; then
+          docker_env+=(--env "QTMESH_TOKEN=${INPUT_QTMESH_TOKEN}")
+        fi
+        if [ -n "${INPUT_QTMESH_API_BASE:-}" ]; then
+          docker_env+=(--env "QTMESH_API_BASE=${INPUT_QTMESH_API_BASE}")
+        fi
 
         OUTPUT=$(docker run --rm \
           --user "$(id -u):$(id -g)" \
           -v "${{ github.workspace }}:/workspace" \
+          "${docker_env[@]}" \
           "ghcr.io/fernandotonon/qtmesh:${{ inputs.image-tag }}" \
           "${cmd[@]}")
 

@@ -2,6 +2,7 @@
 #define SCANENGINE_H
 
 #include "ScanConfig.h"
+#include <QJsonObject>
 #include <QList>
 #include <QString>
 #include <QStringList>
@@ -59,6 +60,10 @@ struct ScanResult {
     int fixed    = 0;
     int skipped  = 0;
     double elapsedMs = 0;
+
+    /// Wall-clock bounds for reports, always UTC (`yyyy-MM-dd'T'HH:mm:ss.zzzZ`). Set by `ScanEngine::run`.
+    QString scanStartedUtc;
+    QString scanCompletedUtc;
 };
 
 class ScanEngine {
@@ -89,6 +94,11 @@ public:
     // --- Formatters ---
 
     static QString formatText(const ScanResult& result, const ScanConfig& config, bool colorize = false);
+    /// Canonical JSON object for `--json`, report files, and QtMesh Cloud upload (identical schema).
+    static QJsonObject scanReportToJsonObject(const ScanResult& result);
+
+    /// UTC ISO-8601 timestamps for reports (`scanStartedUtc` / `scanCompletedUtc`); missing values use `scanCompletedUtc` or current UTC.
+    static void scanReportUtcTimes(const ScanResult& result, QString* scanStartedUtc, QString* scanCompletedUtc);
     static QString formatJson(const ScanResult& result);
     static QString formatSarif(const ScanResult& result);
 
