@@ -4,6 +4,7 @@
 #include "../SubMeshTransform.h"
 #include "../EditModeController.h"
 #include "../EditableMesh.h"
+#include "../SentryReporter.h"
 #include <Ogre.h>
 
 // Check if a scene node pointer is still valid (not destroyed)
@@ -573,4 +574,48 @@ void EditVertexTransformCommand::redo()
     ctrl->restoreVertexPositions(mNewPositions);
     ctrl->recalculateNormals(ctrl->normalsMode() == 0);
     ctrl->validateMesh();
+}
+
+// ---- MaterialPresetCommand ----
+
+MaterialPresetCommand::MaterialPresetCommand(
+    const QList<EntityMaterial>& entities,
+    const QList<SubEntityMaterial>& subEntities,
+    const QString& presetName,
+    QUndoCommand* parent)
+    : QUndoCommand(QString("Apply Preset: %1").arg(presetName), parent)
+    , mEntities(entities)
+    , mSubEntities(subEntities)
+    , mFirstRedo(true)
+{
+}
+
+void MaterialPresetCommand::undo()
+{
+    SentryReporter::addBreadcrumb("ui.action", "Undo material preset");
+
+    // Restore per-sub-entity materials (handles mixed-material entities correctly)
+    for (const auto& sm : mSubEntities) {
+        if (sm.subEntity)
+            sm.subEntity->setMaterialName(sm.oldMaterialName);
+    }
+}
+
+void MaterialPresetCommand::redo()
+{
+    if (mFirstRedo) {
+        mFirstRedo = false;
+        return;
+    }
+
+    SentryReporter::addBreadcrumb("ui.action", "Redo material preset");
+
+    for (const auto& em : mEntities) {
+        if (em.entity)
+            em.entity->setMaterialName(em.newMaterialName);
+    }
+    for (const auto& sm : mSubEntities) {
+        if (sm.subEntity)
+            sm.subEntity->setMaterialName(sm.newMaterialName);
+    }
 }
