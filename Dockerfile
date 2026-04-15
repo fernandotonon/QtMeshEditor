@@ -4,6 +4,7 @@ ARG VERSION=latest
 
 # Runtime system deps only (X11, Mesa GL, virtual framebuffer)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
     xvfb x11-utils libxcb-cursor0 libxcb-xinerama0 libx11-6 libxrandr2 \
     libgl1-mesa-dri libegl-mesa0 libgbm1 libglx-mesa0 \
     libglut3.12 libcurl4t64 libopengl0 libgomp1 \

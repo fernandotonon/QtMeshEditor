@@ -746,6 +746,9 @@ jobs:
             rm -f ./pack-deb/usr/share/qtmesheditor/media/models/"Rumba Dancing.fbx"
             rm -f ./pack-deb/usr/share/qtmesheditor/media/models/"Hip Hop Dancing.fbx"
             cp -R ./bin/platforms/ ./pack-deb/usr/share/qtmesheditor/
+            if [ -d ./bin/tls ]; then
+              cp -R ./bin/tls/ ./pack-deb/usr/share/qtmesheditor/tls/
+            fi
 
             # Copy bundled libraries to private lib directory
             cp -R ./bin/*.so* ./pack-deb/usr/lib/qtmesheditor/
@@ -1557,6 +1560,9 @@ jobs:
             
             # Copy plugins to proper PlugIns directory
             sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/plugins/platforms/* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/platforms/
+            # Qt 6: HTTPS / QNetworkAccessManager needs TLS plugins (qsecuretransportbackend, etc.)
+            sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/tls
+            sudo cp -R /Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/plugins/tls/* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/tls/
 
             # Copy QML plugins for QtQuick components
             sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/PlugIns/qml
@@ -1867,13 +1873,14 @@ jobs:
           }
 
           Write-Host "Generating WinGet manifest for version $ver..."
+          # --out manifests nests under manifests/ (output path includes manifests\f\...)
           .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
             --version $ver `
             --urls $url `
             --out manifests
 
           Write-Host "Manifest generated:"
-          Get-ChildItem -Recurse manifests | Get-Content
+          Get-ChildItem -Recurse -File manifests | Get-Content
 
       - name: Submit PR to winget-pkgs
         continue-on-error: true   # don't fail the release if submission fails
@@ -1884,7 +1891,18 @@ jobs:
           RAW_TAG="${{ github.event.release.tag_name }}"
           VER="${RAW_TAG#v}"
           BRANCH="qtmesheditor-${VER}"
-          MANIFEST_DIR="manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+          DEST_DIR="manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+
+          # Probe from repo root (cwd is $GITHUB_WORKSPACE). After cd winget-pkgs, sources live under ../manifests/...
+          # wingetcreate --out manifests writes to manifests/manifests/f/<Publisher>/... (or manifests/f/... on older layouts)
+          if [ -d "manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
+            MANIFEST_SRC="../manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+          elif [ -d "manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
+            MANIFEST_SRC="../manifests/f/FernandoTonon/QtMeshEditor/${VER}"
+          else
+            echo "::error::Could not find generated WinGet manifests for ${VER} under manifests/"
+            exit 1
+          fi
 
           # Derive fork owner from the authenticated token (may differ from repo owner)
           FORK_OWNER="$(gh api user --jq .login)"
@@ -1910,8 +1928,8 @@ jobs:
           fi
 
           # Copy manifests
-          mkdir -p "manifests/f/FernandoTonon/QtMeshEditor/${VER}"
-          cp -r "../${MANIFEST_DIR}/." "manifests/f/FernandoTonon/QtMeshEditor/${VER}/"
+          mkdir -p "${DEST_DIR}"
+          cp -r "${MANIFEST_SRC}/." "${DEST_DIR}/"
 
           # Commit and push
           git config user.name "github-actions[bot]"
