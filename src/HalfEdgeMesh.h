@@ -250,6 +250,39 @@ public:
 
     /// @}
 
+    /// @name Topology operations
+    /// @{
+
+    /**
+     * @brief Extrude selected faces.
+     *
+     * Duplicates the selected faces, creating new vertices at the same
+     * positions as the originals. Connects the old boundary edges to the
+     * new faces with side-wall quads (split into triangles).
+     *
+     * After extrusion, the new (top) vertices can be translated to create
+     * the extruded shape.
+     *
+     * @param faceIndices The face indices to extrude.
+     * @return Indices of the newly created vertices (the "top" of the extrusion).
+     *         Empty if the operation failed.
+     */
+    std::vector<int> extrudeFaces(const std::vector<int>& faceIndices);
+
+    /**
+     * @brief Extrude selected edges.
+     *
+     * Creates new faces by duplicating the selected edges and connecting
+     * old edge vertices to new edge vertices with quads (split into triangles).
+     *
+     * @param edgeIndices The edge indices to extrude.
+     * @return Indices of the newly created vertices.
+     *         Empty if the operation failed.
+     */
+    std::vector<int> extrudeEdges(const std::vector<int>& edgeIndices);
+
+    /// @}
+
     /// @name Validation
     /// @{
     /**

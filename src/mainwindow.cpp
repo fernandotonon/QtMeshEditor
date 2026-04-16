@@ -949,6 +949,16 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                 return;
             }
             break;
+        case Qt::Key_E:
+            // Cmd+E (Ctrl+E on Linux/Windows): Extrude selection in face/edge mode
+            if (event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier)) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "Cmd+E — Extrude (edit mode)");
+                editCtrl->extrudeSelection();
+                event->accept();
+                return;
+            }
+            // No modifier: fall through to rotate mode
+            break;
         default:
             break;
         }

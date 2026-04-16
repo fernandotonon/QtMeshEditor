@@ -178,6 +178,363 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     return true;
 }
 
+bool EditableMesh::rebuildEntityMesh(Ogre::Entity* entity)
+{
+    if (!entity)
+        return false;
+
+    Ogre::MeshPtr meshPtr = entity->getMesh();
+    if (!meshPtr)
+        return false;
+
+    Ogre::Mesh* mesh = meshPtr.get();
+
+    // Recalculate normals
+    if (m_flatNormals)
+        recalculateNormalsFlat();
+    else
+        recalculateNormals();
+
+    // Remove old shared vertex data
+    if (mesh->sharedVertexData) {
+        delete mesh->sharedVertexData;
+        mesh->sharedVertexData = nullptr;
+    }
+
+    // Remove old submeshes
+    while (mesh->getNumSubMeshes() > 0) {
+        mesh->destroySubMesh(0);
+    }
+
+    // Rebuild each submesh with new buffers
+    for (size_t s = 0; s < m_subMeshes.size(); ++s) {
+        const auto& editSub = m_subMeshes[s];
+        if (editSub.vertices.empty() || editSub.triangles.empty())
+            continue;
+
+        auto* subMesh = mesh->createSubMesh();
+        subMesh->setMaterialName(editSub.materialName);
+        subMesh->useSharedVertices = false;
+
+        // Create vertex data
+        subMesh->vertexData = new Ogre::VertexData();
+        subMesh->vertexData->vertexCount = editSub.vertices.size();
+
+        auto* decl = subMesh->vertexData->vertexDeclaration;
+        size_t offset = 0;
+
+        // Position
+        decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+        offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+
+        // Normal
+        bool hasNormals = !editSub.vertices.empty() && editSub.vertices[0].hasNormal;
+        if (hasNormals) {
+            decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+            offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+        }
+
+        // UV
+        bool hasUVs = !editSub.vertices.empty() && editSub.vertices[0].hasUV;
+        if (hasUVs) {
+            decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+            offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
+        }
+
+        auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+            decl->getVertexSize(0), editSub.vertices.size(),
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+
+        // Fill vertex buffer
+        auto* dest = static_cast<float*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+        for (const auto& v : editSub.vertices) {
+            *dest++ = v.position.x;
+            *dest++ = v.position.y;
+            *dest++ = v.position.z;
+            if (hasNormals) {
+                *dest++ = v.normal.x;
+                *dest++ = v.normal.y;
+                *dest++ = v.normal.z;
+            }
+            if (hasUVs) {
+                *dest++ = v.uv.x;
+                *dest++ = v.uv.y;
+            }
+        }
+        vbuf->unlock();
+
+        subMesh->vertexData->vertexBufferBinding->setBinding(0, vbuf);
+
+        // Create index buffer
+        bool use32bit = editSub.vertices.size() > 65535;
+        auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+            use32bit ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT,
+            editSub.triangles.size() * 3,
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+
+        if (use32bit) {
+            auto* idx = static_cast<uint32_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for (const auto& tri : editSub.triangles) {
+                *idx++ = tri.indices[0];
+                *idx++ = tri.indices[1];
+                *idx++ = tri.indices[2];
+            }
+            ibuf->unlock();
+        } else {
+            auto* idx = static_cast<uint16_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for (const auto& tri : editSub.triangles) {
+                *idx++ = static_cast<uint16_t>(tri.indices[0]);
+                *idx++ = static_cast<uint16_t>(tri.indices[1]);
+                *idx++ = static_cast<uint16_t>(tri.indices[2]);
+            }
+            ibuf->unlock();
+        }
+
+        subMesh->indexData->indexBuffer = ibuf;
+        subMesh->indexData->indexCount = editSub.triangles.size() * 3;
+    }
+
+    // Recalculate bounds
+    SubMeshTransform::recalculateMeshBounds(mesh);
+
+    return true;
+}
+
+bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
+{
+    if (!entity) return false;
+    Ogre::MeshPtr meshPtr = entity->getMesh();
+    if (!meshPtr) return false;
+    Ogre::Mesh* mesh = meshPtr.get();
+
+    if (m_subMeshes.size() != static_cast<size_t>(mesh->getNumSubMeshes()))
+        return false;
+
+    // Recalculate normals
+    if (m_flatNormals) recalculateNormalsFlat();
+    else recalculateNormals();
+
+    // EditableMesh stores per-submesh vertex arrays. Migrate away from
+    // any shared vertex data — each submesh gets its own fresh VertexData
+    // with a simple position/normal/uv layout. This also avoids issues
+    // with multiple submeshes overwriting the shared buffer.
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* subMesh = mesh->getSubMesh(i);
+        const EditableSubMesh& editSub = m_subMeshes[i];
+        if (editSub.vertices.empty() || editSub.triangles.empty())
+            continue;
+
+        // Always rebuild VertexData from scratch to guarantee correct layout.
+        if (subMesh->vertexData) {
+            delete subMesh->vertexData;
+        }
+        subMesh->useSharedVertices = false;
+        subMesh->vertexData = new Ogre::VertexData();
+
+        auto* decl = subMesh->vertexData->vertexDeclaration;
+        auto* binding = subMesh->vertexData->vertexBufferBinding;
+
+        // Build a fresh declaration: position, normal, uv
+        size_t declOffset = 0;
+        decl->addElement(0, declOffset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+        declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+
+        bool hasNormals = !editSub.vertices.empty() && editSub.vertices[0].hasNormal;
+        if (hasNormals) {
+            decl->addElement(0, declOffset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+            declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+        }
+
+        bool hasUVs = !editSub.vertices.empty() && editSub.vertices[0].hasUV;
+        if (hasUVs) {
+            decl->addElement(0, declOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+            declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
+        }
+
+        subMesh->vertexData->vertexCount = editSub.vertices.size();
+
+        // Create a single interleaved buffer for all attributes (matches our fresh decl)
+        size_t vertSize = decl->getVertexSize(0);
+        auto newBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+            vertSize, editSub.vertices.size(),
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+
+        auto* dest = static_cast<float*>(newBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+        for (const auto& v : editSub.vertices) {
+            *dest++ = v.position.x;
+            *dest++ = v.position.y;
+            *dest++ = v.position.z;
+            if (hasNormals) {
+                *dest++ = v.normal.x;
+                *dest++ = v.normal.y;
+                *dest++ = v.normal.z;
+            }
+            if (hasUVs) {
+                *dest++ = v.uv.x;
+                *dest++ = v.uv.y;
+            }
+        }
+        newBuf->unlock();
+
+        binding->setBinding(0, newBuf);
+
+        // Replace index buffer
+        bool use32bit = editSub.vertices.size() > 65535;
+        auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+            use32bit ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT,
+            editSub.triangles.size() * 3,
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+
+        if (use32bit) {
+            std::vector<uint32_t> idx;
+            idx.reserve(editSub.triangles.size() * 3);
+            for (const auto& tri : editSub.triangles) {
+                idx.push_back(tri.indices[0]);
+                idx.push_back(tri.indices[1]);
+                idx.push_back(tri.indices[2]);
+            }
+            ibuf->writeData(0, idx.size() * sizeof(uint32_t), idx.data(), true);
+        } else {
+            std::vector<uint16_t> idx;
+            idx.reserve(editSub.triangles.size() * 3);
+            for (const auto& tri : editSub.triangles) {
+                idx.push_back(static_cast<uint16_t>(tri.indices[0]));
+                idx.push_back(static_cast<uint16_t>(tri.indices[1]));
+                idx.push_back(static_cast<uint16_t>(tri.indices[2]));
+            }
+            ibuf->writeData(0, idx.size() * sizeof(uint16_t), idx.data(), true);
+        }
+
+        subMesh->indexData->indexBuffer = ibuf;
+        subMesh->indexData->indexCount = editSub.triangles.size() * 3;
+        subMesh->indexData->indexStart = 0;
+    }
+
+    // Check if any submesh still uses shared vertex data. If not, we can
+    // safely delete the shared vertex data.
+    bool anyShared = false;
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        if (mesh->getSubMesh(i)->useSharedVertices) {
+            anyShared = true;
+            break;
+        }
+    }
+    if (!anyShared && mesh->sharedVertexData) {
+        delete mesh->sharedVertexData;
+        mesh->sharedVertexData = nullptr;
+    }
+
+    // Recalculate bounds
+    SubMeshTransform::recalculateMeshBounds(mesh);
+
+    return true;
+}
+
+Ogre::MeshPtr EditableMesh::createNewMesh(const std::string& baseName)
+{
+    // Recalculate normals
+    if (m_flatNormals)
+        recalculateNormalsFlat();
+    else
+        recalculateNormals();
+
+    // Generate a unique name
+    static int counter = 0;
+    std::string meshName = baseName + "_edited_" + std::to_string(++counter);
+
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    for (size_t s = 0; s < m_subMeshes.size(); ++s) {
+        const auto& editSub = m_subMeshes[s];
+        if (editSub.vertices.empty() || editSub.triangles.empty())
+            continue;
+
+        auto* subMesh = mesh->createSubMesh();
+        subMesh->setMaterialName(editSub.materialName);
+        subMesh->useSharedVertices = false;
+
+        subMesh->vertexData = new Ogre::VertexData();
+        subMesh->vertexData->vertexCount = editSub.vertices.size();
+
+        auto* decl = subMesh->vertexData->vertexDeclaration;
+        size_t offset = 0;
+
+        decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+        offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+
+        bool hasNormals = !editSub.vertices.empty() && editSub.vertices[0].hasNormal;
+        if (hasNormals) {
+            decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+            offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+        }
+
+        bool hasUVs = !editSub.vertices.empty() && editSub.vertices[0].hasUV;
+        if (hasUVs) {
+            decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+            offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
+        }
+
+        auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+            decl->getVertexSize(0), editSub.vertices.size(),
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+
+        auto* dest = static_cast<float*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+        for (const auto& v : editSub.vertices) {
+            *dest++ = v.position.x;
+            *dest++ = v.position.y;
+            *dest++ = v.position.z;
+            if (hasNormals) {
+                *dest++ = v.normal.x;
+                *dest++ = v.normal.y;
+                *dest++ = v.normal.z;
+            }
+            if (hasUVs) {
+                *dest++ = v.uv.x;
+                *dest++ = v.uv.y;
+            }
+        }
+        vbuf->unlock();
+
+        subMesh->vertexData->vertexBufferBinding->setBinding(0, vbuf);
+
+        bool use32bit = editSub.vertices.size() > 65535;
+        auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+            use32bit ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT,
+            editSub.triangles.size() * 3,
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+
+        if (use32bit) {
+            auto* idx = static_cast<uint32_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for (const auto& tri : editSub.triangles) {
+                *idx++ = tri.indices[0];
+                *idx++ = tri.indices[1];
+                *idx++ = tri.indices[2];
+            }
+            ibuf->unlock();
+        } else {
+            auto* idx = static_cast<uint16_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+            for (const auto& tri : editSub.triangles) {
+                *idx++ = static_cast<uint16_t>(tri.indices[0]);
+                *idx++ = static_cast<uint16_t>(tri.indices[1]);
+                *idx++ = static_cast<uint16_t>(tri.indices[2]);
+            }
+            ibuf->unlock();
+        }
+
+        subMesh->indexData->indexBuffer = ibuf;
+        subMesh->indexData->indexCount = editSub.triangles.size() * 3;
+    }
+
+    Ogre::AxisAlignedBox bounds = calculateBounds();
+    mesh->_setBounds(bounds);
+    mesh->_setBoundingSphereRadius(
+        (bounds.getMaximum() - bounds.getMinimum()).length() / 2.0f);
+    mesh->load();
+
+    return mesh;
+}
+
 size_t EditableMesh::totalVertexCount() const
 {
     size_t total = 0;

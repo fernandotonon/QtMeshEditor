@@ -120,10 +120,52 @@ public:
      * normals, and UVs back to the hardware buffers. Handles the static-to-dynamic
      * buffer upgrade for immediate GPU visibility.
      *
+     * Only works when vertex/triangle counts haven't changed. Use
+     * rebuildEntityMesh() for topology modifications.
+     *
      * @param entity The target entity (should be the same entity used in loadFromEntity).
      * @return true on success, false on failure.
      */
     bool commitToEntity(Ogre::Entity* entity);
+
+    /**
+     * @brief Rebuild the Ogre mesh with new vertex/index buffers.
+     *
+     * Unlike commitToEntity(), this handles topology changes (added/removed
+     * vertices and triangles) by destroying and recreating the hardware
+     * buffers. Use after operations like extrude, subdivide, delete, etc.
+     *
+     * @param entity The target entity.
+     * @return true on success, false on failure.
+     */
+    bool rebuildEntityMesh(Ogre::Entity* entity);
+
+    /**
+     * @brief Create a new Ogre::Mesh from the current editable data.
+     *
+     * Creates a fresh Mesh resource with a unique name. Use this instead of
+     * rebuildEntityMesh when the topology has changed, since modifying a live
+     * Mesh that an Entity references is unsafe in Ogre.
+     *
+     * @param baseName Base name for the new mesh (a suffix is appended for uniqueness).
+     * @return The new MeshPtr, or null on failure.
+     */
+    Ogre::MeshPtr createNewMesh(const std::string& baseName);
+
+    /**
+     * @brief Resize and update existing Ogre::Mesh buffers in-place.
+     *
+     * Unlike rebuildEntityMesh(), this doesn't destroy SubMeshes. Instead it
+     * replaces each SubMesh's vertex and index buffers with new, larger
+     * buffers containing the current EditableMesh data. The Entity's
+     * SubEntity list remains valid because SubMesh pointers don't change.
+     *
+     * Requires that the submesh count matches. Preserves skeleton bindings.
+     *
+     * @param entity The target entity.
+     * @return true on success, false on failure.
+     */
+    bool resizeEntityBuffers(Ogre::Entity* entity);
 
     /// @name Accessors
     /// @{

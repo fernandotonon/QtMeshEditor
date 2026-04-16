@@ -784,3 +784,217 @@ TEST_F(HalfEdgeMeshOgreTest, RoundtripThroughOgre) {
 
     Manager::getSingleton()->destroySceneNode("HalfEdge_roundtrip_ogre_node");
 }
+
+// ===========================================================================
+// Tests: Extrude Faces
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, ExtrudeFacesEmpty) {
+    auto editMesh = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    // Extrude with no faces should return empty
+    auto newVerts = he.extrudeFaces({});
+    EXPECT_TRUE(newVerts.empty());
+}
+
+TEST(HalfEdgeMeshStandalone, ExtrudeSingleTriangle) {
+    auto editMesh = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    // Original: 3 vertices, 1 face, 3 edges
+    EXPECT_EQ(he.vertexCount(), 3u);
+    EXPECT_EQ(he.faceCount(), 1u);
+
+    // Extrude the single face
+    auto newVerts = he.extrudeFaces({0});
+
+    // Should have created 3 new vertices (one per boundary vertex)
+    EXPECT_EQ(newVerts.size(), 3u);
+
+    // Total vertices: 3 original + 3 new = 6
+    EXPECT_EQ(he.vertexCount(), 6u);
+
+    // Total faces: 1 original (rewired to new verts) + 6 side-wall triangles
+    // (3 boundary edges * 2 triangles each = 6) = 7
+    EXPECT_EQ(he.faceCount(), 7u);
+
+    // New vertices should be at same positions as originals
+    for (int nv : newVerts) {
+        // Each new vertex should match one of the original positions
+        auto pos = he.vertex(nv).position;
+        bool matchesOriginal =
+            pos.squaredDistance(Ogre::Vector3(0, 0, 0)) < 0.001f ||
+            pos.squaredDistance(Ogre::Vector3(1, 0, 0)) < 0.001f ||
+            pos.squaredDistance(Ogre::Vector3(0, 1, 0)) < 0.001f;
+        EXPECT_TRUE(matchesOriginal) << "New vertex at " << pos.x << "," << pos.y << "," << pos.z;
+    }
+
+    // Structure should still be valid
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, ExtrudeFaceRoundtrip) {
+    auto editMesh = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    auto newVerts = he.extrudeFaces({0});
+    ASSERT_FALSE(newVerts.empty());
+
+    // Move new vertices up by 1 unit in Z
+    for (int nv : newVerts) {
+        he.vertex(nv).position.z += 1.0f;
+    }
+
+    // Convert back to EditableMesh
+    EditableMesh result;
+    ASSERT_TRUE(he.toEditableMesh(result));
+
+    // Should have 1 submesh with 6 vertices and 7 triangles
+    EXPECT_EQ(result.subMeshCount(), 1u);
+    EXPECT_EQ(result.totalVertexCount(), 6u);
+    EXPECT_EQ(result.totalTriangleCount(), 7u);
+}
+
+TEST(HalfEdgeMeshStandalone, ExtrudeOneFaceOfQuad) {
+    auto editMesh = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    // Original: 4 vertices, 2 faces, 5 edges
+    EXPECT_EQ(he.vertexCount(), 4u);
+    EXPECT_EQ(he.faceCount(), 2u);
+
+    // Extrude just face 0
+    auto newVerts = he.extrudeFaces({0});
+
+    // Face 0 has 3 boundary edges (the edges not shared with face 1 + the shared edge).
+    // Actually in a quad: face 0 shares 1 edge with face 1, so face 0 has 2 boundary edges
+    // plus 1 edge shared with face 1 = 3 edges total, but only 2 are "exterior" boundary
+    // and 1 is the shared interior edge. Since face 1 is NOT in the selection,
+    // the shared edge IS a boundary of the selection. So all 3 edges are selection-boundary.
+    // That means 3 boundary vertices.
+    EXPECT_EQ(newVerts.size(), 3u);
+
+    // Total: 4 + 3 = 7 vertices
+    EXPECT_EQ(he.vertexCount(), 7u);
+
+    // Face count: 2 original + 6 side walls = 8
+    EXPECT_EQ(he.faceCount(), 8u);
+
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, ExtrudeBothFacesOfQuad) {
+    auto editMesh = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    // Extrude both faces — the shared edge is NOT a boundary of the selection
+    auto newVerts = he.extrudeFaces({0, 1});
+
+    // Boundary of {face0, face1} is the 4 outer edges.
+    // Boundary vertices are all 4 vertices.
+    EXPECT_EQ(newVerts.size(), 4u);
+
+    // Total: 4 + 4 = 8 vertices
+    EXPECT_EQ(he.vertexCount(), 8u);
+
+    // Face count: 2 original + (4 boundary edges * 2 tris) = 10
+    EXPECT_EQ(he.faceCount(), 10u);
+
+    EXPECT_TRUE(he.validate());
+}
+
+// ===========================================================================
+// Tests: Extrude Edges
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, ExtrudeEdgesEmpty) {
+    auto editMesh = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    auto newVerts = he.extrudeEdges({});
+    EXPECT_TRUE(newVerts.empty());
+}
+
+TEST(HalfEdgeMeshStandalone, ExtrudeSingleEdge) {
+    auto editMesh = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    // Original: 3 vertices, 1 face, 3 edges
+    // Extrude edge 0
+    auto newVerts = he.extrudeEdges({0});
+
+    // Edge 0 has 2 vertices, so 2 new vertices
+    EXPECT_EQ(newVerts.size(), 2u);
+
+    // Total: 3 + 2 = 5 vertices
+    EXPECT_EQ(he.vertexCount(), 5u);
+
+    // Total faces: 1 original + 2 (one quad = 2 tris) = 3
+    EXPECT_EQ(he.faceCount(), 3u);
+
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, ExtrudeEdgeRoundtrip) {
+    auto editMesh = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    auto newVerts = he.extrudeEdges({0});
+    ASSERT_FALSE(newVerts.empty());
+
+    // Move new vertices
+    for (int nv : newVerts) {
+        he.vertex(nv).position.z += 1.0f;
+    }
+
+    EditableMesh result;
+    ASSERT_TRUE(he.toEditableMesh(result));
+
+    EXPECT_EQ(result.totalVertexCount(), 5u);
+    EXPECT_EQ(result.totalTriangleCount(), 3u);
+}
+
+TEST(HalfEdgeMeshStandalone, ExtrudeMultipleEdges) {
+    auto editMesh = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    // Extrude all 3 edges of the triangle
+    auto newVerts = he.extrudeEdges({0, 1, 2});
+
+    // 3 edges sharing 3 vertices total = 3 new vertices
+    EXPECT_EQ(newVerts.size(), 3u);
+
+    // Total: 3 + 3 = 6 vertices
+    EXPECT_EQ(he.vertexCount(), 6u);
+
+    // Total faces: 1 + 6 (3 edges * 2 tris each) = 7
+    EXPECT_EQ(he.faceCount(), 7u);
+
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, ExtrudePreservesAttributes) {
+    auto editMesh = makeBoneWeightMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    auto newVerts = he.extrudeFaces({0});
+
+    // New vertices should have copied bone weights from originals
+    for (int nv : newVerts) {
+        // Each new vertex should have bone assignments
+        // (all original vertices had at least one assignment)
+        EXPECT_FALSE(he.vertex(nv).boneAssignments.empty())
+            << "New vertex " << nv << " has no bone assignments";
+    }
+}

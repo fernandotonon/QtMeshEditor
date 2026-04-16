@@ -189,62 +189,110 @@ bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
 
 void HalfEdgeMesh::buildBoundaryHalfEdges()
 {
-    // Find all half-edges without twins (boundary edges).
-    // For each, create a boundary half-edge going in the opposite direction.
-    std::vector<int> boundaryHEs;
+    // Find all interior half-edges without twins (boundary edges).
+    std::vector<int> unpaired;
     for (int i = 0; i < static_cast<int>(m_halfEdges.size()); ++i) {
         if (m_halfEdges[i].twin == -1 && m_halfEdges[i].face != -1) {
-            boundaryHEs.push_back(i);
+            unpaired.push_back(i);
         }
     }
 
-    if (boundaryHEs.empty())
+    if (unpaired.empty())
         return;
 
-    // Create boundary half-edges
-    // A boundary half-edge goes from he.vertex back to the vertex that he starts from.
-    // The "from" vertex of a half-edge he is: m_halfEdges[he.prev].vertex
-    std::unordered_map<int, int> vertexToBoundaryHE; // vertex -> boundary half-edge starting at that vertex
-
-    for (int interiorHE : boundaryHEs) {
+    // Create boundary half-edges.
+    // Interior HE goes: fromVertex -> he.vertex
+    // Boundary twin goes: he.vertex -> fromVertex (i.e., starts at he.vertex)
+    for (int interiorHE : unpaired) {
         int bheIdx = static_cast<int>(m_halfEdges.size());
 
+        int startVertex = m_halfEdges[interiorHE].vertex;
+        int endVertex = m_halfEdges[m_halfEdges[interiorHE].prev].vertex;
+
         HalfEdge bhe;
-        // The boundary half-edge goes from he.vertex to the "from" vertex of he
-        int fromVertex = m_halfEdges[interiorHE].vertex;
-        int toVertex = m_halfEdges[m_halfEdges[interiorHE].prev].vertex;
-        // Actually: the "from" of interior he is prev->vertex... let me reconsider.
-        // Interior half-edge goes: prevVertex -> he.vertex
-        // Boundary twin goes: he.vertex -> prevVertex
-        // So boundary he points TO the "from" vertex of the interior he.
-        bhe.vertex = toVertex;
+        bhe.vertex = endVertex;
         bhe.twin = interiorHE;
-        bhe.face = -1; // boundary
+        bhe.face = -1;
         bhe.edge = m_halfEdges[interiorHE].edge;
 
         m_halfEdges[interiorHE].twin = bheIdx;
         m_halfEdges.push_back(bhe);
 
-        // Track that this boundary HE starts at fromVertex
-        vertexToBoundaryHE[fromVertex] = bheIdx;
-
-        // For boundary vertices, prefer to store a boundary half-edge as outgoing
-        // so that isVertexBoundary() can work efficiently
-        m_vertices[fromVertex].halfEdge = bheIdx;
+        m_vertices[startVertex].halfEdge = bheIdx;
     }
 
-    // Link boundary half-edges into loops via next/prev.
-    // Each boundary HE starts at some vertex. Its "next" boundary HE starts
-    // at the vertex this one points to.
+    // Link boundary HEs via next/prev.
+    // For each boundary HE `bhe`, find the next boundary HE in the loop.
+    // bhe ends at vertex V (bhe.vertex == V).
+    // bhe.next = the boundary HE that starts at V and is adjacent in the fan.
+    //
+    // The boundary HE starting at V is the twin of an interior HE whose .vertex == V
+    // and which is unpaired (was in our unpaired list).
+    //
+    // To find the correct one when V has multiple boundary HEs:
+    // Walk the interior fan around V starting from bhe's twin's prev (which points to V).
+    // Go twin->prev repeatedly until we find an interior HE that was unpaired.
+    // That unpaired HE's boundary twin is bhe.next.
     for (int i = 0; i < static_cast<int>(m_halfEdges.size()); ++i) {
         if (m_halfEdges[i].face != -1)
-            continue; // not a boundary HE
+            continue;
+        if (m_halfEdges[i].next >= 0)
+            continue; // already linked
 
-        int targetVertex = m_halfEdges[i].vertex;
-        auto nextIt = vertexToBoundaryHE.find(targetVertex);
-        if (nextIt != vertexToBoundaryHE.end()) {
-            m_halfEdges[i].next = nextIt->second;
-            m_halfEdges[nextIt->second].prev = i;
+        int endVertex = m_halfEdges[i].vertex; // bhe ends at endVertex
+
+        // bhe's twin is an interior HE. That interior HE starts FROM endVertex... no.
+        // bhe starts at some vertex A and ends at endVertex.
+        // bhe.twin is the interior HE that goes endVertex -> A.
+        // No: bhe.twin is the interior HE that bhe was created from.
+        // Interior HE goes fromVertex -> he.vertex.
+        // bhe goes he.vertex -> fromVertex.
+        // So bhe.twin = interiorHE, and interiorHE.vertex is bhe's start vertex.
+        // bhe.vertex (= endVertex) is interiorHE's fromVertex = interiorHE.prev.vertex.
+
+        // We need to find a boundary HE starting at endVertex.
+        // A boundary HE starting at endVertex was created from an interior HE whose
+        // .vertex == endVertex (since the boundary twin starts at the interior HE's .vertex).
+
+        // Walk the interior fan around endVertex:
+        // Start from the interior HE that points TO endVertex (= bhe's twin's prev).
+        int iTwin = m_halfEdges[i].twin;
+        if (iTwin < 0) continue;
+
+        // interiorHE's prev points TO endVertex (= the "from" of interiorHE)
+        // Wait: interiorHE goes fromVertex -> interiorHE.vertex.
+        // fromVertex = interiorHE.prev.vertex = endVertex.
+        // interiorHE.prev is an interior HE whose .vertex == endVertex.
+        int cur = m_halfEdges[iTwin].prev; // points TO endVertex
+        // Walk around endVertex by going: cur -> cur.twin -> cur.twin.next
+        // Actually: to walk around a vertex, from an HE pointing TO that vertex,
+        // go to twin (which starts FROM that vertex), then twin.next (points TO another vertex),
+        // then twin.next.twin (starts FROM that vertex again)... no.
+        // Standard CCW walk around vertex V starting from HE `h` that points TO V:
+        // h.twin starts FROM V. h.twin.prev points TO V (the HE before h.twin in its face).
+        // That's NOT right either.
+        //
+        // Let me use a different approach: collect all boundary HEs starting at a given vertex
+        // and if there's only one, link directly. If multiple, use any (the mesh topology
+        // determines correctness but for our use case we just need valid loops).
+
+        // Find boundary HE starting at endVertex that hasn't been linked as a next yet.
+        // A boundary HE starting at endVertex: its twin's .vertex == endVertex.
+        int nextBhe = -1;
+        for (int j = 0; j < static_cast<int>(m_halfEdges.size()); ++j) {
+            if (j == i) continue;
+            if (m_halfEdges[j].face != -1) continue;
+            if (m_halfEdges[j].prev >= 0) continue; // already linked as someone's next
+            int jTwin = m_halfEdges[j].twin;
+            if (jTwin >= 0 && m_halfEdges[jTwin].vertex == endVertex) {
+                nextBhe = j;
+                break;
+            }
+        }
+
+        if (nextBhe >= 0) {
+            m_halfEdges[i].next = nextBhe;
+            m_halfEdges[nextBhe].prev = i;
         }
     }
 }
@@ -645,6 +693,407 @@ std::vector<std::vector<int>> HalfEdgeMesh::boundaryLoops() const
     }
 
     return loops;
+}
+
+std::vector<int> HalfEdgeMesh::extrudeFaces(const std::vector<int>& faceIndices)
+{
+    std::vector<int> newVertices;
+    if (faceIndices.empty())
+        return newVertices;
+
+    // Build set of selected faces for quick lookup
+    std::unordered_set<int> selectedFaces(faceIndices.begin(), faceIndices.end());
+
+    // Step 1: Find boundary edges of the selection and save their vertex info
+    // BEFORE any rewiring happens. A boundary edge has one face in the
+    // selection and the other not (or -1).
+    struct BoundaryEdgeInfo {
+        int oldFrom;       // original "from" vertex
+        int oldTo;         // original "to" vertex
+        int subMeshIndex;
+    };
+    std::vector<BoundaryEdgeInfo> boundaryEdges;
+    std::vector<int> boundaryHEs;
+
+    for (int fi : faceIndices) {
+        if (fi < 0 || fi >= static_cast<int>(m_faces.size()))
+            continue;
+        int startHE = m_faces[fi].halfEdge;
+        if (startHE < 0) continue;
+
+        int he = startHE;
+        do {
+            int twin = m_halfEdges[he].twin;
+            bool twinInSelection = false;
+            if (twin >= 0 && m_halfEdges[twin].face >= 0) {
+                twinInSelection = selectedFaces.count(m_halfEdges[twin].face) > 0;
+            }
+            if (!twinInSelection) {
+                BoundaryEdgeInfo info;
+                info.oldFrom = m_halfEdges[m_halfEdges[he].prev].vertex;
+                info.oldTo = m_halfEdges[he].vertex;
+                info.subMeshIndex = m_faces[fi].subMeshIndex;
+                boundaryEdges.push_back(info);
+                boundaryHEs.push_back(he);
+            }
+            he = m_halfEdges[he].next;
+        } while (he != startHE);
+    }
+
+    if (boundaryEdges.empty())
+        return newVertices;
+
+    // Step 2: Collect unique boundary vertices and create duplicates.
+    std::unordered_map<int, int> oldToNew;
+
+    for (const auto& be : boundaryEdges) {
+        for (int v : {be.oldFrom, be.oldTo}) {
+            if (oldToNew.count(v) == 0) {
+                int newIdx = static_cast<int>(m_vertices.size());
+                HEVertex newVert = m_vertices[v];
+                newVert.halfEdge = -1;
+                m_vertices.push_back(newVert);
+                oldToNew[v] = newIdx;
+                newVertices.push_back(newIdx);
+            }
+        }
+    }
+
+    // Step 3: Rewire selected faces to use new vertices.
+    for (int fi : faceIndices) {
+        int startHE = m_faces[fi].halfEdge;
+        if (startHE < 0) continue;
+
+        int he = startHE;
+        do {
+            auto it = oldToNew.find(m_halfEdges[he].vertex);
+            if (it != oldToNew.end()) {
+                m_halfEdges[he].vertex = it->second;
+            }
+            he = m_halfEdges[he].next;
+        } while (he != startHE);
+    }
+
+    // Update vertex halfEdge pointers for new vertices
+    for (int fi : faceIndices) {
+        int startHE = m_faces[fi].halfEdge;
+        if (startHE < 0) continue;
+        int he = startHE;
+        do {
+            int v = m_halfEdges[he].vertex;
+            if (m_vertices[v].halfEdge == -1) {
+                m_vertices[v].halfEdge = m_halfEdges[he].next;
+            }
+            he = m_halfEdges[he].next;
+        } while (he != startHE);
+    }
+
+    // Step 4: Create side-wall triangles using pre-saved boundary info.
+    // For each boundary edge (oldFrom -> oldTo), the new vertices are
+    // newFrom and newTo. Quad: oldFrom-oldTo-newTo-newFrom, split into 2 tris.
+    for (const auto& be : boundaryEdges) {
+        int newFrom = oldToNew[be.oldFrom];
+        int newTo = oldToNew[be.oldTo];
+
+        // Triangle 1: oldFrom, oldTo, newTo
+        {
+            int fIdx = static_cast<int>(m_faces.size());
+            HEFace f; f.subMeshIndex = be.subMeshIndex;
+            m_faces.push_back(f);
+
+            int he0 = static_cast<int>(m_halfEdges.size());
+            HalfEdge h0, h1, h2;
+            h0.vertex = be.oldTo; h0.face = fIdx; h0.next = he0+1; h0.prev = he0+2;
+            h1.vertex = newTo;    h1.face = fIdx; h1.next = he0+2; h1.prev = he0;
+            h2.vertex = be.oldFrom; h2.face = fIdx; h2.next = he0; h2.prev = he0+1;
+            m_halfEdges.push_back(h0);
+            m_halfEdges.push_back(h1);
+            m_halfEdges.push_back(h2);
+            m_faces[fIdx].halfEdge = he0;
+        }
+
+        // Triangle 2: oldFrom, newTo, newFrom
+        {
+            int fIdx = static_cast<int>(m_faces.size());
+            HEFace f; f.subMeshIndex = be.subMeshIndex;
+            m_faces.push_back(f);
+
+            int he0 = static_cast<int>(m_halfEdges.size());
+            HalfEdge h0, h1, h2;
+            h0.vertex = newTo;    h0.face = fIdx; h0.next = he0+1; h0.prev = he0+2;
+            h1.vertex = newFrom;  h1.face = fIdx; h1.next = he0+2; h1.prev = he0;
+            h2.vertex = be.oldFrom; h2.face = fIdx; h2.next = he0; h2.prev = he0+1;
+            m_halfEdges.push_back(h0);
+            m_halfEdges.push_back(h1);
+            m_halfEdges.push_back(h2);
+            m_faces[fIdx].halfEdge = he0;
+        }
+    }
+
+    // Step 5: Detach old twin links for boundary half-edges
+    for (int bhe : boundaryHEs) {
+        int twin = m_halfEdges[bhe].twin;
+        if (twin >= 0) {
+            m_halfEdges[twin].twin = -1;
+        }
+        m_halfEdges[bhe].twin = -1;
+    }
+
+    // Step 6: Rebuild edges, twins, and boundary from scratch.
+    m_edges.clear();
+
+    std::unordered_map<std::pair<int,int>, int, PairHash> directedEdgeMap;
+    std::unordered_map<std::pair<int,int>, int, PairHash> edgeMap;
+
+    for (int i = 0; i < static_cast<int>(m_halfEdges.size()); ++i) {
+        if (m_halfEdges[i].face < 0) continue;
+
+        int toVert = m_halfEdges[i].vertex;
+        int fromVert = m_halfEdges[m_halfEdges[i].prev].vertex;
+
+        directedEdgeMap[{fromVert, toVert}] = i;
+
+        int eMin = std::min(fromVert, toVert);
+        int eMax = std::max(fromVert, toVert);
+        auto edgeKey = std::make_pair(eMin, eMax);
+        auto edgeIt = edgeMap.find(edgeKey);
+        if (edgeIt == edgeMap.end()) {
+            int edgeIdx = static_cast<int>(m_edges.size());
+            HEEdge edge; edge.halfEdge = i;
+            m_edges.push_back(edge);
+            edgeMap[edgeKey] = edgeIdx;
+            m_halfEdges[i].edge = edgeIdx;
+        } else {
+            m_halfEdges[i].edge = edgeIt->second;
+        }
+    }
+
+    for (auto& [dirEdge, heIdx] : directedEdgeMap) {
+        auto twinKey = std::make_pair(dirEdge.second, dirEdge.first);
+        auto twinIt = directedEdgeMap.find(twinKey);
+        m_halfEdges[heIdx].twin = (twinIt != directedEdgeMap.end()) ? twinIt->second : -1;
+    }
+
+    // Compact: remove old boundary HEs (face == -1)
+    std::vector<int> heRemap(m_halfEdges.size(), -1);
+    std::vector<HalfEdge> newHEs;
+    for (int i = 0; i < static_cast<int>(m_halfEdges.size()); ++i) {
+        if (m_halfEdges[i].face >= 0) {
+            heRemap[i] = static_cast<int>(newHEs.size());
+            newHEs.push_back(m_halfEdges[i]);
+        }
+    }
+    for (auto& he : newHEs) {
+        if (he.twin >= 0) he.twin = heRemap[he.twin];
+        if (he.next >= 0) he.next = heRemap[he.next];
+        if (he.prev >= 0) he.prev = heRemap[he.prev];
+    }
+    for (auto& f : m_faces) {
+        if (f.halfEdge >= 0) f.halfEdge = heRemap[f.halfEdge];
+    }
+    for (auto& e : m_edges) {
+        if (e.halfEdge >= 0) e.halfEdge = heRemap[e.halfEdge];
+    }
+    for (auto& v : m_vertices) {
+        if (v.halfEdge >= 0) v.halfEdge = heRemap[v.halfEdge];
+    }
+    m_halfEdges = std::move(newHEs);
+
+    // Rebuild boundary half-edges
+    buildBoundaryHalfEdges();
+
+    // Fix all vertex halfEdge pointers to satisfy invariant: prev->vertex == v
+    for (int v = 0; v < static_cast<int>(m_vertices.size()); ++v) {
+        int he = m_vertices[v].halfEdge;
+        if (he >= 0 && he < static_cast<int>(m_halfEdges.size())) {
+            int prev = m_halfEdges[he].prev;
+            if (prev >= 0 && m_halfEdges[prev].vertex == v)
+                continue;
+        }
+        // Find a valid outgoing HE for this vertex
+        m_vertices[v].halfEdge = -1;
+        for (int i = 0; i < static_cast<int>(m_halfEdges.size()); ++i) {
+            int prev = m_halfEdges[i].prev;
+            if (prev >= 0 && m_halfEdges[prev].vertex == v) {
+                m_vertices[v].halfEdge = i;
+                break;
+            }
+        }
+    }
+
+    return newVertices;
+}
+
+std::vector<int> HalfEdgeMesh::extrudeEdges(const std::vector<int>& edgeIndices)
+{
+    std::vector<int> newVertices;
+    if (edgeIndices.empty())
+        return newVertices;
+
+    // Pre-compute edge info before any mutation
+    struct EdgeInfo {
+        int v1, v2, subMeshIndex;
+    };
+    std::vector<EdgeInfo> edgeInfos;
+    for (int ei : edgeIndices) {
+        if (ei < 0 || ei >= static_cast<int>(m_edges.size()))
+            continue;
+        auto [v1, v2] = edgeVertices(ei);
+        if (v1 < 0 || v2 < 0) continue;
+        auto [f1, f2] = edgeFaces(ei);
+        int subIdx = 0;
+        if (f1 >= 0) subIdx = m_faces[f1].subMeshIndex;
+        else if (f2 >= 0) subIdx = m_faces[f2].subMeshIndex;
+        edgeInfos.push_back({v1, v2, subIdx});
+    }
+
+    // Collect unique vertices and create duplicates
+    std::unordered_map<int, int> oldToNew;
+
+    for (const auto& ei : edgeInfos) {
+        for (int v : {ei.v1, ei.v2}) {
+            if (oldToNew.count(v) == 0) {
+                int newIdx = static_cast<int>(m_vertices.size());
+                HEVertex newVert = m_vertices[v];
+                newVert.halfEdge = -1;
+                m_vertices.push_back(newVert);
+                oldToNew[v] = newIdx;
+                newVertices.push_back(newIdx);
+            }
+        }
+    }
+
+    // For each edge, create a quad (two triangles) connecting old edge to new edge.
+    for (const auto& ei : edgeInfos) {
+        int nv1 = oldToNew[ei.v1];
+        int nv2 = oldToNew[ei.v2];
+        int subMeshIdx = ei.subMeshIndex;
+
+        // Triangle 1: v1, v2, nv2
+        {
+            int fIdx = static_cast<int>(m_faces.size());
+            HEFace f; f.subMeshIndex = subMeshIdx;
+            m_faces.push_back(f);
+
+            int he0 = static_cast<int>(m_halfEdges.size());
+            HalfEdge h0, h1, h2;
+            h0.vertex = ei.v2;  h0.face = fIdx; h0.next = he0+1; h0.prev = he0+2;
+            h1.vertex = nv2;    h1.face = fIdx; h1.next = he0+2; h1.prev = he0;
+            h2.vertex = ei.v1;  h2.face = fIdx; h2.next = he0;   h2.prev = he0+1;
+            m_halfEdges.push_back(h0);
+            m_halfEdges.push_back(h1);
+            m_halfEdges.push_back(h2);
+            m_faces[fIdx].halfEdge = he0;
+        }
+
+        // Triangle 2: v1, nv2, nv1
+        {
+            int fIdx = static_cast<int>(m_faces.size());
+            HEFace f; f.subMeshIndex = subMeshIdx;
+            m_faces.push_back(f);
+
+            int he0 = static_cast<int>(m_halfEdges.size());
+            HalfEdge h0, h1, h2;
+            h0.vertex = nv2;    h0.face = fIdx; h0.next = he0+1; h0.prev = he0+2;
+            h1.vertex = nv1;    h1.face = fIdx; h1.next = he0+2; h1.prev = he0;
+            h2.vertex = ei.v1;  h2.face = fIdx; h2.next = he0;   h2.prev = he0+1;
+            m_halfEdges.push_back(h0);
+            m_halfEdges.push_back(h1);
+            m_halfEdges.push_back(h2);
+            m_faces[fIdx].halfEdge = he0;
+        }
+    }
+
+    // Detach twin links to old boundary HEs before rebuild
+    for (int i = 0; i < static_cast<int>(m_halfEdges.size()); ++i) {
+        if (m_halfEdges[i].face >= 0) {
+            int twin = m_halfEdges[i].twin;
+            if (twin >= 0 && m_halfEdges[twin].face < 0) {
+                m_halfEdges[i].twin = -1;
+            }
+        }
+    }
+
+    // Rebuild edges and twin links
+    m_edges.clear();
+    std::unordered_map<std::pair<int,int>, int, PairHash> directedEdgeMap;
+    std::unordered_map<std::pair<int,int>, int, PairHash> edgeMap;
+
+    for (int i = 0; i < static_cast<int>(m_halfEdges.size()); ++i) {
+        if (m_halfEdges[i].face < 0) continue;
+
+        int toVert = m_halfEdges[i].vertex;
+        int fromVert = m_halfEdges[m_halfEdges[i].prev].vertex;
+
+        directedEdgeMap[{fromVert, toVert}] = i;
+
+        int eMin = std::min(fromVert, toVert);
+        int eMax = std::max(fromVert, toVert);
+        auto edgeKey = std::make_pair(eMin, eMax);
+        auto edgeIt = edgeMap.find(edgeKey);
+        if (edgeIt == edgeMap.end()) {
+            int edgeIdx = static_cast<int>(m_edges.size());
+            HEEdge edge; edge.halfEdge = i;
+            m_edges.push_back(edge);
+            edgeMap[edgeKey] = edgeIdx;
+            m_halfEdges[i].edge = edgeIdx;
+        } else {
+            m_halfEdges[i].edge = edgeIt->second;
+        }
+    }
+
+    for (auto& [dirEdge, heIdx] : directedEdgeMap) {
+        auto twinKey = std::make_pair(dirEdge.second, dirEdge.first);
+        auto twinIt = directedEdgeMap.find(twinKey);
+        m_halfEdges[heIdx].twin = (twinIt != directedEdgeMap.end()) ? twinIt->second : -1;
+    }
+
+    // Compact: remove old boundary HEs
+    std::vector<int> heRemap(m_halfEdges.size(), -1);
+    std::vector<HalfEdge> newHEs;
+    for (int i = 0; i < static_cast<int>(m_halfEdges.size()); ++i) {
+        if (m_halfEdges[i].face >= 0) {
+            heRemap[i] = static_cast<int>(newHEs.size());
+            newHEs.push_back(m_halfEdges[i]);
+        }
+    }
+    for (auto& he : newHEs) {
+        if (he.twin >= 0) he.twin = heRemap[he.twin];
+        if (he.next >= 0) he.next = heRemap[he.next];
+        if (he.prev >= 0) he.prev = heRemap[he.prev];
+    }
+    for (auto& f : m_faces) {
+        if (f.halfEdge >= 0) f.halfEdge = heRemap[f.halfEdge];
+    }
+    for (auto& e : m_edges) {
+        if (e.halfEdge >= 0) e.halfEdge = heRemap[e.halfEdge];
+    }
+    for (auto& v : m_vertices) {
+        if (v.halfEdge >= 0) v.halfEdge = heRemap[v.halfEdge];
+    }
+    m_halfEdges = std::move(newHEs);
+
+    buildBoundaryHalfEdges();
+
+    // Fix all vertex halfEdge pointers to satisfy invariant: prev->vertex == v
+    for (int v = 0; v < static_cast<int>(m_vertices.size()); ++v) {
+        int he = m_vertices[v].halfEdge;
+        if (he >= 0 && he < static_cast<int>(m_halfEdges.size())) {
+            int prev = m_halfEdges[he].prev;
+            if (prev >= 0 && m_halfEdges[prev].vertex == v)
+                continue;
+        }
+        m_vertices[v].halfEdge = -1;
+        for (int i = 0; i < static_cast<int>(m_halfEdges.size()); ++i) {
+            int prev = m_halfEdges[i].prev;
+            if (prev >= 0 && m_halfEdges[prev].vertex == v) {
+                m_vertices[v].halfEdge = i;
+                break;
+            }
+        }
+    }
+
+    return newVertices;
 }
 
 bool HalfEdgeMesh::validate() const

@@ -480,6 +480,28 @@ Rectangle {
                 }
             }
 
+            // Topology tools
+            Text {
+                width: parent.width - 16
+                text: "Topology"
+                color: PropertiesPanelController.textColor; font.pixelSize: 11; font.bold: true
+                visible: EditModeController.editModeActive
+            }
+
+            // Extrude button
+            Rectangle {
+                width: parent.width - 16; height: 26; radius: 3
+                visible: EditModeController.editModeActive && EditModeController.selectionMode !== 0
+                color: extrudeMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                     : extrudeMouse.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
+                     : PropertiesPanelController.highlightColor
+                Text { anchors.centerIn: parent; text: "Extrude (Cmd+E)"; color: "white"; font.pixelSize: 11 }
+                MouseArea {
+                    id: extrudeMouse; anchors.fill: parent; hoverEnabled: true
+                    onClicked: EditModeController.extrudeSelection()
+                }
+            }
+
             // Separator
             Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor }
 
