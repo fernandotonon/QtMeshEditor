@@ -1873,8 +1873,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate WinGet manifest
+      - name: Submit WinGet manifest
         shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
           # Download wingetcreate standalone exe from GitHub releases
           $wgcUrl = "https://github.com/microsoft/winget-create/releases/latest/download/wingetcreate.exe"
@@ -1897,93 +1899,23 @@ jobs:
             }
           }
 
-          Write-Host "Generating WinGet manifest for version $ver..."
-          # --out manifests nests under manifests/ (output path includes manifests\f\...)
+          # Use wingetcreate's built-in --submit path. This goes through the
+          # GitHub Contents API (PUT /contents/:path), which works with a
+          # classic PAT that only has `public_repo` scope. The previous approach
+          # (manual `git clone` + `git push` to the fork) required the token's
+          # write-access scope to cover git-over-HTTPS for the fork, which is a
+          # different permission path and was 403-denied.
+          Write-Host "Submitting WinGet manifest for version $ver..."
           .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
             --version $ver `
             --urls $url `
-            --out manifests
-
-          Write-Host "Manifest generated:"
-          Get-ChildItem -Recurse -File manifests | Get-Content
-
-      - name: Submit PR to winget-pkgs
-        continue-on-error: true   # don't fail the release if submission fails
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
-        run: |
-          set -e
-          RAW_TAG="${{ github.event.release.tag_name }}"
-          VER="${RAW_TAG#v}"
-          BRANCH="qtmesheditor-${VER}"
-          DEST_DIR="manifests/f/FernandoTonon/QtMeshEditor/${VER}"
-
-          # Probe from repo root (cwd is $GITHUB_WORKSPACE). After cd winget-pkgs, sources live under ../manifests/...
-          # wingetcreate --out manifests writes to manifests/manifests/f/<Publisher>/... (or manifests/f/... on older layouts)
-          if [ -d "manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
-            MANIFEST_SRC="../manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}"
-          elif [ -d "manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
-            MANIFEST_SRC="../manifests/f/FernandoTonon/QtMeshEditor/${VER}"
-          else
-            echo "::error::Could not find generated WinGet manifests for ${VER} under manifests/"
-            exit 1
-          fi
-
-          # Derive fork owner from the authenticated token (may differ from repo owner)
-          FORK_OWNER="$(gh api user --jq .login)"
-          echo "Authenticated as: $FORK_OWNER"
-
-          # Ensure we have a fork of winget-pkgs
-          gh repo fork microsoft/winget-pkgs --clone=false 2>/dev/null || true
-
-          # Clone the fork (shallow) using a token-embedded URL so git push works
-          # without relying on a credential helper (previous git push attempts
-          # returned 403 because gh auth setup-git was not providing creds).
-          git clone --depth 1 \
-            "https://x-access-token:${GH_TOKEN}@github.com/${FORK_OWNER}/winget-pkgs.git" \
-            winget-pkgs
-          cd winget-pkgs
-
-          # Handle reruns: if branch already exists, check it out; otherwise create it
-          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
-            echo "Branch $BRANCH already exists, updating..."
-            git fetch origin "$BRANCH"
-            git checkout "$BRANCH"
-          else
-            git checkout -b "$BRANCH"
-          fi
-
-          # Copy manifests
-          mkdir -p "${DEST_DIR}"
-          cp -r "${MANIFEST_SRC}/." "${DEST_DIR}/"
-
-          # Commit and push
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          if git diff --cached --quiet; then
-            echo "No changes to commit"
-            exit 0
-          fi
-          git commit -m "Update FernandoTonon.QtMeshEditor to ${VER}"
-          git push -u origin "$BRANCH"
-
-          # Open PR (or skip if one already exists for this branch)
-          EXISTING_PR="$(gh pr list --repo microsoft/winget-pkgs --head "${FORK_OWNER}:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
-          if [ -n "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
-            echo "PR #${EXISTING_PR} already exists for this version, skipping creation."
-          else
-            gh pr create \
-              --repo microsoft/winget-pkgs \
-              --head "${FORK_OWNER}:${BRANCH}" \
-              --title "Update FernandoTonon.QtMeshEditor to ${VER}" \
-              --body "## Automated update
-          Version: ${VER}
-          Release: https://github.com/fernandotonon/QtMeshEditor/releases/tag/${RAW_TAG}"
-          fi
-
-          echo "WinGet PR submitted successfully."
+            --submit `
+            --token $env:WINGET_TOKEN
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::wingetcreate submit failed with exit $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+          Write-Host "WinGet PR submitted successfully."
 
 ####################################################################
 # Snap Store Publish (after Linux .deb is built)
