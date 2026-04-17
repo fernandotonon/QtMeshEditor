@@ -1185,14 +1185,94 @@ bool EditModeController::extrudeSelection()
 
     m_editableMesh->subMeshes() = std::move(newMesh.subMeshes());
 
-    if (m_normalsMode == 0)
-        m_editableMesh->recalculateNormals();
-    else
-        m_editableMesh->recalculateNormalsFlat();
-
+    // Collect the offset positions of the new vertices. These will be used
+    // to identify which vertices in the new EditableMesh are "new" and need
+    // fresh normals (side-wall triangles have new geometry that affects
+    // adjacent vertex normals too).
     std::vector<Ogre::Vector3> newVertPositions;
+    newVertPositions.reserve(newHEVertices.size());
     for (int heVert : newHEVertices)
         newVertPositions.push_back(heMesh.vertex(heVert).position);
+
+    // Selective normal recompute: only update normals for vertices whose
+    // position matches a new vertex AND for vertices used by triangles that
+    // include any of those new vertices (these are the vertices whose
+    // neighborhood changed).
+    //
+    // All OTHER vertices keep their ORIGINAL normals (preserved through the
+    // HE round-trip). This avoids a lighting shift on the untouched parts.
+    {
+        const float TOL2 = 1e-8f; // squared distance tolerance
+
+        auto positionMatchesNew = [&](const Ogre::Vector3& p) {
+            for (const auto& np : newVertPositions) {
+                if (p.squaredDistance(np) < TOL2)
+                    return true;
+            }
+            return false;
+        };
+
+        for (auto& sub : m_editableMesh->subMeshes()) {
+            // Mark vertices at new positions
+            std::vector<bool> isNew(sub.vertices.size(), false);
+            for (size_t v = 0; v < sub.vertices.size(); ++v) {
+                if (positionMatchesNew(sub.vertices[v].position))
+                    isNew[v] = true;
+            }
+
+            // Expand the dirty set: any vertex sharing a triangle with a
+            // new vertex also needs its normal updated.
+            std::vector<bool> isDirty = isNew;
+            for (const auto& tri : sub.triangles) {
+                if (tri.indices[0] >= sub.vertices.size() ||
+                    tri.indices[1] >= sub.vertices.size() ||
+                    tri.indices[2] >= sub.vertices.size())
+                    continue;
+                bool anyNew = isNew[tri.indices[0]] || isNew[tri.indices[1]] || isNew[tri.indices[2]];
+                if (anyNew) {
+                    isDirty[tri.indices[0]] = true;
+                    isDirty[tri.indices[1]] = true;
+                    isDirty[tri.indices[2]] = true;
+                }
+            }
+
+            // Zero the normals of dirty vertices (we'll accumulate below)
+            for (size_t v = 0; v < sub.vertices.size(); ++v) {
+                if (isDirty[v]) {
+                    sub.vertices[v].normal = Ogre::Vector3::ZERO;
+                    sub.vertices[v].hasNormal = true;
+                }
+            }
+
+            // Accumulate area-weighted face normals ONLY onto dirty vertices
+            for (const auto& tri : sub.triangles) {
+                if (tri.indices[0] >= sub.vertices.size() ||
+                    tri.indices[1] >= sub.vertices.size() ||
+                    tri.indices[2] >= sub.vertices.size())
+                    continue;
+                bool anyDirty = isDirty[tri.indices[0]] || isDirty[tri.indices[1]] || isDirty[tri.indices[2]];
+                if (!anyDirty) continue;
+
+                const auto& v0 = sub.vertices[tri.indices[0]].position;
+                const auto& v1 = sub.vertices[tri.indices[1]].position;
+                const auto& v2 = sub.vertices[tri.indices[2]].position;
+                Ogre::Vector3 faceN = (v1 - v0).crossProduct(v2 - v0);
+                for (int k = 0; k < 3; ++k) {
+                    if (isDirty[tri.indices[k]])
+                        sub.vertices[tri.indices[k]].normal += faceN;
+                }
+            }
+
+            // Normalize the dirty vertices
+            for (size_t v = 0; v < sub.vertices.size(); ++v) {
+                if (isDirty[v]) {
+                    float len = sub.vertices[v].normal.length();
+                    if (len > 1e-8f)
+                        sub.vertices[v].normal /= len;
+                }
+            }
+        }
+    }
 
     if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
         return false;

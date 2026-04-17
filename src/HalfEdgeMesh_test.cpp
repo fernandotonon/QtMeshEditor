@@ -648,6 +648,103 @@ TEST(HalfEdgeMeshStandalone, RoundtripPreservesNormals) {
     }
 }
 
+TEST(HalfEdgeMeshStandalone, RoundtripPreservesTangents) {
+    // Build a triangle with explicit tangents (distinct per vertex so we can
+    // verify the correct tangent survives round-trip for each vertex).
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "TangentMat";
+
+    EditableVertex v0, v1, v2;
+    v0.position = Ogre::Vector3(0, 0, 0);
+    v0.normal = Ogre::Vector3(0, 0, 1); v0.hasNormal = true;
+    v0.uv = Ogre::Vector2(0, 0); v0.hasUV = true;
+    v0.tangent = Ogre::Vector4(1.0f, 0.0f, 0.0f, 1.0f); v0.hasTangent = true;
+
+    v1.position = Ogre::Vector3(1, 0, 0);
+    v1.normal = Ogre::Vector3(0, 0, 1); v1.hasNormal = true;
+    v1.uv = Ogre::Vector2(1, 0); v1.hasUV = true;
+    v1.tangent = Ogre::Vector4(0.7071f, 0.7071f, 0.0f, -1.0f); v1.hasTangent = true;
+
+    v2.position = Ogre::Vector3(0, 1, 0);
+    v2.normal = Ogre::Vector3(0, 0, 1); v2.hasNormal = true;
+    v2.uv = Ogre::Vector2(0, 1); v2.hasUV = true;
+    v2.tangent = Ogre::Vector4(0.0f, 1.0f, 0.0f, 1.0f); v2.hasTangent = true;
+
+    sub.vertices = {v0, v1, v2};
+    EditableTriangle tri;
+    tri.indices[0] = 0; tri.indices[1] = 1; tri.indices[2] = 2;
+    sub.triangles = {tri};
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+
+    EditableMesh result;
+    ASSERT_TRUE(he.toEditableMesh(result));
+
+    ASSERT_EQ(result.subMeshCount(), 1u);
+    ASSERT_EQ(result.subMeshes()[0].vertices.size(), 3u);
+
+    // Each vertex should have hasTangent set and match the input tangent
+    // (identified by the position that came out).
+    for (const auto& v : result.subMeshes()[0].vertices) {
+        EXPECT_TRUE(v.hasTangent);
+        if (v.position.squaredDistance(Ogre::Vector3(0, 0, 0)) < 0.001f) {
+            EXPECT_NEAR(v.tangent.x, 1.0f, 0.001f);
+            EXPECT_NEAR(v.tangent.w, 1.0f, 0.001f);
+        } else if (v.position.squaredDistance(Ogre::Vector3(1, 0, 0)) < 0.001f) {
+            EXPECT_NEAR(v.tangent.x, 0.7071f, 0.001f);
+            EXPECT_NEAR(v.tangent.y, 0.7071f, 0.001f);
+            EXPECT_NEAR(v.tangent.w, -1.0f, 0.001f); // negative parity preserved
+        } else if (v.position.squaredDistance(Ogre::Vector3(0, 1, 0)) < 0.001f) {
+            EXPECT_NEAR(v.tangent.y, 1.0f, 0.001f);
+        }
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, ExtrudePreservesTangents) {
+    // Tangents of original vertices should be unchanged; new vertices should
+    // inherit the tangent of the vertex they were duplicated from.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+
+    EditableVertex v0, v1, v2;
+    v0.position = Ogre::Vector3(0, 0, 0);
+    v0.normal = Ogre::Vector3(0, 0, 1); v0.hasNormal = true;
+    v0.uv = Ogre::Vector2(0, 0); v0.hasUV = true;
+    v0.tangent = Ogre::Vector4(1.0f, 0.0f, 0.0f, 1.0f); v0.hasTangent = true;
+
+    v1.position = Ogre::Vector3(1, 0, 0);
+    v1.normal = Ogre::Vector3(0, 0, 1); v1.hasNormal = true;
+    v1.uv = Ogre::Vector2(1, 0); v1.hasUV = true;
+    v1.tangent = Ogre::Vector4(1.0f, 0.0f, 0.0f, 1.0f); v1.hasTangent = true;
+
+    v2.position = Ogre::Vector3(0, 1, 0);
+    v2.normal = Ogre::Vector3(0, 0, 1); v2.hasNormal = true;
+    v2.uv = Ogre::Vector2(0, 1); v2.hasUV = true;
+    v2.tangent = Ogre::Vector4(1.0f, 0.0f, 0.0f, 1.0f); v2.hasTangent = true;
+
+    sub.vertices = {v0, v1, v2};
+    EditableTriangle tri;
+    tri.indices[0] = 0; tri.indices[1] = 1; tri.indices[2] = 2;
+    sub.triangles = {tri};
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+
+    auto newVerts = he.extrudeFaces({0});
+    ASSERT_EQ(newVerts.size(), 3u);
+
+    // New vertices should inherit tangents from their originals
+    for (int nv : newVerts) {
+        EXPECT_TRUE(he.vertex(nv).hasTangent);
+        EXPECT_NEAR(he.vertex(nv).tangent.x, 1.0f, 0.001f);
+        EXPECT_NEAR(he.vertex(nv).tangent.w, 1.0f, 0.001f);
+    }
+}
+
 // ===========================================================================
 // Tests: Edge cases
 // ===========================================================================

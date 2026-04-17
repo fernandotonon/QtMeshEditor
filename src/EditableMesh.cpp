@@ -310,26 +310,10 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
     if (m_subMeshes.size() != static_cast<size_t>(mesh->getNumSubMeshes()))
         return false;
 
-    // Recalculate normals
-    if (m_flatNormals) recalculateNormalsFlat();
-    else recalculateNormals();
-
-    // Detect whether the original mesh had tangents (for normal mapping).
-    // If yes, we'll rebuild them after the vertex buffer is replaced.
-    bool hadTangents = false;
-    {
-        auto* sharedDecl = mesh->sharedVertexData ? mesh->sharedVertexData->vertexDeclaration : nullptr;
-        if (sharedDecl && sharedDecl->findElementBySemantic(Ogre::VES_TANGENT)) {
-            hadTangents = true;
-        }
-        for (unsigned short i = 0; i < mesh->getNumSubMeshes() && !hadTangents; ++i) {
-            auto* sm = mesh->getSubMesh(i);
-            if (sm->vertexData && sm->vertexData->vertexDeclaration &&
-                sm->vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_TANGENT)) {
-                hadTangents = true;
-            }
-        }
-    }
+    // Note: callers are responsible for setting normals/tangents before
+    // calling this. We do NOT recalculate normals or tangents here because
+    // topology ops (extrude, etc.) need to preserve original normals AND
+    // tangents on unchanged vertices to avoid visible lighting shifts.
 
     // EditableMesh stores per-submesh vertex arrays. Migrate away from
     // any shared vertex data — each submesh gets its own fresh VertexData
@@ -351,7 +335,7 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
         auto* decl = subMesh->vertexData->vertexDeclaration;
         auto* binding = subMesh->vertexData->vertexBufferBinding;
 
-        // Build a fresh declaration: position, normal, uv
+        // Build a fresh declaration: position, normal, uv, tangent(FLOAT4)
         size_t declOffset = 0;
         decl->addElement(0, declOffset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
         declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
@@ -366,6 +350,12 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
         if (hasUVs) {
             decl->addElement(0, declOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
             declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
+        }
+
+        bool hasTangents = !editSub.vertices.empty() && editSub.vertices[0].hasTangent;
+        if (hasTangents) {
+            decl->addElement(0, declOffset, Ogre::VET_FLOAT4, Ogre::VES_TANGENT);
+            declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT4);
         }
 
         subMesh->vertexData->vertexCount = editSub.vertices.size();
@@ -389,6 +379,12 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
             if (hasUVs) {
                 *dest++ = v.uv.x;
                 *dest++ = v.uv.y;
+            }
+            if (hasTangents) {
+                *dest++ = v.tangent.x;
+                *dest++ = v.tangent.y;
+                *dest++ = v.tangent.z;
+                *dest++ = v.tangent.w;
             }
         }
         newBuf->unlock();
@@ -473,15 +469,10 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
         mesh->_compileBoneAssignments();
     }
 
-    // Rebuild tangent vectors if the original mesh had them. This is
-    // required for normal-mapped / bump-mapped materials to render correctly.
-    if (hadTangents) {
-        try {
-            mesh->buildTangentVectors(0, false, false, false);
-        } catch (const Ogre::Exception&) {
-            // Tangent generation can fail if UVs have issues; ignore gracefully
-        }
-    }
+    // Tangents are preserved directly through EditableVertex::tangent, so
+    // there is no need to call Mesh::buildTangentVectors() here (doing so
+    // would replace the source-file tangents with Ogre's computed ones,
+    // causing a visible lighting shift on first edit).
 
     // Recalculate bounds
     SubMeshTransform::recalculateMeshBounds(mesh);
@@ -858,6 +849,25 @@ bool EditableMesh::readVertexData(Ogre::VertexData* vertexData, std::vector<Edit
             cv.setAsRGBA(*pRGBA);
             vertices[j].color = cv;
             vertices[j].hasColor = true;
+        }
+        vbuf->unlock();
+    }
+
+    // Read tangents (used by normal mapping). Tangents may be stored as
+    // FLOAT3 (just direction) or FLOAT4 (direction + parity w).
+    const auto* tanElem = decl->findElementBySemantic(Ogre::VES_TANGENT);
+    if (tanElem) {
+        auto vbuf = binding->getBuffer(tanElem->getSource());
+        auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        bool isFloat4 = (tanElem->getType() == Ogre::VET_FLOAT4);
+        for (size_t j = 0; j < vertexData->vertexCount; ++j) {
+            Ogre::Real* pReal;
+            tanElem->baseVertexPointerToElement(base + j * vbuf->getVertexSize(), &pReal);
+            vertices[j].tangent.x = pReal[0];
+            vertices[j].tangent.y = pReal[1];
+            vertices[j].tangent.z = pReal[2];
+            vertices[j].tangent.w = isFloat4 ? pReal[3] : 1.0f;
+            vertices[j].hasTangent = true;
         }
         vbuf->unlock();
     }

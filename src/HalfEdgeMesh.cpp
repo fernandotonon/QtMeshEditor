@@ -72,9 +72,11 @@ bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
             hv.normal = sub.vertices[v].normal;
             hv.uv = sub.vertices[v].uv;
             hv.color = sub.vertices[v].color;
+            hv.tangent = sub.vertices[v].tangent;
             hv.hasNormal = sub.vertices[v].hasNormal;
             hv.hasUV = sub.vertices[v].hasUV;
             hv.hasColor = sub.vertices[v].hasColor;
+            hv.hasTangent = sub.vertices[v].hasTangent;
 
             for (const auto& ba : sub.vertices[v].boneAssignments) {
                 hv.boneAssignments.push_back({ba.boneIndex, ba.weight});
@@ -356,9 +358,11 @@ bool HalfEdgeMesh::toEditableMesh(EditableMesh& editableMesh) const
                 ev.normal = hv.normal;
                 ev.uv = hv.uv;
                 ev.color = hv.color;
+                ev.tangent = hv.tangent;
                 ev.hasNormal = hv.hasNormal;
                 ev.hasUV = hv.hasUV;
                 ev.hasColor = hv.hasColor;
+                ev.hasTangent = hv.hasTangent;
 
                 for (const auto& [boneIdx, weight] : hv.boneAssignments) {
                     EditableBoneAssignment eba;

@@ -52,11 +52,13 @@ struct EditableVertex {
     Ogre::Vector3 normal = Ogre::Vector3::ZERO;
     Ogre::Vector2 uv = Ogre::Vector2::ZERO;
     Ogre::ColourValue color = Ogre::ColourValue::White;
+    Ogre::Vector4 tangent = Ogre::Vector4::ZERO; // w = parity
     std::vector<EditableBoneAssignment> boneAssignments;
 
     bool hasNormal = false;
     bool hasUV = false;
     bool hasColor = false;
+    bool hasTangent = false;
 };
 
 /**
