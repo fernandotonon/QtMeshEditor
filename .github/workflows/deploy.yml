@@ -1572,6 +1572,20 @@ jobs:
             # Copy Assimp libraries to MacOS directory
             sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ || echo "Assimp libraries not found, continuing..."
 
+            # macdeployqt scans -qmldir for QML imports and bundles the module
+            # plugins (Controls, Layouts, Dialogs, ...) the manual copy misses —
+            # without it the inspector panel renders blank on installed bundles.
+            MACDEPLOYQT="/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/bin/macdeployqt"
+            if [ -x "$MACDEPLOYQT" ]; then
+                echo "Running macdeployqt against app bundle..."
+                sudo "$MACDEPLOYQT" "${{github.workspace}}/bin/QtMeshEditor.app" \
+                    -qmldir="${{github.workspace}}/qml" \
+                    -verbose=2 \
+                    -no-strip 2>&1 | tail -60 || echo "macdeployqt reported warnings, continuing..."
+            else
+                echo "WARNING: macdeployqt not found at $MACDEPLOYQT — QML modules may be incomplete"
+            fi
+
     - name: Prepare for packing
       run: |
             sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
