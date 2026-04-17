@@ -29,6 +29,8 @@ THE SOFTWARE.
 #include "EditableMesh.h"
 #include "SubMeshTransform.h"
 #include <OgreSubEntity.h>
+#include <algorithm>
+#include <iterator>
 #include <limits>
 #include <cmath>
 #include <cstring>
@@ -37,12 +39,18 @@ bool EditableMesh::loadFromEntity(Ogre::Entity* entity)
 {
     if (!entity)
         return false;
-
     Ogre::MeshPtr meshPtr = entity->getMesh();
     if (!meshPtr)
         return false;
-
     m_sourceEntity = entity;
+    return loadFromMesh(meshPtr);
+}
+
+bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
+{
+    if (!meshPtr)
+        return false;
+
     m_subMeshes.clear();
 
     Ogre::Mesh* mesh = meshPtr.get();
@@ -61,14 +69,12 @@ bool EditableMesh::loadFromEntity(Ogre::Entity* entity)
         editSub.usesSharedVertices = subMesh->useSharedVertices;
         editSub.materialName = subMesh->getMaterialName();
 
-        // Read vertices
         if (subMesh->useSharedVertices) {
             editSub.vertices = sharedVertices;
         } else {
             readVertexData(subMesh->vertexData, editSub.vertices);
         }
 
-        // Read bone assignments for this submesh
         if (mesh->hasSkeleton()) {
             const Ogre::SubMesh::VertexBoneAssignmentList& boneAssignments =
                 subMesh->useSharedVertices ? mesh->getBoneAssignments() : subMesh->getBoneAssignments();
@@ -84,7 +90,6 @@ bool EditableMesh::loadFromEntity(Ogre::Entity* entity)
             }
         }
 
-        // Read triangles
         if (subMesh->indexData) {
             readIndexData(subMesh->indexData, editSub.triangles);
         }
@@ -93,6 +98,103 @@ bool EditableMesh::loadFromEntity(Ogre::Entity* entity)
     }
 
     return true;
+}
+
+void EditableMesh::collapseToSingleSubmeshAndWeld(float tolerance)
+{
+    if (m_subMeshes.size() <= 1) {
+        weldByPosition(tolerance);
+        return;
+    }
+
+    EditableSubMesh merged;
+    merged.materialName = m_subMeshes[0].materialName;
+    merged.usesSharedVertices = false;
+
+    for (auto& sub : m_subMeshes) {
+        size_t offset = merged.vertices.size();
+        merged.vertices.insert(merged.vertices.end(),
+            std::make_move_iterator(sub.vertices.begin()),
+            std::make_move_iterator(sub.vertices.end()));
+        for (auto& tri : sub.triangles) {
+            EditableTriangle t;
+            t.indices[0] = static_cast<unsigned int>(tri.indices[0] + offset);
+            t.indices[1] = static_cast<unsigned int>(tri.indices[1] + offset);
+            t.indices[2] = static_cast<unsigned int>(tri.indices[2] + offset);
+            merged.triangles.push_back(t);
+        }
+    }
+
+    m_subMeshes.clear();
+    m_subMeshes.push_back(std::move(merged));
+
+    weldByPosition(tolerance);
+}
+
+void EditableMesh::weldByPosition(float tolerance)
+{
+    for (auto& sub : m_subMeshes) {
+        if (sub.vertices.empty())
+            continue;
+
+        // For each vertex, find the earliest vertex within tolerance (if any)
+        // and remap to it. O(n^2) but n is small for primitive meshes.
+        std::vector<size_t> remap(sub.vertices.size());
+        std::vector<bool> keep(sub.vertices.size(), true);
+        for (size_t i = 0; i < sub.vertices.size(); ++i)
+            remap[i] = i;
+
+        for (size_t i = 0; i < sub.vertices.size(); ++i) {
+            if (!keep[i]) continue;
+            for (size_t j = i + 1; j < sub.vertices.size(); ++j) {
+                if (!keep[j]) continue;
+                float d2 = sub.vertices[i].position.squaredDistance(sub.vertices[j].position);
+                if (d2 <= tolerance) {
+                    remap[j] = i;
+                    keep[j] = false;
+                }
+            }
+        }
+
+        // Build new vertex array, preserving the first-seen attributes for
+        // each welded group. Compact the remap so indices are contiguous.
+        std::vector<size_t> compact(sub.vertices.size(), 0);
+        std::vector<EditableVertex> newVerts;
+        newVerts.reserve(sub.vertices.size());
+        for (size_t i = 0; i < sub.vertices.size(); ++i) {
+            if (keep[i]) {
+                compact[i] = newVerts.size();
+                newVerts.push_back(sub.vertices[i]);
+            }
+        }
+        // Second pass: redirect non-kept entries through their representative.
+        for (size_t i = 0; i < sub.vertices.size(); ++i) {
+            if (!keep[i])
+                compact[i] = compact[remap[i]];
+        }
+
+        // Rewrite triangle indices
+        for (auto& tri : sub.triangles) {
+            for (int k = 0; k < 3; ++k) {
+                size_t oldIdx = tri.indices[k];
+                if (oldIdx < compact.size())
+                    tri.indices[k] = static_cast<unsigned int>(compact[oldIdx]);
+            }
+        }
+
+        sub.vertices = std::move(newVerts);
+
+        // Drop degenerate triangles (any two indices equal) — welding can
+        // collapse a triangle if two of its corners merge.
+        sub.triangles.erase(
+            std::remove_if(sub.triangles.begin(), sub.triangles.end(),
+                [](const EditableTriangle& t) {
+                    return t.indices[0] == t.indices[1] ||
+                           t.indices[1] == t.indices[2] ||
+                           t.indices[0] == t.indices[2];
+                }),
+            sub.triangles.end());
+    }
 }
 
 bool EditableMesh::commitToEntity(Ogre::Entity* entity)

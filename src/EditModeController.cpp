@@ -1361,6 +1361,182 @@ bool EditModeController::extrudeSelection()
     return true;
 }
 
+bool EditModeController::bevelSelection()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+        return false;
+
+    if (m_selectionMode != EdgeMode || m_selectedEdges.empty())
+        return false;
+
+    SentryReporter::addBreadcrumb("edit_mode", "Bevel selection");
+
+    // Snapshot for undo
+    EditableMesh oldMesh;
+    oldMesh.subMeshes() = m_editableMesh->subMeshes();
+    auto oldSelectedVertices = m_selectedVertices;
+    auto oldSelectedEdges = m_selectedEdges;
+    auto oldSelectedFaces = m_selectedFaces;
+
+    HalfEdgeMesh heMesh;
+    if (!heMesh.buildFromEditableMesh(*m_editableMesh))
+        return false;
+
+    // Convert (min,max) vertex-pair edge selections to HE edge indices
+    std::vector<int> edgeIndices;
+    for (const auto& [v1, v2] : m_selectedEdges) {
+        for (size_t e = 0; e < heMesh.edgeCount(); ++e) {
+            auto [ev1, ev2] = heMesh.edgeVertices(e);
+            int eMin = std::min(ev1, ev2);
+            int eMax = std::max(ev1, ev2);
+            if (eMin == v1 && eMax == v2) {
+                edgeIndices.push_back(static_cast<int>(e));
+                break;
+            }
+        }
+    }
+
+    const float BEVEL_WIDTH = 0.005f;
+    std::vector<int> newHEVertices = heMesh.bevelEdges(edgeIndices, BEVEL_WIDTH);
+    if (newHEVertices.empty())
+        return false;
+
+    // Snapshot new-vertex positions for post-conversion normal-dirty detection
+    std::vector<Ogre::Vector3> newVertPositions;
+    newVertPositions.reserve(newHEVertices.size());
+    for (int heVert : newHEVertices)
+        newVertPositions.push_back(heMesh.vertex(heVert).position);
+
+    EditableMesh newMesh;
+    if (!heMesh.toEditableMesh(newMesh))
+        return false;
+
+    m_editableMesh->subMeshes() = std::move(newMesh.subMeshes());
+
+    // Selective normal recompute (same pattern as extrude): only touch
+    // vertices at new positions or adjacent to them.
+    {
+        const float TOL2 = 1e-8f;
+        auto positionMatchesNew = [&](const Ogre::Vector3& p) {
+            for (const auto& np : newVertPositions) {
+                if (p.squaredDistance(np) < TOL2)
+                    return true;
+            }
+            return false;
+        };
+
+        for (auto& sub : m_editableMesh->subMeshes()) {
+            std::vector<bool> isNew(sub.vertices.size(), false);
+            for (size_t v = 0; v < sub.vertices.size(); ++v) {
+                if (positionMatchesNew(sub.vertices[v].position))
+                    isNew[v] = true;
+            }
+            std::vector<bool> isDirty = isNew;
+            for (const auto& tri : sub.triangles) {
+                if (tri.indices[0] >= sub.vertices.size() ||
+                    tri.indices[1] >= sub.vertices.size() ||
+                    tri.indices[2] >= sub.vertices.size())
+                    continue;
+                bool anyNew = isNew[tri.indices[0]] || isNew[tri.indices[1]] || isNew[tri.indices[2]];
+                if (anyNew) {
+                    isDirty[tri.indices[0]] = true;
+                    isDirty[tri.indices[1]] = true;
+                    isDirty[tri.indices[2]] = true;
+                }
+            }
+            for (size_t v = 0; v < sub.vertices.size(); ++v) {
+                if (isDirty[v]) {
+                    sub.vertices[v].normal = Ogre::Vector3::ZERO;
+                    sub.vertices[v].hasNormal = true;
+                }
+            }
+            for (const auto& tri : sub.triangles) {
+                if (tri.indices[0] >= sub.vertices.size() ||
+                    tri.indices[1] >= sub.vertices.size() ||
+                    tri.indices[2] >= sub.vertices.size())
+                    continue;
+                bool anyDirty = isDirty[tri.indices[0]] || isDirty[tri.indices[1]] || isDirty[tri.indices[2]];
+                if (!anyDirty) continue;
+                const auto& v0 = sub.vertices[tri.indices[0]].position;
+                const auto& v1 = sub.vertices[tri.indices[1]].position;
+                const auto& v2 = sub.vertices[tri.indices[2]].position;
+                Ogre::Vector3 faceN = (v1 - v0).crossProduct(v2 - v0);
+                for (int k = 0; k < 3; ++k) {
+                    if (isDirty[tri.indices[k]])
+                        sub.vertices[tri.indices[k]].normal += faceN;
+                }
+            }
+            for (size_t v = 0; v < sub.vertices.size(); ++v) {
+                if (isDirty[v]) {
+                    float len = sub.vertices[v].normal.length();
+                    if (len > 1e-8f)
+                        sub.vertices[v].normal /= len;
+                }
+            }
+        }
+    }
+
+    if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
+        return false;
+
+    m_editEntity->_deinitialise();
+    m_editEntity->_initialise(true);
+
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (shaderGen) {
+        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
+            if (!matName.empty())
+                shaderGen->invalidateMaterial(
+                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
+        }
+    }
+
+    // After bevel, the originally selected edges no longer exist — clear the
+    // edge selection. Select the new chamfer vertices so the user gets visual
+    // confirmation of what changed.
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    std::set<int> newGlobalVerts;
+    for (const auto& pos : newVertPositions) {
+        int globalIdx = 0;
+        bool found = false;
+        for (size_t s = 0; s < m_editableMesh->subMeshes().size() && !found; ++s) {
+            const auto& verts = m_editableMesh->subMeshes()[s].vertices;
+            for (size_t v = 0; v < verts.size(); ++v) {
+                if (verts[v].position.squaredDistance(pos) < 1e-8f) {
+                    newGlobalVerts.insert(globalIdx + static_cast<int>(v));
+                    found = true;
+                    break;
+                }
+            }
+            globalIdx += static_cast<int>(verts.size());
+        }
+    }
+    m_selectedVertices = newGlobalVerts;
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(oldMesh.subMeshes()),
+        m_editableMesh->subMeshes(),
+        oldSelectedVertices, oldSelectedEdges, oldSelectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        "Bevel");
+    UndoManager::getSingleton()->push(cmd);
+
+    refreshNormalVisualizer();
+    updateSelectionOverlay();
+    validateMesh();
+
+    emit meshDataChanged();
+    emit editSelectionChanged();
+    emit selectionModeChanged();
+    emit editModeChanged();
+
+    return true;
+}
+
 // ===========================================================================
 // Vertex transform support
 // ===========================================================================

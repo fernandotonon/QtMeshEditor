@@ -116,6 +116,45 @@ public:
     bool loadFromEntity(Ogre::Entity* entity);
 
     /**
+     * @brief Read vertex/index data directly from an Ogre::Mesh (no Entity).
+     *
+     * Same extraction logic as loadFromEntity, but sourced from a MeshPtr.
+     * Useful when building editable data before an Entity exists (e.g.,
+     * post-processing procedural primitives before they become a scene node).
+     *
+     * @param mesh The source mesh. Must not be null.
+     * @return true on success.
+     */
+    bool loadFromMesh(const Ogre::MeshPtr& mesh);
+
+    /**
+     * @brief Merge vertices at (approximately) coincident positions within
+     *        each submesh.
+     *
+     * For each submesh, groups vertices that share a position within
+     * `tolerance` (squared distance) and replaces them with a single
+     * representative. Triangles are rewritten to use the new indices.
+     * Vertex attributes (normal, UV, bone weights, tangent) are taken from
+     * the first-seen vertex in each group; if you care about preserving
+     * those, call this before any normal/tangent computation.
+     *
+     * @param tolerance Squared distance threshold. Defaults to 1e-8.
+     */
+    void weldByPosition(float tolerance = 1e-8f);
+
+    /**
+     * @brief Collapse all submeshes into the first and weld across positions.
+     *
+     * Intended for newly-generated primitives where every face uses the same
+     * material and the "separate submesh per face" topology blocks topology
+     * edits (e.g., beveling the shared edge between two cube faces). After
+     * this call, the mesh has exactly one submesh with welded vertices.
+     *
+     * @param tolerance Squared distance threshold for welding.
+     */
+    void collapseToSingleSubmeshAndWeld(float tolerance = 1e-8f);
+
+    /**
      * @brief Write edited mesh data back to the Ogre::Entity's buffers.
      *
      * Recalculates normals and mesh bounds, then writes vertex positions,

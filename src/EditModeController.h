@@ -189,6 +189,20 @@ public:
      * @return true if extrude succeeded.
      */
     Q_INVOKABLE bool extrudeSelection();
+
+    /**
+     * @brief Bevel the current selection (Edge mode only, fixed-width for now).
+     *
+     * Replaces each selected interior edge with a flat chamfer quad at a
+     * starting width of 0.005 local units. Skips boundary edges, edges with
+     * one-face adjacency, and edges that share endpoints with other selected
+     * edges (chained bevels need special handling, planned for a follow-up).
+     *
+     * Pushes a single undo command capturing the full mesh state.
+     *
+     * @return true if bevel succeeded (at least one edge was beveled).
+     */
+    Q_INVOKABLE bool bevelSelection();
     /// @}
 
     /// @name Vertex transform support

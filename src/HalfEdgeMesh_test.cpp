@@ -1095,3 +1095,127 @@ TEST(HalfEdgeMeshStandalone, ExtrudePreservesAttributes) {
             << "New vertex " << nv << " has no bone assignments";
     }
 }
+
+// ===========================================================================
+// Tests: Bevel
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, BevelEdgesEmpty) {
+    auto editMesh = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+    EXPECT_TRUE(he.bevelEdges({}, 0.01f).empty());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelBoundaryEdgeSkipped) {
+    auto editMesh = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+    // All edges of a single triangle are boundary — bevel should skip them all.
+    std::vector<int> allEdges;
+    for (size_t e = 0; e < he.edgeCount(); ++e) allEdges.push_back(static_cast<int>(e));
+    EXPECT_TRUE(he.bevelEdges(allEdges, 0.05f).empty());
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelQuadInteriorEdgeAddsFourVerticesAndTwoFaces) {
+    auto editMesh = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    // Find the one interior edge of the quad (diagonal between (1,0,0) and (0,1,0)).
+    int interior = -1;
+    for (size_t e = 0; e < he.edgeCount(); ++e) {
+        auto [f1, f2] = he.edgeFaces(e);
+        if (f1 >= 0 && f2 >= 0) { interior = static_cast<int>(e); break; }
+    }
+    ASSERT_GE(interior, 0);
+
+    const size_t vBefore = he.vertexCount();
+    const size_t fBefore = he.faceCount();
+
+    auto newVerts = he.bevelEdges({interior}, 0.1f);
+
+    // One interior edge → 4 new vertices (v1a, v1b, v2a, v2b).
+    EXPECT_EQ(newVerts.size(), 4u);
+    EXPECT_EQ(he.vertexCount(), vBefore + 4u);
+    // Each of the 2 face tris is replaced by 3 retriangulation tris, plus
+    // 2 chamfer tris + 2 end-cap tris. The 2 originals are orphaned
+    // (halfEdge=-1) but still occupy slots in m_faces, so vectorized
+    // face count is fBefore + 10. faceCount() returns the raw size.
+    EXPECT_EQ(he.faceCount(), fBefore + 10u);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelSharedEndpointEdgesSkipped) {
+    // Two edges sharing a vertex → first version skips them both (chained
+    // bevels need direction logic the first pass doesn't handle).
+    auto editMesh = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    // Collect interior-edge index and one boundary-edge index that shares a vertex.
+    int interior = -1, adjacentBoundary = -1;
+    for (size_t e = 0; e < he.edgeCount(); ++e) {
+        auto [f1, f2] = he.edgeFaces(e);
+        if (f1 >= 0 && f2 >= 0) interior = static_cast<int>(e);
+    }
+    ASSERT_GE(interior, 0);
+    auto [iv1, iv2] = he.edgeVertices(interior);
+    for (size_t e = 0; e < he.edgeCount(); ++e) {
+        if (static_cast<int>(e) == interior) continue;
+        auto [v1, v2] = he.edgeVertices(e);
+        if (v1 == iv1 || v2 == iv1 || v1 == iv2 || v2 == iv2) {
+            adjacentBoundary = static_cast<int>(e);
+            break;
+        }
+    }
+    ASSERT_GE(adjacentBoundary, 0);
+
+    // Bevel [interior, adjacentBoundary]: adjacentBoundary is a boundary edge
+    // (filtered out in pass 1), so interior is the only survivor — it should
+    // succeed. To actually exercise the shared-endpoint filter we need two
+    // interior edges; a single quad only has one, so we assert the filter
+    // doesn't break single-edge cases.
+    auto newVerts = he.bevelEdges({interior, adjacentBoundary}, 0.05f);
+    EXPECT_EQ(newVerts.size(), 4u);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelZeroWidthRejected) {
+    auto editMesh = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+    int interior = -1;
+    for (size_t e = 0; e < he.edgeCount(); ++e) {
+        auto [f1, f2] = he.edgeFaces(e);
+        if (f1 >= 0 && f2 >= 0) { interior = static_cast<int>(e); break; }
+    }
+    EXPECT_TRUE(he.bevelEdges({interior}, 0.0f).empty());
+    EXPECT_TRUE(he.bevelEdges({interior}, -1.0f).empty());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelRoundtripKeepsMeshValid) {
+    auto editMesh = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(editMesh));
+
+    int interior = -1;
+    for (size_t e = 0; e < he.edgeCount(); ++e) {
+        auto [f1, f2] = he.edgeFaces(e);
+        if (f1 >= 0 && f2 >= 0) { interior = static_cast<int>(e); break; }
+    }
+    ASSERT_GE(interior, 0);
+
+    auto newVerts = he.bevelEdges({interior}, 0.1f);
+    ASSERT_EQ(newVerts.size(), 4u);
+
+    EditableMesh result;
+    ASSERT_TRUE(he.toEditableMesh(result));
+
+    // Roundtripped mesh: all 4 original verts stay in use (end-caps reference
+    // the shared-edge endpoints), plus 4 new chamfer verts = 8 distinct verts.
+    // Triangle count: 3 per face × 2 faces + 2 chamfer + 2 end-cap = 10.
+    EXPECT_EQ(result.totalVertexCount(), 8u);
+    EXPECT_EQ(result.totalTriangleCount(), 10u);
+}

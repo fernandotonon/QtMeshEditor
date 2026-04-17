@@ -959,6 +959,15 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             }
             // No modifier: fall through to rotate mode
             break;
+        case Qt::Key_B:
+            // Cmd+B (Ctrl+B on Linux/Windows): Bevel selection in edge mode
+            if (event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier)) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "Cmd+B — Bevel (edit mode)");
+                editCtrl->bevelSelection();
+                event->accept();
+                return;
+            }
+            break;
         default:
             break;
         }
