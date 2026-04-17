@@ -189,16 +189,6 @@ public:
      * @return true if extrude succeeded.
      */
     Q_INVOKABLE bool extrudeSelection();
-
-    /**
-     * @brief Extrude selected faces along their individual normals.
-     *
-     * Each face is extruded along its own face normal. Only works in Face mode.
-     *
-     * @param distance Distance to extrude along normals.
-     * @return true if extrude succeeded.
-     */
-    Q_INVOKABLE bool extrudeAlongNormals(float distance = 0.0f);
     /// @}
 
     /// @name Vertex transform support

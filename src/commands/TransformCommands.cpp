@@ -658,19 +658,24 @@ void EditMeshTopologyCommand::applyMeshState(
 
     ctrl->currentMesh()->subMeshes() = subMeshes;
 
-    if (ctrl->currentMesh()->isFlatNormals())
-        ctrl->currentMesh()->recalculateNormalsFlat();
-    else
-        ctrl->currentMesh()->recalculateNormals();
+    // Note: we preserve stored normals/tangents exactly. Callers that change
+    // topology are expected to set these correctly in the snapshot already.
+    // Use resizeEntityBuffers() (not rebuildEntityMesh) so bone assignments
+    // and skeletal skinning are preserved through undo/redo.
+    ctrl->currentMesh()->resizeEntityBuffers(ctrl->editEntity());
 
-    ctrl->currentMesh()->rebuildEntityMesh(ctrl->editEntity());
+    // Refresh Entity's SubEntity caches for the new vertex layout
+    ctrl->editEntity()->_deinitialise();
+    ctrl->editEntity()->_initialise(true);
 
-    // Restore selection
+    // Restore full selection state (vertices, edges, and faces)
     ctrl->deselectAll();
     for (int v : verts)
         ctrl->selectVertex(v, true);
-    // Note: edge and face selections are restored but the selection mode
-    // is not changed — the command just stores/restores the selection state.
+    for (const auto& e : edges)
+        ctrl->selectEdge(e.first, e.second, true);
+    for (int f : faces)
+        ctrl->selectFace(f, true);
 }
 
 void EditMeshTopologyCommand::undo()

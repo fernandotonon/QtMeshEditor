@@ -1304,14 +1304,17 @@ bool EditModeController::extrudeSelection()
     std::set<int> newGlobalVerts;
     for (const auto& pos : newVertPositions) {
         int globalIdx = 0;
-        for (size_t s = 0; s < m_editableMesh->subMeshes().size(); ++s) {
-            for (size_t v = 0; v < m_editableMesh->subMeshes()[s].vertices.size(); ++v) {
-                if (m_editableMesh->subMeshes()[s].vertices[v].position.squaredDistance(pos) < 1e-8f) {
-                    newGlobalVerts.insert(globalIdx);
+        bool found = false;
+        for (size_t s = 0; s < m_editableMesh->subMeshes().size() && !found; ++s) {
+            const auto& verts = m_editableMesh->subMeshes()[s].vertices;
+            for (size_t v = 0; v < verts.size(); ++v) {
+                if (verts[v].position.squaredDistance(pos) < 1e-8f) {
+                    newGlobalVerts.insert(globalIdx + static_cast<int>(v));
+                    found = true;
                     break;
                 }
-                ++globalIdx;
             }
+            globalIdx += static_cast<int>(verts.size());
         }
     }
     m_selectedVertices = newGlobalVerts;
@@ -1354,49 +1357,6 @@ bool EditModeController::extrudeSelection()
     emit editSelectionChanged();
     emit selectionModeChanged();
     emit editModeChanged();
-
-    return true;
-}
-
-bool EditModeController::extrudeAlongNormals(float distance)
-{
-    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
-        return false;
-
-    if (m_selectionMode != FaceMode || m_selectedFaces.empty())
-        return false;
-
-    SentryReporter::addBreadcrumb("edit_mode",
-        QString("Extrude along normals: distance=%1").arg(distance));
-
-    // First perform the extrude
-    if (!extrudeSelection())
-        return false;
-
-    // Now translate each new vertex along its normal by the distance
-    if (distance != 0.0f) {
-        for (int gi : m_selectedVertices) {
-            auto [subIdx, localIdx] = globalToLocal(gi);
-            if (subIdx < m_editableMesh->subMeshes().size() &&
-                localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
-            {
-                Ogre::Vector3 pos = m_editableMesh->getVertexPosition(subIdx, localIdx);
-                Ogre::Vector3 norm = m_editableMesh->getVertexNormal(subIdx, localIdx);
-                pos += norm * distance;
-                m_editableMesh->setVertexPosition(subIdx, localIdx, pos);
-            }
-        }
-
-        if (m_normalsMode == 0)
-            m_editableMesh->recalculateNormals();
-        else
-            m_editableMesh->recalculateNormalsFlat();
-
-        m_editableMesh->commitToEntity(m_editEntity);
-        refreshNormalVisualizer();
-        updateSelectionOverlay();
-        emit meshDataChanged();
-    }
 
     return true;
 }
