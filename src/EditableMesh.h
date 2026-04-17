@@ -249,6 +249,21 @@ private:
      */
     bool writeVertexData(Ogre::VertexData* vertexData, const std::vector<EditableVertex>& vertices);
 
+    /**
+     * @brief Build vertex/index hardware buffers for a single submesh.
+     *
+     * Creates a fresh Ogre::VertexData with a position/normal/uv/tangent
+     * declaration (only including attributes the EditableSubMesh has) and
+     * fills the interleaved buffer. Replaces subMesh->vertexData.
+     *
+     * Used by both rebuildEntityMesh-style code paths to avoid duplication.
+     *
+     * @param subMesh The Ogre SubMesh to populate.
+     * @param editSub The source editable submesh.
+     */
+    static void buildSubMeshBuffers(Ogre::SubMesh* subMesh,
+                                    const EditableSubMesh& editSub);
+
     std::vector<EditableSubMesh> m_subMeshes;
     Ogre::Entity* m_sourceEntity = nullptr;
     bool m_flatNormals = false; // true = flat normals, false = smooth

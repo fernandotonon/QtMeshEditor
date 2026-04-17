@@ -178,6 +178,98 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     return true;
 }
 
+void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
+                                       const EditableSubMesh& editSub)
+{
+    if (!subMesh || editSub.vertices.empty() || editSub.triangles.empty())
+        return;
+
+    // Replace any existing vertex data with a fresh one.
+    if (subMesh->vertexData) delete subMesh->vertexData;
+    subMesh->useSharedVertices = false;
+    subMesh->vertexData = new Ogre::VertexData();
+    subMesh->vertexData->vertexCount = editSub.vertices.size();
+
+    auto* decl = subMesh->vertexData->vertexDeclaration;
+    auto* binding = subMesh->vertexData->vertexBufferBinding;
+
+    // Build declaration: position, optional normal, uv, tangent (FLOAT4 with parity).
+    size_t offset = 0;
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+
+    bool hasNormals = editSub.vertices[0].hasNormal;
+    if (hasNormals) {
+        decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+        offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    }
+
+    bool hasUVs = editSub.vertices[0].hasUV;
+    if (hasUVs) {
+        decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+        offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
+    }
+
+    bool hasTangents = editSub.vertices[0].hasTangent;
+    if (hasTangents) {
+        decl->addElement(0, offset, Ogre::VET_FLOAT4, Ogre::VES_TANGENT);
+        offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT4);
+    }
+
+    // Create interleaved vertex buffer.
+    size_t vertSize = decl->getVertexSize(0);
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        vertSize, editSub.vertices.size(),
+        Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+
+    auto* dest = static_cast<float*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+    for (const auto& v : editSub.vertices) {
+        *dest++ = v.position.x;
+        *dest++ = v.position.y;
+        *dest++ = v.position.z;
+        if (hasNormals) {
+            *dest++ = v.normal.x; *dest++ = v.normal.y; *dest++ = v.normal.z;
+        }
+        if (hasUVs) {
+            *dest++ = v.uv.x; *dest++ = v.uv.y;
+        }
+        if (hasTangents) {
+            *dest++ = v.tangent.x; *dest++ = v.tangent.y;
+            *dest++ = v.tangent.z; *dest++ = v.tangent.w;
+        }
+    }
+    vbuf->unlock();
+    binding->setBinding(0, vbuf);
+
+    // Create index buffer (16-bit if possible, else 32-bit).
+    bool use32bit = editSub.vertices.size() > 65535;
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        use32bit ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT,
+        editSub.triangles.size() * 3,
+        Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+
+    if (use32bit) {
+        auto* idx = static_cast<uint32_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+        for (const auto& tri : editSub.triangles) {
+            *idx++ = tri.indices[0];
+            *idx++ = tri.indices[1];
+            *idx++ = tri.indices[2];
+        }
+    } else {
+        auto* idx = static_cast<uint16_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+        for (const auto& tri : editSub.triangles) {
+            *idx++ = static_cast<uint16_t>(tri.indices[0]);
+            *idx++ = static_cast<uint16_t>(tri.indices[1]);
+            *idx++ = static_cast<uint16_t>(tri.indices[2]);
+        }
+    }
+    ibuf->unlock();
+
+    subMesh->indexData->indexBuffer = ibuf;
+    subMesh->indexData->indexCount = editSub.triangles.size() * 3;
+    subMesh->indexData->indexStart = 0;
+}
+
 bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
 {
     if (!entity) return false;
@@ -193,112 +285,11 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
     // topology ops (extrude, etc.) need to preserve original normals AND
     // tangents on unchanged vertices to avoid visible lighting shifts.
 
-    // EditableMesh stores per-submesh vertex arrays. Migrate away from
-    // any shared vertex data — each submesh gets its own fresh VertexData
-    // with a simple position/normal/uv layout. This also avoids issues
-    // with multiple submeshes overwriting the shared buffer.
+    // EditableMesh stores per-submesh vertex arrays. Migrate away from any
+    // shared vertex data — each submesh gets its own fresh VertexData. This
+    // avoids multiple submeshes overwriting the shared buffer.
     for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
-        Ogre::SubMesh* subMesh = mesh->getSubMesh(i);
-        const EditableSubMesh& editSub = m_subMeshes[i];
-        if (editSub.vertices.empty() || editSub.triangles.empty())
-            continue;
-
-        // Always rebuild VertexData from scratch to guarantee correct layout.
-        if (subMesh->vertexData) {
-            delete subMesh->vertexData;
-        }
-        subMesh->useSharedVertices = false;
-        subMesh->vertexData = new Ogre::VertexData();
-
-        auto* decl = subMesh->vertexData->vertexDeclaration;
-        auto* binding = subMesh->vertexData->vertexBufferBinding;
-
-        // Build a fresh declaration: position, normal, uv, tangent(FLOAT4)
-        size_t declOffset = 0;
-        decl->addElement(0, declOffset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
-        declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
-
-        bool hasNormals = !editSub.vertices.empty() && editSub.vertices[0].hasNormal;
-        if (hasNormals) {
-            decl->addElement(0, declOffset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
-            declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
-        }
-
-        bool hasUVs = !editSub.vertices.empty() && editSub.vertices[0].hasUV;
-        if (hasUVs) {
-            decl->addElement(0, declOffset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
-            declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
-        }
-
-        bool hasTangents = !editSub.vertices.empty() && editSub.vertices[0].hasTangent;
-        if (hasTangents) {
-            decl->addElement(0, declOffset, Ogre::VET_FLOAT4, Ogre::VES_TANGENT);
-            declOffset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT4);
-        }
-
-        subMesh->vertexData->vertexCount = editSub.vertices.size();
-
-        // Create a single interleaved buffer for all attributes (matches our fresh decl)
-        size_t vertSize = decl->getVertexSize(0);
-        auto newBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-            vertSize, editSub.vertices.size(),
-            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
-
-        auto* dest = static_cast<float*>(newBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for (const auto& v : editSub.vertices) {
-            *dest++ = v.position.x;
-            *dest++ = v.position.y;
-            *dest++ = v.position.z;
-            if (hasNormals) {
-                *dest++ = v.normal.x;
-                *dest++ = v.normal.y;
-                *dest++ = v.normal.z;
-            }
-            if (hasUVs) {
-                *dest++ = v.uv.x;
-                *dest++ = v.uv.y;
-            }
-            if (hasTangents) {
-                *dest++ = v.tangent.x;
-                *dest++ = v.tangent.y;
-                *dest++ = v.tangent.z;
-                *dest++ = v.tangent.w;
-            }
-        }
-        newBuf->unlock();
-
-        binding->setBinding(0, newBuf);
-
-        // Replace index buffer
-        bool use32bit = editSub.vertices.size() > 65535;
-        auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
-            use32bit ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT,
-            editSub.triangles.size() * 3,
-            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
-
-        if (use32bit) {
-            std::vector<uint32_t> idx;
-            idx.reserve(editSub.triangles.size() * 3);
-            for (const auto& tri : editSub.triangles) {
-                idx.push_back(tri.indices[0]);
-                idx.push_back(tri.indices[1]);
-                idx.push_back(tri.indices[2]);
-            }
-            ibuf->writeData(0, idx.size() * sizeof(uint32_t), idx.data(), true);
-        } else {
-            std::vector<uint16_t> idx;
-            idx.reserve(editSub.triangles.size() * 3);
-            for (const auto& tri : editSub.triangles) {
-                idx.push_back(static_cast<uint16_t>(tri.indices[0]));
-                idx.push_back(static_cast<uint16_t>(tri.indices[1]));
-                idx.push_back(static_cast<uint16_t>(tri.indices[2]));
-            }
-            ibuf->writeData(0, idx.size() * sizeof(uint16_t), idx.data(), true);
-        }
-
-        subMesh->indexData->indexBuffer = ibuf;
-        subMesh->indexData->indexCount = editSub.triangles.size() * 3;
-        subMesh->indexData->indexStart = 0;
+        buildSubMeshBuffers(mesh->getSubMesh(i), m_subMeshes[i]);
     }
 
     // Check if any submesh still uses shared vertex data. If not, we can
@@ -380,78 +371,7 @@ Ogre::MeshPtr EditableMesh::createNewMesh(const std::string& baseName)
 
         auto* subMesh = mesh->createSubMesh();
         subMesh->setMaterialName(editSub.materialName);
-        subMesh->useSharedVertices = false;
-
-        subMesh->vertexData = new Ogre::VertexData();
-        subMesh->vertexData->vertexCount = editSub.vertices.size();
-
-        auto* decl = subMesh->vertexData->vertexDeclaration;
-        size_t offset = 0;
-
-        decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
-        offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
-
-        bool hasNormals = !editSub.vertices.empty() && editSub.vertices[0].hasNormal;
-        if (hasNormals) {
-            decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
-            offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
-        }
-
-        bool hasUVs = !editSub.vertices.empty() && editSub.vertices[0].hasUV;
-        if (hasUVs) {
-            decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
-            offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
-        }
-
-        auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-            decl->getVertexSize(0), editSub.vertices.size(),
-            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
-
-        auto* dest = static_cast<float*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for (const auto& v : editSub.vertices) {
-            *dest++ = v.position.x;
-            *dest++ = v.position.y;
-            *dest++ = v.position.z;
-            if (hasNormals) {
-                *dest++ = v.normal.x;
-                *dest++ = v.normal.y;
-                *dest++ = v.normal.z;
-            }
-            if (hasUVs) {
-                *dest++ = v.uv.x;
-                *dest++ = v.uv.y;
-            }
-        }
-        vbuf->unlock();
-
-        subMesh->vertexData->vertexBufferBinding->setBinding(0, vbuf);
-
-        bool use32bit = editSub.vertices.size() > 65535;
-        auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
-            use32bit ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT,
-            editSub.triangles.size() * 3,
-            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
-
-        if (use32bit) {
-            auto* idx = static_cast<uint32_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-            for (const auto& tri : editSub.triangles) {
-                *idx++ = tri.indices[0];
-                *idx++ = tri.indices[1];
-                *idx++ = tri.indices[2];
-            }
-            ibuf->unlock();
-        } else {
-            auto* idx = static_cast<uint16_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-            for (const auto& tri : editSub.triangles) {
-                *idx++ = static_cast<uint16_t>(tri.indices[0]);
-                *idx++ = static_cast<uint16_t>(tri.indices[1]);
-                *idx++ = static_cast<uint16_t>(tri.indices[2]);
-            }
-            ibuf->unlock();
-        }
-
-        subMesh->indexData->indexBuffer = ibuf;
-        subMesh->indexData->indexCount = editSub.triangles.size() * 3;
+        buildSubMeshBuffers(subMesh, editSub);
     }
 
     Ogre::AxisAlignedBox bounds = calculateBounds();
@@ -673,81 +593,62 @@ bool EditableMesh::readVertexData(Ogre::VertexData* vertexData, std::vector<Edit
 
     auto* decl = vertexData->vertexDeclaration;
     auto* binding = vertexData->vertexBufferBinding;
+    size_t vertCount = vertexData->vertexCount;
 
-    // Read positions
-    const auto* posElem = decl->findElementBySemantic(Ogre::VES_POSITION);
-    if (posElem) {
-        auto vbuf = binding->getBuffer(posElem->getSource());
+    // Lock an attribute's source buffer and apply `read(elem, vertexBase, j)`
+    // for each vertex j. No-op if the element is missing.
+    auto readAttribute = [&](const Ogre::VertexElement* elem, auto&& read) {
+        if (!elem) return;
+        auto vbuf = binding->getBuffer(elem->getSource());
         auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        for (size_t j = 0; j < vertexData->vertexCount; ++j) {
-            Ogre::Real* pReal;
-            posElem->baseVertexPointerToElement(base + j * vbuf->getVertexSize(), &pReal);
-            vertices[j].position = Ogre::Vector3(pReal[0], pReal[1], pReal[2]);
+        size_t vertexSize = vbuf->getVertexSize();
+        for (size_t j = 0; j < vertCount; ++j) {
+            read(elem, base + j * vertexSize, j);
         }
         vbuf->unlock();
-    }
+    };
 
-    // Read normals
-    const auto* normElem = decl->findElementBySemantic(Ogre::VES_NORMAL);
-    if (normElem) {
-        auto vbuf = binding->getBuffer(normElem->getSource());
-        auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        for (size_t j = 0; j < vertexData->vertexCount; ++j) {
-            Ogre::Real* pReal;
-            normElem->baseVertexPointerToElement(base + j * vbuf->getVertexSize(), &pReal);
-            vertices[j].normal = Ogre::Vector3(pReal[0], pReal[1], pReal[2]);
+    readAttribute(decl->findElementBySemantic(Ogre::VES_POSITION),
+        [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
+            Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+            vertices[j].position = Ogre::Vector3(p[0], p[1], p[2]);
+        });
+
+    readAttribute(decl->findElementBySemantic(Ogre::VES_NORMAL),
+        [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
+            Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+            vertices[j].normal = Ogre::Vector3(p[0], p[1], p[2]);
             vertices[j].hasNormal = true;
-        }
-        vbuf->unlock();
-    }
+        });
 
-    // Read UVs
-    const auto* uvElem = decl->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
-    if (uvElem) {
-        auto vbuf = binding->getBuffer(uvElem->getSource());
-        auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        for (size_t j = 0; j < vertexData->vertexCount; ++j) {
-            Ogre::Real* pReal;
-            uvElem->baseVertexPointerToElement(base + j * vbuf->getVertexSize(), &pReal);
-            vertices[j].uv = Ogre::Vector2(pReal[0], pReal[1]);
+    readAttribute(decl->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES),
+        [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
+            Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+            vertices[j].uv = Ogre::Vector2(p[0], p[1]);
             vertices[j].hasUV = true;
-        }
-        vbuf->unlock();
-    }
+        });
 
-    // Read vertex colors
-    const auto* colElem = decl->findElementBySemantic(Ogre::VES_DIFFUSE);
-    if (colElem) {
-        auto vbuf = binding->getBuffer(colElem->getSource());
-        auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        for (size_t j = 0; j < vertexData->vertexCount; ++j) {
-            Ogre::RGBA* pRGBA;
-            colElem->baseVertexPointerToElement(base + j * vbuf->getVertexSize(), &pRGBA);
+    readAttribute(decl->findElementBySemantic(Ogre::VES_DIFFUSE),
+        [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
+            Ogre::RGBA* p; e->baseVertexPointerToElement(base, &p);
             Ogre::ColourValue cv;
-            cv.setAsRGBA(*pRGBA);
+            cv.setAsRGBA(*p);
             vertices[j].color = cv;
             vertices[j].hasColor = true;
-        }
-        vbuf->unlock();
-    }
+        });
 
-    // Read tangents (used by normal mapping). Tangents may be stored as
-    // FLOAT3 (just direction) or FLOAT4 (direction + parity w).
-    const auto* tanElem = decl->findElementBySemantic(Ogre::VES_TANGENT);
-    if (tanElem) {
-        auto vbuf = binding->getBuffer(tanElem->getSource());
-        auto* base = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+    // Tangents may be FLOAT3 (direction only) or FLOAT4 (direction + parity w).
+    if (const auto* tanElem = decl->findElementBySemantic(Ogre::VES_TANGENT)) {
         bool isFloat4 = (tanElem->getType() == Ogre::VET_FLOAT4);
-        for (size_t j = 0; j < vertexData->vertexCount; ++j) {
-            Ogre::Real* pReal;
-            tanElem->baseVertexPointerToElement(base + j * vbuf->getVertexSize(), &pReal);
-            vertices[j].tangent.x = pReal[0];
-            vertices[j].tangent.y = pReal[1];
-            vertices[j].tangent.z = pReal[2];
-            vertices[j].tangent.w = isFloat4 ? pReal[3] : 1.0f;
-            vertices[j].hasTangent = true;
-        }
-        vbuf->unlock();
+        readAttribute(tanElem,
+            [&vertices, isFloat4](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
+                Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+                vertices[j].tangent.x = p[0];
+                vertices[j].tangent.y = p[1];
+                vertices[j].tangent.z = p[2];
+                vertices[j].tangent.w = isFloat4 ? p[3] : 1.0f;
+                vertices[j].hasTangent = true;
+            });
     }
 
     return true;
@@ -795,55 +696,21 @@ bool EditableMesh::writeVertexData(Ogre::VertexData* vertexData, const std::vect
 
     auto* decl = vertexData->vertexDeclaration;
     auto* binding = vertexData->vertexBufferBinding;
+    size_t count = std::min(vertices.size(), static_cast<size_t>(vertexData->vertexCount));
 
-    // Write positions
-    const auto* posElem = decl->findElementBySemantic(Ogre::VES_POSITION);
-    if (posElem) {
-        unsigned short source = posElem->getSource();
+    // Write a single per-vertex attribute back to its source buffer.
+    // Upgrades static buffers to dynamic for immediate GPU visibility, then
+    // reads the buffer, applies `mutate(buffer + j*vertexSize, j)` for each
+    // vertex j, and writes the buffer back with DISCARD.
+    auto writeAttribute = [&](const Ogre::VertexElement* elem,
+                              auto&& mutate) {
+        if (!elem) return;
+        unsigned short source = elem->getSource();
         auto vbuf = binding->getBuffer(source);
         size_t bufSize = vbuf->getSizeInBytes();
         size_t vertexSize = vbuf->getVertexSize();
 
-        // Upgrade static buffers to dynamic for immediate GPU visibility
-        // (same pattern as SubMeshTransform::writePositions)
-        if (vbuf->getUsage() & Ogre::HardwareBuffer::HBU_STATIC) {
-            std::vector<unsigned char> oldData(bufSize);
-            vbuf->readData(0, bufSize, oldData.data());
-
-            auto newBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-                vertexSize, vertexData->vertexCount,
-                Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
-            newBuf->writeData(0, bufSize, oldData.data(), true);
-            binding->setBinding(source, newBuf);
-            vbuf = newBuf;
-        }
-
-        // Read full buffer, modify positions, write back with DISCARD
-        std::vector<unsigned char> bufCopy(bufSize);
-        vbuf->readData(0, bufSize, bufCopy.data());
-
-        size_t count = std::min(vertices.size(), static_cast<size_t>(vertexData->vertexCount));
-        for (size_t j = 0; j < count; ++j) {
-            Ogre::Real* pReal;
-            posElem->baseVertexPointerToElement(bufCopy.data() + j * vertexSize, &pReal);
-            pReal[0] = vertices[j].position.x;
-            pReal[1] = vertices[j].position.y;
-            pReal[2] = vertices[j].position.z;
-        }
-
-        auto* dest = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        memcpy(dest, bufCopy.data(), bufSize);
-        vbuf->unlock();
-    }
-
-    // Write normals
-    const auto* normElem = decl->findElementBySemantic(Ogre::VES_NORMAL);
-    if (normElem) {
-        unsigned short source = normElem->getSource();
-        auto vbuf = binding->getBuffer(source);
-        size_t bufSize = vbuf->getSizeInBytes();
-        size_t vertexSize = vbuf->getVertexSize();
-
+        // Upgrade static → dynamic for immediate GPU visibility.
         if (vbuf->getUsage() & Ogre::HardwareBuffer::HBU_STATIC) {
             std::vector<unsigned char> oldData(bufSize);
             vbuf->readData(0, bufSize, oldData.data());
@@ -859,57 +726,39 @@ bool EditableMesh::writeVertexData(Ogre::VertexData* vertexData, const std::vect
         std::vector<unsigned char> bufCopy(bufSize);
         vbuf->readData(0, bufSize, bufCopy.data());
 
-        size_t count = std::min(vertices.size(), static_cast<size_t>(vertexData->vertexCount));
         for (size_t j = 0; j < count; ++j) {
-            if (!vertices[j].hasNormal) continue;
-            Ogre::Real* pReal;
-            normElem->baseVertexPointerToElement(bufCopy.data() + j * vertexSize, &pReal);
-            pReal[0] = vertices[j].normal.x;
-            pReal[1] = vertices[j].normal.y;
-            pReal[2] = vertices[j].normal.z;
+            mutate(elem, bufCopy.data() + j * vertexSize, j);
         }
 
         auto* dest = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
         memcpy(dest, bufCopy.data(), bufSize);
         vbuf->unlock();
-    }
+    };
 
-    // Write UVs
-    const auto* uvElem = decl->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES);
-    if (uvElem) {
-        unsigned short source = uvElem->getSource();
-        auto vbuf = binding->getBuffer(source);
-        size_t bufSize = vbuf->getSizeInBytes();
-        size_t vertexSize = vbuf->getVertexSize();
+    writeAttribute(decl->findElementBySemantic(Ogre::VES_POSITION),
+        [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
+            Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+            p[0] = vertices[j].position.x;
+            p[1] = vertices[j].position.y;
+            p[2] = vertices[j].position.z;
+        });
 
-        if (vbuf->getUsage() & Ogre::HardwareBuffer::HBU_STATIC) {
-            std::vector<unsigned char> oldData(bufSize);
-            vbuf->readData(0, bufSize, oldData.data());
+    writeAttribute(decl->findElementBySemantic(Ogre::VES_NORMAL),
+        [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
+            if (!vertices[j].hasNormal) return;
+            Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+            p[0] = vertices[j].normal.x;
+            p[1] = vertices[j].normal.y;
+            p[2] = vertices[j].normal.z;
+        });
 
-            auto newBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-                vertexSize, vertexData->vertexCount,
-                Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
-            newBuf->writeData(0, bufSize, oldData.data(), true);
-            binding->setBinding(source, newBuf);
-            vbuf = newBuf;
-        }
-
-        std::vector<unsigned char> bufCopy(bufSize);
-        vbuf->readData(0, bufSize, bufCopy.data());
-
-        size_t count = std::min(vertices.size(), static_cast<size_t>(vertexData->vertexCount));
-        for (size_t j = 0; j < count; ++j) {
-            if (!vertices[j].hasUV) continue;
-            Ogre::Real* pReal;
-            uvElem->baseVertexPointerToElement(bufCopy.data() + j * vertexSize, &pReal);
-            pReal[0] = vertices[j].uv.x;
-            pReal[1] = vertices[j].uv.y;
-        }
-
-        auto* dest = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        memcpy(dest, bufCopy.data(), bufSize);
-        vbuf->unlock();
-    }
+    writeAttribute(decl->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES),
+        [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
+            if (!vertices[j].hasUV) return;
+            Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+            p[0] = vertices[j].uv.x;
+            p[1] = vertices[j].uv.y;
+        });
 
     return true;
 }

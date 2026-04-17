@@ -318,6 +318,25 @@ private:
     /// Link prev pointers for all half-edge loops.
     void linkPrevPointers();
 
+    /// Append a triangle (3 half-edges + 1 face) to the structure.
+    /// Returns the new face index. Does NOT update vertex or edge data —
+    /// callers must rebuild edges/twins after adding all triangles.
+    int appendTriangle(int v0, int v1, int v2, int subMeshIndex);
+
+    /// Rebuild m_edges, half-edge twin/edge fields, and clear edge state.
+    /// Skips half-edges with face < 0. After this, every interior HE has
+    /// a valid edge index and twin (or twin == -1 if no opposite found).
+    void rebuildEdgesAndTwins();
+
+    /// Remove all boundary half-edges (face == -1), remap all references.
+    /// Used after extrude operations that detach old boundary HEs.
+    void compactBoundaryHalfEdges();
+
+    /// Ensure every vertex's halfEdge pointer satisfies the invariant:
+    /// m_halfEdges[v.halfEdge].prev->vertex == v. Searches for a valid
+    /// outgoing HE if the current pointer is stale or invalid.
+    void fixVertexHalfEdges();
+
     std::vector<HalfEdge> m_halfEdges;
     std::vector<HEVertex> m_vertices;
     std::vector<HEFace> m_faces;
