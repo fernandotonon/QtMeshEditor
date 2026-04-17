@@ -1578,12 +1578,21 @@ jobs:
             MACDEPLOYQT="/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/bin/macdeployqt"
             if [ -x "$MACDEPLOYQT" ]; then
                 echo "Running macdeployqt against app bundle..."
+                deploy_log=$(mktemp)
                 sudo "$MACDEPLOYQT" "${{github.workspace}}/bin/QtMeshEditor.app" \
                     -qmldir="${{github.workspace}}/qml" \
                     -verbose=2 \
-                    -no-strip 2>&1 | tail -60 || echo "macdeployqt reported warnings, continuing..."
+                    -no-strip > "$deploy_log" 2>&1
+                rc=$?
+                tail -60 "$deploy_log"
+                rm -f "$deploy_log"
+                if [ $rc -ne 0 ]; then
+                    echo "::error::macdeployqt exited with status $rc"
+                    exit $rc
+                fi
             else
-                echo "WARNING: macdeployqt not found at $MACDEPLOYQT — QML modules may be incomplete"
+                echo "::error::macdeployqt not found at $MACDEPLOYQT"
+                exit 1
             fi
 
     - name: Prepare for packing
