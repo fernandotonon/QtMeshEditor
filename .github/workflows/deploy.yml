@@ -1572,6 +1572,29 @@ jobs:
             # Copy Assimp libraries to MacOS directory
             sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ || echo "Assimp libraries not found, continuing..."
 
+            # macdeployqt scans -qmldir for QML imports and bundles the module
+            # plugins (Controls, Layouts, Dialogs, ...) the manual copy misses —
+            # without it the inspector panel renders blank on installed bundles.
+            MACDEPLOYQT="/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/bin/macdeployqt"
+            if [ -x "$MACDEPLOYQT" ]; then
+                echo "Running macdeployqt against app bundle..."
+                deploy_log=$(mktemp)
+                sudo "$MACDEPLOYQT" "${{github.workspace}}/bin/QtMeshEditor.app" \
+                    -qmldir="${{github.workspace}}/qml" \
+                    -verbose=2 \
+                    -no-strip > "$deploy_log" 2>&1
+                rc=$?
+                tail -60 "$deploy_log"
+                rm -f "$deploy_log"
+                if [ $rc -ne 0 ]; then
+                    echo "::error::macdeployqt exited with status $rc"
+                    exit $rc
+                fi
+            else
+                echo "::error::macdeployqt not found at $MACDEPLOYQT"
+                exit 1
+            fi
+
     - name: Prepare for packing
       run: |
             sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
@@ -1588,9 +1611,11 @@ jobs:
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
             
-            # Fix library paths for proper app bundle structure
-            sudo install_name_tool -add_rpath @executable_path/../Frameworks ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
-            sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+            # Fix library paths for proper app bundle structure.
+            # macdeployqt may have already added these rpaths, so ignore
+            # "would duplicate path" errors.
+            sudo install_name_tool -add_rpath @executable_path/../Frameworks ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor 2>/dev/null || true
+            sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor 2>/dev/null || true
 
             # Fix all dylibs in MacOS directory to use @rpath for their dependencies
             echo "Fixing dylib install names and rpaths..."
