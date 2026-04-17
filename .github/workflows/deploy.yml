@@ -1611,9 +1611,11 @@ jobs:
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
             
-            # Fix library paths for proper app bundle structure
-            sudo install_name_tool -add_rpath @executable_path/../Frameworks ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
-            sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+            # Fix library paths for proper app bundle structure.
+            # macdeployqt may have already added these rpaths, so ignore
+            # "would duplicate path" errors.
+            sudo install_name_tool -add_rpath @executable_path/../Frameworks ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor 2>/dev/null || true
+            sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor 2>/dev/null || true
 
             # Fix all dylibs in MacOS directory to use @rpath for their dependencies
             echo "Fixing dylib install names and rpaths..."
