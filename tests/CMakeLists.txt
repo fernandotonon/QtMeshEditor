@@ -80,6 +80,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HalfEdgeMesh.cpp
     )
 
     set(TEST_HEADER_FILES
@@ -152,6 +153,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialPreviewRenderer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/HalfEdgeMesh.h
     )
 
     # Add Ogre-Procedural sources (matching src/CMakeLists.txt)

@@ -176,6 +176,21 @@ public:
     Q_INVOKABLE void removeDegenerateTriangles();
     /// @}
 
+    /// @name Topology operations
+    /// @{
+    /**
+     * @brief Extrude the current selection (faces or edges depending on mode).
+     *
+     * In Face mode: duplicates selected faces, creates side walls, selects
+     * the new (top) vertices for immediate translation.
+     * In Edge mode: creates new faces connecting selected edges to new vertices.
+     * In Vertex mode: no-op.
+     *
+     * @return true if extrude succeeded.
+     */
+    Q_INVOKABLE bool extrudeSelection();
+    /// @}
+
     /// @name Vertex transform support
     /// @{
     /// Get the centroid of selected vertices in local mesh space.

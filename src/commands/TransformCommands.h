@@ -6,8 +6,11 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <set>
+#include <utility>
 #include <OgreVector.h>
 #include <OgreQuaternion.h>
+#include "../EditableMesh.h"
 
 namespace Ogre {
     class SceneNode;
@@ -254,6 +257,42 @@ public:
 private:
     QList<EntityMaterial> mEntities;
     QList<SubEntityMaterial> mSubEntities;
+    bool mFirstRedo = true;
+};
+
+// Edit-mode topology change: stores full mesh snapshots for undo/redo
+// Used by extrude, subdivide, delete, and other topology-changing operations.
+class EditMeshTopologyCommand : public QUndoCommand
+{
+public:
+    EditMeshTopologyCommand(std::vector<EditableSubMesh>&& oldSubMeshes,
+                            const std::vector<EditableSubMesh>& newSubMeshes,
+                            const std::set<int>& oldSelectedVerts,
+                            const std::set<std::pair<int,int>>& oldSelectedEdges,
+                            const std::set<int>& oldSelectedFaces,
+                            const std::set<int>& newSelectedVerts,
+                            const std::set<std::pair<int,int>>& newSelectedEdges,
+                            const std::set<int>& newSelectedFaces,
+                            const QString& description = "Topology Edit",
+                            QUndoCommand* parent = nullptr);
+
+    void undo() override;
+    void redo() override;
+
+private:
+    void applyMeshState(const std::vector<EditableSubMesh>& subMeshes,
+                        const std::set<int>& verts,
+                        const std::set<std::pair<int,int>>& edges,
+                        const std::set<int>& faces);
+
+    std::vector<EditableSubMesh> mOldSubMeshes;
+    std::vector<EditableSubMesh> mNewSubMeshes;
+    std::set<int> mOldSelectedVerts;
+    std::set<std::pair<int,int>> mOldSelectedEdges;
+    std::set<int> mOldSelectedFaces;
+    std::set<int> mNewSelectedVerts;
+    std::set<std::pair<int,int>> mNewSelectedEdges;
+    std::set<int> mNewSelectedFaces;
     bool mFirstRedo = true;
 };
 

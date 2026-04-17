@@ -52,11 +52,13 @@ struct EditableVertex {
     Ogre::Vector3 normal = Ogre::Vector3::ZERO;
     Ogre::Vector2 uv = Ogre::Vector2::ZERO;
     Ogre::ColourValue color = Ogre::ColourValue::White;
+    Ogre::Vector4 tangent = Ogre::Vector4::ZERO; // w = parity
     std::vector<EditableBoneAssignment> boneAssignments;
 
     bool hasNormal = false;
     bool hasUV = false;
     bool hasColor = false;
+    bool hasTangent = false;
 };
 
 /**
@@ -120,10 +122,45 @@ public:
      * normals, and UVs back to the hardware buffers. Handles the static-to-dynamic
      * buffer upgrade for immediate GPU visibility.
      *
+     * Only works when vertex/triangle counts haven't changed. Use
+     * resizeEntityBuffers() for topology modifications.
+     *
      * @param entity The target entity (should be the same entity used in loadFromEntity).
      * @return true on success, false on failure.
      */
     bool commitToEntity(Ogre::Entity* entity);
+
+    /**
+     * @brief Create a new Ogre::Mesh from the current editable data.
+     *
+     * Creates a fresh Mesh resource with a unique name. Use this when you
+     * need a detached copy of the mesh; the live-edit path uses
+     * resizeEntityBuffers() instead to keep Entity SubEntity caches valid.
+     *
+     * @param baseName Base name for the new mesh (a suffix is appended for uniqueness).
+     * @return The new MeshPtr, or null on failure.
+     */
+    Ogre::MeshPtr createNewMesh(const std::string& baseName);
+
+    /**
+     * @brief Resize and update existing Ogre::Mesh buffers in-place.
+     *
+     * Replaces each SubMesh's vertex and index buffers with new buffers
+     * containing the current EditableMesh data, without destroying the
+     * SubMesh objects. The Entity's SubEntity list remains valid because
+     * SubMesh pointers don't change.
+     *
+     * Requires that the submesh count matches the current Ogre mesh.
+     * For skeletal meshes, re-registers bone assignments and calls
+     * Mesh::_compileBoneAssignments() so skinning continues to work.
+     * Writes position / normal / uv / tangent (when available) from the
+     * EditableVertex attributes; bone indices/weights are populated by
+     * _compileBoneAssignments().
+     *
+     * @param entity The target entity.
+     * @return true on success, false on failure.
+     */
+    bool resizeEntityBuffers(Ogre::Entity* entity);
 
     /// @name Accessors
     /// @{
@@ -211,6 +248,21 @@ private:
      * @return true on success.
      */
     bool writeVertexData(Ogre::VertexData* vertexData, const std::vector<EditableVertex>& vertices);
+
+    /**
+     * @brief Build vertex/index hardware buffers for a single submesh.
+     *
+     * Creates a fresh Ogre::VertexData with a position/normal/uv/tangent
+     * declaration (only including attributes the EditableSubMesh has) and
+     * fills the interleaved buffer. Replaces subMesh->vertexData.
+     *
+     * Used by both rebuildEntityMesh-style code paths to avoid duplication.
+     *
+     * @param subMesh The Ogre SubMesh to populate.
+     * @param editSub The source editable submesh.
+     */
+    static void buildSubMeshBuffers(Ogre::SubMesh* subMesh,
+                                    const EditableSubMesh& editSub);
 
     std::vector<EditableSubMesh> m_subMeshes;
     Ogre::Entity* m_sourceEntity = nullptr;

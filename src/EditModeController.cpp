@@ -28,14 +28,18 @@ THE SOFTWARE.
 
 #include "EditModeController.h"
 #include "EditableMesh.h"
+#include "HalfEdgeMesh.h"
 #include "SelectionSet.h"
 #include "SentryReporter.h"
+#include "UndoManager.h"
+#include "commands/TransformCommands.h"
 #include "Manager.h"
 #include "NormalVisualizer.h"
 #include "mainwindow.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
 #include <Ogre.h>
+#include <OgreRTShaderSystem.h>
 #include <ProceduralSphereGenerator.h>
 #include <cmath>
 #include <algorithm>
@@ -1083,6 +1087,278 @@ void EditModeController::removeDegenerateTriangles()
 
     // Re-validate
     validateMesh();
+}
+
+// ===========================================================================
+// Topology operations
+// ===========================================================================
+
+bool EditModeController::extrudeSelection()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+        return false;
+
+    // Only face extrude is supported for now. Edge extrude is implemented in
+    // HalfEdgeMesh but not yet wired up through the full pipeline.
+    if (m_selectionMode != FaceMode)
+        return false;
+
+    SentryReporter::addBreadcrumb("edit_mode", "Extrude selection");
+
+    // Snapshot for undo
+    EditableMesh oldMesh;
+    oldMesh.subMeshes() = m_editableMesh->subMeshes();
+    auto oldSelectedVertices = m_selectedVertices;
+    auto oldSelectedEdges = m_selectedEdges;
+    auto oldSelectedFaces = m_selectedFaces;
+
+    // Build half-edge structure
+    HalfEdgeMesh heMesh;
+    if (!heMesh.buildFromEditableMesh(*m_editableMesh))
+        return false;
+
+    std::vector<int> newHEVertices;
+
+    if (m_selectionMode == FaceMode && !m_selectedFaces.empty()) {
+        std::vector<int> faceIndices(m_selectedFaces.begin(), m_selectedFaces.end());
+        newHEVertices = heMesh.extrudeFaces(faceIndices);
+    } else if (m_selectionMode == EdgeMode && !m_selectedEdges.empty()) {
+        // Convert (min,max) vertex-pair edge selections to HE edge indices
+        std::vector<int> edgeIndices;
+        for (const auto& [v1, v2] : m_selectedEdges) {
+            for (size_t e = 0; e < heMesh.edgeCount(); ++e) {
+                auto [ev1, ev2] = heMesh.edgeVertices(e);
+                int eMin = std::min(ev1, ev2);
+                int eMax = std::max(ev1, ev2);
+                if (eMin == v1 && eMax == v2) {
+                    edgeIndices.push_back(static_cast<int>(e));
+                    break;
+                }
+            }
+        }
+        newHEVertices = heMesh.extrudeEdges(edgeIndices);
+    } else {
+        return false;
+    }
+
+    if (newHEVertices.empty())
+        return false;
+
+    // Offset new vertices slightly along adjacent face normals so side-wall
+    // triangles have non-zero area (avoids NaN normals and bad shading).
+    const float EXTRUDE_OFFSET = 0.01f;
+    std::set<int> newVertSet(newHEVertices.begin(), newHEVertices.end());
+    std::map<int, Ogre::Vector3> offsets;
+    for (int heVert : newHEVertices) {
+        auto adjFaces = heMesh.facesAroundVertex(heVert);
+        Ogre::Vector3 avgNormal(0, 0, 0);
+        int count = 0;
+        for (int fi : adjFaces) {
+            auto verts = heMesh.faceVertices(fi);
+            if (verts.size() != 3) continue;
+            if (!newVertSet.count(verts[0]) || !newVertSet.count(verts[1]) || !newVertSet.count(verts[2]))
+                continue;
+            Ogre::Vector3 v0 = heMesh.vertex(verts[0]).position;
+            Ogre::Vector3 v1 = heMesh.vertex(verts[1]).position;
+            Ogre::Vector3 v2 = heMesh.vertex(verts[2]).position;
+            Ogre::Vector3 n = (v1 - v0).crossProduct(v2 - v0);
+            if (n.length() > 1e-8f) {
+                n.normalise();
+                avgNormal += n;
+                ++count;
+            }
+        }
+        if (count > 0) {
+            avgNormal /= static_cast<float>(count);
+            if (avgNormal.length() > 1e-6f) {
+                avgNormal.normalise();
+                offsets[heVert] = avgNormal * EXTRUDE_OFFSET;
+            }
+        }
+    }
+    for (const auto& [heVert, offset] : offsets)
+        heMesh.vertex(heVert).position += offset;
+
+    EditableMesh newMesh;
+    if (!heMesh.toEditableMesh(newMesh))
+        return false;
+
+    m_editableMesh->subMeshes() = std::move(newMesh.subMeshes());
+
+    // Collect the offset positions of the new vertices. These will be used
+    // to identify which vertices in the new EditableMesh are "new" and need
+    // fresh normals (side-wall triangles have new geometry that affects
+    // adjacent vertex normals too).
+    std::vector<Ogre::Vector3> newVertPositions;
+    newVertPositions.reserve(newHEVertices.size());
+    for (int heVert : newHEVertices)
+        newVertPositions.push_back(heMesh.vertex(heVert).position);
+
+    // Selective normal recompute: only update normals for vertices whose
+    // position matches a new vertex AND for vertices used by triangles that
+    // include any of those new vertices (these are the vertices whose
+    // neighborhood changed).
+    //
+    // All OTHER vertices keep their ORIGINAL normals (preserved through the
+    // HE round-trip). This avoids a lighting shift on the untouched parts.
+    {
+        const float TOL2 = 1e-8f; // squared distance tolerance
+
+        auto positionMatchesNew = [&](const Ogre::Vector3& p) {
+            for (const auto& np : newVertPositions) {
+                if (p.squaredDistance(np) < TOL2)
+                    return true;
+            }
+            return false;
+        };
+
+        for (auto& sub : m_editableMesh->subMeshes()) {
+            // Mark vertices at new positions
+            std::vector<bool> isNew(sub.vertices.size(), false);
+            for (size_t v = 0; v < sub.vertices.size(); ++v) {
+                if (positionMatchesNew(sub.vertices[v].position))
+                    isNew[v] = true;
+            }
+
+            // Expand the dirty set: any vertex sharing a triangle with a
+            // new vertex also needs its normal updated.
+            std::vector<bool> isDirty = isNew;
+            for (const auto& tri : sub.triangles) {
+                if (tri.indices[0] >= sub.vertices.size() ||
+                    tri.indices[1] >= sub.vertices.size() ||
+                    tri.indices[2] >= sub.vertices.size())
+                    continue;
+                bool anyNew = isNew[tri.indices[0]] || isNew[tri.indices[1]] || isNew[tri.indices[2]];
+                if (anyNew) {
+                    isDirty[tri.indices[0]] = true;
+                    isDirty[tri.indices[1]] = true;
+                    isDirty[tri.indices[2]] = true;
+                }
+            }
+
+            // Zero the normals of dirty vertices (we'll accumulate below)
+            for (size_t v = 0; v < sub.vertices.size(); ++v) {
+                if (isDirty[v]) {
+                    sub.vertices[v].normal = Ogre::Vector3::ZERO;
+                    sub.vertices[v].hasNormal = true;
+                }
+            }
+
+            // Accumulate area-weighted face normals ONLY onto dirty vertices
+            for (const auto& tri : sub.triangles) {
+                if (tri.indices[0] >= sub.vertices.size() ||
+                    tri.indices[1] >= sub.vertices.size() ||
+                    tri.indices[2] >= sub.vertices.size())
+                    continue;
+                bool anyDirty = isDirty[tri.indices[0]] || isDirty[tri.indices[1]] || isDirty[tri.indices[2]];
+                if (!anyDirty) continue;
+
+                const auto& v0 = sub.vertices[tri.indices[0]].position;
+                const auto& v1 = sub.vertices[tri.indices[1]].position;
+                const auto& v2 = sub.vertices[tri.indices[2]].position;
+                Ogre::Vector3 faceN = (v1 - v0).crossProduct(v2 - v0);
+                for (int k = 0; k < 3; ++k) {
+                    if (isDirty[tri.indices[k]])
+                        sub.vertices[tri.indices[k]].normal += faceN;
+                }
+            }
+
+            // Normalize the dirty vertices
+            for (size_t v = 0; v < sub.vertices.size(); ++v) {
+                if (isDirty[v]) {
+                    float len = sub.vertices[v].normal.length();
+                    if (len > 1e-8f)
+                        sub.vertices[v].normal /= len;
+                }
+            }
+        }
+    }
+
+    if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
+        return false;
+
+    // Force Entity to rebuild its SubEntity list from the updated Mesh.
+    // Without this, Ogre's skeletal skinning pipeline may use stale
+    // animation blend buffers that still reference the old vertex layout.
+    m_editEntity->_deinitialise();
+    m_editEntity->_initialise(true);
+
+    // Invalidate RTSS shaders for the entity's materials so they regenerate
+    // against the new vertex declaration (with possibly new tangent / blend
+    // indices elements). Without this, bump maps / skinning may render wrong.
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (shaderGen) {
+        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
+            if (!matName.empty())
+                shaderGen->invalidateMaterial(
+                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
+        }
+    }
+
+    // Select the new (offset) vertices by position — offset ensures uniqueness
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    std::set<int> newGlobalVerts;
+    for (const auto& pos : newVertPositions) {
+        int globalIdx = 0;
+        bool found = false;
+        for (size_t s = 0; s < m_editableMesh->subMeshes().size() && !found; ++s) {
+            const auto& verts = m_editableMesh->subMeshes()[s].vertices;
+            for (size_t v = 0; v < verts.size(); ++v) {
+                if (verts[v].position.squaredDistance(pos) < 1e-8f) {
+                    newGlobalVerts.insert(globalIdx + static_cast<int>(v));
+                    found = true;
+                    break;
+                }
+            }
+            globalIdx += static_cast<int>(verts.size());
+        }
+    }
+    m_selectedVertices = newGlobalVerts;
+
+    // Select the extruded top faces (all 3 vertices are new)
+    if (m_selectionMode == FaceMode) {
+        int globalTriIdx = 0;
+        for (size_t s = 0; s < m_editableMesh->subMeshes().size(); ++s) {
+            const auto& sub = m_editableMesh->subMeshes()[s];
+            int subVertOffset = 0;
+            for (size_t ss = 0; ss < s; ++ss)
+                subVertOffset += static_cast<int>(m_editableMesh->subMeshes()[ss].vertices.size());
+
+            for (const auto& tri : sub.triangles) {
+                int g0 = subVertOffset + static_cast<int>(tri.indices[0]);
+                int g1 = subVertOffset + static_cast<int>(tri.indices[1]);
+                int g2 = subVertOffset + static_cast<int>(tri.indices[2]);
+                if (newGlobalVerts.count(g0) && newGlobalVerts.count(g1) && newGlobalVerts.count(g2)) {
+                    m_selectedFaces.insert(globalTriIdx);
+                }
+                ++globalTriIdx;
+            }
+        }
+    }
+
+    // Push undo command
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(oldMesh.subMeshes()),
+        m_editableMesh->subMeshes(),
+        oldSelectedVertices, oldSelectedEdges, oldSelectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        "Extrude");
+    UndoManager::getSingleton()->push(cmd);
+
+    refreshNormalVisualizer();
+    updateSelectionOverlay();
+    validateMesh();
+
+    emit meshDataChanged();
+    emit editSelectionChanged();
+    emit selectionModeChanged();
+    emit editModeChanged();
+
+    return true;
 }
 
 // ===========================================================================

@@ -619,3 +619,77 @@ void MaterialPresetCommand::redo()
             sm.subEntity->setMaterialName(sm.newMaterialName);
     }
 }
+
+// ---- EditMeshTopologyCommand ----
+
+EditMeshTopologyCommand::EditMeshTopologyCommand(
+    std::vector<EditableSubMesh>&& oldSubMeshes,
+    const std::vector<EditableSubMesh>& newSubMeshes,
+    const std::set<int>& oldSelectedVerts,
+    const std::set<std::pair<int,int>>& oldSelectedEdges,
+    const std::set<int>& oldSelectedFaces,
+    const std::set<int>& newSelectedVerts,
+    const std::set<std::pair<int,int>>& newSelectedEdges,
+    const std::set<int>& newSelectedFaces,
+    const QString& description,
+    QUndoCommand* parent)
+    : QUndoCommand(description, parent)
+    , mOldSubMeshes(std::move(oldSubMeshes))
+    , mNewSubMeshes(newSubMeshes)
+    , mOldSelectedVerts(oldSelectedVerts)
+    , mOldSelectedEdges(oldSelectedEdges)
+    , mOldSelectedFaces(oldSelectedFaces)
+    , mNewSelectedVerts(newSelectedVerts)
+    , mNewSelectedEdges(newSelectedEdges)
+    , mNewSelectedFaces(newSelectedFaces)
+    , mFirstRedo(true)
+{
+}
+
+void EditMeshTopologyCommand::applyMeshState(
+    const std::vector<EditableSubMesh>& subMeshes,
+    const std::set<int>& verts,
+    const std::set<std::pair<int,int>>& edges,
+    const std::set<int>& faces)
+{
+    auto* ctrl = EditModeController::instance();
+    if (!ctrl->isEditModeActive() || !ctrl->currentMesh() || !ctrl->editEntity())
+        return;
+
+    ctrl->currentMesh()->subMeshes() = subMeshes;
+
+    // Note: we preserve stored normals/tangents exactly. Callers that change
+    // topology are expected to set these correctly in the snapshot already.
+    // Use resizeEntityBuffers() (not rebuildEntityMesh) so bone assignments
+    // and skeletal skinning are preserved through undo/redo.
+    ctrl->currentMesh()->resizeEntityBuffers(ctrl->editEntity());
+
+    // Refresh Entity's SubEntity caches for the new vertex layout
+    ctrl->editEntity()->_deinitialise();
+    ctrl->editEntity()->_initialise(true);
+
+    // Restore full selection state (vertices, edges, and faces)
+    ctrl->deselectAll();
+    for (int v : verts)
+        ctrl->selectVertex(v, true);
+    for (const auto& e : edges)
+        ctrl->selectEdge(e.first, e.second, true);
+    for (int f : faces)
+        ctrl->selectFace(f, true);
+}
+
+void EditMeshTopologyCommand::undo()
+{
+    SentryReporter::addBreadcrumb("edit_mode", "Undo topology edit");
+    applyMeshState(mOldSubMeshes, mOldSelectedVerts, mOldSelectedEdges, mOldSelectedFaces);
+}
+
+void EditMeshTopologyCommand::redo()
+{
+    if (mFirstRedo) {
+        mFirstRedo = false;
+        return;
+    }
+    SentryReporter::addBreadcrumb("edit_mode", "Redo topology edit");
+    applyMeshState(mNewSubMeshes, mNewSelectedVerts, mNewSelectedEdges, mNewSelectedFaces);
+}

@@ -1888,6 +1888,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
+          set -e
           RAW_TAG="${{ github.event.release.tag_name }}"
           VER="${RAW_TAG#v}"
           BRANCH="qtmesheditor-${VER}"
@@ -1911,11 +1912,12 @@ jobs:
           # Ensure we have a fork of winget-pkgs
           gh repo fork microsoft/winget-pkgs --clone=false 2>/dev/null || true
 
-          # Configure git to use the GH token for push
-          gh auth setup-git
-
-          # Clone the fork (shallow)
-          gh repo clone "${FORK_OWNER}/winget-pkgs" winget-pkgs -- --depth 1
+          # Clone the fork (shallow) using a token-embedded URL so git push works
+          # without relying on a credential helper (previous git push attempts
+          # returned 403 because gh auth setup-git was not providing creds).
+          git clone --depth 1 \
+            "https://x-access-token:${GH_TOKEN}@github.com/${FORK_OWNER}/winget-pkgs.git" \
+            winget-pkgs
           cd winget-pkgs
 
           # Handle reruns: if branch already exists, check it out; otherwise create it
@@ -1935,7 +1937,10 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git diff --cached --quiet && echo "No changes to commit" && exit 0
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
           git commit -m "Update FernandoTonon.QtMeshEditor to ${VER}"
           git push -u origin "$BRANCH"
 
