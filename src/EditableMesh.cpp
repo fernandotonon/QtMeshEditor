@@ -314,6 +314,23 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
     if (m_flatNormals) recalculateNormalsFlat();
     else recalculateNormals();
 
+    // Detect whether the original mesh had tangents (for normal mapping).
+    // If yes, we'll rebuild them after the vertex buffer is replaced.
+    bool hadTangents = false;
+    {
+        auto* sharedDecl = mesh->sharedVertexData ? mesh->sharedVertexData->vertexDeclaration : nullptr;
+        if (sharedDecl && sharedDecl->findElementBySemantic(Ogre::VES_TANGENT)) {
+            hadTangents = true;
+        }
+        for (unsigned short i = 0; i < mesh->getNumSubMeshes() && !hadTangents; ++i) {
+            auto* sm = mesh->getSubMesh(i);
+            if (sm->vertexData && sm->vertexData->vertexDeclaration &&
+                sm->vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_TANGENT)) {
+                hadTangents = true;
+            }
+        }
+    }
+
     // EditableMesh stores per-submesh vertex arrays. Migrate away from
     // any shared vertex data — each submesh gets its own fresh VertexData
     // with a simple position/normal/uv layout. This also avoids issues
@@ -422,6 +439,48 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
     if (!anyShared && mesh->sharedVertexData) {
         delete mesh->sharedVertexData;
         mesh->sharedVertexData = nullptr;
+    }
+
+    // Re-register bone assignments with Ogre and compile them into blend
+    // indices / weights in the vertex buffer. This is required for skeletal
+    // skinning to work after a topology change.
+    if (mesh->hasSkeleton()) {
+        // Clear the top-level (shared) bone assignments — they referred to
+        // the old shared buffer's vertex indices which are now invalid.
+        mesh->clearBoneAssignments();
+
+        for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+            Ogre::SubMesh* subMesh = mesh->getSubMesh(i);
+            const EditableSubMesh& editSub = m_subMeshes[i];
+
+            subMesh->clearBoneAssignments();
+
+            for (size_t vi = 0; vi < editSub.vertices.size(); ++vi) {
+                for (const auto& ba : editSub.vertices[vi].boneAssignments) {
+                    Ogre::VertexBoneAssignment vba;
+                    vba.vertexIndex = static_cast<unsigned int>(vi);
+                    vba.boneIndex = ba.boneIndex;
+                    vba.weight = ba.weight;
+                    subMesh->addBoneAssignment(vba);
+                }
+            }
+        }
+
+        // Compile bone assignments into the vertex buffer.
+        // Ogre will add VES_BLEND_INDICES and VES_BLEND_WEIGHTS elements
+        // to the declaration and pack up to OGRE_MAX_BLEND_WEIGHTS bones
+        // per vertex into a new buffer source.
+        mesh->_compileBoneAssignments();
+    }
+
+    // Rebuild tangent vectors if the original mesh had them. This is
+    // required for normal-mapped / bump-mapped materials to render correctly.
+    if (hadTangents) {
+        try {
+            mesh->buildTangentVectors(0, false, false, false);
+        } catch (const Ogre::Exception&) {
+            // Tangent generation can fail if UVs have issues; ignore gracefully
+        }
     }
 
     // Recalculate bounds

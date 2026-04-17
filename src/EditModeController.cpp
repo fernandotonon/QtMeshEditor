@@ -39,6 +39,7 @@ THE SOFTWARE.
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
 #include <Ogre.h>
+#include <OgreRTShaderSystem.h>
 #include <ProceduralSphereGenerator.h>
 #include <cmath>
 #include <algorithm>
@@ -1097,16 +1098,10 @@ bool EditModeController::extrudeSelection()
     if (!m_editModeActive || !m_editableMesh || !m_editEntity)
         return false;
 
-    if (m_selectionMode == VertexMode)
+    // Only face extrude is supported for now. Edge extrude is implemented in
+    // HalfEdgeMesh but not yet wired up through the full pipeline.
+    if (m_selectionMode != FaceMode)
         return false;
-
-    // Skeletal meshes are not yet supported — rebuilding the vertex buffer
-    // doesn't preserve bone assignments, which breaks skinning.
-    if (m_editEntity->hasSkeleton()) {
-        SentryReporter::addBreadcrumb("edit_mode",
-            "Extrude blocked: skeletal mesh not yet supported");
-        return false;
-    }
 
     SentryReporter::addBreadcrumb("edit_mode", "Extrude selection");
 
@@ -1201,6 +1196,25 @@ bool EditModeController::extrudeSelection()
 
     if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
         return false;
+
+    // Force Entity to rebuild its SubEntity list from the updated Mesh.
+    // Without this, Ogre's skeletal skinning pipeline may use stale
+    // animation blend buffers that still reference the old vertex layout.
+    m_editEntity->_deinitialise();
+    m_editEntity->_initialise(true);
+
+    // Invalidate RTSS shaders for the entity's materials so they regenerate
+    // against the new vertex declaration (with possibly new tangent / blend
+    // indices elements). Without this, bump maps / skinning may render wrong.
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (shaderGen) {
+        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
+            if (!matName.empty())
+                shaderGen->invalidateMaterial(
+                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
+        }
+    }
 
     // Select the new (offset) vertices by position — offset ensures uniqueness
     m_selectedVertices.clear();
