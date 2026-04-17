@@ -123,7 +123,7 @@ public:
      * buffer upgrade for immediate GPU visibility.
      *
      * Only works when vertex/triangle counts haven't changed. Use
-     * rebuildEntityMesh() for topology modifications.
+     * resizeEntityBuffers() for topology modifications.
      *
      * @param entity The target entity (should be the same entity used in loadFromEntity).
      * @return true on success, false on failure.
@@ -131,23 +131,11 @@ public:
     bool commitToEntity(Ogre::Entity* entity);
 
     /**
-     * @brief Rebuild the Ogre mesh with new vertex/index buffers.
-     *
-     * Unlike commitToEntity(), this handles topology changes (added/removed
-     * vertices and triangles) by destroying and recreating the hardware
-     * buffers. Use after operations like extrude, subdivide, delete, etc.
-     *
-     * @param entity The target entity.
-     * @return true on success, false on failure.
-     */
-    bool rebuildEntityMesh(Ogre::Entity* entity);
-
-    /**
      * @brief Create a new Ogre::Mesh from the current editable data.
      *
-     * Creates a fresh Mesh resource with a unique name. Use this instead of
-     * rebuildEntityMesh when the topology has changed, since modifying a live
-     * Mesh that an Entity references is unsafe in Ogre.
+     * Creates a fresh Mesh resource with a unique name. Use this when you
+     * need a detached copy of the mesh; the live-edit path uses
+     * resizeEntityBuffers() instead to keep Entity SubEntity caches valid.
      *
      * @param baseName Base name for the new mesh (a suffix is appended for uniqueness).
      * @return The new MeshPtr, or null on failure.
@@ -157,12 +145,17 @@ public:
     /**
      * @brief Resize and update existing Ogre::Mesh buffers in-place.
      *
-     * Unlike rebuildEntityMesh(), this doesn't destroy SubMeshes. Instead it
-     * replaces each SubMesh's vertex and index buffers with new, larger
-     * buffers containing the current EditableMesh data. The Entity's
-     * SubEntity list remains valid because SubMesh pointers don't change.
+     * Replaces each SubMesh's vertex and index buffers with new buffers
+     * containing the current EditableMesh data, without destroying the
+     * SubMesh objects. The Entity's SubEntity list remains valid because
+     * SubMesh pointers don't change.
      *
-     * Requires that the submesh count matches. Preserves skeleton bindings.
+     * Requires that the submesh count matches the current Ogre mesh.
+     * For skeletal meshes, re-registers bone assignments and calls
+     * Mesh::_compileBoneAssignments() so skinning continues to work.
+     * Writes position / normal / uv / tangent (when available) from the
+     * EditableVertex attributes; bone indices/weights are populated by
+     * _compileBoneAssignments().
      *
      * @param entity The target entity.
      * @return true on success, false on failure.
