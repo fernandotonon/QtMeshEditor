@@ -1883,9 +1883,9 @@ namespace {
     // a fan at each endpoint with crease edges on the f1 and f2 sides AND
     // a crease between the two non-beveled neighbors — precisely the case
     // where processRingNeighbors cannot merge them.
-    // A character-mesh-like fixture: two rows of triangles forming a
-    // gently-curved surface. Each bevel endpoint has a 6-face fan with
-    // no obvious creases anywhere — closer to Lead Jab's topology.
+    // A closed-ring smooth character fixture: both bevel endpoints have
+    // full rings (ringWalkFailed=0 in the bevel diag, matching Lead Jab's
+    // real topology). Built as two "pie fans" joined at the bevel edge.
     EditableMesh makeSmoothCharacterMesh()
     {
         EditableMesh em;
@@ -1898,20 +1898,27 @@ namespace {
             v.hasNormal = true;
             return v;
         };
-        // 8 verts forming 2 rows at y=0 (bevel endpoints) and y=±1 (ring).
-        // Slight z-curve so faces aren't exactly coplanar (creating subtle
-        // creases between adjacent faces).
+        // v0 and v1 are the bevel endpoints. Around each of them is a
+        // "pie fan" of 4 triangles sharing successive edges — giving each
+        // endpoint a closed ring. The bevel faces f1 and f2 are two of
+        // those ring faces (the ones along the v0-v1 edge).
+        //
+        // Layout:
+        //   v2 — v3 — v4 (upper ring above v0/v1)
+        //   v0 — v1 (bevel edge)
+        //   v5 — v6 — v7 (lower ring below)
+        // With slight z-perturbation so faces aren't coplanar.
         sub.vertices = {
             mkV( 0.0f,  0.0f,  0.00f),  // 0 — v0 (bevel endpoint)
             mkV( 1.0f,  0.0f,  0.00f),  // 1 — v1 (bevel endpoint)
-            // Upper row (+Y)
-            mkV(-0.5f,  1.0f,  0.30f),  // 2
-            mkV( 0.5f,  1.0f,  0.50f),  // 3 (above mid)
-            mkV( 1.5f,  1.0f,  0.30f),  // 4
-            // Lower row (-Y)
-            mkV(-0.5f, -1.0f,  0.30f),  // 5
-            mkV( 0.5f, -1.0f,  0.50f),  // 6 (below mid)
-            mkV( 1.5f, -1.0f,  0.30f),  // 7
+            mkV(-0.5f,  0.8f,  0.30f),  // 2 — upper-left
+            mkV( 0.5f,  0.8f,  0.50f),  // 3 — upper-mid
+            mkV( 1.5f,  0.8f,  0.30f),  // 4 — upper-right
+            mkV(-0.5f, -0.8f,  0.30f),  // 5 — lower-left
+            mkV( 0.5f, -0.8f,  0.50f),  // 6 — lower-mid
+            mkV( 1.5f, -0.8f,  0.30f),  // 7 — lower-right
+            mkV(-1.0f,  0.0f,  0.25f),  // 8 — far-left
+            mkV( 2.0f,  0.0f,  0.25f),  // 9 — far-right
         };
         auto mkT = [&](unsigned a, unsigned b, unsigned c) {
             EditableTriangle t;
@@ -1919,17 +1926,21 @@ namespace {
             return t;
         };
         sub.triangles = {
-            // Bevel faces (share edge v0-v1)
-            mkT(0, 1, 3),   // f1 — upper mid, above bevel edge
-            mkT(1, 0, 6),   // f2 — lower mid, below bevel edge
-            // Upper ring at v0: v0 → v2 → v3
-            mkT(0, 3, 2),   // fA
-            // Upper ring at v1: v1 → v3 → v4
-            mkT(1, 4, 3),   // fB
-            // Lower ring at v0: v0 → v6 → v5 → v0 (but v0-v6 shared with f2)
-            mkT(0, 5, 6),   // fC
-            // Lower ring at v1: v1 → v6 → v7
-            mkT(1, 6, 7),   // fD
+            // Bevel faces meeting along v0-v1:
+            mkT(0, 1, 3),   // f1 (above beveled edge, shares v0-v1)
+            mkT(1, 0, 6),   // f2 (below beveled edge, shares v0-v1)
+            // v0's upper ring: f1 ← fA ← fB
+            mkT(0, 3, 2),   // fA — shares v0-v3 with f1, v0-v2 with fB
+            mkT(0, 2, 8),   // fB — shares v0-v2 with fA, v0-v8 with fC
+            // v0's lower ring: f2 ← fC ← fD
+            mkT(0, 8, 5),   // fC — shares v0-v8 with fB, v0-v5 with fD
+            mkT(0, 5, 6),   // fD — shares v0-v5 with fC, v0-v6 with f2
+            // v1's upper ring: f1 → fE → fF
+            mkT(1, 4, 3),   // fE — shares v1-v3 with f1, v1-v4 with fF
+            mkT(1, 9, 4),   // fF — shares v1-v4 with fE, v1-v9 with fG
+            // v1's lower ring: f2 → fG → fH
+            mkT(1, 7, 9),   // fG — shares v1-v9 with fF, v1-v7 with fH
+            mkT(1, 6, 7),   // fH — shares v1-v7 with fG, v1-v6 with f2
         };
         em.subMeshes().push_back(std::move(sub));
         return em;
@@ -2071,6 +2082,153 @@ TEST(HalfEdgeMeshStandalone, SmoothSurfaceBevelProducesManifold) {
         }
     }
     EXPECT_EQ(flipped, 0) << flipped << " tris have inverted winding";
+}
+
+namespace {
+    // High-valence smooth fixture: each bevel endpoint has a 6-face fan
+    // (closed ring), mimicking a denser character-mesh neighborhood.
+    EditableMesh makeDenseSmoothCharacterMesh()
+    {
+        EditableMesh em;
+        EditableSubMesh sub;
+        sub.materialName = "M";
+        auto mkV = [](float x, float y, float z) {
+            EditableVertex v;
+            v.position = Ogre::Vector3(x, y, z);
+            v.normal = Ogre::Vector3::UNIT_Z;
+            v.hasNormal = true;
+            return v;
+        };
+        // v0 at origin, v1 at (1,0,0). Each has a 6-point ring around it.
+        // Use slight z-wavelets so faces aren't coplanar.
+        auto dz = [](float theta) {
+            return 0.15f + 0.05f * std::sin(theta * 3.14159f);
+        };
+        sub.vertices.push_back(mkV( 0.0f,  0.0f, 0.0f));  // 0 — v0
+        sub.vertices.push_back(mkV( 1.0f,  0.0f, 0.0f));  // 1 — v1
+        // v0's ring: 5 extra verts (v2-v6) at 72° intervals, plus v1 completes the 6-fan
+        for (int i = 0; i < 5; ++i) {
+            float theta = (-2.0f + i * 0.8f) * 0.5f; // skip the v1 direction
+            float x = 0.5f * std::cos(theta);
+            float y = 0.5f * std::sin(theta);
+            sub.vertices.push_back(mkV(x, y, dz(theta)));
+        }
+        // v1's ring: 5 extra verts (v7-v11) mirrored, plus v0
+        for (int i = 0; i < 5; ++i) {
+            float theta = (-2.0f + i * 0.8f) * 0.5f;
+            float x = 1.0f + 0.5f * std::cos(3.14159f - theta);
+            float y = 0.5f * std::sin(3.14159f - theta);
+            sub.vertices.push_back(mkV(x, y, dz(theta)));
+        }
+        auto mkT = [](unsigned a, unsigned b, unsigned c) {
+            EditableTriangle t;
+            t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+            return t;
+        };
+        // v0's fan: 6 tris connecting v0 to consecutive ring verts.
+        // Ring order around v0: v1 (as one of the ring), v2, v3, v4, v5, v6, back to v1.
+        // So fan tris: (0,1,2), (0,2,3), (0,3,4), (0,4,5), (0,5,6), (0,6,1)
+        // But (0,1,?) is the bevel face; we pair it with (1,0,?) below.
+        sub.triangles.push_back(mkT(0, 2, 1));  // f1: upper bevel face (contains v0-v1)
+        sub.triangles.push_back(mkT(0, 3, 2));
+        sub.triangles.push_back(mkT(0, 4, 3));
+        sub.triangles.push_back(mkT(0, 5, 4));
+        sub.triangles.push_back(mkT(0, 6, 5));
+        sub.triangles.push_back(mkT(0, 1, 6));  // f2: lower bevel face (contains v0-v1)
+        // v1's fan: tris sharing v1 with the other ring
+        // But f1 and f2 already touch v1, so v1's OTHER ring faces are:
+        sub.triangles.push_back(mkT(1, 2, 7));   // above v0-v1 continuing to v1's ring
+        sub.triangles.push_back(mkT(1, 7, 8));
+        sub.triangles.push_back(mkT(1, 8, 9));
+        sub.triangles.push_back(mkT(1, 9, 10));
+        sub.triangles.push_back(mkT(1, 10, 11));
+        sub.triangles.push_back(mkT(1, 11, 6));  // closes back to v6 (shared with f2)
+        em.subMeshes().push_back(std::move(sub));
+        return em;
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, DISABLED_DenseSmoothCharacterBevelManifold) {
+    auto em = makeDenseSmoothCharacterMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 0, 1);
+    ASSERT_GE(edgeIdx, 0);
+    ASSERT_FALSE(he.bevelEdges({edgeIdx}, 0.02f).empty());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+
+    // Winding consistency check.
+    const auto& sub = back.subMeshes()[0];
+    std::map<std::pair<unsigned,unsigned>, int> directedEdges;
+    for (const auto& tri : sub.triangles) {
+        for (int k = 0; k < 3; ++k) {
+            unsigned a = tri.indices[k], b = tri.indices[(k + 1) % 3];
+            ++directedEdges[{a, b}];
+        }
+    }
+    int windingInconsistencies = 0;
+    for (const auto& [dir, count] : directedEdges) {
+        if (count > 1) {
+            ++windingInconsistencies;
+            fprintf(stderr, "  winding inconsistency: edge (%u→%u) used %d times\n",
+                    dir.first, dir.second, count);
+        }
+    }
+    if (windingInconsistencies > 0) {
+        fprintf(stderr, "=== Dense char dump ===\n");
+        for (size_t i = 0; i < sub.vertices.size(); ++i) {
+            const auto& p = sub.vertices[i].position;
+            fprintf(stderr, "v%zu = (%.3f, %.3f, %.3f)\n", i, p.x, p.y, p.z);
+        }
+        for (size_t t = 0; t < sub.triangles.size(); ++t) {
+            const auto& tri = sub.triangles[t];
+            fprintf(stderr, "t%zu = (%u, %u, %u)\n",
+                    t, tri.indices[0], tri.indices[1], tri.indices[2]);
+        }
+    }
+    EXPECT_EQ(windingInconsistencies, 0)
+        << windingInconsistencies << " winding inconsistencies";
+}
+
+TEST(HalfEdgeMeshStandalone, DISABLED_SmoothCharacterBevelSmallScale) {
+    // Same fixture as SmoothCharacterBevelProducesManifold but scaled to
+    // ~0.1-unit dimensions matching Lead Jab (edge length 0.1 per diag).
+    // Also uses Lead Jab's bevel width (0.05 → clamped to 0.025).
+    auto em = makeSmoothCharacterMesh();
+    // Scale all vertex positions by 0.1
+    for (auto& vert : em.subMeshes()[0].vertices) {
+        vert.position *= 0.1f;
+    }
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 0, 1);
+    ASSERT_GE(edgeIdx, 0);
+    ASSERT_FALSE(he.bevelEdges({edgeIdx}, 0.05f).empty());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+
+    const auto& sub = back.subMeshes()[0];
+    std::map<std::pair<unsigned,unsigned>, int> directedEdges;
+    for (const auto& tri : sub.triangles) {
+        for (int k = 0; k < 3; ++k) {
+            unsigned a = tri.indices[k], b = tri.indices[(k + 1) % 3];
+            ++directedEdges[{a, b}];
+        }
+    }
+    int windingInconsistencies = 0;
+    for (const auto& [dir, count] : directedEdges) {
+        if (count > 1) {
+            ++windingInconsistencies;
+            fprintf(stderr, "  winding inconsistency: edge (%u→%u) used %d times\n",
+                    dir.first, dir.second, count);
+        }
+    }
+    EXPECT_EQ(windingInconsistencies, 0)
+        << windingInconsistencies << " winding inconsistencies";
 }
 
 TEST(HalfEdgeMeshStandalone, DISABLED_SmoothCharacterBevelProducesManifold) {
