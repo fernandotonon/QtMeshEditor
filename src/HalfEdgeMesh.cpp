@@ -2092,7 +2092,7 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             // the same (isV1, fWalksAB) logic as the fallback to decide fan
             // direction. For isV1 case the outward normal aligns with
             // fWalksAB's polarity.
-            bool flip = (isV1 ? fWalksAB : !fWalksAB);
+            bool flip = (isV1 ? !fWalksAB : fWalksAB);
 
             auto tri = [&](int x, int y, int z) {
                 appendTriangle(x, y, z, info.subMeshIndex);

@@ -2148,7 +2148,7 @@ namespace {
     }
 }
 
-TEST(HalfEdgeMeshStandalone, DISABLED_DenseSmoothCharacterBevelManifold) {
+TEST(HalfEdgeMeshStandalone, DenseSmoothCharacterBevelManifold) {
     auto em = makeDenseSmoothCharacterMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -2192,7 +2192,7 @@ TEST(HalfEdgeMeshStandalone, DISABLED_DenseSmoothCharacterBevelManifold) {
         << windingInconsistencies << " winding inconsistencies";
 }
 
-TEST(HalfEdgeMeshStandalone, DISABLED_SmoothCharacterBevelSmallScale) {
+TEST(HalfEdgeMeshStandalone, SmoothCharacterBevelSmallScale) {
     // Same fixture as SmoothCharacterBevelProducesManifold but scaled to
     // ~0.1-unit dimensions matching Lead Jab (edge length 0.1 per diag).
     // Also uses Lead Jab's bevel width (0.05 → clamped to 0.025).
@@ -2231,7 +2231,7 @@ TEST(HalfEdgeMeshStandalone, DISABLED_SmoothCharacterBevelSmallScale) {
         << windingInconsistencies << " winding inconsistencies";
 }
 
-TEST(HalfEdgeMeshStandalone, DISABLED_SmoothCharacterBevelProducesManifold) {
+TEST(HalfEdgeMeshStandalone, SmoothCharacterBevelProducesManifold) {
     // Reproduces the Lead Jab scenario: smooth surface where the bevel-edge
     // endpoint's ring has faces with multiple creases and the chamfer
     // cap-end is not covered by any existing retriangulation.
