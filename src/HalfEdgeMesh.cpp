@@ -1036,35 +1036,160 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
     // Collect face indices we replace so we can delete them at the end.
     std::vector<int> facesToRemove;
 
-    for (const auto& info : clean) {
-        // Skip edges where the effective width would collapse the geometry
-        // (too small to offset visibly).
-        float w = effectiveWidth(info);
-        if (w < 1e-5f)
-            continue;
+    // Helper: gather all faces incident at vertex v, in half-edge rotation
+    // order. Walks `twin(current_he).next` to rotate around v. Returns empty
+    // if the walk fails (boundary or non-manifold), signalling that the
+    // caller should fall back to a simpler algorithm.
+    auto facesAtVertexOrdered = [&](int vIdx) -> std::vector<int> {
+        std::vector<int> ring;
+        if (vIdx < 0 || vIdx >= static_cast<int>(m_vertices.size()))
+            return ring;
+        int startHE = m_vertices[vIdx].halfEdge;
+        if (startHE < 0)
+            return ring;
+        int he = startHE;
+        for (int guard = 0; guard < 1000; ++guard) {
+            if (he < 0) return {}; // corrupt
+            int f = m_halfEdges[he].face;
+            if (f < 0) return {}; // boundary — bail, use fallback
+            ring.push_back(f);
+            // Rotate: next outgoing he from v is twin(prev(he)).
+            int prev = m_halfEdges[he].prev;
+            if (prev < 0) return {};
+            int twin = m_halfEdges[prev].twin;
+            if (twin < 0) return {}; // boundary
+            he = twin;
+            if (he == startHE) return ring;
+        }
+        return {}; // walk didn't close — treat as degenerate
+    };
 
-        // Create 4 new vertices. v1a/v2a live on f1's side (pulled toward its
-        // opposite vertex), v1b/v2b on f2's side.
-        auto makeOffset = [&](int baseIdx, int towardIdx) {
+    // Helper: direction from v that is perpendicular to the beveled edge,
+    // projected into face `faceIdx`'s plane, pointing into the face's
+    // interior. Using this instead of the triangle-local bisector keeps
+    // both triangles of a coplanar face producing the same offset (so the
+    // chamfer stays symmetric across the face's internal diagonal).
+    auto faceInwardDirection = [&](int faceIdx, int v, int otherEndpoint) -> Ogre::Vector3 {
+        auto verts = faceVertices(faceIdx);
+        if (verts.size() != 3) return Ogre::Vector3::ZERO;
+
+        Ogre::Vector3 a = m_vertices[verts[0]].position;
+        Ogre::Vector3 b = m_vertices[verts[1]].position;
+        Ogre::Vector3 c = m_vertices[verts[2]].position;
+        Ogre::Vector3 faceNormal = (b - a).crossProduct(c - a);
+        if (faceNormal.length() < 1e-8f) return Ogre::Vector3::ZERO;
+        faceNormal.normalise();
+
+        Ogre::Vector3 edgeDir = m_vertices[otherEndpoint].position - m_vertices[v].position;
+        if (edgeDir.length() < 1e-6f) return Ogre::Vector3::ZERO;
+        edgeDir.normalise();
+
+        // Perpendicular in face plane = normal × edge_dir (right-hand rule).
+        // Sign ambiguity resolved by checking against the face's third vertex:
+        // the "inward" direction is the one that has a positive dot product
+        // with the vector from v to that third vertex (centroid heuristic).
+        Ogre::Vector3 perp = faceNormal.crossProduct(edgeDir);
+        if (perp.length() < 1e-6f) return Ogre::Vector3::ZERO;
+        perp.normalise();
+
+        // Find the third vertex (not v, not otherEndpoint) — could be anything
+        // on the face.
+        Ogre::Vector3 third = Ogre::Vector3::ZERO;
+        bool haveThird = false;
+        for (int x : verts) {
+            if (x != v && x != otherEndpoint) {
+                third = m_vertices[x].position - m_vertices[v].position;
+                haveThird = true;
+                break;
+            }
+        }
+        if (haveThird && perp.dotProduct(third) < 0)
+            perp = -perp;
+        return perp;
+    };
+
+    for (const auto& info : clean) {
+        float w = effectiveWidth(info);
+        if (w < 1e-5f) continue;
+
+        // Phase 1: gather face ring at each endpoint. A previous pass
+        // experimented with rewiring every incident face to its own
+        // per-face inward-offset vertex (full multi-face bevel). On meshes
+        // with coplanar-per-face topology that works, but on general meshes
+        // (cubes, skeletal models) faces that shared non-bevel edges ended
+        // up with different vertex endpoints and the mesh fractured into
+        // disconnected strips. Until we add inter-face stitching along
+        // those shared edges, fall back to the simpler 2-face algorithm:
+        // only f1 and f2 get vertex splits; other incident faces keep the
+        // original endpoint, accepting a small "pinch" at corners where a
+        // third face meets.
+        std::vector<int> ringV1; // intentionally empty for now
+        std::vector<int> ringV2;
+        (void)facesAtVertexOrdered; // keep helper live for the planned fix
+        bool fullBevelV1 = false;
+        bool fullBevelV2 = false;
+
+        // Phase 2: per-face offset vertices for each endpoint, keyed by face.
+        // faceOffsetV1[f] = new HE vertex index that replaces v1 in face f.
+        // Same for V2. Always create at least the f1/f2 entries (those are
+        // needed by the chamfer + retriangulation regardless of fallback).
+        auto makeOffsetAlongDir = [&](int baseIdx, const Ogre::Vector3& unitDir, float dist) {
             HEVertex nv = m_vertices[baseIdx];
-            nv.position = offsetPosition(m_vertices[baseIdx].position,
-                                         m_vertices[towardIdx].position, w);
+            nv.position = m_vertices[baseIdx].position + unitDir * dist;
             nv.halfEdge = -1;
             int idx = static_cast<int>(m_vertices.size());
             m_vertices.push_back(nv);
             newVertices.push_back(idx);
             return idx;
         };
-        int v1a = makeOffset(info.v1, info.f1Opposite);
-        int v1b = makeOffset(info.v1, info.f2Opposite);
-        int v2a = makeOffset(info.v2, info.f1Opposite);
-        int v2b = makeOffset(info.v2, info.f2Opposite);
+        auto offsetForFaceAtV = [&](int faceIdx, int v, int otherEndpoint) -> int {
+            Ogre::Vector3 dir = faceInwardDirection(faceIdx, v, otherEndpoint);
+            if (dir.length() < 0.5f) {
+                // Fallback: offset toward face centroid. Rare but keeps us
+                // producing *some* inward offset even on degenerate tris.
+                auto verts = faceVertices(faceIdx);
+                if (verts.size() != 3) return -1;
+                Ogre::Vector3 c = (m_vertices[verts[0]].position +
+                                   m_vertices[verts[1]].position +
+                                   m_vertices[verts[2]].position) / 3.0f;
+                dir = c - m_vertices[v].position;
+                if (dir.length() < 1e-6f) return -1;
+                dir.normalise();
+            }
+            return makeOffsetAlongDir(v, dir, w);
+        };
 
-        // Determine each face's winding direction across the beveled edge.
-        // For a triangle (v1, v2, opp), the HE loop visits vertices in winding
-        // order; we detect whether v1 comes before v2 (f1 "walks" v1→v2) or
-        // after. That determines how we retriangulate to preserve the outward
-        // normal direction of f1's replacement tris.
+        std::unordered_map<int, int> faceOffsetV1;
+        std::unordered_map<int, int> faceOffsetV2;
+
+        int v1a = offsetForFaceAtV(info.f1, info.v1, info.v2);
+        int v1b = offsetForFaceAtV(info.f2, info.v1, info.v2);
+        int v2a = offsetForFaceAtV(info.f1, info.v2, info.v1);
+        int v2b = offsetForFaceAtV(info.f2, info.v2, info.v1);
+        if (v1a < 0 || v1b < 0 || v2a < 0 || v2b < 0) continue;
+        faceOffsetV1[info.f1] = v1a;
+        faceOffsetV1[info.f2] = v1b;
+        faceOffsetV2[info.f1] = v2a;
+        faceOffsetV2[info.f2] = v2b;
+
+        // Extra offsets for the other faces in the ring (multi-face corner).
+        if (fullBevelV1) {
+            for (int f : ringV1) {
+                if (f == info.f1 || f == info.f2) continue;
+                int idx = offsetForFaceAtV(f, info.v1, info.v2);
+                if (idx >= 0) faceOffsetV1[f] = idx;
+            }
+        }
+        if (fullBevelV2) {
+            for (int f : ringV2) {
+                if (f == info.f1 || f == info.f2) continue;
+                int idx = offsetForFaceAtV(f, info.v2, info.v1);
+                if (idx >= 0) faceOffsetV2[f] = idx;
+            }
+        }
+
+        // Phase 3: determine f1/f2 winding direction across the beveled edge.
+        // Same logic as before — needed for chamfer and retriangulation.
         auto walksV1ToV2 = [&](int faceIdx) {
             int startHE = m_faces[faceIdx].halfEdge;
             int he = startHE;
@@ -1075,61 +1200,121 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                 if (src == info.v2 && dst == info.v1) return false;
                 he = m_halfEdges[he].next;
             } while (he != startHE);
-            return true; // fallback
+            return true;
         };
         bool f1WalksAB = walksV1ToV2(info.f1);
         bool f2WalksAB = walksV1ToV2(info.f2);
 
-        // Helper: emit three tris replacing face f that had vertices
-        // (A=v1, B=v2, C=opp), with A→A' and B→B' (where A',B' are the
-        // new interior-offset vertices on f's side). Winding is preserved
-        // via `aToB` (whether the original loop walked A→B).
+        // Phase 4: retriangulate f1 and f2. Emit up to 3 tris per face:
+        //   - corner-A tri (keeps A connected to the opposite C via edge A-C);
+        //     skipped when A's ring is fully beveled (the corner fan at A
+        //     provides the alternative bridge).
+        //   - corner-B tri (analogous); skipped when B's ring is fully beveled.
+        //   - inner tri (always emitted).
         auto retriangulateFace = [&](int A, int B, int C, int Aprime, int Bprime,
-                                     bool aToB, int subIdx) {
-            // Original winding: A→B→C→A (if aToB). Replacement winding must
-            // keep all three sub-tris consistent with that direction.
+                                     bool aToB, int subIdx,
+                                     bool skipCornerA, bool skipCornerB) {
             if (aToB) {
-                appendTriangle(A, Aprime, C, subIdx);       // corner at A
-                appendTriangle(C, Bprime, B, subIdx);       // corner at B
-                appendTriangle(Aprime, Bprime, C, subIdx);  // inner tri
+                if (!skipCornerA) appendTriangle(A, Aprime, C, subIdx);
+                if (!skipCornerB) appendTriangle(C, Bprime, B, subIdx);
+                appendTriangle(Aprime, Bprime, C, subIdx);
             } else {
-                appendTriangle(A, C, Aprime, subIdx);       // corner at A (flipped)
-                appendTriangle(C, B, Bprime, subIdx);       // corner at B (flipped)
-                appendTriangle(Aprime, C, Bprime, subIdx);  // inner tri (flipped)
+                if (!skipCornerA) appendTriangle(A, C, Aprime, subIdx);
+                if (!skipCornerB) appendTriangle(C, B, Bprime, subIdx);
+                appendTriangle(Aprime, C, Bprime, subIdx);
             }
         };
-
         retriangulateFace(info.v1, info.v2, info.f1Opposite, v1a, v2a,
-                          f1WalksAB, info.subMeshIndex);
+                          f1WalksAB, info.subMeshIndex,
+                          fullBevelV1, fullBevelV2);
         retriangulateFace(info.v1, info.v2, info.f2Opposite, v1b, v2b,
-                          f2WalksAB, info.subMeshIndex);
+                          f2WalksAB, info.subMeshIndex,
+                          fullBevelV1, fullBevelV2);
 
-        // Chamfer quad (v1a, v2a, v2b, v1b). f1 walks AB => f1's new inner
-        // tri has edge (v1a→v2a); chamfer needs (v2a→v1a) as its twin, and
-        // (v1b→v2b) as the twin of f2's edge. (If f2 walks BA, f2's inner
-        // has edge (v2b→v1b); chamfer needs (v1b→v2b). Same twinning result.)
-        //
-        // Chamfer winding chosen so each chamfer tri's boundary edge with
-        // the face triangle is the opposite direction (twinning).
+        // Phase 5: rewire the *other* faces in each ring so their v corner
+        // points to the new per-face offset vertex instead of v.
+        auto rewireFaceVertex = [&](int faceIdx, int oldV, int newV) {
+            int startHE = m_faces[faceIdx].halfEdge;
+            if (startHE < 0) return;
+            int he = startHE;
+            do {
+                if (m_halfEdges[he].vertex == oldV)
+                    m_halfEdges[he].vertex = newV;
+                he = m_halfEdges[he].next;
+            } while (he != startHE);
+        };
+        if (fullBevelV1) {
+            for (auto& [f, newV] : faceOffsetV1) {
+                if (f == info.f1 || f == info.f2) continue; // handled by retriangulate
+                rewireFaceVertex(f, info.v1, newV);
+            }
+        }
+        if (fullBevelV2) {
+            for (auto& [f, newV] : faceOffsetV2) {
+                if (f == info.f1 || f == info.f2) continue;
+                rewireFaceVertex(f, info.v2, newV);
+            }
+        }
+
+        // Phase 6: chamfer quad between f1's and f2's new vertices. Winding
+        // picked so each chamfer edge twins with the adjacent face's edge.
         if (f1WalksAB) {
-            appendTriangle(v1b, v2b, v2a, info.subMeshIndex); // twins with f2 via (v1b→v2b)
-            appendTriangle(v1b, v2a, v1a, info.subMeshIndex); // twins with f1 via (v2a→v1a)
+            appendTriangle(v1b, v2b, v2a, info.subMeshIndex);
+            appendTriangle(v1b, v2a, v1a, info.subMeshIndex);
         } else {
             appendTriangle(v2b, v1b, v1a, info.subMeshIndex);
             appendTriangle(v2b, v1a, v2a, info.subMeshIndex);
         }
 
-        // End-cap at v1: a triangle filling the slot between v1 (still used
-        // by non-beveled faces around this corner), v1a (new on f1 side), and
-        // v1b (new on f2 side). Winding mirrors f1's — if f1 walks v1→v2,
-        // then at v1 the outward cap winds (v1, v1a, v1b); otherwise flip.
-        if (f1WalksAB) {
-            appendTriangle(info.v1, v1a, v1b, info.subMeshIndex);
-            appendTriangle(info.v2, v2b, v2a, info.subMeshIndex);
-        } else {
-            appendTriangle(info.v1, v1b, v1a, info.subMeshIndex);
-            appendTriangle(info.v2, v2a, v2b, info.subMeshIndex);
-        }
+        // Phase 7: corner fan at each endpoint.
+        // - If multi-face: fan across all offset vertices in ring order.
+        // - Otherwise: fall back to a single end-cap triangle between
+        //   v, v_f1, v_f2 (previous behavior).
+        auto buildCornerFan = [&](int vOrig, const std::vector<int>& ring,
+                                  std::unordered_map<int,int>& faceToOffset,
+                                  bool isV1, bool fWalksAB) {
+            // Ring-order winding: picked so the fan's outward normal aligns
+            // with the averaged face normal at vOrig. `fWalksAB` encodes that
+            // for the bevel-adjacent face; we use it to pick the cap winding.
+            if (ring.size() >= 3) {
+                // Gather ordered offset verts that we actually created.
+                std::vector<int> orderedOffsets;
+                orderedOffsets.reserve(ring.size());
+                for (int f : ring) {
+                    auto it = faceToOffset.find(f);
+                    if (it != faceToOffset.end()) orderedOffsets.push_back(it->second);
+                }
+                if (orderedOffsets.size() < 3) return; // shouldn't happen
+                // Triangle fan from orderedOffsets[0].
+                bool flip = (isV1 ? !fWalksAB : fWalksAB);
+                for (size_t k = 1; k + 1 < orderedOffsets.size(); ++k) {
+                    int a = orderedOffsets[0];
+                    int b = orderedOffsets[k];
+                    int c = orderedOffsets[k + 1];
+                    if (flip) std::swap(b, c);
+                    appendTriangle(a, b, c, info.subMeshIndex);
+                }
+            } else {
+                // Fallback: 2-face cap using v_f1 and v_f2.
+                int vf1 = faceToOffset[info.f1];
+                int vf2 = faceToOffset[info.f2];
+                if (isV1) {
+                    if (fWalksAB) appendTriangle(vOrig, vf1, vf2, info.subMeshIndex);
+                    else          appendTriangle(vOrig, vf2, vf1, info.subMeshIndex);
+                } else {
+                    if (fWalksAB) appendTriangle(vOrig, vf2, vf1, info.subMeshIndex);
+                    else          appendTriangle(vOrig, vf1, vf2, info.subMeshIndex);
+                }
+            }
+        };
+        if (fullBevelV1)
+            buildCornerFan(info.v1, ringV1, faceOffsetV1, /*isV1=*/true, f1WalksAB);
+        else
+            buildCornerFan(info.v1, {}, faceOffsetV1, /*isV1=*/true, f1WalksAB);
+        if (fullBevelV2)
+            buildCornerFan(info.v2, ringV2, faceOffsetV2, /*isV1=*/false, f1WalksAB);
+        else
+            buildCornerFan(info.v2, {}, faceOffsetV2, /*isV1=*/false, f1WalksAB);
 
         facesToRemove.push_back(info.f1);
         facesToRemove.push_back(info.f2);

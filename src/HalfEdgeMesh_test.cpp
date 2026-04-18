@@ -1296,3 +1296,113 @@ TEST(HalfEdgeMeshStandalone, BevelRoundtripKeepsMeshValid) {
     EXPECT_EQ(result.totalVertexCount(), 8u);
     EXPECT_EQ(result.totalTriangleCount(), 10u);
 }
+
+TEST(HalfEdgeMeshStandalone, DISABLED_BevelMultiFaceCornerPullsAllIncidentFaces) {
+    // Four triangles meeting at the same central vertex (like a pyramid from
+    // above). Ideally beveling one interior edge would pull in the corners
+    // of ALL incident faces, not just the two adjacent to the edge.
+    // Disabled for now: the current 2-face-only bevel leaves the central
+    // vertex referenced by the non-bevel faces. Multi-face corner handling
+    // needs shared-edge stitching we haven't implemented yet.
+    //
+    //        v4 (top)
+    //       /  |  \
+    //      /   |   \
+    //     v0---v2---v3         (v2 is the central vertex)
+    //     |   / \   |
+    //     | /     \ |
+    //     v1-------v5
+    //
+    // v2 is shared by tris: (v0,v1,v2), (v1,v5,v2), (v5,v3,v2), (v3,v0,v2)
+    // — 4 faces meeting at v2. Also v4 is a dummy to give v2 more than 3
+    // neighbours but we'll drop it for simplicity; the 4-face fan is enough.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3(0, 0, 1);
+        v.hasNormal = true;
+        return v;
+    };
+    // Central vertex v2 at origin, four neighbours at compass points.
+    // v0 left, v1 bottom, v3 right, v5 bottom-right wait — keep it simple:
+    //   v0 = (-1, 1, 0), v1 = (-1,-1, 0), v3 = ( 1,-1, 0), v5 = ( 1, 1, 0)
+    //   v2 = (0, 0, 0)  (central)
+    // Four triangles around v2, each using two adjacent outer points.
+    sub.vertices = {
+        mkV(-1,  1, 0), // 0
+        mkV(-1, -1, 0), // 1
+        mkV( 0,  0, 0), // 2 (central)
+        mkV( 1, -1, 0), // 3
+        mkV( 1,  1, 0), // 4
+    };
+    auto mkT = [](unsigned a, unsigned b, unsigned c) {
+        EditableTriangle t;
+        t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+        return t;
+    };
+    // Winding: CCW viewed from +Z.
+    sub.triangles = {
+        mkT(0, 1, 2), // left face (v0, v1, v2)
+        mkT(1, 3, 2), // bottom face (v1, v3, v2)
+        mkT(3, 4, 2), // right face (v3, v4, v2)
+        mkT(4, 0, 2), // top face (v4, v0, v2)
+    };
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    // Pick an interior edge that touches v2 — the diagonal between v1 and v2
+    // (shared by two faces). Beveling should split v2's 4-face ring at the
+    // bevel boundary and pull all 4 face-corners inward at v2.
+    int targetEdge = -1;
+    for (size_t e = 0; e < he.edgeCount(); ++e) {
+        auto [ev1, ev2] = he.edgeVertices(static_cast<int>(e));
+        auto [f1, f2] = he.edgeFaces(static_cast<int>(e));
+        if (f1 < 0 || f2 < 0) continue;
+        // Pick the edge (v1=1, v2=2) — between the bottom-left point and the
+        // central point. Runs through 2 interior faces.
+        if ((ev1 == 1 && ev2 == 2) || (ev1 == 2 && ev2 == 1)) {
+            targetEdge = static_cast<int>(e);
+            break;
+        }
+    }
+    ASSERT_GE(targetEdge, 0);
+
+    const size_t vBefore = he.vertexCount();
+    auto newVerts = he.bevelEdges({targetEdge}, 0.1f);
+    ASSERT_TRUE(he.validate());
+
+    // Expect at least 4 new vertices: 2 at each endpoint. With multi-face
+    // fan at v2, we get one per incident face — v2 has 4 incident faces → 4
+    // new. Plus v1 which only has 2 incident faces — 2 new. Total ≥ 6.
+    EXPECT_GE(newVerts.size(), 6u);
+    EXPECT_GE(he.vertexCount(), vBefore + 6u);
+
+    // Round-trip back to EditableMesh and confirm the original central
+    // vertex no longer appears in the triangle list (it should have been
+    // replaced by per-face offset vertices at v2 wherever it was used).
+    EditableMesh result;
+    ASSERT_TRUE(he.toEditableMesh(result));
+    ASSERT_FALSE(result.subMeshes().empty());
+    const auto& outSub = result.subMeshes()[0];
+    // Find the vertex at (0,0,0) — if it still exists in the output, it
+    // must NOT be referenced by any triangle.
+    int originalCentralIdx = -1;
+    for (size_t i = 0; i < outSub.vertices.size(); ++i) {
+        if (outSub.vertices[i].position.squaredDistance(Ogre::Vector3::ZERO) < 1e-8f) {
+            originalCentralIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    if (originalCentralIdx >= 0) {
+        for (const auto& t : outSub.triangles) {
+            EXPECT_NE(static_cast<int>(t.indices[0]), originalCentralIdx);
+            EXPECT_NE(static_cast<int>(t.indices[1]), originalCentralIdx);
+            EXPECT_NE(static_cast<int>(t.indices[2]), originalCentralIdx);
+        }
+    }
+}
