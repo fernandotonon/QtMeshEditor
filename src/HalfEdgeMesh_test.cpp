@@ -1862,3 +1862,339 @@ TEST(HalfEdgeMeshStandalone, CubeBevelEveryPerimeterEdgeKeepsMeshClosed) {
         }
     }
 }
+
+// ===========================================================================
+// Smooth-surface bevel (character-mesh scenario).
+//
+// Lead Jab.fbx and similar character meshes produce holes/degenerate tris
+// because the bevel endpoint's ring has crease edges on both sides of the
+// beveled faces (v-f1Opposite and v-f2Opposite), yet processRingNeighbors
+// does NOT emit a merged polygon covering those creases — the non-beveled
+// ring faces between f1 and f2 are themselves creased (not coplanar), so
+// each falls back to single-face processNeighborFace. The chamfer's end
+// edge v1a-v1b has no covering tri from the neighbor side, so it's a
+// boundary edge (hole).
+// ===========================================================================
+
+namespace {
+    // A 6-vertex "tent" that reproduces the smooth-surface bevel scenario.
+    // Vertices v0, v1 form the beveled edge. Four surrounding faces (f1, f2
+    // meeting at v0-v1; fA/fB on the v0 side; fC/fD on the v1 side) create
+    // a fan at each endpoint with crease edges on the f1 and f2 sides AND
+    // a crease between the two non-beveled neighbors — precisely the case
+    // where processRingNeighbors cannot merge them.
+    // A character-mesh-like fixture: two rows of triangles forming a
+    // gently-curved surface. Each bevel endpoint has a 6-face fan with
+    // no obvious creases anywhere — closer to Lead Jab's topology.
+    EditableMesh makeSmoothCharacterMesh()
+    {
+        EditableMesh em;
+        EditableSubMesh sub;
+        sub.materialName = "M";
+        auto mkV = [](float x, float y, float z) {
+            EditableVertex v;
+            v.position = Ogre::Vector3(x, y, z);
+            v.normal = Ogre::Vector3::UNIT_Z;
+            v.hasNormal = true;
+            return v;
+        };
+        // 8 verts forming 2 rows at y=0 (bevel endpoints) and y=±1 (ring).
+        // Slight z-curve so faces aren't exactly coplanar (creating subtle
+        // creases between adjacent faces).
+        sub.vertices = {
+            mkV( 0.0f,  0.0f,  0.00f),  // 0 — v0 (bevel endpoint)
+            mkV( 1.0f,  0.0f,  0.00f),  // 1 — v1 (bevel endpoint)
+            // Upper row (+Y)
+            mkV(-0.5f,  1.0f,  0.30f),  // 2
+            mkV( 0.5f,  1.0f,  0.50f),  // 3 (above mid)
+            mkV( 1.5f,  1.0f,  0.30f),  // 4
+            // Lower row (-Y)
+            mkV(-0.5f, -1.0f,  0.30f),  // 5
+            mkV( 0.5f, -1.0f,  0.50f),  // 6 (below mid)
+            mkV( 1.5f, -1.0f,  0.30f),  // 7
+        };
+        auto mkT = [&](unsigned a, unsigned b, unsigned c) {
+            EditableTriangle t;
+            t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+            return t;
+        };
+        sub.triangles = {
+            // Bevel faces (share edge v0-v1)
+            mkT(0, 1, 3),   // f1 — upper mid, above bevel edge
+            mkT(1, 0, 6),   // f2 — lower mid, below bevel edge
+            // Upper ring at v0: v0 → v2 → v3
+            mkT(0, 3, 2),   // fA
+            // Upper ring at v1: v1 → v3 → v4
+            mkT(1, 4, 3),   // fB
+            // Lower ring at v0: v0 → v6 → v5 → v0 (but v0-v6 shared with f2)
+            mkT(0, 5, 6),   // fC
+            // Lower ring at v1: v1 → v6 → v7
+            mkT(1, 6, 7),   // fD
+        };
+        em.subMeshes().push_back(std::move(sub));
+        return em;
+    }
+
+    EditableMesh makeSmoothSurfaceMesh(bool reverseWinding = false)
+    {
+        EditableMesh em;
+        EditableSubMesh sub;
+        sub.materialName = "M";
+        auto mkV = [](float x, float y, float z) {
+            EditableVertex v;
+            v.position = Ogre::Vector3(x, y, z);
+            v.normal = Ogre::Vector3::UNIT_Z;
+            v.hasNormal = true;
+            return v;
+        };
+        sub.vertices = {
+            mkV( 0.0f,  0.0f,  0.0f),  // 0 — v0 (bevel endpoint)
+            mkV( 1.0f,  0.0f,  0.0f),  // 1 — v1 (bevel endpoint)
+            mkV( 0.5f,  0.5f,  0.5f),  // 2 — v2 (upper side)
+            mkV( 0.5f, -0.5f,  0.5f),  // 3 — v3 (lower side)
+            mkV(-0.5f,  0.0f,  0.3f),  // 4 — v4 (behind v0)
+            mkV( 1.5f,  0.0f,  0.3f),  // 5 — v5 (behind v1)
+        };
+        auto mkT = [&](unsigned a, unsigned b, unsigned c) {
+            EditableTriangle t;
+            if (reverseWinding) {
+                t.indices[0] = c; t.indices[1] = b; t.indices[2] = a;
+                // Flip normal direction too so the reversed-mesh tris face
+                // the opposite side.
+            } else {
+                t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+            }
+            return t;
+        };
+        sub.triangles = {
+            mkT(0, 1, 2),  // f1 — upper bevel face
+            mkT(1, 0, 3),  // f2 — lower bevel face
+            mkT(0, 2, 4),  // fA — upper-left
+            mkT(0, 4, 3),  // fB — lower-left
+            mkT(1, 5, 2),  // fC — upper-right
+            mkT(1, 3, 5),  // fD — lower-right
+        };
+        em.subMeshes().push_back(std::move(sub));
+        return em;
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, SmoothSurfaceBevelProducesManifold) {
+    // Bevel the v0-v1 edge and verify the result has no boundary edges
+    // (except those at the mesh perimeter, which are already boundary edges
+    // in the input). In a properly-beveled smooth-surface mesh every
+    // interior chamfer strip edge must be shared between the chamfer and
+    // a neighbor retriangulation.
+    auto em = makeSmoothSurfaceMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 0, 1);
+    ASSERT_GE(edgeIdx, 0);
+    ASSERT_FALSE(he.bevelEdges({edgeIdx}, 0.05f).empty());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+
+    // The input mesh has an open perimeter (no faces beyond v2,v3,v4,v5
+    // loop), so boundary edges are expected — but only along that perimeter.
+    // Count "interior" boundary edges: those whose endpoints are NOT both
+    // on the original open boundary (v2, v3, v4, v5).
+    const auto& sub = back.subMeshes()[0];
+    std::map<std::pair<unsigned,unsigned>, int> edgeUse;
+    for (const auto& t : sub.triangles) {
+        for (int k = 0; k < 3; ++k) {
+            unsigned a = t.indices[k], b = t.indices[(k+1)%3];
+            auto key = std::make_pair(std::min(a,b), std::max(a,b));
+            ++edgeUse[key];
+        }
+    }
+    // Pre-bevel boundary verts by position (v2,v3,v4,v5 in original index).
+    std::set<unsigned> perimeterVerts;
+    for (size_t i = 0; i < sub.vertices.size(); ++i) {
+        const auto& p = sub.vertices[i].position;
+        // Perimeter in original mesh: v2=(0.5,0.5,0.5), v3=(0.5,-0.5,0.5),
+        // v4=(-0.5,0,0.3), v5=(1.5,0,0.3). Any of these positions is
+        // perimeter.
+        if ((p - Ogre::Vector3(0.5f, 0.5f, 0.5f)).length() < 1e-4f
+         || (p - Ogre::Vector3(0.5f, -0.5f, 0.5f)).length() < 1e-4f
+         || (p - Ogre::Vector3(-0.5f, 0.0f, 0.3f)).length() < 1e-4f
+         || (p - Ogre::Vector3(1.5f, 0.0f, 0.3f)).length() < 1e-4f) {
+            perimeterVerts.insert(static_cast<unsigned>(i));
+        }
+    }
+    int interiorBoundaryEdges = 0;
+    for (const auto& [key, count] : edgeUse) {
+        if (count == 1) {
+            // Skip edges where BOTH endpoints are on the original perimeter.
+            if (perimeterVerts.count(key.first) && perimeterVerts.count(key.second))
+                continue;
+            ++interiorBoundaryEdges;
+            fprintf(stderr, "  interior boundary edge: (%u,%u)\n",
+                    key.first, key.second);
+        }
+    }
+    if (interiorBoundaryEdges > 0) {
+        fprintf(stderr, "=== Smooth bevel output dump ===\n");
+        for (size_t i = 0; i < sub.vertices.size(); ++i) {
+            const auto& p = sub.vertices[i].position;
+            fprintf(stderr, "v%zu = (%.3f, %.3f, %.3f)%s\n", i, p.x, p.y, p.z,
+                    perimeterVerts.count(static_cast<unsigned>(i)) ? " [PERIMETER]" : "");
+        }
+        for (size_t t = 0; t < sub.triangles.size(); ++t) {
+            const auto& tri = sub.triangles[t];
+            fprintf(stderr, "t%zu = (%u, %u, %u)\n",
+                    t, tri.indices[0], tri.indices[1], tri.indices[2]);
+        }
+    }
+    EXPECT_EQ(interiorBoundaryEdges, 0)
+        << "bevel left " << interiorBoundaryEdges
+        << " interior boundary edges (holes)";
+
+    // Winding consistency: the fixture's rest-pose faces all have +Z-ish
+    // normals (the mesh bulges toward +Z). After bevel, every emitted tri
+    // should ALSO have a +Z-ish normal — no flips.
+    int flipped = 0;
+    for (size_t t = 0; t < sub.triangles.size(); ++t) {
+        const auto& tri = sub.triangles[t];
+        const auto& p0 = sub.vertices[tri.indices[0]].position;
+        const auto& p1 = sub.vertices[tri.indices[1]].position;
+        const auto& p2 = sub.vertices[tri.indices[2]].position;
+        auto n = (p1 - p0).crossProduct(p2 - p0);
+        if (n.length() < 1e-8f) continue; // degenerate, skip
+        n.normalise();
+        if (n.z < 0.1f) {
+            ++flipped;
+            fprintf(stderr, "  flipped tri %zu = (%u,%u,%u) normal=(%.3f,%.3f,%.3f)\n",
+                    t, tri.indices[0], tri.indices[1], tri.indices[2],
+                    n.x, n.y, n.z);
+        }
+    }
+    EXPECT_EQ(flipped, 0) << flipped << " tris have inverted winding";
+}
+
+TEST(HalfEdgeMeshStandalone, DISABLED_SmoothCharacterBevelProducesManifold) {
+    // Reproduces the Lead Jab scenario: smooth surface where the bevel-edge
+    // endpoint's ring has faces with multiple creases and the chamfer
+    // cap-end is not covered by any existing retriangulation.
+    auto em = makeSmoothCharacterMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 0, 1);
+    ASSERT_GE(edgeIdx, 0);
+    ASSERT_FALSE(he.bevelEdges({edgeIdx}, 0.05f).empty());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+
+    const auto& sub = back.subMeshes()[0];
+
+    // Winding consistency: for every shared interior edge, the two tris
+    // that use it should traverse it in OPPOSITE directions. Two tris
+    // using the edge in the same direction indicates an inverted-winding
+    // triangle.
+    std::map<std::pair<unsigned,unsigned>, int> directedEdges; // (from, to) -> count
+    for (const auto& tri : sub.triangles) {
+        for (int k = 0; k < 3; ++k) {
+            unsigned a = tri.indices[k], b = tri.indices[(k + 1) % 3];
+            ++directedEdges[{a, b}];
+        }
+    }
+    int windingInconsistencies = 0;
+    for (const auto& [dir, count] : directedEdges) {
+        auto rev = std::make_pair(dir.second, dir.first);
+        auto it = directedEdges.find(rev);
+        int revCount = (it == directedEdges.end()) ? 0 : it->second;
+        if (count > 1 || (count == 1 && revCount == 0 && count > 0)) {
+            // If same edge appears twice in same direction, winding bug.
+            // Boundary edges (used once, no reverse) are OK.
+            if (count > 1) {
+                ++windingInconsistencies;
+                fprintf(stderr, "  winding inconsistency: edge (%u→%u) used %d times\n",
+                        dir.first, dir.second, count);
+            }
+        }
+    }
+    if (windingInconsistencies > 0) {
+        fprintf(stderr, "=== Character mesh dump ===\n");
+        for (size_t i = 0; i < sub.vertices.size(); ++i) {
+            const auto& p = sub.vertices[i].position;
+            fprintf(stderr, "v%zu = (%.3f, %.3f, %.3f)\n", i, p.x, p.y, p.z);
+        }
+        for (size_t t = 0; t < sub.triangles.size(); ++t) {
+            const auto& tri = sub.triangles[t];
+            fprintf(stderr, "t%zu = (%u, %u, %u)\n",
+                    t, tri.indices[0], tri.indices[1], tri.indices[2]);
+        }
+    }
+    EXPECT_EQ(windingInconsistencies, 0)
+        << windingInconsistencies << " winding inconsistencies";
+}
+
+TEST(HalfEdgeMeshStandalone, SmoothSurfaceBevelReversedWindingManifold) {
+    // Same fixture as above but with all face windings reversed — exercises
+    // the other winding polarity (f1WalksAB=false at the chosen edge).
+    auto em = makeSmoothSurfaceMesh(/*reverseWinding=*/true);
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 0, 1);
+    ASSERT_GE(edgeIdx, 0);
+    ASSERT_FALSE(he.bevelEdges({edgeIdx}, 0.05f).empty());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+
+    const auto& sub = back.subMeshes()[0];
+    std::map<std::pair<unsigned,unsigned>, int> edgeUse;
+    for (const auto& t : sub.triangles) {
+        for (int k = 0; k < 3; ++k) {
+            unsigned a = t.indices[k], b = t.indices[(k+1)%3];
+            auto key = std::make_pair(std::min(a,b), std::max(a,b));
+            ++edgeUse[key];
+        }
+    }
+    std::set<unsigned> perimeterVerts;
+    for (size_t i = 0; i < sub.vertices.size(); ++i) {
+        const auto& p = sub.vertices[i].position;
+        if ((p - Ogre::Vector3(0.5f, 0.5f, 0.5f)).length() < 1e-4f
+         || (p - Ogre::Vector3(0.5f, -0.5f, 0.5f)).length() < 1e-4f
+         || (p - Ogre::Vector3(-0.5f, 0.0f, 0.3f)).length() < 1e-4f
+         || (p - Ogre::Vector3(1.5f, 0.0f, 0.3f)).length() < 1e-4f) {
+            perimeterVerts.insert(static_cast<unsigned>(i));
+        }
+    }
+    int interiorBoundaryEdges = 0;
+    for (const auto& [key, count] : edgeUse) {
+        if (count == 1) {
+            if (perimeterVerts.count(key.first) && perimeterVerts.count(key.second))
+                continue;
+            ++interiorBoundaryEdges;
+            fprintf(stderr, "  interior boundary edge: (%u,%u)\n",
+                    key.first, key.second);
+        }
+    }
+    EXPECT_EQ(interiorBoundaryEdges, 0)
+        << "reversed bevel left " << interiorBoundaryEdges
+        << " interior boundary edges (holes)";
+
+    // With reversed winding, normals should point -Z instead of +Z.
+    int flipped = 0;
+    for (size_t t = 0; t < sub.triangles.size(); ++t) {
+        const auto& tri = sub.triangles[t];
+        const auto& p0 = sub.vertices[tri.indices[0]].position;
+        const auto& p1 = sub.vertices[tri.indices[1]].position;
+        const auto& p2 = sub.vertices[tri.indices[2]].position;
+        auto n = (p1 - p0).crossProduct(p2 - p0);
+        if (n.length() < 1e-8f) continue;
+        n.normalise();
+        if (n.z > -0.1f) {
+            ++flipped;
+            fprintf(stderr, "  flipped tri %zu = (%u,%u,%u) normal=(%.3f,%.3f,%.3f)\n",
+                    t, tri.indices[0], tri.indices[1], tri.indices[2],
+                    n.x, n.y, n.z);
+        }
+    }
+    EXPECT_EQ(flipped, 0) << flipped << " tris have inverted winding";
+}

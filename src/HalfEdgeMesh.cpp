@@ -31,6 +31,7 @@ THE SOFTWARE.
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <set>
 #include <unordered_set>
 
 bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
@@ -1474,6 +1475,26 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
 
         // onEdgeOffset defined earlier (above the inner-offset builder).
 
+        // Track edges emitted during this edge's bevel (Phases 4-5). The
+        // cap emission in buildCorner consults this — if (v1a, v1b) is
+        // already an edge of some emitted tri, emitting a cap would
+        // overlap, so skip. This one mechanism handles both the cube-
+        // sibling case (edge covered by a merged polygon's fan) AND the
+        // case where a neighbor face's "both on-edge offsets" branch
+        // emits a tri with that edge.
+        std::set<std::pair<int, int>> emittedEdges;
+        auto sortedPair = [](int a, int b) {
+            return std::make_pair(std::min(a, b), std::max(a, b));
+        };
+        auto recordTriEdges = [&](int a, int b, int c) {
+            emittedEdges.insert(sortedPair(a, b));
+            emittedEdges.insert(sortedPair(b, c));
+            emittedEdges.insert(sortedPair(c, a));
+        };
+        auto hasEmittedEdge = [&](int a, int b) {
+            return emittedEdges.count(sortedPair(a, b)) > 0;
+        };
+
         auto retriangulateBeveledFace = [&](int A, int B, int C, int Aprime, int Bprime,
                                             bool aToB, int subIdx,
                                             bool AHasRing, bool BHasRing) {
@@ -1488,56 +1509,13 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             //   - Only uB → 3 tris: B-corner, inner pair.
             //   - Neither → original 3-tri pattern, using A/B directly.
             // All windings honor aToB.
-            auto tri = [&](int x, int y, int z) { appendTriangle(x, y, z, subIdx); };
+            auto tri = [&](int x, int y, int z) {
+                appendTriangle(x, y, z, subIdx);
+                recordTriEdges(x, y, z);
+            };
 
-            if (uA >= 0 && uB >= 0) {
-                if (aToB) {
-                    tri(A, Aprime, uA);         // A-corner tri
-                    tri(C, Bprime, uB);         // segment of inner near C... wait
-                    // Let me restart. See ASCII below.
-                } else { /* flipped */ }
-                // ----- NEW DIAGRAM (aToB) -----
-                // Original face: A --edge(AB,beveled)--> B --edge(BC)--> C --edge(CA)--> A
-                // Rewritten vertices placed:
-                //   Aprime: inside face, near A side (away from the AB edge)
-                //   Bprime: inside face, near B side
-                //   uA: on segment A->C at distance w from A
-                //   uB: on segment B->C at distance w from B
-                //
-                // Face polygon in new form (CCW if aToB):
-                //   Aprime, Bprime, uB, C, uA
-                //   (5 vertices — triangulate as a fan from Aprime)
-                //
-                // Plus one tri at the A corner:  (A, Aprime, uA)
-                // Plus one tri at the B corner:  (uB, Bprime, B)
-                //   wait this uses B which doesn't exist — if uB exists, the
-                //   face doesn't touch B anymore, B is replaced along this
-                //   edge by uB. The corner triangle uses B because the edge
-                //   (B,C) is shared with the NEIGHBOR face — neighbor still
-                //   has B on its side (no, if ring exists at B then neighbor
-                //   also gets uB on its side). So B-corner tri becomes
-                //   (uB, Bprime, ???) — doesn't need B.
-                //
-                // Actually I'm overcomplicating. If uA exists, it means edge
-                // (A, C) is bevel-boundary AND the neighbor face across (A,C)
-                // has also been rewired to use uA on its side. So A is NOT
-                // connected to the face along (A,C) anymore — only along
-                // (A, B') where B' is... but B is gone too.
-                //
-                // Hmm. If both uA and uB exist, A is completely disconnected
-                // from this face. The face becomes just the polygon
-                // (Aprime, Bprime, uB, C, uA), and A's corner is "floating"
-                // — filled by the CORNER FAN on A's side.
-                //
-                // So the face emits 3 tris (fan from Aprime):
-                //   (Aprime, Bprime, uB), (Aprime, uB, C), (Aprime, C, uA)
-                //
-                // Not 4. Let me redo:
-                // clear previous emits — start over for this branch
-                // ----- END DIAGRAM -----
-            }
-            // Reset; correct implementation below.
-            (void)uA; (void)uB; // suppress warnings if branches unused
+            // NOTE: the real emission happens below in the polygon/fan
+            // construction — uA/uB are used there.
 
             // Clean implementation: determine polygon vertices in order, then fan.
             std::vector<int> poly;
@@ -1745,6 +1723,7 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                 int uCrease = (uOut >= 0) ? uOut : uIn;
                 appendTriangle(uCrease, outX, inX,
                                m_faces[fIdx].subMeshIndex);
+                recordTriEdges(uCrease, outX, inX);
                 facesToRemove.push_back(fIdx);
                 return;
             }
@@ -1753,6 +1732,7 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             // Winding: always v → outX → inX → v (triangle's CCW order).
             auto tri = [&](int x, int y, int z) {
                 appendTriangle(x, y, z, m_faces[fIdx].subMeshIndex);
+                recordTriEdges(x, y, z);
             };
 
             // Face original winding (CCW from outside): v → outX → inX → v.
@@ -1916,6 +1896,7 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                     int subIdx = m_faces[ring[group[0]].face].subMeshIndex;
                     for (size_t i = 1; i + 1 < dedup.size(); ++i) {
                         appendTriangle(dedup[0], dedup[i], dedup[i + 1], subIdx);
+                        recordTriEdges(dedup[0], dedup[i], dedup[i + 1]);
                     }
                     for (int gi : group) {
                         facesToRemove.push_back(ring[gi].face);
@@ -1934,6 +1915,9 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
 
         // =====================================================================
         // Phase 6: chamfer quad between f1's and f2's inner offsets.
+        // Note: we do NOT record these edges in emittedEdges because the
+        // cap check in buildCorner is "does a NON-CHAMFER tri cover the
+        // chamfer-end edge?". The chamfer itself always has that edge.
         // =====================================================================
         if (f1WalksAB) {
             appendTriangle(v1b, v2b, v2a, info.subMeshIndex);
@@ -1963,16 +1947,18 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                                bool isV1, bool fWalksAB) {
             if (ring.empty()) {
                 // No ring (boundary or non-manifold): 2-face cap via original v.
+                // Use the same winding as the full-ring cap below — the cap
+                // geometry is identical in both cases.
                 int vf1 = innerA, vf2 = innerB;
                 auto tri = [&](int x, int y, int z) {
                     appendTriangle(x, y, z, info.subMeshIndex);
                 };
                 if (isV1) {
-                    if (fWalksAB) tri(v, vf1, vf2);
-                    else          tri(v, vf2, vf1);
-                } else {
                     if (fWalksAB) tri(v, vf2, vf1);
                     else          tri(v, vf1, vf2);
+                } else {
+                    if (fWalksAB) tri(v, vf1, vf2);
+                    else          tri(v, vf2, vf1);
                 }
                 return;
             }
@@ -2048,8 +2034,38 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             // chamfer-end offsets coincide with the crease on-edge offsets),
             // the chamfer's end shares an edge with the neighbor face
             // retriangulation and no cap triangle is needed.
-            if (polygon.size() == 2 && !pushedAnyRingEdgeOffset)
-                polygon.insert(polygon.begin() + 1, v);
+            // Cap handling when polygon reduces to [innerA, innerB]:
+            //   - If some non-chamfer tri emitted during Phases 4-5 already
+            //     has the (innerA, innerB) edge (e.g., a merged polygon's
+            //     fan, or a neighbor face's "both on-edge offsets" branch),
+            //     the cap is covered — emitting one would overlap. Skip.
+            //   - Otherwise (smooth-mesh or no-crease case), emit a single
+            //     cap triangle (v, innerA, innerB) with the empty-ring
+            //     winding convention (NOT via the fan path below, which
+            //     produces flipped winding for this case). Return early.
+            if (polygon.size() == 2) {
+                if (hasEmittedEdge(polygon[0], polygon[1])) return;
+                auto tri = [&](int x, int y, int z) {
+                    appendTriangle(x, y, z, info.subMeshIndex);
+                };
+                // Winding: innerA is on the f1 side, innerB on f2 side.
+                // For v1 (the first endpoint) with fWalksAB, the beveled
+                // edge goes v1→v2 inside f1 — so the cap's outward normal
+                // points the same direction as f1+f2 averaged. Correct
+                // winding at v1 (isV1=true, fWalksAB=true) is
+                // (v, innerB, innerA): going CCW from the far side, we see
+                // v→innerB→innerA. The other 3 cases are derived by
+                // swapping innerA↔innerB depending on direction.
+                int vf1 = innerA, vf2 = innerB;
+                if (isV1) {
+                    if (fWalksAB) tri(v, vf2, vf1);
+                    else          tri(v, vf1, vf2);
+                } else {
+                    if (fWalksAB) tri(v, vf1, vf2);
+                    else          tri(v, vf2, vf1);
+                }
+                return;
+            }
 
             // Dedupe consecutive polygon verts whose positions coincide —
             // that happens e.g. when v1a (inner offset perp to beveled edge)
