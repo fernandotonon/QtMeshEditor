@@ -1420,8 +1420,24 @@ bool EditModeController::applyBevelTopology(
     if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
         return false;
 
+    // _deinitialise/_initialise rebuilds SubEntities and resets their
+    // material to the SubMesh default. In edit mode the SubEntity holds
+    // the wireframe variant and MaterialEditor writes go to the SubEntity
+    // (not the SubMesh), so both must be preserved across the rebuild.
+    std::vector<std::string> preMats;
+    preMats.reserve(m_editEntity->getNumSubEntities());
+    for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+        preMats.push_back(m_editEntity->getSubEntity(i)->getMaterialName());
+    }
+
     m_editEntity->_deinitialise();
     m_editEntity->_initialise(true);
+
+    for (unsigned int i = 0;
+         i < m_editEntity->getNumSubEntities() && i < preMats.size(); ++i) {
+        if (!preMats[i].empty())
+            m_editEntity->getSubEntity(i)->setMaterialName(preMats[i]);
+    }
 
     auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
     if (shaderGen) {

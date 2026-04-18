@@ -1624,6 +1624,85 @@ TEST(HalfEdgeMeshStandalone, CubeBevelTopRightEdgeKeepsMeshClosed) {
     }
 }
 
+// Given a beveled cube edge, return the count of triangles in face `normal`
+// (±X, ±Y, ±Z) that still reference the original cube corner at position
+// `corner`.
+namespace {
+    int countTrisOnFaceReferencingVert(const EditableMesh& em,
+                                       const Ogre::Vector3& faceNormalAxis,
+                                       const Ogre::Vector3& corner)
+    {
+        if (em.subMeshes().empty()) return 0;
+        const auto& sub = em.subMeshes()[0];
+        int cornerIdx = -1;
+        for (size_t i = 0; i < sub.vertices.size(); ++i) {
+            if (sub.vertices[i].position.squaredDistance(corner) < 1e-8f) {
+                cornerIdx = static_cast<int>(i);
+                break;
+            }
+        }
+        if (cornerIdx < 0) return 0;
+
+        int count = 0;
+        for (const auto& t : sub.triangles) {
+            // On-face check: pick the component of `faceNormalAxis` that is
+            // nonzero; all three vertices should have that coordinate ≈ ±1.
+            bool onFace = true;
+            for (int k = 0; k < 3; ++k) {
+                const auto& p = sub.vertices[t.indices[k]].position;
+                float c = p.dotProduct(faceNormalAxis);
+                if (std::abs(c - 1.0f) > 0.01f) { onFace = false; break; }
+            }
+            if (!onFace) continue;
+            for (int k = 0; k < 3; ++k)
+                if (static_cast<int>(t.indices[k]) == cornerIdx) { ++count; break; }
+        }
+        return count;
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, CubeBevelTopFrontEdgeTrimsLeftAndRightFaceCorners) {
+    // Beveling the top-front cube edge (between v4=(-1,1,1) and v5=(1,1,1))
+    // has the chamfer strip running along the TOP and FRONT faces. At each
+    // endpoint, the OTHER adjacent face (left face at v4, right face at v5)
+    // is perpendicular to the chamfer and shares a v-edge that is a crease
+    // with a beveled face — so the left/right face corners SHOULD be trimmed
+    // (the original v4 / v5 corner should no longer appear in a single-tri
+    // face corner on those faces).
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 4, 5);
+    ASSERT_GE(edgeIdx, 0);
+    ASSERT_FALSE(he.bevelEdges({edgeIdx}, 0.05f).empty());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+
+    // Left face (x=-1): should have NO tri referencing v4=(-1,1,1).
+    int leftFaceV4 = countTrisOnFaceReferencingVert(
+        back, Ogre::Vector3(-1, 0, 0), Ogre::Vector3(-1, 1, 1));
+    // Right face (x=+1): should have NO tri referencing v5=(1,1,1).
+    int rightFaceV5 = countTrisOnFaceReferencingVert(
+        back, Ogre::Vector3(1, 0, 0), Ogre::Vector3(1, 1, 1));
+
+    fprintf(stderr, "[TRIM] leftFaceV4=%d rightFaceV5=%d\n", leftFaceV4, rightFaceV5);
+    const auto& sub = back.subMeshes()[0];
+    for (size_t i = 0; i < sub.vertices.size(); ++i) {
+        const auto& p = sub.vertices[i].position;
+        fprintf(stderr, "v%zu = (%.3f, %.3f, %.3f)\n", i, p.x, p.y, p.z);
+    }
+    for (size_t t = 0; t < sub.triangles.size(); ++t) {
+        const auto& tri = sub.triangles[t];
+        fprintf(stderr, "t%zu = (%u, %u, %u)\n", t, tri.indices[0], tri.indices[1], tri.indices[2]);
+    }
+    EXPECT_EQ(leftFaceV4, 0)
+        << "left face still has " << leftFaceV4
+        << " tris referencing v4=(-1,1,1) — corner not trimmed";
+    EXPECT_EQ(rightFaceV5, 0)
+        << "right face still has " << rightFaceV5
+        << " tris referencing v5=(1,1,1) — corner not trimmed";
+}
+
 TEST(HalfEdgeMeshStandalone, CubeBevelFrontFaceGetsCornerCut) {
     // When beveling the top-right edge (v5↔v3):
     //   - v5=(1,1,1) is on the FRONT face (z=+1). Beveling cuts v5 so it no
