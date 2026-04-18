@@ -155,6 +155,13 @@ private:
     TranslationGizmo*                       m_pTranslationGizmo = nullptr;
     ScaleGizmo*                             m_pScaleGizmo = nullptr;
     Ogre::SceneNode*                        m_pTransformNode = nullptr;
+
+public:
+    /// Resize the active transform gizmo (translate/rotate/scale) so it
+    /// keeps a roughly constant pixel size regardless of camera distance.
+    /// Called per-frame from OgreWidget::frameStarted.
+    void tickTransformGizmoScale(const Ogre::Camera* camera);
+private:
     //Ogre::SceneNode*                        m_pSelectedNode;
     Ogre::RaySceneQuery*                    m_pRayQuery  = nullptr;
     Ogre::PlaneBoundedVolumeListSceneQuery* m_pVolQuery  = nullptr;
@@ -182,6 +189,7 @@ private:
     QList<Ogre::Vector3>                    mUndoStartPositions;
     QList<Ogre::Quaternion>                 mUndoStartOrientations;
     QList<Ogre::Vector3>                    mUndoStartScales;
+    QPoint                                  mScaleDragStartPixel;  ///< Press-time mouse pos (pixel-delta scale)
 
     // Sub-entity undo state: vertex positions captured at drag start
     QList<Ogre::SubEntity*>                 mUndoSubEntities;
@@ -190,7 +198,15 @@ private:
     // Edit mode undo state: vertex positions captured at drag start
     std::map<int, Ogre::Vector3>            mEditModeStartPositions;   ///< Rolling snapshot (updated each frame)
     std::map<int, Ogre::Vector3>            mEditModeUndoSnapshot;     ///< Immutable snapshot from press (for undo)
+    Ogre::Vector3                           mEditModeScalePivot = Ogre::Vector3::ZERO; ///< Fixed pivot for scale drag
+    QPoint                                  mEditModeScaleStartPixel;  ///< Screen pos at drag start (for pixel-delta scale)
     bool                                    mEditModeTransformActive = false;
+
+    // Bevel-gizmo drag state. Active only while a bevel session is running
+    // AND the user has mouse-pressed the gizmo handle.
+    bool                                    mBevelDragActive = false;
+    Ogre::Ray                               mBevelDragStartRay{Ogre::Vector3::ZERO, Ogre::Vector3::UNIT_Z};
+    float                                   mBevelDragStartWidth = 0.0f;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;
 #else

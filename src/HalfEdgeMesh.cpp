@@ -1005,14 +1005,31 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
     if (clean.empty())
         return newVertices;
 
-    // Helper: offset a source vertex toward a target vertex by `width` (clamped
-    // so we don't overshoot halfway — avoids degenerate/flipped faces for very
-    // short edges).
-    auto offsetPosition = [width](const Ogre::Vector3& src, const Ogre::Vector3& dst) {
+    // Per-edge effective width: clamped to 40% of the shortest adjacent-face
+    // edge (including the beveled edge itself) so the retriangulation can't
+    // collapse into slivers. If the clamp shrinks the width below a usable
+    // floor, skip the edge entirely.
+    auto effectiveWidth = [&](const EdgeInfo& info) {
+        auto edgeLen = [&](int va, int vb) {
+            return (m_vertices[vb].position - m_vertices[va].position).length();
+        };
+        float shortestAdj = edgeLen(info.v1, info.v2);
+        shortestAdj = std::min(shortestAdj, edgeLen(info.v1, info.f1Opposite));
+        shortestAdj = std::min(shortestAdj, edgeLen(info.v2, info.f1Opposite));
+        shortestAdj = std::min(shortestAdj, edgeLen(info.v1, info.f2Opposite));
+        shortestAdj = std::min(shortestAdj, edgeLen(info.v2, info.f2Opposite));
+        float cap = shortestAdj * 0.4f;
+        return std::min(width, cap);
+    };
+
+    // Helper: offset a source vertex toward a target vertex by `w` (clamped so
+    // we don't overshoot — already covered by the per-edge effective width,
+    // but keep a defensive mid-point clamp for numerical safety).
+    auto offsetPosition = [](const Ogre::Vector3& src, const Ogre::Vector3& dst, float w) {
         Ogre::Vector3 dir = dst - src;
         float len = dir.length();
         if (len < 1e-6f) return src;
-        float w = std::min(width, len * 0.49f);
+        w = std::min(w, len * 0.49f);
         return src + dir * (w / len);
     };
 
@@ -1020,12 +1037,18 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
     std::vector<int> facesToRemove;
 
     for (const auto& info : clean) {
+        // Skip edges where the effective width would collapse the geometry
+        // (too small to offset visibly).
+        float w = effectiveWidth(info);
+        if (w < 1e-5f)
+            continue;
+
         // Create 4 new vertices. v1a/v2a live on f1's side (pulled toward its
         // opposite vertex), v1b/v2b on f2's side.
         auto makeOffset = [&](int baseIdx, int towardIdx) {
             HEVertex nv = m_vertices[baseIdx];
             nv.position = offsetPosition(m_vertices[baseIdx].position,
-                                         m_vertices[towardIdx].position);
+                                         m_vertices[towardIdx].position, w);
             nv.halfEdge = -1;
             int idx = static_cast<int>(m_vertices.size());
             m_vertices.push_back(nv);

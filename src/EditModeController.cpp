@@ -35,6 +35,7 @@ THE SOFTWARE.
 #include "commands/TransformCommands.h"
 #include "Manager.h"
 #include "NormalVisualizer.h"
+#include "BevelGizmo.h"
 #include "mainwindow.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
@@ -190,6 +191,13 @@ void EditModeController::exitEditMode(bool commitChanges)
 {
     if (!m_editModeActive)
         return;
+
+    // An active bevel session is committed before exiting (or cancelled if
+    // the caller is discarding changes).
+    if (m_bevelSession.active) {
+        if (commitChanges) commitBevel();
+        else cancelBevel();
+    }
 
     if (commitChanges && m_editableMesh && m_editEntity) {
         bool ok = m_editableMesh->commitToEntity(m_editEntity);
@@ -1361,30 +1369,21 @@ bool EditModeController::extrudeSelection()
     return true;
 }
 
-bool EditModeController::bevelSelection()
+bool EditModeController::applyBevelTopology(
+    const std::vector<std::pair<int,int>>& edges, float width)
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity)
         return false;
-
-    if (m_selectionMode != EdgeMode || m_selectedEdges.empty())
+    if (edges.empty() || width <= 0.0f)
         return false;
-
-    SentryReporter::addBreadcrumb("edit_mode", "Bevel selection");
-
-    // Snapshot for undo
-    EditableMesh oldMesh;
-    oldMesh.subMeshes() = m_editableMesh->subMeshes();
-    auto oldSelectedVertices = m_selectedVertices;
-    auto oldSelectedEdges = m_selectedEdges;
-    auto oldSelectedFaces = m_selectedFaces;
 
     HalfEdgeMesh heMesh;
     if (!heMesh.buildFromEditableMesh(*m_editableMesh))
         return false;
 
-    // Convert (min,max) vertex-pair edge selections to HE edge indices
+    // Convert (min,max) vertex-pair edges to HE edge indices.
     std::vector<int> edgeIndices;
-    for (const auto& [v1, v2] : m_selectedEdges) {
+    for (const auto& [v1, v2] : edges) {
         for (size_t e = 0; e < heMesh.edgeCount(); ++e) {
             auto [ev1, ev2] = heMesh.edgeVertices(e);
             int eMin = std::min(ev1, ev2);
@@ -1396,8 +1395,7 @@ bool EditModeController::bevelSelection()
         }
     }
 
-    const float BEVEL_WIDTH = 0.005f;
-    std::vector<int> newHEVertices = heMesh.bevelEdges(edgeIndices, BEVEL_WIDTH);
+    std::vector<int> newHEVertices = heMesh.bevelEdges(edgeIndices, width);
     if (newHEVertices.empty())
         return false;
 
@@ -1517,14 +1515,6 @@ bool EditModeController::bevelSelection()
     }
     m_selectedVertices = newGlobalVerts;
 
-    auto* cmd = new EditMeshTopologyCommand(
-        std::move(oldMesh.subMeshes()),
-        m_editableMesh->subMeshes(),
-        oldSelectedVertices, oldSelectedEdges, oldSelectedFaces,
-        m_selectedVertices, m_selectedEdges, m_selectedFaces,
-        "Bevel");
-    UndoManager::getSingleton()->push(cmd);
-
     refreshNormalVisualizer();
     updateSelectionOverlay();
     validateMesh();
@@ -1535,6 +1525,252 @@ bool EditModeController::bevelSelection()
     emit editModeChanged();
 
     return true;
+}
+
+bool EditModeController::beginBevel()
+{
+    if (m_bevelSession.active)
+        return false;
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+        return false;
+    if (m_selectionMode != EdgeMode || m_selectedEdges.empty())
+        return false;
+
+    SentryReporter::addBreadcrumb("edit_mode", "Bevel: begin session");
+
+    BevelSession s;
+    s.originalSubMeshes = m_editableMesh->subMeshes();
+    s.origSelectedVertices = m_selectedVertices;
+    s.origSelectedEdges = m_selectedEdges;
+    s.origSelectedFaces = m_selectedFaces;
+    s.targetEdges.assign(m_selectedEdges.begin(), m_selectedEdges.end());
+
+    // Compute gizmo pivot (centroid of edge endpoints) and axis (averaged
+    // adjacent-face normal at those edges). Uses the pre-bevel mesh so the
+    // gizmo stays put while the user drags.
+    Ogre::Vector3 pivot = Ogre::Vector3::ZERO;
+    Ogre::Vector3 normalSum = Ogre::Vector3::ZERO;
+    int pivotCount = 0;
+    {
+        // Build global-index → (submesh, local) lookup by walking vertex
+        // arrays once.
+        const auto& subs = m_editableMesh->subMeshes();
+        auto posOf = [&](int gIdx) -> Ogre::Vector3 {
+            int off = 0;
+            for (const auto& sub : subs) {
+                int n = static_cast<int>(sub.vertices.size());
+                if (gIdx < off + n)
+                    return sub.vertices[gIdx - off].position;
+                off += n;
+            }
+            return Ogre::Vector3::ZERO;
+        };
+        for (const auto& [v1, v2] : s.targetEdges) {
+            Ogre::Vector3 a = posOf(v1);
+            Ogre::Vector3 b = posOf(v2);
+            pivot += (a + b) * 0.5f;
+            ++pivotCount;
+        }
+        if (pivotCount > 0) pivot /= static_cast<float>(pivotCount);
+
+        // Sum per-face normals of triangles containing any selected-edge
+        // vertex. Gives a reasonable "outward" axis even for irregular fans.
+        std::set<int> edgeVerts;
+        for (const auto& [v1, v2] : s.targetEdges) {
+            edgeVerts.insert(v1);
+            edgeVerts.insert(v2);
+        }
+        int vertOffset = 0;
+        for (const auto& sub : subs) {
+            for (const auto& tri : sub.triangles) {
+                int g0 = vertOffset + static_cast<int>(tri.indices[0]);
+                int g1 = vertOffset + static_cast<int>(tri.indices[1]);
+                int g2 = vertOffset + static_cast<int>(tri.indices[2]);
+                if (!edgeVerts.count(g0) && !edgeVerts.count(g1) && !edgeVerts.count(g2))
+                    continue;
+                const auto& p0 = sub.vertices[tri.indices[0]].position;
+                const auto& p1 = sub.vertices[tri.indices[1]].position;
+                const auto& p2 = sub.vertices[tri.indices[2]].position;
+                Ogre::Vector3 n = (p1 - p0).crossProduct(p2 - p0);
+                if (n.length() > 1e-8f) {
+                    n.normalise();
+                    normalSum += n;
+                }
+            }
+            vertOffset += static_cast<int>(sub.vertices.size());
+        }
+    }
+    s.pivot = pivot;
+    s.axis = (normalSum.length() > 1e-6f) ? normalSum.normalisedCopy() : Ogre::Vector3::UNIT_Y;
+    s.width = 0.005f;
+
+    if (!applyBevelTopology(s.targetEdges, s.width)) {
+        // Failed — undo any partial state by restoring the snapshot.
+        m_editableMesh->subMeshes() = std::move(s.originalSubMeshes);
+        m_selectedVertices = std::move(s.origSelectedVertices);
+        m_selectedEdges = std::move(s.origSelectedEdges);
+        m_selectedFaces = std::move(s.origSelectedFaces);
+        return false;
+    }
+
+    s.active = true;
+    m_bevelSession = std::move(s);
+
+    // Spawn the gizmo. Created lazily against the edit entity's scene manager.
+    if (!m_bevelGizmo && m_editEntity) {
+        auto* sceneMgr = m_editEntity->_getManager();
+        if (sceneMgr)
+            m_bevelGizmo = std::make_unique<BevelGizmo>(sceneMgr);
+    }
+    if (m_bevelGizmo) {
+        m_bevelGizmo->setAxis(bevelGizmoWorldOrigin(), bevelGizmoWorldAxis());
+        // Start the handle at the default shaft tip (matches buildGeometry).
+        m_bevelGizmo->setHandleOffset(0.4f);
+        m_bevelGizmo->setVisible(true);
+    }
+
+    emit editModeChanged(); // UI hook so inspector can show "bevel active" state.
+    return true;
+}
+
+Ogre::Vector3 EditModeController::bevelGizmoWorldOrigin() const
+{
+    if (!m_editEntity) return m_bevelSession.pivot;
+    auto* node = m_editEntity->getParentSceneNode();
+    if (!node) return m_bevelSession.pivot;
+    return node->convertLocalToWorldPosition(m_bevelSession.pivot);
+}
+
+Ogre::Vector3 EditModeController::bevelGizmoWorldAxis() const
+{
+    if (!m_editEntity) return m_bevelSession.axis;
+    auto* node = m_editEntity->getParentSceneNode();
+    if (!node) return m_bevelSession.axis;
+    return node->convertLocalToWorldOrientation(Ogre::Quaternion::IDENTITY) * m_bevelSession.axis;
+}
+
+bool EditModeController::isBevelGizmoHandle(const Ogre::MovableObject* obj) const
+{
+    return m_bevelGizmo && m_bevelGizmo->isHandle(obj);
+}
+
+void EditModeController::tickBevelGizmo(const Ogre::Camera* camera)
+{
+    if (!m_bevelSession.active || !m_bevelGizmo || !camera)
+        return;
+    m_bevelGizmo->updateScreenSpaceScale(camera);
+}
+
+void EditModeController::updateBevelFromDrag(const Ogre::Ray& startRay,
+                                              const Ogre::Ray& dragRay,
+                                              float startWidth)
+{
+    if (!m_bevelSession.active || !m_bevelGizmo)
+        return;
+    float startT = m_bevelGizmo->distanceAlongAxis(startRay);
+    float curT = m_bevelGizmo->distanceAlongAxis(dragRay);
+    float delta = curT - startT;
+    // Map axis-distance-delta to width-delta 1:1 in local units. Positive
+    // delta (drag away from the mesh) grows the bevel; negative shrinks it.
+    float newWidth = startWidth + delta;
+    if (newWidth < 1e-4f) newWidth = 1e-4f;
+    updateBevelWidth(newWidth);
+    // Slide the handle cube along the shaft so it visually follows the drag.
+    // Base offset of 0.1 (the initial shaft tip) plus delta keeps the visible
+    // handle under the cursor. 0.02 minimum keeps it barely above the shaft
+    // base so it doesn't sink into the mesh when width is tiny.
+    float handleLocalY = std::max(0.02f, 0.4f + delta);
+    m_bevelGizmo->setHandleOffset(handleLocalY);
+}
+
+void EditModeController::updateBevelWidth(float width)
+{
+    if (!m_bevelSession.active)
+        return;
+    if (width <= 0.0f)
+        width = 1e-4f; // keep just enough to stay a bevel (not a collapse)
+
+    // Restore the pre-bevel mesh state, then re-apply at the new width.
+    m_editableMesh->subMeshes() = m_bevelSession.originalSubMeshes;
+    m_selectedVertices = m_bevelSession.origSelectedVertices;
+    m_selectedEdges = m_bevelSession.origSelectedEdges;
+    m_selectedFaces = m_bevelSession.origSelectedFaces;
+
+    if (applyBevelTopology(m_bevelSession.targetEdges, width))
+        m_bevelSession.width = width;
+}
+
+void EditModeController::commitBevel()
+{
+    if (!m_bevelSession.active)
+        return;
+
+    SentryReporter::addBreadcrumb("edit_mode", "Bevel: commit");
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(m_bevelSession.originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        m_bevelSession.origSelectedVertices, m_bevelSession.origSelectedEdges,
+        m_bevelSession.origSelectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        "Bevel");
+    UndoManager::getSingleton()->push(cmd);
+
+    m_bevelSession = {};
+    if (m_bevelGizmo) m_bevelGizmo->setVisible(false);
+    emit editModeChanged();
+}
+
+void EditModeController::cancelBevel()
+{
+    if (!m_bevelSession.active)
+        return;
+
+    SentryReporter::addBreadcrumb("edit_mode", "Bevel: cancel");
+
+    m_editableMesh->subMeshes() = std::move(m_bevelSession.originalSubMeshes);
+    m_selectedVertices = std::move(m_bevelSession.origSelectedVertices);
+    m_selectedEdges = std::move(m_bevelSession.origSelectedEdges);
+    m_selectedFaces = std::move(m_bevelSession.origSelectedFaces);
+
+    // Re-sync the entity with the restored mesh.
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    if (m_editEntity) {
+        m_editEntity->_deinitialise();
+        m_editEntity->_initialise(true);
+    }
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (shaderGen && m_editEntity) {
+        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
+            if (!matName.empty())
+                shaderGen->invalidateMaterial(
+                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
+        }
+    }
+
+    m_bevelSession = {};
+    if (m_bevelGizmo) m_bevelGizmo->setVisible(false);
+
+    refreshNormalVisualizer();
+    updateSelectionOverlay();
+    validateMesh();
+    emit meshDataChanged();
+    emit editSelectionChanged();
+    emit editModeChanged();
+}
+
+bool EditModeController::bevelSelection()
+{
+    // Interactive bevel: opens a session with the gizmo visible. User commits
+    // with a click outside the gizmo, cancels with Esc, or the session ends
+    // automatically on tool-switch / edit-mode exit. Pressing Cmd+B again
+    // while a session is active commits the current one.
+    if (m_bevelSession.active) {
+        commitBevel();
+        return true;
+    }
+    return beginBevel();
 }
 
 // ===========================================================================
@@ -1615,6 +1851,43 @@ void EditModeController::rotateSelectedVertices(const Ogre::Quaternion& rotation
             Ogre::Vector3 rotatedOffset = weightedRot * offset;
             m_editableMesh->setVertexPosition(subIdx, localIdx, pivot + rotatedOffset);
         }
+    }
+
+    if (m_normalsMode == 0)
+        m_editableMesh->recalculateNormals();
+    else
+        m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->commitToEntity(m_editEntity);
+    refreshNormalVisualizer();
+    updateSelectionOverlay();
+    emit meshDataChanged();
+}
+
+void EditModeController::scaleFromSnapshot(
+    const std::map<int, Ogre::Vector3>& snapshot,
+    const Ogre::Vector3& pivot,
+    const Ogre::Vector3& scaleFactor)
+{
+    if (!m_editableMesh || snapshot.empty())
+        return;
+
+    auto weights = getSoftSelectionWeights();
+
+    for (const auto& [gi, originalPos] : snapshot) {
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx >= m_editableMesh->subMeshes().size() ||
+            localIdx >= m_editableMesh->subMeshes()[subIdx].vertices.size())
+            continue;
+        float weight = 1.0f;
+        auto wit = weights.find(gi);
+        if (wit != weights.end()) weight = wit->second;
+
+        Ogre::Vector3 offset = originalPos - pivot;
+        Ogre::Vector3 weightedScale = Ogre::Vector3::UNIT_SCALE +
+            (scaleFactor - Ogre::Vector3::UNIT_SCALE) * weight;
+        Ogre::Vector3 scaledOffset = offset * weightedScale;
+        m_editableMesh->setVertexPosition(subIdx, localIdx, pivot + scaledOffset);
     }
 
     if (m_normalsMode == 0)

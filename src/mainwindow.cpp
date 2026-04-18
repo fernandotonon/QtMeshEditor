@@ -919,6 +919,15 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 
     // Edit mode shortcuts take priority when edit mode is active
     auto* editCtrl = EditModeController::instance();
+
+    // Esc cancels an active bevel session regardless of current tool.
+    if (editCtrl->bevelSessionActive() && event->key() == Qt::Key_Escape) {
+        SentryReporter::addBreadcrumb("ui.shortcut", "Esc — cancel bevel");
+        editCtrl->cancelBevel();
+        event->accept();
+        return;
+    }
+
     if (editCtrl->isEditModeActive()) {
         switch (event->key()) {
         case Qt::Key_1:
@@ -1491,6 +1500,11 @@ void MainWindow::chooseBgColor()
 
 void MainWindow::setTransformState(TransformOperator::TransformState newState)
 {
+    // Any tool switch commits the current bevel session (user's explicit
+    // choice — fires whether triggered by keyboard, menu, or toolbar).
+    if (EditModeController::instance()->bevelSessionActive())
+        EditModeController::instance()->commitBevel();
+
     ui->actionSelect_Object->setChecked(newState == TransformOperator::TS_SELECT);
     ui->actionTranslate_Object->setChecked(newState == TransformOperator::TS_TRANSLATE);
     ui->actionRotate_Object->setChecked(newState == TransformOperator::TS_ROTATE);

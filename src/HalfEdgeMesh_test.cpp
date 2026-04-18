@@ -1195,6 +1195,83 @@ TEST(HalfEdgeMeshStandalone, BevelZeroWidthRejected) {
     EXPECT_TRUE(he.bevelEdges({interior}, -1.0f).empty());
 }
 
+TEST(HalfEdgeMeshStandalone, BevelLargerWidthProducesLargerChamfer) {
+    // Same mesh beveled at two different widths should produce chamfer
+    // vertices at proportionally different distances from the original edge.
+    auto mk = []() {
+        HalfEdgeMesh he;
+        he.buildFromEditableMesh(makeQuadMesh());
+        return he;
+    };
+
+    auto findInterior = [](const HalfEdgeMesh& he) {
+        for (size_t e = 0; e < he.edgeCount(); ++e) {
+            auto [f1, f2] = he.edgeFaces(static_cast<int>(e));
+            if (f1 >= 0 && f2 >= 0) return static_cast<int>(e);
+        }
+        return -1;
+    };
+
+    HalfEdgeMesh hSmall = mk();
+    int eSmall = findInterior(hSmall);
+    auto [v1Small, v2Small] = hSmall.edgeVertices(eSmall);
+    auto v1Orig = hSmall.vertex(v1Small).position;
+    auto newSmall = hSmall.bevelEdges({eSmall}, 0.05f);
+    ASSERT_EQ(newSmall.size(), 4u);
+
+    HalfEdgeMesh hLarge = mk();
+    int eLarge = findInterior(hLarge);
+    auto newLarge = hLarge.bevelEdges({eLarge}, 0.15f);
+    ASSERT_EQ(newLarge.size(), 4u);
+
+    // The first new vertex is v1a (v1 pulled toward f1Opp). At 3x the width,
+    // it should be roughly 3x farther from v1 (within the clamp limits).
+    float distSmall = hSmall.vertex(newSmall[0]).position.distance(v1Orig);
+    float distLarge = hLarge.vertex(newLarge[0]).position.distance(v1Orig);
+    EXPECT_GT(distLarge, distSmall * 2.5f);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelWidthCappedForShortEdges) {
+    // A mesh with a very short adjacent edge should clamp the effective
+    // bevel width so no degenerate triangles are produced, regardless of
+    // how large a width the caller passes.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    // Two narrow triangles sharing a short diagonal (length 0.1) with long
+    // outer edges (length 1.0). Bevel width 10.0 would trivially collapse
+    // if uncapped.
+    EditableVertex v0, v1, v2, v3;
+    v0.position = Ogre::Vector3(0, 0, 0);
+    v1.position = Ogre::Vector3(1, 0, 0);
+    v2.position = Ogre::Vector3(0.5f, 0.05f, 0);
+    v3.position = Ogre::Vector3(0.5f, -0.05f, 0);
+    v0.hasNormal = v1.hasNormal = v2.hasNormal = v3.hasNormal = true;
+    v0.normal = v1.normal = v2.normal = v3.normal = Ogre::Vector3(0,0,1);
+    sub.vertices = {v0, v1, v2, v3};
+    EditableTriangle t0, t1;
+    t0.indices[0] = 0; t0.indices[1] = 2; t0.indices[2] = 3;
+    t1.indices[0] = 1; t1.indices[1] = 3; t1.indices[2] = 2;
+    sub.triangles = {t0, t1};
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int interior = -1;
+    for (size_t e = 0; e < he.edgeCount(); ++e) {
+        auto [f1, f2] = he.edgeFaces(static_cast<int>(e));
+        if (f1 >= 0 && f2 >= 0) { interior = static_cast<int>(e); break; }
+    }
+    ASSERT_GE(interior, 0);
+
+    // Request absurdly large width; effective width should clamp to 40% of
+    // the shortest adjacent edge (≈0.1 diagonal → 0.04 cap). Result still
+    // produces 4 new verts and a valid mesh.
+    auto newVerts = he.bevelEdges({interior}, 10.0f);
+    EXPECT_EQ(newVerts.size(), 4u);
+    EXPECT_TRUE(he.validate());
+}
+
 TEST(HalfEdgeMeshStandalone, BevelRoundtripKeepsMeshValid) {
     auto editMesh = makeQuadMesh();
     HalfEdgeMesh he;

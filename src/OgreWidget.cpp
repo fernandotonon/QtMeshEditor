@@ -41,6 +41,8 @@ THE SOFTWARE.
 #include "SpaceCamera.h"
 #include "EditorViewport.h"
 #include "QtInputManager.h"
+#include "EditModeController.h"
+#include "TransformOperator.h"
 
 OgreWidget::OgreWidget( QWidget *parent ):
     QWidget( parent )
@@ -188,6 +190,12 @@ void OgreWidget::initOgreWindow(void)
 
 bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)
 {
+    // Keep tool gizmos at a constant pixel size by scaling them against the
+    // current camera distance each frame.
+    if (mCamera && mCamera->getCamera()) {
+        EditModeController::instance()->tickBevelGizmo(mCamera->getCamera());
+        TransformOperator::getSingleton()->tickTransformGizmoScale(mCamera->getCamera());
+    }
     return true;
 }
 
