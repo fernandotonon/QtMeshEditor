@@ -2043,6 +2043,25 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             //     cap triangle (v, innerA, innerB) with the empty-ring
             //     winding convention (NOT via the fan path below, which
             //     produces flipped winding for this case). Return early.
+            // If any INNER polygon edge (between consecutive pushed
+            // offsets) isn't already an edge of an emitted tri, the cap
+            // fan would introduce boundary edges. In that case, collapse
+            // the polygon to the simple [innerA, v, innerB] cap.
+            bool polygonInteriorCovered = true;
+            for (size_t i = 0; i + 1 < polygon.size(); ++i) {
+                if (!hasEmittedEdge(polygon[i], polygon[i + 1])) {
+                    // Acceptable if this is the final edge and it equals
+                    // the chamfer-end edge (innerA-innerB, wrap-around).
+                    if (i == 0 && polygon.size() == 2) continue;
+                    polygonInteriorCovered = false;
+                    break;
+                }
+            }
+            if (polygon.size() > 2 && !polygonInteriorCovered) {
+                polygon.clear();
+                polygon.push_back(innerA);
+                polygon.push_back(innerB);
+            }
             if (polygon.size() == 2) {
                 if (hasEmittedEdge(polygon[0], polygon[1])) return;
                 auto tri = [&](int x, int y, int z) {

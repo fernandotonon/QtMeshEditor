@@ -2148,6 +2148,205 @@ namespace {
     }
 }
 
+namespace {
+    // Build a smooth-surface fan-to-fan mesh parameterized by fanSize and
+    // seed, matching the pattern used by RandomSmoothFanBevelManifold.
+    // Used by single-case repro tests below.
+    EditableMesh makeFanToFanMesh(int fanSize, int seed)
+    {
+        EditableMesh em;
+        EditableSubMesh sub;
+        sub.materialName = "M";
+        auto mkV = [](float x, float y, float z) {
+            EditableVertex v;
+            v.position = Ogre::Vector3(x, y, z);
+            v.normal = Ogre::Vector3::UNIT_Z;
+            v.hasNormal = true;
+            return v;
+        };
+        auto zOf = [&](int i) {
+            float t = static_cast<float>(fanSize * 13 + seed * 7 + i);
+            return 0.1f + 0.15f * std::sin(t * 1.1f);
+        };
+        sub.vertices.push_back(mkV(0.0f, 0.0f, 0.0f));
+        sub.vertices.push_back(mkV(1.0f, 0.0f, 0.0f));
+        for (int i = 0; i < fanSize; ++i) {
+            float theta = (static_cast<float>(i) / fanSize - 0.5f)
+                        * 3.14159f * 0.9f + 3.14159f * 0.5f;
+            float x = 0.5f * std::cos(theta);
+            float y = 0.5f * std::sin(theta);
+            sub.vertices.push_back(mkV(x, -y, zOf(i)));
+        }
+        for (int i = 0; i < fanSize; ++i) {
+            float theta = (static_cast<float>(i) / fanSize - 0.5f)
+                        * 3.14159f * 0.9f + 3.14159f * 0.5f;
+            float x = 1.0f - 0.5f * std::cos(theta);
+            float y = 0.5f * std::sin(theta);
+            sub.vertices.push_back(mkV(x, -y, zOf(i + fanSize)));
+        }
+        auto mkT = [](unsigned a, unsigned b, unsigned c) {
+            EditableTriangle t;
+            t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+            return t;
+        };
+        sub.triangles.push_back(mkT(0, 2, 1));
+        for (int i = 0; i < fanSize - 1; ++i) {
+            sub.triangles.push_back(mkT(0, i + 3, i + 2));
+        }
+        sub.triangles.push_back(mkT(0, 1, fanSize + 1));
+        sub.triangles.push_back(mkT(1, 2, fanSize + 2));
+        for (int i = 0; i < fanSize - 1; ++i) {
+            sub.triangles.push_back(mkT(1, fanSize + 2 + i, fanSize + 3 + i));
+        }
+        sub.triangles.push_back(mkT(1, 2 * fanSize + 1, fanSize + 1));
+        em.subMeshes().push_back(std::move(sub));
+        return em;
+    }
+}
+
+// Stress test: generate many different fan sizes and geometries and verify
+// every one produces a manifold bevel. Designed to catch edge cases in
+// processRingNeighbors / PNF interactions with the cap emission.
+TEST(HalfEdgeMeshStandalone, DISABLED_RandomSmoothFanBevelManifold) {
+    int totalTested = 0;
+    int totalFailures = 0;
+    for (int fanSize = 3; fanSize <= 8; ++fanSize) {
+        for (int seed = 0; seed < 5; ++seed) {
+            EditableMesh em;
+            EditableSubMesh sub;
+            sub.materialName = "M";
+            auto mkV = [](float x, float y, float z) {
+                EditableVertex v;
+                v.position = Ogre::Vector3(x, y, z);
+                v.normal = Ogre::Vector3::UNIT_Z;
+                v.hasNormal = true;
+                return v;
+            };
+            // Pseudo-random z-perturbation seeded by (fanSize, seed).
+            auto zOf = [&](int i) {
+                float t = static_cast<float>(fanSize * 13 + seed * 7 + i);
+                return 0.1f + 0.15f * std::sin(t * 1.1f);
+            };
+            sub.vertices.push_back(mkV(0.0f, 0.0f, 0.0f));  // 0 — v0
+            sub.vertices.push_back(mkV(1.0f, 0.0f, 0.0f));  // 1 — v1
+            // v0's fan (indices 2..fanSize+1)
+            for (int i = 0; i < fanSize; ++i) {
+                float theta = (static_cast<float>(i) / fanSize - 0.5f)
+                            * 3.14159f * 0.9f + 3.14159f * 0.5f;
+                float x = 0.5f * std::cos(theta);
+                float y = 0.5f * std::sin(theta);
+                sub.vertices.push_back(mkV(x, -y, zOf(i)));
+            }
+            // v1's fan (indices fanSize+2..2*fanSize+1)
+            for (int i = 0; i < fanSize; ++i) {
+                float theta = (static_cast<float>(i) / fanSize - 0.5f)
+                            * 3.14159f * 0.9f + 3.14159f * 0.5f;
+                float x = 1.0f - 0.5f * std::cos(theta);
+                float y = 0.5f * std::sin(theta);
+                sub.vertices.push_back(mkV(x, -y, zOf(i + fanSize)));
+            }
+            auto mkT = [](unsigned a, unsigned b, unsigned c) {
+                EditableTriangle t;
+                t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+                return t;
+            };
+            // v0's fan: (0, 2, 1), (0, 3, 2), ..., (0, fanSize+1, fanSize)
+            sub.triangles.push_back(mkT(0, 2, 1)); // bevel face on one side
+            for (int i = 0; i < fanSize - 1; ++i) {
+                sub.triangles.push_back(mkT(0, i + 3, i + 2));
+            }
+            sub.triangles.push_back(mkT(0, 1, fanSize + 1)); // bevel face other side
+            // v1's fan: similar
+            sub.triangles.push_back(mkT(1, 2, fanSize + 2));
+            for (int i = 0; i < fanSize - 1; ++i) {
+                sub.triangles.push_back(mkT(1, fanSize + 2 + i, fanSize + 3 + i));
+            }
+            sub.triangles.push_back(mkT(1, 2 * fanSize + 1, fanSize + 1));
+
+            em.subMeshes().push_back(std::move(sub));
+
+            HalfEdgeMesh he;
+            if (!he.buildFromEditableMesh(em)) continue;
+            int edgeIdx = findEdge(he, 0, 1);
+            if (edgeIdx < 0) continue;
+            if (he.bevelEdges({edgeIdx}, 0.05f).empty()) continue;
+
+            EditableMesh back;
+            if (!he.toEditableMesh(back)) continue;
+            ++totalTested;
+
+            // Check for duplicate-directed edges (non-manifold).
+            const auto& bsub = back.subMeshes()[0];
+            std::map<std::pair<unsigned,unsigned>, int> directedEdges;
+            for (const auto& tri : bsub.triangles) {
+                for (int k = 0; k < 3; ++k) {
+                    unsigned a = tri.indices[k], b = tri.indices[(k + 1) % 3];
+                    ++directedEdges[{a, b}];
+                }
+            }
+            int sameDir = 0;
+            for (const auto& [dir, count] : directedEdges) {
+                if (count > 1) ++sameDir;
+            }
+            // Check for boundary-only edges at non-perimeter verts.
+            std::set<unsigned> perimeterVerts;
+            for (size_t i = 0; i < bsub.vertices.size(); ++i) {
+                const auto& p = bsub.vertices[i].position;
+                // Original perimeter = v2..v(2*fanSize+1).
+                for (int j = 0; j < 2 * fanSize; ++j) {
+                    const auto& orig = em.subMeshes()[0].vertices[j + 2].position;
+                    if ((p - orig).length() < 1e-4f) {
+                        perimeterVerts.insert(static_cast<unsigned>(i));
+                    }
+                }
+            }
+            int interiorBdry = 0;
+            for (const auto& [dir, count] : directedEdges) {
+                if (count == 1) {
+                    auto rev = directedEdges.find({dir.second, dir.first});
+                    if (rev == directedEdges.end() || rev->second == 0) {
+                        if (perimeterVerts.count(dir.first)
+                         && perimeterVerts.count(dir.second)) continue;
+                        ++interiorBdry;
+                    }
+                }
+            }
+            if (sameDir > 0 || interiorBdry > 0) {
+                ++totalFailures;
+                fprintf(stderr, "  FAIL fanSize=%d seed=%d sameDir=%d interiorBdry=%d\n",
+                        fanSize, seed, sameDir, interiorBdry);
+            }
+        }
+    }
+    fprintf(stderr, "Total tested: %d, failures: %d\n", totalTested, totalFailures);
+    EXPECT_EQ(totalFailures, 0);
+}
+
+TEST(HalfEdgeMeshStandalone, DISABLED_FanToFanFailCaseDump) {
+    // Dump the first failing case (fanSize=5, seed=1) so we can see the
+    // exact emission pattern that produces boundary holes.
+    auto em = makeFanToFanMesh(5, 1);
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 0, 1);
+    ASSERT_GE(edgeIdx, 0);
+    ASSERT_FALSE(he.bevelEdges({edgeIdx}, 0.05f).empty());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+
+    const auto& sub = back.subMeshes()[0];
+    fprintf(stderr, "=== FanToFan(5,1) dump ===\n");
+    for (size_t i = 0; i < sub.vertices.size(); ++i) {
+        const auto& p = sub.vertices[i].position;
+        fprintf(stderr, "v%zu = (%.4f, %.4f, %.4f)\n", i, p.x, p.y, p.z);
+    }
+    for (size_t t = 0; t < sub.triangles.size(); ++t) {
+        const auto& tri = sub.triangles[t];
+        fprintf(stderr, "t%zu = (%u, %u, %u)\n",
+                t, tri.indices[0], tri.indices[1], tri.indices[2]);
+    }
+}
+
 TEST(HalfEdgeMeshStandalone, DenseSmoothCharacterBevelManifold) {
     auto em = makeDenseSmoothCharacterMesh();
     HalfEdgeMesh he;
