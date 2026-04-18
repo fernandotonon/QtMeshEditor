@@ -1411,68 +1411,11 @@ bool EditModeController::applyBevelTopology(
 
     m_editableMesh->subMeshes() = std::move(newMesh.subMeshes());
 
-    // Selective normal recompute (same pattern as extrude): only touch
-    // vertices at new positions or adjacent to them.
-    {
-        const float TOL2 = 1e-8f;
-        auto positionMatchesNew = [&](const Ogre::Vector3& p) {
-            for (const auto& np : newVertPositions) {
-                if (p.squaredDistance(np) < TOL2)
-                    return true;
-            }
-            return false;
-        };
-
-        for (auto& sub : m_editableMesh->subMeshes()) {
-            std::vector<bool> isNew(sub.vertices.size(), false);
-            for (size_t v = 0; v < sub.vertices.size(); ++v) {
-                if (positionMatchesNew(sub.vertices[v].position))
-                    isNew[v] = true;
-            }
-            std::vector<bool> isDirty = isNew;
-            for (const auto& tri : sub.triangles) {
-                if (tri.indices[0] >= sub.vertices.size() ||
-                    tri.indices[1] >= sub.vertices.size() ||
-                    tri.indices[2] >= sub.vertices.size())
-                    continue;
-                bool anyNew = isNew[tri.indices[0]] || isNew[tri.indices[1]] || isNew[tri.indices[2]];
-                if (anyNew) {
-                    isDirty[tri.indices[0]] = true;
-                    isDirty[tri.indices[1]] = true;
-                    isDirty[tri.indices[2]] = true;
-                }
-            }
-            for (size_t v = 0; v < sub.vertices.size(); ++v) {
-                if (isDirty[v]) {
-                    sub.vertices[v].normal = Ogre::Vector3::ZERO;
-                    sub.vertices[v].hasNormal = true;
-                }
-            }
-            for (const auto& tri : sub.triangles) {
-                if (tri.indices[0] >= sub.vertices.size() ||
-                    tri.indices[1] >= sub.vertices.size() ||
-                    tri.indices[2] >= sub.vertices.size())
-                    continue;
-                bool anyDirty = isDirty[tri.indices[0]] || isDirty[tri.indices[1]] || isDirty[tri.indices[2]];
-                if (!anyDirty) continue;
-                const auto& v0 = sub.vertices[tri.indices[0]].position;
-                const auto& v1 = sub.vertices[tri.indices[1]].position;
-                const auto& v2 = sub.vertices[tri.indices[2]].position;
-                Ogre::Vector3 faceN = (v1 - v0).crossProduct(v2 - v0);
-                for (int k = 0; k < 3; ++k) {
-                    if (isDirty[tri.indices[k]])
-                        sub.vertices[tri.indices[k]].normal += faceN;
-                }
-            }
-            for (size_t v = 0; v < sub.vertices.size(); ++v) {
-                if (isDirty[v]) {
-                    float len = sub.vertices[v].normal.length();
-                    if (len > 1e-8f)
-                        sub.vertices[v].normal /= len;
-                }
-            }
-        }
-    }
+    // Full normal recompute — cheaper options (selective by proximity) turned
+    // out to leave seams around the beveled region where the neighbor faces
+    // share vertices with the new topology. A full pass is safe and cheap on
+    // meshes that pass through edit mode.
+    m_editableMesh->recalculateNormals();
 
     if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
         return false;
@@ -1490,9 +1433,6 @@ bool EditModeController::applyBevelTopology(
         }
     }
 
-    // After bevel, the originally selected edges no longer exist — clear the
-    // edge selection. Select the new chamfer vertices so the user gets visual
-    // confirmation of what changed.
     m_selectedVertices.clear();
     m_selectedEdges.clear();
     m_selectedFaces.clear();
@@ -1602,7 +1542,7 @@ bool EditModeController::beginBevel()
     }
     s.pivot = pivot;
     s.axis = (normalSum.length() > 1e-6f) ? normalSum.normalisedCopy() : Ogre::Vector3::UNIT_Y;
-    s.width = 0.005f;
+    s.width = 0.05f; // 2.5% of a 2-unit cube — visible initial chamfer
 
     if (!applyBevelTopology(s.targetEdges, s.width)) {
         // Failed — undo any partial state by restoring the snapshot.
