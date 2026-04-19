@@ -2197,66 +2197,55 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             }
         }
 
-        // Expand repair zone: include any vertex that's 1-ring adjacent
-        // (via any directed edge in the current face set) to a vertex
-        // already in the zone. Phase 5 retriangulations can split neighbor
-        // faces, introducing boundary edges at vertices that aren't direct
-        // bevel endpoints (outX/inX/third corners). Two-ring expansion so
-        // that a hole touching `third` (one ring out from v) and that
-        // vertex's own neighbor (two rings out) is still repairable.
-        for (int hop = 0; hop < 2; ++hop) {
-            std::unordered_set<int> toAdd;
-            for (const auto& [dir, cnt] : dirCount) {
-                int a = dir.first, b = dir.second;
-                if (repairZone.count(a) && !repairZone.count(b)) toAdd.insert(b);
-                if (repairZone.count(b) && !repairZone.count(a)) toAdd.insert(a);
+        // Expand repair zone by POSITION-COINCIDENT duplicates only.
+        // On multi-submesh meshes (e.g., character meshes), each seam
+        // vertex exists as multiple distinct vertex indices (one per
+        // submesh sharing the seam). A bevel on submesh A moves V_A but
+        // leaves its position-coincident V_B in submesh B untouched —
+        // producing a geometric crack that the filler cannot see because
+        // the boundary edges on the far side involve V_B, which isn't in
+        // the base zone. Including position-coincident duplicates lets
+        // the filler close these cracks.
+        //
+        // Unlike 1-ring topological expansion (which regresses fan tests
+        // by pulling in the mesh perimeter), this expansion is strictly
+        // geometric and only fires on true duplicates, which cannot exist
+        // on a single-submesh mesh like a fan.
+        {
+            std::vector<Ogre::Vector3> zonePositions;
+            zonePositions.reserve(repairZone.size());
+            for (int v : repairZone) {
+                if (v >= 0 && v < (int)m_vertices.size()) {
+                    zonePositions.push_back(m_vertices[v].position);
+                }
             }
-            for (int v : toAdd) repairZone.insert(v);
+            std::unordered_set<int> coincident;
+            const float tol2 = 1e-10f;
+            for (int v = 0; v < (int)m_vertices.size(); ++v) {
+                if (repairZone.count(v)) continue;
+                const Ogre::Vector3& p = m_vertices[v].position;
+                for (const Ogre::Vector3& zp : zonePositions) {
+                    if ((p - zp).squaredLength() < tol2) {
+                        coincident.insert(v);
+                        break;
+                    }
+                }
+            }
+            for (int v : coincident) repairZone.insert(v);
         }
         // For each (a, b) used in zone with no (b, a) partner, the
         // partner tri would need to traverse b→a. Collect those needed
         // directions grouped by submesh.
         std::map<int, std::vector<std::pair<int,int>>> zoneBoundaryBySub;
-        std::vector<std::pair<int,int>> allBoundaries;
-        std::vector<std::pair<int,int>> skippedBoundaries;
         for (const auto& [dir, cnt] : dirCount) {
             int a = dir.first, b = dir.second;
             int rev = 0;
             auto it = dirCount.find({b, a});
             if (it != dirCount.end()) rev = it->second;
             if (cnt == 1 && rev == 0) {
-                allBoundaries.push_back({a, b});
-                if (!repairZone.count(a) || !repairZone.count(b)) {
-                    skippedBoundaries.push_back({a, b});
-                    continue;
-                }
+                if (!repairZone.count(a) || !repairZone.count(b)) continue;
                 zoneBoundaryBySub[dirSub[{a, b}]].push_back({b, a});
             }
-        }
-        if (FILE* logF = fopen("/tmp/qtmesh_bevel.log", "a")) {
-            fprintf(logF, "[BOUNDARY SCAN] total boundaries=%zu, "
-                    "skipped (outside repair zone)=%zu, repairZone size=%zu\n",
-                    allBoundaries.size(), skippedBoundaries.size(),
-                    repairZone.size());
-            // Log first 40 skipped edges with whether their endpoints are
-            // near any new vertex (1-ring adjacency check via dirCount).
-            size_t dumpN = std::min<size_t>(40, skippedBoundaries.size());
-            for (size_t i = 0; i < dumpN; ++i) {
-                auto [a, b] = skippedBoundaries[i];
-                // Check if a or b is adjacent (via any edge in dirCount) to
-                // any vertex in newVertices.
-                bool aNearNew = false, bNearNew = false;
-                for (int nv : newVertices) {
-                    if (dirCount.count({a, nv}) || dirCount.count({nv, a})) { aNearNew = true; break; }
-                }
-                for (int nv : newVertices) {
-                    if (dirCount.count({b, nv}) || dirCount.count({nv, b})) { bNearNew = true; break; }
-                }
-                fprintf(logF, "  skipped: %d→%d  aInZone=%d bInZone=%d aNearNew=%d bNearNew=%d\n",
-                        a, b, (int)repairZone.count(a), (int)repairZone.count(b),
-                        (int)aNearNew, (int)bNearNew);
-            }
-            fclose(logF);
         }
         for (const auto& [sm, edges] : zoneBoundaryBySub) {
             // Build adjacency: each needed (start→end) edge
@@ -2424,24 +2413,8 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                         flipWinding = refNormal.dotProduct(noFlipN) < 0;
                     }
                 }
-                if (FILE* logF = fopen("/tmp/qtmesh_bevel.log", "a")) {
-                    Ogre::Vector3 p0 = m_vertices[loop[0]].position;
-                    Ogre::Vector3 p1 = m_vertices[loop[1]].position;
-                    Ogre::Vector3 p2 = m_vertices[loop[2]].position;
-                    Ogre::Vector3 nfN = (p1 - p0).crossProduct(p2 - p0);
-                    float nfLen = nfN.length();
-                    if (nfLen > 1e-8f) nfN /= nfLen;
-                    Ogre::Vector3 rN = refNormal;
-                    float rLen = rN.length();
-                    if (rLen > 1e-8f) rN /= rLen;
-                    fprintf(logF, "[FILL emit] loop: ");
-                    for (int lv : loop) fprintf(logF, "%d ", lv);
-                    fprintf(logF, " noFlip=%d flip=%d nfN=(%.2f,%.2f,%.2f) rN=(%.2f,%.2f,%.2f) dot=%.2f → flipWinding=%d\n",
-                            noFlipConflicts, flipConflicts,
-                            nfN.x, nfN.y, nfN.z, rN.x, rN.y, rN.z,
-                            nfN.dotProduct(rN), (int)flipWinding);
-                    fclose(logF);
-                }
+                (void)noFlipConflicts;
+                (void)flipConflicts;
                 for (size_t i = 1; i + 1 < loop.size(); ++i) {
                     int a = loop[0], b = loop[i], c = loop[i + 1];
                     if (flipWinding) std::swap(b, c);
