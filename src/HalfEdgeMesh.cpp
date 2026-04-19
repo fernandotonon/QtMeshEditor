@@ -2196,19 +2196,67 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                 dirSub[{a, b}] = sm;
             }
         }
+
+        // Expand repair zone: include any vertex that's 1-ring adjacent
+        // (via any directed edge in the current face set) to a vertex
+        // already in the zone. Phase 5 retriangulations can split neighbor
+        // faces, introducing boundary edges at vertices that aren't direct
+        // bevel endpoints (outX/inX/third corners). Two-ring expansion so
+        // that a hole touching `third` (one ring out from v) and that
+        // vertex's own neighbor (two rings out) is still repairable.
+        for (int hop = 0; hop < 2; ++hop) {
+            std::unordered_set<int> toAdd;
+            for (const auto& [dir, cnt] : dirCount) {
+                int a = dir.first, b = dir.second;
+                if (repairZone.count(a) && !repairZone.count(b)) toAdd.insert(b);
+                if (repairZone.count(b) && !repairZone.count(a)) toAdd.insert(a);
+            }
+            for (int v : toAdd) repairZone.insert(v);
+        }
         // For each (a, b) used in zone with no (b, a) partner, the
         // partner tri would need to traverse b→a. Collect those needed
         // directions grouped by submesh.
         std::map<int, std::vector<std::pair<int,int>>> zoneBoundaryBySub;
+        std::vector<std::pair<int,int>> allBoundaries;
+        std::vector<std::pair<int,int>> skippedBoundaries;
         for (const auto& [dir, cnt] : dirCount) {
             int a = dir.first, b = dir.second;
-            if (!repairZone.count(a) || !repairZone.count(b)) continue;
             int rev = 0;
             auto it = dirCount.find({b, a});
             if (it != dirCount.end()) rev = it->second;
             if (cnt == 1 && rev == 0) {
+                allBoundaries.push_back({a, b});
+                if (!repairZone.count(a) || !repairZone.count(b)) {
+                    skippedBoundaries.push_back({a, b});
+                    continue;
+                }
                 zoneBoundaryBySub[dirSub[{a, b}]].push_back({b, a});
             }
+        }
+        if (FILE* logF = fopen("/tmp/qtmesh_bevel.log", "a")) {
+            fprintf(logF, "[BOUNDARY SCAN] total boundaries=%zu, "
+                    "skipped (outside repair zone)=%zu, repairZone size=%zu\n",
+                    allBoundaries.size(), skippedBoundaries.size(),
+                    repairZone.size());
+            // Log first 40 skipped edges with whether their endpoints are
+            // near any new vertex (1-ring adjacency check via dirCount).
+            size_t dumpN = std::min<size_t>(40, skippedBoundaries.size());
+            for (size_t i = 0; i < dumpN; ++i) {
+                auto [a, b] = skippedBoundaries[i];
+                // Check if a or b is adjacent (via any edge in dirCount) to
+                // any vertex in newVertices.
+                bool aNearNew = false, bNearNew = false;
+                for (int nv : newVertices) {
+                    if (dirCount.count({a, nv}) || dirCount.count({nv, a})) { aNearNew = true; break; }
+                }
+                for (int nv : newVertices) {
+                    if (dirCount.count({b, nv}) || dirCount.count({nv, b})) { bNearNew = true; break; }
+                }
+                fprintf(logF, "  skipped: %d→%d  aInZone=%d bInZone=%d aNearNew=%d bNearNew=%d\n",
+                        a, b, (int)repairZone.count(a), (int)repairZone.count(b),
+                        (int)aNearNew, (int)bNearNew);
+            }
+            fclose(logF);
         }
         for (const auto& [sm, edges] : zoneBoundaryBySub) {
             // Build adjacency: each needed (start→end) edge
@@ -2239,11 +2287,17 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                         if (subLoop.size() >= 3) {
                             loopsToProcess.push_back(subLoop);
                         }
-                        // Truncate walk to the sub-loop start.
+                        // Drop the sub-loop's verts from walk AND from
+                        // posInWalk so we don't re-trigger on them.
                         for (size_t j = startIdx; j < walk.size(); ++j) {
                             posInWalk.erase(walk[j]);
                         }
                         walk.resize(startIdx);
+                        // Do NOT re-add cur — it's already been visited
+                        // as part of the extracted sub-loop. Break out of
+                        // this walk; the outer loop will pick up any
+                        // unvisited edges.
+                        break;
                     }
                     posInWalk[cur] = static_cast<int>(walk.size());
                     walk.push_back(cur);
@@ -2291,29 +2345,103 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                     }
                 }
                 if (!hasNewVert) continue;
-                // Winding decision: count how many "same-direction
-                // duplicate" edge uses each winding option would create.
-                // Pick the one with fewer duplicates — that's the
-                // manifold-compatible orientation. This works even when
-                // the fan's diagonals conflict in both options: the
-                // boundary-partnering edges dominate the count.
-                auto countConflicts = [&](bool flip) {
-                    int count = 0;
+                // Winding decision via per-option "boundary closure"
+                // scoring. For each candidate winding, count how many of
+                // the loop's directed boundary edges would be PARTNERED
+                // (existing tri has the opposite direction) by the fan,
+                // and subtract how many would be duplicated (same
+                // direction). Pick the winding with the best score.
+                auto scoreWinding = [&](bool flip) {
+                    int partnered = 0;
+                    int duplicates = 0;
                     for (size_t i = 1; i + 1 < loop.size(); ++i) {
                         int a = loop[0], b = loop[i], c = loop[i + 1];
                         if (flip) std::swap(b, c);
                         for (auto [u, v] : std::vector<std::pair<int,int>>{
                                  {a, b}, {b, c}, {c, a}}) {
-                            auto it = dirCount.find({u, v});
-                            if (it != dirCount.end() && it->second > 0)
-                                ++count;
+                            auto fwd = dirCount.find({u, v});
+                            auto rev = dirCount.find({v, u});
+                            int fwdN = (fwd == dirCount.end()) ? 0 : fwd->second;
+                            int revN = (rev == dirCount.end()) ? 0 : rev->second;
+                            if (fwdN > 0) duplicates += fwdN;
+                            if (revN > 0) partnered += revN;
                         }
                     }
-                    return count;
+                    return partnered - 2 * duplicates;
                 };
-                int noFlipConflicts = countConflicts(false);
-                int flipConflicts = countConflicts(true);
-                bool flipWinding = flipConflicts < noFlipConflicts;
+                int noFlipScore = scoreWinding(false);
+                int flipScore = scoreWinding(true);
+                int noFlipConflicts = -noFlipScore;
+                int flipConflicts = -flipScore;
+
+                // Reference normal from tris that share a loop edge
+                // (undirected).
+                Ogre::Vector3 refNormal = Ogre::Vector3::ZERO;
+                std::set<std::pair<int,int>> loopEdges;
+                for (size_t i = 0; i + 1 < loop.size(); ++i) {
+                    loopEdges.insert({std::min(loop[i], loop[i + 1]),
+                                      std::max(loop[i], loop[i + 1])});
+                }
+                loopEdges.insert({std::min(loop.back(), loop.front()),
+                                  std::max(loop.back(), loop.front())});
+                for (int f = 0; f < static_cast<int>(m_faces.size()); ++f) {
+                    if (m_faces[f].halfEdge < 0) continue;
+                    auto fv = faceVertices(f);
+                    if (fv.size() != 3) continue;
+                    bool shares = false;
+                    for (int k = 0; k < 3; ++k) {
+                        int ea = fv[k], eb = fv[(k + 1) % 3];
+                        if (loopEdges.count({std::min(ea, eb),
+                                             std::max(ea, eb)})) {
+                            shares = true; break;
+                        }
+                    }
+                    if (!shares) continue;
+                    Ogre::Vector3 p0 = m_vertices[fv[0]].position;
+                    Ogre::Vector3 p1 = m_vertices[fv[1]].position;
+                    Ogre::Vector3 p2 = m_vertices[fv[2]].position;
+                    Ogre::Vector3 n = (p1 - p0).crossProduct(p2 - p0);
+                    if (n.length() > 1e-8f) {
+                        n.normalise();
+                        refNormal += n;
+                    }
+                }
+                // Geometry-first winding: the fill's visible face should
+                // match its neighbors' orientation (outward-facing). If
+                // refNormal is well-defined, trust it — users care about
+                // what they SEE, and the surrounding mesh may already be
+                // non-manifold at this location (otherwise fill wouldn't
+                // be needed), so perfect topological closure isn't
+                // achievable.
+                bool flipWinding = flipScore > noFlipScore;
+                if (refNormal.length() > 0.1f && loop.size() >= 3) {
+                    Ogre::Vector3 p0 = m_vertices[loop[0]].position;
+                    Ogre::Vector3 p1 = m_vertices[loop[1]].position;
+                    Ogre::Vector3 p2 = m_vertices[loop[2]].position;
+                    Ogre::Vector3 noFlipN = (p1 - p0).crossProduct(p2 - p0);
+                    if (noFlipN.length() > 1e-6f) {
+                        noFlipN.normalise();
+                        flipWinding = refNormal.dotProduct(noFlipN) < 0;
+                    }
+                }
+                if (FILE* logF = fopen("/tmp/qtmesh_bevel.log", "a")) {
+                    Ogre::Vector3 p0 = m_vertices[loop[0]].position;
+                    Ogre::Vector3 p1 = m_vertices[loop[1]].position;
+                    Ogre::Vector3 p2 = m_vertices[loop[2]].position;
+                    Ogre::Vector3 nfN = (p1 - p0).crossProduct(p2 - p0);
+                    float nfLen = nfN.length();
+                    if (nfLen > 1e-8f) nfN /= nfLen;
+                    Ogre::Vector3 rN = refNormal;
+                    float rLen = rN.length();
+                    if (rLen > 1e-8f) rN /= rLen;
+                    fprintf(logF, "[FILL emit] loop: ");
+                    for (int lv : loop) fprintf(logF, "%d ", lv);
+                    fprintf(logF, " noFlip=%d flip=%d nfN=(%.2f,%.2f,%.2f) rN=(%.2f,%.2f,%.2f) dot=%.2f → flipWinding=%d\n",
+                            noFlipConflicts, flipConflicts,
+                            nfN.x, nfN.y, nfN.z, rN.x, rN.y, rN.z,
+                            nfN.dotProduct(rN), (int)flipWinding);
+                    fclose(logF);
+                }
                 for (size_t i = 1; i + 1 < loop.size(); ++i) {
                     int a = loop[0], b = loop[i], c = loop[i + 1];
                     if (flipWinding) std::swap(b, c);
