@@ -2207,6 +2207,36 @@ namespace {
 // Stress test: generate many different fan sizes and geometries and verify
 // every one produces a manifold bevel. Designed to catch edge cases in
 // processRingNeighbors / PNF interactions with the cap emission.
+// Stress test: generate many different fan sizes and geometries and verify
+// every one produces a manifold bevel.
+//
+// STATUS: DISABLED, 4 failures out of 30 variants (fanSize=5 seed=1;
+// fanSize=6 seeds 1, 3, 4). All have interiorBdry=4 boundary edges with
+// sameDir=0 (no winding inconsistencies — real holes).
+//
+// Diagnosis: the failing cases have buildCorner polygon of form
+// [v1a, crease_offset_u, v1b] at v=1, where the ring walk pushed
+// crease_offset_u between an effectively-beveled face (coplanar with
+// f2) and its non-beveled ring-neighbor. The cap fan emits (v1a,
+// crease_offset_u, v1b) which leaves edge (v1b, f2Opposite) unpartnered
+// — f2's retriangulation emits tri(v1b, f2Opposite, v2b) but nothing
+// closes f2Opposite back to v1b on the cap side. 4 boundary edges form
+// a cycle: v → v1b → f2Opposite → crease_offset_u → v.
+//
+// Attempted fixes (all either broke cube tests or left the hole):
+//   1. Fan-from-v instead of polygon[0] — broke dense test winding.
+//   2. Per-uncovered-edge (v, p[i], p[i+1]) bridge tris — wrong winding
+//      pushes for the dense case.
+//   3. Collapse polygon to [innerA, innerB] when interior edges aren't
+//      covered — didn't help (hole is NOT polygon[0]-polygon[last]).
+//   4. Push f2Opposite into polygon before innerB when ring walked
+//      through effectively-beveled — broke cube tests.
+//   5. Post-bevel repair pass scanning boundary edges at v — doesn't
+//      fire because orphans aren't at "v→offset" edges.
+//
+// Proper fix likely needs re-examining how f2Opposite (and f1Opposite)
+// enter the cap polygon. Possibly requires processRingNeighbors to
+// emit a fan at v across effectively-beveled-only segments.
 TEST(HalfEdgeMeshStandalone, DISABLED_RandomSmoothFanBevelManifold) {
     int totalTested = 0;
     int totalFailures = 0;
