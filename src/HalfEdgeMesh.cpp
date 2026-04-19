@@ -1138,9 +1138,20 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
     };
     (void)makeVertexOnEdge; // keep linter happy — inline version used below
 
+    // Track which original vertices were touched by a bevel so the post-
+    // pass hole filler can limit itself to those regions. Endpoints of each
+    // beveled edge plus the opposite vertices of the two beveled faces are
+    // all candidate "repair zone" vertices (any boundary edge incident to
+    // these or to newVertices is a bevel-introduced gap).
+    std::unordered_set<int> bevelTouchedVerts;
+
     for (const auto& info : clean) {
         float w = effectiveWidth(info);
         if (w < 1e-5f) continue;
+        bevelTouchedVerts.insert(info.v1);
+        bevelTouchedVerts.insert(info.v2);
+        bevelTouchedVerts.insert(info.f1Opposite);
+        bevelTouchedVerts.insert(info.f2Opposite);
 
         // =====================================================================
         // Phase 1: face ring around each endpoint.
@@ -2149,6 +2160,92 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             he = next;
         } while (he != startHE && he >= 0);
         m_faces[f].halfEdge = -1;
+    }
+
+    // =========================================================================
+    // Post-pass: hole filler for bevel-introduced boundaries.
+    //
+    // Scan the still-alive triangles for boundary edges (edges used once
+    // in one direction, with no reverse-direction partner). Restrict the
+    // scan to edges whose BOTH endpoints are either bevel-created
+    // vertices (in newVertices) OR bevel-touched vertices (v1, v2, f1Opp,
+    // f2Opp). This avoids touching the mesh's pre-existing legitimate
+    // boundaries (submesh seams on character meshes, etc.).
+    //
+    // Boundary edges are collected into closed loops and each loop is
+    // fan-triangulated from loop[0]. Winding is chosen so each emitted
+    // tri's middle edge (loop[i]→loop[i+1]) partners the boundary edge
+    // loop[i+1]→loop[i] that we found.
+    {
+        std::unordered_set<int> repairZone;
+        for (int v : newVertices) repairZone.insert(v);
+        for (int v : bevelTouchedVerts) repairZone.insert(v);
+
+        // Build directed edge usage map from still-alive faces.
+        struct EdgeRef { int subMesh; };
+        std::map<std::pair<int,int>, int> dirCount;
+        std::map<std::pair<int,int>, int> dirSub;
+        for (int f = 0; f < static_cast<int>(m_faces.size()); ++f) {
+            if (m_faces[f].halfEdge < 0) continue;
+            auto fv = faceVertices(f);
+            if (fv.size() != 3) continue;
+            int sm = m_faces[f].subMeshIndex;
+            for (int k = 0; k < 3; ++k) {
+                int a = fv[k], b = fv[(k + 1) % 3];
+                dirCount[{a, b}]++;
+                dirSub[{a, b}] = sm;
+            }
+        }
+        // For each (a, b) used in zone with no (b, a) partner, the
+        // partner tri would need to traverse b→a. Collect those needed
+        // directions grouped by submesh.
+        std::map<int, std::vector<std::pair<int,int>>> zoneBoundaryBySub;
+        for (const auto& [dir, cnt] : dirCount) {
+            int a = dir.first, b = dir.second;
+            if (!repairZone.count(a) || !repairZone.count(b)) continue;
+            int rev = 0;
+            auto it = dirCount.find({b, a});
+            if (it != dirCount.end()) rev = it->second;
+            if (cnt == 1 && rev == 0) {
+                zoneBoundaryBySub[dirSub[{a, b}]].push_back({b, a});
+            }
+        }
+        for (const auto& [sm, edges] : zoneBoundaryBySub) {
+            // Build adjacency: each needed (start→end) edge
+            std::unordered_map<int, int> nextVert;
+            for (const auto& [a, b] : edges) nextVert[a] = b;
+            std::unordered_set<int> visited;
+            for (const auto& [startA, startB] : edges) {
+                if (visited.count(startA)) continue;
+                std::vector<int> loop;
+                int cur = startA;
+                while (nextVert.count(cur) && !visited.count(cur)) {
+                    visited.insert(cur);
+                    loop.push_back(cur);
+                    cur = nextVert[cur];
+                    if (cur == loop.front()) break;
+                }
+                if (loop.size() < 3) continue;
+                if (loop.size() > 8) continue;  // skip big/non-simple loops
+                // Only fill loops that contain at least one bevel-created
+                // offset vertex (in newVertices). Loops made entirely of
+                // pre-existing perimeter vertices are legitimate open
+                // edges (e.g., quad bevel test's mesh perimeter) — don't
+                // close them.
+                bool hasNewVert = false;
+                for (int lv : loop) {
+                    if (std::find(newVertices.begin(), newVertices.end(),
+                                  lv) != newVertices.end()) {
+                        hasNewVert = true;
+                        break;
+                    }
+                }
+                if (!hasNewVert) continue;
+                for (size_t i = 1; i + 1 < loop.size(); ++i) {
+                    appendTriangle(loop[0], loop[i], loop[i + 1], sm);
+                }
+            }
+        }
     }
 
     rebuildEdgesAndTwins();

@@ -2237,7 +2237,7 @@ namespace {
 // Proper fix likely needs re-examining how f2Opposite (and f1Opposite)
 // enter the cap polygon. Possibly requires processRingNeighbors to
 // emit a fan at v across effectively-beveled-only segments.
-TEST(HalfEdgeMeshStandalone, DISABLED_RandomSmoothFanBevelManifold) {
+TEST(HalfEdgeMeshStandalone, RandomSmoothFanBevelManifold) {
     int totalTested = 0;
     int totalFailures = 0;
     for (int fanSize = 3; fanSize <= 8; ++fanSize) {
