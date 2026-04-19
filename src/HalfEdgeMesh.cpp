@@ -2212,19 +2212,69 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
         }
         for (const auto& [sm, edges] : zoneBoundaryBySub) {
             // Build adjacency: each needed (start→end) edge
-            std::unordered_map<int, int> nextVert;
-            for (const auto& [a, b] : edges) nextVert[a] = b;
-            std::unordered_set<int> visited;
+            // One vertex may have MULTIPLE outgoing needed edges (if two
+            // separate holes touch the same vertex). Build a multi-map
+            // and consume edges as we walk — each edge used once. When
+            // we revisit an already-seen vertex during a walk, we've
+            // found a sub-loop — extract it and continue from there.
+            std::unordered_map<int, std::vector<int>> nextVerts;
+            for (const auto& [a, b] : edges) nextVerts[a].push_back(b);
+            std::set<std::pair<int,int>> consumed;
+
+            std::vector<std::vector<int>> loopsToProcess;
+
             for (const auto& [startA, startB] : edges) {
-                if (visited.count(startA)) continue;
-                std::vector<int> loop;
+                if (consumed.count({startA, startB})) continue;
+                std::vector<int> walk;
+                std::unordered_map<int, int> posInWalk;
                 int cur = startA;
-                while (nextVert.count(cur) && !visited.count(cur)) {
-                    visited.insert(cur);
-                    loop.push_back(cur);
-                    cur = nextVert[cur];
-                    if (cur == loop.front()) break;
+                int nextCandidate = startB;
+                while (true) {
+                    if (!consumed.insert({cur, nextCandidate}).second) break;
+                    // If cur is already in walk, split out the sub-loop.
+                    auto posIt = posInWalk.find(cur);
+                    if (posIt != posInWalk.end()) {
+                        int startIdx = posIt->second;
+                        std::vector<int> subLoop(walk.begin() + startIdx, walk.end());
+                        if (subLoop.size() >= 3) {
+                            loopsToProcess.push_back(subLoop);
+                        }
+                        // Truncate walk to the sub-loop start.
+                        for (size_t j = startIdx; j < walk.size(); ++j) {
+                            posInWalk.erase(walk[j]);
+                        }
+                        walk.resize(startIdx);
+                    }
+                    posInWalk[cur] = static_cast<int>(walk.size());
+                    walk.push_back(cur);
+                    cur = nextCandidate;
+                    // Pick an unused outgoing edge from cur.
+                    auto it = nextVerts.find(cur);
+                    if (it == nextVerts.end()) break;
+                    bool found = false;
+                    for (int candidate : it->second) {
+                        if (!consumed.count({cur, candidate})) {
+                            nextCandidate = candidate;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) break;
                 }
+                // Close the final walk if cur returns to its start.
+                if (!walk.empty()) {
+                    auto posIt = posInWalk.find(cur);
+                    if (posIt != posInWalk.end()) {
+                        int startIdx = posIt->second;
+                        std::vector<int> subLoop(walk.begin() + startIdx, walk.end());
+                        if (subLoop.size() >= 3) {
+                            loopsToProcess.push_back(subLoop);
+                        }
+                    }
+                }
+            }
+
+            for (auto& loop : loopsToProcess) {
                 if (loop.size() < 3) continue;
                 if (loop.size() > 8) continue;  // skip big/non-simple loops
                 // Only fill loops that contain at least one bevel-created
@@ -2241,26 +2291,29 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                     }
                 }
                 if (!hasNewVert) continue;
-                // Winding: determined by examining the first loop edge.
-                // The loop[0]→loop[1] direction is what the NEW tri must
-                // contain (we collected (b,a) when (a,b) existed as a
-                // boundary, so loop traversal matches the needed new
-                // direction). A fan tri(loop[0], loop[i], loop[i+1]) has
-                // edge loop[0]→loop[i]; for i=1 that's loop[0]→loop[1] ✓.
-                // So DEFAULT (no flip) winding is correct. But if a fan
-                // tri would introduce an edge in the SAME direction as an
-                // existing directed edge, flip the tri to avoid it.
-                bool flipWinding = false;
-                if (loop.size() >= 3) {
-                    // Check: tri(loop[0], loop[1], loop[2]) has edges
-                    // loop[0]→loop[1], loop[1]→loop[2], loop[2]→loop[0].
-                    // loop[2]→loop[0] is a NEW "diagonal" — if that
-                    // direction exists in dirCount, flipping is needed.
-                    auto it = dirCount.find({loop[2], loop[0]});
-                    if (it != dirCount.end() && it->second > 0) {
-                        flipWinding = true;
+                // Winding decision: count how many "same-direction
+                // duplicate" edge uses each winding option would create.
+                // Pick the one with fewer duplicates — that's the
+                // manifold-compatible orientation. This works even when
+                // the fan's diagonals conflict in both options: the
+                // boundary-partnering edges dominate the count.
+                auto countConflicts = [&](bool flip) {
+                    int count = 0;
+                    for (size_t i = 1; i + 1 < loop.size(); ++i) {
+                        int a = loop[0], b = loop[i], c = loop[i + 1];
+                        if (flip) std::swap(b, c);
+                        for (auto [u, v] : std::vector<std::pair<int,int>>{
+                                 {a, b}, {b, c}, {c, a}}) {
+                            auto it = dirCount.find({u, v});
+                            if (it != dirCount.end() && it->second > 0)
+                                ++count;
+                        }
                     }
-                }
+                    return count;
+                };
+                int noFlipConflicts = countConflicts(false);
+                int flipConflicts = countConflicts(true);
+                bool flipWinding = flipConflicts < noFlipConflicts;
                 for (size_t i = 1; i + 1 < loop.size(); ++i) {
                     int a = loop[0], b = loop[i], c = loop[i + 1];
                     if (flipWinding) std::swap(b, c);
