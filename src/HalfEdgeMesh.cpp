@@ -2241,8 +2241,30 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                     }
                 }
                 if (!hasNewVert) continue;
+                // Winding: determined by examining the first loop edge.
+                // The loop[0]→loop[1] direction is what the NEW tri must
+                // contain (we collected (b,a) when (a,b) existed as a
+                // boundary, so loop traversal matches the needed new
+                // direction). A fan tri(loop[0], loop[i], loop[i+1]) has
+                // edge loop[0]→loop[i]; for i=1 that's loop[0]→loop[1] ✓.
+                // So DEFAULT (no flip) winding is correct. But if a fan
+                // tri would introduce an edge in the SAME direction as an
+                // existing directed edge, flip the tri to avoid it.
+                bool flipWinding = false;
+                if (loop.size() >= 3) {
+                    // Check: tri(loop[0], loop[1], loop[2]) has edges
+                    // loop[0]→loop[1], loop[1]→loop[2], loop[2]→loop[0].
+                    // loop[2]→loop[0] is a NEW "diagonal" — if that
+                    // direction exists in dirCount, flipping is needed.
+                    auto it = dirCount.find({loop[2], loop[0]});
+                    if (it != dirCount.end() && it->second > 0) {
+                        flipWinding = true;
+                    }
+                }
                 for (size_t i = 1; i + 1 < loop.size(); ++i) {
-                    appendTriangle(loop[0], loop[i], loop[i + 1], sm);
+                    int a = loop[0], b = loop[i], c = loop[i + 1];
+                    if (flipWinding) std::swap(b, c);
+                    appendTriangle(a, b, c, sm);
                 }
             }
         }
