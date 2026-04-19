@@ -2313,16 +2313,28 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                             loopsToProcess.push_back(subLoop);
                         }
                         // Drop the sub-loop's verts from walk AND from
-                        // posInWalk so we don't re-trigger on them.
+                        // posInWalk. Do NOT break — at a figure-8
+                        // junction, the pre-sub-loop portion of the walk
+                        // may still be part of another (outer) loop that
+                        // also passes through `cur`. Continue the walk
+                        // from `cur` so we can finish the outer loop.
                         for (size_t j = startIdx; j < walk.size(); ++j) {
                             posInWalk.erase(walk[j]);
                         }
                         walk.resize(startIdx);
-                        // Do NOT re-add cur — it's already been visited
-                        // as part of the extracted sub-loop. Break out of
-                        // this walk; the outer loop will pick up any
-                        // unvisited edges.
-                        break;
+                        // cur stays as-is; pick a new outgoing edge.
+                        auto it = nextVerts.find(cur);
+                        if (it == nextVerts.end()) break;
+                        bool found = false;
+                        for (int candidate : it->second) {
+                            if (!consumed.count({cur, candidate})) {
+                                nextCandidate = candidate;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) break;
+                        continue;  // re-enter while loop with new candidate
                     }
                     posInWalk[cur] = static_cast<int>(walk.size());
                     walk.push_back(cur);
