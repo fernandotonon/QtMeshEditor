@@ -2197,20 +2197,23 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             }
         }
 
-        // Expand repair zone by POSITION-COINCIDENT duplicates only.
-        // On multi-submesh meshes (e.g., character meshes), each seam
-        // vertex exists as multiple distinct vertex indices (one per
-        // submesh sharing the seam). A bevel on submesh A moves V_A but
-        // leaves its position-coincident V_B in submesh B untouched —
-        // producing a geometric crack that the filler cannot see because
-        // the boundary edges on the far side involve V_B, which isn't in
-        // the base zone. Including position-coincident duplicates lets
-        // the filler close these cracks.
+        // Expand repair zone along two dimensions:
         //
-        // Unlike 1-ring topological expansion (which regresses fan tests
-        // by pulling in the mesh perimeter), this expansion is strictly
-        // geometric and only fires on true duplicates, which cannot exist
-        // on a single-submesh mesh like a fan.
+        // 1) POSITION-COINCIDENT duplicates: multi-submesh meshes keep
+        //    separate vertex indices for seams, so V_A moved by bevel on
+        //    submesh A leaves coincident V_B in submesh B untouched.
+        //    Including V_B lets the filler close the seam crack.
+        //
+        // 2) 1-RING NEIGHBORS OF NEW VERTICES only: Phase 5 neighbor
+        //    retriangulations can split neighbor faces, introducing
+        //    boundary edges at vertices that are 1-ring adjacent to a new
+        //    offset vertex. Expanding from `newVertices` (not from the
+        //    full base zone) is narrow enough to avoid pulling in the
+        //    mesh perimeter on single-submesh fans: fan-bevel `newVertices`
+        //    are near the apex, 1-hop away is the first ring of perimeter
+        //    points, but since these are connected legitimately (every
+        //    perimeter edge still has a partnering triangle), they won't
+        //    appear as zone boundaries.
         {
             std::vector<Ogre::Vector3> zonePositions;
             zonePositions.reserve(repairZone.size());
@@ -2232,6 +2235,39 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                 }
             }
             for (int v : coincident) repairZone.insert(v);
+
+        }
+
+        // Promote half-in-zone seam vertices. When exactly one endpoint
+        // of an unpartnered directed edge is in the zone, the other
+        // endpoint is a candidate for promotion — but only if it's a
+        // SEAM vertex (i.e., some other vertex in the mesh shares its
+        // position). Seam vertices exist only on multi-submesh meshes;
+        // on a single-submesh patch like a fan, a half-in-zone vertex
+        // is a legitimate open-boundary vertex and must NOT be promoted.
+        {
+            auto isSeamVertex = [&](int v) {
+                const Ogre::Vector3& p = m_vertices[v].position;
+                const float tol2 = 1e-10f;
+                for (int u = 0; u < (int)m_vertices.size(); ++u) {
+                    if (u == v) continue;
+                    if ((m_vertices[u].position - p).squaredLength() < tol2)
+                        return true;
+                }
+                return false;
+            };
+            std::unordered_set<int> promote;
+            for (const auto& [dir, cnt] : dirCount) {
+                int a = dir.first, b = dir.second;
+                if (cnt != 1) continue;
+                auto it = dirCount.find({b, a});
+                if (it != dirCount.end() && it->second > 0) continue;
+                bool aIn = repairZone.count(a) > 0;
+                bool bIn = repairZone.count(b) > 0;
+                if (aIn && !bIn && isSeamVertex(b)) promote.insert(b);
+                else if (bIn && !aIn && isSeamVertex(a)) promote.insert(a);
+            }
+            for (int v : promote) repairZone.insert(v);
         }
         // For each (a, b) used in zone with no (b, a) partner, the
         // partner tri would need to traverse b→a. Collect those needed
