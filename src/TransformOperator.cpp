@@ -1150,6 +1150,13 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                     Ogre::Vector3 snappedDelta = snapScale(
                         scaleFactor - Ogre::Vector3::UNIT_SCALE, mSnapScaleStep);
                     scaleFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
+                    // Snap can round a delta near -1 down to exactly -1 (e.g.
+                    // ratio=0.01 → delta=-0.99 → snapped to -1 at step=1.0),
+                    // producing a zero scale that collapses geometry. Reclamp
+                    // to the same 0.01 floor the pre-snap ratio enforces.
+                    scaleFactor.x = std::max<Ogre::Real>(scaleFactor.x, 0.01f);
+                    scaleFactor.y = std::max<Ogre::Real>(scaleFactor.y, 0.01f);
+                    scaleFactor.z = std::max<Ogre::Real>(scaleFactor.z, 0.01f);
                 }
 
                 editCtrl->scaleFromSnapshot(mEditModeUndoSnapshot,
@@ -1373,6 +1380,11 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                 Ogre::Vector3 snappedDelta = snapScale(scaleFactor - Ogre::Vector3::UNIT_SCALE,
                                                        mSnapScaleStep);
                 scaleFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
+                // Reclamp per-component after snap — snapping can round a
+                // delta near -1 down to exactly -1, producing zero scale.
+                scaleFactor.x = std::max<Ogre::Real>(scaleFactor.x, 0.01f);
+                scaleFactor.y = std::max<Ogre::Real>(scaleFactor.y, 0.01f);
+                scaleFactor.z = std::max<Ogre::Real>(scaleFactor.z, 0.01f);
             }
 
             // Apply cumulative scale to the press-time baseline for each

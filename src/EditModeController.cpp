@@ -1032,6 +1032,66 @@ std::map<int, float> EditModeController::getSoftSelectionWeights() const
     return weights;
 }
 
+std::map<int, float> EditModeController::computeSoftSelectionWeightsFromPositions(
+    const std::map<int, Ogre::Vector3>& positions) const
+{
+    std::map<int, float> weights;
+    if (!m_editableMesh || m_selectedVertices.empty())
+        return weights;
+
+    // Selected vertices always get weight 1.0.
+    for (int gi : m_selectedVertices)
+        weights[gi] = 1.0f;
+
+    if (!m_softSelectionEnabled || m_softSelectionRadius <= 0.0)
+        return weights;
+
+    // Position of each selected vertex — prefer the supplied map, fall back
+    // to the live mesh for any selected vertex not represented in it.
+    std::vector<Ogre::Vector3> selectedPositions;
+    selectedPositions.reserve(m_selectedVertices.size());
+    for (int gi : m_selectedVertices) {
+        auto it = positions.find(gi);
+        if (it != positions.end()) {
+            selectedPositions.push_back(it->second);
+            continue;
+        }
+        auto [subIdx, localIdx] = globalToLocal(gi);
+        if (subIdx < m_editableMesh->subMeshes().size() &&
+            localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size())
+        {
+            selectedPositions.push_back(
+                m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position);
+        }
+    }
+
+    const float radius = static_cast<float>(m_softSelectionRadius);
+    for (const auto& [gi, pos] : positions) {
+        if (m_selectedVertices.count(gi))
+            continue;
+
+        float minDist = std::numeric_limits<float>::max();
+        for (const auto& selPos : selectedPositions) {
+            float dist = pos.distance(selPos);
+            if (dist < minDist)
+                minDist = dist;
+        }
+        if (minDist >= radius)
+            continue;
+
+        float t = minDist / radius;
+        float weight = 0.0f;
+        if (m_softSelectionFalloff == 0) {
+            weight = 1.0f - t;
+        } else {
+            weight = 0.5f * (1.0f + std::cos(t * static_cast<float>(M_PI)));
+        }
+        if (weight > 0.001f)
+            weights[gi] = weight;
+    }
+    return weights;
+}
+
 // ===========================================================================
 // Normals recalculation
 // ===========================================================================
@@ -1852,14 +1912,23 @@ void EditModeController::scaleFromSnapshot(
     if (!m_editableMesh || snapshot.empty())
         return;
 
-    auto weights = getSoftSelectionWeights();
+    // Compute soft-selection weights from the PRESS-TIME snapshot positions,
+    // not the live (already-scaled) mesh. Otherwise a vertex near the radius
+    // boundary can drift out of the soft zone mid-drag, flipping its weight
+    // from its press-time value back to the default 1.0 and causing a visible
+    // jump. This is only a concern for baseline-based operations like scale;
+    // the incremental translate/rotate paths re-read the live mesh each call
+    // and their deltas are tiny, so the drift is negligible there.
+    auto weights = computeSoftSelectionWeightsFromPositions(snapshot);
 
     for (const auto& [gi, originalPos] : snapshot) {
         auto [subIdx, localIdx] = globalToLocal(gi);
         if (subIdx >= m_editableMesh->subMeshes().size() ||
             localIdx >= m_editableMesh->subMeshes()[subIdx].vertices.size())
             continue;
-        float weight = 1.0f;
+        // Weight 0 (not in snapshot map from soft-selection) means the vertex
+        // was captured but fell outside the radius, so it must not move.
+        float weight = 0.0f;
         auto wit = weights.find(gi);
         if (wit != weights.end()) weight = wit->second;
 

@@ -161,6 +161,13 @@ public:
     /// Returns a map of global vertex index -> weight (0.0 to 1.0).
     /// Selected vertices get weight 1.0; nearby vertices get falloff weight.
     std::map<int, float> getSoftSelectionWeights() const;
+
+    /// Compute soft-selection weights using a caller-supplied position map
+    /// instead of the live mesh. Used by baseline-based operations (e.g.
+    /// scaleFromSnapshot) to freeze weights at drag-start, so a vertex near
+    /// the radius boundary can't drift out of the soft zone mid-drag.
+    std::map<int, float> computeSoftSelectionWeightsFromPositions(
+        const std::map<int, Ogre::Vector3>& positions) const;
     /// @}
 
     /// @name Normals recalculation
