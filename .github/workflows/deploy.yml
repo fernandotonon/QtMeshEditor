@@ -1595,6 +1595,29 @@ jobs:
                 exit 1
             fi
 
+            # Fix QML plugin rpaths so they resolve Qt frameworks inside the
+            # bundle. macdeployqt leaves the original Qt-SDK rpath
+            # (@loader_path/../../../lib) on the plugins, which at runtime
+            # points to Contents/PlugIns/qml/lib/ — a directory that doesn't
+            # exist in the bundle. Plugins fail to load with
+            #   "plugin qtquickcontrols2plugin not found"
+            # because their dependent frameworks (QtQuickControls2 etc.) can't
+            # be resolved. Adding @executable_path/../Frameworks — which always
+            # resolves to Contents/Frameworks for any dylib loaded by the
+            # main executable — makes Qt's frameworks visible to the plugins.
+            echo "Fixing QML plugin rpaths..."
+            APP_BUNDLE="${{github.workspace}}/bin/QtMeshEditor.app"
+            find "$APP_BUNDLE/Contents/PlugIns/qml" -name "*.dylib" -type f 2>/dev/null | while read -r plugin; do
+                sudo install_name_tool -add_rpath @executable_path/../Frameworks "$plugin" 2>/dev/null || true
+                sudo install_name_tool -add_rpath @loader_path/../../../../Frameworks "$plugin" 2>/dev/null || true
+            done
+            # Also fix regular Qt plugins (platforms, tls, etc.) and CA-root
+            # drivers for the same reason.
+            find "$APP_BUNDLE/Contents/PlugIns" -maxdepth 3 -name "*.dylib" -type f \
+                ! -path "*/qml/*" 2>/dev/null | while read -r plugin; do
+                sudo install_name_tool -add_rpath @executable_path/../Frameworks "$plugin" 2>/dev/null || true
+            done
+
     - name: Prepare for packing
       run: |
             sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
