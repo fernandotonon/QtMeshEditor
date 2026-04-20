@@ -1297,144 +1297,6 @@ TEST(HalfEdgeMeshStandalone, BevelRoundtripKeepsMeshValid) {
     EXPECT_EQ(result.totalTriangleCount(), 10u);
 }
 
-TEST(HalfEdgeMeshStandalone, DISABLED_BevelMultiFaceCornerPullsAllIncidentFaces) {
-    // Four triangles meeting at the same central vertex (like a pyramid from
-    // above). Ideally beveling one interior edge would pull in the corners
-    // of ALL incident faces, not just the two adjacent to the edge.
-    // Disabled for now: the current 2-face-only bevel leaves the central
-    // vertex referenced by the non-bevel faces. Multi-face corner handling
-    // needs shared-edge stitching we haven't implemented yet.
-    //
-    //        v4 (top)
-    //       /  |  \
-    //      /   |   \
-    //     v0---v2---v3         (v2 is the central vertex)
-    //     |   / \   |
-    //     | /     \ |
-    //     v1-------v5
-    //
-    // v2 is shared by tris: (v0,v1,v2), (v1,v5,v2), (v5,v3,v2), (v3,v0,v2)
-    // — 4 faces meeting at v2. Also v4 is a dummy to give v2 more than 3
-    // neighbours but we'll drop it for simplicity; the 4-face fan is enough.
-    EditableMesh em;
-    EditableSubMesh sub;
-    sub.materialName = "M";
-    auto mkV = [](float x, float y, float z) {
-        EditableVertex v;
-        v.position = Ogre::Vector3(x, y, z);
-        v.normal = Ogre::Vector3(0, 0, 1);
-        v.hasNormal = true;
-        return v;
-    };
-    // Central vertex v2 at origin, four neighbours at compass points.
-    // v0 left, v1 bottom, v3 right, v5 bottom-right wait — keep it simple:
-    //   v0 = (-1, 1, 0), v1 = (-1,-1, 0), v3 = ( 1,-1, 0), v5 = ( 1, 1, 0)
-    //   v2 = (0, 0, 0)  (central)
-    // Four triangles around v2, each using two adjacent outer points.
-    // Use a pyramid-like shape so faces form creases with each other (not
-    // all coplanar). The central vertex v2 is lifted to (0, 0, 1) while the
-    // outer ring stays at z=0.
-    sub.vertices = {
-        mkV(-1,  1, 0), // 0
-        mkV(-1, -1, 0), // 1
-        mkV( 0,  0, 1), // 2 (central, elevated)
-        mkV( 1, -1, 0), // 3
-        mkV( 1,  1, 0), // 4
-    };
-    auto mkT = [](unsigned a, unsigned b, unsigned c) {
-        EditableTriangle t;
-        t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
-        return t;
-    };
-    // Winding: CCW viewed from +Z.
-    sub.triangles = {
-        mkT(0, 1, 2), // left face (v0, v1, v2)
-        mkT(1, 3, 2), // bottom face (v1, v3, v2)
-        mkT(3, 4, 2), // right face (v3, v4, v2)
-        mkT(4, 0, 2), // top face (v4, v0, v2)
-    };
-    em.subMeshes().push_back(std::move(sub));
-
-    HalfEdgeMesh he;
-    ASSERT_TRUE(he.buildFromEditableMesh(em));
-
-    // Pick an interior edge that touches v2 — the diagonal between v1 and v2
-    // (shared by two faces). Beveling should split v2's 4-face ring at the
-    // bevel boundary and pull all 4 face-corners inward at v2.
-    int targetEdge = -1;
-    for (size_t e = 0; e < he.edgeCount(); ++e) {
-        auto [ev1, ev2] = he.edgeVertices(static_cast<int>(e));
-        auto [f1, f2] = he.edgeFaces(static_cast<int>(e));
-        if (f1 < 0 || f2 < 0) continue;
-        // Pick the edge (v1=1, v2=2) — between the bottom-left point and the
-        // central point. Runs through 2 interior faces.
-        if ((ev1 == 1 && ev2 == 2) || (ev1 == 2 && ev2 == 1)) {
-            targetEdge = static_cast<int>(e);
-            break;
-        }
-    }
-    ASSERT_GE(targetEdge, 0);
-
-    const size_t vBefore = he.vertexCount();
-    auto newVerts = he.bevelEdges({targetEdge}, 0.1f);
-    ASSERT_TRUE(he.validate());
-
-    // Expect at least 4 new vertices: 2 at each endpoint. With multi-face
-    // fan at v2, we get one per incident face — v2 has 4 incident faces → 4
-    // new. Plus v1 which only has 2 incident faces — 2 new. Total ≥ 6.
-    EXPECT_GE(newVerts.size(), 6u);
-    EXPECT_GE(he.vertexCount(), vBefore + 6u);
-
-    // Round-trip back to EditableMesh and count how many triangles still
-    // reference the original central vertex (0,0,0). The two non-beveled
-    // neighbor faces that sit OPPOSITE the beveled edge share an internal
-    // edge where the central vertex legitimately stays. But the two beveled
-    // faces (and the edges between them and their ring-neighbors) should
-    // have been rewired away from the central vertex — so we expect far
-    // fewer references than the original 4.
-    EditableMesh result;
-    ASSERT_TRUE(he.toEditableMesh(result));
-    ASSERT_FALSE(result.subMeshes().empty());
-    const auto& outSub = result.subMeshes()[0];
-    int originalCentralIdx = -1;
-    Ogre::Vector3 centralPos(0, 0, 1);
-    for (size_t i = 0; i < outSub.vertices.size(); ++i) {
-        if (outSub.vertices[i].position.squaredDistance(centralPos) < 1e-8f) {
-            originalCentralIdx = static_cast<int>(i);
-            break;
-        }
-    }
-    int refsToCentral = 0;
-    if (originalCentralIdx >= 0) {
-        for (const auto& t : outSub.triangles) {
-            for (int k = 0; k < 3; ++k)
-                if (static_cast<int>(t.indices[k]) == originalCentralIdx) ++refsToCentral;
-        }
-    }
-    // Originally each of the 4 triangles had the central vertex as a corner
-    // (4 references). After multi-face bevel:
-    //   - The 2 beveled faces (f1, f2) no longer reference the central vertex
-    //     — they now use the inner offset vertices inside each face.
-    //   - The 2 non-beveled neighbor faces each have ONE v-incident edge that
-    //     is bevel-boundary (shared with f1 or f2) and one that is not
-    //     (shared with each other). Each neighbor is retriangulated into 2
-    //     tris, and 2 of those 4 new tris still reference the central vertex
-    //     (where it legitimately shares the non-beveled edge between the
-    //     two neighbor faces).
-    //
-    // So refsToCentral should be 4 — meaningfully fewer than before the
-    // rewire (where it would have been 4 triangles × 1 corner each = 4, but
-    // all coming from the f1/f2 side), and now only from the 2 untouched
-    // edges at the central vertex.
-    EXPECT_LE(refsToCentral, 4);
-    // New vertices: 4 inner offsets (v1a, v1b, v2a, v2b inside f1 and f2)
-    // + 2 on-edge offsets at v2 for the two bevel-boundary edges there.
-    // v1 is a boundary vertex in this test mesh so its ring walk bails and
-    // no extra edge offsets are created at v1 (the bevel falls back to the
-    // 2-face cap at that endpoint).
-    EXPECT_GE(newVerts.size(), 6u);
-}
-
 // ===========================================================================
 // Tests: Bevel on a welded cube (matches runtime's PrimitiveObject output)
 // ===========================================================================
@@ -1737,21 +1599,6 @@ TEST(HalfEdgeMeshStandalone, CubeBevelFrontFaceGetsCornerCut) {
     // are covered by CubeBevelTopRightEdgeProducesClosedManifold.
     (void)outputV5;
     (void)frontTrisReferencingV5;
-}
-
-TEST(HalfEdgeMeshStandalone, DISABLED_DebugCubeBevelTopFrontEdge) {
-    // Disabled: investigative dump test with no behavioral assertions.
-    // Kept as DISABLED so it's easy to re-enable ad hoc when diagnosing
-    // top-front-edge bevel regressions without adding CI noise.
-    auto em = makeCubeMesh();
-    HalfEdgeMesh he;
-    ASSERT_TRUE(he.buildFromEditableMesh(em));
-    int edgeIdx = findEdge(he, 4, 5);
-    ASSERT_GE(edgeIdx, 0);
-    auto newVerts = he.bevelEdges({edgeIdx}, 0.05f);
-    ASSERT_FALSE(newVerts.empty());
-    EditableMesh back;
-    ASSERT_TRUE(he.toEditableMesh(back));
 }
 
 TEST(HalfEdgeMeshStandalone, CubeBevelPreservesVolumeMinusChamfer) {
@@ -2324,31 +2171,6 @@ TEST(HalfEdgeMeshStandalone, RandomSmoothFanBevelManifold) {
     }
     fprintf(stderr, "Total tested: %d, failures: %d\n", totalTested, totalFailures);
     EXPECT_EQ(totalFailures, 0);
-}
-
-TEST(HalfEdgeMeshStandalone, DISABLED_FanToFanFailCaseDump) {
-    // Dump the first failing case (fanSize=5, seed=1) so we can see the
-    // exact emission pattern that produces boundary holes.
-    auto em = makeFanToFanMesh(5, 1);
-    HalfEdgeMesh he;
-    ASSERT_TRUE(he.buildFromEditableMesh(em));
-    int edgeIdx = findEdge(he, 0, 1);
-    ASSERT_GE(edgeIdx, 0);
-    ASSERT_FALSE(he.bevelEdges({edgeIdx}, 0.05f).empty());
-    EditableMesh back;
-    ASSERT_TRUE(he.toEditableMesh(back));
-
-    const auto& sub = back.subMeshes()[0];
-    fprintf(stderr, "=== FanToFan(5,1) dump ===\n");
-    for (size_t i = 0; i < sub.vertices.size(); ++i) {
-        const auto& p = sub.vertices[i].position;
-        fprintf(stderr, "v%zu = (%.4f, %.4f, %.4f)\n", i, p.x, p.y, p.z);
-    }
-    for (size_t t = 0; t < sub.triangles.size(); ++t) {
-        const auto& tri = sub.triangles[t];
-        fprintf(stderr, "t%zu = (%u, %u, %u)\n",
-                t, tri.indices[0], tri.indices[1], tri.indices[2]);
-    }
 }
 
 TEST(HalfEdgeMeshStandalone, DenseSmoothCharacterBevelManifold) {
