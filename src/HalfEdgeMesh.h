@@ -283,6 +283,29 @@ public:
      */
     std::vector<int> extrudeEdges(const std::vector<int>& edgeIndices);
 
+    /**
+     * @brief Bevel selected edges (flat chamfer).
+     *
+     * For each selected interior (two-face) edge, splits the edge in place
+     * into two parallel edges offset by `width` toward each adjacent face's
+     * interior, and inserts a chamfer quad (two triangles) between them.
+     * Each adjacent face is retriangulated so its shared edge moves from
+     * (v1, v2) to either (v1a, v2a) or (v1b, v2b).
+     *
+     * First-version limitations:
+     * - Boundary edges and non-manifold edges are skipped.
+     * - Edges that share an endpoint with another selected edge are skipped
+     *   (the corner would be pulled in inconsistent directions).
+     * - Flat profile only, 1 segment.
+     *
+     * @param edgeIndices The edge indices to bevel.
+     * @param width The offset distance, in world units, by which each side
+     *              of the chamfer is pulled away from the original edge.
+     * @return Indices of the newly created vertices (the chamfer corners).
+     *         Empty if the operation was skipped or failed.
+     */
+    std::vector<int> bevelEdges(const std::vector<int>& edgeIndices, float width);
+
     /// @}
 
     /// @name Validation

@@ -21,6 +21,7 @@ EditorViewport.cpp
 RotationGizmo.cpp
 TranslationGizmo.cpp
 ScaleGizmo.cpp
+BevelGizmo.cpp
 TransformOperator.cpp
 PrimitivesWidget.cpp
 PrimitiveObject.cpp
@@ -94,6 +95,7 @@ EditorViewport.h
 RotationGizmo.h
 TranslationGizmo.h
 ScaleGizmo.h
+BevelGizmo.h
 TransformOperator.h
 PrimitivesWidget.h
 PrimitiveObject.h

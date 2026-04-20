@@ -250,6 +250,67 @@ static inline Ogre::MeshPtr createInMemoryTriangleMesh(const std::string& name)
 }
 
 /**
+ * Creates an in-memory welded cube mesh (8 verts, 12 tris). Matches the
+ * topology the primitive-cube post-process produces at runtime — useful
+ * for end-to-end bevel tests that go through the full editor pipeline.
+ */
+static inline Ogre::MeshPtr createInMemoryWeldedCube(const std::string& name)
+{
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* sub = mesh->createSubMesh();
+    sub->useSharedVertices = false;
+    sub->vertexData = new Ogre::VertexData();
+    auto* decl = sub->vertexData->vertexDeclaration;
+
+    size_t offset = 0;
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+
+    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl->getVertexSize(0), 8, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    // (pos x3, normal x3, uv x2) = 8 floats per vertex
+    float verts[] = {
+        -1,-1,-1,  0,0,-1,  0,0,   // v0
+         1,-1,-1,  0,0,-1,  1,0,   // v1
+        -1, 1,-1,  0,0,-1,  0,1,   // v2
+         1, 1,-1,  0,0,-1,  1,1,   // v3
+        -1, 1, 1,  0,1, 0,  0,0,   // v4
+         1, 1, 1,  0,1, 0,  1,0,   // v5
+        -1,-1, 1,  0,-1,0,  0,1,   // v6
+         1,-1, 1,  0,-1,0,  1,1,   // v7
+    };
+    vbuf->writeData(0, sizeof(verts), verts);
+    sub->vertexData->vertexBufferBinding->setBinding(0, vbuf);
+    sub->vertexData->vertexCount = 8;
+
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 12 * 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint16_t idx[] = {
+        0,2,1,  1,2,3,       // back
+        4,6,5,  5,6,7,       // front
+        6,0,7,  7,0,1,       // bottom
+        2,4,3,  3,4,5,       // top
+        2,0,4,  4,0,6,       // left
+        1,3,7,  7,3,5,       // right
+    };
+    ibuf->writeData(0, sizeof(idx), idx);
+    sub->indexData->indexBuffer = ibuf;
+    sub->indexData->indexCount = 36;
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1,-1,-1,1,1,1));
+    mesh->_setBoundingSphereRadius(2.0);
+    mesh->load();
+
+    return mesh;
+}
+
+/**
  * Creates an in-memory mesh with a skeleton (2 bones: root + child)
  * and bone assignments. Does NOT include animations.
  *

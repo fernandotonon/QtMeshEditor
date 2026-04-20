@@ -61,7 +61,7 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     Ogre::SceneManager* pSceneMgr = manager->getSceneMgr();
     m_pTransformNode = pSceneMgr->getRootSceneNode()->createChildSceneNode(TRANSFORM_OBJECT_NAME);
 
-    m_pRotationGizmo = new RotationGizmo(m_pTransformNode);
+    m_pRotationGizmo = new RotationGizmo(m_pTransformNode, "RotationGizmo", 2.0f);
     m_pRotationGizmo->setQueryFlags(GIZMO_QUERY_FLAGS);
     m_pRotationGizmo->setVisible(false);
 
@@ -93,9 +93,14 @@ TransformOperator::TransformOperator() : QObject(nullptr)
 
     QtInputManager::getInstance().AddMouseListener(this);
 
-    // Load snap settings from QSettings
+    // Load snap settings from QSettings.
+    // Snap/enabled is a session toggle — always start disabled, don't read
+    // any previously-persisted value. Also clear any legacy persisted value
+    // so prior releases that stored `true` stop surfacing on next launch.
     QSettings settings;
-    mSnapEnabled    = settings.value("Snap/enabled", false).toBool();
+    if (settings.contains("Snap/enabled"))
+        settings.remove("Snap/enabled");
+    mSnapEnabled    = false;
     mSnapGridSize   = settings.value("Snap/gridSize", 1.0).toDouble();
     mSnapAngleStep  = settings.value("Snap/angleStep", 15.0).toDouble();
     mSnapScaleStep  = settings.value("Snap/scaleStep", 0.25).toDouble();
@@ -177,8 +182,7 @@ void TransformOperator::setSnapEnabled(bool enabled)
     if (mSnapEnabled != enabled)
     {
         mSnapEnabled = enabled;
-        QSettings settings;
-        settings.setValue("Snap/enabled", mSnapEnabled);
+        // Don't persist — snap is a session toggle, not a saved preference.
         SentryReporter::addBreadcrumb("ui.action",
             mSnapEnabled ? "Snap enabled" : "Snap disabled");
         emit snapSettingsChanged();
@@ -580,6 +584,37 @@ void TransformOperator::updateGizmo()
         m_pActiveWidget->setMouseTracking(mTrackingEnable);
 }
 
+void TransformOperator::tickTransformGizmoScale(const Ogre::Camera* camera)
+{
+    if (!camera || !m_pTransformNode) return;
+    // Only scale when a gizmo is actually visible (something selected and
+    // an active transform tool). Otherwise leave the node scale alone.
+    if (mTransformState == TS_SELECT || mTransformState == TS_NONE) return;
+    if (SelectionSet::getSingleton()->isEmpty()
+        && !(EditModeController::instance()->isEditModeActive()
+             && !EditModeController::instance()->selectedVertices().empty()))
+    {
+        return;
+    }
+    // Don't re-scale mid-drag. The scale path captures the gizmo's node
+    // scale at press-time (mEditModeScaleStartPixel / mTransformVector);
+    // mutating the node's scale per-frame would produce erratic ratios on
+    // skeletal meshes in edit mode.
+    if (mEditModeTransformActive) return;
+
+    float dist = (camera->getDerivedPosition() - m_pTransformNode->getPosition()).length();
+    if (dist < 1e-4f) dist = 1e-4f;
+    // Target roughly constant pixel size; the 0.12 coefficient matches what
+    // BevelGizmo uses so all on-screen gizmos look consistent.
+    // Note: RotationGizmo is authored at 2.0f scale (see constructor) so its
+    // circles encompass the translate/scale arrow handles — this factor is
+    // applied in RotationGizmo itself, on top of the uniform node scale
+    // here. Keeping the 2x in RotationGizmo means tweaking `s` updates all
+    // three gizmos proportionally.
+    float s = dist * 0.12f;
+    m_pTransformNode->setScale(s, s, s);
+}
+
 void TransformOperator::updateGizmoPosition()
 {
     Ogre::Vector3 currentPosition = Ogre::Vector3::ZERO;
@@ -857,6 +892,27 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 {
     if (e->button()==Qt::LeftButton)
     {
+        // Bevel session is active: priority path. If the click hits the
+        // gizmo handle → start a width-drag; anywhere else → commit the
+        // current width and fall through to normal selection.
+        auto* editCtrl = EditModeController::instance();
+        if (editCtrl->bevelSessionActive())
+        {
+            auto* hit = performRaySelection(e->pos(), /*findGizmo=*/true);
+            if (hit && editCtrl->isBevelGizmoHandle(hit)) {
+                mBevelDragStartRay = rayFromScreenPoint(e->pos());
+                mBevelDragStartWidth = editCtrl->bevelGizmoWidth();
+                mBevelDragActive = true;
+                SentryReporter::addBreadcrumb("ui.transform", "Bevel: drag start");
+                return;
+            }
+            // Click anywhere else — commit and consume the click. Matches
+            // Blender/Maya: a click outside the bevel gizmo ends the tool
+            // without immediately starting a new selection or transform.
+            editCtrl->commitBevel();
+            return;
+        }
+
         // In edit mode, delegate selection to EditModeController
         if (EditModeController::instance()->isEditModeActive() && mTransformState == TS_SELECT)
         {
@@ -896,8 +952,10 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
             if (result.first) {
                 mStartPoint = mouseRay.getPoint(result.second);
-                if (mTransformState == TS_SCALE)
-                    mScaleStartDistance = (mStartPoint - m_pTransformNode->getPosition()).length();
+                if (mTransformState == TS_SCALE) {
+                    mEditModeScalePivot = editCtrl->getSelectedVerticesCentroid();
+                    mEditModeScaleStartPixel = e->pos();
+                }
             }
             return;
         }
@@ -968,9 +1026,12 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             if(result.first)
             {
                 mStartPoint = mouseRay.getPoint(result.second);
-                // For scale: record initial distance from gizmo center to start point
-                if(mTransformState == TS_SCALE)
-                    mScaleStartDistance = (mStartPoint - m_pTransformNode->getPosition()).length();
+                // For scale: record start pixel for pixel-delta drag. The
+                // world-space ray-plane math used to live here but it compounded
+                // drift on trackpads (high event rate → many rebases → runaway).
+                if(mTransformState == TS_SCALE) {
+                    mScaleDragStartPixel = e->pos();
+                }
             }
         }
     }
@@ -978,6 +1039,15 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
 void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 {
+    // Bevel gizmo drag: priority path.
+    if (mBevelDragActive && EditModeController::instance()->bevelSessionActive())
+    {
+        Ogre::Ray dragRay = rayFromScreenPoint(e->pos());
+        EditModeController::instance()->updateBevelFromDrag(
+            mBevelDragStartRay, dragRay, mBevelDragStartWidth);
+        return;
+    }
+
     // Edit mode vertex transform: intercept drag and route to EditModeController
     if (mEditModeTransformActive && EditModeController::instance()->isEditModeActive()
         && !mStartPoint.isZeroLength())
@@ -1063,24 +1133,36 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
             }
             else if (mTransformState == TS_SCALE)
             {
-                Ogre::Real currentDistance = (point - m_pTransformNode->getPosition()).length();
-                if (mScaleStartDistance > 0.001f)
-                {
-                    Ogre::Real ratio = currentDistance / mScaleStartDistance;
-                    Ogre::Vector3 scaleFactor = Ogre::Vector3::UNIT_SCALE;
+                QPoint delta = e->pos() - mEditModeScaleStartPixel;
+                float pixels = static_cast<float>(delta.x() - delta.y());
+                const float kPixelsPerDouble = 100.0f;
+                float ratio = std::pow(2.0f, pixels / kPixelsPerDouble);
+                if (ratio < 0.01f) ratio = 0.01f;
+                if (ratio > 100.0f) ratio = 100.0f;
 
-                    if (mTransformVector == Ogre::Vector3::ZERO)
-                        scaleFactor = Ogre::Vector3(ratio, ratio, ratio);
-                    else
-                        scaleFactor = Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
+                Ogre::Vector3 scaleFactor = (mTransformVector == Ogre::Vector3::ZERO)
+                    ? Ogre::Vector3(ratio, ratio, ratio)
+                    : Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
 
-                    editCtrl->restoreVertexPositions(mEditModeStartPositions);
-                    editCtrl->scaleSelectedVertices(scaleFactor);
-
-                    mScaleStartDistance = currentDistance;
-                    mEditModeStartPositions = editCtrl->snapshotVertexPositions();
-                    updateGizmoPosition();
+                // Apply snap if enabled, matching object-mode behavior.
+                bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
+                if (snapping) {
+                    Ogre::Vector3 snappedDelta = snapScale(
+                        scaleFactor - Ogre::Vector3::UNIT_SCALE, mSnapScaleStep);
+                    scaleFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
+                    // Snap can round a delta near -1 down to exactly -1 (e.g.
+                    // ratio=0.01 → delta=-0.99 → snapped to -1 at step=1.0),
+                    // producing a zero scale that collapses geometry. Reclamp
+                    // to the same 0.01 floor the pre-snap ratio enforces.
+                    scaleFactor.x = std::max<Ogre::Real>(scaleFactor.x, 0.01f);
+                    scaleFactor.y = std::max<Ogre::Real>(scaleFactor.y, 0.01f);
+                    scaleFactor.z = std::max<Ogre::Real>(scaleFactor.z, 0.01f);
                 }
+
+                editCtrl->scaleFromSnapshot(mEditModeUndoSnapshot,
+                                            mEditModeScalePivot,
+                                            scaleFactor);
+                updateGizmoPosition();
             }
         }
         return;
@@ -1279,78 +1361,61 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
         }
         else
         {
-            // Dragging -> compute scale factor from distance ratio
-            Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
-            std::pair<bool, Ogre::Real> result = mouseRay.intersects(Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
+            // Pixel-delta scale against the frozen press-time baseline.
+            // See the press-time handler above for why this replaced the
+            // world-space ray-plane distance approach.
+            QPoint delta = e->pos() - mScaleDragStartPixel;
+            float pixels = static_cast<float>(delta.x() - delta.y());
+            const float kPixelsPerDouble = 100.0f;
+            float ratio = std::pow(2.0f, pixels / kPixelsPerDouble);
+            if (ratio < 0.01f) ratio = 0.01f;
+            if (ratio > 100.0f) ratio = 100.0f;
 
-            if(result.first)
-            {
-                Ogre::Vector3 point = mouseRay.getPoint(result.second);
-                Ogre::Real currentDistance = (point - m_pTransformNode->getPosition()).length();
+            Ogre::Vector3 scaleFactor = (mTransformVector == Ogre::Vector3::ZERO)
+                ? Ogre::Vector3(ratio, ratio, ratio)
+                : Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
 
-                if(mScaleStartDistance > 0.001f)
-                {
-                    Ogre::Real ratio = currentDistance / mScaleStartDistance;
-                    Ogre::Vector3 scaleFactor = Ogre::Vector3::UNIT_SCALE;
-
-                    if(mTransformVector == Ogre::Vector3::ZERO)
-                    {
-                        // Uniform scale when no axis selected
-                        scaleFactor = Ogre::Vector3(ratio, ratio, ratio);
-                    }
-                    else
-                    {
-                        // Per-axis scale
-                        scaleFactor = Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
-                    }
-
-                    // Apply snap if Ctrl is held or snap is permanently enabled
-                    bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
-                    if (snapping)
-                    {
-                        // Accumulate the delta from identity (1.0)
-                        mSnapScaleAccum += (scaleFactor - Ogre::Vector3::UNIT_SCALE);
-                        Ogre::Vector3 snappedDelta = snapScale(mSnapScaleAccum, mSnapScaleStep);
-                        if (snappedDelta.isZeroLength())
-                        {
-                            mScaleStartDistance = currentDistance;
-                        }
-                        else
-                        {
-                            mSnapScaleAccum -= snappedDelta;
-                            // For nodes: use incremental factor (node->scale is multiplicative)
-                            // For entities/sub-entities: use cumulative factor (scaleSelected
-                            // undoes previous and applies absolute)
-                            if (SelectionSet::getSingleton()->hasNodes())
-                            {
-                                Ogre::Vector3 snappedFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
-                                scaleSelected(snappedFactor);
-                            }
-                            else
-                            {
-                                mSnapScaleCumulative += snappedDelta;
-                                scaleSelected(mSnapScaleCumulative);
-                            }
-                            mScaleStartDistance = currentDistance;
-                            emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
-                            updateGizmoPosition();
-                        }
-                    }
-                    else
-                    {
-                        scaleSelected(scaleFactor);
-                        mScaleStartDistance = currentDistance;
-                        emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
-                        updateGizmoPosition();
-                    }
-                }
+            bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
+            if (snapping) {
+                Ogre::Vector3 snappedDelta = snapScale(scaleFactor - Ogre::Vector3::UNIT_SCALE,
+                                                       mSnapScaleStep);
+                scaleFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
+                // Reclamp per-component after snap — snapping can round a
+                // delta near -1 down to exactly -1, producing zero scale.
+                scaleFactor.x = std::max<Ogre::Real>(scaleFactor.x, 0.01f);
+                scaleFactor.y = std::max<Ogre::Real>(scaleFactor.y, 0.01f);
+                scaleFactor.z = std::max<Ogre::Real>(scaleFactor.z, 0.01f);
             }
+
+            // Apply cumulative scale to the press-time baseline for each
+            // selected object.
+            if (SelectionSet::getSingleton()->hasNodes()) {
+                auto nodes = SelectionSet::getSingleton()->getNodesSelectionList();
+                for (int i = 0; i < nodes.size() && i < mUndoStartScales.size(); ++i) {
+                    nodes[i]->setScale(mUndoStartScales[i] * scaleFactor);
+                }
+                updateGizmoPosition();
+            } else {
+                // Entities / sub-entities: scaleSelected undoes the previous
+                // factor and applies the new one, so we can pass the cumulative
+                // factor directly.
+                scaleSelected(scaleFactor);
+            }
+            emit selectedScaleChanged(SelectionSet::getSingleton()->getSelectionScale());
         }
     }
 }
 
 void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 {
+    // End bevel drag but keep the session open (user can re-grab or click
+    // elsewhere to commit).
+    if (mBevelDragActive && e->button() == Qt::LeftButton) {
+        mBevelDragActive = false;
+        SentryReporter::addBreadcrumb("ui.transform", "Bevel: drag end");
+        return;
+    }
+
     // Push undo command for edit mode vertex transforms
     if (mEditModeTransformActive && (e->button() == Qt::LeftButton))
     {
@@ -1389,7 +1454,6 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         mEditModeStartPositions.clear();
         mEditModeUndoSnapshot.clear();
         mStartPoint = Ogre::Vector3::ZERO;
-        mScaleStartDistance = 0.0f;
 
         // Don't fall through to object-mode handlers
         if (m_pSelectionBox->isVisible()) {
@@ -1424,7 +1488,6 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         mUndoSubEntities.clear();
         mUndoSubMeshPositions.clear();
         mStartPoint = Ogre::Vector3::ZERO;
-        mScaleStartDistance = 0.0f;
     }
 
     if((SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()) && (e->button() == Qt::LeftButton))
@@ -1506,7 +1569,6 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         mUndoStartOrientations.clear();
         mUndoStartScales.clear();
         mStartPoint = Ogre::Vector3::ZERO;
-        mScaleStartDistance = 0.0f;
     }
 
     if(m_pSelectionBox->isVisible())
@@ -1637,17 +1699,31 @@ void TransformOperator::scaleSelected(const Ogre::Vector3& scaleFactor)
     }
     else if(SelectionSet::getSingleton()->hasSubEntities())
     {
-        for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+        // Restore baseline positions (captured at drag start into
+        // mUndoSubMeshPositions) before applying the cumulative scale.
+        // Without this step, SubMeshTransform::scaleSubMesh is a relative
+        // mutation on the current positions, so mouse-move events compound
+        // the scaling exponentially. The entity path above already inverts
+        // the previous scale via getEntityScaleFactor — this is the
+        // equivalent for the sub-mesh path.
+        const auto& subs = SelectionSet::getSingleton()->getSubEntitiesSelectionList();
+        int idx = 0;
+        for (Ogre::SubEntity* sub : subs)
         {
             Ogre::Entity* ent = sub->getParent();
             for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
             {
                 if (ent->getSubEntity(s) == sub)
                 {
+                    if (idx < mUndoSubMeshPositions.size()) {
+                        SubMeshTransform::writePositions(ent, s,
+                            mUndoSubMeshPositions[idx]);
+                    }
                     SubMeshTransform::scaleSubMesh(ent, s, scaleFactor);
                     break;
                 }
             }
+            ++idx;
         }
         updateGizmoPosition();
     }

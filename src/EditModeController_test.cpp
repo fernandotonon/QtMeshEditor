@@ -18,6 +18,8 @@ The MIT License
 #include <set>
 #include <utility>
 #include <cmath>
+#include <array>
+#include <map>
 
 // ===========================================================================
 // Pure geometry tests (no Ogre needed)
@@ -807,3 +809,141 @@ TEST_F(EditModeControllerSelectionTest, SignalEmission) {
     ctrl->exitEditMode(false);
     Manager::getSingleton()->destroySceneNode("EditCtrl_signals_node");
 }
+
+// ===========================================================================
+// End-to-end bevel tests (cube primitive → edit mode → bevel → GPU buffers)
+// Runs the whole EditModeController::applyBevelTopology pipeline including
+// toEditableMesh → recalculateNormals → resizeEntityBuffers → Ogre sync.
+// Catches bugs between the HE mesh output and the final Ogre buffers.
+// ===========================================================================
+
+class EditModeControllerBevelE2ETest : public ::testing::Test {
+protected:
+    Ogre::SceneNode* m_node = nullptr;
+    Ogre::Entity* m_entity = nullptr;
+    int s_counter = 0;
+
+    void SetUp() override {
+        if (!tryInitOgre()) { GTEST_SKIP() << "Ogre not available"; return; }
+        if (!canLoadMeshFiles()) { GTEST_SKIP() << "Cannot create HW buffers"; return; }
+        createStandardOgreMaterials();
+
+        auto mesh = createInMemoryWeldedCube("BevelE2E_cube");
+        m_node = Manager::getSingleton()->addSceneNode("BevelE2E_node");
+        m_entity = Manager::getSingleton()->createEntity(m_node, mesh);
+        m_entity->setMaterialName("BaseWhite");
+        SelectionSet::getSingleton()->selectOne(m_node);
+    }
+    void TearDown() override {
+        auto* ctrl = EditModeController::instance();
+        if (ctrl->isEditModeActive()) ctrl->exitEditMode(false);
+        if (m_node) {
+            Manager::getSingleton()->destroySceneNode(m_node);
+            m_node = nullptr;
+        }
+    }
+};
+
+// Extract the actual GPU vertex positions + triangle indices for all
+// submeshes of an entity. Returns (positions, indices) — indices are
+// per-submesh triangle index triples.
+static void extractEntityBuffers(Ogre::Entity* entity,
+                                 std::vector<Ogre::Vector3>& outPositions,
+                                 std::vector<std::array<unsigned, 3>>& outTriangles)
+{
+    outPositions.clear();
+    outTriangles.clear();
+    if (!entity) return;
+    auto* mesh = entity->getMesh().get();
+    if (!mesh) return;
+
+    unsigned baseVert = 0;
+    for (unsigned short s = 0; s < mesh->getNumSubMeshes(); ++s) {
+        auto* sub = mesh->getSubMesh(s);
+        auto* vdata = sub->useSharedVertices ? mesh->sharedVertexData : sub->vertexData;
+        if (!vdata) continue;
+        const auto* elem = vdata->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+        if (!elem) continue;
+        auto vbuf = vdata->vertexBufferBinding->getBuffer(elem->getSource());
+        unsigned char* raw = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (size_t v = 0; v < vdata->vertexCount; ++v) {
+            float* f;
+            elem->baseVertexPointerToElement(raw + v * vbuf->getVertexSize(), &f);
+            outPositions.push_back(Ogre::Vector3(f[0], f[1], f[2]));
+        }
+        vbuf->unlock();
+
+        auto* idata = sub->indexData;
+        if (!idata || !idata->indexBuffer) continue;
+        auto ibuf = idata->indexBuffer;
+        bool use32 = (ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT);
+        unsigned char* rawI = static_cast<unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        size_t nTris = idata->indexCount / 3;
+        for (size_t t = 0; t < nTris; ++t) {
+            std::array<unsigned, 3> tri;
+            if (use32) {
+                auto* p = reinterpret_cast<uint32_t*>(rawI) + t * 3;
+                tri = {p[0] + baseVert, p[1] + baseVert, p[2] + baseVert};
+            } else {
+                auto* p = reinterpret_cast<uint16_t*>(rawI) + t * 3;
+                tri = {p[0] + baseVert, p[1] + baseVert, p[2] + baseVert};
+            }
+            outTriangles.push_back(tri);
+        }
+        ibuf->unlock();
+        baseVert += vdata->vertexCount;
+    }
+}
+
+TEST_F(EditModeControllerBevelE2ETest, BevelCubeTopRightEdgeProducesClosedManifold) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+
+    // Select the edge between v5=(1,1,1) and v3=(1,1,-1).
+    ctrl->selectEdge(5, 3, false);
+
+    ASSERT_TRUE(ctrl->bevelSelection()) << "bevelSelection returned false";
+
+    // Extract GPU buffers and verify closed manifold with positive outward normals.
+    std::vector<Ogre::Vector3> positions;
+    std::vector<std::array<unsigned, 3>> tris;
+    extractEntityBuffers(m_entity, positions, tris);
+
+    fprintf(stderr, "[E2E] Entity post-bevel: verts=%zu tris=%zu\n",
+            positions.size(), tris.size());
+
+    // Closed: every edge must appear exactly 2 times (once forward, once backward).
+    std::map<std::pair<unsigned,unsigned>, int> edgeUse;
+    for (const auto& t : tris) {
+        for (int k = 0; k < 3; ++k) {
+            unsigned u = t[k], v = t[(k+1)%3];
+            auto key = std::make_pair(std::min(u,v), std::max(u,v));
+            ++edgeUse[key];
+        }
+    }
+    size_t boundaryEdges = 0;
+    for (auto& [_, c] : edgeUse) if (c == 1) ++boundaryEdges;
+    EXPECT_EQ(boundaryEdges, 0u) << "E2E bevel leaves " << boundaryEdges << " boundary edges";
+
+    // Every tri should face outward (cube centered at origin).
+    int invertedTris = 0;
+    for (size_t t = 0; t < tris.size(); ++t) {
+        const auto& tri = tris[t];
+        auto& p0 = positions[tri[0]];
+        auto& p1 = positions[tri[1]];
+        auto& p2 = positions[tri[2]];
+        auto n = (p1 - p0).crossProduct(p2 - p0);
+        if (n.length() < 1e-8f) continue;
+        n.normalise();
+        auto c = (p0 + p1 + p2) / 3.0f;
+        if (c.length() > 1e-6f) c.normalise();
+        if (n.dotProduct(c) < 0.1f) {
+            ++invertedTris;
+            fprintf(stderr, "  inverted tri %zu = (%u,%u,%u) cos=%.3f\n",
+                    t, tri[0], tri[1], tri[2], n.dotProduct(c));
+        }
+    }
+    EXPECT_EQ(invertedTris, 0) << invertedTris << " inverted triangles in GPU buffers";
+}
+
