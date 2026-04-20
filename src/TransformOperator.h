@@ -170,7 +170,6 @@ private:
     TransformState                          mTransformState = TS_NONE;
     TransformSpace                          mTransformSpace = SPACE_WORLD;
     PivotMode                               mPivotMode = PIVOT_CENTER;
-    Ogre::Real                              mScaleStartDistance = 0.0f;
 
     // Snap settings (persisted in QSettings)
     bool                                    mSnapEnabled = false;

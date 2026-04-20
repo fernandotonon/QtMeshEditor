@@ -58,9 +58,15 @@ EditModeController::EditModeController()
 
 EditModeController::~EditModeController()
 {
-    // Exit cleanly if still in edit mode
-    if (m_editModeActive)
-        exitEditMode(false);
+    // Exit cleanly if still in edit mode. Swallow any exception: a
+    // destructor must never propagate, and the process is ending anyway.
+    if (m_editModeActive) {
+        try {
+            exitEditMode(false);
+        } catch (...) {
+            // Best-effort cleanup during shutdown.
+        }
+    }
 }
 
 EditModeController* EditModeController::instance()

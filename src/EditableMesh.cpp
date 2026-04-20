@@ -144,13 +144,15 @@ void EditableMesh::weldByPosition(float tolerance)
         for (size_t i = 0; i < sub.vertices.size(); ++i)
             remap[i] = i;
 
-        const float tol2 = tolerance * tolerance;
+        // NOTE: `tolerance` is a SQUARED distance — it's compared directly
+        // against squaredDistance without another square. Default 1e-8
+        // corresponds to a 1e-4 welding radius in linear units.
         for (size_t i = 0; i < sub.vertices.size(); ++i) {
             if (!keep[i]) continue;
             for (size_t j = i + 1; j < sub.vertices.size(); ++j) {
                 if (!keep[j]) continue;
                 float d2 = sub.vertices[i].position.squaredDistance(sub.vertices[j].position);
-                if (d2 <= tol2) {
+                if (d2 <= tolerance) {
                     remap[j] = i;
                     keep[j] = false;
                 }

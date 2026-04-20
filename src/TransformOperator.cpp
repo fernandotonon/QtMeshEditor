@@ -596,15 +596,21 @@ void TransformOperator::tickTransformGizmoScale(const Ogre::Camera* camera)
     {
         return;
     }
-    // Don't re-scale mid-drag. The scale drag path uses mScaleStartDistance
-    // captured at press-time and mutating the node's scale per-frame produces
-    // erratic ratios on skeletal meshes in edit mode.
+    // Don't re-scale mid-drag. The scale path captures the gizmo's node
+    // scale at press-time (mEditModeScaleStartPixel / mTransformVector);
+    // mutating the node's scale per-frame would produce erratic ratios on
+    // skeletal meshes in edit mode.
     if (mEditModeTransformActive) return;
 
     float dist = (camera->getDerivedPosition() - m_pTransformNode->getPosition()).length();
     if (dist < 1e-4f) dist = 1e-4f;
     // Target roughly constant pixel size; the 0.12 coefficient matches what
     // BevelGizmo uses so all on-screen gizmos look consistent.
+    // Note: RotationGizmo is authored at 2.0f scale (see constructor) so its
+    // circles encompass the translate/scale arrow handles — this factor is
+    // applied in RotationGizmo itself, on top of the uniform node scale
+    // here. Keeping the 2x in RotationGizmo means tweaking `s` updates all
+    // three gizmos proportionally.
     float s = dist * 0.12f;
     m_pTransformNode->setScale(s, s, s);
 }
@@ -949,7 +955,6 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 if (mTransformState == TS_SCALE) {
                     mEditModeScalePivot = editCtrl->getSelectedVerticesCentroid();
                     mEditModeScaleStartPixel = e->pos();
-                    mScaleStartDistance = 1.0f; // unused in pixel-delta path
                 }
             }
             return;
@@ -1025,7 +1030,6 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 // world-space ray-plane math used to live here but it compounded
                 // drift on trackpads (high event rate → many rebases → runaway).
                 if(mTransformState == TS_SCALE) {
-                    mScaleStartDistance = 1.0f; // unused in pixel-delta path
                     mScaleDragStartPixel = e->pos();
                 }
             }
@@ -1139,6 +1143,14 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
                 Ogre::Vector3 scaleFactor = (mTransformVector == Ogre::Vector3::ZERO)
                     ? Ogre::Vector3(ratio, ratio, ratio)
                     : Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
+
+                // Apply snap if enabled, matching object-mode behavior.
+                bool snapping = mSnapEnabled || (e->modifiers() & Qt::ControlModifier);
+                if (snapping) {
+                    Ogre::Vector3 snappedDelta = snapScale(
+                        scaleFactor - Ogre::Vector3::UNIT_SCALE, mSnapScaleStep);
+                    scaleFactor = Ogre::Vector3::UNIT_SCALE + snappedDelta;
+                }
 
                 editCtrl->scaleFromSnapshot(mEditModeUndoSnapshot,
                                             mEditModeScalePivot,
@@ -1430,7 +1442,6 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         mEditModeStartPositions.clear();
         mEditModeUndoSnapshot.clear();
         mStartPoint = Ogre::Vector3::ZERO;
-        mScaleStartDistance = 0.0f;
 
         // Don't fall through to object-mode handlers
         if (m_pSelectionBox->isVisible()) {
@@ -1465,7 +1476,6 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         mUndoSubEntities.clear();
         mUndoSubMeshPositions.clear();
         mStartPoint = Ogre::Vector3::ZERO;
-        mScaleStartDistance = 0.0f;
     }
 
     if((SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()) && (e->button() == Qt::LeftButton))
@@ -1547,7 +1557,6 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         mUndoStartOrientations.clear();
         mUndoStartScales.clear();
         mStartPoint = Ogre::Vector3::ZERO;
-        mScaleStartDistance = 0.0f;
     }
 
     if(m_pSelectionBox->isVisible())
@@ -1678,17 +1687,31 @@ void TransformOperator::scaleSelected(const Ogre::Vector3& scaleFactor)
     }
     else if(SelectionSet::getSingleton()->hasSubEntities())
     {
-        for (Ogre::SubEntity* sub : SelectionSet::getSingleton()->getSubEntitiesSelectionList())
+        // Restore baseline positions (captured at drag start into
+        // mUndoSubMeshPositions) before applying the cumulative scale.
+        // Without this step, SubMeshTransform::scaleSubMesh is a relative
+        // mutation on the current positions, so mouse-move events compound
+        // the scaling exponentially. The entity path above already inverts
+        // the previous scale via getEntityScaleFactor — this is the
+        // equivalent for the sub-mesh path.
+        const auto& subs = SelectionSet::getSingleton()->getSubEntitiesSelectionList();
+        int idx = 0;
+        for (Ogre::SubEntity* sub : subs)
         {
             Ogre::Entity* ent = sub->getParent();
             for (unsigned int s = 0; s < ent->getNumSubEntities(); ++s)
             {
                 if (ent->getSubEntity(s) == sub)
                 {
+                    if (idx < mUndoSubMeshPositions.size()) {
+                        SubMeshTransform::writePositions(ent, s,
+                            mUndoSubMeshPositions[idx]);
+                    }
                     SubMeshTransform::scaleSubMesh(ent, s, scaleFactor);
                     break;
                 }
             }
+            ++idx;
         }
         updateGizmoPosition();
     }
