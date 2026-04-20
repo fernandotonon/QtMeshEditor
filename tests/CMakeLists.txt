@@ -31,6 +31,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BevelGizmo.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformOperator.cpp
 
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrimitivesWidget.cpp
@@ -105,6 +106,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/RotationGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TranslationGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/ScaleGizmo.h
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BevelGizmo.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/TransformOperator.h
 
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PrimitivesWidget.h

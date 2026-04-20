@@ -166,8 +166,12 @@ void BevelGizmo::setVisible(bool visible)
 
 bool BevelGizmo::isVisible() const
 {
-    return m_node && m_node->getAttachedObject(0) &&
-           m_node->getAttachedObject(0)->isVisible();
+    // m_node has no directly attached objects; the shaft and handle are
+    // attached to their own child nodes. Query the ManualObjects themselves
+    // so the reported visibility matches the cascaded setVisible() call.
+    if (m_shaft && m_shaft->isVisible()) return true;
+    if (m_handle && m_handle->isVisible()) return true;
+    return false;
 }
 
 void BevelGizmo::setScale(float scale)

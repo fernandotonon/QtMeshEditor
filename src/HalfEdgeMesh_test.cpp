@@ -1685,16 +1685,6 @@ TEST(HalfEdgeMeshStandalone, CubeBevelTopFrontEdgeTrimsLeftAndRightFaceCorners) 
     int rightFaceV5 = countTrisOnFaceReferencingVert(
         back, Ogre::Vector3(1, 0, 0), Ogre::Vector3(1, 1, 1));
 
-    fprintf(stderr, "[TRIM] leftFaceV4=%d rightFaceV5=%d\n", leftFaceV4, rightFaceV5);
-    const auto& sub = back.subMeshes()[0];
-    for (size_t i = 0; i < sub.vertices.size(); ++i) {
-        const auto& p = sub.vertices[i].position;
-        fprintf(stderr, "v%zu = (%.3f, %.3f, %.3f)\n", i, p.x, p.y, p.z);
-    }
-    for (size_t t = 0; t < sub.triangles.size(); ++t) {
-        const auto& tri = sub.triangles[t];
-        fprintf(stderr, "t%zu = (%u, %u, %u)\n", t, tri.indices[0], tri.indices[1], tri.indices[2]);
-    }
     EXPECT_EQ(leftFaceV4, 0)
         << "left face still has " << leftFaceV4
         << " tris referencing v4=(-1,1,1) — corner not trimmed";
@@ -1739,17 +1729,20 @@ TEST(HalfEdgeMeshStandalone, CubeBevelFrontFaceGetsCornerCut) {
                 if (static_cast<int>(t.indices[k]) == outputV5) ++frontTrisReferencingV5;
         }
     }
-    // Front face keeps v5 as a corner — the bevel cuts INTO the top and
-    // right faces, leaving the front face (and its v5 corner) intact.
-    // What we care about is just that front-face tris are still properly
-    // stitched (which the manifold/closed tests already verify).
-    (void)frontTrisReferencingV5;
+    // The bevel cuts v5=(1,1,1) entirely (it's both endpoints' corner on
+    // top AND right faces). Neither outputV5 nor the front-face-corner
+    // counter survives to a testable state; the valuable coverage here
+    // is just that bevel ran without crashing, which the ASSERT_FALSE
+    // above already enforces. The manifold/closed-surface invariants
+    // are covered by CubeBevelTopRightEdgeProducesClosedManifold.
     (void)outputV5;
+    (void)frontTrisReferencingV5;
 }
 
-TEST(HalfEdgeMeshStandalone, DebugCubeBevelTopFrontEdge) {
-    // Top-front edge between v4=(-1,1,1) and v5=(1,1,1). This edge is
-    // adjacent to top (+Y) and front (+Z) faces. Dump full mesh state.
+TEST(HalfEdgeMeshStandalone, DISABLED_DebugCubeBevelTopFrontEdge) {
+    // Disabled: investigative dump test with no behavioral assertions.
+    // Kept as DISABLED so it's easy to re-enable ad hoc when diagnosing
+    // top-front-edge bevel regressions without adding CI noise.
     auto em = makeCubeMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -1759,25 +1752,6 @@ TEST(HalfEdgeMeshStandalone, DebugCubeBevelTopFrontEdge) {
     ASSERT_FALSE(newVerts.empty());
     EditableMesh back;
     ASSERT_TRUE(he.toEditableMesh(back));
-    const auto& sub = back.subMeshes()[0];
-
-    fprintf(stderr, "\n=== Top-front bevel ===\n");
-    for (size_t i = 0; i < sub.vertices.size(); ++i) {
-        const auto& p = sub.vertices[i].position;
-        fprintf(stderr, "v%zu = (%.4f, %.4f, %.4f)\n", i, p.x, p.y, p.z);
-    }
-    for (size_t t = 0; t < sub.triangles.size(); ++t) {
-        const auto& tri = sub.triangles[t];
-        const auto& p0 = sub.vertices[tri.indices[0]].position;
-        const auto& p1 = sub.vertices[tri.indices[1]].position;
-        const auto& p2 = sub.vertices[tri.indices[2]].position;
-        auto n = (p1 - p0).crossProduct(p2 - p0);
-        auto cent = (p0 + p1 + p2) / 3.0f;
-        float outward = n.normalisedCopy().dotProduct(cent.normalisedCopy());
-        fprintf(stderr, "t%zu = (%u, %u, %u) nLen=%.4f outward=%.4f\n",
-                t, tri.indices[0], tri.indices[1], tri.indices[2], n.length(), outward);
-    }
-    fflush(stderr);
 }
 
 TEST(HalfEdgeMeshStandalone, CubeBevelPreservesVolumeMinusChamfer) {

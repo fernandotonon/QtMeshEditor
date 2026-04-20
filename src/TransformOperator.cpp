@@ -900,8 +900,11 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 SentryReporter::addBreadcrumb("ui.transform", "Bevel: drag start");
                 return;
             }
-            // Click anywhere else — commit and let selection proceed below.
+            // Click anywhere else — commit and consume the click. Matches
+            // Blender/Maya: a click outside the bevel gizmo ends the tool
+            // without immediately starting a new selection or transform.
             editCtrl->commitBevel();
+            return;
         }
 
         // In edit mode, delegate selection to EditModeController

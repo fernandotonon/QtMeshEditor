@@ -1414,8 +1414,12 @@ bool EditModeController::applyBevelTopology(
     // Full normal recompute — cheaper options (selective by proximity) turned
     // out to leave seams around the beveled region where the neighbor faces
     // share vertices with the new topology. A full pass is safe and cheap on
-    // meshes that pass through edit mode.
-    m_editableMesh->recalculateNormals();
+    // meshes that pass through edit mode. Respect the current normals mode
+    // so flat-shaded meshes don't silently flip to smooth after bevel.
+    if (m_normalsMode == 0)
+        m_editableMesh->recalculateNormals();
+    else
+        m_editableMesh->recalculateNormalsFlat();
 
     if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
         return false;
@@ -1689,11 +1693,25 @@ void EditModeController::cancelBevel()
     m_selectedEdges = std::move(m_bevelSession.origSelectedEdges);
     m_selectedFaces = std::move(m_bevelSession.origSelectedFaces);
 
-    // Re-sync the entity with the restored mesh.
+    // Re-sync the entity with the restored mesh. Snapshot SubEntity
+    // materials before _deinitialise/_initialise (Ogre resets them to
+    // the SubMesh default) so wireframe / material-editor overrides
+    // survive the Esc path, matching the commit path.
     m_editableMesh->resizeEntityBuffers(m_editEntity);
     if (m_editEntity) {
+        std::vector<std::string> preMats;
+        preMats.reserve(m_editEntity->getNumSubEntities());
+        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i)
+            preMats.push_back(m_editEntity->getSubEntity(i)->getMaterialName());
+
         m_editEntity->_deinitialise();
         m_editEntity->_initialise(true);
+
+        for (unsigned int i = 0;
+             i < m_editEntity->getNumSubEntities() && i < preMats.size(); ++i) {
+            if (!preMats[i].empty())
+                m_editEntity->getSubEntity(i)->setMaterialName(preMats[i]);
+        }
     }
     auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
     if (shaderGen && m_editEntity) {
