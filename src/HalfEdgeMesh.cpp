@@ -2312,17 +2312,23 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                         if (subLoop.size() >= 3) {
                             loopsToProcess.push_back(subLoop);
                         }
-                        // Drop the sub-loop's verts from walk AND from
-                        // posInWalk. Do NOT break — at a figure-8
-                        // junction, the pre-sub-loop portion of the walk
-                        // may still be part of another (outer) loop that
-                        // also passes through `cur`. Continue the walk
-                        // from `cur` so we can finish the outer loop.
                         for (size_t j = startIdx; j < walk.size(); ++j) {
                             posInWalk.erase(walk[j]);
                         }
                         walk.resize(startIdx);
-                        // cur stays as-is; pick a new outgoing edge.
+                        // After the subloop is removed, the pre-subloop
+                        // prefix + cur may itself form a closed outer
+                        // loop if cur's just-consumed edge closes back to
+                        // walk[0]. Push it immediately so we don't lose
+                        // it when the walker breaks below.
+                        if (!walk.empty() && walk[0] == nextCandidate
+                            && walk.size() >= 2) {
+                            std::vector<int> outer = walk;
+                            outer.push_back(cur);
+                            if (outer.size() >= 3) {
+                                loopsToProcess.push_back(outer);
+                            }
+                        }
                         auto it = nextVerts.find(cur);
                         if (it == nextVerts.end()) break;
                         bool found = false;
@@ -2334,12 +2340,11 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                             }
                         }
                         if (!found) break;
-                        continue;  // re-enter while loop with new candidate
+                        continue;
                     }
                     posInWalk[cur] = static_cast<int>(walk.size());
                     walk.push_back(cur);
                     cur = nextCandidate;
-                    // Pick an unused outgoing edge from cur.
                     auto it = nextVerts.find(cur);
                     if (it == nextVerts.end()) break;
                     bool found = false;
@@ -2352,7 +2357,6 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                     }
                     if (!found) break;
                 }
-                // Close the final walk if cur returns to its start.
                 if (!walk.empty()) {
                     auto posIt = posInWalk.find(cur);
                     if (posIt != posInWalk.end()) {
@@ -2360,6 +2364,24 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                         std::vector<int> subLoop(walk.begin() + startIdx, walk.end());
                         if (subLoop.size() >= 3) {
                             loopsToProcess.push_back(subLoop);
+                        }
+                    } else if (!walk.empty()) {
+                        // Open walk: salvage only if start and end are
+                        // position-coincident (implicit closing edge
+                        // crosses a submesh seam).
+                        int chainStart = walk[0];
+                        int chainEnd = cur;
+                        const Ogre::Vector3& pStart =
+                            m_vertices[chainStart].position;
+                        const Ogre::Vector3& pEnd =
+                            m_vertices[chainEnd].position;
+                        if ((pStart - pEnd).squaredLength() < 1e-10f
+                            && chainStart != chainEnd) {
+                            std::vector<int> chain = walk;
+                            chain.push_back(cur);
+                            if (chain.size() >= 3) {
+                                loopsToProcess.push_back(chain);
+                            }
                         }
                     }
                 }
