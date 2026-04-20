@@ -2197,23 +2197,12 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             }
         }
 
-        // Expand repair zone along two dimensions:
-        //
-        // 1) POSITION-COINCIDENT duplicates: multi-submesh meshes keep
-        //    separate vertex indices for seams, so V_A moved by bevel on
-        //    submesh A leaves coincident V_B in submesh B untouched.
-        //    Including V_B lets the filler close the seam crack.
-        //
-        // 2) 1-RING NEIGHBORS OF NEW VERTICES only: Phase 5 neighbor
-        //    retriangulations can split neighbor faces, introducing
-        //    boundary edges at vertices that are 1-ring adjacent to a new
-        //    offset vertex. Expanding from `newVertices` (not from the
-        //    full base zone) is narrow enough to avoid pulling in the
-        //    mesh perimeter on single-submesh fans: fan-bevel `newVertices`
-        //    are near the apex, 1-hop away is the first ring of perimeter
-        //    points, but since these are connected legitimately (every
-        //    perimeter edge still has a partnering triangle), they won't
-        //    appear as zone boundaries.
+        // Expand the repair zone by position-coincident duplicates:
+        // multi-submesh meshes keep separate vertex indices for seams, so
+        // V_A moved by a bevel on submesh A leaves coincident V_B in
+        // submesh B untouched, producing a crack. Including V_B lets the
+        // filler close the seam.
+        const float tol2 = 1e-10f;
         {
             std::vector<Ogre::Vector3> zonePositions;
             zonePositions.reserve(repairZone.size());
@@ -2223,7 +2212,6 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                 }
             }
             std::unordered_set<int> coincident;
-            const float tol2 = 1e-10f;
             for (int v = 0; v < (int)m_vertices.size(); ++v) {
                 if (repairZone.count(v)) continue;
                 const Ogre::Vector3& p = m_vertices[v].position;
@@ -2235,20 +2223,16 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                 }
             }
             for (int v : coincident) repairZone.insert(v);
-
         }
 
-        // Promote half-in-zone seam vertices. When exactly one endpoint
-        // of an unpartnered directed edge is in the zone, the other
-        // endpoint is a candidate for promotion — but only if it's a
-        // SEAM vertex (i.e., some other vertex in the mesh shares its
-        // position). Seam vertices exist only on multi-submesh meshes;
-        // on a single-submesh patch like a fan, a half-in-zone vertex
-        // is a legitimate open-boundary vertex and must NOT be promoted.
+        // Promote half-in-zone seam vertices: when exactly one endpoint of
+        // an unpartnered directed edge is in the zone, promote the other
+        // IF it's a seam (another vertex shares its position). On
+        // single-submesh patches like a fan, seam vertices don't exist,
+        // so legitimate open-perimeter vertices stay out of the zone.
         {
             auto isSeamVertex = [&](int v) {
                 const Ogre::Vector3& p = m_vertices[v].position;
-                const float tol2 = 1e-10f;
                 for (int u = 0; u < (int)m_vertices.size(); ++u) {
                     if (u == v) continue;
                     if ((m_vertices[u].position - p).squaredLength() < tol2)
@@ -2269,9 +2253,9 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
             }
             for (int v : promote) repairZone.insert(v);
         }
-        // For each (a, b) used in zone with no (b, a) partner, the
-        // partner tri would need to traverse b→a. Collect those needed
-        // directions grouped by submesh.
+        // Collect unpartnered directed edges whose BOTH endpoints are in
+        // the zone. For each (a, b) boundary, the missing partner would
+        // travel b→a, which is what we want to emit.
         std::map<int, std::vector<std::pair<int,int>>> zoneBoundaryBySub;
         for (const auto& [dir, cnt] : dirCount) {
             int a = dir.first, b = dir.second;
