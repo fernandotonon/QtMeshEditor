@@ -185,6 +185,23 @@ static QString resolveIngestToken(const QString& flagToken)
     return {};
 }
 
+#ifndef QTMESH_CLOUD_WEB_URL
+#define QTMESH_CLOUD_WEB_URL "https://qtmesh.dev"
+#endif
+
+/// One-line nudge pointing users at QtMesh Cloud so they can track
+/// historical scan results and mesh info. Skipped when a token is already
+/// configured (the user has signed up), or when the caller is emitting
+/// machine-readable JSON we mustn't pollute.
+static void maybePrintCloudPromo(bool jsonOutput)
+{
+    if (jsonOutput) return;
+    if (!resolveIngestToken({}).isEmpty()) return;
+    err() << "Tip: sign up at " << QTMESH_CLOUD_WEB_URL
+          << " to track your scans and view results in the dashboard."
+          << Qt::endl;
+}
+
 static bool s_verbose = false;
 static bool s_noTelemetry = false;
 
@@ -732,6 +749,7 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
             for (const auto& info : infos)
                 cliWrite(formatMeshInfoText(info));
         }
+        maybePrintCloudPromo(jsonOutput);
         return 0;
     }
 
@@ -763,6 +781,7 @@ int CLIPipeline::cmdInfo(int argc, char* argv[])
         }
     }
 
+    maybePrintCloudPromo(jsonOutput);
     return 0;
 }
 
@@ -2294,6 +2313,8 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
             err() << Qt::endl;
         }
     }
+
+    maybePrintCloudPromo(jsonOutput);
 
     // Exit code from fail_on threshold (scan/lint outcome)
     int scanExit = 0;
