@@ -264,8 +264,7 @@ public:
     Q_INVOKABLE void updateBevelSegments(int segments);
 
     /// @brief Re-run the active bevel with a new profile in [0, 1].
-    ///        Concave (<0.5) is currently clamped to flat — see
-    ///        HalfEdgeMesh.cpp Phase 6 for details.
+    ///        0.5 = flat, >0.5 = convex (fillet), <0.5 = concave (groove).
     Q_INVOKABLE void updateBevelProfile(float profile);
     /// @}
 

@@ -307,10 +307,8 @@ public:
      * @param profile Profile-curve shape in [0, 1]. 0.5 = flat (linear
      *                interpolation, identical geometry to the single-segment
      *                case at any segments value); >0.5 bulges outward
-     *                (convex / fillet-like). Concave (<0.5) is currently
-     *                clamped to flat — a downstream Phase-7 winding edge
-     *                case turns inverted triangles loose for any inward
-     *                bulge; tracked as a follow-up. Clamped to [0, 1].
+     *                (convex / fillet-like); <0.5 bulges inward (concave /
+     *                groove-like). Clamped to [0, 1].
      * @return Indices of the newly created vertices (the chamfer corners
      *         and any per-segment intermediate vertices). Empty if the
      *         operation was skipped or failed.

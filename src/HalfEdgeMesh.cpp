@@ -1976,16 +1976,11 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
                     outward.normalise();
                 else
                     outward = Ogre::Vector3::ZERO;
-                // Profile values ABOVE 0.5 are stable across all segment
-                // counts; profile values BELOW 0.5 currently trip a winding
-                // edge case in Phase 7's downstream cap emission and produce
-                // inverted triangles. Until that's diagnosed, clamp to a
-                // safe range so users still get visible curvature gradient
-                // (0.5 = flat, 1.0 = convex/fillet) without breaking the
-                // mesh. Concave (< 0.5) is gated until the underlying issue
-                // is fixed.
-                const float safeProfile = std::max(profile, 0.5f);
-                const float bulgeScale = (safeProfile - 0.5f) * w;
+                // Bulge magnitude up to ±0.5*w at the chord midpoint —
+                // small enough that even profile=0 (full concave) keeps
+                // intermediate vertices inside the original solid for
+                // typical bevel widths.
+                const float bulgeScale = (profile - 0.5f) * w;
                 const float kPi = 3.14159265358979323846f;
                 for (int i = 1; i < segments; ++i) {
                     const float t = static_cast<float>(i)
@@ -2458,7 +2453,14 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
 
             for (auto& loop : loopsToProcess) {
                 if (loop.size() < 3) continue;
-                if (loop.size() > 8) continue;  // skip big/non-simple loops
+                // Hard cap to avoid filling bizarrely large loops (which
+                // almost certainly indicate a non-simple polygon the
+                // fan-triangulation would bungle). Scales with segment
+                // count: a multi-segment bevel can legitimately produce
+                // loops of ~2*(segments+1) verts around the chamfer strip
+                // perimeter, so the old hard 8 was too tight for
+                // segments>=4. Use a generous but bounded ceiling.
+                if (loop.size() > 64) continue;
                 // Only fill loops that contain at least one bevel-created
                 // offset vertex (in newVertices). Loops made entirely of
                 // pre-existing perimeter vertices are legitimate open
@@ -2534,15 +2536,22 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
                         refNormal += n;
                     }
                 }
-                // Geometry-first winding: the fill's visible face should
-                // match its neighbors' orientation (outward-facing). If
-                // refNormal is well-defined, trust it — users care about
-                // what they SEE, and the surrounding mesh may already be
-                // non-manifold at this location (otherwise fill wouldn't
-                // be needed), so perfect topological closure isn't
-                // achievable.
-                bool flipWinding = flipScore > noFlipScore;
-                if (refNormal.length() > 0.1f && loop.size() >= 3) {
+                // Topology-first winding: prefer the winding that partners
+                // the most directed boundary edges with existing tris and
+                // duplicates the fewest. This is robust against curved
+                // fill surfaces (e.g., concave multi-segment bevels) where
+                // the geometric face-normal check can flip sign based on
+                // profile even though the correct topological winding is
+                // unchanged.
+                //
+                // Fall back to the geometric refNormal check only when the
+                // topology scores are tied (ambiguous), which happens when
+                // the loop's boundary edges don't meaningfully overlap the
+                // existing mesh — then visual appearance is the only cue.
+                bool flipWinding;
+                if (flipScore != noFlipScore) {
+                    flipWinding = flipScore > noFlipScore;
+                } else if (refNormal.length() > 0.1f && loop.size() >= 3) {
                     Ogre::Vector3 p0 = m_vertices[loop[0]].position;
                     Ogre::Vector3 p1 = m_vertices[loop[1]].position;
                     Ogre::Vector3 p2 = m_vertices[loop[2]].position;
@@ -2550,7 +2559,11 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
                     if (noFlipN.length() > 1e-6f) {
                         noFlipN.normalise();
                         flipWinding = refNormal.dotProduct(noFlipN) < 0;
+                    } else {
+                        flipWinding = false;
                     }
+                } else {
+                    flipWinding = false;
                 }
                 (void)noFlipConflicts;
                 (void)flipConflicts;

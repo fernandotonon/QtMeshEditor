@@ -2436,17 +2436,41 @@ TEST(HalfEdgeMeshStandalone, BevelSegments4FlatStillManifold) {
     expectCubeBevelSegments(4, 0.5f);
 }
 
+TEST(HalfEdgeMeshStandalone, BevelSegments8FlatStillManifold) {
+    expectCubeBevelSegments(8, 0.5f);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelSegments12FlatStillManifold) {
+    expectCubeBevelSegments(12, 0.5f);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelSegments16FlatStillManifold) {
+    expectCubeBevelSegments(16, 0.5f);
+}
+
 TEST(HalfEdgeMeshStandalone, BevelSegments4ConvexStillManifold) {
     // Convex (>0.5) bulges intermediate verts outward toward where the
-    // original sharp edge was — extreme values stay manifold on cube edges.
+    // original sharp edge was.
     expectCubeBevelSegments(4, 1.0f);
 }
 
-TEST(HalfEdgeMeshStandalone, BevelProfileConvexShiftsIntermediateVertexPosition) {
-    // For segments=2, the single intermediate vertex per endpoint should sit
-    // at the chord midpoint when profile=0.5 (flat) and closer to the
-    // original cube corner when profile=1 (convex). Concave (<0.5) is
-    // currently clamped to flat — see comment in HalfEdgeMesh.cpp Phase 6.
+TEST(HalfEdgeMeshStandalone, BevelSegments4ConcaveStillManifold) {
+    // Concave (<0.5) bulges intermediate verts inward into the solid,
+    // producing a groove-like chamfer.
+    expectCubeBevelSegments(4, 0.0f);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelSegments8ConcaveStillManifold) {
+    // High segment count + concave profile is a stress case for the
+    // post-pass hole filler's loop walker.
+    expectCubeBevelSegments(8, 0.0f);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelProfileShiftsIntermediateVertexPosition) {
+    // For segments=2, the single intermediate vertex per endpoint should
+    // sit at the chord midpoint when profile=0.5 (flat), closer to the
+    // original cube corner when profile=1 (convex), and farther from it
+    // when profile=0 (concave, digs into the solid).
     auto runOnce = [](float profile) -> float {
         auto em = makeCubeMesh();
         HalfEdgeMesh he;
@@ -2466,8 +2490,11 @@ TEST(HalfEdgeMeshStandalone, BevelProfileConvexShiftsIntermediateVertexPosition)
         }
         return minDist;
     };
-    const float dFlat   = runOnce(0.5f);
-    const float dConvex = runOnce(1.0f);
+    const float dFlat    = runOnce(0.5f);
+    const float dConvex  = runOnce(1.0f);
+    const float dConcave = runOnce(0.0f);
     EXPECT_LT(dConvex, dFlat)
         << "convex profile should bring the chamfer mid closer to the cut-off corner";
+    EXPECT_GT(dConcave, dFlat)
+        << "concave profile should push the chamfer mid farther from the cut-off corner";
 }

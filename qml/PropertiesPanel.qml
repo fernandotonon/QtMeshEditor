@@ -578,7 +578,7 @@ Rectangle {
                     }
                 }
                 Text {
-                    text: "0 = concave (clamped to flat) · 0.5 = flat · 1 = convex"
+                    text: "0 = concave (groove) · 0.5 = flat · 1 = convex (fillet)"
                     color: PropertiesPanelController.subtleTextColor !== undefined
                          ? PropertiesPanelController.subtleTextColor
                          : "#888"
