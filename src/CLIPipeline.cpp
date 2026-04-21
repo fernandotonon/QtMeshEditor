@@ -191,12 +191,13 @@ static QString resolveIngestToken(const QString& flagToken)
 
 /// One-line nudge pointing users at QtMesh Cloud so they can track
 /// historical scan results and mesh info. Skipped when a token is already
-/// configured (the user has signed up), or when the caller is emitting
-/// machine-readable JSON we mustn't pollute.
-static void maybePrintCloudPromo(bool jsonOutput)
+/// configured (the user has signed up — passes flagToken so the per-command
+/// `--token` value short-circuits the same as env vars), or when the caller
+/// is emitting machine-readable JSON we mustn't pollute.
+static void maybePrintCloudPromo(bool jsonOutput, const QString& flagToken = {})
 {
     if (jsonOutput) return;
-    if (!resolveIngestToken({}).isEmpty()) return;
+    if (!resolveIngestToken(flagToken).isEmpty()) return;
     err() << "Tip: sign up at " << QTMESH_CLOUD_WEB_URL
           << " to track your scans and view results in the dashboard."
           << Qt::endl;
@@ -2314,7 +2315,7 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         }
     }
 
-    maybePrintCloudPromo(jsonOutput);
+    maybePrintCloudPromo(jsonOutput, tokenArg);
 
     // Exit code from fail_on threshold (scan/lint outcome)
     int scanExit = 0;

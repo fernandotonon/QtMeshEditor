@@ -27,6 +27,9 @@ add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
 # Override with -DQTMESH_CLOUD_WEB_URL=https://... for self-hosted instances.
 set(QTMESH_CLOUD_WEB_URL "https://qtmesh.dev" CACHE STRING
     "QtMesh Cloud web UI base URL (no trailing slash)")
+# Normalize: strip a single trailing slash so callers can paste a copied URL
+# without breaking string concatenation downstream.
+string(REGEX REPLACE "/+$" "" QTMESH_CLOUD_WEB_URL "${QTMESH_CLOUD_WEB_URL}")
 add_definitions(-DQTMESH_CLOUD_WEB_URL="${QTMESH_CLOUD_WEB_URL}")
 
 set(CMAKE_CXX_STANDARD 17)
