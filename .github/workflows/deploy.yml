@@ -1901,6 +1901,35 @@ jobs:
         env:
           WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
+          $ErrorActionPreference = "Stop"
+
+          if (-not $env:WINGET_TOKEN) {
+            Write-Host "::error::WINGET_TOKEN secret is missing. Configure it in repo secrets with a classic PAT that has 'public_repo' scope."
+            exit 1
+          }
+
+          # Sanity-check the token before wingetcreate uses it. A revoked or
+          # scope-less PAT shows up here as a clear 401/403 instead of
+          # wingetcreate's generic "Failed to connect to GitHub".
+          Write-Host "Validating WINGET_TOKEN against GitHub API..."
+          $headers = @{
+            Authorization = "token $env:WINGET_TOKEN"
+            Accept        = "application/vnd.github+json"
+            "User-Agent"  = "QtMeshEditor-CI"
+          }
+          try {
+            $userResp = Invoke-WebRequest -Uri "https://api.github.com/user" -Headers $headers -UseBasicParsing
+            $scopes = $userResp.Headers['X-OAuth-Scopes']
+            $login  = ($userResp.Content | ConvertFrom-Json).login
+            Write-Host "Token OK for user '$login' with scopes: $scopes"
+            if ($scopes -and ($scopes -notmatch 'public_repo') -and ($scopes -notmatch '\brepo\b')) {
+              Write-Host "::warning::WINGET_TOKEN has scopes '$scopes'; wingetcreate --submit needs 'public_repo' or 'repo'."
+            }
+          } catch {
+            Write-Host "::error::Token validation failed: $($_.Exception.Message). Rotate WINGET_TOKEN (classic PAT with 'public_repo')."
+            exit 1
+          }
+
           # Download wingetcreate standalone exe from GitHub releases
           $wgcUrl = "https://github.com/microsoft/winget-create/releases/latest/download/wingetcreate.exe"
           Invoke-WebRequest -Uri $wgcUrl -OutFile wingetcreate.exe
@@ -1909,34 +1938,59 @@ jobs:
           $ver = $rawTag -replace '^v', ''
           $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${rawTag}/QtMeshEditor-${rawTag}-bin-Windows.zip"
 
-          # Wait for the release asset to be downloadable (GitHub CDN propagation)
+          # Wait for the release asset to be downloadable (GitHub CDN propagation).
+          # Treat "still not available after all retries" as a hard error —
+          # wingetcreate would otherwise fail later with a confusing message.
           Write-Host "Waiting for release asset to be available..."
+          $assetReady = $false
           for ($attempt = 1; $attempt -le 10; $attempt++) {
             try {
               $resp = Invoke-WebRequest -Uri $url -Method Head -ErrorAction Stop
               Write-Host "Asset available (attempt $attempt)"
+              $assetReady = $true
               break
             } catch {
               Write-Host "Attempt ${attempt}: asset not yet available, waiting 30s..."
               Start-Sleep -Seconds 30
             }
           }
+          if (-not $assetReady) {
+            Write-Host "::error::Release asset $url never became available."
+            exit 1
+          }
 
-          # Use wingetcreate's built-in --submit path. This goes through the
-          # GitHub Contents API (PUT /contents/:path), which works with a
-          # classic PAT that only has `public_repo` scope. The previous approach
-          # (manual `git clone` + `git push` to the fork) required the token's
-          # write-access scope to cover git-over-HTTPS for the fork, which is a
-          # different permission path and was 403-denied.
-          Write-Host "Submitting WinGet manifest for version $ver..."
-          .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
-            --version $ver `
-            --urls $url `
-            --submit `
-            --token $env:WINGET_TOKEN
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "::error::wingetcreate submit failed with exit $LASTEXITCODE"
-            exit $LASTEXITCODE
+          # wingetcreate --submit goes through the GitHub Contents API (PUT
+          # /contents/:path), which works with a classic PAT that only has
+          # `public_repo` scope. The previous approach (manual `git clone` +
+          # `git push` to the fork) required write-access on the fork via
+          # git-over-HTTPS, a different permission path that was 403-denied.
+          #
+          # Retry up to three times on transient failures — wingetcreate's
+          # "Failed to connect to GitHub" sometimes hits during runner DNS
+          # flakes or microsoft/winget-pkgs being under load after a release.
+          $submitOk = $false
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Write-Host "Submitting WinGet manifest for version $ver (attempt $attempt)..."
+            .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
+              --version $ver `
+              --urls $url `
+              --submit `
+              --token $env:WINGET_TOKEN
+            if ($LASTEXITCODE -eq 0) {
+              $submitOk = $true
+              break
+            }
+            Write-Host "::warning::wingetcreate exited $LASTEXITCODE on attempt $attempt."
+            if ($attempt -lt 3) {
+              Start-Sleep -Seconds 30
+            }
+          }
+          if (-not $submitOk) {
+            Write-Host "::error::wingetcreate submit failed after 3 attempts. Check:"
+            Write-Host "::error:: 1. WINGET_TOKEN is still valid and has 'public_repo' scope."
+            Write-Host "::error:: 2. The user's fork of microsoft/winget-pkgs hasn't diverged."
+            Write-Host "::error:: 3. https://www.githubstatus.com for GitHub API availability."
+            exit 1
           }
           Write-Host "WinGet PR submitted successfully."
 
