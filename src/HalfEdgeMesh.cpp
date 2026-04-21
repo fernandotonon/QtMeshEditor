@@ -933,11 +933,17 @@ std::vector<int> HalfEdgeMesh::extrudeEdges(const std::vector<int>& edgeIndices)
     return newVertices;
 }
 
-std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, float width)
+std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
+                                           float width,
+                                           int segments,
+                                           float profile)
 {
     std::vector<int> newVertices;
     if (edgeIndices.empty() || width <= 0.0f)
         return newVertices;
+    if (segments < 1) segments = 1;
+    if (profile < 0.0f) profile = 0.0f;
+    if (profile > 1.0f) profile = 1.0f;
 
     // Snapshot the per-edge info we need before we start mutating faces.
     // Each entry captures the two endpoint vertices, the two adjacent faces,
@@ -1925,17 +1931,96 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
         if (fullRingV2) processRingNeighbors(info.v2, ringV2);
 
         // =====================================================================
-        // Phase 6: chamfer quad between f1's and f2's inner offsets.
-        // Note: we do NOT record these edges in emittedEdges because the
-        // cap check in buildCorner is "does a NON-CHAMFER tri cover the
-        // chamfer-end edge?". The chamfer itself always has that edge.
+        // Phase 6: chamfer strip between f1's and f2's inner offsets.
+        //
+        // For segments=1 (default), this is the original two-triangle quad
+        // bridging (v1a, v2a) on f1's side to (v1b, v2b) on f2's side.
+        //
+        // For segments>1, we subdivide the strip into `segments` quads along
+        // a profile curve. At each endpoint v ∈ {v1, v2} we compute N-1
+        // intermediate offset vertices between vA = inner_on_f1 and
+        // vB = inner_on_f2, parametrized t = i / segments for i in [1..N-1].
+        // Position is lerp(vA.pos, vB.pos, t) plus a bulge along the
+        // chamfer-plane normal: bulge = (profile - 0.5) * 2 * width * sin(πt).
+        // - profile = 0.5 → flat (no bulge), reproduces the original geometry.
+        // - profile > 0.5 → convex (rounded outward, fillet-like).
+        // - profile < 0.5 → concave (cut inward, groove-like).
+        //
+        // The bulge direction "outward" is away from v (the original corner
+        // we cut off), so positive bulge pushes the strip toward where the
+        // original sharp edge USED to be.
+        //
+        // We do NOT record these edges in emittedEdges because the cap check
+        // in buildCorner is "does a NON-CHAMFER tri cover the chamfer-end
+        // edge?". The chamfer itself always has that edge.
         // =====================================================================
-        if (f1WalksAB) {
-            appendTriangle(v1b, v2b, v2a, info.subMeshIndex);
-            appendTriangle(v1b, v2a, v1a, info.subMeshIndex);
-        } else {
-            appendTriangle(v2b, v1b, v1a, info.subMeshIndex);
-            appendTriangle(v2b, v1a, v2a, info.subMeshIndex);
+        auto buildSegmentVerts = [&](int v, int innerA, int innerB) -> std::vector<int> {
+            std::vector<int> chain;
+            chain.reserve(segments + 1);
+            chain.push_back(innerA);
+            if (segments > 1) {
+                const Ogre::Vector3 pA = m_vertices[innerA].position;
+                const Ogre::Vector3 pB = m_vertices[innerB].position;
+                const Ogre::Vector3 pV = m_vertices[v].position;
+                // Outward bulge direction: from the chord midpoint toward
+                // the original corner v (where the sharp edge used to be).
+                // Convex profile bulges in this direction (rounded fillet),
+                // concave bulges opposite (digs into the solid).
+                const Ogre::Vector3 chord = pB - pA;
+                Ogre::Vector3 outward = pV - (pA + pB) * 0.5f;
+                const float chordLen2 = chord.squaredLength();
+                if (chordLen2 > 1e-12f) {
+                    outward -= chord * (outward.dotProduct(chord) / chordLen2);
+                }
+                if (outward.length() > 1e-6f)
+                    outward.normalise();
+                else
+                    outward = Ogre::Vector3::ZERO;
+                // Profile values ABOVE 0.5 are stable across all segment
+                // counts; profile values BELOW 0.5 currently trip a winding
+                // edge case in Phase 7's downstream cap emission and produce
+                // inverted triangles. Until that's diagnosed, clamp to a
+                // safe range so users still get visible curvature gradient
+                // (0.5 = flat, 1.0 = convex/fillet) without breaking the
+                // mesh. Concave (< 0.5) is gated until the underlying issue
+                // is fixed.
+                const float safeProfile = std::max(profile, 0.5f);
+                const float bulgeScale = (safeProfile - 0.5f) * w;
+                const float kPi = 3.14159265358979323846f;
+                for (int i = 1; i < segments; ++i) {
+                    const float t = static_cast<float>(i)
+                                  / static_cast<float>(segments);
+                    Ogre::Vector3 base = pA + chord * t;
+                    Ogre::Vector3 pos = base + outward
+                                      * (bulgeScale * std::sin(kPi * t));
+                    HEVertex nv = m_vertices[v];
+                    nv.position = pos;
+                    nv.halfEdge = -1;
+                    int idx = static_cast<int>(m_vertices.size());
+                    m_vertices.push_back(nv);
+                    newVertices.push_back(idx);
+                    chain.push_back(idx);
+                }
+            }
+            chain.push_back(innerB);
+            return chain;
+        };
+        const std::vector<int> v1Chain = buildSegmentVerts(info.v1, v1a, v1b);
+        const std::vector<int> v2Chain = buildSegmentVerts(info.v2, v2a, v2b);
+        // Emit two triangles per strip i: bridges chain[i]->chain[i+1] on each
+        // endpoint. Original (segments=1) winding is preserved when N=1.
+        for (int i = 0; i < segments; ++i) {
+            const int a = v1Chain[i];      // f1-side at v1, step i
+            const int b = v1Chain[i + 1];  // f2-side at v1, step i (toward f2)
+            const int c = v2Chain[i + 1];  // f2-side at v2, step i (toward f2)
+            const int d = v2Chain[i];      // f1-side at v2, step i
+            if (f1WalksAB) {
+                appendTriangle(b, c, d, info.subMeshIndex);
+                appendTriangle(b, d, a, info.subMeshIndex);
+            } else {
+                appendTriangle(c, b, a, info.subMeshIndex);
+                appendTriangle(c, a, d, info.subMeshIndex);
+            }
         }
 
         // =====================================================================

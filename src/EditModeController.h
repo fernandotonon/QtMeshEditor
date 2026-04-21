@@ -252,6 +252,21 @@ public:
 
     /// @brief Currently-applied width (starts at 0.005, grows/shrinks via drag).
     float bevelGizmoWidth() const { return m_bevelSession.width; }
+
+    /// @brief Currently-applied segment count (1 = single-strip chamfer).
+    Q_INVOKABLE int bevelSegments() const { return m_bevelSession.segments; }
+
+    /// @brief Currently-applied profile shape (0.5 = flat, 1.0 = convex).
+    Q_INVOKABLE float bevelProfile() const { return m_bevelSession.profile; }
+
+    /// @brief Re-run the active bevel with new segments (>=1). No-op if
+    ///        no session is active or if the value didn't change.
+    Q_INVOKABLE void updateBevelSegments(int segments);
+
+    /// @brief Re-run the active bevel with a new profile in [0, 1].
+    ///        Concave (<0.5) is currently clamped to flat — see
+    ///        HalfEdgeMesh.cpp Phase 6 for details.
+    Q_INVOKABLE void updateBevelProfile(float profile);
     /// @}
 
     /// @name Vertex transform support
@@ -507,6 +522,8 @@ private:
         Ogre::Vector3 pivot = Ogre::Vector3::ZERO; ///< Gizmo pivot (chamfer region center).
         Ogre::Vector3 axis = Ogre::Vector3::UNIT_Y; ///< Gizmo axis (averaged surface normal).
         float width = 0.0f;                         ///< Currently-applied width.
+        int segments = 1;                           ///< Chamfer-strip segment count.
+        float profile = 0.5f;                       ///< Profile shape (0.5 = flat).
     };
     BevelSession m_bevelSession;
     std::unique_ptr<class BevelGizmo> m_bevelGizmo;
@@ -515,7 +532,9 @@ private:
     /// pre-bevel snapshot state. Updates selection to the new chamfer verts.
     /// Internal helper shared by beginBevel / updateBevelWidth.
     bool applyBevelTopology(const std::vector<std::pair<int,int>>& edges,
-                            float width);
+                            float width,
+                            int segments = 1,
+                            float profile = 0.5f);
 
     /// World-space pivot (entity transform applied to session.pivot).
     Ogre::Vector3 bevelGizmoWorldOrigin() const;

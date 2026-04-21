@@ -292,19 +292,33 @@ public:
      * Each adjacent face is retriangulated so its shared edge moves from
      * (v1, v2) to either (v1a, v2a) or (v1b, v2b).
      *
-     * First-version limitations:
+     * Limitations:
      * - Boundary edges and non-manifold edges are skipped.
      * - Edges that share an endpoint with another selected edge are skipped
      *   (the corner would be pulled in inconsistent directions).
-     * - Flat profile only, 1 segment.
      *
      * @param edgeIndices The edge indices to bevel.
      * @param width The offset distance, in world units, by which each side
      *              of the chamfer is pulled away from the original edge.
-     * @return Indices of the newly created vertices (the chamfer corners).
-     *         Empty if the operation was skipped or failed.
+     * @param segments Number of chamfer strips between the two inner offsets
+     *                 (1 = single-strip flat chamfer, the original behavior;
+     *                 2+ subdivides the chamfer into N strips along the
+     *                 profile curve). Clamped to >= 1.
+     * @param profile Profile-curve shape in [0, 1]. 0.5 = flat (linear
+     *                interpolation, identical geometry to the single-segment
+     *                case at any segments value); >0.5 bulges outward
+     *                (convex / fillet-like). Concave (<0.5) is currently
+     *                clamped to flat — a downstream Phase-7 winding edge
+     *                case turns inverted triangles loose for any inward
+     *                bulge; tracked as a follow-up. Clamped to [0, 1].
+     * @return Indices of the newly created vertices (the chamfer corners
+     *         and any per-segment intermediate vertices). Empty if the
+     *         operation was skipped or failed.
      */
-    std::vector<int> bevelEdges(const std::vector<int>& edgeIndices, float width);
+    std::vector<int> bevelEdges(const std::vector<int>& edgeIndices,
+                                float width,
+                                int segments = 1,
+                                float profile = 0.5f);
 
     /// @}
 

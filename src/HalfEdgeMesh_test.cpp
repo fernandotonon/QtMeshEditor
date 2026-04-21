@@ -2362,3 +2362,112 @@ TEST(HalfEdgeMeshStandalone, SmoothSurfaceBevelReversedWindingManifold) {
     }
     EXPECT_EQ(flipped, 0) << flipped << " tris have inverted winding";
 }
+
+// ===========================================================================
+// Tests: bevelEdges segments + profile parameters
+// ===========================================================================
+
+namespace {
+    void expectCubeBevelSegments(int segments, float profile) {
+        ASSERT_GE(segments, 1);
+        auto em = makeCubeMesh();
+        HalfEdgeMesh he;
+        ASSERT_TRUE(he.buildFromEditableMesh(em));
+        // Pick a deterministic perimeter edge (top-right vertical 5↔3).
+        int edgeIdx = findEdge(he, 5, 3);
+        ASSERT_GE(edgeIdx, 0);
+
+        auto newVerts = he.bevelEdges({edgeIdx}, 0.05f, segments, profile);
+        ASSERT_FALSE(newVerts.empty())
+            << "bevel returned no new verts (segments=" << segments
+            << " profile=" << profile << ")";
+        EXPECT_TRUE(he.validate())
+            << "validate() failed (segments=" << segments
+            << " profile=" << profile << ")";
+
+        EditableMesh back;
+        ASSERT_TRUE(he.toEditableMesh(back));
+        const auto stats = statsOf(back);
+        EXPECT_EQ(stats.boundaryEdges, 0u)
+            << "boundary edges for segments=" << segments
+            << " profile=" << profile;
+        EXPECT_TRUE(isManifold(back))
+            << "non-manifold output for segments=" << segments
+            << " profile=" << profile;
+
+        // Each endpoint contributes (segments - 1) intermediate verts.
+        const size_t intermediates = 2u * static_cast<size_t>(segments - 1);
+        EXPECT_GE(newVerts.size(), 4u + intermediates)
+            << "newVerts too small for segments=" << segments;
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, BevelSegments1FlatMatchesBaseline) {
+    // Default args (segments=1, profile=0.5) must reproduce the original
+    // single-strip chamfer geometry.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh heA, heB;
+    ASSERT_TRUE(heA.buildFromEditableMesh(em));
+    ASSERT_TRUE(heB.buildFromEditableMesh(em));
+    int eA = findEdge(heA, 5, 3);
+    int eB = findEdge(heB, 5, 3);
+    ASSERT_EQ(eA, eB);
+    auto a = heA.bevelEdges({eA}, 0.05f);
+    auto b = heB.bevelEdges({eB}, 0.05f, 1, 0.5f);
+    EXPECT_EQ(a.size(), b.size());
+    EditableMesh outA, outB;
+    ASSERT_TRUE(heA.toEditableMesh(outA));
+    ASSERT_TRUE(heB.toEditableMesh(outB));
+    EXPECT_EQ(outA.subMeshes()[0].vertices.size(),
+              outB.subMeshes()[0].vertices.size());
+    EXPECT_EQ(outA.subMeshes()[0].triangles.size(),
+              outB.subMeshes()[0].triangles.size());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelSegments2FlatStillManifold) {
+    expectCubeBevelSegments(2, 0.5f);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelSegments3FlatStillManifold) {
+    expectCubeBevelSegments(3, 0.5f);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelSegments4FlatStillManifold) {
+    expectCubeBevelSegments(4, 0.5f);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelSegments4ConvexStillManifold) {
+    // Convex (>0.5) bulges intermediate verts outward toward where the
+    // original sharp edge was — extreme values stay manifold on cube edges.
+    expectCubeBevelSegments(4, 1.0f);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelProfileConvexShiftsIntermediateVertexPosition) {
+    // For segments=2, the single intermediate vertex per endpoint should sit
+    // at the chord midpoint when profile=0.5 (flat) and closer to the
+    // original cube corner when profile=1 (convex). Concave (<0.5) is
+    // currently clamped to flat — see comment in HalfEdgeMesh.cpp Phase 6.
+    auto runOnce = [](float profile) -> float {
+        auto em = makeCubeMesh();
+        HalfEdgeMesh he;
+        EXPECT_TRUE(he.buildFromEditableMesh(em));
+        int edgeIdx = findEdge(he, 5, 3);
+        EXPECT_GE(edgeIdx, 0);
+        auto newVerts = he.bevelEdges({edgeIdx}, 0.05f, 2, profile);
+        EXPECT_FALSE(newVerts.empty());
+        EditableMesh back;
+        EXPECT_TRUE(he.toEditableMesh(back));
+        const auto& sub = back.subMeshes()[0];
+        const Ogre::Vector3 v5(1, 1, 1);
+        float minDist = std::numeric_limits<float>::max();
+        for (const auto& vert : sub.vertices) {
+            float d = vert.position.distance(v5);
+            if (d > 1e-5f && d < minDist) minDist = d;
+        }
+        return minDist;
+    };
+    const float dFlat   = runOnce(0.5f);
+    const float dConvex = runOnce(1.0f);
+    EXPECT_LT(dConvex, dFlat)
+        << "convex profile should bring the chamfer mid closer to the cut-off corner";
+}

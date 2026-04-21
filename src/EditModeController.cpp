@@ -1436,7 +1436,8 @@ bool EditModeController::extrudeSelection()
 }
 
 bool EditModeController::applyBevelTopology(
-    const std::vector<std::pair<int,int>>& edges, float width)
+    const std::vector<std::pair<int,int>>& edges, float width,
+    int segments, float profile)
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity)
         return false;
@@ -1461,7 +1462,7 @@ bool EditModeController::applyBevelTopology(
         }
     }
 
-    std::vector<int> newHEVertices = heMesh.bevelEdges(edgeIndices, width);
+    std::vector<int> newHEVertices = heMesh.bevelEdges(edgeIndices, width, segments, profile);
     if (newHEVertices.empty())
         return false;
 
@@ -1722,8 +1723,42 @@ void EditModeController::updateBevelWidth(float width)
     m_selectedEdges = m_bevelSession.origSelectedEdges;
     m_selectedFaces = m_bevelSession.origSelectedFaces;
 
-    if (applyBevelTopology(m_bevelSession.targetEdges, width))
+    if (applyBevelTopology(m_bevelSession.targetEdges, width,
+                           m_bevelSession.segments, m_bevelSession.profile))
         m_bevelSession.width = width;
+}
+
+void EditModeController::updateBevelSegments(int segments)
+{
+    if (!m_bevelSession.active) return;
+    if (segments < 1) segments = 1;
+    if (segments == m_bevelSession.segments) return;
+
+    m_editableMesh->subMeshes() = m_bevelSession.originalSubMeshes;
+    m_selectedVertices = m_bevelSession.origSelectedVertices;
+    m_selectedEdges = m_bevelSession.origSelectedEdges;
+    m_selectedFaces = m_bevelSession.origSelectedFaces;
+
+    if (applyBevelTopology(m_bevelSession.targetEdges, m_bevelSession.width,
+                           segments, m_bevelSession.profile))
+        m_bevelSession.segments = segments;
+}
+
+void EditModeController::updateBevelProfile(float profile)
+{
+    if (!m_bevelSession.active) return;
+    if (profile < 0.0f) profile = 0.0f;
+    if (profile > 1.0f) profile = 1.0f;
+    if (std::abs(profile - m_bevelSession.profile) < 1e-4f) return;
+
+    m_editableMesh->subMeshes() = m_bevelSession.originalSubMeshes;
+    m_selectedVertices = m_bevelSession.origSelectedVertices;
+    m_selectedEdges = m_bevelSession.origSelectedEdges;
+    m_selectedFaces = m_bevelSession.origSelectedFaces;
+
+    if (applyBevelTopology(m_bevelSession.targetEdges, m_bevelSession.width,
+                           m_bevelSession.segments, profile))
+        m_bevelSession.profile = profile;
 }
 
 void EditModeController::commitBevel()
