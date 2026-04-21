@@ -548,37 +548,70 @@ Rectangle {
                     }
                 }
 
-                // Profile shape
+                // Profile shape — 2D graph control
+                Text {
+                    text: "Profile"
+                    color: PropertiesPanelController.textColor
+                    font.pixelSize: 11
+                }
+                ProfileGraph {
+                    id: bevelProfileGraph
+                    width: parent.width
+                    height: 100
+                    value: EditModeController.bevelProfile
+                    onProfileChanged: (v) => EditModeController.updateBevelProfile(v)
+                }
                 Row {
                     width: parent.width
-                    spacing: 6
+                    spacing: 4
+
+                    Repeater {
+                        model: [
+                            { label: "Concave", v: 0.0 },
+                            { label: "Flat",    v: 0.5 },
+                            { label: "Convex",  v: 1.0 }
+                        ]
+                        Rectangle {
+                            required property var modelData
+                            width: (parent.width - 40) / 3
+                            height: 20
+                            radius: 3
+                            color: presetMouse.pressed
+                                 ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
+                                 : presetMouse.containsMouse
+                                 ? Qt.lighter(PropertiesPanelController.buttonColor !== undefined
+                                              ? PropertiesPanelController.buttonColor
+                                              : "#333", 1.2)
+                                 : (PropertiesPanelController.buttonColor !== undefined
+                                    ? PropertiesPanelController.buttonColor
+                                    : "#333")
+                            border.color: PropertiesPanelController.borderColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: modelData.label
+                                color: PropertiesPanelController.textColor
+                                font.pixelSize: 10
+                            }
+                            MouseArea {
+                                id: presetMouse
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onClicked: EditModeController.updateBevelProfile(modelData.v)
+                            }
+                        }
+                    }
                     Text {
-                        text: "Profile"
+                        width: 36
+                        height: 20
+                        text: bevelProfileGraph.value.toFixed(2)
                         color: PropertiesPanelController.textColor
                         font.pixelSize: 11
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 60
-                    }
-                    Slider {
-                        id: bevelProfileSlider
-                        from: 0.0
-                        to: 1.0
-                        stepSize: 0.05
-                        value: EditModeController.bevelProfile
-                        onMoved: EditModeController.updateBevelProfile(value)
-                        width: parent.width - 100
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Text {
-                        text: bevelProfileSlider.value.toFixed(2)
-                        color: PropertiesPanelController.textColor
-                        font.pixelSize: 11
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 30
+                        horizontalAlignment: Text.AlignRight
+                        verticalAlignment: Text.AlignVCenter
                     }
                 }
                 Text {
-                    text: "0 = concave (groove) · 0.5 = flat · 1 = convex (fillet)"
+                    text: "Drag the dot · double-click to reset"
                     color: PropertiesPanelController.subtleTextColor !== undefined
                          ? PropertiesPanelController.subtleTextColor
                          : "#888"
