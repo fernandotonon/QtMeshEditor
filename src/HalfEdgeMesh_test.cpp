@@ -2524,7 +2524,7 @@ TEST(HalfEdgeMeshStandalone, BevelVectorOverloadAllFlatMatchesScalarFlat) {
     int eA = findEdge(heA, 5, 3);
     int eB = findEdge(heB, 5, 3);
     auto a = heA.bevelEdges({eA}, 0.05f, 4, 0.5f);
-    auto b = heB.bevelEdges({eB}, 0.05f, 4, std::vector<float>{0.5f, 0.5f, 0.5f});
+    auto b = heB.bevelEdges({eB}, 0.05f, 4, 0.5f, std::vector<float>{0.5f, 0.5f, 0.5f});
     ASSERT_FALSE(a.empty());
     ASSERT_FALSE(b.empty());
     EXPECT_EQ(a.size(), b.size());
@@ -2544,7 +2544,7 @@ TEST(HalfEdgeMeshStandalone, BevelVectorOverloadWrongSizeFallsBackToFlat) {
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
     int edgeIdx = findEdge(he, 5, 3);
-    auto newVerts = he.bevelEdges({edgeIdx}, 0.05f, 4,
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.05f, 4, 0.5f,
                                   std::vector<float>{0.9f}); // wrong size
     ASSERT_FALSE(newVerts.empty());
     EXPECT_TRUE(he.validate());
@@ -2560,7 +2560,7 @@ TEST(HalfEdgeMeshStandalone, BevelVectorOverloadClampsOutOfRangeValues) {
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
     int edgeIdx = findEdge(he, 5, 3);
-    auto newVerts = he.bevelEdges({edgeIdx}, 0.05f, 4,
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.05f, 4, 0.5f,
                                   std::vector<float>{-0.3f, 2.0f, 1.5f});
     ASSERT_FALSE(newVerts.empty());
     EXPECT_TRUE(he.validate());
@@ -2578,7 +2578,7 @@ TEST(HalfEdgeMeshStandalone, BevelVectorOverloadAsymmetricCurveIsAsymmetric) {
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
     int edgeIdx = findEdge(he, 5, 3);
-    auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4,
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4, 0.5f,
                                   std::vector<float>{0.9f, 0.5f, 0.1f});
     ASSERT_FALSE(newVerts.empty());
     EditableMesh back;
@@ -2603,7 +2603,7 @@ namespace {
         if (!he.buildFromEditableMesh(em)) return std::nanf("");
         int edgeIdx = findEdge(he, 5, 3);
         if (edgeIdx < 0) return std::nanf("");
-        auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4, points);
+        auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4, 0.5f, points);
         if (newVerts.empty()) return std::nanf("");
         const Ogre::Vector3 v5(1, 1, 1);
         float sum = 0.0f;

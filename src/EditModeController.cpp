@@ -1463,7 +1463,7 @@ bool EditModeController::applyBevelTopology(
     }
 
     std::vector<int> newHEVertices =
-        heMesh.bevelEdges(edgeIndices, width, segments, profilePoints);
+        heMesh.bevelEdges(edgeIndices, width, segments, 0.5f, profilePoints);
     if (newHEVertices.empty())
         return false;
 
