@@ -31,6 +31,8 @@ THE SOFTWARE.
 
 #include "Manager.h"
 #include "PrimitiveObject.h"
+#include "EditableMesh.h"
+#include <OgreMeshManager.h>
 
 #include "ProceduralBoxGenerator.h"
 #include "ProceduralSphereGenerator.h"
@@ -474,13 +476,40 @@ Ogre::MeshPtr PrimitiveObject::createMesh()
     Ogre::String name = mName.toStdString();
     switch(mType)
     {
-        case AP_CUBE:
-            mp = Procedural::BoxGenerator()
+        case AP_CUBE: {
+            // ogre-procedural's BoxGenerator emits 6 separate submeshes (one per
+            // face, 24 unique verts total) so each face can carry its own flat
+            // normal. That topology blocks mesh-edit operations like bevel on
+            // the shared edges between faces. Weld across submeshes into a
+            // single 8-vert mesh so topology ops have real interior edges;
+            // callers that want crisp faces can set flat shading on the
+            // material later.
+            //
+            // Important: the final mesh must be registered under `name` (the
+            // primitive's own name, e.g. "Cube") so later updatePrimitive()
+            // calls can remove it via remove(mName). createNewMesh appends a
+            // "_edited_N" suffix, so we remove the edited mesh after cloning
+            // its data into a second mesh registered under the expected name.
+            const std::string rawName = name + "_raw";
+            Ogre::MeshPtr raw = Procedural::BoxGenerator()
                     .setSizeX(mSizeX).setSizeY(mSizeY).setSizeZ(mSizeZ)
                     .setNumSegX(mNumSegX).setNumSegY(mNumSegY).setNumSegZ(mNumSegZ)
                     .setUTile(mUTile).setVTile(mVTile).setSwitchUV(mSwitchUV)
-                    .realizeMesh(name.data());
+                    .realizeMesh(rawName);
+            if (raw) {
+                EditableMesh em;
+                if (em.loadFromMesh(raw)) {
+                    em.collapseToSingleSubmeshAndWeld();
+                    Ogre::MeshPtr edited = em.createNewMesh(name);
+                    if (edited) {
+                        mp = edited->clone(name);
+                        Ogre::MeshManager::getSingleton().remove(edited);
+                    }
+                }
+                Ogre::MeshManager::getSingleton().remove(raw);
+            }
             break;
+        }
         case AP_SPHERE:
             mp = Procedural::SphereGenerator().setRadius(mRadius)
                     .setNumRings(mNumSegX).setNumSegments(mNumSegY)

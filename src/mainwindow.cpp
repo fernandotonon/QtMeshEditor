@@ -919,6 +919,15 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
 
     // Edit mode shortcuts take priority when edit mode is active
     auto* editCtrl = EditModeController::instance();
+
+    // Esc cancels an active bevel session regardless of current tool.
+    if (editCtrl->bevelSessionActive() && event->key() == Qt::Key_Escape) {
+        SentryReporter::addBreadcrumb("ui.shortcut", "Esc — cancel bevel");
+        editCtrl->cancelBevel();
+        event->accept();
+        return;
+    }
+
     if (editCtrl->isEditModeActive()) {
         switch (event->key()) {
         case Qt::Key_1:
@@ -945,6 +954,25 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             } else if (event->modifiers() & Qt::AltModifier) {
                 SentryReporter::addBreadcrumb("ui.shortcut", "Alt+A — Deselect All (edit mode)");
                 editCtrl->deselectAll();
+                event->accept();
+                return;
+            }
+            break;
+        case Qt::Key_E:
+            // Cmd+E (Ctrl+E on Linux/Windows): Extrude selection in face/edge mode
+            if (event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier)) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "Cmd+E — Extrude (edit mode)");
+                editCtrl->extrudeSelection();
+                event->accept();
+                return;
+            }
+            // No modifier: fall through to rotate mode
+            break;
+        case Qt::Key_B:
+            // Cmd+B (Ctrl+B on Linux/Windows): Bevel selection in edge mode
+            if (event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier)) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "Cmd+B — Bevel (edit mode)");
+                editCtrl->bevelSelection();
                 event->accept();
                 return;
             }
@@ -1472,6 +1500,11 @@ void MainWindow::chooseBgColor()
 
 void MainWindow::setTransformState(TransformOperator::TransformState newState)
 {
+    // Any tool switch commits the current bevel session (user's explicit
+    // choice — fires whether triggered by keyboard, menu, or toolbar).
+    if (EditModeController::instance()->bevelSessionActive())
+        EditModeController::instance()->commitBevel();
+
     ui->actionSelect_Object->setChecked(newState == TransformOperator::TS_SELECT);
     ui->actionTranslate_Object->setChecked(newState == TransformOperator::TS_TRANSLATE);
     ui->actionRotate_Object->setChecked(newState == TransformOperator::TS_ROTATE);

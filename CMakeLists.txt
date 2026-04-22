@@ -13,7 +13,7 @@ cmake_minimum_required(VERSION 3.24.0)
 cmake_policy(SET CMP0005 NEW)
 cmake_policy(SET CMP0048 NEW) # manages project version
 
-project(QtMeshEditor VERSION 2.26.3 LANGUAGES C CXX)
+project(QtMeshEditor VERSION 2.28.0 LANGUAGES C CXX)
 message(STATUS "Building QtMeshEditor version ${PROJECT_VERSION}")
 
 set(QTMESHEDITOR_VERSION_STRING "\"${PROJECT_VERSION}\"")
@@ -22,6 +22,15 @@ set(PLUGIN_DIR "../")
 endif()
 
 add_definitions( -DQTMESHEDITOR_VERSION=${QTMESHEDITOR_VERSION_STRING} )
+
+# Public QtMesh Cloud web URL (used by CLI promo + any future link-outs).
+# Override with -DQTMESH_CLOUD_WEB_URL=https://... for self-hosted instances.
+set(QTMESH_CLOUD_WEB_URL "https://qtmesh.dev" CACHE STRING
+    "QtMesh Cloud web UI base URL (no trailing slash)")
+# Normalize: strip a single trailing slash so callers can paste a copied URL
+# without breaking string concatenation downstream.
+string(REGEX REPLACE "/+$" "" QTMESH_CLOUD_WEB_URL "${QTMESH_CLOUD_WEB_URL}")
+add_definitions(-DQTMESH_CLOUD_WEB_URL="${QTMESH_CLOUD_WEB_URL}")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

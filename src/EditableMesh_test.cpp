@@ -66,6 +66,83 @@ TEST(EditableMeshStandalone, RecalculateNormalsNoSubmeshes) {
     EXPECT_EQ(mesh.totalVertexCount(), 0u);
 }
 
+// -- weldByPosition / collapseToSingleSubmeshAndWeld ------------------------
+
+namespace {
+    EditableVertex makeV(float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3(0, 0, 1);
+        v.hasNormal = true;
+        return v;
+    }
+    EditableTriangle makeT(unsigned int a, unsigned int b, unsigned int c) {
+        EditableTriangle t;
+        t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+        return t;
+    }
+}
+
+TEST(EditableMeshStandalone, WeldByPositionMergesCoincidentVerts) {
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    // Two coincident verts and two unique ones; two triangles sharing no edge.
+    sub.vertices = {
+        makeV(0, 0, 0),
+        makeV(1, 0, 0),
+        makeV(0, 0, 0), // duplicate of v0
+        makeV(0, 1, 0),
+    };
+    sub.triangles = { makeT(0, 1, 3), makeT(2, 1, 3) };
+    em.subMeshes().push_back(std::move(sub));
+
+    em.weldByPosition();
+
+    ASSERT_EQ(em.subMeshes().size(), 1u);
+    EXPECT_EQ(em.subMeshes()[0].vertices.size(), 3u);
+    // Both triangles should still exist and reference the same merged vertex.
+    EXPECT_EQ(em.subMeshes()[0].triangles.size(), 2u);
+}
+
+TEST(EditableMeshStandalone, WeldDropsDegenerateTriangles) {
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.vertices = {
+        makeV(0, 0, 0),
+        makeV(0, 0, 0), // duplicate
+        makeV(1, 0, 0),
+    };
+    // This triangle references both coincident verts → after weld, two indices
+    // collapse and it becomes a degenerate sliver.
+    sub.triangles = { makeT(0, 1, 2) };
+    em.subMeshes().push_back(std::move(sub));
+
+    em.weldByPosition();
+    EXPECT_TRUE(em.subMeshes()[0].triangles.empty());
+}
+
+TEST(EditableMeshStandalone, CollapseTwoSubMeshesAndWeldUnifiesVertices) {
+    EditableMesh em;
+    // Two submeshes that share a common corner vertex (position-wise).
+    EditableSubMesh a, b;
+    a.materialName = "M";
+    a.vertices = { makeV(0, 0, 0), makeV(1, 0, 0), makeV(0, 1, 0) };
+    a.triangles = { makeT(0, 1, 2) };
+    b.materialName = "M";
+    b.vertices = { makeV(0, 0, 0), makeV(0, 0, 1), makeV(1, 0, 0) };
+    b.triangles = { makeT(0, 1, 2) };
+    em.subMeshes().push_back(std::move(a));
+    em.subMeshes().push_back(std::move(b));
+
+    em.collapseToSingleSubmeshAndWeld();
+
+    ASSERT_EQ(em.subMeshes().size(), 1u);
+    // 3 from a + 3 from b = 6, but two pairs coincide → 4 unique verts.
+    EXPECT_EQ(em.subMeshes()[0].vertices.size(), 4u);
+    EXPECT_EQ(em.subMeshes()[0].triangles.size(), 2u);
+}
+
 TEST(EditableMeshStandalone, OutOfBoundsAccessReturnsZero) {
     EditableMesh mesh;
     auto pos = mesh.getVertexPosition(0, 0);

@@ -68,10 +68,12 @@ struct HEVertex {
     Ogre::Vector3 normal = Ogre::Vector3::ZERO;
     Ogre::Vector2 uv = Ogre::Vector2::ZERO;
     Ogre::ColourValue color = Ogre::ColourValue::White;
+    Ogre::Vector4 tangent = Ogre::Vector4::ZERO; // w = parity
 
     bool hasNormal = false;
     bool hasUV = false;
     bool hasColor = false;
+    bool hasTangent = false;
 
     /// Bone assignments stored as (boneIndex, weight) pairs.
     std::vector<std::pair<unsigned short, float>> boneAssignments;
@@ -250,6 +252,62 @@ public:
 
     /// @}
 
+    /// @name Topology operations
+    /// @{
+
+    /**
+     * @brief Extrude selected faces.
+     *
+     * Duplicates the selected faces, creating new vertices at the same
+     * positions as the originals. Connects the old boundary edges to the
+     * new faces with side-wall quads (split into triangles).
+     *
+     * After extrusion, the new (top) vertices can be translated to create
+     * the extruded shape.
+     *
+     * @param faceIndices The face indices to extrude.
+     * @return Indices of the newly created vertices (the "top" of the extrusion).
+     *         Empty if the operation failed.
+     */
+    std::vector<int> extrudeFaces(const std::vector<int>& faceIndices);
+
+    /**
+     * @brief Extrude selected edges.
+     *
+     * Creates new faces by duplicating the selected edges and connecting
+     * old edge vertices to new edge vertices with quads (split into triangles).
+     *
+     * @param edgeIndices The edge indices to extrude.
+     * @return Indices of the newly created vertices.
+     *         Empty if the operation failed.
+     */
+    std::vector<int> extrudeEdges(const std::vector<int>& edgeIndices);
+
+    /**
+     * @brief Bevel selected edges (flat chamfer).
+     *
+     * For each selected interior (two-face) edge, splits the edge in place
+     * into two parallel edges offset by `width` toward each adjacent face's
+     * interior, and inserts a chamfer quad (two triangles) between them.
+     * Each adjacent face is retriangulated so its shared edge moves from
+     * (v1, v2) to either (v1a, v2a) or (v1b, v2b).
+     *
+     * First-version limitations:
+     * - Boundary edges and non-manifold edges are skipped.
+     * - Edges that share an endpoint with another selected edge are skipped
+     *   (the corner would be pulled in inconsistent directions).
+     * - Flat profile only, 1 segment.
+     *
+     * @param edgeIndices The edge indices to bevel.
+     * @param width The offset distance, in world units, by which each side
+     *              of the chamfer is pulled away from the original edge.
+     * @return Indices of the newly created vertices (the chamfer corners).
+     *         Empty if the operation was skipped or failed.
+     */
+    std::vector<int> bevelEdges(const std::vector<int>& edgeIndices, float width);
+
+    /// @}
+
     /// @name Validation
     /// @{
     /**
@@ -282,6 +340,25 @@ private:
 
     /// Link prev pointers for all half-edge loops.
     void linkPrevPointers();
+
+    /// Append a triangle (3 half-edges + 1 face) to the structure.
+    /// Returns the new face index. Does NOT update vertex or edge data —
+    /// callers must rebuild edges/twins after adding all triangles.
+    int appendTriangle(int v0, int v1, int v2, int subMeshIndex);
+
+    /// Rebuild m_edges, half-edge twin/edge fields, and clear edge state.
+    /// Skips half-edges with face < 0. After this, every interior HE has
+    /// a valid edge index and twin (or twin == -1 if no opposite found).
+    void rebuildEdgesAndTwins();
+
+    /// Remove all boundary half-edges (face == -1), remap all references.
+    /// Used after extrude operations that detach old boundary HEs.
+    void compactBoundaryHalfEdges();
+
+    /// Ensure every vertex's halfEdge pointer satisfies the invariant:
+    /// m_halfEdges[v.halfEdge].prev->vertex == v. Searches for a valid
+    /// outgoing HE if the current pointer is stale or invalid.
+    void fixVertexHalfEdges();
 
     std::vector<HalfEdge> m_halfEdges;
     std::vector<HEVertex> m_vertices;

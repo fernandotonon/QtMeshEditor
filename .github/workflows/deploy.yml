@@ -1572,6 +1572,52 @@ jobs:
             # Copy Assimp libraries to MacOS directory
             sudo cp -R /usr/local/lib/libassimp* ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/ || echo "Assimp libraries not found, continuing..."
 
+            # macdeployqt scans -qmldir for QML imports and bundles the module
+            # plugins (Controls, Layouts, Dialogs, ...) the manual copy misses —
+            # without it the inspector panel renders blank on installed bundles.
+            MACDEPLOYQT="/Users/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/$QT_ARCH_DIR/bin/macdeployqt"
+            if [ -x "$MACDEPLOYQT" ]; then
+                echo "Running macdeployqt against app bundle..."
+                deploy_log=$(mktemp)
+                sudo "$MACDEPLOYQT" "${{github.workspace}}/bin/QtMeshEditor.app" \
+                    -qmldir="${{github.workspace}}/qml" \
+                    -verbose=2 \
+                    -no-strip > "$deploy_log" 2>&1
+                rc=$?
+                tail -60 "$deploy_log"
+                rm -f "$deploy_log"
+                if [ $rc -ne 0 ]; then
+                    echo "::error::macdeployqt exited with status $rc"
+                    exit $rc
+                fi
+            else
+                echo "::error::macdeployqt not found at $MACDEPLOYQT"
+                exit 1
+            fi
+
+            # Fix QML plugin rpaths so they resolve Qt frameworks inside the
+            # bundle. macdeployqt leaves the original Qt-SDK rpath
+            # (@loader_path/../../../lib) on the plugins, which at runtime
+            # points to Contents/PlugIns/qml/lib/ — a directory that doesn't
+            # exist in the bundle. Plugins fail to load with
+            #   "plugin qtquickcontrols2plugin not found"
+            # because their dependent frameworks (QtQuickControls2 etc.) can't
+            # be resolved. Adding @executable_path/../Frameworks — which always
+            # resolves to Contents/Frameworks for any dylib loaded by the
+            # main executable — makes Qt's frameworks visible to the plugins.
+            echo "Fixing QML plugin rpaths..."
+            APP_BUNDLE="${{github.workspace}}/bin/QtMeshEditor.app"
+            find "$APP_BUNDLE/Contents/PlugIns/qml" -name "*.dylib" -type f 2>/dev/null | while read -r plugin; do
+                sudo install_name_tool -add_rpath @executable_path/../Frameworks "$plugin" 2>/dev/null || true
+                sudo install_name_tool -add_rpath @loader_path/../../../../Frameworks "$plugin" 2>/dev/null || true
+            done
+            # Also fix regular Qt plugins (platforms, tls, etc.) and CA-root
+            # drivers for the same reason.
+            find "$APP_BUNDLE/Contents/PlugIns" -maxdepth 3 -name "*.dylib" -type f \
+                ! -path "*/qml/*" 2>/dev/null | while read -r plugin; do
+                sudo install_name_tool -add_rpath @executable_path/../Frameworks "$plugin" 2>/dev/null || true
+            done
+
     - name: Prepare for packing
       run: |
             sudo cp -R ${{github.workspace}}/bin/media ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
@@ -1588,9 +1634,11 @@ jobs:
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
             
-            # Fix library paths for proper app bundle structure
-            sudo install_name_tool -add_rpath @executable_path/../Frameworks ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
-            sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor
+            # Fix library paths for proper app bundle structure.
+            # macdeployqt may have already added these rpaths, so ignore
+            # "would duplicate path" errors.
+            sudo install_name_tool -add_rpath @executable_path/../Frameworks ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor 2>/dev/null || true
+            sudo install_name_tool -add_rpath @loader_path/ ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/QtMeshEditor 2>/dev/null || true
 
             # Fix all dylibs in MacOS directory to use @rpath for their dependencies
             echo "Fixing dylib install names and rpaths..."
@@ -1848,9 +1896,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Generate WinGet manifest
+      - name: Submit WinGet manifest
         shell: pwsh
+        env:
+          WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
         run: |
+          $ErrorActionPreference = "Stop"
+
+          if (-not $env:WINGET_TOKEN) {
+            Write-Host "::error::WINGET_TOKEN secret is missing. Configure it in repo secrets with a classic PAT that has 'public_repo' scope."
+            exit 1
+          }
+
+          # Sanity-check the token before wingetcreate uses it. A revoked or
+          # scope-less PAT shows up here as a clear 401/403 instead of
+          # wingetcreate's generic "Failed to connect to GitHub".
+          Write-Host "Validating WINGET_TOKEN against GitHub API..."
+          $headers = @{
+            Authorization = "token $env:WINGET_TOKEN"
+            Accept        = "application/vnd.github+json"
+            "User-Agent"  = "QtMeshEditor-CI"
+          }
+          try {
+            $userResp = Invoke-WebRequest -Uri "https://api.github.com/user" -Headers $headers -UseBasicParsing
+            $scopes = $userResp.Headers['X-OAuth-Scopes']
+            $login  = ($userResp.Content | ConvertFrom-Json).login
+            Write-Host "Token OK for user '$login' with scopes: $scopes"
+            if ($scopes -and ($scopes -notmatch 'public_repo') -and ($scopes -notmatch '\brepo\b')) {
+              Write-Host "::warning::WINGET_TOKEN has scopes '$scopes'; wingetcreate --submit needs 'public_repo' or 'repo'."
+            }
+          } catch {
+            Write-Host "::error::Token validation failed: $($_.Exception.Message). Rotate WINGET_TOKEN (classic PAT with 'public_repo')."
+            exit 1
+          }
+
           # Download wingetcreate standalone exe from GitHub releases
           $wgcUrl = "https://github.com/microsoft/winget-create/releases/latest/download/wingetcreate.exe"
           Invoke-WebRequest -Uri $wgcUrl -OutFile wingetcreate.exe
@@ -1859,101 +1938,61 @@ jobs:
           $ver = $rawTag -replace '^v', ''
           $url = "https://github.com/fernandotonon/QtMeshEditor/releases/download/${rawTag}/QtMeshEditor-${rawTag}-bin-Windows.zip"
 
-          # Wait for the release asset to be downloadable (GitHub CDN propagation)
+          # Wait for the release asset to be downloadable (GitHub CDN propagation).
+          # Treat "still not available after all retries" as a hard error —
+          # wingetcreate would otherwise fail later with a confusing message.
           Write-Host "Waiting for release asset to be available..."
+          $assetReady = $false
           for ($attempt = 1; $attempt -le 10; $attempt++) {
             try {
               $resp = Invoke-WebRequest -Uri $url -Method Head -ErrorAction Stop
               Write-Host "Asset available (attempt $attempt)"
+              $assetReady = $true
               break
             } catch {
               Write-Host "Attempt ${attempt}: asset not yet available, waiting 30s..."
               Start-Sleep -Seconds 30
             }
           }
-
-          Write-Host "Generating WinGet manifest for version $ver..."
-          # --out manifests nests under manifests/ (output path includes manifests\f\...)
-          .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
-            --version $ver `
-            --urls $url `
-            --out manifests
-
-          Write-Host "Manifest generated:"
-          Get-ChildItem -Recurse -File manifests | Get-Content
-
-      - name: Submit PR to winget-pkgs
-        continue-on-error: true   # don't fail the release if submission fails
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.WINGET_TOKEN }}
-        run: |
-          RAW_TAG="${{ github.event.release.tag_name }}"
-          VER="${RAW_TAG#v}"
-          BRANCH="qtmesheditor-${VER}"
-          DEST_DIR="manifests/f/FernandoTonon/QtMeshEditor/${VER}"
-
-          # Probe from repo root (cwd is $GITHUB_WORKSPACE). After cd winget-pkgs, sources live under ../manifests/...
-          # wingetcreate --out manifests writes to manifests/manifests/f/<Publisher>/... (or manifests/f/... on older layouts)
-          if [ -d "manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
-            MANIFEST_SRC="../manifests/manifests/f/FernandoTonon/QtMeshEditor/${VER}"
-          elif [ -d "manifests/f/FernandoTonon/QtMeshEditor/${VER}" ]; then
-            MANIFEST_SRC="../manifests/f/FernandoTonon/QtMeshEditor/${VER}"
-          else
-            echo "::error::Could not find generated WinGet manifests for ${VER} under manifests/"
+          if (-not $assetReady) {
+            Write-Host "::error::Release asset $url never became available."
             exit 1
-          fi
+          }
 
-          # Derive fork owner from the authenticated token (may differ from repo owner)
-          FORK_OWNER="$(gh api user --jq .login)"
-          echo "Authenticated as: $FORK_OWNER"
-
-          # Ensure we have a fork of winget-pkgs
-          gh repo fork microsoft/winget-pkgs --clone=false 2>/dev/null || true
-
-          # Configure git to use the GH token for push
-          gh auth setup-git
-
-          # Clone the fork (shallow)
-          gh repo clone "${FORK_OWNER}/winget-pkgs" winget-pkgs -- --depth 1
-          cd winget-pkgs
-
-          # Handle reruns: if branch already exists, check it out; otherwise create it
-          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
-            echo "Branch $BRANCH already exists, updating..."
-            git fetch origin "$BRANCH"
-            git checkout "$BRANCH"
-          else
-            git checkout -b "$BRANCH"
-          fi
-
-          # Copy manifests
-          mkdir -p "${DEST_DIR}"
-          cp -r "${MANIFEST_SRC}/." "${DEST_DIR}/"
-
-          # Commit and push
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .
-          git diff --cached --quiet && echo "No changes to commit" && exit 0
-          git commit -m "Update FernandoTonon.QtMeshEditor to ${VER}"
-          git push -u origin "$BRANCH"
-
-          # Open PR (or skip if one already exists for this branch)
-          EXISTING_PR="$(gh pr list --repo microsoft/winget-pkgs --head "${FORK_OWNER}:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
-          if [ -n "$EXISTING_PR" ] && [ "$EXISTING_PR" != "null" ]; then
-            echo "PR #${EXISTING_PR} already exists for this version, skipping creation."
-          else
-            gh pr create \
-              --repo microsoft/winget-pkgs \
-              --head "${FORK_OWNER}:${BRANCH}" \
-              --title "Update FernandoTonon.QtMeshEditor to ${VER}" \
-              --body "## Automated update
-          Version: ${VER}
-          Release: https://github.com/fernandotonon/QtMeshEditor/releases/tag/${RAW_TAG}"
-          fi
-
-          echo "WinGet PR submitted successfully."
+          # wingetcreate --submit goes through the GitHub Contents API (PUT
+          # /contents/:path), which works with a classic PAT that only has
+          # `public_repo` scope. The previous approach (manual `git clone` +
+          # `git push` to the fork) required write-access on the fork via
+          # git-over-HTTPS, a different permission path that was 403-denied.
+          #
+          # Retry up to three times on transient failures — wingetcreate's
+          # "Failed to connect to GitHub" sometimes hits during runner DNS
+          # flakes or microsoft/winget-pkgs being under load after a release.
+          $submitOk = $false
+          for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Write-Host "Submitting WinGet manifest for version $ver (attempt $attempt)..."
+            .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
+              --version $ver `
+              --urls $url `
+              --submit `
+              --token $env:WINGET_TOKEN
+            if ($LASTEXITCODE -eq 0) {
+              $submitOk = $true
+              break
+            }
+            Write-Host "::warning::wingetcreate exited $LASTEXITCODE on attempt $attempt."
+            if ($attempt -lt 3) {
+              Start-Sleep -Seconds 30
+            }
+          }
+          if (-not $submitOk) {
+            Write-Host "::error::wingetcreate submit failed after 3 attempts. Check:"
+            Write-Host "::error:: 1. WINGET_TOKEN is still valid and has 'public_repo' scope."
+            Write-Host "::error:: 2. The user's fork of microsoft/winget-pkgs hasn't diverged."
+            Write-Host "::error:: 3. https://www.githubstatus.com for GitHub API availability."
+            exit 1
+          }
+          Write-Host "WinGet PR submitted successfully."
 
 ####################################################################
 # Snap Store Publish (after Linux .deb is built)
