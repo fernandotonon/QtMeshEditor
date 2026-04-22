@@ -318,6 +318,25 @@ public:
                                 int segments = 1,
                                 float profile = 0.5f);
 
+    /**
+     * @brief Bevel with per-segment profile control.
+     *
+     * Same semantics as the scalar-profile overload, but `profilePoints`
+     * directly specifies the vertical position of each interior chord
+     * intermediate (one point per t = i/segments for i in [1..segments-1]).
+     * Each value is in [0, 1] where 0.5 = on the chord (flat), 1 = maximum
+     * outward bulge, 0 = maximum inward bulge. The magnitude of the bulge
+     * at each point is (v - 0.5) * width, linearly — no sin attenuation,
+     * so the user's drawn curve matches the resulting geometry directly.
+     *
+     * If `profilePoints.size() != segments - 1` this overload falls back
+     * to a flat chamfer (all points at 0.5).
+     */
+    std::vector<int> bevelEdges(const std::vector<int>& edgeIndices,
+                                float width,
+                                int segments,
+                                const std::vector<float>& profilePoints);
+
     /// @}
 
     /// @name Validation

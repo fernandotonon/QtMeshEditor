@@ -1437,7 +1437,7 @@ bool EditModeController::extrudeSelection()
 
 bool EditModeController::applyBevelTopology(
     const std::vector<std::pair<int,int>>& edges, float width,
-    int segments, float profile)
+    int segments, const std::vector<float>& profilePoints)
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity)
         return false;
@@ -1462,7 +1462,8 @@ bool EditModeController::applyBevelTopology(
         }
     }
 
-    std::vector<int> newHEVertices = heMesh.bevelEdges(edgeIndices, width, segments, profile);
+    std::vector<int> newHEVertices =
+        heMesh.bevelEdges(edgeIndices, width, segments, profilePoints);
     if (newHEVertices.empty())
         return false;
 
@@ -1642,6 +1643,7 @@ bool EditModeController::beginBevel()
 
     s.active = true;
     m_bevelSession = std::move(s);
+    emit bevelProfilePointsChanged();
 
     // Spawn the gizmo. Created lazily against the edit entity's scene manager.
     if (!m_bevelGizmo && m_editEntity) {
@@ -1724,8 +1726,17 @@ void EditModeController::updateBevelWidth(float width)
     m_selectedFaces = m_bevelSession.origSelectedFaces;
 
     if (applyBevelTopology(m_bevelSession.targetEdges, width,
-                           m_bevelSession.segments, m_bevelSession.profile))
+                           m_bevelSession.segments, m_bevelSession.profilePoints))
         m_bevelSession.width = width;
+}
+
+QVariantList EditModeController::bevelProfilePoints() const
+{
+    QVariantList out;
+    out.reserve(static_cast<int>(m_bevelSession.profilePoints.size()));
+    for (float v : m_bevelSession.profilePoints)
+        out.append(v);
+    return out;
 }
 
 void EditModeController::updateBevelSegments(int segments)
@@ -1734,22 +1745,54 @@ void EditModeController::updateBevelSegments(int segments)
     if (segments < 1) segments = 1;
     if (segments == m_bevelSession.segments) return;
 
+    // Resample existing profile points onto the new segment count so the
+    // user's curve shape is preserved when the spinner moves up/down.
+    std::vector<float> newPoints(segments > 1 ? segments - 1 : 0, 0.5f);
+    if (!m_bevelSession.profilePoints.empty() && segments > 1) {
+        const int oldN = m_bevelSession.segments;
+        const int newN = segments;
+        for (int i = 1; i < newN; ++i) {
+            const float tNew = static_cast<float>(i) / static_cast<float>(newN);
+            const float oldPos = tNew * static_cast<float>(oldN);
+            const int lo = std::max(1, std::min(oldN - 1,
+                                   static_cast<int>(std::floor(oldPos))));
+            const int hi = std::max(1, std::min(oldN - 1,
+                                   static_cast<int>(std::ceil(oldPos))));
+            if (lo == hi) {
+                newPoints[i - 1] = m_bevelSession.profilePoints[lo - 1];
+            } else {
+                const float frac = oldPos - static_cast<float>(lo);
+                newPoints[i - 1] = m_bevelSession.profilePoints[lo - 1] * (1.0f - frac)
+                                 + m_bevelSession.profilePoints[hi - 1] * frac;
+            }
+        }
+    }
+
     m_editableMesh->subMeshes() = m_bevelSession.originalSubMeshes;
     m_selectedVertices = m_bevelSession.origSelectedVertices;
     m_selectedEdges = m_bevelSession.origSelectedEdges;
     m_selectedFaces = m_bevelSession.origSelectedFaces;
 
     if (applyBevelTopology(m_bevelSession.targetEdges, m_bevelSession.width,
-                           segments, m_bevelSession.profile))
+                           segments, newPoints)) {
         m_bevelSession.segments = segments;
+        m_bevelSession.profilePoints = std::move(newPoints);
+        emit bevelProfilePointsChanged();
+    }
 }
 
-void EditModeController::updateBevelProfile(float profile)
+void EditModeController::updateBevelProfilePoint(int index, float value)
 {
     if (!m_bevelSession.active) return;
-    if (profile < 0.0f) profile = 0.0f;
-    if (profile > 1.0f) profile = 1.0f;
-    if (std::abs(profile - m_bevelSession.profile) < 1e-4f) return;
+    if (m_bevelSession.segments < 2) return;
+    if (index < 0 || index >= static_cast<int>(m_bevelSession.profilePoints.size()))
+        return;
+    if (value < 0.0f) value = 0.0f;
+    if (value > 1.0f) value = 1.0f;
+    if (std::abs(value - m_bevelSession.profilePoints[index]) < 1e-4f) return;
+
+    std::vector<float> newPoints = m_bevelSession.profilePoints;
+    newPoints[index] = value;
 
     m_editableMesh->subMeshes() = m_bevelSession.originalSubMeshes;
     m_selectedVertices = m_bevelSession.origSelectedVertices;
@@ -1757,8 +1800,30 @@ void EditModeController::updateBevelProfile(float profile)
     m_selectedFaces = m_bevelSession.origSelectedFaces;
 
     if (applyBevelTopology(m_bevelSession.targetEdges, m_bevelSession.width,
-                           m_bevelSession.segments, profile))
-        m_bevelSession.profile = profile;
+                           m_bevelSession.segments, newPoints)) {
+        m_bevelSession.profilePoints = std::move(newPoints);
+        emit bevelProfilePointsChanged();
+    }
+}
+
+void EditModeController::resetBevelProfile()
+{
+    if (!m_bevelSession.active) return;
+    if (m_bevelSession.segments < 2) return;
+
+    std::vector<float> newPoints(m_bevelSession.segments - 1, 0.5f);
+    if (newPoints == m_bevelSession.profilePoints) return;
+
+    m_editableMesh->subMeshes() = m_bevelSession.originalSubMeshes;
+    m_selectedVertices = m_bevelSession.origSelectedVertices;
+    m_selectedEdges = m_bevelSession.origSelectedEdges;
+    m_selectedFaces = m_bevelSession.origSelectedFaces;
+
+    if (applyBevelTopology(m_bevelSession.targetEdges, m_bevelSession.width,
+                           m_bevelSession.segments, newPoints)) {
+        m_bevelSession.profilePoints = std::move(newPoints);
+        emit bevelProfilePointsChanged();
+    }
 }
 
 void EditModeController::commitBevel()
@@ -1779,6 +1844,7 @@ void EditModeController::commitBevel()
 
     m_bevelSession = {};
     if (m_bevelGizmo) m_bevelGizmo->setVisible(false);
+    emit bevelProfilePointsChanged();
     emit editModeChanged();
 }
 
@@ -1830,6 +1896,7 @@ void EditModeController::cancelBevel()
     refreshNormalVisualizer();
     updateSelectionOverlay();
     validateMesh();
+    emit bevelProfilePointsChanged();
     emit meshDataChanged();
     emit editSelectionChanged();
     emit editModeChanged();

@@ -938,12 +938,52 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
                                            int segments,
                                            float profile)
 {
+    if (segments < 1) segments = 1;
+    if (profile < 0.0f) profile = 0.0f;
+    if (profile > 1.0f) profile = 1.0f;
+
+    // Build a per-segment profilePoints vector from the scalar using the sin
+    // envelope. This preserves the original "bulge peaks at the midpoint"
+    // behavior when the UI only gives us a single number.
+    std::vector<float> profilePoints;
+    if (segments > 1) {
+        const float kPi = 3.14159265358979323846f;
+        const float amp = (profile - 0.5f);
+        profilePoints.reserve(segments - 1);
+        for (int i = 1; i < segments; ++i) {
+            const float t = static_cast<float>(i)
+                          / static_cast<float>(segments);
+            profilePoints.push_back(0.5f + amp * std::sin(kPi * t));
+        }
+    }
+    return bevelEdges(edgeIndices, width, segments, profilePoints);
+}
+
+std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
+                                           float width,
+                                           int segments,
+                                           const std::vector<float>& profilePointsIn)
+{
     std::vector<int> newVertices;
     if (edgeIndices.empty() || width <= 0.0f)
         return newVertices;
     if (segments < 1) segments = 1;
-    if (profile < 0.0f) profile = 0.0f;
-    if (profile > 1.0f) profile = 1.0f;
+
+    // If the caller didn't supply the right number of points, fall back to
+    // a flat chamfer (all 0.5). This matches the "segments=1 has no inner
+    // points" convention.
+    std::vector<float> profilePoints;
+    if (segments > 1) {
+        profilePoints.resize(segments - 1, 0.5f);
+        if (profilePointsIn.size() == static_cast<size_t>(segments - 1)) {
+            for (size_t i = 0; i < profilePoints.size(); ++i) {
+                float p = profilePointsIn[i];
+                if (p < 0.0f) p = 0.0f;
+                if (p > 1.0f) p = 1.0f;
+                profilePoints[i] = p;
+            }
+        }
+    }
 
     // Snapshot the per-edge info we need before we start mutating faces.
     // Each entry captures the two endpoint vertices, the two adjacent faces,
@@ -1976,18 +2016,16 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
                     outward.normalise();
                 else
                     outward = Ogre::Vector3::ZERO;
-                // Bulge magnitude up to ±0.5*w at the chord midpoint —
-                // small enough that even profile=0 (full concave) keeps
-                // intermediate vertices inside the original solid for
-                // typical bevel widths.
-                const float bulgeScale = (profile - 0.5f) * w;
-                const float kPi = 3.14159265358979323846f;
+                // Each interior chord point is offset along `outward` by
+                //   (profilePoints[i-1] - 0.5) * w
+                // linearly — no sin attenuation. The user's drawn curve
+                // translates directly into the resulting bulge.
                 for (int i = 1; i < segments; ++i) {
                     const float t = static_cast<float>(i)
                                   / static_cast<float>(segments);
+                    const float pt = profilePoints[i - 1];
                     Ogre::Vector3 base = pA + chord * t;
-                    Ogre::Vector3 pos = base + outward
-                                      * (bulgeScale * std::sin(kPi * t));
+                    Ogre::Vector3 pos = base + outward * ((pt - 0.5f) * w);
                     HEVertex nv = m_vertices[v];
                     nv.position = pos;
                     nv.halfEdge = -1;

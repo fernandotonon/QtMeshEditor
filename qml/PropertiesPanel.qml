@@ -523,7 +523,7 @@ Rectangle {
             // Lets the user tweak segment count and profile shape while the
             // gizmo is up.
             Column {
-                visible: EditModeController.bevelSessionActive
+                visible: EditModeController.bevelSessionActiveValue
                 width: parent.width - 16
                 spacing: 4
 
@@ -542,82 +542,42 @@ Rectangle {
                         id: bevelSegmentsSpin
                         from: 1
                         to: 16
-                        value: EditModeController.bevelSegments
+                        value: EditModeController.bevelSegmentsValue
                         onValueModified: EditModeController.updateBevelSegments(value)
                         width: parent.width - 70
                     }
                 }
 
-                // Profile shape — 2D graph control
-                Text {
-                    text: "Profile"
-                    color: PropertiesPanelController.textColor
-                    font.pixelSize: 11
-                }
-                ProfileGraph {
-                    id: bevelProfileGraph
-                    width: parent.width
-                    height: 100
-                    value: EditModeController.bevelProfile
-                    onProfileChanged: (v) => EditModeController.updateBevelProfile(v)
-                }
-                Row {
+                // Profile shape — 2D graph control with one handle per
+                // interior segment. Only shown when segments > 1 (a single
+                // segment has no interior points to shape).
+                Column {
+                    visible: EditModeController.bevelSegmentsValue > 1
                     width: parent.width
                     spacing: 4
 
-                    Repeater {
-                        model: [
-                            { label: "Concave", v: 0.0 },
-                            { label: "Flat",    v: 0.5 },
-                            { label: "Convex",  v: 1.0 }
-                        ]
-                        Rectangle {
-                            required property var modelData
-                            width: (parent.width - 40) / 3
-                            height: 20
-                            radius: 3
-                            color: presetMouse.pressed
-                                 ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
-                                 : presetMouse.containsMouse
-                                 ? Qt.lighter(PropertiesPanelController.buttonColor !== undefined
-                                              ? PropertiesPanelController.buttonColor
-                                              : "#333", 1.2)
-                                 : (PropertiesPanelController.buttonColor !== undefined
-                                    ? PropertiesPanelController.buttonColor
-                                    : "#333")
-                            border.color: PropertiesPanelController.borderColor
-                            Text {
-                                anchors.centerIn: parent
-                                text: modelData.label
-                                color: PropertiesPanelController.textColor
-                                font.pixelSize: 10
-                            }
-                            MouseArea {
-                                id: presetMouse
-                                anchors.fill: parent
-                                hoverEnabled: true
-                                onClicked: EditModeController.updateBevelProfile(modelData.v)
-                            }
-                        }
-                    }
                     Text {
-                        width: 36
-                        height: 20
-                        text: bevelProfileGraph.value.toFixed(2)
+                        text: "Profile"
                         color: PropertiesPanelController.textColor
                         font.pixelSize: 11
-                        horizontalAlignment: Text.AlignRight
-                        verticalAlignment: Text.AlignVCenter
                     }
-                }
-                Text {
-                    text: "Drag the dot · double-click to reset"
-                    color: PropertiesPanelController.subtleTextColor !== undefined
-                         ? PropertiesPanelController.subtleTextColor
-                         : "#888"
-                    font.pixelSize: 9
-                    width: parent.width
-                    wrapMode: Text.Wrap
+                    ProfileGraph {
+                        id: bevelProfileGraph
+                        width: parent.width
+                        height: 100
+                        values: EditModeController.bevelProfilePointsList
+                        onPointChanged: (idx, v) => EditModeController.updateBevelProfilePoint(idx, v)
+                        onResetRequested: EditModeController.resetBevelProfile()
+                    }
+                    Text {
+                        text: "Drag a dot · double-click to reset"
+                        color: PropertiesPanelController.subtleTextColor !== undefined
+                             ? PropertiesPanelController.subtleTextColor
+                             : "#888"
+                        font.pixelSize: 9
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                    }
                 }
             }
 

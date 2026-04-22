@@ -2498,3 +2498,110 @@ TEST(HalfEdgeMeshStandalone, BevelProfileShiftsIntermediateVertexPosition) {
     EXPECT_GT(dConcave, dFlat)
         << "concave profile should push the chamfer mid farther from the cut-off corner";
 }
+
+// ===========================================================================
+// Tests: per-segment profile points (vector overload)
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, BevelVectorOverloadAllFlatMatchesScalarFlat) {
+    auto em = makeCubeMesh();
+    HalfEdgeMesh heA, heB;
+    ASSERT_TRUE(heA.buildFromEditableMesh(em));
+    ASSERT_TRUE(heB.buildFromEditableMesh(em));
+    int eA = findEdge(heA, 5, 3);
+    int eB = findEdge(heB, 5, 3);
+    auto a = heA.bevelEdges({eA}, 0.05f, 4, 0.5f);
+    auto b = heB.bevelEdges({eB}, 0.05f, 4, std::vector<float>{0.5f, 0.5f, 0.5f});
+    ASSERT_FALSE(a.empty());
+    ASSERT_FALSE(b.empty());
+    EXPECT_EQ(a.size(), b.size());
+    EditableMesh outA, outB;
+    ASSERT_TRUE(heA.toEditableMesh(outA));
+    ASSERT_TRUE(heB.toEditableMesh(outB));
+    EXPECT_EQ(outA.subMeshes()[0].vertices.size(),
+              outB.subMeshes()[0].vertices.size());
+    EXPECT_EQ(outA.subMeshes()[0].triangles.size(),
+              outB.subMeshes()[0].triangles.size());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVectorOverloadWrongSizeFallsBackToFlat) {
+    // When size != segments-1, the vector overload should treat every
+    // point as 0.5 (flat chamfer) rather than crashing or corrupting.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 5, 3);
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.05f, 4,
+                                  std::vector<float>{0.9f}); // wrong size
+    ASSERT_FALSE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVectorOverloadClampsOutOfRangeValues) {
+    // Values outside [0, 1] should be clamped, not rejected. Bevel still
+    // succeeds and produces a manifold mesh.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 5, 3);
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.05f, 4,
+                                  std::vector<float>{-0.3f, 2.0f, 1.5f});
+    ASSERT_FALSE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVectorOverloadAsymmetricCurveIsAsymmetric) {
+    // An asymmetric profile (e.g., one side convex, other side concave)
+    // should produce vertex positions that reflect the asymmetry — the
+    // distance from each intermediate to the original cut-off corner v5
+    // must differ along the chord.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 5, 3);
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4,
+                                  std::vector<float>{0.9f, 0.5f, 0.1f});
+    ASSERT_FALSE(newVerts.empty());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    const Ogre::Vector3 v5(1, 1, 1);
+    std::vector<float> dists;
+    for (int idx : newVerts) {
+        const auto& p = he.vertex(idx).position;
+        dists.push_back(p.distance(v5));
+    }
+    float minD = *std::min_element(dists.begin(), dists.end());
+    float maxD = *std::max_element(dists.begin(), dists.end());
+    EXPECT_GT(maxD - minD, 0.01f) << "asymmetric profile produced uniform distances";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVectorOverloadAllConvexMovesPointsToward) {
+    // profilePoints all near 1.0 should bring every interior vertex
+    // closer to the original cut-off corner than a flat (0.5) profile.
+    auto runOnce = [](const std::vector<float>& points) -> float {
+        auto em = makeCubeMesh();
+        HalfEdgeMesh he;
+        EXPECT_TRUE(he.buildFromEditableMesh(em));
+        int edgeIdx = findEdge(he, 5, 3);
+        auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4, points);
+        EXPECT_FALSE(newVerts.empty());
+        const Ogre::Vector3 v5(1, 1, 1);
+        float sum = 0.0f;
+        int count = 0;
+        for (int idx : newVerts) {
+            const auto& p = he.vertex(idx).position;
+            sum += p.distance(v5);
+            ++count;
+        }
+        return count > 0 ? sum / count : 0.0f;
+    };
+    const float dFlat   = runOnce({0.5f, 0.5f, 0.5f});
+    const float dConvex = runOnce({0.95f, 0.95f, 0.95f});
+    EXPECT_LT(dConvex, dFlat) << "all-convex points should pull the strip toward v5";
+}
