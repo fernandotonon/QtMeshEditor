@@ -21,7 +21,7 @@ inputs:
     description: 'Additional CLI flags (e.g. --json, --fail-on warning, --resample 30)'
     required: false
   image-tag:
-    description: 'Docker image tag (default: latest)'
+    description: 'ghcr.io/fernandotonon/qtmesh image tag. Pin to the same release as uses: ...@x.y.z so CLI matches the action (latest may lag or differ).'
     required: false
     default: 'latest'
   generate-badges:
@@ -177,6 +177,13 @@ runs:
         if [ -n "${INPUT_QTMESH_API_BASE:-}" ]; then
           docker_env+=(--env "QTMESH_API_BASE=${INPUT_QTMESH_API_BASE}")
         fi
+        # GitHub Actions sets these on the runner; forward into the container so uploads include
+        # meta (repo, branch, sha, run id) for QtMesh Cloud dashboard / project linkage.
+        for ga_name in GITHUB_REPOSITORY GITHUB_REF_NAME GITHUB_HEAD_REF GITHUB_BASE_REF GITHUB_SHA GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_WORKFLOW GITHUB_JOB GITHUB_ACTOR; do
+          if [ -n "${!ga_name:-}" ]; then
+            docker_env+=(--env "${ga_name}=${!ga_name}")
+          fi
+        done
 
         set +e
         docker run --rm \

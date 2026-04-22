@@ -97,6 +97,9 @@ public:
     /// Canonical JSON object for `--json`, report files, and QtMesh Cloud upload (identical schema).
     static QJsonObject scanReportToJsonObject(const ScanResult& result);
 
+    /// Merge `GITHUB_*` environment (when set, e.g. in GitHub Actions) into `meta` for `/v1/ingest/scan` (prefers GITHUB_HEAD_REF over GITHUB_REF_NAME for branch).
+    static QJsonObject mergeGithubActionsMetaIntoReport(const QJsonObject& report);
+
     /// UTC ISO-8601 timestamps for reports (`scanStartedUtc` / `scanCompletedUtc`); missing values use `scanCompletedUtc` or current UTC.
     static void scanReportUtcTimes(const ScanResult& result, QString* scanStartedUtc, QString* scanCompletedUtc);
     static QString formatJson(const ScanResult& result);

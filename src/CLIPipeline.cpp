@@ -2274,7 +2274,8 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     if (!ingestToken.isEmpty() && !noUpload) {
         SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),
             QStringLiteral("QtMesh Cloud uploadScan: posting"));
-        const auto up = QtMeshCloudClient::uploadScanReport(ingestToken, reportJson);
+        const QJsonObject reportForUpload = ScanEngine::mergeGithubActionsMetaIntoReport(reportJson);
+        const auto up = QtMeshCloudClient::uploadScanReport(ingestToken, reportForUpload);
         uploadOk = up.ok;
         if (up.ok) {
             SentryReporter::addBreadcrumb(QStringLiteral("cli.scan"),

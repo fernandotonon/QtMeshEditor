@@ -82,6 +82,11 @@ runs:
         if [ -n "${INPUT_QTMESH_API_BASE:-}" ]; then
           docker_env+=(--env "QTMESH_API_BASE=${INPUT_QTMESH_API_BASE}")
         fi
+        for ga_name in GITHUB_REPOSITORY GITHUB_REF_NAME GITHUB_HEAD_REF GITHUB_BASE_REF GITHUB_SHA GITHUB_RUN_ID GITHUB_RUN_NUMBER GITHUB_WORKFLOW GITHUB_JOB GITHUB_ACTOR; do
+          if [ -n "${!ga_name:-}" ]; then
+            docker_env+=(--env "${ga_name}=${!ga_name}")
+          fi
+        done
 
         OUTPUT=$(docker run --rm \
           --user "$(id -u):$(id -g)" \
