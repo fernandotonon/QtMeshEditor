@@ -303,7 +303,9 @@ public:
      * @param segments Number of chamfer strips between the two inner offsets
      *                 (1 = single-strip flat chamfer, the original behavior;
      *                 2+ subdivides the chamfer into N strips along the
-     *                 profile curve). Clamped to >= 1.
+     *                 profile curve). Clamped to [1, 16] — the UI SpinBox
+     *                 cap; higher values can overflow the hole-filler's
+     *                 64-vertex loop budget.
      * @param profile Profile-curve shape in [0, 1]. 0.5 = flat (linear
      *                interpolation, identical geometry to the single-segment
      *                case at any segments value); >0.5 bulges outward

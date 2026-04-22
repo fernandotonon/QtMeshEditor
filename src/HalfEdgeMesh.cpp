@@ -933,12 +933,19 @@ std::vector<int> HalfEdgeMesh::extrudeEdges(const std::vector<int>& edgeIndices)
     return newVertices;
 }
 
+// Matches the UI SpinBox upper bound in PropertiesPanel.qml. Large values
+// cost O(segments) allocation per beveled endpoint and can overflow the
+// hole-filler's 64-vertex loop cap; clamping here keeps the public API
+// safe even if a caller bypasses the UI.
+static constexpr int kMaxBevelSegments = 16;
+
 std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
                                            float width,
                                            int segments,
                                            float profile)
 {
     if (segments < 1) segments = 1;
+    if (segments > kMaxBevelSegments) segments = kMaxBevelSegments;
     if (profile < 0.0f) profile = 0.0f;
     if (profile > 1.0f) profile = 1.0f;
 
@@ -968,6 +975,7 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
     if (edgeIndices.empty() || width <= 0.0f)
         return newVertices;
     if (segments < 1) segments = 1;
+    if (segments > kMaxBevelSegments) segments = kMaxBevelSegments;
 
     // If the caller didn't supply the right number of points, fall back to
     // a flat chamfer (all 0.5). This matches the "segments=1 has no inner
@@ -1980,11 +1988,16 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
         // a profile curve. At each endpoint v ∈ {v1, v2} we compute N-1
         // intermediate offset vertices between vA = inner_on_f1 and
         // vB = inner_on_f2, parametrized t = i / segments for i in [1..N-1].
-        // Position is lerp(vA.pos, vB.pos, t) plus a bulge along the
-        // chamfer-plane normal: bulge = (profile - 0.5) * 2 * width * sin(πt).
-        // - profile = 0.5 → flat (no bulge), reproduces the original geometry.
-        // - profile > 0.5 → convex (rounded outward, fillet-like).
-        // - profile < 0.5 → concave (cut inward, groove-like).
+        // Position is lerp(vA.pos, vB.pos, t) plus a per-point bulge along
+        // the chamfer-plane normal: offset = (profilePoints[i-1] - 0.5) * w.
+        // - p = 0.5 → flat (no bulge), reproduces the original geometry.
+        // - p > 0.5 → convex (rounded outward, fillet-like).
+        // - p < 0.5 → concave (cut inward, groove-like).
+        //
+        // The scalar-profile entry point (scalar overload) pre-fills the
+        // vector with the old sin-envelope so the single-number UX keeps
+        // working; callers with explicit per-segment values get a linear
+        // interpretation matching what the user draws in the graph.
         //
         // The bulge direction "outward" is away from v (the original corner
         // we cut off), so positive bulge pushes the strip toward where the
@@ -1994,7 +2007,7 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
         // in buildCorner is "does a NON-CHAMFER tri cover the chamfer-end
         // edge?". The chamfer itself always has that edge.
         // =====================================================================
-        auto buildSegmentVerts = [&](int v, int innerA, int innerB) -> std::vector<int> {
+        auto buildSegmentVerts = [&](int v, int innerA, int innerB) {
             std::vector<int> chain;
             chain.reserve(segments + 1);
             chain.push_back(innerA);

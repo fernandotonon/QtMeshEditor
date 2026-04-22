@@ -9,6 +9,8 @@ The MIT License
 */
 
 #include <gtest/gtest.h>
+#include <cmath>
+#include <limits>
 #include "HalfEdgeMesh.h"
 #include "EditableMesh.h"
 #include "TestHelpers.h"
@@ -2466,21 +2468,22 @@ TEST(HalfEdgeMeshStandalone, BevelSegments8ConcaveStillManifold) {
     expectCubeBevelSegments(8, 0.0f);
 }
 
-TEST(HalfEdgeMeshStandalone, BevelProfileShiftsIntermediateVertexPosition) {
-    // For segments=2, the single intermediate vertex per endpoint should
-    // sit at the chord midpoint when profile=0.5 (flat), closer to the
-    // original cube corner when profile=1 (convex), and farther from it
-    // when profile=0 (concave, digs into the solid).
-    auto runOnce = [](float profile) -> float {
+namespace {
+    // Run one bevel with the scalar profile overload and return the min
+    // distance from any vertex (other than v5 itself) to v5=(1,1,1). If
+    // the bevel fails or the back-conversion fails, returns NaN so the
+    // caller can flag it without dereferencing empty buffers.
+    float bevelDistFromV5Scalar(float profile) {
         auto em = makeCubeMesh();
         HalfEdgeMesh he;
-        EXPECT_TRUE(he.buildFromEditableMesh(em));
+        if (!he.buildFromEditableMesh(em)) return std::nanf("");
         int edgeIdx = findEdge(he, 5, 3);
-        EXPECT_GE(edgeIdx, 0);
+        if (edgeIdx < 0) return std::nanf("");
         auto newVerts = he.bevelEdges({edgeIdx}, 0.05f, 2, profile);
-        EXPECT_FALSE(newVerts.empty());
+        if (newVerts.empty()) return std::nanf("");
         EditableMesh back;
-        EXPECT_TRUE(he.toEditableMesh(back));
+        if (!he.toEditableMesh(back) || back.subMeshes().empty())
+            return std::nanf("");
         const auto& sub = back.subMeshes()[0];
         const Ogre::Vector3 v5(1, 1, 1);
         float minDist = std::numeric_limits<float>::max();
@@ -2489,10 +2492,20 @@ TEST(HalfEdgeMeshStandalone, BevelProfileShiftsIntermediateVertexPosition) {
             if (d > 1e-5f && d < minDist) minDist = d;
         }
         return minDist;
-    };
-    const float dFlat    = runOnce(0.5f);
-    const float dConvex  = runOnce(1.0f);
-    const float dConcave = runOnce(0.0f);
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, BevelProfileShiftsIntermediateVertexPosition) {
+    // For segments=2, the single intermediate vertex per endpoint should
+    // sit at the chord midpoint when profile=0.5 (flat), closer to the
+    // original cube corner when profile=1 (convex), and farther from it
+    // when profile=0 (concave, digs into the solid).
+    const float dFlat    = bevelDistFromV5Scalar(0.5f);
+    const float dConvex  = bevelDistFromV5Scalar(1.0f);
+    const float dConcave = bevelDistFromV5Scalar(0.0f);
+    ASSERT_FALSE(std::isnan(dFlat));
+    ASSERT_FALSE(std::isnan(dConvex));
+    ASSERT_FALSE(std::isnan(dConcave));
     EXPECT_LT(dConvex, dFlat)
         << "convex profile should bring the chamfer mid closer to the cut-off corner";
     EXPECT_GT(dConcave, dFlat)
@@ -2581,27 +2594,34 @@ TEST(HalfEdgeMeshStandalone, BevelVectorOverloadAsymmetricCurveIsAsymmetric) {
     EXPECT_GT(maxD - minD, 0.01f) << "asymmetric profile produced uniform distances";
 }
 
-TEST(HalfEdgeMeshStandalone, BevelVectorOverloadAllConvexMovesPointsToward) {
-    // profilePoints all near 1.0 should bring every interior vertex
-    // closer to the original cut-off corner than a flat (0.5) profile.
-    auto runOnce = [](const std::vector<float>& points) -> float {
+namespace {
+    // Return mean distance from v5=(1,1,1) to the newly-created chamfer
+    // vertices. NaN on bevel failure so the caller can flag it.
+    float meanDistFromV5Vector(const std::vector<float>& points) {
         auto em = makeCubeMesh();
         HalfEdgeMesh he;
-        EXPECT_TRUE(he.buildFromEditableMesh(em));
+        if (!he.buildFromEditableMesh(em)) return std::nanf("");
         int edgeIdx = findEdge(he, 5, 3);
+        if (edgeIdx < 0) return std::nanf("");
         auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4, points);
-        EXPECT_FALSE(newVerts.empty());
+        if (newVerts.empty()) return std::nanf("");
         const Ogre::Vector3 v5(1, 1, 1);
         float sum = 0.0f;
         int count = 0;
         for (int idx : newVerts) {
-            const auto& p = he.vertex(idx).position;
-            sum += p.distance(v5);
+            sum += he.vertex(idx).position.distance(v5);
             ++count;
         }
-        return count > 0 ? sum / count : 0.0f;
-    };
-    const float dFlat   = runOnce({0.5f, 0.5f, 0.5f});
-    const float dConvex = runOnce({0.95f, 0.95f, 0.95f});
+        return count > 0 ? sum / count : std::nanf("");
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVectorOverloadAllConvexMovesPointsToward) {
+    // profilePoints all near 1.0 should bring every interior vertex
+    // closer to the original cut-off corner than a flat (0.5) profile.
+    const float dFlat   = meanDistFromV5Vector({0.5f, 0.5f, 0.5f});
+    const float dConvex = meanDistFromV5Vector({0.95f, 0.95f, 0.95f});
+    ASSERT_FALSE(std::isnan(dFlat));
+    ASSERT_FALSE(std::isnan(dConvex));
     EXPECT_LT(dConvex, dFlat) << "all-convex points should pull the strip toward v5";
 }
