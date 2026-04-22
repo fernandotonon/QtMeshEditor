@@ -933,11 +933,48 @@ std::vector<int> HalfEdgeMesh::extrudeEdges(const std::vector<int>& edgeIndices)
     return newVertices;
 }
 
-std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, float width)
+// Matches the UI SpinBox upper bound in PropertiesPanel.qml. Large values
+// cost O(segments) allocation per beveled endpoint and can overflow the
+// hole-filler's 64-vertex loop cap; clamping here keeps the public API
+// safe even if a caller bypasses the UI.
+static constexpr int kMaxBevelSegments = 16;
+
+// The Phase 1-7 bevel topology below has high cognitive complexity that
+// predates this PR; splitting it into phase-sized helpers is tracked as
+// a separate refactor. This PR only adds the optional profilePoints
+// parameter and uses it inside buildSegmentVerts.
+std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, // NOSONAR(cpp:S3776)
+                                           float width,
+                                           int segments,
+                                           float profile,
+                                           const std::vector<float>& profilePointsIn)
 {
     std::vector<int> newVertices;
     if (edgeIndices.empty() || width <= 0.0f)
         return newVertices;
+    segments = std::clamp(segments, 1, kMaxBevelSegments);
+    profile = std::clamp(profile, 0.0f, 1.0f);
+
+    // Build the per-interior-point profile vector. If the caller supplied
+    // an explicit one of the right size, clamp and use it directly; other-
+    // wise synthesize from the scalar profile using a sin envelope so a
+    // single UI number still produces the classic bulge shape.
+    std::vector<float> profilePoints;
+    if (segments > 1) {
+        profilePoints.resize(segments - 1, 0.5f);
+        if (profilePointsIn.size() == static_cast<size_t>(segments - 1)) {
+            for (size_t i = 0; i < profilePoints.size(); ++i)
+                profilePoints[i] = std::clamp(profilePointsIn[i], 0.0f, 1.0f);
+        } else {
+            const float kPi = 3.14159265358979323846f;
+            const float amp = profile - 0.5f;
+            for (int i = 1; i < segments; ++i) {
+                const float t = static_cast<float>(i)
+                              / static_cast<float>(segments);
+                profilePoints[i - 1] = 0.5f + amp * std::sin(kPi * t);
+            }
+        }
+    }
 
     // Snapshot the per-edge info we need before we start mutating faces.
     // Each entry captures the two endpoint vertices, the two adjacent faces,
@@ -1925,17 +1962,102 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
         if (fullRingV2) processRingNeighbors(info.v2, ringV2);
 
         // =====================================================================
-        // Phase 6: chamfer quad between f1's and f2's inner offsets.
-        // Note: we do NOT record these edges in emittedEdges because the
-        // cap check in buildCorner is "does a NON-CHAMFER tri cover the
-        // chamfer-end edge?". The chamfer itself always has that edge.
+        // Phase 6: chamfer strip between f1's and f2's inner offsets.
+        //
+        // For segments=1 (default), this is the original two-triangle quad
+        // bridging (v1a, v2a) on f1's side to (v1b, v2b) on f2's side.
+        //
+        // For segments>1, we subdivide the strip into `segments` quads along
+        // a profile curve. At each endpoint v ∈ {v1, v2} we compute N-1
+        // intermediate offset vertices between vA = inner_on_f1 and
+        // vB = inner_on_f2, parametrized t = i / segments for i in [1..N-1].
+        // Position is lerp(vA.pos, vB.pos, t) plus a per-point bulge along
+        // the chamfer-plane normal: offset = (profilePoints[i-1] - 0.5) * w.
+        // - p = 0.5 → flat (no bulge), reproduces the original geometry.
+        // - p > 0.5 → convex (rounded outward, fillet-like).
+        // - p < 0.5 → concave (cut inward, groove-like).
+        //
+        // The scalar-profile entry point (scalar overload) pre-fills the
+        // vector with the old sin-envelope so the single-number UX keeps
+        // working; callers with explicit per-segment values get a linear
+        // interpretation matching what the user draws in the graph.
+        //
+        // The bulge direction "outward" is away from v (the original corner
+        // we cut off), so positive bulge pushes the strip toward where the
+        // original sharp edge USED to be.
+        //
+        // We do NOT record these edges in emittedEdges because the cap check
+        // in buildCorner is "does a NON-CHAMFER tri cover the chamfer-end
+        // edge?". The chamfer itself always has that edge.
         // =====================================================================
-        if (f1WalksAB) {
-            appendTriangle(v1b, v2b, v2a, info.subMeshIndex);
-            appendTriangle(v1b, v2a, v1a, info.subMeshIndex);
-        } else {
-            appendTriangle(v2b, v1b, v1a, info.subMeshIndex);
-            appendTriangle(v2b, v1a, v2a, info.subMeshIndex);
+        // Outward bulge direction: from the chord midpoint toward the
+        // original corner v. Convex profile bulges in this direction
+        // (rounded fillet), concave bulges opposite (digs into the solid).
+        auto computeOutward = [&](const Ogre::Vector3& pA,
+                                  const Ogre::Vector3& pB,
+                                  const Ogre::Vector3& pV) {
+            const auto chord = pB - pA;
+            auto outward = pV - (pA + pB) * 0.5f;
+            if (const float chordLen2 = chord.squaredLength(); chordLen2 > 1e-12f)
+                outward -= chord * (outward.dotProduct(chord) / chordLen2);
+            if (outward.length() > 1e-6f) outward.normalise();
+            else                          outward = Ogre::Vector3::ZERO;
+            return outward;
+        };
+
+        // Append one new vertex cloned from `v` and positioned at `pos`.
+        // Returns the new vertex index and records it in newVertices.
+        auto appendChamferVertex = [&](int v, const Ogre::Vector3& pos) {
+            HEVertex nv = m_vertices[v];
+            nv.position = pos;
+            nv.halfEdge = -1;
+            const auto idx = static_cast<int>(m_vertices.size());
+            m_vertices.push_back(nv);
+            newVertices.push_back(idx);
+            return idx;
+        };
+
+        // Build one endpoint's chain: innerA → N-1 intermediates → innerB.
+        // Each intermediate is offset along `outward` by
+        //   (profilePoints[i-1] - 0.5) * w
+        // linearly. The user's drawn curve translates directly into the
+        // resulting bulge.
+        auto buildSegmentVerts = [&](int v, int innerA, int innerB) {
+            std::vector<int> chain;
+            chain.reserve(segments + 1);
+            chain.push_back(innerA);
+            if (segments > 1) {
+                const auto pA = m_vertices[innerA].position;
+                const auto pB = m_vertices[innerB].position;
+                const auto chord = pB - pA;
+                const auto outward = computeOutward(pA, pB, m_vertices[v].position);
+                for (int i = 1; i < segments; ++i) {
+                    const float t = static_cast<float>(i)
+                                  / static_cast<float>(segments);
+                    const float pt = profilePoints[i - 1];
+                    const auto pos = pA + chord * t + outward * ((pt - 0.5f) * w);
+                    chain.push_back(appendChamferVertex(v, pos));
+                }
+            }
+            chain.push_back(innerB);
+            return chain;
+        };
+        const std::vector<int> v1Chain = buildSegmentVerts(info.v1, v1a, v1b);
+        const std::vector<int> v2Chain = buildSegmentVerts(info.v2, v2a, v2b);
+        // Emit two triangles per strip i: bridges chain[i]->chain[i+1] on each
+        // endpoint. Original (segments=1) winding is preserved when N=1.
+        for (int i = 0; i < segments; ++i) {
+            const int a = v1Chain[i];      // f1-side at v1, step i
+            const int b = v1Chain[i + 1];  // f2-side at v1, step i (toward f2)
+            const int c = v2Chain[i + 1];  // f2-side at v2, step i (toward f2)
+            const int d = v2Chain[i];      // f1-side at v2, step i
+            if (f1WalksAB) {
+                appendTriangle(b, c, d, info.subMeshIndex);
+                appendTriangle(b, d, a, info.subMeshIndex);
+            } else {
+                appendTriangle(c, b, a, info.subMeshIndex);
+                appendTriangle(c, a, d, info.subMeshIndex);
+            }
         }
 
         // =====================================================================
@@ -2373,7 +2495,14 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
 
             for (auto& loop : loopsToProcess) {
                 if (loop.size() < 3) continue;
-                if (loop.size() > 8) continue;  // skip big/non-simple loops
+                // Hard cap to avoid filling bizarrely large loops (which
+                // almost certainly indicate a non-simple polygon the
+                // fan-triangulation would bungle). Scales with segment
+                // count: a multi-segment bevel can legitimately produce
+                // loops of ~2*(segments+1) verts around the chamfer strip
+                // perimeter, so the old hard 8 was too tight for
+                // segments>=4. Use a generous but bounded ceiling.
+                if (loop.size() > 64) continue;
                 // Only fill loops that contain at least one bevel-created
                 // offset vertex (in newVertices). Loops made entirely of
                 // pre-existing perimeter vertices are legitimate open
@@ -2449,15 +2578,22 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                         refNormal += n;
                     }
                 }
-                // Geometry-first winding: the fill's visible face should
-                // match its neighbors' orientation (outward-facing). If
-                // refNormal is well-defined, trust it — users care about
-                // what they SEE, and the surrounding mesh may already be
-                // non-manifold at this location (otherwise fill wouldn't
-                // be needed), so perfect topological closure isn't
-                // achievable.
-                bool flipWinding = flipScore > noFlipScore;
-                if (refNormal.length() > 0.1f && loop.size() >= 3) {
+                // Topology-first winding: prefer the winding that partners
+                // the most directed boundary edges with existing tris and
+                // duplicates the fewest. This is robust against curved
+                // fill surfaces (e.g., concave multi-segment bevels) where
+                // the geometric face-normal check can flip sign based on
+                // profile even though the correct topological winding is
+                // unchanged.
+                //
+                // Fall back to the geometric refNormal check only when the
+                // topology scores are tied (ambiguous), which happens when
+                // the loop's boundary edges don't meaningfully overlap the
+                // existing mesh — then visual appearance is the only cue.
+                bool flipWinding;
+                if (flipScore != noFlipScore) {
+                    flipWinding = flipScore > noFlipScore;
+                } else if (refNormal.length() > 0.1f && loop.size() >= 3) {
                     Ogre::Vector3 p0 = m_vertices[loop[0]].position;
                     Ogre::Vector3 p1 = m_vertices[loop[1]].position;
                     Ogre::Vector3 p2 = m_vertices[loop[2]].position;
@@ -2465,7 +2601,11 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, f
                     if (noFlipN.length() > 1e-6f) {
                         noFlipN.normalise();
                         flipWinding = refNormal.dotProduct(noFlipN) < 0;
+                    } else {
+                        flipWinding = false;
                     }
+                } else {
+                    flipWinding = false;
                 }
                 (void)noFlipConflicts;
                 (void)flipConflicts;

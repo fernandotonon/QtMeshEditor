@@ -821,15 +821,23 @@ class EditModeControllerBevelE2ETest : public ::testing::Test {
 protected:
     Ogre::SceneNode* m_node = nullptr;
     Ogre::Entity* m_entity = nullptr;
-    int s_counter = 0;
+    std::string m_meshName;
+    std::string m_nodeName;
 
     void SetUp() override {
         if (!tryInitOgre()) { GTEST_SKIP() << "Ogre not available"; return; }
         if (!canLoadMeshFiles()) { GTEST_SKIP() << "Cannot create HW buffers"; return; }
         createStandardOgreMaterials();
 
-        auto mesh = createInMemoryWeldedCube("BevelE2E_cube");
-        m_node = Manager::getSingleton()->addSceneNode("BevelE2E_node");
+        // Unique names per test so reruns don't collide with Ogre's
+        // resource manager registry across fixture instances.
+        static int counter = 0;
+        ++counter;
+        m_meshName = "BevelE2E_cube_" + std::to_string(counter);
+        m_nodeName = "BevelE2E_node_" + std::to_string(counter);
+
+        auto mesh = createInMemoryWeldedCube(m_meshName);
+        m_node = Manager::getSingleton()->addSceneNode(QString::fromStdString(m_nodeName));
         m_entity = Manager::getSingleton()->createEntity(m_node, mesh);
         m_entity->setMaterialName("BaseWhite");
         SelectionSet::getSingleton()->selectOne(m_node);
@@ -840,6 +848,12 @@ protected:
         if (m_node) {
             Manager::getSingleton()->destroySceneNode(m_node);
             m_node = nullptr;
+        }
+        if (!m_meshName.empty()) {
+            auto& mm = Ogre::MeshManager::getSingleton();
+            if (mm.getByName(m_meshName))
+                mm.remove(m_meshName);
+            m_meshName.clear();
         }
     }
 };
@@ -945,5 +959,208 @@ TEST_F(EditModeControllerBevelE2ETest, BevelCubeTopRightEdgeProducesClosedManifo
         }
     }
     EXPECT_EQ(invertedTris, 0) << invertedTris << " inverted triangles in GPU buffers";
+}
+
+// ===========================================================================
+// Per-segment bevel profile points: session state, API, signal emission.
+// ===========================================================================
+
+TEST_F(EditModeControllerBevelE2ETest, BevelSegments1HasEmptyProfilePoints) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+
+    ASSERT_TRUE(ctrl->bevelSelection());
+    EXPECT_EQ(ctrl->bevelSegments(), 1);
+    auto pts = ctrl->bevelProfilePoints();
+    EXPECT_EQ(pts.size(), 0);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, UpdateBevelSegmentsResizesProfilePoints) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+
+    ctrl->updateBevelSegments(3);
+    EXPECT_EQ(ctrl->bevelSegments(), 3);
+    auto pts = ctrl->bevelProfilePoints();
+    EXPECT_EQ(pts.size(), 2);
+    for (const auto& v : pts) EXPECT_NEAR(v.toFloat(), 0.5f, 1e-3f);
+
+    ctrl->updateBevelSegments(5);
+    EXPECT_EQ(ctrl->bevelSegments(), 5);
+    EXPECT_EQ(ctrl->bevelProfilePoints().size(), 4);
+
+    ctrl->updateBevelSegments(2);
+    EXPECT_EQ(ctrl->bevelSegments(), 2);
+    EXPECT_EQ(ctrl->bevelProfilePoints().size(), 1);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, UpdateBevelProfilePointChangesValue) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+
+    ctrl->updateBevelSegments(4);
+    ASSERT_EQ(ctrl->bevelProfilePoints().size(), 3);
+
+    ctrl->updateBevelProfilePoint(1, 0.9f);
+    auto pts = ctrl->bevelProfilePoints();
+    ASSERT_EQ(pts.size(), 3);
+    EXPECT_NEAR(pts[0].toFloat(), 0.5f, 1e-3f);
+    EXPECT_NEAR(pts[1].toFloat(), 0.9f, 1e-3f);
+    EXPECT_NEAR(pts[2].toFloat(), 0.5f, 1e-3f);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, UpdateBevelProfilePointClampsRange) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+
+    ctrl->updateBevelSegments(3);
+    ASSERT_EQ(ctrl->bevelProfilePoints().size(), 2);
+
+    ctrl->updateBevelProfilePoint(0, -1.0f);
+    EXPECT_NEAR(ctrl->bevelProfilePoints()[0].toFloat(), 0.0f, 1e-3f);
+    ctrl->updateBevelProfilePoint(0, 2.0f);
+    EXPECT_NEAR(ctrl->bevelProfilePoints()[0].toFloat(), 1.0f, 1e-3f);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, UpdateBevelProfilePointInvalidIndexIsNoOp) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+
+    ctrl->updateBevelSegments(3);
+    ASSERT_EQ(ctrl->bevelProfilePoints().size(), 2);
+    auto before = ctrl->bevelProfilePoints();
+    ctrl->updateBevelProfilePoint(-1, 0.9f);
+    ctrl->updateBevelProfilePoint(5, 0.9f);
+    auto after = ctrl->bevelProfilePoints();
+    ASSERT_EQ(before.size(), after.size());
+    for (int i = 0; i < before.size(); ++i)
+        EXPECT_NEAR(before[i].toFloat(), after[i].toFloat(), 1e-6f);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, ResetBevelProfileFlattens) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+
+    ctrl->updateBevelSegments(4);
+    ctrl->updateBevelProfilePoint(0, 0.1f);
+    ctrl->updateBevelProfilePoint(1, 0.9f);
+    ctrl->updateBevelProfilePoint(2, 0.2f);
+
+    ctrl->resetBevelProfile();
+    auto pts = ctrl->bevelProfilePoints();
+    ASSERT_EQ(pts.size(), 3);
+    for (const auto& v : pts) EXPECT_NEAR(v.toFloat(), 0.5f, 1e-3f);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, BevelProfilePointsChangedSignalFires) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+
+    int fires = 0;
+    auto conn = QObject::connect(ctrl, &EditModeController::bevelProfilePointsChanged,
+                                 [&]() { ++fires; });
+
+    ASSERT_TRUE(ctrl->bevelSelection());
+    EXPECT_GE(fires, 1) << "signal should fire on session start";
+
+    fires = 0;
+    ctrl->updateBevelSegments(3);
+    EXPECT_GE(fires, 1);
+
+    fires = 0;
+    ctrl->updateBevelProfilePoint(0, 0.8f);
+    EXPECT_GE(fires, 1);
+
+    fires = 0;
+    ctrl->resetBevelProfile();
+    EXPECT_GE(fires, 1);
+
+    fires = 0;
+    ctrl->cancelBevel();
+    EXPECT_GE(fires, 1);
+
+    QObject::disconnect(conn);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, UpdateBevelProfilePointWithSegments1NoOp) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+    ASSERT_EQ(ctrl->bevelSegments(), 1);
+
+    ctrl->updateBevelProfilePoint(0, 0.9f);
+    EXPECT_EQ(ctrl->bevelProfilePoints().size(), 0);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, ResetBevelProfileWithSegments1NoOp) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+
+    ctrl->resetBevelProfile();
+    EXPECT_EQ(ctrl->bevelProfilePoints().size(), 0);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, ResizingSegmentsPreservesCurveShape) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+
+    ctrl->updateBevelSegments(3);
+    ctrl->updateBevelProfilePoint(0, 0.2f);
+    ctrl->updateBevelProfilePoint(1, 0.8f);
+
+    ctrl->updateBevelSegments(5);
+    auto pts = ctrl->bevelProfilePoints();
+    ASSERT_EQ(pts.size(), 4);
+    // After resampling, the first and last resampled points should roughly
+    // bracket the original range — not all be 0.5.
+    float minV = 1.0f, maxV = 0.0f;
+    for (const auto& v : pts) {
+        float f = v.toFloat();
+        if (f < minV) minV = f;
+        if (f > maxV) maxV = f;
+    }
+    EXPECT_LT(minV, 0.5f) << "resample should carry the concave side forward";
+    EXPECT_GT(maxV, 0.5f) << "resample should carry the convex side forward";
+}
+
+TEST_F(EditModeControllerBevelE2ETest, SessionEndClearsProfilePoints) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(5, 3, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+    ctrl->updateBevelSegments(3);
+    ASSERT_EQ(ctrl->bevelProfilePoints().size(), 2);
+
+    ctrl->cancelBevel();
+    EXPECT_FALSE(ctrl->bevelSessionActive());
+    EXPECT_EQ(ctrl->bevelProfilePoints().size(), 0);
 }
 

@@ -518,6 +518,69 @@ Rectangle {
                 }
             }
 
+            // Bevel session controls (visible only while a bevel session is
+            // active — i.e., between Cmd+B and the commit/cancel click).
+            // Lets the user tweak segment count and profile shape while the
+            // gizmo is up.
+            Column {
+                visible: EditModeController.bevelSessionActiveValue
+                width: parent.width - 16
+                spacing: 4
+
+                // Segments
+                Row {
+                    width: parent.width
+                    spacing: 6
+                    Text {
+                        text: "Segments"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 60
+                    }
+                    SpinBox {
+                        id: bevelSegmentsSpin
+                        from: 1
+                        to: 16
+                        value: EditModeController.bevelSegmentsValue
+                        onValueModified: EditModeController.updateBevelSegments(value)
+                        width: parent.width - 70
+                    }
+                }
+
+                // Profile shape — 2D graph control with one handle per
+                // interior segment. Only shown when segments > 1 (a single
+                // segment has no interior points to shape).
+                Column {
+                    visible: EditModeController.bevelSegmentsValue > 1
+                    width: parent.width
+                    spacing: 4
+
+                    Text {
+                        text: "Profile"
+                        color: PropertiesPanelController.textColor
+                        font.pixelSize: 11
+                    }
+                    ProfileGraph {
+                        id: bevelProfileGraph
+                        width: parent.width
+                        height: 100
+                        values: EditModeController.bevelProfilePointsList
+                        onPointChanged: (idx, v) => EditModeController.updateBevelProfilePoint(idx, v)
+                        onResetRequested: EditModeController.resetBevelProfile()
+                    }
+                    Text {
+                        text: "Drag a dot · double-click to reset"
+                        color: PropertiesPanelController.subtleTextColor !== undefined
+                             ? PropertiesPanelController.subtleTextColor
+                             : "#888"
+                        font.pixelSize: 9
+                        width: parent.width
+                        wrapMode: Text.Wrap
+                    }
+                }
+            }
+
             // Separator
             Rectangle { width: parent.width - 16; height: 1; color: PropertiesPanelController.borderColor }
 

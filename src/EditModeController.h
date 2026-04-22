@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include <QQmlEngine>
 #include <QPoint>
 #include <QRect>
+#include <QVariantList>
 #include <memory>
 #include <set>
 #include <map>
@@ -242,7 +243,11 @@ public:
     Q_INVOKABLE void cancelBevel();
 
     /// @brief Whether a bevel session is active (gizmo should be visible).
-    Q_INVOKABLE bool bevelSessionActive() const { return m_bevelSession.active; }
+    ///        Exposed as a Q_PROPERTY so QML `visible:` bindings get a
+    ///        real bool (not a function reference, which is always truthy).
+    Q_PROPERTY(bool bevelSessionActiveValue READ bevelSessionActive
+               NOTIFY bevelProfilePointsChanged)
+    bool bevelSessionActive() const { return m_bevelSession.active; }
 
     /// @brief Gizmo pivot position in local mesh space (chamfer region center).
     Ogre::Vector3 bevelGizmoOrigin() const { return m_bevelSession.pivot; }
@@ -252,6 +257,35 @@ public:
 
     /// @brief Currently-applied width (starts at 0.005, grows/shrinks via drag).
     float bevelGizmoWidth() const { return m_bevelSession.width; }
+
+    /// @brief Currently-applied segment count (1 = single-strip chamfer).
+    ///        Exposed as a Q_PROPERTY so QML bindings (e.g. a segments
+    ///        SpinBox) get a real int, not a function reference.
+    Q_PROPERTY(int bevelSegmentsValue READ bevelSegments
+               NOTIFY bevelProfilePointsChanged)
+    int bevelSegments() const { return m_bevelSession.segments; }
+
+    /// @brief Currently-applied profile points (size = segments-1).
+    ///        Each value in [0, 1]: 0.5 = flat, 1 = max outward bulge,
+    ///        0 = max inward bulge. Empty when segments == 1.
+    ///        Exposed as a Q_PROPERTY so QML bindings re-evaluate when it
+    ///        changes; updated on every segments/point-value change.
+    Q_PROPERTY(QVariantList bevelProfilePointsList READ bevelProfilePoints
+               NOTIFY bevelProfilePointsChanged)
+    QVariantList bevelProfilePoints() const;
+
+    /// @brief Re-run the active bevel with new segments (>=1). No-op if
+    ///        no session is active or if the value didn't change.
+    ///        Resizes the profile-points vector to segments-1, preserving
+    ///        existing values where possible.
+    Q_INVOKABLE void updateBevelSegments(int segments);
+
+    /// @brief Re-run the active bevel with a new value at one profile
+    ///        point index. `index` in [0, segments-2], `value` in [0, 1].
+    Q_INVOKABLE void updateBevelProfilePoint(int index, float value);
+
+    /// @brief Reset all profile points to 0.5 (flat chamfer).
+    Q_INVOKABLE void resetBevelProfile();
     /// @}
 
     /// @name Vertex transform support
@@ -456,6 +490,8 @@ signals:
     void normalsModeChanged();
     /// Emitted when mesh validation results change.
     void validationChanged();
+    /// Emitted when the bevel profile points vector changes (size or value).
+    void bevelProfilePointsChanged();
 
 private slots:
     void onSelectionChanged();
@@ -507,6 +543,10 @@ private:
         Ogre::Vector3 pivot = Ogre::Vector3::ZERO; ///< Gizmo pivot (chamfer region center).
         Ogre::Vector3 axis = Ogre::Vector3::UNIT_Y; ///< Gizmo axis (averaged surface normal).
         float width = 0.0f;                         ///< Currently-applied width.
+        int segments = 1;                           ///< Chamfer-strip segment count.
+        /// Per-interior-point profile values (size = segments-1, each in
+        /// [0, 1], 0.5 = flat). Empty when segments == 1.
+        std::vector<float> profilePoints;
     };
     BevelSession m_bevelSession;
     std::unique_ptr<class BevelGizmo> m_bevelGizmo;
@@ -515,7 +555,9 @@ private:
     /// pre-bevel snapshot state. Updates selection to the new chamfer verts.
     /// Internal helper shared by beginBevel / updateBevelWidth.
     bool applyBevelTopology(const std::vector<std::pair<int,int>>& edges,
-                            float width);
+                            float width,
+                            int segments = 1,
+                            const std::vector<float>& profilePoints = {});
 
     /// World-space pivot (entity transform applied to session.pivot).
     Ogre::Vector3 bevelGizmoWorldOrigin() const;
