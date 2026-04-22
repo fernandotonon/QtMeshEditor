@@ -8,7 +8,6 @@ export const links = {
   issues: 'https://github.com/fernandotonon/QtMeshEditor/issues',
   forum: 'https://forums.ogre3d.org/viewtopic.php?t=76016',
   license: 'https://opensource.org/license/mit',
-  actions: 'https://github.com/fernandotonon/qtmesh',
   marketplace: 'https://github.com/marketplace/actions/qtmesheditor'
 };
 
@@ -36,55 +35,70 @@ export const media = {
 };
 
 export const hero = {
-  title: 'Automate your 3D asset pipeline.',
+  title: 'Catch 3D asset issues before they break your game.',
   subtitle:
-    'QtMeshEditor gives indie teams and studios one technical workflow to fix, convert, merge, and automate 3D assets with GUI + CLI + CI/CD support, with repo-wide scanning and validation evolving quickly.',
-  ctaPrimary: 'Download Latest',
+    'QtMeshEditor helps developers and technical artists lint, validate, fix, and track 3D asset pipelines across GUI, CLI, Docker, GitHub Actions, and QtMesh Cloud reporting.',
+  ctaPrimary: 'Download QtMeshEditor',
   ctaSecondary: 'View on GitHub',
   ctaDocs: 'Documentation'
 };
 
-export const proofPoints = ['Free & open source', 'Windows / macOS / Linux', 'GUI + CLI', 'Docker + GitHub Actions'];
+export const proofPoints = [
+  'CI/CD for 3D assets',
+  'GUI + CLI + Docker',
+  'GitHub Actions + QtMesh Cloud',
+  'Open source (MIT)'
+];
 
 export const pipelineFlow = [
   {
     title: 'Scan',
-    body: 'Pipeline scanning is in active development, focused on repo-wide checks for broken files and policy issues.'
+    body: 'Scan repository assets for format, naming, and structural issues before integration.'
   },
   {
     title: 'Validate',
-    body: 'Evolving validation workflows enforce consistency for geometry, naming, and structure before integration.'
+    body: 'Apply quality rules consistently so imports and runtime behavior stay predictable.'
   },
   {
     title: 'Fix & Optimize',
-    body: 'Apply deterministic cleanup and optimization steps so assets remain stable across machines and CI jobs.'
+    body: 'Run deterministic cleanup and optimization to reduce pipeline drift across environments.'
   },
   {
     title: 'Convert & Ship',
-    body: 'Export to engine-ready formats and publish artifacts from local scripts, Docker, or GitHub Actions.'
+    body: 'Convert and publish engine-ready artifacts through local scripts, Docker, and CI.'
   }
 ];
 
-export const useCases = [
+export const beforeAfter = {
+  before: [
+    'Broken animations discovered late',
+    'Missing materials after import',
+    'Inconsistent naming across teams',
+    'Pipeline surprises near release'
+  ],
+  after: [
+    'Validated assets at every push',
+    'Predictable imports and outputs',
+    'CI visibility for asset quality',
+    'Shareable quality badges for stakeholders'
+  ]
+};
+
+export const audienceCards = [
   {
-    title: 'Scan assets in repositories (in progress)',
-    body: 'Add repo-wide checks that surface pipeline issues early and support stricter CI gates over time.'
+    title: 'Indie game developers',
+    body: 'Catch asset regressions early and keep production moving without building custom tooling from scratch.',
+    tag: 'Indie'
   },
   {
-    title: 'Fix and optimize meshes',
-    body: 'Repair and optimize imported assets to keep runtime and tooling behavior predictable.'
+    title: 'Technical artists / pipeline owners',
+    body: 'Standardize checks, automate fixes, and keep DCC-to-engine handoffs consistent across contributors.',
+    tag: 'Technical Art'
   },
   {
-    title: 'Convert across formats',
-    body: 'Move assets between DCC tools and engines with import/export support for 40+ formats.'
-  },
-  {
-    title: 'Merge animation clips',
-    body: 'Combine Mixamo, Unreal exports, and DCC clips into clean output files for engine ingestion.'
-  },
-  {
-    title: 'GitHub Actions (Marketplace)',
-    body: 'Use the onboarding-style workflow template and keep the action ref current from the latest release.'
+    title: 'Studios with CI/CD workflows',
+    body: 'Add quality gates for 3D assets like code, with historical tracking and visible health signals in CI.',
+    tag: 'Studio CI/CD'
   }
 ];
 
@@ -100,20 +114,16 @@ export const pipelineExamples = {
 
 export const cloudBadgeSteps = [
   {
-    title: 'Create your QtMesh Cloud project',
-    body: 'Sign in at qtmesh.dev, then create a project and choose a stable slug for badge URLs.'
+    title: 'Connect a project',
+    body: 'Create a QtMesh Cloud project and store a project token in CI secrets.'
   },
   {
-    title: 'Store your token in CI secrets',
-    body: 'Generate a project token and save it as QTMESH_CLOUD_TOKEN in your GitHub repository secrets.'
+    title: 'Upload scan results on every run',
+    body: 'Send scan JSON to /v1/ingest/scan to keep branch and commit quality history.'
   },
   {
-    title: 'Upload each scan report from CI',
-    body: 'POST the JSON report to /v1/ingest/scan so QtMesh Cloud tracks history and refreshes badge values.'
-  },
-  {
-    title: 'Embed live SVG badges',
-    body: 'Use owner slug + project slug in badge URLs to show real status, errors, and warnings in your README or website.'
+    title: 'Publish live badges',
+    body: 'Expose status, score, errors, and warnings with badge URLs tied to your project.'
   }
 ];
 
@@ -149,26 +159,26 @@ export const cloudBadgeUploadExample = `- name: Scan assets
 export const mixamoSteps = [
   {
     title: 'Import base + clips',
-    body: 'Load a base character and animation clips from Mixamo, Unreal export, or DCC tools.'
+    body: 'Bring in Mixamo, Unreal, and DCC clips around a shared rig base.'
   },
   {
     title: 'Merge into one asset',
-    body: 'Compose multiple actions into one predictable output file for gameplay integration.'
+    body: 'Merge clips into one predictable output for gameplay and content review.'
   },
   {
     title: 'Export to your runtime format',
-    body: 'Export to glTF, FBX-compatible workflows, Collada, OBJ, or Ogre Mesh and continue the pipeline.'
+    body: 'Export to glTF/FBX/Collada/Ogre Mesh and feed directly into CI and engine import.'
   }
 ];
 
 export const highlightFeatures = [
   {
     title: 'Scene save/load',
-    body: 'Store full scenes with meshes, transforms, materials, skeletons, and animations for repeatable edits.'
+    body: 'Store full scenes with meshes, transforms, materials, skeletons, and animations.'
   },
   {
     title: 'Material tools',
-    body: 'Adjust materials visually with realtime feedback during look-dev and technical review.'
+    body: 'Adjust materials visually with realtime feedback for look-dev and QA.'
   },
   {
     title: 'REST API',
@@ -176,7 +186,7 @@ export const highlightFeatures = [
   },
   {
     title: 'MCP / AI agent integration',
-    body: 'Expose pipeline tools through MCP for advanced scripted and agent-driven workflows.'
+    body: 'Expose pipeline tools through MCP for scripted and agent-driven workflows.'
   }
 ];
 
@@ -210,11 +220,11 @@ export const trustItems = [
   },
   {
     title: 'Active since 2012',
-    body: 'Long-running project with continuous evolution across GUI, CLI, and pipeline tooling.'
+    body: 'Long-running project with steady evolution across editor, CLI, and CI workflows.'
   },
   {
     title: 'Pipeline-first by design',
-    body: 'Built around practical asset flow outcomes: validate, fix, convert, merge, and automate.'
+    body: 'Built around real asset outcomes: validate, fix, convert, merge, and automate.'
   }
 ];
 
