@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import s from './DocsApp.module.css';
+import useQtmeshActionRef from './hooks/useQtmeshActionRef';
 
 const NAV = [
   { section: 'Getting Started', items: [
@@ -31,15 +32,6 @@ const NAV = [
     { id: 'ci-cd', label: 'CI/CD Patterns' },
   ]},
 ];
-
-const QTMESH_RELEASES_LATEST_API = 'https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest';
-const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@v1';
-
-function actionRefFromTag(tagName) {
-  const tag = String(tagName || '').trim();
-  if (!tag || !/^v?\d/.test(tag)) return QTMESH_ACTION_REF_FALLBACK;
-  return `fernandotonon/QtMeshEditor@${tag}`;
-}
 
 function Code({ children }) {
   return <code className={s.code}>{children}</code>;
@@ -104,7 +96,7 @@ function CmdSection({ id, name, synopsis, description, examples, options, childr
 export default function DocsApp() {
   const [active, setActive] = useState('installation');
   const [menuOpen, setMenuOpen] = useState(false);
-  const [qtmeshActionRef, setQtmeshActionRef] = useState(QTMESH_ACTION_REF_FALLBACK);
+  const qtmeshActionRef = useQtmeshActionRef();
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -117,26 +109,6 @@ export default function DocsApp() {
     );
     document.querySelectorAll('section[id]').forEach(el => observer.observe(el));
     return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(QTMESH_RELEASES_LATEST_API, {
-          headers: { Accept: 'application/vnd.github+json' },
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setQtmeshActionRef(actionRefFromTag(data?.tag_name));
-      } catch (_e) {
-        // Keep fallback ref when GitHub API is unavailable.
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   return (
