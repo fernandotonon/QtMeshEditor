@@ -660,14 +660,6 @@ function App() {
                 <FeatureCard key={item.title} title={item.title} body={item.body} />
               ))}
             </div>
-
-            <nav className={styles.communityLinks} aria-label="Community links">
-              {footerLinks.map((item) => (
-                <a key={item.label} href={item.href} target="_blank" rel="noreferrer">
-                  {item.label}
-                </a>
-              ))}
-            </nav>
           </Section>
         </main>
 

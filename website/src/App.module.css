@@ -729,15 +729,7 @@
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.communityLinks {
-  margin-top: 1rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-
 .cliLinks a,
-.communityLinks a,
 .footerLinks a {
   color: var(--accent-1);
   text-decoration: none;
@@ -745,7 +737,6 @@
 }
 
 .cliLinks a:hover,
-.communityLinks a:hover,
 .footerLinks a:hover {
   color: #9cdfff;
 }
