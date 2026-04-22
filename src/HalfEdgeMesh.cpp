@@ -2020,11 +2020,23 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
             return outward;
         };
 
+        // Append one new vertex cloned from `v` and positioned at `pos`.
+        // Returns the new vertex index and records it in newVertices.
+        auto appendChamferVertex = [&](int v, const Ogre::Vector3& pos) {
+            HEVertex nv = m_vertices[v];
+            nv.position = pos;
+            nv.halfEdge = -1;
+            const auto idx = static_cast<int>(m_vertices.size());
+            m_vertices.push_back(nv);
+            newVertices.push_back(idx);
+            return idx;
+        };
+
         // Build one endpoint's chain: innerA → N-1 intermediates → innerB.
         // Each intermediate is offset along `outward` by
         //   (profilePoints[i-1] - 0.5) * w
-        // linearly — no sin attenuation. The user's drawn curve translates
-        // directly into the resulting bulge.
+        // linearly. The user's drawn curve translates directly into the
+        // resulting bulge.
         auto buildSegmentVerts = [&](int v, int innerA, int innerB) {
             std::vector<int> chain;
             chain.reserve(segments + 1);
@@ -2039,13 +2051,7 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
                                   / static_cast<float>(segments);
                     const float pt = profilePoints[i - 1];
                     const auto pos = pA + chord * t + outward * ((pt - 0.5f) * w);
-                    HEVertex nv = m_vertices[v];
-                    nv.position = pos;
-                    nv.halfEdge = -1;
-                    const int idx = static_cast<int>(m_vertices.size());
-                    m_vertices.push_back(nv);
-                    newVertices.push_back(idx);
-                    chain.push_back(idx);
+                    chain.push_back(appendChamferVertex(v, pos));
                 }
             }
             chain.push_back(innerB);
