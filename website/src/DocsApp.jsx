@@ -32,6 +32,15 @@ const NAV = [
   ]},
 ];
 
+const QTMESH_RELEASES_LATEST_API = 'https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest';
+const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@v1';
+
+function actionRefFromTag(tagName) {
+  const tag = String(tagName || '').trim();
+  if (!tag || !/^v?\d/.test(tag)) return QTMESH_ACTION_REF_FALLBACK;
+  return `fernandotonon/QtMeshEditor@${tag}`;
+}
+
 function Code({ children }) {
   return <code className={s.code}>{children}</code>;
 }
@@ -95,6 +104,7 @@ function CmdSection({ id, name, synopsis, description, examples, options, childr
 export default function DocsApp() {
   const [active, setActive] = useState('installation');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [qtmeshActionRef, setQtmeshActionRef] = useState(QTMESH_ACTION_REF_FALLBACK);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -107,6 +117,26 @@ export default function DocsApp() {
     );
     document.querySelectorAll('section[id]').forEach(el => observer.observe(el));
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(QTMESH_RELEASES_LATEST_API, {
+          headers: { Accept: 'application/vnd.github+json' },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setQtmeshActionRef(actionRefFromTag(data?.tag_name));
+      } catch (_e) {
+        // Keep fallback ref when GitHub API is unavailable.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return (
@@ -358,7 +388,7 @@ qtmesh pose <file> --animation <name> --count N -o <pattern>`}
             ]}
           />
 
-          <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON output, and auto-fix. Also available as a <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Action</a>: <Code>fernandotonon/QtMeshEditor@v1</Code>.</>}
+          <CmdSection id="cmd-scan" name="scan" description={<>Recursively scan a directory for 3D asset issues. Think of it as <strong>ESLint for 3D assets</strong>. Checks format restrictions, complexity limits, naming conventions, skeleton/animation content, and more. Supports YAML configuration, scoped rules per folder, JSON output, and auto-fix. Also available as a <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Action</a>: <Code>{qtmeshActionRef}</Code>.</>}
             synopsis={`qtmesh scan [path] [options]`}
             options={[
               ['--config <file>', 'Config file path (default: qtmesh.yml, qtmesh.yaml, qtmesh.json)'],
@@ -718,7 +748,7 @@ scopes:
     QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}
     QTMESH_CLOUD_API_URL: https://api.qtmesh.dev
   run: |
-    jq --arg branch "\${GITHUB_REF_NAME}" \\
+    jq --arg branch "\${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" \\
        --arg sha "\${GITHUB_SHA}" \\
        --arg runId "\${GITHUB_RUN_ID}" \\
        '. + {meta: {branch: $branch, commitSha: $sha, runId: $runId}}' \\
@@ -731,9 +761,9 @@ scopes:
       --data-binary @qtmesh-scan-upload.json`}</CodeBlock>
 
             <h3 className={s.subsection}>3. Use live badge URLs</h3>
-            <CodeBlock lang="md">{`[![qtmesh status](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.dev)
-[![qtmesh errors](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.dev)
-[![qtmesh warnings](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.dev)`}</CodeBlock>
+            <CodeBlock lang="md">{`[![qtmesh status](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.dev)
+[![qtmesh errors](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.dev)
+[![qtmesh warnings](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.dev)`}</CodeBlock>
 
             <p className={s.para}>
               Badge values update after each successful upload to <Code>/v1/ingest/scan</Code>.
@@ -763,37 +793,46 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh \\
           <section className={s.section} id="github-actions">
             <h2 className={s.sectionTitle}>GitHub Actions</h2>
             <p className={s.para}>
-              The <Code>qtmesh</Code> action is available on the <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Actions Marketplace</a>. Add it to any workflow with one line.
+              The <Code>qtmesh</Code> action is available on the <a href="https://github.com/marketplace/actions/qtmesheditor" className={s.link}>GitHub Actions Marketplace</a>. This page resolves the latest release ref automatically: <Code>{qtmeshActionRef}</Code>.
             </p>
 
-            <h3 className={s.subsection}>Scan assets on every PR</h3>
-            <CodeBlock lang="yaml">{`name: Validate 3D Assets
-on: [pull_request]
+            <h3 className={s.subsection}>Onboarding Step 3 template</h3>
+            <CodeBlock lang="yaml">{`name: QtMesh Scan
+
+on:
+  push:
+    branches: [ "master" ]
 
 jobs:
-  scan:
+  scan-assets-qtmesh:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: fernandotonon/QtMeshEditor@v1
+
+      - name: Run QtMesh scan
+        uses: ${qtmeshActionRef}
         with:
           command: scan
-          input-file: ./assets
-          options: --fail-on warning`}</CodeBlock>
+        env:
+          QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}`}</CodeBlock>
+            <p className={s.para}>
+              Set <Code>QTMESH_CLOUD_TOKEN</Code> in repository secrets to upload scan results to QtMesh Cloud.
+              Add <Code>qtmesh-strict-upload: true</Code> if upload failures should fail the job.
+            </p>
 
             <h3 className={s.subsection}>Convert and validate</h3>
-            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor@v1
+            <CodeBlock lang="yaml">{`- uses: ${qtmeshActionRef}
   with:
     command: validate
     input-file: ./models/character.fbx
 
-- uses: fernandotonon/QtMeshEditor@v1
+- uses: ${qtmeshActionRef}
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.glb2
 
-- uses: fernandotonon/QtMeshEditor@v1
+- uses: ${qtmeshActionRef}
   with:
     command: anim
     input-file: ./animations/dance.fbx
@@ -801,7 +840,7 @@ jobs:
     options: --resample 30`}</CodeBlock>
 
             <h3 className={s.subsection}>Get mesh info as JSON</h3>
-            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor@v1
+            <CodeBlock lang="yaml">{`- uses: ${qtmeshActionRef}
   id: info
   with:
     command: info
@@ -811,7 +850,7 @@ jobs:
 - run: echo "\${{ steps.info.outputs.result }}"`}</CodeBlock>
 
             <h3 className={s.subsection}>Self-hosted scan badges (legacy Shields endpoint JSON)</h3>
-            <CodeBlock lang="yaml">{`- uses: fernandotonon/QtMeshEditor@v1
+            <CodeBlock lang="yaml">{`- uses: ${qtmeshActionRef}
   id: scan
   with:
     command: scan

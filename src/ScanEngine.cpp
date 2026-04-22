@@ -765,6 +765,44 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
     return root;
 }
 
+QJsonObject ScanEngine::mergeGithubActionsMetaIntoReport(const QJsonObject& report)
+{
+    // PR workflows set GITHUB_HEAD_REF (source branch). Push workflows only set GITHUB_REF_NAME.
+    const QByteArray branch = [&]() -> QByteArray {
+        const QByteArray headRef = qgetenv("GITHUB_HEAD_REF");
+        if (!headRef.isEmpty())
+            return headRef;
+        return qgetenv("GITHUB_REF_NAME");
+    }();
+
+    static const struct {
+        const char* envVar;
+        const char* jsonKey;
+    } kMappings[] = {
+        {"GITHUB_REPOSITORY", "repository"},
+        {"GITHUB_BASE_REF", "baseBranch"},
+        {"GITHUB_SHA", "commitSha"},
+        {"GITHUB_RUN_ID", "runId"},
+        {"GITHUB_RUN_NUMBER", "runNumber"},
+        {"GITHUB_WORKFLOW", "workflow"},
+        {"GITHUB_JOB", "job"},
+        {"GITHUB_ACTOR", "actor"},
+    };
+
+    QJsonObject out = report;
+    QJsonObject meta = out.value(QStringLiteral("meta")).toObject();
+    if (!branch.isEmpty())
+        meta[QStringLiteral("branch")] = QString::fromUtf8(branch);
+    for (const auto& m : kMappings) {
+        const QByteArray v = qgetenv(m.envVar);
+        if (!v.isEmpty())
+            meta[QString::fromLatin1(m.jsonKey)] = QString::fromUtf8(v);
+    }
+    if (!meta.isEmpty())
+        out.insert(QStringLiteral("meta"), meta);
+    return out;
+}
+
 QString ScanEngine::formatJson(const ScanResult& result)
 {
     return QString::fromUtf8(QJsonDocument(scanReportToJsonObject(result)).toJson(QJsonDocument::Indented));
