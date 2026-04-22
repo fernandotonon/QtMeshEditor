@@ -24,29 +24,40 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 
 ---
 
-### 🔌 CI/CD — Validate Assets on Every PR
+### 🔌 CI/CD — GitHub Actions (Onboarding Step 3)
 
-Available on the [GitHub Actions Marketplace](https://github.com/marketplace/actions/qtmesheditor). Scan, validate, convert, and optimize 3D assets in any workflow:
+Available on the [GitHub Actions Marketplace](https://github.com/marketplace/actions/qtmesheditor).
 
-```yaml
-# Scan all assets for issues (fails on warnings)
-- uses: fernandotonon/QtMeshEditor@v1
-  with:
-    command: scan
-    input-file: ./assets
-    options: --fail-on warning
-```
+[![Latest action release](https://img.shields.io/github/v/release/fernandotonon/QtMeshEditor?label=latest%20action)](https://github.com/fernandotonon/QtMeshEditor/releases/latest)
 
-To **POST scan results to QtMesh Cloud**, pass the ingest token into the action (recommended):
+Use this workflow template (same shape as QtMesh Cloud onboarding step 3):
 
 ```yaml
-- uses: fernandotonon/QtMeshEditor@v1
-  with:
-    command: scan
-    qtmesh-token: ${{ secrets.QTMESH_CLOUD_TOKEN }}
+name: QtMesh Scan
+
+on:
+  push:
+    branches: [ "master" ]
+
+jobs:
+  scan-assets-qtmesh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run QtMesh scan
+        uses: fernandotonon/QtMeshEditor@v1
+        with:
+          command: scan
+        env:
+          QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
 ```
 
-Alternatively set `QTMESH_CLOUD_TOKEN` on the step; current action versions forward it into the Docker container so the CLI can upload (same as `qtmesh-token` → `QTMESH_TOKEN`).
+`QTMESH_CLOUD_TOKEN` is forwarded into the container and used by `scan` upload. GitHub Actions metadata (`GITHUB_*`) is also forwarded so uploads include `meta` fields (branch/commit/run and context used by QtMesh Cloud).
+
+To fail CI when upload fails, add `qtmesh-strict-upload: true` (or pass `--strict-upload` in `options`).
+
+If you want an exact release tag (instead of `@v1`) with the latest version prefilled, copy the snippet from QtMesh Cloud onboarding step 3.
 
 <details>
 <summary>More CI examples</summary>
@@ -112,7 +123,7 @@ Example upload step:
     QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
     QTMESH_CLOUD_API_URL: https://api.qtmesh.dev
   run: |
-    jq --arg branch "${GITHUB_REF_NAME}" \
+    jq --arg branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" \
        --arg sha "${GITHUB_SHA}" \
        --arg runId "${GITHUB_RUN_ID}" \
        '. + {meta: {branch: $branch, commitSha: $sha, runId: $runId}}' \
@@ -125,12 +136,12 @@ Example upload step:
       --data-binary @qtmesh-scan-upload.json
 ```
 
-Badge markdown (replace `<project-slug>`):
+Badge markdown (replace `<owner-slug>` and `<project-slug>`):
 
 ```md
-[![qtmesh status](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.dev)
-[![qtmesh errors](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.dev)
-[![qtmesh warnings](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.dev)
+[![qtmesh status](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.dev)
+[![qtmesh errors](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.dev)
+[![qtmesh warnings](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.dev)
 ```
 
 ### 🏷️ Self-Hosted Scan Badges (Legacy)

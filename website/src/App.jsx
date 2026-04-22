@@ -31,6 +31,14 @@ const PLATFORM_BY_OS = {
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const QTMESH_RELEASES_LATEST_API = 'https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest';
+const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@v1';
+
+function actionRefFromTag(tagName) {
+  const tag = String(tagName || '').trim();
+  if (!tag || !/^v?\d/.test(tag)) return QTMESH_ACTION_REF_FALLBACK;
+  return `fernandotonon/QtMeshEditor@${tag}`;
+}
 
 function detectVisitorOs() {
   if (typeof navigator === 'undefined') {
@@ -96,6 +104,7 @@ async function copyText(text) {
 function App() {
   const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
   const [copyState, setCopyState] = useState('idle');
+  const [qtmeshActionRef, setQtmeshActionRef] = useState(QTMESH_ACTION_REF_FALLBACK);
   const portalDialogRef = useRef(null);
   const portalTriggerRef = useRef(null);
   const detectedOs = useMemo(detectVisitorOs, []);
@@ -106,6 +115,31 @@ function App() {
   );
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
   const primaryCtaLabel = recommendedStore ? `Install via ${recommendedStore}` : 'Open Install Portal';
+  const githubActionExample = useMemo(
+    () => pipelineExamples.githubAction.replace('__QTMESH_ACTION_REF__', qtmeshActionRef),
+    [qtmeshActionRef]
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(QTMESH_RELEASES_LATEST_API, {
+          headers: { Accept: 'application/vnd.github+json' },
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (cancelled) return;
+        setQtmeshActionRef(actionRefFromTag(data?.tag_name));
+      } catch (_e) {
+        // Keep fallback ref when GitHub API is unavailable.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!isInstallPortalOpen || typeof document === 'undefined') {
@@ -281,7 +315,7 @@ function App() {
               <a href={links.qtmeshCloud} target="_blank" rel="noreferrer">
                 Register on QtMesh Cloud
               </a>
-              <a href={`${links.qtmeshCloudApi}/v1/projects/qtmesheditor/badges/qtmesh-status.svg`} target="_blank" rel="noreferrer">
+              <a href={`${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg`} target="_blank" rel="noreferrer">
                 View live badge example
               </a>
               <a href={links.docs} target="_blank" rel="noreferrer">
@@ -360,7 +394,7 @@ function App() {
               <CodePanel title="Convert formats" code={pipelineExamples.convert} label="convert" />
               <CodePanel title="Merge animations" code={pipelineExamples.merge} label="anim" />
               <CodePanel title="Docker" code={pipelineExamples.docker} label="docker" />
-              <CodePanel title="GitHub Actions" code={pipelineExamples.githubAction} label="ci" />
+              <CodePanel title="GitHub Actions" code={githubActionExample} label="ci" />
             </div>
 
             <div className={styles.cliLinks}>

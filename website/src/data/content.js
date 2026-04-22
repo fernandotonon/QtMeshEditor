@@ -84,7 +84,7 @@ export const useCases = [
   },
   {
     title: 'GitHub Actions (Marketplace)',
-    body: 'Add `fernandotonon/QtMeshEditor@v1` to any workflow. Scan assets on every PR, convert formats, validate meshes — one line in your YAML.'
+    body: 'Use the onboarding-style workflow template and keep the action ref current from the latest release.'
   }
 ];
 
@@ -94,7 +94,7 @@ export const pipelineExamples = {
   convert: `qtmesh convert model.fbx -o model.glb2\nqtmesh convert model.dae -o model.mesh`,
   merge: `qtmesh anim base.fbx \\\n  --merge walk.fbx run.fbx jump.fbx idle.fbx \\\n  -o merged.fbx`,
   docker: `docker run --rm --user "$(id -u):$(id -g)" -v $(pwd):/workspace \\\n  ghcr.io/fernandotonon/qtmesh scan ./assets --fail-on error`,
-  githubAction: `# GitHub Actions Marketplace: fernandotonon/qtmesh\n- uses: fernandotonon/QtMeshEditor@v1\n  with:\n    command: scan\n    input-file: ./assets\n    options: --fail-on warning`,
+  githubAction: `name: QtMesh Scan\n\non:\n  push:\n    branches: [ "master" ]\n\njobs:\n  scan-assets-qtmesh:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n\n      - name: Run QtMesh scan\n        uses: __QTMESH_ACTION_REF__\n        with:\n          command: scan\n        env:\n          QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}`,
   scanFixConvert: `qtmesh scan ./assets --fail-on error\nqtmesh fix character.fbx --all -o character_fixed.fbx\nqtmesh convert character_fixed.fbx -o character.glb2`
 };
 
@@ -113,13 +113,13 @@ export const cloudBadgeSteps = [
   },
   {
     title: 'Embed live SVG badges',
-    body: 'Use the project slug in badge URLs to show real status, errors, and warnings in your README or website.'
+    body: 'Use owner slug + project slug in badge URLs to show real status, errors, and warnings in your README or website.'
   }
 ];
 
-export const cloudBadgeMarkdown = `[![qtmesh status](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.dev)
-[![qtmesh errors](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.dev)
-[![qtmesh warnings](https://api.qtmesh.dev/v1/projects/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.dev)`;
+export const cloudBadgeMarkdown = `[![qtmesh status](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-status.svg)](https://qtmesh.dev)
+[![qtmesh errors](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.dev)
+[![qtmesh warnings](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.dev)`;
 
 export const cloudBadgeUploadExample = `- name: Scan assets
   run: |
@@ -134,7 +134,7 @@ export const cloudBadgeUploadExample = `- name: Scan assets
     QTMESH_CLOUD_TOKEN: \${{ secrets.QTMESH_CLOUD_TOKEN }}
     QTMESH_CLOUD_API_URL: https://api.qtmesh.dev
   run: |
-    jq --arg branch "\${GITHUB_REF_NAME}" \\
+    jq --arg branch "\${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" \\
        --arg sha "\${GITHUB_SHA}" \\
        --arg runId "\${GITHUB_RUN_ID}" \\
        '. + {meta: {branch: $branch, commitSha: $sha, runId: $runId}}' \\

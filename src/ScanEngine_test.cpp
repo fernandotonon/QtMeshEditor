@@ -1440,3 +1440,80 @@ TEST(ScanEngineTest, InspectAsset_AnimatedFixtureCollectsAnimationMetadata)
     EXPECT_FALSE(info.animationKeyframeCounts.isEmpty());
     EXPECT_EQ(info.animationNames.size(), info.animationDurations.size());
 }
+
+namespace {
+
+class TestEnvVar {
+public:
+    TestEnvVar(const char* name, const QByteArray& value)
+        : m_name(name)
+        , m_had(qEnvironmentVariableIsSet(name))
+        , m_old(qgetenv(name))
+    {
+        qputenv(name, value);
+    }
+
+    ~TestEnvVar()
+    {
+        if (m_had)
+            qputenv(m_name, m_old);
+        else
+            qunsetenv(m_name);
+    }
+
+private:
+    const char* m_name = nullptr;
+    bool m_had = false;
+    QByteArray m_old;
+};
+
+} // namespace
+
+TEST(ScanEngineTest, MergeGithubActionsMetaIntoReport_FillsMetaFromEnv)
+{
+    QJsonObject base;
+    base.insert(QStringLiteral("version"), QJsonValue(QStringLiteral("1.0")));
+
+    TestEnvVar repo("GITHUB_REPOSITORY", "acme/game");
+    TestEnvVar headRef("GITHUB_HEAD_REF", "");
+    TestEnvVar refName("GITHUB_REF_NAME", "main");
+    TestEnvVar sha("GITHUB_SHA", "deadbeef");
+    TestEnvVar runId("GITHUB_RUN_ID", "42");
+
+    const QJsonObject merged = ScanEngine::mergeGithubActionsMetaIntoReport(base);
+    const QJsonObject meta = merged.value(QStringLiteral("meta")).toObject();
+    EXPECT_EQ(meta.value(QStringLiteral("repository")).toString(), QStringLiteral("acme/game"));
+    EXPECT_EQ(meta.value(QStringLiteral("branch")).toString(), QStringLiteral("main"));
+    EXPECT_EQ(meta.value(QStringLiteral("commitSha")).toString(), QStringLiteral("deadbeef"));
+    EXPECT_EQ(meta.value(QStringLiteral("runId")).toString(), QStringLiteral("42"));
+}
+
+TEST(ScanEngineTest, MergeGithubActionsMetaIntoReport_PrefersHeadRefAndIncludesBaseRef)
+{
+    QJsonObject base;
+    base.insert(QStringLiteral("version"), QJsonValue(QStringLiteral("1.0")));
+
+    TestEnvVar headRef("GITHUB_HEAD_REF", "feature/upload-meta");
+    TestEnvVar refName("GITHUB_REF_NAME", "123/merge");
+    TestEnvVar baseRef("GITHUB_BASE_REF", "main");
+
+    const QJsonObject merged = ScanEngine::mergeGithubActionsMetaIntoReport(base);
+    const QJsonObject meta = merged.value(QStringLiteral("meta")).toObject();
+    EXPECT_EQ(meta.value(QStringLiteral("branch")).toString(), QStringLiteral("feature/upload-meta"));
+    EXPECT_EQ(meta.value(QStringLiteral("baseBranch")).toString(), QStringLiteral("main"));
+}
+
+TEST(ScanEngineTest, MergeGithubActionsMetaIntoReport_PreservesExistingMeta)
+{
+    QJsonObject metaIn;
+    metaIn.insert(QStringLiteral("custom"), 1);
+    QJsonObject base;
+    base.insert(QStringLiteral("meta"), metaIn);
+
+    TestEnvVar repo("GITHUB_REPOSITORY", "acme/game");
+
+    const QJsonObject merged = ScanEngine::mergeGithubActionsMetaIntoReport(base);
+    const QJsonObject meta = merged.value(QStringLiteral("meta")).toObject();
+    EXPECT_EQ(meta.value(QStringLiteral("custom")).toInt(), 1);
+    EXPECT_EQ(meta.value(QStringLiteral("repository")).toString(), QStringLiteral("acme/game"));
+}
