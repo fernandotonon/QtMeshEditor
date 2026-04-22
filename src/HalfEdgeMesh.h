@@ -359,6 +359,14 @@ public:
     /// @}
 
 private:
+    /// Shared implementation for bevelEdges. Both public overloads
+    /// validate/clamp inputs and build the `profilePoints` vector, then
+    /// call this to execute the actual Phase 1–7 topology work.
+    std::vector<int> bevelEdgesImpl(const std::vector<int>& edgeIndices,
+                                    float width,
+                                    int segments,
+                                    const std::vector<float>& profilePoints);
+
     /// Hash function for (int, int) pairs used as edge keys.
     struct PairHash {
         size_t operator()(const std::pair<int, int>& p) const {

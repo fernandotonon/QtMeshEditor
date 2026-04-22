@@ -971,25 +971,31 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
                                            int segments,
                                            const std::vector<float>& profilePointsIn)
 {
-    std::vector<int> newVertices;
     if (edgeIndices.empty() || width <= 0.0f)
-        return newVertices;
-    if (segments < 1) segments = 1;
-    if (segments > kMaxBevelSegments) segments = kMaxBevelSegments;
+        return {};
+    segments = std::clamp(segments, 1, kMaxBevelSegments);
 
     // If the caller didn't supply the right number of points, fall back to
-    // a flat chamfer (all 0.5). This matches the "segments=1 has no inner
+    // a flat chamfer (all 0.5). Matches the "segments=1 has no inner
     // points" convention.
     std::vector<float> profilePoints;
     if (segments > 1) {
         profilePoints.resize(segments - 1, 0.5f);
-        const bool valid =
-            (profilePointsIn.size() == static_cast<size_t>(segments - 1));
-        if (valid) {
+        if (profilePointsIn.size() == static_cast<size_t>(segments - 1)) {
             for (size_t i = 0; i < profilePoints.size(); ++i)
                 profilePoints[i] = std::clamp(profilePointsIn[i], 0.0f, 1.0f);
         }
     }
+    return bevelEdgesImpl(edgeIndices, width, segments, profilePoints);
+}
+
+std::vector<int> HalfEdgeMesh::bevelEdgesImpl(
+    const std::vector<int>& edgeIndices,
+    float width,
+    int segments,
+    const std::vector<float>& profilePoints)
+{
+    std::vector<int> newVertices;
 
     // Snapshot the per-edge info we need before we start mutating faces.
     // Each entry captures the two endpoint vertices, the two adjacent faces,
