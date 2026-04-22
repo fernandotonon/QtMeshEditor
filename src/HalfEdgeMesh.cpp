@@ -939,7 +939,11 @@ std::vector<int> HalfEdgeMesh::extrudeEdges(const std::vector<int>& edgeIndices)
 // safe even if a caller bypasses the UI.
 static constexpr int kMaxBevelSegments = 16;
 
-std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
+// The Phase 1-7 bevel topology below has high cognitive complexity that
+// predates this PR; splitting it into phase-sized helpers is tracked as
+// a separate refactor. This PR only adds the optional profilePoints
+// parameter and uses it inside buildSegmentVerts.
+std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, // NOSONAR(cpp:S3776)
                                            float width,
                                            int segments,
                                            float profile,
