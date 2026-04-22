@@ -1843,7 +1843,7 @@ void EditModeController::commitBevel()
     UndoManager::getSingleton()->push(cmd);
 
     m_bevelSession = {};
-    if (m_bevelGizmo) m_bevelGizmo->setVisible(false);
+    if (m_bevelGizmo) { m_bevelGizmo->setVisible(false); }
     emit bevelProfilePointsChanged();
     emit editModeChanged();
 }

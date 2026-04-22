@@ -821,15 +821,23 @@ class EditModeControllerBevelE2ETest : public ::testing::Test {
 protected:
     Ogre::SceneNode* m_node = nullptr;
     Ogre::Entity* m_entity = nullptr;
-    int s_counter = 0;
+    std::string m_meshName;
+    std::string m_nodeName;
 
     void SetUp() override {
         if (!tryInitOgre()) { GTEST_SKIP() << "Ogre not available"; return; }
         if (!canLoadMeshFiles()) { GTEST_SKIP() << "Cannot create HW buffers"; return; }
         createStandardOgreMaterials();
 
-        auto mesh = createInMemoryWeldedCube("BevelE2E_cube");
-        m_node = Manager::getSingleton()->addSceneNode("BevelE2E_node");
+        // Unique names per test so reruns don't collide with Ogre's
+        // resource manager registry across fixture instances.
+        static int counter = 0;
+        ++counter;
+        m_meshName = "BevelE2E_cube_" + std::to_string(counter);
+        m_nodeName = "BevelE2E_node_" + std::to_string(counter);
+
+        auto mesh = createInMemoryWeldedCube(m_meshName);
+        m_node = Manager::getSingleton()->addSceneNode(QString::fromStdString(m_nodeName));
         m_entity = Manager::getSingleton()->createEntity(m_node, mesh);
         m_entity->setMaterialName("BaseWhite");
         SelectionSet::getSingleton()->selectOne(m_node);
@@ -840,6 +848,12 @@ protected:
         if (m_node) {
             Manager::getSingleton()->destroySceneNode(m_node);
             m_node = nullptr;
+        }
+        if (!m_meshName.empty()) {
+            auto& mm = Ogre::MeshManager::getSingleton();
+            if (mm.getByName(m_meshName))
+                mm.remove(m_meshName);
+            m_meshName.clear();
         }
     }
 };

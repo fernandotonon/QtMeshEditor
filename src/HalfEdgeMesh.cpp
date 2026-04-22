@@ -983,13 +983,11 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
     std::vector<float> profilePoints;
     if (segments > 1) {
         profilePoints.resize(segments - 1, 0.5f);
-        if (profilePointsIn.size() == static_cast<size_t>(segments - 1)) {
-            for (size_t i = 0; i < profilePoints.size(); ++i) {
-                float p = profilePointsIn[i];
-                if (p < 0.0f) p = 0.0f;
-                if (p > 1.0f) p = 1.0f;
-                profilePoints[i] = p;
-            }
+        const bool valid =
+            (profilePointsIn.size() == static_cast<size_t>(segments - 1));
+        if (valid) {
+            for (size_t i = 0; i < profilePoints.size(); ++i)
+                profilePoints[i] = std::clamp(profilePointsIn[i], 0.0f, 1.0f);
         }
     }
 
@@ -2007,42 +2005,44 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices,
         // in buildCorner is "does a NON-CHAMFER tri cover the chamfer-end
         // edge?". The chamfer itself always has that edge.
         // =====================================================================
+        // Outward bulge direction: from the chord midpoint toward the
+        // original corner v. Convex profile bulges in this direction
+        // (rounded fillet), concave bulges opposite (digs into the solid).
+        auto computeOutward = [&](const Ogre::Vector3& pA,
+                                  const Ogre::Vector3& pB,
+                                  const Ogre::Vector3& pV) {
+            const auto chord = pB - pA;
+            auto outward = pV - (pA + pB) * 0.5f;
+            if (const float chordLen2 = chord.squaredLength(); chordLen2 > 1e-12f)
+                outward -= chord * (outward.dotProduct(chord) / chordLen2);
+            if (outward.length() > 1e-6f) outward.normalise();
+            else                          outward = Ogre::Vector3::ZERO;
+            return outward;
+        };
+
+        // Build one endpoint's chain: innerA → N-1 intermediates → innerB.
+        // Each intermediate is offset along `outward` by
+        //   (profilePoints[i-1] - 0.5) * w
+        // linearly — no sin attenuation. The user's drawn curve translates
+        // directly into the resulting bulge.
         auto buildSegmentVerts = [&](int v, int innerA, int innerB) {
             std::vector<int> chain;
             chain.reserve(segments + 1);
             chain.push_back(innerA);
             if (segments > 1) {
-                const Ogre::Vector3 pA = m_vertices[innerA].position;
-                const Ogre::Vector3 pB = m_vertices[innerB].position;
-                const Ogre::Vector3 pV = m_vertices[v].position;
-                // Outward bulge direction: from the chord midpoint toward
-                // the original corner v (where the sharp edge used to be).
-                // Convex profile bulges in this direction (rounded fillet),
-                // concave bulges opposite (digs into the solid).
-                const Ogre::Vector3 chord = pB - pA;
-                Ogre::Vector3 outward = pV - (pA + pB) * 0.5f;
-                const float chordLen2 = chord.squaredLength();
-                if (chordLen2 > 1e-12f) {
-                    outward -= chord * (outward.dotProduct(chord) / chordLen2);
-                }
-                if (outward.length() > 1e-6f)
-                    outward.normalise();
-                else
-                    outward = Ogre::Vector3::ZERO;
-                // Each interior chord point is offset along `outward` by
-                //   (profilePoints[i-1] - 0.5) * w
-                // linearly — no sin attenuation. The user's drawn curve
-                // translates directly into the resulting bulge.
+                const auto pA = m_vertices[innerA].position;
+                const auto pB = m_vertices[innerB].position;
+                const auto chord = pB - pA;
+                const auto outward = computeOutward(pA, pB, m_vertices[v].position);
                 for (int i = 1; i < segments; ++i) {
                     const float t = static_cast<float>(i)
                                   / static_cast<float>(segments);
                     const float pt = profilePoints[i - 1];
-                    Ogre::Vector3 base = pA + chord * t;
-                    Ogre::Vector3 pos = base + outward * ((pt - 0.5f) * w);
+                    const auto pos = pA + chord * t + outward * ((pt - 0.5f) * w);
                     HEVertex nv = m_vertices[v];
                     nv.position = pos;
                     nv.halfEdge = -1;
-                    int idx = static_cast<int>(m_vertices.size());
+                    const int idx = static_cast<int>(m_vertices.size());
                     m_vertices.push_back(nv);
                     newVertices.push_back(idx);
                     chain.push_back(idx);
