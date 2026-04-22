@@ -264,7 +264,7 @@ Manual alternative: `./scripts/update-winget.sh <version>` generates the manifes
 The `qtmesh` CLI is published as a GitHub Action on the [GitHub Actions Marketplace](https://github.com/marketplace/actions/qtmesheditor). The `action.yml` lives at the repo root.
 
 ```yaml
-- uses: fernandotonon/QtMeshEditor@2.28.0
+- uses: fernandotonon/QtMeshEditor@v1
   with:
     command: scan
     input-file: ./assets

@@ -5,6 +5,7 @@ import ButtonLink from './components/ButtonLink';
 import CodePanel from './components/CodePanel';
 import FeatureCard from './components/FeatureCard';
 import Section from './components/Section';
+import useQtmeshActionRef from './hooks/useQtmeshActionRef';
 import {
   audienceCards,
   beforeAfter,
@@ -32,14 +33,6 @@ const PLATFORM_BY_OS = {
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
-const QTMESH_RELEASES_LATEST_API = 'https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest';
-const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@2.28.0';
-
-function actionRefFromTag(tagName) {
-  const tag = String(tagName || '').trim();
-  if (!tag || !/^v?\d/.test(tag)) return QTMESH_ACTION_REF_FALLBACK;
-  return `fernandotonon/QtMeshEditor@${tag}`;
-}
 
 function detectVisitorOs() {
   if (typeof navigator === 'undefined') {
@@ -105,10 +98,11 @@ async function copyText(text) {
 function App() {
   const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
   const [copyState, setCopyState] = useState('idle');
-  const [qtmeshActionRef, setQtmeshActionRef] = useState(QTMESH_ACTION_REF_FALLBACK);
+  const qtmeshActionRef = useQtmeshActionRef();
   const [activeCliTab, setActiveCliTab] = useState('scan');
   const portalDialogRef = useRef(null);
   const portalTriggerRef = useRef(null);
+  const cliTabButtonRefs = useRef([]);
   const detectedOs = useMemo(detectVisitorOs, []);
   const detectedPlatform = PLATFORM_BY_OS[detectedOs];
   const recommendedInstall = useMemo(
@@ -133,6 +127,7 @@ function App() {
     [githubActionExample]
   );
   const activeCliExample = cliTabs.find((tab) => tab.id === activeCliTab) || cliTabs[0];
+  const cliTabPanelId = 'cli-tab-panel';
 
   const cloudBadgePreview = useMemo(
     () => [
@@ -159,27 +154,6 @@ function App() {
     ],
     []
   );
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(QTMESH_RELEASES_LATEST_API, {
-          headers: { Accept: 'application/vnd.github+json' },
-        });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (cancelled) return;
-        setQtmeshActionRef(actionRefFromTag(data?.tag_name));
-      } catch (_e) {
-        // Keep fallback ref when GitHub API is unavailable.
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (!isInstallPortalOpen || typeof document === 'undefined') {
@@ -285,6 +259,30 @@ function App() {
   function handleOpenInstallPortal(event) {
     portalTriggerRef.current = event.currentTarget;
     setIsInstallPortalOpen(true);
+  }
+
+  function handleCliTabKeyDown(event, index) {
+    if (!['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) {
+      return;
+    }
+
+    event.preventDefault();
+    const lastIndex = cliTabs.length - 1;
+    let nextIndex = index;
+
+    if (event.key === 'ArrowRight') {
+      nextIndex = index === lastIndex ? 0 : index + 1;
+    } else if (event.key === 'ArrowLeft') {
+      nextIndex = index === 0 ? lastIndex : index - 1;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = lastIndex;
+    }
+
+    setActiveCliTab(cliTabs[nextIndex].id);
+    const nextTab = cliTabButtonRefs.current[nextIndex];
+    if (nextTab) nextTab.focus();
   }
 
   return (
@@ -527,26 +525,42 @@ function App() {
             subtitle="Switch between scan, fix, convert, merge, Docker, and GitHub Actions examples."
           >
             <div className={styles.cliTabs} role="tablist" aria-label="CLI and CI examples">
-              {cliTabs.map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeCliExample.id === tab.id}
-                  className={`${styles.cliTabButton} ${activeCliExample.id === tab.id ? styles.cliTabButtonActive : ''}`}
-                  onClick={() => setActiveCliTab(tab.id)}
-                >
-                  {tab.label}
-                </button>
-              ))}
+              {cliTabs.map((tab, index) => {
+                const isActive = activeCliExample.id === tab.id;
+                const tabId = `cli-tab-${tab.id}`;
+                return (
+                  <button
+                    key={tab.id}
+                    id={tabId}
+                    type="button"
+                    role="tab"
+                    aria-selected={isActive}
+                    aria-controls={cliTabPanelId}
+                    tabIndex={isActive ? 0 : -1}
+                    className={`${styles.cliTabButton} ${isActive ? styles.cliTabButtonActive : ''}`}
+                    onClick={() => setActiveCliTab(tab.id)}
+                    onKeyDown={(event) => handleCliTabKeyDown(event, index)}
+                    ref={(node) => {
+                      cliTabButtonRefs.current[index] = node;
+                    }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
             </div>
 
-            <div className={styles.cliTabPanel} role="tabpanel">
+            <div
+              className={styles.cliTabPanel}
+              id={cliTabPanelId}
+              role="tabpanel"
+              aria-labelledby={`cli-tab-${activeCliExample.id}`}
+            >
               <CodePanel title={activeCliExample.title} code={activeCliExample.code} label={activeCliExample.language} />
             </div>
 
             <div className={styles.cliLinks}>
-              <a href={links.actions} target="_blank" rel="noreferrer">
+              <a href={links.marketplace} target="_blank" rel="noreferrer">
                 GitHub Action
               </a>
               <a href={links.docs} target="_blank" rel="noreferrer">

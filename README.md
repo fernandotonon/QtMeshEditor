@@ -57,7 +57,7 @@ jobs:
 
 To fail CI when upload fails, add `qtmesh-strict-upload: true` (or pass `--strict-upload` in `options`).
 
-Use the latest action release tag (currently `@2.28.0`) from QtMesh Cloud onboarding step 3 when updating this workflow.
+Use the latest action release tag from the [releases page](https://github.com/fernandotonon/QtMeshEditor/releases/latest) (also shown in QtMesh Cloud onboarding step 3) when updating this workflow.
 
 <details>
 <summary>More CI examples</summary>

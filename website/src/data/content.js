@@ -8,7 +8,6 @@ export const links = {
   issues: 'https://github.com/fernandotonon/QtMeshEditor/issues',
   forum: 'https://forums.ogre3d.org/viewtopic.php?t=76016',
   license: 'https://opensource.org/license/mit',
-  actions: 'https://github.com/marketplace/actions/qtmesheditor',
   marketplace: 'https://github.com/marketplace/actions/qtmesheditor'
 };
 
