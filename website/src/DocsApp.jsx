@@ -33,7 +33,7 @@ const NAV = [
 ];
 
 const QTMESH_RELEASES_LATEST_API = 'https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest';
-const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@v1';
+const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@2.28.0';
 
 function actionRefFromTag(tagName) {
   const tag = String(tagName || '').trim();

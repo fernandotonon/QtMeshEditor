@@ -6,6 +6,8 @@ import CodePanel from './components/CodePanel';
 import FeatureCard from './components/FeatureCard';
 import Section from './components/Section';
 import {
+  audienceCards,
+  beforeAfter,
   cloudBadgeMarkdown,
   cloudBadgeSteps,
   cloudBadgeUploadExample,
@@ -20,19 +22,18 @@ import {
   pipelineFlow,
   proofPoints,
   trustItems,
-  useCases
 } from './data/content';
 
 const PLATFORM_BY_OS = {
   windows: 'Windows',
   macos: 'macOS',
-  linux: 'Linux'
+  linux: 'Linux',
 };
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 const QTMESH_RELEASES_LATEST_API = 'https://api.github.com/repos/fernandotonon/QtMeshEditor/releases/latest';
-const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@v1';
+const QTMESH_ACTION_REF_FALLBACK = 'fernandotonon/QtMeshEditor@2.28.0';
 
 function actionRefFromTag(tagName) {
   const tag = String(tagName || '').trim();
@@ -105,6 +106,7 @@ function App() {
   const [isInstallPortalOpen, setIsInstallPortalOpen] = useState(false);
   const [copyState, setCopyState] = useState('idle');
   const [qtmeshActionRef, setQtmeshActionRef] = useState(QTMESH_ACTION_REF_FALLBACK);
+  const [activeCliTab, setActiveCliTab] = useState('scan');
   const portalDialogRef = useRef(null);
   const portalTriggerRef = useRef(null);
   const detectedOs = useMemo(detectVisitorOs, []);
@@ -114,10 +116,48 @@ function App() {
     [detectedPlatform]
   );
   const recommendedStore = recommendedInstall ? getStoreLabel(recommendedInstall.method) : null;
-  const primaryCtaLabel = recommendedStore ? `Install via ${recommendedStore}` : 'Open Install Portal';
   const githubActionExample = useMemo(
     () => pipelineExamples.githubAction.replace('__QTMESH_ACTION_REF__', qtmeshActionRef),
     [qtmeshActionRef]
+  );
+
+  const cliTabs = useMemo(
+    () => [
+      { id: 'scan', label: 'Scan', title: 'Scan repo assets', code: pipelineExamples.scan, language: 'scan' },
+      { id: 'fix', label: 'Fix', title: 'Fix and optimize', code: pipelineExamples.fix, language: 'fix' },
+      { id: 'convert', label: 'Convert', title: 'Convert formats', code: pipelineExamples.convert, language: 'convert' },
+      { id: 'merge', label: 'Merge', title: 'Merge animation clips', code: pipelineExamples.merge, language: 'anim' },
+      { id: 'docker', label: 'Docker', title: 'Docker workflow', code: pipelineExamples.docker, language: 'docker' },
+      { id: 'gha', label: 'GitHub Actions', title: 'GitHub Actions workflow', code: githubActionExample, language: 'yaml' },
+    ],
+    [githubActionExample]
+  );
+  const activeCliExample = cliTabs.find((tab) => tab.id === activeCliTab) || cliTabs[0];
+
+  const cloudBadgePreview = useMemo(
+    () => [
+      {
+        key: 'status',
+        alt: 'QtMesh status badge',
+        src: `${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg`,
+      },
+      {
+        key: 'score',
+        alt: 'QtMesh score badge',
+        src: `${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-score.svg`,
+      },
+      {
+        key: 'errors',
+        alt: 'QtMesh errors badge',
+        src: `${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-errors.svg`,
+      },
+      {
+        key: 'warnings',
+        alt: 'QtMesh warnings badge',
+        src: `${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-warnings.svg`,
+      },
+    ],
+    []
   );
 
   useEffect(() => {
@@ -255,24 +295,24 @@ function App() {
         <main className={styles.main}>
           <header className={`${styles.hero} reveal`}>
             <div className={styles.heroCopy}>
-              <p className={styles.kicker}>QtMeshEditor</p>
+              <p className={styles.kicker}>QtMeshEditor | CI/CD for 3D Assets</p>
               <h1 className={styles.heroTitle}>{hero.title}</h1>
               <p className={styles.heroSubtitle}>{hero.subtitle}</p>
 
-              <div className={styles.ctaRow}>
-                <button
-                  type="button"
-                  className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
-                  onClick={handleOpenInstallPortal}
-                >
-                  {primaryCtaLabel}
-                </button>
-                <ButtonLink href={links.github} variant="secondary">
-                  {hero.ctaSecondary}
-                </ButtonLink>
-                <ButtonLink href={links.docs} variant="secondary">
-                  {hero.ctaDocs}
-                </ButtonLink>
+              <div className={styles.heroCtaPanel}>
+                <div className={styles.ctaRow}>
+                  <button
+                    type="button"
+                    className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
+                    onClick={handleOpenInstallPortal}
+                  >
+                    {hero.ctaPrimary}
+                  </button>
+                  <ButtonLink href={links.github} variant="secondary">
+                    {hero.ctaSecondary}
+                  </ButtonLink>
+                </div>
+                <p className={styles.ctaHint}>Install from winget, Homebrew, snap, Docker, or release binaries.</p>
               </div>
 
               <ul className={styles.proofRow} aria-label="Product proof points">
@@ -285,136 +325,150 @@ function App() {
             </div>
 
             <figure className={styles.heroMediaCard}>
-              <img className={styles.heroImage} src={media.skeletonPreview.src} alt={media.skeletonPreview.alt} />
-              <figcaption className={styles.mediaCaption}>Pipeline validation and inspection workflow</figcaption>
+              <img className={styles.heroImage} src={media.pipelineCiCd.src} alt={media.pipelineCiCd.alt} />
+              <figcaption className={styles.mediaCaption}>Scan → Validate → Upload → Badges</figcaption>
+              <div className={styles.heroWorkflowBar} aria-label="Pipeline workflow overview">
+                <span>Scan</span>
+                <span>Validate</span>
+                <span>Upload</span>
+                <span>Badges</span>
+              </div>
+              <div className={styles.heroBadgeStrip}>
+                {cloudBadgePreview.slice(0, 3).map((badge) => (
+                  <img key={badge.key} src={badge.src} alt={badge.alt} loading="lazy" />
+                ))}
+              </div>
             </figure>
           </header>
 
           <Section
-            id="qtmesh-cloud-badges"
-            eyebrow="Main Topic"
-            title="QtMesh Cloud badges and scan history"
-            subtitle="Register your repository in QtMesh Cloud and publish real CI scan results as live SVG badges for status, errors, and warnings."
+            id="quick-workflow"
+            eyebrow="Quick Workflow"
+            title="Understand the pipeline in one glance"
+            subtitle="One strong flow: catch issues early, keep imports predictable, and publish visible quality signals."
           >
-            <div className={styles.pipelineFlow}>
-              {cloudBadgeSteps.map((item, index) => (
-                <article key={item.title} className={styles.pipelineNode}>
-                  <span className={styles.pipelineNodeIndex}>{index + 1}</span>
-                  <h3 className={styles.pipelineNodeTitle}>{item.title}</h3>
-                  <p className={styles.pipelineNodeBody}>{item.body}</p>
-                </article>
-              ))}
-            </div>
-
-            <div className={styles.codeGrid}>
-              <CodePanel title="GitHub Actions: upload scan report" code={cloudBadgeUploadExample} label="yaml" />
-              <CodePanel title="README badge snippet" code={cloudBadgeMarkdown} label="md" />
-            </div>
-
-            <div className={styles.cliLinks}>
-              <a href={links.qtmeshCloud} target="_blank" rel="noreferrer">
-                Register on QtMesh Cloud
-              </a>
-              <a href={`${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg`} target="_blank" rel="noreferrer">
-                View live badge example
-              </a>
-              <a href={links.docs} target="_blank" rel="noreferrer">
-                Read integration docs
-              </a>
-            </div>
-          </Section>
-
-          <Section
-            id="pipeline"
-            eyebrow="Pipeline Overview"
-            title="CI/CD for 3D assets"
-            subtitle="One toolchain for scan, validate, fix, convert, and publish across local scripts and automation workflows. Scan and validation are being expanded as first-class pipeline checks."
-          >
-            <div className={styles.pipelineFlow}>
-              {pipelineFlow.map((item, index) => (
-                <article key={item.title} className={styles.pipelineNode}>
-                  <span className={styles.pipelineNodeIndex}>{index + 1}</span>
-                  <h3 className={styles.pipelineNodeTitle}>{item.title}</h3>
-                  <p className={styles.pipelineNodeBody}>{item.body}</p>
-                </article>
-              ))}
-            </div>
-
-            <div className={styles.demoLayout}>
+            <div className={styles.quickWorkflowLayout}>
               <figure className={`${styles.demoMain} reveal`}>
-                <img
-                  className={styles.demoImage}
-                  src={media.pipelineCiCd.src}
-                  alt={media.pipelineCiCd.alt}
-                  loading="lazy"
-                />
+                <img className={styles.demoImage} src={media.skeletonPreview.src} alt={media.skeletonPreview.alt} loading="lazy" />
               </figure>
 
-              <article className={styles.pipelinePanel}>
-                <h3>Pipeline run in three commands</h3>
-                <p>
-                  Use the same command sequence in local checks and CI jobs to keep asset handling deterministic.
-                </p>
-                <pre className={styles.pipelineSnippet}>
-                  <code>{pipelineExamples.scanFixConvert}</code>
-                </pre>
+              <article className={styles.quickWorkflowPanel}>
+                <h3>Commit-to-report workflow</h3>
+                <ul className={styles.workflowList}>
+                  {pipelineFlow.map((item) => (
+                    <li key={item.title} className={styles.workflowListItem}>
+                      <strong>{item.title}</strong>
+                      <p>{item.body}</p>
+                    </li>
+                  ))}
+                </ul>
               </article>
             </div>
           </Section>
 
           <Section
-            id="use-cases"
-            eyebrow="Core Use Cases"
-            title="Built for real asset production tasks"
-            subtitle="Pipeline-focused workflows for technical artists, indie teams, and studios shipping content continuously."
+            id="qtmesh-cloud-badges"
+            eyebrow="QtMesh Cloud"
+            title="Track 3D asset quality in CI"
+            subtitle="Get visibility, quality gates, and historical tracking for your 3D asset pipeline."
           >
-            <div className={styles.useCaseGrid}>
-              {useCases.map((item) => (
-                <FeatureCard key={item.title} title={item.title} body={item.body} tag="Pipeline" />
+            <p className={styles.sectionLeadCompact}>
+              QtMesh Cloud turns each scan into a shareable quality signal for developers, technical artists, and production leads.
+            </p>
+
+            <div className={styles.badgeShowcase}>
+              {cloudBadgePreview.map((badge) => (
+                <article key={badge.key} className={styles.badgeShowcaseCard}>
+                  <img src={badge.src} alt={badge.alt} loading="lazy" />
+                </article>
               ))}
+            </div>
+
+            <div className={styles.cloudStepGrid}>
+              {cloudBadgeSteps.map((item, index) => (
+                <article key={item.title} className={styles.cloudStepCard}>
+                  <span className={styles.cloudStepIndex}>{index + 1}</span>
+                  <h3>{item.title}</h3>
+                  <p>{item.body}</p>
+                </article>
+              ))}
+            </div>
+
+            <details className={styles.expandable}>
+              <summary>Show full GitHub upload example</summary>
+              <div className={styles.expandableBody}>
+                <CodePanel title="GitHub Actions: upload scan report" code={cloudBadgeUploadExample} label="yaml" />
+              </div>
+            </details>
+
+            <details className={styles.expandable}>
+              <summary>Show README badge snippet</summary>
+              <pre className={styles.inlineCodeBlock}>
+                <code>{cloudBadgeMarkdown}</code>
+              </pre>
+            </details>
+
+            <div className={styles.cliLinks}>
+              <a href={links.qtmeshCloud} target="_blank" rel="noreferrer">
+                Open QtMesh Cloud
+              </a>
+              <a href={`${links.qtmeshCloudApi}/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg`} target="_blank" rel="noreferrer">
+                View live badge example
+              </a>
             </div>
           </Section>
 
           <Section
-            id="cli"
-            eyebrow="CLI + CI"
-            title="Script your 3D asset pipeline"
-            subtitle="Run the same `qtmesh` operations locally, in Docker, and inside GitHub Actions."
+            id="before-after"
+            eyebrow="Before vs After"
+            title="From asset pipeline surprises to predictable delivery"
+            subtitle="A small change in process creates a big difference in production reliability."
           >
-            <div className={styles.cliIntro}>
-              <p>
-                Repo-wide scan and validation commands are expanding. The examples below show the intended pipeline
-                shape while keeping fix, convert, merge, and automation fully scriptable today.
-              </p>
-            </div>
+            <div className={styles.beforeAfterGrid}>
+              <article className={`${styles.outcomeCard} ${styles.outcomeBefore}`}>
+                <h3>Before</h3>
+                <ul>
+                  {beforeAfter.before.map((item) => (
+                    <li key={item}>
+                      <span aria-hidden="true">✕</span>
+                      <p>{item}</p>
+                    </li>
+                  ))}
+                </ul>
+              </article>
 
-            <div className={styles.codeGrid}>
-              <CodePanel title="Scan repo assets" code={pipelineExamples.scan} label="scan" />
-              <CodePanel title="Fix and optimize" code={pipelineExamples.fix} label="fix" />
-              <CodePanel title="Convert formats" code={pipelineExamples.convert} label="convert" />
-              <CodePanel title="Merge animations" code={pipelineExamples.merge} label="anim" />
-              <CodePanel title="Docker" code={pipelineExamples.docker} label="docker" />
-              <CodePanel title="GitHub Actions" code={githubActionExample} label="ci" />
+              <article className={`${styles.outcomeCard} ${styles.outcomeAfter}`}>
+                <h3>After</h3>
+                <ul>
+                  {beforeAfter.after.map((item) => (
+                    <li key={item}>
+                      <span aria-hidden="true">✓</span>
+                      <p>{item}</p>
+                    </li>
+                  ))}
+                </ul>
+              </article>
             </div>
+          </Section>
 
-            <div className={styles.cliLinks}>
-              <a href={links.actions} target="_blank" rel="noreferrer">
-                GitHub Action
-              </a>
-              <a href={links.docs} target="_blank" rel="noreferrer">
-                CLI Documentation
-              </a>
-              <a href={links.releases} target="_blank" rel="noreferrer">
-                Latest release binaries
-              </a>
+          <Section
+            id="who-for"
+            eyebrow="Who It's For"
+            title="Built for teams shipping 3D content continuously"
+            subtitle="Focused workflows for game developers, technical artists, and studio CI/CD teams."
+          >
+            <div className={styles.audienceGrid}>
+              {audienceCards.map((item) => (
+                <FeatureCard key={item.title} title={item.title} body={item.body} tag={item.tag} />
+              ))}
             </div>
           </Section>
 
           <Section
             id="mixamo"
             eyebrow="Animation Merge Workflow"
-            title="Fast Mixamo and Unreal animation merging"
-            subtitle="Use QtMeshEditor as a practical entry-point workflow, then plug output directly into the broader pipeline."
+            title="Merge animation clips into one predictable output"
+            subtitle="Combine Mixamo, Unreal, and DCC clips, then export a clean asset ready for engine import and CI."
           >
             <div className={styles.demoLayout}>
               <figure className={`${styles.demoMain} reveal`}>
@@ -433,13 +487,82 @@ function App() {
                 ))}
               </ol>
             </div>
+
+            <div className={styles.mixamoActions}>
+              <ButtonLink href={`${links.docs}#cmd-anim`} variant="secondary">
+                See animation workflow
+              </ButtonLink>
+            </div>
+          </Section>
+
+          <Section
+            id="pipeline"
+            eyebrow="Pipeline Overview"
+            title="CI/CD pipeline flow for 3D assets"
+            subtitle="Use one deterministic flow for local checks and CI runs."
+          >
+            <div className={styles.pipelineFlow}>
+              {pipelineFlow.map((item, index) => (
+                <article key={item.title} className={styles.pipelineNode}>
+                  <span className={styles.pipelineNodeIndex}>{index + 1}</span>
+                  <h3 className={styles.pipelineNodeTitle}>{item.title}</h3>
+                  <p className={styles.pipelineNodeBody}>{item.body}</p>
+                </article>
+              ))}
+            </div>
+
+            <article className={styles.pipelinePanel}>
+              <h3>Pipeline run in three commands</h3>
+              <p>Keep asset handling deterministic from workstation to CI.</p>
+              <pre className={styles.pipelineSnippet}>
+                <code>{pipelineExamples.scanFixConvert}</code>
+              </pre>
+            </article>
+          </Section>
+
+          <Section
+            id="cli"
+            eyebrow="CLI + CI"
+            title="Use real commands, not toy snippets"
+            subtitle="Switch between scan, fix, convert, merge, Docker, and GitHub Actions examples."
+          >
+            <div className={styles.cliTabs} role="tablist" aria-label="CLI and CI examples">
+              {cliTabs.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeCliExample.id === tab.id}
+                  className={`${styles.cliTabButton} ${activeCliExample.id === tab.id ? styles.cliTabButtonActive : ''}`}
+                  onClick={() => setActiveCliTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </div>
+
+            <div className={styles.cliTabPanel} role="tabpanel">
+              <CodePanel title={activeCliExample.title} code={activeCliExample.code} label={activeCliExample.language} />
+            </div>
+
+            <div className={styles.cliLinks}>
+              <a href={links.actions} target="_blank" rel="noreferrer">
+                GitHub Action
+              </a>
+              <a href={links.docs} target="_blank" rel="noreferrer">
+                CLI Documentation
+              </a>
+              <a href={links.releases} target="_blank" rel="noreferrer">
+                Latest release binaries
+              </a>
+            </div>
           </Section>
 
           <Section
             id="features"
             eyebrow="Advanced Features"
-            title="Extended capabilities for specialized workflows"
-            subtitle="Advanced tools stay available without overshadowing the core pipeline flow."
+            title="Deeper capabilities for specialized workflows"
+            subtitle="Keep advanced tooling available without hiding the core CI/CD path."
           >
             <div className={styles.highlightGrid}>
               {highlightFeatures.map((feature) => (
@@ -459,7 +582,7 @@ function App() {
               </figure>
               <figure className={styles.previewCard}>
                 <img src={media.mcpPreview.src} alt={media.mcpPreview.alt} loading="lazy" />
-                <figcaption>MCP integration for advanced agent-driven automation.</figcaption>
+                <figcaption>MCP integration for agent-driven pipeline automation.</figcaption>
               </figure>
             </div>
           </Section>
@@ -467,44 +590,68 @@ function App() {
           <Section
             id="install"
             eyebrow="Install"
-            title="Install QtMeshEditor your way"
-            subtitle="Store-first installs with winget, Homebrew, and snap, plus Docker and release binaries."
+            title="Install QtMeshEditor and start scanning"
+            subtitle="Choose your platform path: winget, Homebrew, snap, Docker, or release binaries."
           >
-            <div className={styles.installPortalEntry}>
-              <p>
-                Store options include <code>winget</code>, <code>Homebrew</code>, and <code>snap</code>. You can also
-                use Docker or download binaries from the latest release.
-              </p>
-              <div className={styles.installPortalEntryActions}>
-                <button
-                  type="button"
-                  className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
-                  onClick={handleOpenInstallPortal}
-                >
-                  Open Install Portal
-                </button>
-                <a href={links.releases} target="_blank" rel="noreferrer">
-                  Download from latest release
-                </a>
-              </div>
+            <div className={styles.installPortalEntryActions}>
+              <button
+                type="button"
+                className={`${styles.ctaButton} ${styles.ctaButtonPrimary}`}
+                onClick={handleOpenInstallPortal}
+              >
+                {hero.ctaPrimary}
+              </button>
+              <a href={links.releases} target="_blank" rel="noreferrer">
+                Download latest release binaries
+              </a>
+            </div>
+
+            <div className={styles.installGrid}>
+              {installOptions.map((option) => (
+                <article key={option.platform} className={styles.installMethodCard}>
+                  <div className={styles.installMethodHeader}>
+                    <h3>{option.platform}</h3>
+                    <span>{option.method}</span>
+                  </div>
+                  <pre>
+                    <code>{option.command}</code>
+                  </pre>
+                </article>
+              ))}
             </div>
           </Section>
 
           <Section
             id="trust"
             eyebrow="Open Source Trust"
-            title="Built in public for long-term production use"
-            subtitle="Open source, multi-platform, and focused on practical pipeline outcomes for small teams and studios."
+            title="Credible, technical, and built in public"
+            subtitle="Community-driven since 2012 with practical tooling for production asset pipelines."
           >
-            <div className={styles.trustLead}>
+            <div className={styles.trustMetrics}>
               <a href="https://github.com/fernandotonon/QtMeshEditor/stargazers" target="_blank" rel="noreferrer">
                 <img
-                  className={styles.starBadge}
-                  src="https://img.shields.io/github/stars/fernandotonon/QtMeshEditor.svg?style=social&label=Star"
-                  alt="GitHub stars for QtMeshEditor"
+                  src="https://img.shields.io/github/stars/fernandotonon/QtMeshEditor?style=for-the-badge&label=GitHub%20stars"
+                  alt="QtMeshEditor GitHub stars"
                   loading="lazy"
                 />
               </a>
+              <a href={links.releases} target="_blank" rel="noreferrer">
+                <img
+                  src="https://img.shields.io/github/v/release/fernandotonon/QtMeshEditor?style=for-the-badge&label=Latest%20release"
+                  alt="QtMeshEditor latest release"
+                  loading="lazy"
+                />
+              </a>
+              <a href={links.license} target="_blank" rel="noreferrer">
+                <img
+                  src="https://img.shields.io/github/license/fernandotonon/QtMeshEditor?style=for-the-badge&label=License"
+                  alt="QtMeshEditor license badge"
+                  loading="lazy"
+                />
+              </a>
+            </div>
+
+            <div className={styles.trustLead}>
               <p className={styles.trustCopy}>Active development since 2012 • MIT license • Community-driven roadmap</p>
             </div>
 

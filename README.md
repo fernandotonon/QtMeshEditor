@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run QtMesh scan
-        uses: fernandotonon/QtMeshEditor@v1
+        uses: fernandotonon/QtMeshEditor@2.28.0
         with:
           command: scan
         env:
@@ -57,27 +57,27 @@ jobs:
 
 To fail CI when upload fails, add `qtmesh-strict-upload: true` (or pass `--strict-upload` in `options`).
 
-If you want an exact release tag (instead of `@v1`) with the latest version prefilled, copy the snippet from QtMesh Cloud onboarding step 3.
+Use the latest action release tag (currently `@2.28.0`) from QtMesh Cloud onboarding step 3 when updating this workflow.
 
 <details>
 <summary>More CI examples</summary>
 
 ```yaml
 # Validate a specific mesh
-- uses: fernandotonon/QtMeshEditor@v1
+- uses: fernandotonon/QtMeshEditor@2.28.0
   with:
     command: validate
     input-file: ./models/character.fbx
 
 # Convert FBX → glTF
-- uses: fernandotonon/QtMeshEditor@v1
+- uses: fernandotonon/QtMeshEditor@2.28.0
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.gltf2
 
 # Resample Mixamo animations (200+ keyframes → 30)
-- uses: fernandotonon/QtMeshEditor@v1
+- uses: fernandotonon/QtMeshEditor@2.28.0
   with:
     command: anim
     input-file: ./animations/dance.fbx
@@ -85,7 +85,7 @@ If you want an exact release tag (instead of `@v1`) with the latest version pref
     options: --resample 30
 
 # Get mesh info as JSON
-- uses: fernandotonon/QtMeshEditor@v1
+- uses: fernandotonon/QtMeshEditor@2.28.0
   id: info
   with:
     command: info
@@ -167,7 +167,7 @@ jobs:
 
       - name: Run scan + generate badge JSON files
         id: scan
-        uses: fernandotonon/QtMeshEditor@v1
+        uses: fernandotonon/QtMeshEditor@2.28.0
         with:
           command: scan
           input-file: .
