@@ -627,6 +627,7 @@ void MainWindow::initToolBar()
     // On successful extrude, auto-switch to the Translate tool so the
     // user can immediately move the freshly-extruded geometry.
     connect(extrudeButton, &QToolButton::clicked, this, [this]() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Extrude");
         auto* c = EditModeController::instance();
         if (c->extrudeSelection()) {
             setTransformState(TransformOperator::TS_TRANSLATE);
@@ -649,8 +650,10 @@ void MainWindow::initToolBar()
     bevelButton->setToolTip(tr("Bevel selected edges / vertices (%1)").arg(bevelShortcutLabel));
     bevelButton->setFont(topoFont);
     bevelButton->setStyleSheet(topoBtnStyle);
-    connect(bevelButton, &QToolButton::clicked,
-            editCtrlForTopo, &EditModeController::bevelSelection);
+    connect(bevelButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Bevel");
+        EditModeController::instance()->bevelSelection();
+    });
     QAction* bevelAction = ui->objectsToolbar->addWidget(bevelButton);
 
     // Context-aware visibility + enabled:
