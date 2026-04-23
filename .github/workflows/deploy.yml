@@ -2029,48 +2029,16 @@ jobs:
           }
           Write-Host "WinGet PR submitted successfully."
 
-          # Parse the PR number out of wingetcreate's success output and
-          # post a follow-up comment on the winget-pkgs PR. The default
-          # body is Microsoft's contributor checklist (same for every
-          # submission); this comment gives the reviewer a pointer to
-          # the QtMeshEditor release notes + flags the PR as automated.
-          $prUrl = $null
+          # Echo the created PR's URL at the top of our own action log
+          # so it's easy to find from the release build later. We do NOT
+          # post a comment on the winget-pkgs PR itself: winget's review
+          # flow is driven by wingetbot and Microsoft maintainers, and
+          # external contributor comments don't add value (and could
+          # risk tripping keyword-based automation).
           foreach ($line in $lastOutput) {
-            if ($line -match 'Pull request.*?(https://github\.com/microsoft/winget-pkgs/pull/(\d+))') {
-              $prUrl    = $Matches[1]
-              $prNumber = [int]$Matches[2]
+            if ($line -match 'Pull request.*?(https://github\.com/microsoft/winget-pkgs/pull/\d+)') {
+              Write-Host "::notice::WinGet PR created: $($Matches[1])"
               break
-            }
-          }
-          if (-not $prUrl) {
-            Write-Host "::warning::Submit succeeded but no PR URL was parsed from wingetcreate output — skipping context comment."
-          } else {
-            Write-Host "Posting context comment on $prUrl ..."
-            $releaseUrl = "https://github.com/fernandotonon/QtMeshEditor/releases/tag/$rawTag"
-            $commentBody = @"
-Automated by the QtMeshEditor release workflow ([run]($($env:GITHUB_SERVER_URL + '/' + $env:GITHUB_REPOSITORY + '/actions/runs/' + $env:GITHUB_RUN_ID))).
-
-Release notes: [$rawTag]($releaseUrl)
-
-The default checklist above is the microsoft/winget-pkgs PR template; the manifest passed `wingetcreate`'s local validation before submission.
-"@
-            $payload = @{ body = $commentBody } | ConvertTo-Json -Compress
-            $commentHeaders = @{
-              Authorization = "token $env:WINGET_TOKEN"
-              Accept        = "application/vnd.github+json"
-              "User-Agent"  = "QtMeshEditor-CI"
-            }
-            try {
-              $null = Invoke-WebRequest `
-                -Uri "https://api.github.com/repos/microsoft/winget-pkgs/issues/$prNumber/comments" `
-                -Method POST `
-                -Headers $commentHeaders `
-                -ContentType "application/json; charset=utf-8" `
-                -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
-                -UseBasicParsing
-              Write-Host "Context comment posted on $prUrl."
-            } catch {
-              Write-Host "::warning::Failed to post context comment: $($_.Exception.Message). The PR itself is still submitted at $prUrl."
             }
           }
 
