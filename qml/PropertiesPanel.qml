@@ -503,11 +503,13 @@ Rectangle {
                 }
             }
 
-            // Bevel button (edge mode only)
+            // Bevel button (edge or vertex mode)
             Rectangle {
                 property string shortcutLabel: Qt.platform.os === "osx" ? "Cmd+B" : "Ctrl+B"
                 width: parent.width - 16; height: 26; radius: 3
-                visible: EditModeController.editModeActive && EditModeController.selectionMode === 1
+                visible: EditModeController.editModeActive
+                      && (EditModeController.selectionMode === 1
+                          || EditModeController.selectionMode === 0)
                 color: bevelMouse.pressed ? Qt.darker(PropertiesPanelController.highlightColor, 1.2)
                      : bevelMouse.containsMouse ? Qt.lighter(PropertiesPanelController.highlightColor, 1.1)
                      : PropertiesPanelController.highlightColor
@@ -527,8 +529,10 @@ Rectangle {
                 width: parent.width - 16
                 spacing: 4
 
-                // Segments
+                // Segments (edge-bevel only — vertex bevel is flat for
+                // now; rounded-dome is a future extension).
                 Row {
+                    visible: EditModeController.selectionMode === 1
                     width: parent.width
                     spacing: 6
                     Text {
@@ -549,10 +553,10 @@ Rectangle {
                 }
 
                 // Profile shape — 2D graph control with one handle per
-                // interior segment. Only shown when segments > 1 (a single
-                // segment has no interior points to shape).
+                // interior segment. Only shown in edge mode with segments > 1.
                 Column {
-                    visible: EditModeController.bevelSegmentsValue > 1
+                    visible: EditModeController.selectionMode === 1
+                         && EditModeController.bevelSegmentsValue > 1
                     width: parent.width
                     spacing: 4
 

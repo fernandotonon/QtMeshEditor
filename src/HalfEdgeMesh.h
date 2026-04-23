@@ -326,6 +326,47 @@ public:
                                 float profile = 0.5f,
                                 const std::vector<float>& profilePoints = {});
 
+    /**
+     * @brief Bevel selected vertices (corner cut).
+     *
+     * For each selected vertex v of valence N >= 3, replaces v with an
+     * N-gon face. Each edge incident to v is split at distance `width`
+     * from v (clamped to half the shortest incident edge), giving N new
+     * vertices. Each face originally at v is retriangulated to exchange
+     * v's corner for the two edge offsets on its two v-edges. Then the
+     * N offsets are triangulated into a "cap" face sitting where v used
+     * to be.
+     *
+     * Limitations (MVP):
+     * - Valence < 3 vertices are skipped (nothing sensible to bevel).
+     * - Boundary vertices are skipped.
+     * - `segments` and `profilePoints` are reserved for a future
+     *   rounded-dome implementation; this MVP always emits a flat cap.
+     *
+     * Multi-vertex selections are processed sequentially (one vertex at
+     * a time, rebuilding the half-edge structure between iterations).
+     * This keeps shared-edge pairs manifold at the cost of slight O(N²)
+     * growth with selection size, which is fine for interactive use.
+     *
+     * @param vertexIndices The vertex indices to bevel.
+     * @param width The offset distance along each incident edge. Clamped
+     *              per-vertex to min(shortest_edge) / 2 to avoid self-
+     *              intersection with the neighbor's own bevel.
+     * @param segments Radial subdivisions of the cap (1 = flat N-gon,
+     *                 2+ = rounded dome). Clamped to [1, 16].
+     * @param profile Profile-curve shape in [0, 1]. Same semantics as
+     *                edge bevel.
+     * @param profilePoints Optional per-ring profile values (size = segments - 1).
+     *                When empty, `profile` drives the sin envelope.
+     * @return Indices of the newly created vertices. Empty if the
+     *         operation was skipped or failed.
+     */
+    std::vector<int> bevelVertices(const std::vector<int>& vertexIndices,
+                                   float width,
+                                   int segments = 1,
+                                   float profile = 0.5f,
+                                   const std::vector<float>& profilePoints = {});
+
     /// @}
 
     /// @name Validation
