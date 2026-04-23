@@ -4,7 +4,6 @@
 #include <QThread>
 #include "Manager.h"
 #include "SkeletonDebug.h"
-#include "MeshImporterExporter.h"
 #include <OgreException.h>
 #include "TestHelpers.h"
 
@@ -29,20 +28,9 @@ protected:
             GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
         }
 
-        // Import a mesh with skeleton
-        QStringList validUri{"./media/models/robot.mesh"};
-        try {
-            MeshImporterExporter::importer(validUri);
-        } catch (const Ogre::Exception& e) {
-            GTEST_SKIP() << "Skipping SkeletonDebug tests: failed to import mesh ("
-                         << e.getFullDescription() << ")";
-        }
-
-        Ogre::Entity* entity = Manager::getSingleton()->getEntities().isEmpty()
-                                   ? nullptr
-                                   : Manager::getSingleton()->getEntities().last();
+        Ogre::Entity* entity = createAnimatedTestEntity("SkeletonDebugTestEntity");
         if (!entity) {
-            GTEST_SKIP() << "Skipping SkeletonDebug tests: no entity available after import";
+            GTEST_SKIP() << "Skipping SkeletonDebug tests: failed to create animated test entity";
         }
 
         Ogre::SceneManager* sceneManager = Manager::getSingleton()->getSceneMgr();

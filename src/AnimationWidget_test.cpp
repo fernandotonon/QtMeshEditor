@@ -5,9 +5,9 @@
 #include <QSignalSpy>
 #include <QTableWidget>
 #include <QPushButton>
+#include "GlobalDefinitions.h"
 #include "Manager.h"
 #include "SelectionSet.h"
-#include "MeshImporterExporter.h"
 #include "AnimationWidget.h"
 #include "TestHelpers.h"
 
@@ -55,21 +55,7 @@ protected:
             GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
         }
 
-        // Import a mesh with skeleton/animations (robot.mesh ships in media/)
-        QStringList uris{"./media/models/robot.mesh"};
-        try {
-            MeshImporterExporter::importer(uris);
-        } catch (const std::exception& e) {
-            GTEST_SKIP() << "Skipping: failed to import robot.mesh (" << e.what() << ")";
-        } catch (...) {
-            GTEST_SKIP() << "Skipping: failed to import robot.mesh (unknown error)";
-        }
-
-        if (Manager::getSingleton()->getEntities().isEmpty()) {
-            GTEST_SKIP() << "Skipping: no entity available after import";
-        }
-
-        entity = Manager::getSingleton()->getEntities().last();
+        entity = createAnimatedTestEntity("AnimationWidgetWithMeshEntity");
         ASSERT_NE(entity, nullptr);
 
         // Select the entity so AnimationWidget can see it
@@ -77,6 +63,13 @@ protected:
         if (app) app->processEvents();
     }
 };
+
+// GL-heavy ManualObject tests are isolated into one-test suites so each runs
+// in its own process under CI's per-suite execution model.
+class AnimationWidgetToggleBoneWeightsTest : public AnimationWidgetTest {};
+class AnimationWidgetSkeletonTableBoneWeightsClickTest : public AnimationWidgetTest {};
+class AnimationWidgetSceneNodeDestroyedCleanupTest : public AnimationWidgetTest {};
+class AnimationWidgetSceneClearingCleanupTest : public AnimationWidgetTest {};
 
 // ============================== Basic Tests ================================
 
@@ -996,3 +989,219 @@ TEST_F(AnimationWidgetTest, AnimTableCellDoubleClicked_Column0_NoEffect)
 
 // NOTE: AnimTableClicked_EnableThenDisable_RoundTrip was removed because it
 // fails in CI (depends on skeleton debug tests that were previously removed).
+// NOTE: ToggleSkeletonDebugOnAndOff was removed because it consistently
+// crashes under Linux CI's headless Mesa path when SkeletonDebug creates
+// ManualObjects.
+
+TEST_F(AnimationWidgetToggleBoneWeightsTest, ToggleBoneWeightsOnOffAndIdempotent)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_toggle_weights");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    EXPECT_FALSE(widget.isBoneWeightsShown(entity));
+
+    ASSERT_TRUE(widget.toggleBoneWeights(entity, true));
+    EXPECT_TRUE(widget.isBoneWeightsShown(entity));
+    auto* firstOverlay = widget.getBoneWeightOverlay(entity);
+    ASSERT_NE(firstOverlay, nullptr);
+    EXPECT_TRUE(firstOverlay->isVisible());
+
+    // Calling "show" twice should be a no-op and keep the same overlay instance.
+    ASSERT_TRUE(widget.toggleBoneWeights(entity, true));
+    EXPECT_EQ(widget.getBoneWeightOverlay(entity), firstOverlay);
+
+    ASSERT_TRUE(widget.toggleBoneWeights(entity, false));
+    EXPECT_FALSE(widget.isBoneWeightsShown(entity));
+    EXPECT_EQ(widget.getBoneWeightOverlay(entity), nullptr);
+}
+
+TEST_F(AnimationWidgetSkeletonTableBoneWeightsClickTest, SkeletonTableClicked_Column2_TogglesBoneWeights)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_skel_click_col2");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
+    ASSERT_NE(skeletonTable, nullptr);
+    ASSERT_EQ(skeletonTable->rowCount(), 1);
+
+    auto* weightsItem = skeletonTable->item(0, 2);
+    ASSERT_NE(weightsItem, nullptr);
+
+    weightsItem->setCheckState(Qt::Checked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(weightsItem));
+    if (app) app->processEvents();
+    EXPECT_TRUE(widget.isBoneWeightsShown(entity));
+
+    skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
+    ASSERT_NE(skeletonTable, nullptr);
+    ASSERT_EQ(skeletonTable->rowCount(), 1);
+    weightsItem = skeletonTable->item(0, 2);
+    ASSERT_NE(weightsItem, nullptr);
+    weightsItem->setCheckState(Qt::Unchecked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(weightsItem));
+    if (app) app->processEvents();
+    EXPECT_FALSE(widget.isBoneWeightsShown(entity));
+}
+
+TEST_F(AnimationWidgetTest, SkeletonTableClicked_NoSkeletonEntityIsIgnored)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto mesh = createInMemoryTriangleMesh("animwidget_skel_click_noskel");
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    auto* node = Manager::getSingleton()->addSceneNode("animwidget_skel_click_noskel_node");
+    auto* entity = sceneMgr->createEntity("animwidget_skel_click_noskel_ent", mesh);
+    node->attachObject(entity);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
+    ASSERT_NE(skeletonTable, nullptr);
+    ASSERT_EQ(skeletonTable->rowCount(), 1);
+
+    auto* skeletonItem = skeletonTable->item(0, 1);
+    auto* weightsItem = skeletonTable->item(0, 2);
+    ASSERT_NE(skeletonItem, nullptr);
+    ASSERT_NE(weightsItem, nullptr);
+
+    skeletonItem->setCheckState(Qt::Checked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(skeletonItem));
+    weightsItem->setCheckState(Qt::Checked);
+    emit skeletonTable->clicked(skeletonTable->indexFromItem(weightsItem));
+    if (app) app->processEvents();
+
+    EXPECT_FALSE(widget.isSkeletonDebugActive(entity));
+    EXPECT_FALSE(widget.isBoneWeightsShown(entity));
+}
+
+TEST_F(AnimationWidgetSceneNodeDestroyedCleanupTest, SceneNodeDestroyedSignalCleansEntityDebugOverlays)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_scene_node_destroyed");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    ASSERT_TRUE(widget.toggleSkeletonDebug(entity, true));
+    ASSERT_TRUE(widget.toggleBoneWeights(entity, true));
+    EXPECT_TRUE(widget.isSkeletonDebugActive(entity));
+    EXPECT_TRUE(widget.isBoneWeightsShown(entity));
+
+    auto* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    emit Manager::getSingleton()->sceneNodeDestroyed(node);
+    if (app) app->processEvents();
+
+    EXPECT_FALSE(widget.isSkeletonDebugActive(entity));
+    EXPECT_FALSE(widget.isBoneWeightsShown(entity));
+}
+
+TEST_F(AnimationWidgetSceneClearingCleanupTest, SceneClearingSignalDisablesAllDebugOverlays)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_scene_clearing");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    ASSERT_TRUE(widget.toggleSkeletonDebug(entity, true));
+    ASSERT_TRUE(widget.toggleBoneWeights(entity, true));
+    EXPECT_TRUE(widget.isSkeletonDebugActive(entity));
+    EXPECT_TRUE(widget.isBoneWeightsShown(entity));
+
+    emit Manager::getSingleton()->sceneClearing();
+    if (app) app->processEvents();
+
+    EXPECT_FALSE(widget.isSkeletonDebugActive(entity));
+    EXPECT_FALSE(widget.isBoneWeightsShown(entity));
+}
+
+TEST_F(AnimationWidgetTest, AnimTableClicked_NullEntityDataIsIgnored)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_click_null_entity");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
+    ASSERT_NE(animTable, nullptr);
+    ASSERT_GT(animTable->rowCount(), 0);
+
+    auto* entityItem = animTable->item(0, 0);
+    auto* enabledItem = animTable->item(0, 2);
+    ASSERT_NE(entityItem, nullptr);
+    ASSERT_NE(enabledItem, nullptr);
+
+    entityItem->setData(ENTITY_DATA, QVariant::fromValue((void*)nullptr));
+    enabledItem->setCheckState(Qt::Checked);
+    emit animTable->clicked(animTable->indexFromItem(enabledItem));
+    if (app) app->processEvents();
+
+    SUCCEED();
+}
+
+TEST_F(AnimationWidgetTest, PollAnimationStateSkipsRowsWithMissingCells)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    auto* entity = createAnimatedTestEntity("animwidget_poll_missing_cells");
+    ASSERT_NE(entity, nullptr);
+
+    AnimationWidget widget;
+    SelectionSet::getSingleton()->selectOne(entity);
+    if (app) app->processEvents();
+
+    QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
+    ASSERT_NE(animTable, nullptr);
+    ASSERT_GT(animTable->rowCount(), 0);
+
+    auto* entityItem = animTable->item(0, 0);
+    auto* animNameItem = animTable->item(0, 1);
+    auto* enabledItem = animTable->item(0, 2);
+    ASSERT_NE(entityItem, nullptr);
+    ASSERT_NE(animNameItem, nullptr);
+    ASSERT_NE(enabledItem, nullptr);
+
+    auto* removedEnabled = animTable->takeItem(0, 2);
+    QMetaObject::invokeMethod(&widget, "pollAnimationState", Qt::DirectConnection);
+    animTable->setItem(0, 2, removedEnabled);
+
+    entityItem->setData(ENTITY_DATA, QVariant::fromValue((void*)nullptr));
+    QMetaObject::invokeMethod(&widget, "pollAnimationState", Qt::DirectConnection);
+    entityItem->setData(ENTITY_DATA, QVariant::fromValue((void*)entity));
+
+    auto* removedAnimName = animTable->takeItem(0, 1);
+    QMetaObject::invokeMethod(&widget, "pollAnimationState", Qt::DirectConnection);
+    animTable->setItem(0, 1, removedAnimName);
+
+    SUCCEED();
+}

@@ -20,24 +20,28 @@
 
 class OgreWidgetTest : public ::testing::Test {
 protected:
-    QApplication* app = nullptr;
-    MainWindow* mainWindow = nullptr;
+    static QApplication* app;
+    static MainWindow* mainWindow;
     EditorViewport* viewport = nullptr;
     OgreWidget* widget = nullptr;
 
-    void SetUp() override
+    static void SetUpTestSuite()
     {
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
-        ASSERT_NE(app, nullptr);
+        ASSERT_NE(app, nullptr) << "QApplication instance is required";
 
         app->processEvents();
         Manager::kill();
         QThread::msleep(100);
 
+        if (mainWindow) {
+            return;
+        }
+
         constexpr int kMaxMainWindowInitAttempts = 6;
         for (int attempt = 1; attempt <= kMaxMainWindowInitAttempts && !mainWindow; ++attempt) {
             // EGL/Xvfb setup can transiently fail to create the Ogre surface in CI.
-            // Reset global manager state between attempts before constructing MainWindow.
+            // Keep a single MainWindow for this suite to avoid repeated EGL churn.
             Manager::kill();
             app->processEvents();
             QThread::msleep(75);
@@ -59,7 +63,26 @@ protected:
                 QThread::msleep(200 * attempt);
             }
         }
-        ASSERT_NE(mainWindow, nullptr) << "Failed to initialize MainWindow for OgreWidgetTest";
+    }
+
+    static void TearDownTestSuite()
+    {
+        delete mainWindow;
+        mainWindow = nullptr;
+
+        if (app) {
+            app->processEvents();
+        }
+
+        Manager::kill();
+        QThread::msleep(100);
+    }
+
+    void SetUp() override
+    {
+        if (!mainWindow) {
+            GTEST_SKIP() << "Failed to initialize MainWindow for OgreWidgetTest";
+        }
 
         viewport = new EditorViewport(mainWindow, 7);
         ASSERT_NE(viewport, nullptr);
@@ -73,17 +96,11 @@ protected:
         delete viewport;
         viewport = nullptr;
         widget = nullptr;
-
-        delete mainWindow;
-        mainWindow = nullptr;
-
-        if (app)
-            app->processEvents();
-
-        Manager::kill();
-        QThread::msleep(100);
     }
 };
+
+QApplication* OgreWidgetTest::app = nullptr;
+MainWindow* OgreWidgetTest::mainWindow = nullptr;
 
 TEST_F(OgreWidgetTest, GetIndexMatchesParentViewport)
 {

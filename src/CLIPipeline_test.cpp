@@ -777,6 +777,40 @@ static QString exportGeneratedTriangleMesh(const QString& baseName)
     return outFile;
 }
 
+static QByteArray firstAnimationNameForFile(const QString& filePath)
+{
+    if (!Manager::getSingletonPtr())
+        return QByteArray();
+
+    MeshImporterExporter::importer({filePath});
+    auto& entities = Manager::getSingleton()->getEntities();
+    if (entities.isEmpty() || !entities.first()->hasSkeleton())
+        return QByteArray();
+
+    Ogre::SkeletonPtr skel = entities.first()->getMesh()->getSkeleton();
+    if (!skel || skel->getNumAnimations() == 0)
+        return QByteArray();
+
+    QByteArray name = QString::fromStdString(
+        skel->getAnimation(static_cast<unsigned short>(0))->getName()).toUtf8();
+
+    auto nodes = Manager::getSingleton()->getSceneNodes();
+    for (auto* node : nodes) {
+        Manager::getSingleton()->destroyAllAttachedMovableObjects(node);
+        Manager::getSingleton()->destroySceneNode(node);
+    }
+
+    return name;
+}
+
+static void removeObjAndMtl(const QString& objPath)
+{
+    QFile::remove(objPath);
+    QFileInfo fi(objPath);
+    const QString mtlPath = fi.absolutePath() + "/" + fi.completeBaseName() + ".mtl";
+    QFile::remove(mtlPath);
+}
+
 // -- cmdInfo error paths (no Ogre needed) --
 
 TEST(CLIPipelineCmdInfoError, NoFile)
@@ -1208,6 +1242,100 @@ TEST_F(CLIPipelineCmdTest, CmdAnimList_NoAnimationsGeneratedMeshReturnsError)
 
     QFile::remove(sourceFile);
     QFile::remove(QDir::tempPath() + "/cli_no_anim_source.fbx.meta");
+}
+
+// -- cmdAnim resample/decimate --
+
+TEST_F(CLIPipelineCmdTest, CmdAnimResample_Valid)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    const QByteArray animName = firstAnimationNameForFile(file);
+    if (animName.isEmpty()) GTEST_SKIP() << "Could not discover animation name";
+
+    const QString outFile = QDir::tempPath() + "/cli_test_resample.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_resample.material");
+
+    TestArgv args({"qtmesh", "anim", fileBa.constData(),
+                   "--resample", "4",
+                   "--animation", animName.constData(),
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_resample.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimResample_NoMatchingAnimationReturnsError)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    const QString outFile = QDir::tempPath() + "/cli_test_resample_nomatch.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_resample_nomatch.material");
+
+    TestArgv args({"qtmesh", "anim", fileBa.constData(),
+                   "--resample", "4",
+                   "--animation", "NoSuchAnimation_Resample",
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
+
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_resample_nomatch.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimDecimate_Valid)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    const QByteArray animName = firstAnimationNameForFile(file);
+    if (animName.isEmpty()) GTEST_SKIP() << "Could not discover animation name";
+
+    const QString outFile = QDir::tempPath() + "/cli_test_decimate.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_decimate.material");
+
+    TestArgv args({"qtmesh", "anim", fileBa.constData(),
+                   "--decimate-step", "2",
+                   "--animation", animName.constData(),
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outFile));
+
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_decimate.material");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdAnimDecimate_NoMatchingAnimationReturnsError)
+{
+    QString file = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(file)) GTEST_SKIP() << "Test data not found";
+    QByteArray fileBa = file.toUtf8();
+
+    const QString outFile = QDir::tempPath() + "/cli_test_decimate_nomatch.mesh";
+    QByteArray outBa = outFile.toUtf8();
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_decimate_nomatch.material");
+
+    TestArgv args({"qtmesh", "anim", fileBa.constData(),
+                   "--decimate-step", "2",
+                   "--animation", "NoSuchAnimation_Decimate",
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdAnim(args.argc(), args.argv()), 1);
+
+    QFile::remove(outFile);
+    QFile::remove(QDir::tempPath() + "/cli_test_decimate_nomatch.material");
 }
 
 // -- cmdAnim rename --
@@ -1827,6 +1955,104 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_InfoAndRemoveFromGeneratedMesh)
     QFile::remove(QDir::tempPath() + "/cli_lod_removed.material");
 }
 
+TEST_F(CLIPipelineCmdLodTest, CmdLod_CountModeGeneratesAndExportsLods)
+{
+    const QString fixtureMesh = testDataDir() + "/robot.mesh";
+    if (!QFile::exists(fixtureMesh)) GTEST_SKIP() << "Test data not found";
+
+    QTemporaryDir sourceDir;
+    ASSERT_TRUE(sourceDir.isValid());
+    const QString sourceFile = sourceDir.filePath("robot.mesh");
+    QFile::remove(sourceFile);
+    ASSERT_TRUE(QFile::copy(fixtureMesh, sourceFile));
+
+    const QString fixtureSkeleton = testDataDir() + "/robot.skeleton";
+    if (QFile::exists(fixtureSkeleton)) {
+        // Keep sibling skeleton next to the copied mesh so Ogre can resolve links in CI.
+        const QString sourceSkeleton = sourceDir.filePath("robot.skeleton");
+        QFile::remove(sourceSkeleton);
+        ASSERT_TRUE(QFile::copy(fixtureSkeleton, sourceSkeleton));
+    }
+
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    QTemporaryDir outDir;
+    ASSERT_TRUE(outDir.isValid());
+    const QString outputStem = outDir.filePath("count_out.mesh");
+    QByteArray outputBa = outputStem.toUtf8();
+
+    TestArgv args({"qtmesh", "lod", sourceBa.constData(),
+                   "--count", "2",
+                   "--reductions", "0.7,0.45",
+                   "--output", outputBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 0);
+
+    const QString lod1 = outDir.filePath("count_out_lod1.mesh");
+    const QString lod2 = outDir.filePath("count_out_lod2.mesh");
+    EXPECT_TRUE(QFile::exists(lod1) || QFile::exists(lod2));
+
+    QFile::remove(lod1);
+    QFile::remove(lod2);
+    QFile::remove(outDir.filePath("count_out_lod1.material"));
+    QFile::remove(outDir.filePath("count_out_lod2.material"));
+}
+
+TEST_F(CLIPipelineCmdLodTest, CmdLod_CountModeWithoutOutputUsesInputStem)
+{
+    const QString fixtureMesh = testDataDir() + "/robot.mesh";
+    if (!QFile::exists(fixtureMesh)) GTEST_SKIP() << "Test data not found";
+
+    QTemporaryDir sourceDir;
+    ASSERT_TRUE(sourceDir.isValid());
+    const QString sourceFile = sourceDir.filePath("robot.mesh");
+    QFile::remove(sourceFile);
+    ASSERT_TRUE(QFile::copy(fixtureMesh, sourceFile));
+
+    const QString fixtureSkeleton = testDataDir() + "/robot.skeleton";
+    if (QFile::exists(fixtureSkeleton)) {
+        const QString sourceSkeleton = sourceDir.filePath("robot.skeleton");
+        QFile::remove(sourceSkeleton);
+        ASSERT_TRUE(QFile::copy(fixtureSkeleton, sourceSkeleton));
+    }
+
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    const QString expectedLod1 = sourceDir.filePath("robot_lod1.mesh");
+    const QString expectedLod2 = sourceDir.filePath("robot_lod2.mesh");
+    QFile::remove(expectedLod1);
+    QFile::remove(expectedLod2);
+    QFile::remove(sourceDir.filePath("robot_lod1.material"));
+    QFile::remove(sourceDir.filePath("robot_lod2.material"));
+
+    TestArgv args({"qtmesh", "lod", sourceBa.constData(), "--count", "2"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(expectedLod1) || QFile::exists(expectedLod2));
+
+    QFile::remove(expectedLod1);
+    QFile::remove(expectedLod2);
+    QFile::remove(sourceDir.filePath("robot_lod1.material"));
+    QFile::remove(sourceDir.filePath("robot_lod2.material"));
+}
+
+TEST_F(CLIPipelineCmdLodTest, CmdLod_AutoModeOnTinyMeshReturnsNoGeneratedLevels)
+{
+    const QString sourceFile = exportGeneratedTriangleMesh("cli_lod_auto_tiny_source");
+    ASSERT_FALSE(sourceFile.isEmpty());
+    ASSERT_TRUE(QFile::exists(sourceFile));
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    const QString unexpectedLod1 = QDir::tempPath() + "/cli_lod_auto_tiny_source_lod1.mesh";
+    QFile::remove(unexpectedLod1);
+
+    TestArgv args({"qtmesh", "lod", sourceBa.constData(), "--auto"});
+    EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 1);
+
+    QFile::remove(unexpectedLod1);
+    QFile::remove(QDir::tempPath() + "/cli_lod_auto_tiny_source_lod1.material");
+    QFile::remove(sourceFile);
+    QFile::remove(QDir::tempPath() + "/cli_lod_auto_tiny_source.material");
+}
+
 // ==========================================================================
 // cmdPose error paths
 // ==========================================================================
@@ -1863,6 +2089,122 @@ TEST(CLIPipelineCmdPoseError, NonexistentFile)
     QByteArray missingFileBa = missingFile.toUtf8();
     TestArgv args({"qtmesh", "pose", missingFileBa.constData(), "--animation", "Idle", "--time", "0.0", "-o", "pose.obj"});
     EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 1);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdPose_SingleTimeExportFromAnimatedMesh)
+{
+    const QString sourceFile = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(sourceFile)) GTEST_SKIP() << "Test data not found";
+    const QByteArray animName = firstAnimationNameForFile(sourceFile);
+    if (animName.isEmpty()) GTEST_SKIP() << "Could not discover animation name";
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    const QString outputFile = QDir::tempPath() + "/cli_pose_single.obj";
+    QByteArray outBa = outputFile.toUtf8();
+    removeObjAndMtl(outputFile);
+
+    TestArgv args({"qtmesh", "pose", sourceBa.constData(),
+                   "--animation", animName.constData(),
+                   "--time", "0.5",
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(outputFile));
+
+    removeObjAndMtl(outputFile);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdPose_CountExportWithPrintfPattern)
+{
+    const QString sourceFile = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(sourceFile)) GTEST_SKIP() << "Test data not found";
+    const QByteArray animName = firstAnimationNameForFile(sourceFile);
+    if (animName.isEmpty()) GTEST_SKIP() << "Could not discover animation name";
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    const QString pattern = QDir::tempPath() + "/cli_pose_pattern_%02d.obj";
+    QByteArray patternBa = pattern.toUtf8();
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_00.obj");
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_01.obj");
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_02.obj");
+
+    TestArgv args({"qtmesh", "pose", sourceBa.constData(),
+                   "--animation", animName.constData(),
+                   "--count", "3",
+                   "-o", patternBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(QDir::tempPath() + "/cli_pose_pattern_00.obj"));
+    EXPECT_TRUE(QFile::exists(QDir::tempPath() + "/cli_pose_pattern_01.obj"));
+    EXPECT_TRUE(QFile::exists(QDir::tempPath() + "/cli_pose_pattern_02.obj"));
+
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_00.obj");
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_01.obj");
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_02.obj");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdPose_CountExportWithoutPatternAddsFrameSuffix)
+{
+    const QString sourceFile = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(sourceFile)) GTEST_SKIP() << "Test data not found";
+    const QByteArray animName = firstAnimationNameForFile(sourceFile);
+    if (animName.isEmpty()) GTEST_SKIP() << "Could not discover animation name";
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    const QString outputFile = QDir::tempPath() + "/cli_pose_suffix.obj";
+    QByteArray outBa = outputFile.toUtf8();
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_suffix_00.obj");
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_suffix_01.obj");
+
+    TestArgv args({"qtmesh", "pose", sourceBa.constData(),
+                   "--animation", animName.constData(),
+                   "--count", "2",
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(QDir::tempPath() + "/cli_pose_suffix_00.obj"));
+    EXPECT_TRUE(QFile::exists(QDir::tempPath() + "/cli_pose_suffix_01.obj"));
+
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_suffix_00.obj");
+    removeObjAndMtl(QDir::tempPath() + "/cli_pose_suffix_01.obj");
+}
+
+TEST_F(CLIPipelineCmdTest, CmdPose_AnimationNotFoundOnValidAnimatedSource)
+{
+    const QString sourceFile = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(sourceFile)) GTEST_SKIP() << "Test data not found";
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    const QString outputFile = QDir::tempPath() + "/cli_pose_missing_anim.obj";
+    QByteArray outBa = outputFile.toUtf8();
+    removeObjAndMtl(outputFile);
+
+    TestArgv args({"qtmesh", "pose", sourceBa.constData(),
+                   "--animation", "NoSuchAnimation",
+                   "--time", "0.25",
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 1);
+
+    removeObjAndMtl(outputFile);
+}
+
+TEST_F(CLIPipelineCmdTest, CmdPose_NoSkeletonMeshReturnsError)
+{
+    const QString sourceFile = exportGeneratedTriangleMesh("cli_pose_noskeleton_source");
+    ASSERT_FALSE(sourceFile.isEmpty());
+    ASSERT_TRUE(QFile::exists(sourceFile));
+    QByteArray sourceBa = sourceFile.toUtf8();
+
+    const QString outputFile = QDir::tempPath() + "/cli_pose_noskeleton.obj";
+    QByteArray outBa = outputFile.toUtf8();
+    removeObjAndMtl(outputFile);
+
+    TestArgv args({"qtmesh", "pose", sourceBa.constData(),
+                   "--animation", "TestAnim",
+                   "--time", "0.5",
+                   "-o", outBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 1);
+
+    removeObjAndMtl(outputFile);
+    QFile::remove(sourceFile);
+    QFile::remove(QDir::tempPath() + "/cli_pose_noskeleton_source.material");
 }
 
 // ==========================================================================
@@ -2112,6 +2454,76 @@ TEST(CLIPipelineCmdScan, IncludePatternNormalizesBareExtension)
     QByteArray rootBa = tmpDir.path().toUtf8();
     TestArgv args({"qtmesh", "scan", rootBa.constData(), "--include", "*.fbx"});
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
+}
+
+TEST(CLIPipelineCmdScan, AppliesAllCliRuleOverridesFromFlags)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "report:\n"
+        "  fail_on: error\n");
+    cfg.close();
+
+    const QString reportPath = QDir(tmpDir.path()).filePath("reports/full_overrides.json");
+    const QString sarifPath = QDir(tmpDir.path()).filePath("reports/full_overrides.sarif");
+    QFile::remove(reportPath);
+    QFile::remove(sarifPath);
+
+    QByteArray rootBa = rootPath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    QByteArray reportBa = reportPath.toUtf8();
+    QByteArray sarifBa = sarifPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(),
+                   "--config", configBa.constData(),
+                   "--fix",
+                   "--dry-run",
+                   "--include", "*.obj",
+                   "--exclude", "*.tmp,*.bak",
+                   "--allowed-formats", ".obj,.fbx",
+                   "--forbidden-extensions", ".exe,.tmp",
+                   "--max-vertices", "100",
+                   "--min-vertices", "1",
+                   "--max-meshes", "10",
+                   "--min-meshes", "0",
+                   "--max-materials", "10",
+                   "--min-materials", "0",
+                   "--max-anim-keyframes", "1000",
+                   "--min-anim-keyframes", "0",
+                   "--max-file-size-mb", "10",
+                   "--min-file-size-mb", "0",
+                   "--max-anim-duration", "60",
+                   "--min-anim-duration", "0",
+                   "--require-skeleton",
+                   "--no-require-animations",
+                   "--allow-embedded-textures",
+                   "--require-textures-exist",
+                   "--allow-missing-materials",
+                   "--file-name-case", "snake_case",
+                   "--require-animation-names", "idle,walk",
+                   "--require-bone-names", "Hips,Spine",
+                   "--fail-on", "never",
+                   "--token", "test-token",
+                   "--no-upload",
+                   "--report", reportBa.constData(),
+                   "--sarif", sarifBa.constData(),
+                   "--json"});
+
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(reportPath));
+    EXPECT_TRUE(QFile::exists(sarifPath));
 }
 
 TEST(CLIPipelineCmdScan, AutoDetectConfigWritesConfiguredReports)
