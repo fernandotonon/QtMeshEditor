@@ -2861,10 +2861,31 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
     float profile,
     const std::vector<float>& profilePointsIn)
 {
-    (void)segments; (void)profile; (void)profilePointsIn; // reserved for dome
-
     std::vector<int> newVertices;
     if (vertexIndices.empty() || width <= 0.0f) return newVertices;
+
+    segments = std::clamp(segments, 1, kMaxBevelSegments);
+    profile = std::clamp(profile, 0.0f, 1.0f);
+
+    // Build the per-interior-point profile values, same scheme as
+    // edge-bevel: an explicit vector of the right size is used directly;
+    // otherwise a sin-envelope fills in from the scalar `profile`.
+    std::vector<float> profilePoints;
+    if (segments > 1) {
+        profilePoints.resize(segments - 1, 0.5f);
+        if (profilePointsIn.size() == static_cast<size_t>(segments - 1)) {
+            for (size_t i = 0; i < profilePoints.size(); ++i)
+                profilePoints[i] = std::clamp(profilePointsIn[i], 0.0f, 1.0f);
+        } else {
+            const float kPi = 3.14159265358979323846f;
+            const float amp = profile - 0.5f;
+            for (int i = 1; i < segments; ++i) {
+                const float t = static_cast<float>(i)
+                              / static_cast<float>(segments);
+                profilePoints[i - 1] = 0.5f + amp * std::sin(kPi * t);
+            }
+        }
+    }
 
     // Multi-vertex support: when multiple vertices are passed, we bevel
     // them sequentially — one per internal iteration. Each iteration
@@ -2909,7 +2930,8 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             if (minBudget < width) perVertexWidth[i] = minBudget;
         }
         for (size_t i = 0; i < vertexIndices.size(); ++i) {
-            auto added = bevelVertices({vertexIndices[i]}, perVertexWidth[i]);
+            auto added = bevelVertices({vertexIndices[i]}, perVertexWidth[i],
+                                       segments, profile, profilePointsIn);
             newVertices.insert(newVertices.end(), added.begin(), added.end());
         }
         return newVertices;
@@ -2984,6 +3006,10 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
         std::vector<int> stepToCrease;   // interleaved creaseL/creaseR
         std::vector<int> creaseTargets;  // ring-ordered crease neighbors
         std::vector<char> isCrease;      // per ring step
+        // For segments > 1: chordChains[c] holds segments-1 intermediate
+        // vertex indices along the chord from crease c's offset to
+        // crease (c+1 % M)'s offset. Empty when segments == 1.
+        std::vector<std::vector<int>> chordChains;
         int subMeshIndex;                // for the new cap face
     };
     std::vector<VertBevelPlan> plans;
@@ -3118,10 +3144,159 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             plan.edgeOffsets[c] = idx;
         }
 
+        // Build chord intermediates between each adjacent pair of
+        // crease offsets. For segments=S we add S-1 intermediates per
+        // chord bulging toward v (positive profile) or away from v
+        // (negative). Linear along the chord; outward offset along the
+        // cap-plane normal (computed per-chord from its endpoints and
+        // v's position).
+        if (segments > 1 && plan.edgeOffsets.size() >= 3) {
+            const int M = static_cast<int>(plan.edgeOffsets.size());
+            plan.chordChains.resize(M);
+            // Scale the bulge so fully-convex lands at v (profile=1 →
+            // offset of half chord length toward v); anything less
+            // scales linearly. Keeps the look consistent with edge
+            // bevel where the scale is `w`.
+            for (int c = 0; c < M; ++c) {
+                int oA = plan.edgeOffsets[c];
+                int oB = plan.edgeOffsets[(c + 1) % M];
+                if (oA < 0 || oB < 0) continue;
+                const Ogre::Vector3 pA = m_vertices[oA].position;
+                const Ogre::Vector3 pB = m_vertices[oB].position;
+                const Ogre::Vector3 chord = pB - pA;
+                const float chordLen = chord.length();
+                // outward = from chord midpoint toward v, projected
+                // onto the perpendicular-to-chord direction (so the
+                // bulge is perpendicular to the chord, not along it).
+                Ogre::Vector3 outward = pV - (pA + pB) * 0.5f;
+                if (chordLen > 1e-6f) {
+                    const Ogre::Vector3 chordN = chord / chordLen;
+                    outward -= chordN * outward.dotProduct(chordN);
+                }
+                if (outward.length() > 1e-6f) outward.normalise();
+                else outward = Ogre::Vector3::ZERO;
+                // Magnitude: use the offset distance (same as edge-bevel's
+                // `w`), so the bulge is commensurate with the cut depth.
+                const float bulgeScale = offset;
+                plan.chordChains[c].reserve(segments - 1);
+                for (int i = 1; i < segments; ++i) {
+                    const float t = static_cast<float>(i)
+                                  / static_cast<float>(segments);
+                    const float pt = profilePoints[i - 1];
+                    const Ogre::Vector3 pos =
+                        pA + chord * t + outward * ((pt - 0.5f) * bulgeScale);
+                    HEVertex nvI = vProto;
+                    nvI.position = pos;
+                    int iIdx = static_cast<int>(m_vertices.size());
+                    m_vertices.push_back(nvI);
+                    newVertices.push_back(iIdx);
+                    plan.chordChains[c].push_back(iIdx);
+                }
+            }
+        }
+
         plans.push_back(std::move(plan));
     }
 
     if (plans.empty()) return newVertices;
+
+    // Reusable ear-clipping helper (used for both adjacent-face polygon
+    // retriangulation and cap-polygon emission). Polygon verts are HE
+    // vertex indices; refNrm gives the desired face-outward direction
+    // for winding.
+    auto earClipPoly = [&](const std::vector<int>& p,
+                           const Ogre::Vector3& refNrm,
+                           int subIdx) {
+        if (p.size() < 3) return;
+        if (p.size() == 3) {
+            appendTriangle(p[0], p[1], p[2], subIdx);
+            return;
+        }
+        Ogre::Vector3 nrm = refNrm;
+        if (nrm.length() < 1e-8f) nrm = Ogre::Vector3::UNIT_Y;
+        else nrm.normalise();
+        Ogre::Vector3 uu = std::abs(nrm.x) < 0.9f
+            ? Ogre::Vector3::UNIT_X.crossProduct(nrm)
+            : Ogre::Vector3::UNIT_Y.crossProduct(nrm);
+        uu.normalise();
+        Ogre::Vector3 vv = nrm.crossProduct(uu);
+        std::vector<Ogre::Vector2> pts2D;
+        pts2D.reserve(p.size());
+        for (int idx : p) {
+            const auto& pos = m_vertices[idx].position;
+            pts2D.emplace_back(pos.dotProduct(uu), pos.dotProduct(vv));
+        }
+        float area = 0.0f;
+        for (size_t i = 0; i < pts2D.size(); ++i) {
+            const auto& a = pts2D[i];
+            const auto& b = pts2D[(i + 1) % pts2D.size()];
+            area += a.x * b.y - b.x * a.y;
+        }
+        std::vector<int> poly = p;
+        std::vector<Ogre::Vector2> pxy = pts2D;
+        bool reversed = false;
+        if (area < 0.0f) {
+            std::reverse(poly.begin(), poly.end());
+            std::reverse(pxy.begin(), pxy.end());
+            reversed = true;
+        }
+        auto cross2 = [](const Ogre::Vector2& a,
+                         const Ogre::Vector2& b,
+                         const Ogre::Vector2& c) {
+            return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+        };
+        auto inTri = [&](const Ogre::Vector2& q,
+                         const Ogre::Vector2& a,
+                         const Ogre::Vector2& b,
+                         const Ogre::Vector2& c) {
+            float d1 = cross2(q, a, b);
+            float d2 = cross2(q, b, c);
+            float d3 = cross2(q, c, a);
+            bool neg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            bool pos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+            return !(neg && pos);
+        };
+        std::vector<bool> removed(poly.size(), false);
+        size_t remaining = poly.size();
+        size_t cur = 0;
+        int guard = 0;
+        const int lim = static_cast<int>(poly.size() * poly.size() + 10);
+        auto emit = [&](int a, int b, int c) {
+            if (reversed) appendTriangle(a, c, b, subIdx);
+            else          appendTriangle(a, b, c, subIdx);
+        };
+        while (remaining > 3 && guard++ < lim) {
+            while (removed[cur]) cur = (cur + 1) % poly.size();
+            size_t prev = (cur + poly.size() - 1) % poly.size();
+            while (removed[prev]) prev = (prev + poly.size() - 1) % poly.size();
+            size_t nxt = (cur + 1) % poly.size();
+            while (removed[nxt]) nxt = (nxt + 1) % poly.size();
+            const auto& A = pxy[prev];
+            const auto& B = pxy[cur];
+            const auto& C = pxy[nxt];
+            if (cross2(A, B, C) > 0.0f) {
+                bool isEar = true;
+                for (size_t i = 0; i < poly.size(); ++i) {
+                    if (removed[i] || i == prev || i == cur || i == nxt) continue;
+                    if (inTri(pxy[i], A, B, C)) { isEar = false; break; }
+                }
+                if (isEar) {
+                    emit(poly[prev], poly[cur], poly[nxt]);
+                    removed[cur] = true;
+                    --remaining;
+                    cur = prev;
+                    continue;
+                }
+            }
+            cur = nxt;
+        }
+        if (remaining == 3) {
+            size_t id[3]; size_t k = 0;
+            for (size_t i = 0; i < poly.size(); ++i)
+                if (!removed[i]) id[k++] = i;
+            if (k == 3) emit(poly[id[0]], poly[id[1]], poly[id[2]]);
+        }
+    };
 
     // Build a per-edge "offset-at-v-toward-t" map. For each plan, plan's
     // vertex v has offsets[c] along the edge v→creaseTargets[c]. If the
@@ -3233,6 +3408,52 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             }
             polygon.push_back(o_R);
 
+            // Splice chord intermediates between o_R and the implicit
+            // close-back-to-o_L, so the adjacent face's notch boundary
+            // follows the cap curve instead of a straight diagonal.
+            // Skip when flat (profile 0.5 collinear with chord — the
+            // same "shaped" test edge-bevel uses) to preserve manifold
+            // in the single-segment case.
+            const int M = static_cast<int>(plan.edgeOffsets.size());
+            // chordChains[cL] walks o_L → ... → o_R if cR == (cL+1)%M.
+            // Otherwise walks backward (o_R → ... → o_L) through
+            // chordChains[cR]. We want the closing path o_R → o_L, so
+            // insert intermediates in the direction that bridges that.
+            if (!plan.chordChains.empty()
+                && cL >= 0 && cR >= 0 && cL != cR) {
+                auto isShaped = [&](const std::vector<int>& chain,
+                                    int oL, int oR) {
+                    if (chain.empty()) return false;
+                    const auto& pL = m_vertices[oL].position;
+                    const auto& pR = m_vertices[oR].position;
+                    const auto lr = pR - pL;
+                    const float lrLen2 = lr.squaredLength();
+                    if (lrLen2 < 1e-12f) return false;
+                    for (int idx : chain) {
+                        const auto& p = m_vertices[idx].position;
+                        const auto d = p - pL;
+                        const auto proj = lr * (d.dotProduct(lr) / lrLen2);
+                        if ((d - proj).squaredLength() > 1e-8f) return true;
+                    }
+                    return false;
+                };
+                if ((cL + 1) % M == cR) {
+                    // chain runs o_L → ... → o_R. Close back via reverse.
+                    const auto& chain = plan.chordChains[cL];
+                    if (isShaped(chain, o_L, o_R)) {
+                        for (auto it = chain.rbegin(); it != chain.rend(); ++it)
+                            polygon.push_back(*it);
+                    }
+                } else if ((cR + 1) % M == cL) {
+                    // chain runs o_R → ... → o_L. Close-back walks it
+                    // in forward order.
+                    const auto& chain = plan.chordChains[cR];
+                    if (isShaped(chain, o_R, o_L)) {
+                        for (int idx : chain) polygon.push_back(idx);
+                    }
+                }
+            }
+
             // Dedupe consecutive duplicates and positional matches.
             std::vector<int> dedup;
             for (int idx : polygon) {
@@ -3247,9 +3468,22 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             if (dedup.size() < 3) { cursor = nextStep; continue; }
 
             const int sub = m_faces[plan.ring[runSteps[0]].face].subMeshIndex;
-            for (size_t i = 1; i + 1 < dedup.size(); ++i) {
-                appendTriangle(dedup[0], dedup[i], dedup[i + 1], sub);
+            // When the profile is shaped (chord intermediates spliced
+            // in), the polygon is concave and a plain fan from dedup[0]
+            // would draw a straight diagonal across the arc. Use
+            // ear-clipping against the face's normal so concave polys
+            // triangulate without artificial diagonals.
+            Ogre::Vector3 refNrm = Ogre::Vector3::ZERO;
+            {
+                auto fv = faceVertices(plan.ring[runSteps[0]].face);
+                if (fv.size() == 3) {
+                    const auto& p0 = m_vertices[fv[0]].position;
+                    const auto& p1 = m_vertices[fv[1]].position;
+                    const auto& p2 = m_vertices[fv[2]].position;
+                    refNrm = (p1 - p0).crossProduct(p2 - p0);
+                }
             }
+            earClipPoly(dedup, refNrm, sub);
             for (int s : runSteps) {
                 facesToRemove.insert(plan.ring[s].face);
             }
@@ -3257,17 +3491,54 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             cursor = nextStep;
         }
 
-        // Cap N-gon: fan from creaseTarget[0]'s offset across the
-        // remaining offsets in ring order. creaseOrder walks CCW around
-        // v from outside the solid, so this CCW-from-outside winding
-        // from inside-v's-old-position fans correctly as a face
-        // replacing v.
-        const int M = static_cast<int>(plan.edgeOffsets.size());
-        for (int i = 1; i + 1 < M; ++i) {
-            appendTriangle(plan.edgeOffsets[0],
-                           plan.edgeOffsets[i],
-                           plan.edgeOffsets[i + 1],
-                           plan.subMeshIndex);
+        // Cap polygon: walk ring-ordered offsets, inserting each chord's
+        // intermediates between consecutive offsets. For segments=1 the
+        // chains are empty and this reduces to the plain N-gon fan.
+        // Flat-profile chains are collinear with their chord — skip
+        // them so the cap stays a simple N-gon with no degenerate ear
+        // triangles.
+        const int Mcap = static_cast<int>(plan.edgeOffsets.size());
+        auto chordIsShaped = [&](int c) {
+            if (c < 0 || c >= static_cast<int>(plan.chordChains.size())) return false;
+            const auto& chain = plan.chordChains[c];
+            if (chain.empty()) return false;
+            int oA = plan.edgeOffsets[c];
+            int oB = plan.edgeOffsets[(c + 1) % Mcap];
+            if (oA < 0 || oB < 0) return false;
+            const auto& pA = m_vertices[oA].position;
+            const auto& pB = m_vertices[oB].position;
+            const auto ab = pB - pA;
+            const float lenSq = ab.squaredLength();
+            if (lenSq < 1e-12f) return false;
+            for (int idx : chain) {
+                const auto& p = m_vertices[idx].position;
+                const auto d = p - pA;
+                const auto proj = ab * (d.dotProduct(ab) / lenSq);
+                if ((d - proj).squaredLength() > 1e-8f) return true;
+            }
+            return false;
+        };
+        std::vector<int> capPoly;
+        capPoly.reserve(Mcap * segments);
+        for (int c = 0; c < Mcap; ++c) {
+            capPoly.push_back(plan.edgeOffsets[c]);
+            if (segments > 1 && chordIsShaped(c)) {
+                for (int idx : plan.chordChains[c])
+                    capPoly.push_back(idx);
+            }
+        }
+        if (capPoly.size() >= 3) {
+            // Cap normal: approximate as the average of the ring steps'
+            // outward directions toward v (robust for any valence).
+            Ogre::Vector3 capNrm = Ogre::Vector3::ZERO;
+            for (int c = 0; c + 1 < Mcap; ++c) {
+                const auto& pA = m_vertices[plan.edgeOffsets[0]].position;
+                const auto& pB = m_vertices[plan.edgeOffsets[c + 1]].position;
+                const auto& pC = m_vertices[plan.edgeOffsets[
+                    (c + 1) % Mcap == 0 ? 0 : (c + 2) % Mcap]].position;
+                capNrm += (pB - pA).crossProduct(pC - pA);
+            }
+            earClipPoly(capPoly, capNrm, plan.subMeshIndex);
         }
     }
 

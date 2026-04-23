@@ -2996,3 +2996,112 @@ TEST(HalfEdgeMeshStandalone, BevelVertexOffsetIsClampedToHalfEdge) {
     }
     EXPECT_TRUE(he.validate());
 }
+
+// ===========================================================================
+// Tests: vertex bevel with segments > 1 (rounded cap)
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, BevelVertexSegments2FlatStillManifold) {
+    // Flat profile (0.5) with segments=2 should produce the same
+    // topology count as a flat single-segment cap, because intermediates
+    // are collinear with the chord and get deduped during ear-clip.
+    // We just assert manifold + no boundary edges.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    auto newVerts = he.bevelVertices({5}, 0.1f, 2, 0.5f);
+    ASSERT_FALSE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+    const auto stats = statsOf(back);
+    EXPECT_EQ(stats.boundaryEdges, 0u);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexSegments3ConvexRoundedCap) {
+    // Convex profile (1.0) with segments=3: each of the 3 cap chords
+    // gets 2 intermediates bulging TOWARD where v5 used to be, so the
+    // new verts end up closer to (1,1,1) than the straight-chord
+    // offsets do.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    auto newVerts = he.bevelVertices({5}, 0.1f, 3, 1.0f);
+    ASSERT_FALSE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+    const auto stats = statsOf(back);
+    EXPECT_EQ(stats.boundaryEdges, 0u);
+
+    // The chain intermediates should sit closer to v5 than the straight
+    // chord midpoints. Straight midpoint between any two crease offsets
+    // is at distance ≈ 0.0707 from v5 (for width=0.1 and valence-3
+    // offsets at right angles). A convex intermediate should be closer.
+    const Ogre::Vector3 v5(1, 1, 1);
+    int closerThanStraight = 0;
+    for (int v : newVerts) {
+        const auto& p = he.vertex(v).position;
+        if (p.distance(v5) < 0.07f) ++closerThanStraight;
+    }
+    EXPECT_GT(closerThanStraight, 0)
+        << "convex cap should push at least one intermediate toward v5";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexSegments3ConcaveCupCap) {
+    // Concave profile (0.0) with segments=3: intermediates bulge AWAY
+    // from v5, forming a "cup" shape dipping into the solid. The cap's
+    // intermediates should sit FARTHER from v5 than the straight-chord
+    // offsets.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    auto newVerts = he.bevelVertices({5}, 0.1f, 3, 0.0f);
+    ASSERT_FALSE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+    const auto stats = statsOf(back);
+    EXPECT_EQ(stats.boundaryEdges, 0u);
+
+    const Ogre::Vector3 v5(1, 1, 1);
+    int farther = 0;
+    for (int v : newVerts) {
+        const auto& p = he.vertex(v).position;
+        // Each crease offset sits at distance 0.1 from v5; a concave
+        // intermediate should be FARTHER from v5 than that.
+        if (p.distance(v5) > 0.11f) ++farther;
+    }
+    EXPECT_GT(farther, 0)
+        << "concave cap should push at least one intermediate away from v5";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexSegments4ManifoldWithPerPointProfile) {
+    // Per-point profile values stress the splice/ear-clip path.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    std::vector<float> points = {0.2f, 0.8f, 0.3f};
+    auto newVerts = he.bevelVertices({5}, 0.1f, 4, 0.5f, points);
+    ASSERT_FALSE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexSegmentsClampsOverUpperLimit) {
+    // Requesting segments=100 should clamp to the MAX_BEVEL_SEGMENTS=16
+    // cap used by edge bevel. No crashes, manifold output.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    auto newVerts = he.bevelVertices({5}, 0.1f, 100, 0.5f);
+    EXPECT_TRUE(he.validate());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
