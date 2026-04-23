@@ -12,7 +12,7 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 [![Vulnerabilities](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=vulnerabilities)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 [![Duplicated Lines (%)](https://sonarcloud.io/api/project_badges/measure?project=fernandotonon_QtMeshEditor&metric=duplicated_lines_density)](https://sonarcloud.io/summary/new_code?id=fernandotonon_QtMeshEditor)
 
-#### QtMesh Badges
+#### QtMesh Cloud Badges
 [![qtmesh status](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-status.svg)](https://qtmesh.dev)
 [![qtmesh score](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-score.svg)](https://qtmesh.dev)
 [![qtmesh errors](https://api.qtmesh.dev/v1/u/u-28680b9c/p/qtmesheditor/badges/qtmesh-errors.svg)](https://qtmesh.dev)
