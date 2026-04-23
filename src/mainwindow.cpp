@@ -577,6 +577,113 @@ void MainWindow::initToolBar()
     });
     ui->objectsToolbar->addWidget(aiChatButton);
 
+    // Topology tools — toolbar shortcuts for Extrude / Bevel. They
+    // delegate to the same EditModeController actions the Inspector
+    // buttons used to trigger, and enable/disable themselves based on
+    // the current edit-mode state so the Inspector can be slimmed down.
+    //
+    // Styling: matches the primitive icons' light-green gradient look.
+    // Disabled state desaturates to a subtle gray so the buttons don't
+    // shout when they're not actionable (e.g., Extrude in vertex mode).
+    auto* editCtrlForTopo = EditModeController::instance();
+
+    // Shared stylesheet for the glyph buttons. Uses a CSS linear-gradient
+    // on the text color (via color: qlineargradient isn't supported in
+    // widgets — Qt clips to a single color — so we pick the midtone
+    // green of the icon family for the enabled state and a muted gray
+    // for the disabled state).
+    const char* topoBtnStyle = R"(
+        QToolButton {
+            color: #7bbd2a;
+            border: none;
+            padding: 2px 4px;
+        }
+        QToolButton:hover:enabled {
+            color: #9adc4a;
+        }
+        QToolButton:pressed:enabled {
+            color: #5a9a1a;
+        }
+        QToolButton:disabled {
+            color: #b8b8b8;
+        }
+    )";
+
+    // Extrude: face mode only.
+    auto extrudeButton = new QToolButton(ui->objectsToolbar);
+    extrudeButton->setText("\u2B06");  // ⬆ (extrude = push outward)
+    const QString extrudeShortcutLabel =
+#ifdef Q_OS_MACOS
+        QStringLiteral("Cmd+E");
+#else
+        QStringLiteral("Ctrl+E");
+#endif
+    extrudeButton->setToolTip(tr("Extrude selected faces (%1)").arg(extrudeShortcutLabel));
+    QFont topoFont = extrudeButton->font();
+    topoFont.setPixelSize(16);
+    topoFont.setBold(true);
+    extrudeButton->setFont(topoFont);
+    extrudeButton->setStyleSheet(topoBtnStyle);
+    // On successful extrude, auto-switch to the Translate tool so the
+    // user can immediately move the freshly-extruded geometry.
+    connect(extrudeButton, &QToolButton::clicked, this, [this]() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Extrude");
+        auto* c = EditModeController::instance();
+        if (c->extrudeSelection()) {
+            setTransformState(TransformOperator::TS_TRANSLATE);
+        }
+    });
+    // QToolBar::addWidget returns the QAction that wraps the widget.
+    // Hiding the widget directly doesn't affect the toolbar's layout —
+    // we have to toggle the action's visibility instead.
+    QAction* extrudeAction = ui->objectsToolbar->addWidget(extrudeButton);
+
+    // Bevel: edge OR vertex mode.
+    auto bevelButton = new QToolButton(ui->objectsToolbar);
+    bevelButton->setText("\u25E2");  // ◢ (cut corner)
+    const QString bevelShortcutLabel =
+#ifdef Q_OS_MACOS
+        QStringLiteral("Cmd+B");
+#else
+        QStringLiteral("Ctrl+B");
+#endif
+    bevelButton->setToolTip(tr("Bevel selected edges / vertices (%1)").arg(bevelShortcutLabel));
+    bevelButton->setFont(topoFont);
+    bevelButton->setStyleSheet(topoBtnStyle);
+    connect(bevelButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Bevel");
+        EditModeController::instance()->bevelSelection();
+    });
+    QAction* bevelAction = ui->objectsToolbar->addWidget(bevelButton);
+
+    // Context-aware visibility + enabled:
+    //  - Hidden entirely when NOT in edit mode.
+    //  - In edit mode: stay visible but only enable when the current
+    //    mode matches AND the relevant element type actually has a
+    //    non-empty selection.
+    auto refreshTopoButtons = [extrudeButton, bevelButton,
+                               extrudeAction, bevelAction]() {
+        auto* c = EditModeController::instance();
+        const bool active = c->isEditModeActive();
+        extrudeAction->setVisible(active);
+        bevelAction->setVisible(active);
+        if (!active) return;
+        const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
+        const bool hasFaces = c->selectedFaceCount() > 0;
+        const bool hasEdges = c->selectedEdgeCount() > 0;
+        const bool hasVerts = c->selectedVertexCount() > 0;
+        extrudeButton->setEnabled(mode == 2 && hasFaces);
+        bevelButton->setEnabled((mode == 1 && hasEdges)
+                             || (mode == 0 && hasVerts));
+    };
+    refreshTopoButtons();
+    connect(editCtrlForTopo, &EditModeController::editModeChanged,
+            this, refreshTopoButtons);
+    connect(editCtrlForTopo, &EditModeController::selectionModeChanged,
+            this, refreshTopoButtons);
+    connect(editCtrlForTopo, &EditModeController::editSelectionChanged,
+            this, refreshTopoButtons);
+
     connect(pAddCube,       SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createCube()));
     connect(pAddSphere,     SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createSphere()));
     connect(pAddPlane,      SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createPlane()));
