@@ -1555,23 +1555,159 @@ bool EditModeController::applyBevelTopology(
     return true;
 }
 
+bool EditModeController::applyBevelVertexTopology(
+    const std::vector<int>& vertexIndices, float width,
+    int segments, const std::vector<float>& profilePoints)
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+        return false;
+    if (vertexIndices.empty() || width <= 0.0f)
+        return false;
+
+    HalfEdgeMesh heMesh;
+    if (!heMesh.buildFromEditableMesh(*m_editableMesh))
+        return false;
+
+    // Map global selection indices to HE indices by position match.
+    // HE indexing preserves (submesh, local) so a straight offset walk
+    // works: global = sum of prior subs' vertex counts + local.
+    // We instead just match by position because global-index plumbing
+    // elsewhere (selection set) stores them that way already.
+    std::vector<int> heIndices;
+    heIndices.reserve(vertexIndices.size());
+    {
+        int globalIdx = 0;
+        auto& subs = m_editableMesh->subMeshes();
+        for (size_t s = 0; s < subs.size(); ++s) {
+            for (size_t v = 0; v < subs[s].vertices.size(); ++v) {
+                int g = globalIdx + static_cast<int>(v);
+                if (std::find(vertexIndices.begin(), vertexIndices.end(), g)
+                    != vertexIndices.end()) {
+                    // The HE mesh indexes one HEVertex per (submesh, local)
+                    // in the order subs were built — same as `globalIdx + v`.
+                    heIndices.push_back(g);
+                }
+            }
+            globalIdx += static_cast<int>(subs[s].vertices.size());
+        }
+    }
+    if (heIndices.empty()) return false;
+
+    std::vector<int> newHEVertices =
+        heMesh.bevelVertices(heIndices, width, segments, 0.5f, profilePoints);
+    if (newHEVertices.empty())
+        return false;
+
+    std::vector<Ogre::Vector3> newVertPositions;
+    newVertPositions.reserve(newHEVertices.size());
+    for (int heVert : newHEVertices)
+        newVertPositions.push_back(heMesh.vertex(heVert).position);
+
+    EditableMesh newMesh;
+    if (!heMesh.toEditableMesh(newMesh))
+        return false;
+
+    m_editableMesh->subMeshes() = std::move(newMesh.subMeshes());
+
+    if (m_normalsMode == 0)
+        m_editableMesh->recalculateNormals();
+    else
+        m_editableMesh->recalculateNormalsFlat();
+
+    if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
+        return false;
+
+    std::vector<std::string> preMats;
+    preMats.reserve(m_editEntity->getNumSubEntities());
+    for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i)
+        preMats.push_back(m_editEntity->getSubEntity(i)->getMaterialName());
+
+    m_editEntity->_deinitialise();
+    m_editEntity->_initialise(true);
+
+    for (unsigned int i = 0;
+         i < m_editEntity->getNumSubEntities() && i < preMats.size(); ++i) {
+        if (!preMats[i].empty())
+            m_editEntity->getSubEntity(i)->setMaterialName(preMats[i]);
+    }
+
+    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (shaderGen) {
+        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
+            if (!matName.empty())
+                shaderGen->invalidateMaterial(
+                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
+        }
+    }
+
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    std::set<int> newGlobalVerts;
+    for (const auto& pos : newVertPositions) {
+        int globalIdx = 0;
+        bool found = false;
+        for (size_t s = 0; s < m_editableMesh->subMeshes().size() && !found; ++s) {
+            const auto& verts = m_editableMesh->subMeshes()[s].vertices;
+            for (size_t v = 0; v < verts.size(); ++v) {
+                if (verts[v].position.squaredDistance(pos) < 1e-8f) {
+                    newGlobalVerts.insert(globalIdx + static_cast<int>(v));
+                    found = true;
+                    break;
+                }
+            }
+            globalIdx += static_cast<int>(verts.size());
+        }
+    }
+    m_selectedVertices = newGlobalVerts;
+
+    refreshNormalVisualizer();
+    updateSelectionOverlay();
+    validateMesh();
+
+    emit meshDataChanged();
+    emit editSelectionChanged();
+    emit selectionModeChanged();
+    emit editModeChanged();
+
+    return true;
+}
+
+bool EditModeController::reapplyActiveBevel(
+    float width, int segments, const std::vector<float>& profilePoints)
+{
+    if (!m_bevelSession.active) return false;
+    if (m_bevelSession.kind == BevelSession::Vertices)
+        return applyBevelVertexTopology(m_bevelSession.targetVertices,
+                                        width, segments, profilePoints);
+    return applyBevelTopology(m_bevelSession.targetEdges, width,
+                              segments, profilePoints);
+}
+
 bool EditModeController::beginBevel()
 {
     if (m_bevelSession.active)
         return false;
     if (!m_editModeActive || !m_editableMesh || !m_editEntity)
         return false;
-    if (m_selectionMode != EdgeMode || m_selectedEdges.empty())
-        return false;
+    const bool edgeValid = (m_selectionMode == EdgeMode && !m_selectedEdges.empty());
+    const bool vertValid = (m_selectionMode == VertexMode && !m_selectedVertices.empty());
+    if (!edgeValid && !vertValid) return false;
 
     SentryReporter::addBreadcrumb("edit_mode", "Bevel: begin session");
 
     BevelSession s;
+    s.kind = edgeValid ? BevelSession::Edges : BevelSession::Vertices;
     s.originalSubMeshes = m_editableMesh->subMeshes();
     s.origSelectedVertices = m_selectedVertices;
     s.origSelectedEdges = m_selectedEdges;
     s.origSelectedFaces = m_selectedFaces;
-    s.targetEdges.assign(m_selectedEdges.begin(), m_selectedEdges.end());
+    if (edgeValid)
+        s.targetEdges.assign(m_selectedEdges.begin(), m_selectedEdges.end());
+    else
+        s.targetVertices.assign(m_selectedVertices.begin(), m_selectedVertices.end());
 
     // Compute gizmo pivot (centroid of edge endpoints) and axis (averaged
     // adjacent-face normal at those edges). Uses the pre-bevel mesh so the
@@ -1593,20 +1729,31 @@ bool EditModeController::beginBevel()
             }
             return Ogre::Vector3::ZERO;
         };
-        for (const auto& [v1, v2] : s.targetEdges) {
-            Ogre::Vector3 a = posOf(v1);
-            Ogre::Vector3 b = posOf(v2);
-            pivot += (a + b) * 0.5f;
-            ++pivotCount;
+        if (s.kind == BevelSession::Edges) {
+            for (const auto& [v1, v2] : s.targetEdges) {
+                Ogre::Vector3 a = posOf(v1);
+                Ogre::Vector3 b = posOf(v2);
+                pivot += (a + b) * 0.5f;
+                ++pivotCount;
+            }
+        } else {
+            for (int vIdx : s.targetVertices) {
+                pivot += posOf(vIdx);
+                ++pivotCount;
+            }
         }
         if (pivotCount > 0) pivot /= static_cast<float>(pivotCount);
 
-        // Sum per-face normals of triangles containing any selected-edge
+        // Sum per-face normals of triangles containing any selected
         // vertex. Gives a reasonable "outward" axis even for irregular fans.
         std::set<int> edgeVerts;
-        for (const auto& [v1, v2] : s.targetEdges) {
-            edgeVerts.insert(v1);
-            edgeVerts.insert(v2);
+        if (s.kind == BevelSession::Edges) {
+            for (const auto& [v1, v2] : s.targetEdges) {
+                edgeVerts.insert(v1);
+                edgeVerts.insert(v2);
+            }
+        } else {
+            for (int vIdx : s.targetVertices) edgeVerts.insert(vIdx);
         }
         int vertOffset = 0;
         for (const auto& sub : subs) {
@@ -1632,7 +1779,10 @@ bool EditModeController::beginBevel()
     s.axis = (normalSum.length() > 1e-6f) ? normalSum.normalisedCopy() : Ogre::Vector3::UNIT_Y;
     s.width = 0.05f; // 2.5% of a 2-unit cube — visible initial chamfer
 
-    if (!applyBevelTopology(s.targetEdges, s.width)) {
+    const bool applied = (s.kind == BevelSession::Edges)
+        ? applyBevelTopology(s.targetEdges, s.width)
+        : applyBevelVertexTopology(s.targetVertices, s.width);
+    if (!applied) {
         // Failed — undo any partial state by restoring the snapshot.
         m_editableMesh->subMeshes() = std::move(s.originalSubMeshes);
         m_selectedVertices = std::move(s.origSelectedVertices);
@@ -1725,8 +1875,8 @@ void EditModeController::updateBevelWidth(float width)
     m_selectedEdges = m_bevelSession.origSelectedEdges;
     m_selectedFaces = m_bevelSession.origSelectedFaces;
 
-    if (applyBevelTopology(m_bevelSession.targetEdges, width,
-                           m_bevelSession.segments, m_bevelSession.profilePoints))
+    if (reapplyActiveBevel(width, m_bevelSession.segments,
+                           m_bevelSession.profilePoints))
         m_bevelSession.width = width;
 }
 
@@ -1773,8 +1923,7 @@ void EditModeController::updateBevelSegments(int segments)
     m_selectedEdges = m_bevelSession.origSelectedEdges;
     m_selectedFaces = m_bevelSession.origSelectedFaces;
 
-    if (applyBevelTopology(m_bevelSession.targetEdges, m_bevelSession.width,
-                           segments, newPoints)) {
+    if (reapplyActiveBevel(m_bevelSession.width, segments, newPoints)) {
         m_bevelSession.segments = segments;
         m_bevelSession.profilePoints = std::move(newPoints);
         emit bevelProfilePointsChanged();
@@ -1799,7 +1948,7 @@ void EditModeController::updateBevelProfilePoint(int index, float value)
     m_selectedEdges = m_bevelSession.origSelectedEdges;
     m_selectedFaces = m_bevelSession.origSelectedFaces;
 
-    if (applyBevelTopology(m_bevelSession.targetEdges, m_bevelSession.width,
+    if (reapplyActiveBevel(m_bevelSession.width,
                            m_bevelSession.segments, newPoints)) {
         m_bevelSession.profilePoints = std::move(newPoints);
         emit bevelProfilePointsChanged();
@@ -1819,7 +1968,7 @@ void EditModeController::resetBevelProfile()
     m_selectedEdges = m_bevelSession.origSelectedEdges;
     m_selectedFaces = m_bevelSession.origSelectedFaces;
 
-    if (applyBevelTopology(m_bevelSession.targetEdges, m_bevelSession.width,
+    if (reapplyActiveBevel(m_bevelSession.width,
                            m_bevelSession.segments, newPoints)) {
         m_bevelSession.profilePoints = std::move(newPoints);
         emit bevelProfilePointsChanged();

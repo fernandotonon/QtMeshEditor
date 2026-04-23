@@ -530,6 +530,10 @@ private:
     // Bevel session state — populated on beginBevel, consumed on commit/cancel.
     struct BevelSession {
         bool active = false;
+        // What kind of bevel this session is operating on. Decides which
+        // HalfEdgeMesh API applyBevelTopology calls.
+        enum Kind { Edges, Vertices };
+        Kind kind = Edges;
         // Snapshot of submeshes before any bevel was applied. Used to restart
         // the bevel at a new width and to restore on cancel or undo.
         std::vector<EditableSubMesh> originalSubMeshes;
@@ -537,9 +541,10 @@ private:
         std::set<int> origSelectedVertices;
         std::set<std::pair<int,int>> origSelectedEdges;
         std::set<int> origSelectedFaces;
-        // The edges targeted by the bevel, captured so updateBevelWidth can
-        // re-run against the same topology on each drag tick.
+        // Kind == Edges: the edges targeted by the bevel.
         std::vector<std::pair<int,int>> targetEdges;
+        // Kind == Vertices: the vertex indices targeted by the bevel.
+        std::vector<int> targetVertices;
         Ogre::Vector3 pivot = Ogre::Vector3::ZERO; ///< Gizmo pivot (chamfer region center).
         Ogre::Vector3 axis = Ogre::Vector3::UNIT_Y; ///< Gizmo axis (averaged surface normal).
         float width = 0.0f;                         ///< Currently-applied width.
@@ -558,6 +563,20 @@ private:
                             float width,
                             int segments = 1,
                             const std::vector<float>& profilePoints = {});
+
+    /// Vertex-bevel variant: applies bevelVertices on the given vertex
+    /// indices and propagates the result through the same mesh-rebuild
+    /// pipeline as applyBevelTopology.
+    bool applyBevelVertexTopology(const std::vector<int>& vertexIndices,
+                                  float width,
+                                  int segments = 1,
+                                  const std::vector<float>& profilePoints = {});
+
+    /// Dispatcher used by updateBevelWidth/Segments/Profile. Reads
+    /// m_bevelSession.kind and calls the right applyBevel*Topology.
+    bool reapplyActiveBevel(float width,
+                            int segments,
+                            const std::vector<float>& profilePoints);
 
     /// World-space pivot (entity transform applied to session.pivot).
     Ogre::Vector3 bevelGizmoWorldOrigin() const;
