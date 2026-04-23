@@ -1968,6 +1968,7 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_CountModeGeneratesAndExportsLods)
 
     const QString fixtureSkeleton = testDataDir() + "/robot.skeleton";
     if (QFile::exists(fixtureSkeleton)) {
+        // Keep sibling skeleton next to the copied mesh so Ogre can resolve links in CI.
         const QString sourceSkeleton = sourceDir.filePath("robot.skeleton");
         QFile::remove(sourceSkeleton);
         ASSERT_TRUE(QFile::copy(fixtureSkeleton, sourceSkeleton));
