@@ -529,10 +529,9 @@ Rectangle {
                 width: parent.width - 16
                 spacing: 4
 
-                // Segments (edge-bevel only — vertex bevel is flat for
-                // now; rounded-dome is a future extension).
+                // Segments — subdivides the chamfer/cap along a profile
+                // curve. Works in both edge and vertex modes.
                 Row {
-                    visible: EditModeController.selectionMode === 1
                     width: parent.width
                     spacing: 6
                     Text {
@@ -552,11 +551,9 @@ Rectangle {
                     }
                 }
 
-                // Profile shape — 2D graph control with one handle per
-                // interior segment. Only shown in edge mode with segments > 1.
+                // Profile shape — only meaningful with segments > 1.
                 Column {
-                    visible: EditModeController.selectionMode === 1
-                         && EditModeController.bevelSegmentsValue > 1
+                    visible: EditModeController.bevelSegmentsValue > 1
                     width: parent.width
                     spacing: 4
 
