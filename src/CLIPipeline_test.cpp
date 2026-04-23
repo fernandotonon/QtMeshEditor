@@ -10,7 +10,6 @@
 #include <vector>
 #include <OgreMeshManager.h>
 #include <OgreHardwareBufferManager.h>
-#include <OgreSkeletonManager.h>
 #include "MeshValidator.h"
 #include "MeshLodController.h"
 #include "SelectionSet.h"
@@ -772,81 +771,6 @@ static QString exportGeneratedTriangleMesh(const QString& baseName)
     manager->destroySceneNode(node);
     if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
         Ogre::MeshManager::getSingleton().remove(old);
-
-    if (exportRc != 0)
-        return QString();
-    return outFile;
-}
-
-static QString exportGeneratedWeldedCubeMesh(const QString& baseName)
-{
-    auto* manager = Manager::getSingletonPtr();
-    if (!manager)
-        return QString();
-
-    const std::string meshName = (baseName + "_mesh").toStdString();
-    const QString nodeName = baseName + "_node";
-
-    Ogre::MeshPtr mesh = createInMemoryWeldedCube(meshName);
-    Ogre::SceneNode* node = manager->addSceneNode(nodeName);
-    if (!node) {
-        if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
-            Ogre::MeshManager::getSingleton().remove(old);
-        return QString();
-    }
-
-    Ogre::Entity* entity = manager->createEntity(node, mesh);
-    if (!entity) {
-        manager->destroySceneNode(node);
-        if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
-            Ogre::MeshManager::getSingleton().remove(old);
-        return QString();
-    }
-
-    const QString outFile = QDir::tempPath() + "/" + baseName + ".mesh";
-    QFile::remove(outFile);
-    QFile::remove(QDir::tempPath() + "/" + baseName + ".material");
-
-    const int exportRc = MeshImporterExporter::exporter(node, outFile, "Ogre Mesh (*.mesh)");
-
-    manager->destroyAllAttachedMovableObjects(node);
-    manager->destroySceneNode(node);
-    if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
-        Ogre::MeshManager::getSingleton().remove(old);
-
-    if (exportRc != 0)
-        return QString();
-    return outFile;
-}
-
-static QString exportGeneratedAnimatedMesh(const QString& baseName)
-{
-    auto* manager = Manager::getSingletonPtr();
-    if (!manager)
-        return QString();
-
-    const std::string entityStem = (baseName + "_entity").toStdString();
-    Ogre::Entity* entity = createAnimatedTestEntity(entityStem);
-    if (!entity)
-        return QString();
-
-    Ogre::SceneNode* node = entity->getParentSceneNode();
-    if (!node)
-        return QString();
-
-    const QString outFile = QDir::tempPath() + "/" + baseName + ".mesh";
-    QFile::remove(outFile);
-    QFile::remove(QDir::tempPath() + "/" + baseName + ".material");
-
-    const int exportRc = MeshImporterExporter::exporter(node, outFile, "Ogre Mesh (*.mesh)");
-
-    manager->destroyAllAttachedMovableObjects(node);
-    manager->destroySceneNode(node);
-
-    if (auto oldMesh = Ogre::MeshManager::getSingleton().getByName(entityStem + "_mesh"))
-        Ogre::MeshManager::getSingleton().remove(oldMesh);
-    if (auto oldSkel = Ogre::SkeletonManager::getSingleton().getByName(entityStem + "_skel"))
-        Ogre::SkeletonManager::getSingleton().remove(oldSkel);
 
     if (exportRc != 0)
         return QString();
@@ -2033,9 +1957,22 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_InfoAndRemoveFromGeneratedMesh)
 
 TEST_F(CLIPipelineCmdLodTest, CmdLod_CountModeGeneratesAndExportsLods)
 {
-    const QString sourceFile = exportGeneratedWeldedCubeMesh("cli_lod_count_source");
-    ASSERT_FALSE(sourceFile.isEmpty());
-    ASSERT_TRUE(QFile::exists(sourceFile));
+    const QString fixtureMesh = testDataDir() + "/robot.mesh";
+    if (!QFile::exists(fixtureMesh)) GTEST_SKIP() << "Test data not found";
+
+    QTemporaryDir sourceDir;
+    ASSERT_TRUE(sourceDir.isValid());
+    const QString sourceFile = sourceDir.filePath("robot.mesh");
+    QFile::remove(sourceFile);
+    ASSERT_TRUE(QFile::copy(fixtureMesh, sourceFile));
+
+    const QString fixtureSkeleton = testDataDir() + "/robot.skeleton";
+    if (QFile::exists(fixtureSkeleton)) {
+        const QString sourceSkeleton = sourceDir.filePath("robot.skeleton");
+        QFile::remove(sourceSkeleton);
+        ASSERT_TRUE(QFile::copy(fixtureSkeleton, sourceSkeleton));
+    }
+
     QByteArray sourceBa = sourceFile.toUtf8();
 
     QTemporaryDir outDir;
@@ -2057,23 +1994,34 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_CountModeGeneratesAndExportsLods)
     QFile::remove(lod2);
     QFile::remove(outDir.filePath("count_out_lod1.material"));
     QFile::remove(outDir.filePath("count_out_lod2.material"));
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_lod_count_source.material");
 }
 
 TEST_F(CLIPipelineCmdLodTest, CmdLod_CountModeWithoutOutputUsesInputStem)
 {
-    const QString sourceFile = exportGeneratedWeldedCubeMesh("cli_lod_default_output_source");
-    ASSERT_FALSE(sourceFile.isEmpty());
-    ASSERT_TRUE(QFile::exists(sourceFile));
+    const QString fixtureMesh = testDataDir() + "/robot.mesh";
+    if (!QFile::exists(fixtureMesh)) GTEST_SKIP() << "Test data not found";
+
+    QTemporaryDir sourceDir;
+    ASSERT_TRUE(sourceDir.isValid());
+    const QString sourceFile = sourceDir.filePath("robot.mesh");
+    QFile::remove(sourceFile);
+    ASSERT_TRUE(QFile::copy(fixtureMesh, sourceFile));
+
+    const QString fixtureSkeleton = testDataDir() + "/robot.skeleton";
+    if (QFile::exists(fixtureSkeleton)) {
+        const QString sourceSkeleton = sourceDir.filePath("robot.skeleton");
+        QFile::remove(sourceSkeleton);
+        ASSERT_TRUE(QFile::copy(fixtureSkeleton, sourceSkeleton));
+    }
+
     QByteArray sourceBa = sourceFile.toUtf8();
 
-    const QString expectedLod1 = QDir::tempPath() + "/cli_lod_default_output_source_lod1.mesh";
-    const QString expectedLod2 = QDir::tempPath() + "/cli_lod_default_output_source_lod2.mesh";
+    const QString expectedLod1 = sourceDir.filePath("robot_lod1.mesh");
+    const QString expectedLod2 = sourceDir.filePath("robot_lod2.mesh");
     QFile::remove(expectedLod1);
     QFile::remove(expectedLod2);
-    QFile::remove(QDir::tempPath() + "/cli_lod_default_output_source_lod1.material");
-    QFile::remove(QDir::tempPath() + "/cli_lod_default_output_source_lod2.material");
+    QFile::remove(sourceDir.filePath("robot_lod1.material"));
+    QFile::remove(sourceDir.filePath("robot_lod2.material"));
 
     TestArgv args({"qtmesh", "lod", sourceBa.constData(), "--count", "2"});
     EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 0);
@@ -2081,10 +2029,8 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_CountModeWithoutOutputUsesInputStem)
 
     QFile::remove(expectedLod1);
     QFile::remove(expectedLod2);
-    QFile::remove(QDir::tempPath() + "/cli_lod_default_output_source_lod1.material");
-    QFile::remove(QDir::tempPath() + "/cli_lod_default_output_source_lod2.material");
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_lod_default_output_source.material");
+    QFile::remove(sourceDir.filePath("robot_lod1.material"));
+    QFile::remove(sourceDir.filePath("robot_lod2.material"));
 }
 
 TEST_F(CLIPipelineCmdLodTest, CmdLod_AutoModeOnTinyMeshReturnsNoGeneratedLevels)
@@ -2146,9 +2092,10 @@ TEST(CLIPipelineCmdPoseError, NonexistentFile)
 
 TEST_F(CLIPipelineCmdTest, CmdPose_SingleTimeExportFromAnimatedMesh)
 {
-    const QString sourceFile = exportGeneratedAnimatedMesh("cli_pose_single_source");
-    ASSERT_FALSE(sourceFile.isEmpty());
-    ASSERT_TRUE(QFile::exists(sourceFile));
+    const QString sourceFile = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(sourceFile)) GTEST_SKIP() << "Test data not found";
+    const QByteArray animName = firstAnimationNameForFile(sourceFile);
+    if (animName.isEmpty()) GTEST_SKIP() << "Could not discover animation name";
     QByteArray sourceBa = sourceFile.toUtf8();
 
     const QString outputFile = QDir::tempPath() + "/cli_pose_single.obj";
@@ -2156,22 +2103,21 @@ TEST_F(CLIPipelineCmdTest, CmdPose_SingleTimeExportFromAnimatedMesh)
     removeObjAndMtl(outputFile);
 
     TestArgv args({"qtmesh", "pose", sourceBa.constData(),
-                   "--animation", "TestAnim",
+                   "--animation", animName.constData(),
                    "--time", "0.5",
                    "-o", outBa.constData()});
     EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 0);
     EXPECT_TRUE(QFile::exists(outputFile));
 
     removeObjAndMtl(outputFile);
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_pose_single_source.material");
 }
 
 TEST_F(CLIPipelineCmdTest, CmdPose_CountExportWithPrintfPattern)
 {
-    const QString sourceFile = exportGeneratedAnimatedMesh("cli_pose_count_pattern_source");
-    ASSERT_FALSE(sourceFile.isEmpty());
-    ASSERT_TRUE(QFile::exists(sourceFile));
+    const QString sourceFile = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(sourceFile)) GTEST_SKIP() << "Test data not found";
+    const QByteArray animName = firstAnimationNameForFile(sourceFile);
+    if (animName.isEmpty()) GTEST_SKIP() << "Could not discover animation name";
     QByteArray sourceBa = sourceFile.toUtf8();
 
     const QString pattern = QDir::tempPath() + "/cli_pose_pattern_%02d.obj";
@@ -2181,7 +2127,7 @@ TEST_F(CLIPipelineCmdTest, CmdPose_CountExportWithPrintfPattern)
     removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_02.obj");
 
     TestArgv args({"qtmesh", "pose", sourceBa.constData(),
-                   "--animation", "TestAnim",
+                   "--animation", animName.constData(),
                    "--count", "3",
                    "-o", patternBa.constData()});
     EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 0);
@@ -2192,15 +2138,14 @@ TEST_F(CLIPipelineCmdTest, CmdPose_CountExportWithPrintfPattern)
     removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_00.obj");
     removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_01.obj");
     removeObjAndMtl(QDir::tempPath() + "/cli_pose_pattern_02.obj");
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_pose_count_pattern_source.material");
 }
 
 TEST_F(CLIPipelineCmdTest, CmdPose_CountExportWithoutPatternAddsFrameSuffix)
 {
-    const QString sourceFile = exportGeneratedAnimatedMesh("cli_pose_count_suffix_source");
-    ASSERT_FALSE(sourceFile.isEmpty());
-    ASSERT_TRUE(QFile::exists(sourceFile));
+    const QString sourceFile = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(sourceFile)) GTEST_SKIP() << "Test data not found";
+    const QByteArray animName = firstAnimationNameForFile(sourceFile);
+    if (animName.isEmpty()) GTEST_SKIP() << "Could not discover animation name";
     QByteArray sourceBa = sourceFile.toUtf8();
 
     const QString outputFile = QDir::tempPath() + "/cli_pose_suffix.obj";
@@ -2209,7 +2154,7 @@ TEST_F(CLIPipelineCmdTest, CmdPose_CountExportWithoutPatternAddsFrameSuffix)
     removeObjAndMtl(QDir::tempPath() + "/cli_pose_suffix_01.obj");
 
     TestArgv args({"qtmesh", "pose", sourceBa.constData(),
-                   "--animation", "TestAnim",
+                   "--animation", animName.constData(),
                    "--count", "2",
                    "-o", outBa.constData()});
     EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 0);
@@ -2218,15 +2163,12 @@ TEST_F(CLIPipelineCmdTest, CmdPose_CountExportWithoutPatternAddsFrameSuffix)
 
     removeObjAndMtl(QDir::tempPath() + "/cli_pose_suffix_00.obj");
     removeObjAndMtl(QDir::tempPath() + "/cli_pose_suffix_01.obj");
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_pose_count_suffix_source.material");
 }
 
 TEST_F(CLIPipelineCmdTest, CmdPose_AnimationNotFoundOnValidAnimatedSource)
 {
-    const QString sourceFile = exportGeneratedAnimatedMesh("cli_pose_missing_anim_source");
-    ASSERT_FALSE(sourceFile.isEmpty());
-    ASSERT_TRUE(QFile::exists(sourceFile));
+    const QString sourceFile = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(sourceFile)) GTEST_SKIP() << "Test data not found";
     QByteArray sourceBa = sourceFile.toUtf8();
 
     const QString outputFile = QDir::tempPath() + "/cli_pose_missing_anim.obj";
@@ -2240,8 +2182,6 @@ TEST_F(CLIPipelineCmdTest, CmdPose_AnimationNotFoundOnValidAnimatedSource)
     EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 1);
 
     removeObjAndMtl(outputFile);
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_pose_missing_anim_source.material");
 }
 
 TEST_F(CLIPipelineCmdTest, CmdPose_NoSkeletonMeshReturnsError)
