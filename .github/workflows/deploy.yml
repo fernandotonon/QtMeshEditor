@@ -1990,6 +1990,7 @@ jobs:
           # (retrying that is pointless; the token lacks permissions).
           $submitOk = $false
           $authErrorSeen = $false
+          $lastOutput = @()
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             Write-Host "Submitting WinGet manifest for version $ver (attempt $attempt)..."
             $output = & .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
@@ -1997,6 +1998,7 @@ jobs:
               --urls $url `
               --submit `
               --token $env:WINGET_TOKEN 2>&1
+            $lastOutput = $output
             # Echo the tool's output so users can read it in the logs.
             $output | ForEach-Object { Write-Host $_ }
             if ($LASTEXITCODE -eq 0) {
@@ -2026,6 +2028,51 @@ jobs:
             exit 1
           }
           Write-Host "WinGet PR submitted successfully."
+
+          # Parse the PR number out of wingetcreate's success output and
+          # post a follow-up comment on the winget-pkgs PR. The default
+          # body is Microsoft's contributor checklist (same for every
+          # submission); this comment gives the reviewer a pointer to
+          # the QtMeshEditor release notes + flags the PR as automated.
+          $prUrl = $null
+          foreach ($line in $lastOutput) {
+            if ($line -match 'Pull request.*?(https://github\.com/microsoft/winget-pkgs/pull/(\d+))') {
+              $prUrl    = $Matches[1]
+              $prNumber = [int]$Matches[2]
+              break
+            }
+          }
+          if (-not $prUrl) {
+            Write-Host "::warning::Submit succeeded but no PR URL was parsed from wingetcreate output — skipping context comment."
+          } else {
+            Write-Host "Posting context comment on $prUrl ..."
+            $releaseUrl = "https://github.com/fernandotonon/QtMeshEditor/releases/tag/$rawTag"
+            $commentBody = @"
+Automated by the QtMeshEditor release workflow ([run]($($env:GITHUB_SERVER_URL + '/' + $env:GITHUB_REPOSITORY + '/actions/runs/' + $env:GITHUB_RUN_ID))).
+
+Release notes: [$rawTag]($releaseUrl)
+
+The default checklist above is the microsoft/winget-pkgs PR template; the manifest passed `wingetcreate`'s local validation before submission.
+"@
+            $payload = @{ body = $commentBody } | ConvertTo-Json -Compress
+            $commentHeaders = @{
+              Authorization = "token $env:WINGET_TOKEN"
+              Accept        = "application/vnd.github+json"
+              "User-Agent"  = "QtMeshEditor-CI"
+            }
+            try {
+              $null = Invoke-WebRequest `
+                -Uri "https://api.github.com/repos/microsoft/winget-pkgs/issues/$prNumber/comments" `
+                -Method POST `
+                -Headers $commentHeaders `
+                -ContentType "application/json; charset=utf-8" `
+                -Body ([System.Text.Encoding]::UTF8.GetBytes($payload)) `
+                -UseBasicParsing
+              Write-Host "Context comment posted on $prUrl."
+            } catch {
+              Write-Host "::warning::Failed to post context comment: $($_.Exception.Message). The PR itself is still submitted at $prUrl."
+            }
+          }
 
 ####################################################################
 # Snap Store Publish (after Linux .deb is built)
