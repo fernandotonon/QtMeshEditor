@@ -2114,6 +2114,76 @@ TEST(CLIPipelineCmdScan, IncludePatternNormalizesBareExtension)
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 1);
 }
 
+TEST(CLIPipelineCmdScan, AppliesAllCliRuleOverridesFromFlags)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    const QString rootPath = QDir(tmpDir.path()).filePath("assets");
+    ASSERT_TRUE(QDir().mkpath(rootPath));
+    ASSERT_FALSE(writeMinimalObj(rootPath, "scan_mesh.obj").isEmpty());
+
+    const QString configPath = QDir(tmpDir.path()).filePath("scan.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "scan:\n"
+        "  include:\n"
+        "    - \"**/*.obj\"\n"
+        "report:\n"
+        "  fail_on: error\n");
+    cfg.close();
+
+    const QString reportPath = QDir(tmpDir.path()).filePath("reports/full_overrides.json");
+    const QString sarifPath = QDir(tmpDir.path()).filePath("reports/full_overrides.sarif");
+    QFile::remove(reportPath);
+    QFile::remove(sarifPath);
+
+    QByteArray rootBa = rootPath.toUtf8();
+    QByteArray configBa = configPath.toUtf8();
+    QByteArray reportBa = reportPath.toUtf8();
+    QByteArray sarifBa = sarifPath.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(),
+                   "--config", configBa.constData(),
+                   "--fix",
+                   "--dry-run",
+                   "--include", "*.obj",
+                   "--exclude", "*.tmp,*.bak",
+                   "--allowed-formats", ".obj,.fbx",
+                   "--forbidden-extensions", ".exe,.tmp",
+                   "--max-vertices", "100",
+                   "--min-vertices", "1",
+                   "--max-meshes", "10",
+                   "--min-meshes", "0",
+                   "--max-materials", "10",
+                   "--min-materials", "0",
+                   "--max-anim-keyframes", "1000",
+                   "--min-anim-keyframes", "0",
+                   "--max-file-size-mb", "10",
+                   "--min-file-size-mb", "0",
+                   "--max-anim-duration", "60",
+                   "--min-anim-duration", "0",
+                   "--require-skeleton",
+                   "--no-require-animations",
+                   "--allow-embedded-textures",
+                   "--require-textures-exist",
+                   "--allow-missing-materials",
+                   "--file-name-case", "snake_case",
+                   "--require-animation-names", "idle,walk",
+                   "--require-bone-names", "Hips,Spine",
+                   "--fail-on", "never",
+                   "--token", "test-token",
+                   "--no-upload",
+                   "--report", reportBa.constData(),
+                   "--sarif", sarifBa.constData(),
+                   "--json"});
+
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFile::exists(reportPath));
+    EXPECT_TRUE(QFile::exists(sarifPath));
+}
+
 TEST(CLIPipelineCmdScan, AutoDetectConfigWritesConfiguredReports)
 {
     QTemporaryDir tmpDir;
