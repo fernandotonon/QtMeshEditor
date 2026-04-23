@@ -2243,15 +2243,27 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
                                const std::vector<RingStep>& ring,
                                bool isV1, bool fWalksAB) {
             if (ring.empty()) {
-                // No ring (boundary or non-manifold): 2-face cap via original v.
-                // Skip for shaped profiles so the cap doesn't mask the
-                // concave arc carved into the neighbor faces.
+                // No ring (boundary or non-manifold): no neighbor-face
+                // retriangulation ran, so chain edges aren't already
+                // shared with an adjacent face. Cap the open chamfer end
+                // ourselves. For shaped profiles we fan v across the full
+                // chain polyline (one tri per chain edge); for flat, one
+                // triangle (v, innerA, innerB) suffices.
                 const bool shaped = isV1 ? v1Shaped : v2Shaped;
-                if (shaped) return;
-                int vf1 = innerA, vf2 = innerB;
                 auto tri = [&](int x, int y, int z) {
                     appendTriangle(x, y, z, info.subMeshIndex);
                 };
+                if (shaped) {
+                    const auto& chain = isV1 ? v1Chain : v2Chain;
+                    const bool flip = isV1 ? !fWalksAB : fWalksAB;
+                    for (size_t i = 0; i + 1 < chain.size(); ++i) {
+                        int a = chain[i], b = chain[i + 1];
+                        if (flip) std::swap(a, b);
+                        tri(v, a, b);
+                    }
+                    return;
+                }
+                int vf1 = innerA, vf2 = innerB;
                 if (isV1) {
                     if (fWalksAB) tri(v, vf2, vf1);
                     else          tri(v, vf1, vf2);
@@ -2364,19 +2376,38 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
             if (polygon.size() == 2) {
                 if (hasEmittedEdge(polygon[0], polygon[1])) return;
 
-                // For shaped (non-flat) profiles, the chamfer's v-end is
-                // already closed by the front/back neighbor-face splice
-                // (which consumes the chain edges) plus the strip. No cap
-                // is needed — emitting the 3-vertex cap (v, innerA, innerB)
-                // would place a flat triangle covering the concave arc.
-                // The original vertex v ends up unreferenced, which is
-                // harmless (unused vertices are pruned on conversion).
-                const bool shaped = isV1 ? v1Shaped : v2Shaped;
-                if (shaped) return;
-
                 auto tri = [&](int x, int y, int z) {
                     appendTriangle(x, y, z, info.subMeshIndex);
                 };
+
+                // For shaped profiles the single-edge cap (v, innerA,
+                // innerB) would stretch across the concave arc and hide
+                // the intermediate vertices beneath a flat triangle.
+                // Check whether the chain's interior edges are already
+                // covered by the neighbor-face splice — if so, the
+                // chamfer's v-end is already closed and no cap is needed.
+                // If not (e.g. a smooth/no-crease mesh where
+                // processRingNeighbors never fires for this endpoint), we
+                // still need a cap: fan v across the chain polyline so
+                // the cap follows the arc instead of crossing it.
+                const bool shaped = isV1 ? v1Shaped : v2Shaped;
+                if (shaped) {
+                    const auto& chain = isV1 ? v1Chain : v2Chain;
+                    bool chainClosed = true;
+                    for (size_t i = 0; i + 1 < chain.size(); ++i) {
+                        if (!hasEmittedEdge(chain[i], chain[i + 1])) {
+                            chainClosed = false; break;
+                        }
+                    }
+                    if (chainClosed) return;
+                    const bool flip = isV1 ? !fWalksAB : fWalksAB;
+                    for (size_t i = 0; i + 1 < chain.size(); ++i) {
+                        int a = chain[i], b = chain[i + 1];
+                        if (flip) std::swap(a, b);
+                        tri(v, a, b);
+                    }
+                    return;
+                }
                 // Winding: innerA is on the f1 side, innerB on f2 side.
                 // For v1 (the first endpoint) with fWalksAB, the beveled
                 // edge goes v1→v2 inside f1 — so the cap's outward normal
