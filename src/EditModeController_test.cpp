@@ -1164,3 +1164,33 @@ TEST_F(EditModeControllerBevelE2ETest, SessionEndClearsProfilePoints) {
     EXPECT_EQ(ctrl->bevelProfilePoints().size(), 0);
 }
 
+TEST_F(EditModeControllerBevelE2ETest, BevelCubeCornerVertexProducesClosedManifold) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+
+    // Select the top-right-front corner v5 (index 5 in makeCubeMesh).
+    ctrl->selectVertex(5, false);
+    ASSERT_EQ(ctrl->selectedVertexCount(), 1);
+
+    ASSERT_TRUE(ctrl->bevelSelection()) << "vertex bevel should succeed";
+    EXPECT_TRUE(ctrl->bevelSessionActive());
+
+    // Verify manifold: every edge should have exactly 2 directed uses,
+    // giving 0 boundary edges.
+    std::vector<Ogre::Vector3> positions;
+    std::vector<std::array<unsigned, 3>> tris;
+    extractEntityBuffers(m_entity, positions, tris);
+    std::map<std::pair<unsigned, unsigned>, int> edgeUse;
+    for (const auto& t : tris) {
+        for (int k = 0; k < 3; ++k) {
+            unsigned u = t[k], v = t[(k + 1) % 3];
+            auto key = std::make_pair(std::min(u, v), std::max(u, v));
+            ++edgeUse[key];
+        }
+    }
+    size_t boundaryEdges = 0;
+    for (auto& [_, c] : edgeUse) if (c == 1) ++boundaryEdges;
+    EXPECT_EQ(boundaryEdges, 0u) << "vertex bevel leaves " << boundaryEdges << " boundary edges";
+}
+

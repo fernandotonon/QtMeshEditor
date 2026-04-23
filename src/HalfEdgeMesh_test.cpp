@@ -2836,3 +2836,163 @@ TEST(HalfEdgeMeshStandalone, BevelConvexCarvesAdjacentFaces) {
     EXPECT_TRUE(probeFront.refsIntermediate);
     EXPECT_TRUE(probeBack.refsIntermediate);
 }
+
+// ===========================================================================
+// Tests: bevelVertices (corner cut)
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, BevelVertexCubeCornerProducesTriangleCap) {
+    // Beveling a cube corner (valence 3) should produce a triangular
+    // cap face at the corner. All three original quads sharing that
+    // corner become pentagons — i.e. the old 2 tris per side become 3
+    // tris per side (one quad = two tris turns into one pentagon = three
+    // tris when fanned). The total tri count increases by 1 per face
+    // touched + 1 for the new cap.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const int v5 = 5; // (1, 1, 1) — corner where top, right, front meet
+    auto newVerts = he.bevelVertices({v5}, 0.1f);
+    ASSERT_EQ(newVerts.size(), 3u)
+        << "valence-3 corner should produce 3 edge offsets";
+
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+    const auto stats = statsOf(back);
+    EXPECT_EQ(stats.boundaryEdges, 0u);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexLowValenceIsSkipped) {
+    // Valence < 3 has nothing sensible to bevel — should be a no-op.
+    // Build a tiny 2-tri strip and try to bevel an interior vertex
+    // whose valence is 2 in our mini mesh.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3::UNIT_Z;
+        v.hasNormal = true;
+        return v;
+    };
+    // Two tris sharing an edge — the shared-edge vertices have valence 2.
+    sub.vertices = { mkV(0, 0, 0), mkV(1, 0, 0), mkV(0, 1, 0), mkV(1, 1, 0) };
+    auto mkT = [](unsigned a, unsigned b, unsigned c) {
+        EditableTriangle t;
+        t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+        return t;
+    };
+    sub.triangles = { mkT(0, 1, 2), mkT(1, 3, 2) };
+    em.subMeshes().push_back(sub);
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    // Vertex 1 is shared by both tris but has valence 2 internally AND
+    // it's on the mesh boundary — should be skipped by bevelVertices.
+    auto newVerts = he.bevelVertices({1}, 0.05f);
+    EXPECT_TRUE(newVerts.empty())
+        << "valence<3 / boundary vertex should be skipped";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexZeroWidthIsNoOp) {
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    auto newVerts = he.bevelVertices({5}, 0.0f);
+    EXPECT_TRUE(newVerts.empty());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexMultipleCorners) {
+    // Multi-vertex bevel runs one vertex at a time internally so shared
+    // edges get the shortened-edge topology correctly (each pass sees
+    // the already-bevelled neighbor).
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    std::vector<int> corners = {0, 1, 2, 3, 4, 5, 6, 7};
+    auto newVerts = he.bevelVertices(corners, 0.1f);
+    EXPECT_EQ(newVerts.size(), 24u);
+    EXPECT_TRUE(he.validate());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+    const auto stats = statsOf(back);
+    EXPECT_EQ(stats.boundaryEdges, 0u);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexAdjacentPair) {
+    // Two vertices sharing a cube edge (v4-v5). Sequential processing
+    // should leave the mesh manifold with the shared edge shortened
+    // between the two new corner offsets.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    auto newVerts = he.bevelVertices({4, 5}, 0.1f);
+    EXPECT_TRUE(he.validate());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+    const auto stats = statsOf(back);
+    EXPECT_EQ(stats.boundaryEdges, 0u);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexSymmetricBudgetOnSharedEdge) {
+    // When two adjacent selected vertices' offsets would collide on
+    // the shared edge (width > edge_length / 2), each side should clamp
+    // to half the edge so both offsets land at the midpoint. Without a
+    // symmetric budget, the first-processed vertex gets the full
+    // requested offset and the second gets squeezed by the shortened
+    // edge, producing visually uneven offsets.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    // v4 = (-1, 1, 1), v5 = (1, 1, 1). Edge length = 2. Request a
+    // width that would exceed half (i.e., collision territory).
+    const float requested = 100.0f; // huge → clamped to 0.49 * 1.0 = 0.49
+    auto newVerts = he.bevelVertices({4, 5}, requested);
+    EXPECT_TRUE(he.validate());
+
+    // Distance from v4 to v4's offsets should equal v5 to v5's offsets
+    // along the shared edge (both = 0.49 * 1.0 = 0.49). Pick the two
+    // offsets on the v4-v5 edge: they're the ones with y=1, z=1 and
+    // x in (-1, 1) range.
+    std::vector<Ogre::Vector3> onSharedEdge;
+    for (int v : newVerts) {
+        const auto& p = he.vertex(v).position;
+        if (std::abs(p.y - 1.0f) < 1e-4f
+            && std::abs(p.z - 1.0f) < 1e-4f
+            && std::abs(p.x) <= 1.0f - 1e-4f) {
+            onSharedEdge.push_back(p);
+        }
+    }
+    ASSERT_EQ(onSharedEdge.size(), 2u);
+    const Ogre::Vector3 v4(-1, 1, 1), v5(1, 1, 1);
+    // Each vertex's offset should be 0.49 along the shared edge.
+    float dist4 = std::min(onSharedEdge[0].distance(v4), onSharedEdge[1].distance(v4));
+    float dist5 = std::min(onSharedEdge[0].distance(v5), onSharedEdge[1].distance(v5));
+    EXPECT_NEAR(dist4, dist5, 1e-4f)
+        << "offsets at each end of shared edge should be symmetric";
+    EXPECT_NEAR(dist4, 0.49f, 1e-3f)
+        << "each side should claim half the 1.0 shared half-edge budget";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVertexOffsetIsClampedToHalfEdge) {
+    // Passing a huge width should clamp — the new offsets should never
+    // pass the midpoint of the shortest incident edge.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    auto newVerts = he.bevelVertices({5}, 100.0f);
+    ASSERT_EQ(newVerts.size(), 3u);
+    const Ogre::Vector3 v5(1, 1, 1);
+    for (int v : newVerts) {
+        const auto& p = he.vertex(v).position;
+        EXPECT_LT(p.distance(v5), 1.01f)
+            << "offset must not exceed shortest incident edge (length 2 → half=1)";
+    }
+    EXPECT_TRUE(he.validate());
+}
