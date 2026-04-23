@@ -24,13 +24,13 @@ Automate your 3D asset pipeline — scan, validate, convert, fix, and merge 3D a
 
 ---
 
-### 🔌 CI/CD — GitHub Actions (Onboarding Step 3)
+### 🔌 CI/CD — GitHub Actions
 
 Available on the [GitHub Actions Marketplace](https://github.com/marketplace/actions/qtmesheditor).
 
 [![Latest action release](https://img.shields.io/github/v/release/fernandotonon/QtMeshEditor?label=latest%20action)](https://github.com/fernandotonon/QtMeshEditor/releases/latest)
 
-Use this workflow template (same shape as QtMesh Cloud onboarding step 3):
+Use this workflow template:
 
 ```yaml
 name: QtMesh Scan
@@ -98,43 +98,12 @@ docker run --rm -v $(pwd):/workspace ghcr.io/fernandotonon/qtmesh scan ./assets 
 
 </details>
 
-### ☁️ QtMesh Cloud Badges (Recommended)
+### ☁️ QtMesh Cloud Badges
 
-Register your repository in [QtMesh Cloud](https://qtmesh.dev) to publish real scan badges from CI.
-
-1. Sign in at [qtmesh.dev](https://qtmesh.dev) and create a project (choose a slug like `my-game-assets`).
+1. Sign in at [qtmesh.dev](https://qtmesh.dev) and create a project.
 2. Create a project token in QtMesh Cloud.
 3. Add the token as a GitHub secret named `QTMESH_CLOUD_TOKEN`.
-4. Upload each `scan` JSON report from CI to `https://api.qtmesh.dev/v1/ingest/scan`.
-
-Example upload step:
-
-```yaml
-- name: Scan assets
-  run: |
-    docker run --rm \
-      -v "${{ github.workspace }}:/workspace" \
-      -w /workspace \
-      ghcr.io/fernandotonon/qtmesh:latest \
-      scan --config /workspace/qtmesh.yml --json > qtmesh-scan-report.json
-
-- name: Upload scan to QtMesh Cloud
-  env:
-    QTMESH_CLOUD_TOKEN: ${{ secrets.QTMESH_CLOUD_TOKEN }}
-    QTMESH_CLOUD_API_URL: https://api.qtmesh.dev
-  run: |
-    jq --arg branch "${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}" \
-       --arg sha "${GITHUB_SHA}" \
-       --arg runId "${GITHUB_RUN_ID}" \
-       '. + {meta: {branch: $branch, commitSha: $sha, runId: $runId}}' \
-       qtmesh-scan-report.json > qtmesh-scan-upload.json
-
-    curl --fail --silent --show-error \
-      -X POST "${QTMESH_CLOUD_API_URL}/v1/ingest/scan" \
-      -H "Authorization: Bearer ${QTMESH_CLOUD_TOKEN}" \
-      -H "Content-Type: application/json" \
-      --data-binary @qtmesh-scan-upload.json
-```
+4. Run the scan command from Github Actions example above.
 
 Badge markdown (replace `<owner-slug>` and `<project-slug>`):
 
@@ -143,65 +112,6 @@ Badge markdown (replace `<owner-slug>` and `<project-slug>`):
 [![qtmesh errors](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-errors.svg)](https://qtmesh.dev)
 [![qtmesh warnings](https://api.qtmesh.dev/v1/u/<owner-slug>/p/<project-slug>/badges/qtmesh-warnings.svg)](https://qtmesh.dev)
 ```
-
-### 🏷️ Self-Hosted Scan Badges (Legacy)
-
-You can also generate Shields-compatible endpoint JSON badges from `scan` results and host them yourself (for example via GitHub Pages).
-
-```yaml
-name: QtMesh Badges
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: write
-
-jobs:
-  scan-and-publish-badges:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Run scan + generate badge JSON files
-        id: scan
-        uses: fernandotonon/QtMeshEditor@2.28.0
-        with:
-          command: scan
-          input-file: .
-          options: --config /workspace/qtmesh.yml --json
-          generate-badges: true
-          badge-output-dir: badges
-          badge-label-prefix: qtmesh
-          badge-base-url: https://<USER>.github.io/<REPO>/badges
-
-      - name: Publish badges to gh-pages/badges
-        uses: peaceiris/actions-gh-pages@v4
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./badges
-          destination_dir: badges
-          keep_files: true
-```
-
-Example badge markdown (after publishing `badges/*.json`):
-
-```md
-[![qtmesh status](https://img.shields.io/endpoint?url=https%3A%2F%2F<USER>.github.io%2F<REPO>%2Fbadges%2Fqtmesh-status.json)](https://github.com/<USER>/<REPO>/actions)
-[![qtmesh errors](https://img.shields.io/endpoint?url=https%3A%2F%2F<USER>.github.io%2F<REPO>%2Fbadges%2Fqtmesh-errors.json)](https://github.com/<USER>/<REPO>/actions)
-[![qtmesh warnings](https://img.shields.io/endpoint?url=https%3A%2F%2F<USER>.github.io%2F<REPO>%2Fbadges%2Fqtmesh-warnings.json)](https://github.com/<USER>/<REPO>/actions)
-```
-
-Generated files:
-
-- `qtmesh-status.json`
-- `qtmesh-errors.json`
-- `qtmesh-warnings.json`
-- `qtmesh-passed.json`
-- `qtmesh-scanned.json`
-- `qtmesh-skipped.json`
 
 ---
 
