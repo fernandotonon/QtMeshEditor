@@ -2625,3 +2625,214 @@ TEST(HalfEdgeMeshStandalone, BevelVectorOverloadAllConvexMovesPointsToward) {
     ASSERT_FALSE(std::isnan(dConvex));
     EXPECT_LT(dConvex, dFlat) << "all-convex points should pull the strip toward v5";
 }
+
+// ===========================================================================
+// Tests: shaped profile carves into adjacent (non-beveled) faces
+// ===========================================================================
+//
+// When the chamfer profile is concave or convex, the chain intermediates must
+// become part of the adjacent faces' triangulation — not just the chamfer
+// strip. Without this the adjacent faces keep a straight cut and hide the
+// profile. These tests verify the triangulation on the +Z and -Z cube faces
+// (the faces perpendicular to the beveled edge v5-v3) actually references
+// the intermediate vertices, and that no flat cap triangle is emitted at
+// the bevel endpoints.
+
+namespace {
+    struct AdjFaceProbe {
+        size_t triCountOnPlane = 0;   // tris whose verts all lie on the plane
+        bool refsIntermediate = false; // any tri uses a chain intermediate?
+        bool hasOriginalCorner = false; // any tri uses the original v5 / v3?
+    };
+
+    // Probe triangles lying on `z = planeZ` (within tolerance). `corner` is
+    // the cube corner vertex (v5 or v3) at that plane. `intermediates`
+    // are positions the chain produced (same Z). Returns counts/flags.
+    AdjFaceProbe probeFaceAtPlane(const EditableMesh& em,
+                                  float planeZ,
+                                  const Ogre::Vector3& corner,
+                                  const std::vector<Ogre::Vector3>& intermediates)
+    {
+        AdjFaceProbe p;
+        const auto& sub = em.subMeshes()[0];
+        auto isOnPlane = [&](unsigned idx) {
+            return std::abs(sub.vertices[idx].position.z - planeZ) < 1e-4f;
+        };
+        auto isCorner = [&](unsigned idx) {
+            return sub.vertices[idx].position.squaredDistance(corner) < 1e-6f;
+        };
+        auto isIntermediate = [&](unsigned idx) {
+            const auto& pos = sub.vertices[idx].position;
+            for (const auto& ip : intermediates)
+                if (pos.squaredDistance(ip) < 1e-5f) return true;
+            return false;
+        };
+        for (const auto& tri : sub.triangles) {
+            if (!isOnPlane(tri.indices[0])) continue;
+            if (!isOnPlane(tri.indices[1])) continue;
+            if (!isOnPlane(tri.indices[2])) continue;
+            ++p.triCountOnPlane;
+            for (int k = 0; k < 3; ++k) {
+                if (isIntermediate(tri.indices[k])) p.refsIntermediate = true;
+                if (isCorner(tri.indices[k])) p.hasOriginalCorner = true;
+            }
+        }
+        return p;
+    }
+}
+
+// A v5-side intermediate must lie OFF both bevel-boundary cube edges
+// (v5↔v4 along -X and v5↔v7 along -Y). v1a lies on v5→v4, v1b on
+// v5→v7 — those are end-offsets, not shaped chain interior. A true
+// interior vertex is offset along the XY diagonal away from v5.
+namespace {
+    bool isStrictInteriorAtV5(const Ogre::Vector3& p) {
+        // Edge v5→v4 has y=1, z=1; edge v5→v7 has x=1, z=1.
+        const bool onV5V4 = std::abs(p.y - 1.0f) < 1e-4f
+                         && std::abs(p.z - 1.0f) < 1e-4f;
+        const bool onV5V7 = std::abs(p.x - 1.0f) < 1e-4f
+                         && std::abs(p.z - 1.0f) < 1e-4f;
+        return !onV5V4 && !onV5V7;
+    }
+    bool isStrictInteriorAtV3(const Ogre::Vector3& p) {
+        // Edge v3→v2 (x=-1 at... actually v2=(-1,1,-1), so v3→v2 has y=1,z=-1);
+        // edge v3→v1 has (v1=(1,-1,-1)) so x=1,z=-1.
+        const bool onV3V2 = std::abs(p.y - 1.0f) < 1e-4f
+                         && std::abs(p.z + 1.0f) < 1e-4f;
+        const bool onV3V1 = std::abs(p.x - 1.0f) < 1e-4f
+                         && std::abs(p.z + 1.0f) < 1e-4f;
+        return !onV3V2 && !onV3V1;
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, BevelConcaveCarvesAdjacentFaces) {
+    // Beveling the top-right cube edge (v5-v3 along Z) with a concave
+    // profile should leave the +Z and -Z faces with triangulations that
+    // reference the STRICT chain interior — not the inner offsets
+    // v1a/v1b/v2a/v2b which a straight-cut triangulation would already
+    // include. Without the splice the adjacent faces are fanned across
+    // the cut corner and never touch an interior vertex.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 5, 3);
+    ASSERT_GE(edgeIdx, 0);
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4, 0.0f);
+    ASSERT_FALSE(newVerts.empty());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+
+    // Strict interiors only: new verts on each plane that aren't on
+    // either bevel-boundary cube edge at that endpoint.
+    std::vector<Ogre::Vector3> interZpos, interZneg;
+    for (int v : newVerts) {
+        const auto& p = he.vertex(v).position;
+        if (std::abs(p.z - 1.0f) < 1e-4f && isStrictInteriorAtV5(p))
+            interZpos.push_back(p);
+        else if (std::abs(p.z + 1.0f) < 1e-4f && isStrictInteriorAtV3(p))
+            interZneg.push_back(p);
+    }
+    // segments=4 → exactly 3 strict interior intermediates per endpoint.
+    ASSERT_EQ(interZpos.size(), 3u);
+    ASSERT_EQ(interZneg.size(), 3u);
+
+    const Ogre::Vector3 v5(1, 1, 1);
+    const Ogre::Vector3 v3(1, 1, -1);
+    auto probeFront = probeFaceAtPlane(back,  1.0f, v5, interZpos);
+    auto probeBack  = probeFaceAtPlane(back, -1.0f, v3, interZneg);
+
+    EXPECT_TRUE(probeFront.refsIntermediate)
+        << "front face (+Z) triangulation must reference a strict chain "
+           "interior vertex when the profile is concave";
+    EXPECT_TRUE(probeBack.refsIntermediate)
+        << "back face (-Z) triangulation must reference a strict chain "
+           "interior vertex when the profile is concave";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelConcaveRemovesOriginalCornerFromCap) {
+    // When the profile is shaped, the endpoint corner cap would mask the
+    // concave arc on the adjacent faces with a flat triangle. The bevel
+    // skips the cap for shaped profiles — so after the operation the
+    // original corner vertex (v5 / v3) should not be referenced by any
+    // triangle.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 5, 3);
+    ASSERT_GE(edgeIdx, 0);
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4, 0.0f);
+    ASSERT_FALSE(newVerts.empty());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+
+    const auto& sub = back.subMeshes()[0];
+    const Ogre::Vector3 v5(1, 1, 1);
+    const Ogre::Vector3 v3(1, 1, -1);
+    auto usesCorner = [&](const Ogre::Vector3& corner) {
+        for (const auto& tri : sub.triangles) {
+            for (int k = 0; k < 3; ++k) {
+                if (sub.vertices[tri.indices[k]].position
+                        .squaredDistance(corner) < 1e-6f) return true;
+            }
+        }
+        return false;
+    };
+    EXPECT_FALSE(usesCorner(v5))
+        << "v5 should be unreferenced (cap skipped) for shaped profile";
+    EXPECT_FALSE(usesCorner(v3))
+        << "v3 should be unreferenced (cap skipped) for shaped profile";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelFlatStillManifold) {
+    // Sanity guard for the cap-skip change: a plain flat chamfer must
+    // remain closed (manifold) across both bevel endpoints. Neither cap
+    // nor splice should be needed when the chamfer strip's v-end edge is
+    // already a single straight edge shared with the neighbor face group.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 5, 3);
+    ASSERT_GE(edgeIdx, 0);
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.1f);
+    ASSERT_FALSE(newVerts.empty());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+    const auto stats = statsOf(back);
+    EXPECT_EQ(stats.boundaryEdges, 0u);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelConvexCarvesAdjacentFaces) {
+    // Convex profile (moderate 0.75). Max convex (1.0) pushes some
+    // intermediates past the face plane's own edges, which is a visual
+    // edge case — use a moderate value so the interior stays within the
+    // face and we can probe that the adjacent face references it.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    int edgeIdx = findEdge(he, 5, 3);
+    ASSERT_GE(edgeIdx, 0);
+    auto newVerts = he.bevelEdges({edgeIdx}, 0.1f, 4, 0.75f);
+    ASSERT_FALSE(newVerts.empty());
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+
+    std::vector<Ogre::Vector3> interZpos, interZneg;
+    for (int v : newVerts) {
+        const auto& p = he.vertex(v).position;
+        if (std::abs(p.z - 1.0f) < 1e-4f && isStrictInteriorAtV5(p))
+            interZpos.push_back(p);
+        else if (std::abs(p.z + 1.0f) < 1e-4f && isStrictInteriorAtV3(p))
+            interZneg.push_back(p);
+    }
+    ASSERT_GE(interZpos.size(), 1u);
+    ASSERT_GE(interZneg.size(), 1u);
+    const Ogre::Vector3 v5(1, 1, 1);
+    const Ogre::Vector3 v3(1, 1, -1);
+    auto probeFront = probeFaceAtPlane(back,  1.0f, v5, interZpos);
+    auto probeBack  = probeFaceAtPlane(back, -1.0f, v3, interZneg);
+    EXPECT_TRUE(probeFront.refsIntermediate);
+    EXPECT_TRUE(probeBack.refsIntermediate);
+}

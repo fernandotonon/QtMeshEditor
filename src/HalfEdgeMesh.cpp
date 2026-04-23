@@ -31,6 +31,7 @@ THE SOFTWARE.
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <functional>
 #include <set>
 #include <unordered_set>
 
@@ -1182,6 +1183,108 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
     // these or to newVertices is a bevel-introduced gap).
     std::unordered_set<int> bevelTouchedVerts;
 
+    // Ear-clip a simple (possibly concave) polygon lying roughly in the
+    // plane of `refNormal`. `poly` is a list of HE vertex indices in
+    // boundary order matching the source face (CCW from outside). Emits
+    // each triangle via `emit` using the refNormal's orientation for
+    // winding. Handles concave polygons produced by splicing chain
+    // intermediates into neighbor-face polygons — a plain fan from poly[0]
+    // would create an artificial diagonal across the concave arc.
+    auto triangulatePolygon = [&](const std::vector<int>& poly,
+                                  const Ogre::Vector3& refNormal,
+                                  const std::function<void(int,int,int)>& emit) {
+        if (poly.size() < 3) return;
+        if (poly.size() == 3) { emit(poly[0], poly[1], poly[2]); return; }
+        Ogre::Vector3 nrm = refNormal;
+        if (nrm.length() < 1e-8f) nrm = Ogre::Vector3::UNIT_Y;
+        else nrm.normalise();
+        Ogre::Vector3 u = std::abs(nrm.x) < 0.9f
+            ? Ogre::Vector3::UNIT_X.crossProduct(nrm)
+            : Ogre::Vector3::UNIT_Y.crossProduct(nrm);
+        u.normalise();
+        Ogre::Vector3 v2 = nrm.crossProduct(u);
+        auto project = [&](const Ogre::Vector3& p) {
+            return Ogre::Vector2(p.dotProduct(u), p.dotProduct(v2));
+        };
+        std::vector<Ogre::Vector2> pts2D;
+        pts2D.reserve(poly.size());
+        for (int idx : poly) pts2D.push_back(project(m_vertices[idx].position));
+        float signedArea = 0.0f;
+        for (size_t i = 0; i < pts2D.size(); ++i) {
+            const auto& a = pts2D[i];
+            const auto& b = pts2D[(i + 1) % pts2D.size()];
+            signedArea += a.x * b.y - b.x * a.y;
+        }
+        std::vector<int> p = poly;
+        std::vector<Ogre::Vector2> pxy = pts2D;
+        bool reversed = false;
+        if (signedArea < 0.0f) {
+            std::reverse(p.begin(), p.end());
+            std::reverse(pxy.begin(), pxy.end());
+            reversed = true;
+        }
+        auto cross2 = [](const Ogre::Vector2& a,
+                         const Ogre::Vector2& b,
+                         const Ogre::Vector2& c) {
+            return (b.x - a.x) * (c.y - a.y)
+                 - (b.y - a.y) * (c.x - a.x);
+        };
+        auto pointInTri = [&](const Ogre::Vector2& q,
+                              const Ogre::Vector2& a,
+                              const Ogre::Vector2& b,
+                              const Ogre::Vector2& c) {
+            float d1 = cross2(q, a, b);
+            float d2 = cross2(q, b, c);
+            float d3 = cross2(q, c, a);
+            bool hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+            bool hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+            return !(hasNeg && hasPos);
+        };
+        std::vector<bool> removed(p.size(), false);
+        size_t remaining = p.size();
+        size_t cur = 0;
+        int guard = 0;
+        const int guardLimit = static_cast<int>(p.size() * p.size() + 10);
+        // When the 2D orientation was flipped to CCW, emit back in the
+        // caller's original orientation by swapping the last two indices.
+        auto emitKeep = [&](int a, int b, int c) {
+            if (reversed) emit(a, c, b);
+            else          emit(a, b, c);
+        };
+        while (remaining > 3 && guard++ < guardLimit) {
+            while (removed[cur]) cur = (cur + 1) % p.size();
+            size_t prev = (cur + p.size() - 1) % p.size();
+            while (removed[prev]) prev = (prev + p.size() - 1) % p.size();
+            size_t next = (cur + 1) % p.size();
+            while (removed[next]) next = (next + 1) % p.size();
+            const auto& A = pxy[prev];
+            const auto& B = pxy[cur];
+            const auto& C = pxy[next];
+            float conv = cross2(A, B, C);
+            if (conv > 0.0f) {
+                bool isEar = true;
+                for (size_t i = 0; i < p.size(); ++i) {
+                    if (removed[i] || i == prev || i == cur || i == next) continue;
+                    if (pointInTri(pxy[i], A, B, C)) { isEar = false; break; }
+                }
+                if (isEar) {
+                    emitKeep(p[prev], p[cur], p[next]);
+                    removed[cur] = true;
+                    --remaining;
+                    cur = prev;
+                    continue;
+                }
+            }
+            cur = next;
+        }
+        if (remaining == 3) {
+            size_t idx[3]; size_t ii = 0;
+            for (size_t i = 0; i < p.size(); ++i)
+                if (!removed[i]) idx[ii++] = i;
+            if (ii == 3) emitKeep(p[idx[0]], p[idx[1]], p[idx[2]]);
+        }
+    };
+
     for (const auto& info : clean) {
         float w = effectiveWidth(info);
         if (w < 1e-5f) continue;
@@ -1684,6 +1787,81 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
                                  fullRingV1, fullRingV2);
 
         // =====================================================================
+        // Build chamfer-chain intermediates here (before Phase 5) so the
+        // neighbor-face retriangulation below can splice them into the cut
+        // polyline when the profile is concave/convex. Phase 6 reuses the
+        // same chains to emit the chamfer-strip tris.
+        //
+        // vChain = [innerA, interm_1, ..., interm_{N-1}, innerB]
+        //        = [f1-side, ..., f2-side] at endpoint v.
+        // Each intermediate offset: (profilePoints[i-1] - 0.5) * w along
+        // `outward` (chord-midpoint toward v). Linear, no sin attenuation.
+        // =====================================================================
+        auto computeOutward = [&](const Ogre::Vector3& pA,
+                                  const Ogre::Vector3& pB,
+                                  const Ogre::Vector3& pV) {
+            const auto chord = pB - pA;
+            auto outward = pV - (pA + pB) * 0.5f;
+            if (const float chordLen2 = chord.squaredLength(); chordLen2 > 1e-12f)
+                outward -= chord * (outward.dotProduct(chord) / chordLen2);
+            if (outward.length() > 1e-6f) outward.normalise();
+            else                          outward = Ogre::Vector3::ZERO;
+            return outward;
+        };
+        auto appendChamferVertex = [&](int v, const Ogre::Vector3& pos) {
+            HEVertex nv = m_vertices[v];
+            nv.position = pos;
+            nv.halfEdge = -1;
+            const auto idx = static_cast<int>(m_vertices.size());
+            m_vertices.push_back(nv);
+            newVertices.push_back(idx);
+            return idx;
+        };
+        auto buildSegmentVerts = [&](int v, int innerA, int innerB) {
+            std::vector<int> chain;
+            chain.reserve(segments + 1);
+            chain.push_back(innerA);
+            if (segments > 1) {
+                const auto pA = m_vertices[innerA].position;
+                const auto pB = m_vertices[innerB].position;
+                const auto chord = pB - pA;
+                const auto outward = computeOutward(pA, pB, m_vertices[v].position);
+                for (int i = 1; i < segments; ++i) {
+                    const float t = static_cast<float>(i)
+                                  / static_cast<float>(segments);
+                    const float pt = profilePoints[i - 1];
+                    const auto pos = pA + chord * t + outward * ((pt - 0.5f) * w);
+                    chain.push_back(appendChamferVertex(v, pos));
+                }
+            }
+            chain.push_back(innerB);
+            return chain;
+        };
+        const std::vector<int> v1Chain = buildSegmentVerts(info.v1, v1a, v1b);
+        const std::vector<int> v2Chain = buildSegmentVerts(info.v2, v2a, v2b);
+
+        // A chain is "shaped" when any interior vertex is non-collinear
+        // with its endpoints. For flat chamfers the chain is collinear and
+        // we keep the plain fan (manifold guarantees hold automatically).
+        auto chainIsShaped = [&](const std::vector<int>& chain) {
+            if (chain.size() <= 2) return false;
+            const auto& pA = m_vertices[chain.front()].position;
+            const auto& pB = m_vertices[chain.back()].position;
+            const auto ab = pB - pA;
+            const float abLen2 = ab.squaredLength();
+            if (abLen2 < 1e-12f) return false;
+            for (size_t i = 1; i + 1 < chain.size(); ++i) {
+                const auto& p = m_vertices[chain[i]].position;
+                const auto d = p - pA;
+                const auto proj = ab * (d.dotProduct(ab) / abLen2);
+                if ((d - proj).squaredLength() > 1e-8f) return true;
+            }
+            return false;
+        };
+        const bool v1Shaped = chainIsShaped(v1Chain);
+        const bool v2Shaped = chainIsShaped(v2Chain);
+
+        // =====================================================================
         // Phase 5: rewire pure-neighbor faces (faces in the ring that aren't
         // f1 or f2). Each neighbor face has 0, 1, or 2 of its v-incident edges
         // as bevel-boundary. Retriangulate accordingly.
@@ -1802,9 +1980,44 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
             // v's on-edge offsets on the same edge — those are collinear and
             // produce zero-area tris.
             if (uOut >= 0 && uIn >= 0) {
-                // v cut off; polygon = (uOut, outX, inX, uIn). Fan from uOut.
-                tri(uOut, outX, inX);
-                tri(uOut, inX, uIn);
+                // Base polygon walks v's corner: uOut → outX → inX → uIn,
+                // closing back to uOut. For shaped profiles, insert chain
+                // intermediates between uIn and the close-back-to-uOut so
+                // the cut polyline follows the chamfer curve. The direction
+                // of intermediate insertion is chosen so each chain edge
+                // is emitted in the OPPOSITE direction from the strip's
+                // same-edge emission — yielding a manifold join.
+                std::vector<int> polygon = {uOut, outX, inX, uIn};
+                const bool shaped = (v == info.v1) ? v1Shaped : v2Shaped;
+                if (shaped) {
+                    const auto& chain = (v == info.v1) ? v1Chain : v2Chain;
+                    const int cFront = chain.front();
+                    const int cBack  = chain.back();
+                    if (cFront == uIn && cBack == uOut) {
+                        // Chain runs uIn → ... → uOut. To close the polygon
+                        // uIn → chain[1] → chain[2] → ... → uOut, push
+                        // chain's interior in FORWARD order.
+                        for (size_t i = 1; i + 1 < chain.size(); ++i)
+                            polygon.push_back(chain[i]);
+                    } else if (cFront == uOut && cBack == uIn) {
+                        // Chain runs uOut → ... → uIn. To close uIn → ...
+                        // → uOut, push chain's interior in REVERSE order.
+                        for (size_t i = chain.size() - 2; i >= 1; --i)
+                            polygon.push_back(chain[i]);
+                    }
+                }
+                Ogre::Vector3 refNrm = Ogre::Vector3::ZERO;
+                {
+                    const auto fv = faceVertices(fIdx);
+                    if (fv.size() == 3) {
+                        const auto& p0 = m_vertices[fv[0]].position;
+                        const auto& p1 = m_vertices[fv[1]].position;
+                        const auto& p2 = m_vertices[fv[2]].position;
+                        refNrm = (p1 - p0).crossProduct(p2 - p0);
+                    }
+                }
+                triangulatePolygon(polygon, refNrm,
+                                   [&](int a, int b, int c) { tri(a, b, c); });
             } else if (uOut >= 0) {
                 // Only outX edge is split. Polygon at v's corner = (v, uOut),
                 // then main body (uOut, outX, inX). Tri 1: (v, uOut, inX) =
@@ -1917,6 +2130,24 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
                     }
                     polygon.push_back(uRight);
 
+                    // Splice chain intermediates between uRight and the
+                    // implicit close-back-to-uLeft so the neighbor face's
+                    // cut polyline follows the chamfer's concave/convex
+                    // curve instead of a straight diagonal.
+                    const bool shaped = (v == info.v1) ? v1Shaped : v2Shaped;
+                    if (shaped) {
+                        const auto& chain = (v == info.v1) ? v1Chain : v2Chain;
+                        const int cFront = chain.front();
+                        const int cBack  = chain.back();
+                        if (cFront == uLeft && cBack == uRight) {
+                            for (size_t i = chain.size() - 2; i >= 1; --i)
+                                polygon.push_back(chain[i]);
+                        } else if (cFront == uRight && cBack == uLeft) {
+                            for (size_t i = 1; i + 1 < chain.size(); ++i)
+                                polygon.push_back(chain[i]);
+                        }
+                    }
+
                     // Dedupe consecutive duplicates and positional matches.
                     std::vector<int> dedup;
                     dedup.reserve(polygon.size());
@@ -1937,15 +2168,27 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
                         continue;
                     }
 
-                    // Emit fan from dedup[0]. Winding: original faces were
-                    // CCW (v, outX, inX) — the polygon as built above walks
-                    // in the same rotational direction around v, so fan from
-                    // dedup[0] preserves CCW.
+                    // Triangulate via ear-clipping. Shaped profiles make
+                    // the polygon concave (intermediates bulge inward), and
+                    // a plain fan from dedup[0] would emit a tri spanning
+                    // the straight diagonal dedup[0]↔dedup[last], hiding
+                    // the concave arc. Ear-clipping handles concave simple
+                    // polygons correctly.
                     int subIdx = m_faces[ring[group[0]].face].subMeshIndex;
-                    for (size_t i = 1; i + 1 < dedup.size(); ++i) {
-                        appendTriangle(dedup[0], dedup[i], dedup[i + 1], subIdx);
-                        recordTriEdges(dedup[0], dedup[i], dedup[i + 1]);
+                    Ogre::Vector3 refNrm = Ogre::Vector3::ZERO;
+                    {
+                        const auto fv = faceVertices(ring[group[0]].face);
+                        if (fv.size() == 3) {
+                            const auto& p0 = m_vertices[fv[0]].position;
+                            const auto& p1 = m_vertices[fv[1]].position;
+                            const auto& p2 = m_vertices[fv[2]].position;
+                            refNrm = (p1 - p0).crossProduct(p2 - p0);
+                        }
                     }
+                    triangulatePolygon(dedup, refNrm, [&](int a, int b, int c) {
+                        appendTriangle(a, b, c, subIdx);
+                        recordTriEdges(a, b, c);
+                    });
                     for (int gi : group) {
                         facesToRemove.push_back(ring[gi].face);
                     }
@@ -1963,87 +2206,8 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
 
         // =====================================================================
         // Phase 6: chamfer strip between f1's and f2's inner offsets.
-        //
-        // For segments=1 (default), this is the original two-triangle quad
-        // bridging (v1a, v2a) on f1's side to (v1b, v2b) on f2's side.
-        //
-        // For segments>1, we subdivide the strip into `segments` quads along
-        // a profile curve. At each endpoint v ∈ {v1, v2} we compute N-1
-        // intermediate offset vertices between vA = inner_on_f1 and
-        // vB = inner_on_f2, parametrized t = i / segments for i in [1..N-1].
-        // Position is lerp(vA.pos, vB.pos, t) plus a per-point bulge along
-        // the chamfer-plane normal: offset = (profilePoints[i-1] - 0.5) * w.
-        // - p = 0.5 → flat (no bulge), reproduces the original geometry.
-        // - p > 0.5 → convex (rounded outward, fillet-like).
-        // - p < 0.5 → concave (cut inward, groove-like).
-        //
-        // The scalar-profile entry point (scalar overload) pre-fills the
-        // vector with the old sin-envelope so the single-number UX keeps
-        // working; callers with explicit per-segment values get a linear
-        // interpretation matching what the user draws in the graph.
-        //
-        // The bulge direction "outward" is away from v (the original corner
-        // we cut off), so positive bulge pushes the strip toward where the
-        // original sharp edge USED to be.
-        //
-        // We do NOT record these edges in emittedEdges because the cap check
-        // in buildCorner is "does a NON-CHAMFER tri cover the chamfer-end
-        // edge?". The chamfer itself always has that edge.
+        // Chain intermediates were built before Phase 5 (see above).
         // =====================================================================
-        // Outward bulge direction: from the chord midpoint toward the
-        // original corner v. Convex profile bulges in this direction
-        // (rounded fillet), concave bulges opposite (digs into the solid).
-        auto computeOutward = [&](const Ogre::Vector3& pA,
-                                  const Ogre::Vector3& pB,
-                                  const Ogre::Vector3& pV) {
-            const auto chord = pB - pA;
-            auto outward = pV - (pA + pB) * 0.5f;
-            if (const float chordLen2 = chord.squaredLength(); chordLen2 > 1e-12f)
-                outward -= chord * (outward.dotProduct(chord) / chordLen2);
-            if (outward.length() > 1e-6f) outward.normalise();
-            else                          outward = Ogre::Vector3::ZERO;
-            return outward;
-        };
-
-        // Append one new vertex cloned from `v` and positioned at `pos`.
-        // Returns the new vertex index and records it in newVertices.
-        auto appendChamferVertex = [&](int v, const Ogre::Vector3& pos) {
-            HEVertex nv = m_vertices[v];
-            nv.position = pos;
-            nv.halfEdge = -1;
-            const auto idx = static_cast<int>(m_vertices.size());
-            m_vertices.push_back(nv);
-            newVertices.push_back(idx);
-            return idx;
-        };
-
-        // Build one endpoint's chain: innerA → N-1 intermediates → innerB.
-        // Each intermediate is offset along `outward` by
-        //   (profilePoints[i-1] - 0.5) * w
-        // linearly. The user's drawn curve translates directly into the
-        // resulting bulge.
-        auto buildSegmentVerts = [&](int v, int innerA, int innerB) {
-            std::vector<int> chain;
-            chain.reserve(segments + 1);
-            chain.push_back(innerA);
-            if (segments > 1) {
-                const auto pA = m_vertices[innerA].position;
-                const auto pB = m_vertices[innerB].position;
-                const auto chord = pB - pA;
-                const auto outward = computeOutward(pA, pB, m_vertices[v].position);
-                for (int i = 1; i < segments; ++i) {
-                    const float t = static_cast<float>(i)
-                                  / static_cast<float>(segments);
-                    const float pt = profilePoints[i - 1];
-                    const auto pos = pA + chord * t + outward * ((pt - 0.5f) * w);
-                    chain.push_back(appendChamferVertex(v, pos));
-                }
-            }
-            chain.push_back(innerB);
-            return chain;
-        };
-        const std::vector<int> v1Chain = buildSegmentVerts(info.v1, v1a, v1b);
-        const std::vector<int> v2Chain = buildSegmentVerts(info.v2, v2a, v2b);
         // Emit two triangles per strip i: bridges chain[i]->chain[i+1] on each
         // endpoint. Original (segments=1) winding is preserved when N=1.
         for (int i = 0; i < segments; ++i) {
@@ -2079,13 +2243,27 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
                                const std::vector<RingStep>& ring,
                                bool isV1, bool fWalksAB) {
             if (ring.empty()) {
-                // No ring (boundary or non-manifold): 2-face cap via original v.
-                // Use the same winding as the full-ring cap below — the cap
-                // geometry is identical in both cases.
-                int vf1 = innerA, vf2 = innerB;
+                // No ring (boundary or non-manifold): no neighbor-face
+                // retriangulation ran, so chain edges aren't already
+                // shared with an adjacent face. Cap the open chamfer end
+                // ourselves. For shaped profiles we fan v across the full
+                // chain polyline (one tri per chain edge); for flat, one
+                // triangle (v, innerA, innerB) suffices.
+                const bool shaped = isV1 ? v1Shaped : v2Shaped;
                 auto tri = [&](int x, int y, int z) {
                     appendTriangle(x, y, z, info.subMeshIndex);
                 };
+                if (shaped) {
+                    const auto& chain = isV1 ? v1Chain : v2Chain;
+                    const bool flip = isV1 ? !fWalksAB : fWalksAB;
+                    for (size_t i = 0; i + 1 < chain.size(); ++i) {
+                        int a = chain[i], b = chain[i + 1];
+                        if (flip) std::swap(a, b);
+                        tri(v, a, b);
+                    }
+                    return;
+                }
+                int vf1 = innerA, vf2 = innerB;
                 if (isV1) {
                     if (fWalksAB) tri(v, vf2, vf1);
                     else          tri(v, vf1, vf2);
@@ -2197,9 +2375,39 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
             }
             if (polygon.size() == 2) {
                 if (hasEmittedEdge(polygon[0], polygon[1])) return;
+
                 auto tri = [&](int x, int y, int z) {
                     appendTriangle(x, y, z, info.subMeshIndex);
                 };
+
+                // For shaped profiles the single-edge cap (v, innerA,
+                // innerB) would stretch across the concave arc and hide
+                // the intermediate vertices beneath a flat triangle.
+                // Check whether the chain's interior edges are already
+                // covered by the neighbor-face splice — if so, the
+                // chamfer's v-end is already closed and no cap is needed.
+                // If not (e.g. a smooth/no-crease mesh where
+                // processRingNeighbors never fires for this endpoint), we
+                // still need a cap: fan v across the chain polyline so
+                // the cap follows the arc instead of crossing it.
+                const bool shaped = isV1 ? v1Shaped : v2Shaped;
+                if (shaped) {
+                    const auto& chain = isV1 ? v1Chain : v2Chain;
+                    bool chainClosed = true;
+                    for (size_t i = 0; i + 1 < chain.size(); ++i) {
+                        if (!hasEmittedEdge(chain[i], chain[i + 1])) {
+                            chainClosed = false; break;
+                        }
+                    }
+                    if (chainClosed) return;
+                    const bool flip = isV1 ? !fWalksAB : fWalksAB;
+                    for (size_t i = 0; i + 1 < chain.size(); ++i) {
+                        int a = chain[i], b = chain[i + 1];
+                        if (flip) std::swap(a, b);
+                        tri(v, a, b);
+                    }
+                    return;
+                }
                 // Winding: innerA is on the f1 side, innerB on f2 side.
                 // For v1 (the first endpoint) with fWalksAB, the beveled
                 // edge goes v1→v2 inside f1 — so the cap's outward normal
