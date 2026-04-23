@@ -1921,9 +1921,26 @@ jobs:
             $userResp = Invoke-WebRequest -Uri "https://api.github.com/user" -Headers $headers -UseBasicParsing
             $scopes = $userResp.Headers['X-OAuth-Scopes']
             $login  = ($userResp.Content | ConvertFrom-Json).login
-            Write-Host "Token OK for user '$login' with scopes: $scopes"
-            if ($scopes -and ($scopes -notmatch 'public_repo') -and ($scopes -notmatch '\brepo\b')) {
-              Write-Host "::warning::WINGET_TOKEN has scopes '$scopes'; wingetcreate --submit needs 'public_repo' or 'repo'."
+            # X-OAuth-Scopes is only populated for classic PATs.
+            # Fine-grained PATs return an empty / missing scopes header.
+            # wingetcreate --submit has consistently been observed to
+            # fail with "Resource not accessible by personal access token"
+            # when given a fine-grained PAT, regardless of its
+            # configured fine-grained permissions on microsoft/winget-pkgs
+            # (the fork step uses an API endpoint fine-grained tokens
+            # can't reach). Fail fast with a clear remediation.
+            if ($scopes) {
+              Write-Host "Token OK for user '$login' with classic PAT scopes: $scopes"
+              if (($scopes -notmatch 'public_repo') -and ($scopes -notmatch '\brepo\b')) {
+                Write-Host "::error::WINGET_TOKEN is a classic PAT but has scopes '$scopes'; wingetcreate --submit needs 'public_repo' or 'repo'."
+                Write-Host "::error::Regenerate the token at https://github.com/settings/tokens/new with 'public_repo' checked and update the WINGET_TOKEN repo secret."
+                exit 1
+              }
+            } else {
+              Write-Host "::error::WINGET_TOKEN validates as user '$login' but reports NO X-OAuth-Scopes — this is a fine-grained PAT."
+              Write-Host "::error::wingetcreate --submit requires a CLASSIC PAT with 'public_repo' scope; fine-grained PATs cannot fork / open PRs against microsoft/winget-pkgs."
+              Write-Host "::error::Regenerate at https://github.com/settings/tokens/new (NOT /tokens/new?type=beta) with 'public_repo' checked and update WINGET_TOKEN."
+              exit 1
             }
           } catch {
             Write-Host "::error::Token validation failed: $($_.Exception.Message). Rotate WINGET_TOKEN (classic PAT with 'public_repo')."
@@ -1968,16 +1985,26 @@ jobs:
           # Retry up to three times on transient failures — wingetcreate's
           # "Failed to connect to GitHub" sometimes hits during runner DNS
           # flakes or microsoft/winget-pkgs being under load after a release.
+          # We capture stderr so we can detect the "Resource not accessible
+          # by personal access token" auth failure and bail immediately
+          # (retrying that is pointless; the token lacks permissions).
           $submitOk = $false
+          $authErrorSeen = $false
           for ($attempt = 1; $attempt -le 3; $attempt++) {
             Write-Host "Submitting WinGet manifest for version $ver (attempt $attempt)..."
-            .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
+            $output = & .\wingetcreate.exe update FernandoTonon.QtMeshEditor `
               --version $ver `
               --urls $url `
               --submit `
-              --token $env:WINGET_TOKEN
+              --token $env:WINGET_TOKEN 2>&1
+            # Echo the tool's output so users can read it in the logs.
+            $output | ForEach-Object { Write-Host $_ }
             if ($LASTEXITCODE -eq 0) {
               $submitOk = $true
+              break
+            }
+            if ($output -match 'Resource not accessible by personal access token') {
+              $authErrorSeen = $true
               break
             }
             Write-Host "::warning::wingetcreate exited $LASTEXITCODE on attempt $attempt."
@@ -1986,10 +2013,16 @@ jobs:
             }
           }
           if (-not $submitOk) {
-            Write-Host "::error::wingetcreate submit failed after 3 attempts. Check:"
-            Write-Host "::error:: 1. WINGET_TOKEN is still valid and has 'public_repo' scope."
-            Write-Host "::error:: 2. The user's fork of microsoft/winget-pkgs hasn't diverged."
-            Write-Host "::error:: 3. https://www.githubstatus.com for GitHub API availability."
+            if ($authErrorSeen) {
+              Write-Host "::error::wingetcreate reported 'Resource not accessible by personal access token'."
+              Write-Host "::error::This means WINGET_TOKEN lacks the required scope to fork microsoft/winget-pkgs and open a PR."
+              Write-Host "::error::Fix: regenerate a CLASSIC PAT at https://github.com/settings/tokens/new with 'public_repo' checked, update the WINGET_TOKEN repo secret, then re-run this job."
+            } else {
+              Write-Host "::error::wingetcreate submit failed after 3 attempts. Check:"
+              Write-Host "::error:: 1. WINGET_TOKEN is still valid and has 'public_repo' scope."
+              Write-Host "::error:: 2. The user's fork of microsoft/winget-pkgs hasn't diverged."
+              Write-Host "::error:: 3. https://www.githubstatus.com for GitHub API availability."
+            }
             exit 1
           }
           Write-Host "WinGet PR submitted successfully."
