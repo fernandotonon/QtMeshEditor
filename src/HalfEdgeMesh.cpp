@@ -2854,19 +2854,6 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
 // This MVP emits a flat cap (segments=1). Shaped profiles and segments>1
 // are TODO (rounded dome). Unused params are accepted for forward
 // compatibility with the edge-bevel API.
-namespace {
-// When true, bevelVertices trusts the caller's width and skips its per-
-// vertex "min(width, 0.499 × minEdgeLen)" safety clamp. Used only by the
-// multi-vertex pre-budgeted recursive call so the pre-budgeted values
-// aren't shrunk again by a now-mutated mesh's edge lengths.
-thread_local bool s_skipVertexBevelClamp = false;
-struct ScopedSkipClamp {
-    bool prev;
-    explicit ScopedSkipClamp(bool v) : prev(s_skipVertexBevelClamp) { s_skipVertexBevelClamp = v; }
-    ~ScopedSkipClamp() { s_skipVertexBevelClamp = prev; }
-};
-} // namespace
-
 std::vector<int> HalfEdgeMesh::bevelVertices(
     const std::vector<int>& vertexIndices,
     float width,
@@ -2933,8 +2920,9 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
                 // meeting the neighbour's bevel near the midpoint. Unshared
                 // edges use the same 0.499 × edgeLen safety clamp the
                 // single-vertex path would apply, so disconnected multi-
-                // vertex selections don't over-reach when the ScopedSkipClamp
-                // below bypasses the single-vertex re-clamp.
+                // vertex selections don't over-reach when
+                // m_skipVertexBevelClamp (set below) bypasses the single-
+                // vertex re-clamp.
                 float budget = selected.count(n)
                                ? edgeLen * 0.999f * 0.5f
                                : edgeLen * 0.499f;
@@ -2950,13 +2938,16 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
         // Tell the single-vertex path to honor our pre-budgeted widths
         // verbatim. Otherwise the single-vertex clamp re-clamps against
         // the mutated mesh's edge lengths (prior bevels have shortened
-        // the shared edges), which produces asymmetric offsets.
-        ScopedSkipClamp skip(true);
+        // the shared edges), which produces asymmetric offsets. Flag is
+        // reset after the loop so a later top-level bevelVertices call
+        // starts with the usual safety clamp enabled.
+        m_skipVertexBevelClamp = true;
         for (size_t i = 0; i < vertexIndices.size(); ++i) {
             auto added = bevelVertices({vertexIndices[i]}, perVertexWidth[i],
                                        segments, profile, profilePointsIn);
             newVertices.insert(newVertices.end(), added.begin(), added.end());
         }
+        m_skipVertexBevelClamp = false;
         return newVertices;
     }
 
@@ -3130,7 +3121,7 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             float d = m_vertices[v].position.distance(m_vertices[tgt].position);
             if (d < minEdgeLen) minEdgeLen = d;
         }
-        const float offset = s_skipVertexBevelClamp
+        const float offset = m_skipVertexBevelClamp
                              ? width
                              : std::min(width, 0.499f * minEdgeLen);
         if (offset <= 1e-6f) continue;

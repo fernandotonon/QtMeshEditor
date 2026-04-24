@@ -46,6 +46,122 @@ THE SOFTWARE.
 #include <algorithm>
 #include <limits>
 
+namespace {
+
+// Walk-guard budget: a manifold vertex's fan will close well under this.
+constexpr int kHERotateMaxSteps = 1024;
+
+// Rotate one step around a vertex along its outgoing half-edge fan:
+// `he` → prev → twin. Returns -1 when the rotation hits a boundary
+// (no twin) or when the walker loops back to `startHE`. Callers use
+// the -1 sentinel as a "stop iterating" signal, which flattens what
+// would otherwise be a nested prev/twin/sentinel triple in every
+// half-edge fan walker.
+int nextAroundVertex(const HalfEdgeMesh& hm, int he, int startHE)
+{
+    if (he < 0) return -1;
+    int prev = hm.halfEdge(he).prev;
+    if (prev < 0) return -1;
+    int twin = hm.halfEdge(prev).twin;
+    if (twin < 0 || twin == startHE) return -1;
+    return twin;
+}
+
+// Per-vertex max-width for a prospective multi-vertex bevel. Mirrors
+// HalfEdgeMesh::bevelVertices's pre-budget formula so the drag gizmo
+// caps at the same scalar the algorithm itself will apply:
+//   - shared edges (both endpoints selected) → 0.999 × edgeLen × 0.5
+//   - unshared edges → 0.499 × edgeLen (the single-vertex safety clamp)
+// The min across all incident edges of a target is that vertex's cap;
+// the min across all targets is the session cap.
+float computeVertexBevelCap(const HalfEdgeMesh& hm,
+                            const std::vector<int>& targets)
+{
+    float cap = std::numeric_limits<float>::infinity();
+    std::set<int> selected(targets.begin(), targets.end());
+
+    for (int v : targets) {
+        if (v < 0 || v >= static_cast<int>(hm.vertexCount())) continue;
+        int startHE = hm.vertex(v).halfEdge;
+        if (startHE < 0) continue;
+
+        int he = startHE;
+        for (int guard = 0; he >= 0 && guard < kHERotateMaxSteps; ++guard) {
+            const int n = hm.halfEdge(he).vertex;
+            const float edgeLen =
+                hm.vertex(v).position.distance(hm.vertex(n).position);
+            const float budget = selected.count(n)
+                                 ? edgeLen * 0.999f * 0.5f
+                                 : edgeLen * 0.499f;
+            if (budget < cap) cap = budget;
+            he = nextAroundVertex(hm, he, startHE);
+        }
+    }
+    return cap;
+}
+
+// Shrink `shortestAdj` against one of the two faces adjacent to the
+// (va, vb) edge. Walks outgoing half-edges from `va` looking for one
+// where `.vertex == vb`; when found, picks the face's opposite
+// vertex (the third of a triangle) and clamps `shortestAdj` by both
+// va→opp and vb→opp. Returns immediately after a hit — call this
+// twice, once from each endpoint, to cover both adjacent faces.
+void shrinkEdgeBevelAdjacency(const HalfEdgeMesh& hm,
+                              int va, int vb,
+                              float& shortestAdj)
+{
+    int startHE = hm.vertex(va).halfEdge;
+    if (startHE < 0) return;
+
+    int he = startHE;
+    for (int guard = 0; he >= 0 && guard < kHERotateMaxSteps; ++guard) {
+        if (hm.halfEdge(he).vertex == vb) {
+            // Found the va→vb HE; scan the face's other HEs for the
+            // opposite vertex (the non-va, non-vb one).
+            for (int loopHE = hm.halfEdge(he).next;
+                 loopHE != he;
+                 loopHE = hm.halfEdge(loopHE).next) {
+                const int target = hm.halfEdge(loopHE).vertex;
+                if (target == va || target == vb) continue;
+                shortestAdj = std::min(shortestAdj,
+                    hm.vertex(va).position.distance(hm.vertex(target).position));
+                shortestAdj = std::min(shortestAdj,
+                    hm.vertex(vb).position.distance(hm.vertex(target).position));
+                break;
+            }
+            return;
+        }
+        he = nextAroundVertex(hm, he, startHE);
+    }
+}
+
+// Per-edge max-width for a prospective multi-edge bevel. Mirrors
+// HalfEdgeMesh::bevelEdges::effectiveWidth — 0.4 × shortestAdj, where
+// shortestAdj is the min of (edge length, va→opp, vb→opp) across both
+// adjacent faces.
+float computeEdgeBevelCap(const HalfEdgeMesh& hm,
+                          const std::vector<std::pair<int,int>>& targets)
+{
+    float cap = std::numeric_limits<float>::infinity();
+
+    for (const auto& [v1, v2] : targets) {
+        if (v1 < 0 || v2 < 0) continue;
+        if (v1 >= static_cast<int>(hm.vertexCount())) continue;
+        if (v2 >= static_cast<int>(hm.vertexCount())) continue;
+
+        float shortestAdj = hm.vertex(v1).position.distance(hm.vertex(v2).position);
+        // v1 → v2 finds f1; v2 → v1 finds f2.
+        shrinkEdgeBevelAdjacency(hm, v1, v2, shortestAdj);
+        shrinkEdgeBevelAdjacency(hm, v2, v1, shortestAdj);
+
+        const float budget = shortestAdj * 0.4f;
+        if (budget < cap) cap = budget;
+    }
+    return cap;
+}
+
+} // namespace
+
 EditModeController* EditModeController::m_pSingleton = nullptr;
 
 EditModeController::EditModeController()
@@ -1780,105 +1896,18 @@ bool EditModeController::beginBevel()
     s.width = 0.05f; // 2.5% of a 2-unit cube — visible initial chamfer
 
     // Compute the largest width the bevel algorithm will actually apply
-    // before its internal per-vertex/per-edge clamp takes over. For a
-    // vertex bevel, that's min over targets of (0.499 × shortestIncident
-    // × share), where `share = 0.5` when the far endpoint is also
-    // selected (shared-edge budget) and 1.0 otherwise — matching
-    // HalfEdgeMesh::bevelVertices's own formula exactly. For an edge
-    // bevel, the algorithm caps each edge at 0.4 × shortestAdjacent
-    // (HalfEdgeMesh.cpp:1060); the drag-side max is the min across
-    // selected edges. Both budgets are computed from the pre-bevel
-    // mesh so the cap is a fixed scalar the drag can check against.
+    // before its internal per-vertex/per-edge clamp takes over, so the
+    // drag handler can freeze the gizmo at the same scalar the topology
+    // op would freeze at. See the named helpers at the top of this file
+    // (computeVertexBevelCap / computeEdgeBevelCap) for the exact
+    // formulas, which mirror HalfEdgeMesh::bevelVertices and
+    // HalfEdgeMesh::bevelEdges respectively.
     {
         HalfEdgeMesh hm;
         if (hm.buildFromEditableMesh(*m_editableMesh)) {
-            float cap = std::numeric_limits<float>::infinity();
-            if (s.kind == BevelSession::Vertices) {
-                std::set<int> selected(s.targetVertices.begin(), s.targetVertices.end());
-                for (int v : s.targetVertices) {
-                    if (v < 0 || v >= static_cast<int>(hm.vertexCount())) continue;
-                    int startHE = hm.vertex(v).halfEdge;
-                    if (startHE < 0) continue;
-                    int he = startHE;
-                    for (int guard = 0; guard < 1024; ++guard) {
-                        if (he < 0) break;
-                        int n = hm.halfEdge(he).vertex;
-                        float edgeLen = hm.vertex(v).position.distance(hm.vertex(n).position);
-                        // Mirror HalfEdgeMesh::bevelVertices's pre-budget
-                        // exactly: shared edges get 0.999 × edgeLen × 0.5
-                        // so both selected endpoints meet near midpoint;
-                        // unshared edges fall back to the single-vertex
-                        // 0.499 × edgeLen safety clamp to avoid over-reach
-                        // on disconnected selections.
-                        float budget = selected.count(n)
-                                       ? edgeLen * 0.999f * 0.5f
-                                       : edgeLen * 0.499f;
-                        if (budget < cap) cap = budget;
-                        int prev = hm.halfEdge(he).prev;
-                        int twin = (prev >= 0) ? hm.halfEdge(prev).twin : -1;
-                        if (twin < 0) break;
-                        he = twin;
-                        if (he == startHE) break;
-                    }
-                }
-            } else {
-                // Edge bevel: walk each selected edge, find its two
-                // adjacent faces, and take 0.4 × the shortest of the
-                // edge itself and its two opposite-vertex legs.
-                // Helper: walk outgoing half-edges from vertex `va` looking
-                // for the face whose next-vertex is `vb`; when found, shrink
-                // `shortestAdj` against the opposite-vertex legs (va→opp and
-                // vb→opp). Handles one adjacent face per call; we invoke it
-                // from both ends so both f1 and f2 contribute, mirroring
-                // HalfEdgeMesh::bevelEdges's effectiveWidth() which clamps
-                // against f1Opposite and f2Opposite symmetrically.
-                auto clampAgainstFace = [&](int va, int vb, float& shortestAdj) {
-                    int startHE = hm.vertex(va).halfEdge;
-                    if (startHE < 0) return;
-                    int he = startHE;
-                    for (int guard = 0; guard < 1024; ++guard) {
-                        if (he < 0) break;
-                        if (hm.halfEdge(he).vertex == vb) {
-                            int loopHE = hm.halfEdge(he).next;
-                            while (loopHE != he) {
-                                int target = hm.halfEdge(loopHE).vertex;
-                                if (target != va && target != vb) {
-                                    shortestAdj = std::min(shortestAdj,
-                                        hm.vertex(va).position.distance(hm.vertex(target).position));
-                                    shortestAdj = std::min(shortestAdj,
-                                        hm.vertex(vb).position.distance(hm.vertex(target).position));
-                                    break;
-                                }
-                                loopHE = hm.halfEdge(loopHE).next;
-                            }
-                            return; // one face per call
-                        }
-                        int prev = hm.halfEdge(he).prev;
-                        int twin = (prev >= 0) ? hm.halfEdge(prev).twin : -1;
-                        if (twin < 0) break;
-                        he = twin;
-                        if (he == startHE) break;
-                    }
-                };
-
-                for (const auto& [gV1, gV2] : s.targetEdges) {
-                    // Global indices align with HE vertex order (same submesh
-                    // iteration as buildFromEditableMesh), so we can use them
-                    // directly.
-                    int v1 = gV1, v2 = gV2;
-                    if (v1 < 0 || v2 < 0
-                     || v1 >= static_cast<int>(hm.vertexCount())
-                     || v2 >= static_cast<int>(hm.vertexCount())) continue;
-                    float edgeLen = hm.vertex(v1).position.distance(hm.vertex(v2).position);
-                    float shortestAdj = edgeLen;
-                    // Both adjacent faces: the v1→v2 direction finds f1, the
-                    // v2→v1 direction finds f2.
-                    clampAgainstFace(v1, v2, shortestAdj);
-                    clampAgainstFace(v2, v1, shortestAdj);
-                    float budget = shortestAdj * 0.4f;
-                    if (budget < cap) cap = budget;
-                }
-            }
+            const float cap = (s.kind == BevelSession::Vertices)
+                              ? computeVertexBevelCap(hm, s.targetVertices)
+                              : computeEdgeBevelCap(hm, s.targetEdges);
             if (cap > 0.0f && std::isfinite(cap)) s.maxWidth = cap;
         }
     }

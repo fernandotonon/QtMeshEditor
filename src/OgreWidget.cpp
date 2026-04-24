@@ -208,7 +208,7 @@ bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)
         // Restrict the null-active fallback to a single deterministic
         // viewport (index 0) so multi-viewport layouts don't race N
         // cameras rescaling the shared gizmo singleton each frame.
-        auto* active = transform->getActiveWidget();
+        const auto* active = transform->getActiveWidget();
         const bool isInitialFallbackViewport = (active == nullptr && getIndex() == 0);
         if (active == this || isInitialFallbackViewport) {
             auto* camera = mCamera->getCamera();

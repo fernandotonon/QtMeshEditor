@@ -374,18 +374,15 @@ void TranslationGizmo::createAxis(void)
                                              // its bbox must mirror the same [-mScale, 0] extent —
                                              // otherwise the visible arrow and the pickable region
                                              // end up on opposite sides of the origin.
-                                             Ogre::Real axisMin;
-                                             Ogre::Real axisMax;
-                                             if (axis == GizmoAxisHelpers::Axis::X) {
-                                                 axisMin = -mScale;
-                                                 axisMax = 0.0f;
-                                             } else if (axis == GizmoAxisHelpers::Axis::Z && mLeftHandCs) {
-                                                 axisMin = -mScale;
-                                                 axisMax = 0.0f;
-                                             } else {
-                                                 axisMin = 0.0f;
-                                                 axisMax = mScale;
-                                             }
+                                             // Flip the bbox to the negative range for the X
+                                             // axis (geometry flipped for the camera's view
+                                             // flip) and for Z under a left-handed coord
+                                             // system (legacy viewport option).
+                                             const bool flipAxis =
+                                                 axis == GizmoAxisHelpers::Axis::X
+                                                 || (axis == GizmoAxisHelpers::Axis::Z && mLeftHandCs);
+                                             const Ogre::Real axisMin = flipAxis ? -mScale : 0.0f;
+                                             const Ogre::Real axisMax = flipAxis ? 0.0f : mScale;
                                              axisObject->setBoundingBox(
                                                  GizmoAxisHelpers::makeAxisBoundingBox(axis, axisMin, axisMax, bbSize));
                                          });
