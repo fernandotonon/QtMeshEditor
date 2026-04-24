@@ -780,9 +780,12 @@ TEST_F(MainWindowTest, AiChatToolbarButtonAndMenuActionRevealDock)
         GTEST_SKIP() << "Skipping: chat dock not available in this build";
     }
 
+    window->show();
+    app->processEvents();
+
     window->m_chatDock->hide();
     app->processEvents();
-    EXPECT_FALSE(window->m_chatDock->isVisible());
+    EXPECT_TRUE(window->m_chatDock->isHidden());
 
     QAction* aiMenu = findTopLevelMenuAction("&AI");
     ASSERT_NE(aiMenu, nullptr);
@@ -790,11 +793,11 @@ TEST_F(MainWindowTest, AiChatToolbarButtonAndMenuActionRevealDock)
     ASSERT_NE(aiChatAction, nullptr);
     aiChatAction->trigger();
     app->processEvents();
-    EXPECT_TRUE(window->m_chatDock->isVisible());
+    EXPECT_FALSE(window->m_chatDock->isHidden());
 
     window->m_chatDock->hide();
     app->processEvents();
-    EXPECT_FALSE(window->m_chatDock->isVisible());
+    EXPECT_TRUE(window->m_chatDock->isHidden());
 
     QToolButton* aiButton = nullptr;
     for (QToolButton* button : window->ui->objectsToolbar->findChildren<QToolButton*>()) {
@@ -806,7 +809,7 @@ TEST_F(MainWindowTest, AiChatToolbarButtonAndMenuActionRevealDock)
     ASSERT_NE(aiButton, nullptr);
     aiButton->click();
     app->processEvents();
-    EXPECT_TRUE(window->m_chatDock->isVisible());
+    EXPECT_FALSE(window->m_chatDock->isHidden());
 }
 
 TEST_F(MainWindowTest, AssetBrowserMenuActionTracksDockVisibility)
@@ -815,17 +818,22 @@ TEST_F(MainWindowTest, AssetBrowserMenuActionTracksDockVisibility)
         GTEST_SKIP() << "Skipping: asset browser dock not available in this build";
     }
 
+    window->show();
+    app->processEvents();
+
     window->m_assetBrowserDock->hide();
     app->processEvents();
-    EXPECT_FALSE(window->m_assetBrowserDock->isVisible());
+    EXPECT_TRUE(window->m_assetBrowserDock->isHidden());
 
     window->ui->actionAsset_Browser->setChecked(true);
     app->processEvents();
-    EXPECT_TRUE(window->m_assetBrowserDock->isVisible());
+    EXPECT_TRUE(window->ui->actionAsset_Browser->isChecked());
+    EXPECT_FALSE(window->m_assetBrowserDock->isHidden());
 
     window->ui->actionAsset_Browser->setChecked(false);
     app->processEvents();
-    EXPECT_FALSE(window->m_assetBrowserDock->isVisible());
+    EXPECT_FALSE(window->ui->actionAsset_Browser->isChecked());
+    EXPECT_TRUE(window->m_assetBrowserDock->isHidden());
 }
 
 TEST_F(MainWindowTest, LoadFileQueuesNonSceneFileAndTracksRecentFiles)
