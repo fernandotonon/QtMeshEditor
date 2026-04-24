@@ -2282,38 +2282,54 @@ bool EditModeController::commitKnife()
     EditableMesh snapshot;
     std::vector<EditableSubMesh> originalSubMeshes = m_editableMesh->subMeshes();
 
-    // Build an HE view once; each splitEdge mutates it in place. We walk
-    // the confirmed list and for each OnEdge point insert a vertex. OnFace
-    // and OnVertex points don't need a splitEdge — they either already
-    // exist (OnVertex) or land inside a face and would need a splitFace
-    // pairing, which the MVP doesn't yet handle, so we skip them.
+    // Build an HE view once and hand the confirmed-click list to cutPath,
+    // which runs the walk-and-cut algorithm: splits each click endpoint
+    // and every interior edge crossed by the straight-line cut between
+    // consecutive endpoints, so the visible preview becomes a real chain
+    // of mesh edges. OnFace/OnVertex clicks aren't yet in scope — the
+    // commit skips them and proceeds on the OnEdge subset.
     HalfEdgeMesh hm;
     if (!hm.buildFromEditableMesh(*m_editableMesh)) {
         cancelKnife();
         return false;
     }
 
-    int inserted = 0;
+    std::vector<HalfEdgeMesh::CutPoint> cpts;
+    cpts.reserve(m_knifeSession.points.size());
     for (const auto& p : m_knifeSession.points) {
         if (p.kind == KnifePoint::OnEdge && p.edgeIndex >= 0) {
-            if (hm.splitEdge(p.edgeIndex, p.edgeT) >= 0) ++inserted;
+            cpts.push_back({p.edgeIndex, p.edgeT});
         }
     }
-
-    if (inserted == 0) {
+    if (cpts.size() < 2) {
         SentryReporter::addBreadcrumb("edit_mode",
-            "Knife: commit rejected (no edge cuts)");
+            "Knife: commit rejected (fewer than 2 edge clicks)");
         cancelKnife();
         return false;
     }
+    const auto cutVerts = hm.cutPath(cpts);
+    if (cutVerts.empty()) {
+        SentryReporter::addBreadcrumb("edit_mode",
+            "Knife: commit rejected (cutPath failed)");
+        cancelKnife();
+        return false;
+    }
+    const int inserted = static_cast<int>(cutVerts.size());
 
-    // Write the modified mesh back and push undo.
+    // Write the modified mesh back. Topology changed (new verts and
+    // tris), so we must resize the Ogre buffers and re-initialise the
+    // entity's subentity caches — same sequence EditMeshTopologyCommand
+    // uses on undo/redo. Without this the EditableMesh is updated but
+    // the GPU buffers still hold the pre-cut topology.
     EditableMesh updated;
     if (!hm.toEditableMesh(updated)) {
         cancelKnife();
         return false;
     }
     m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    m_editEntity->_deinitialise();
+    m_editEntity->_initialise(true);
 
     auto* cmd = new EditMeshTopologyCommand(
         std::move(originalSubMeshes),
@@ -2369,58 +2385,95 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
         }
     }
 
-    // Priority 2: edge snap. hitTestEdge returns a pair of global vertex
-    // indices identifying the edge; translate it into an HE edge index
-    // and parametric position along it.
-    const auto edgePair = hitTestEdge(screenPos, camera, vw, vh, 10.0f);
-    if (edgePair.first >= 0 && edgePair.second >= 0) {
-        auto [sub0, loc0] = globalToLocal(edgePair.first);
-        auto [sub1, loc1] = globalToLocal(edgePair.second);
-        if (sub0 < m_editableMesh->subMeshes().size()
-         && sub1 < m_editableMesh->subMeshes().size()
-         && loc0 < m_editableMesh->subMeshes()[sub0].vertices.size()
-         && loc1 < m_editableMesh->subMeshes()[sub1].vertices.size()) {
-            const auto& p0 = m_editableMesh->subMeshes()[sub0].vertices[loc0].position;
-            const auto& p1 = m_editableMesh->subMeshes()[sub1].vertices[loc1].position;
+    // Priority 2: edge snap. Knife needs a depth-aware variant of the
+    // regular edge hit-test: when front and back edges of a cube overlap
+    // in screen space, the generic hitTestEdge can pick either (iteration
+    // order decides). That lands the cut on an edge facing away from the
+    // camera, which the user experiences as "the vertex drops somewhere
+    // random on the edge I couldn't even see." Here we walk all edges,
+    // keep only those within the screen-space pixel radius, then pick the
+    // one whose closest-point sits nearest the camera.
+    {
+        const Ogre::Real nx = static_cast<Ogre::Real>(screenPos.x()) / vw;
+        const Ogre::Real ny = static_cast<Ogre::Real>(screenPos.y()) / vh;
+        const Ogre::Ray ray = camera->getCameraToViewportRay(nx, ny);
+        Ogre::SceneNode* node = m_editEntity->getParentSceneNode();
 
-            // Project the click ray onto the edge line; use that parameter
-            // to place the midpoint. Clamp into [0,1] so we stay on the segment.
-            const Ogre::Real nx = static_cast<Ogre::Real>(screenPos.x()) / vw;
-            const Ogre::Real ny = static_cast<Ogre::Real>(screenPos.y()) / vh;
-            const Ogre::Ray ray = camera->getCameraToViewportRay(nx, ny);
-            Ogre::SceneNode* node = m_editEntity->getParentSceneNode();
-            Ogre::Vector3 localOrigin = p0;
-            Ogre::Vector3 localDir = (p1 - p0);
-            if (node) {
-                const Ogre::Affine3 worldToLocal = node->_getFullTransform().inverse();
-                localOrigin = worldToLocal * ray.getOrigin();
-                localDir = worldToLocal.linear() * ray.getDirection();
+        Ogre::Vector3 rO = ray.getOrigin();
+        Ogre::Vector3 rD = ray.getDirection();
+        if (node) {
+            const Ogre::Affine3 worldToLocal = node->_getFullTransform().inverse();
+            rO = worldToLocal * rO;
+            rD = worldToLocal.linear() * rD;
+        }
+
+        HalfEdgeMesh tmp;
+        if (tmp.buildFromEditableMesh(*m_editableMesh)) {
+            const Ogre::Vector3 camPosWorld = camera->getDerivedPosition();
+            constexpr float kPixelRadius = 10.0f;
+            float bestDepth = std::numeric_limits<float>::infinity();
+            int bestEdgeIdx = -1;
+            float bestT = 0.5f;
+            Ogre::Vector3 bestLocal = Ogre::Vector3::ZERO;
+
+            for (size_t e = 0; e < tmp.edgeCount(); ++e) {
+                auto [gv0, gv1] = tmp.edgeVertices(static_cast<int>(e));
+                if (gv0 < 0 || gv1 < 0) continue;
+                auto [sub0, loc0] = globalToLocal(gv0);
+                auto [sub1, loc1] = globalToLocal(gv1);
+                if (sub0 >= m_editableMesh->subMeshes().size()) continue;
+                if (sub1 >= m_editableMesh->subMeshes().size()) continue;
+                const auto& sA = m_editableMesh->subMeshes()[sub0];
+                const auto& sB = m_editableMesh->subMeshes()[sub1];
+                if (loc0 >= sA.vertices.size() || loc1 >= sB.vertices.size()) continue;
+
+                const auto& p0 = sA.vertices[loc0].position;
+                const auto& p1 = sB.vertices[loc1].position;
+
+                // Screen-space pixel distance: reject edges outside the
+                // snap radius outright.
+                if (!node) continue;
+                const Ogre::Vector3 wp0 = node->convertLocalToWorldPosition(p0);
+                const Ogre::Vector3 wp1 = node->convertLocalToWorldPosition(p1);
+                const QPoint sp0 = worldToScreen(wp0, camera, vw, vh);
+                const QPoint sp1 = worldToScreen(wp1, camera, vw, vh);
+                if (pointToSegmentDistance(screenPos, sp0, sp1) > kPixelRadius)
+                    continue;
+
+                // Closest point on the edge segment to the click ray, in
+                // local mesh space. Solves the 2x2 system for the edge
+                // parameter s and ray parameter u that minimize |P(s)-R(u)|².
+                const Ogre::Vector3 d = p1 - p0;
+                const float a = d.dotProduct(d);
+                const float b = d.dotProduct(rD);
+                const float c = rD.dotProduct(rD);
+                const float det = a * c - b * b;
+                float t = 0.5f;
+                if (a > 1e-10f && det > 1e-10f) {
+                    const Ogre::Vector3 w0 = p0 - rO;
+                    const float dW = d.dotProduct(w0);
+                    const float rW = rD.dotProduct(w0);
+                    t = std::clamp((b * rW - c * dW) / det, 0.0f, 1.0f);
+                }
+                const Ogre::Vector3 local = p0 + d * t;
+                const Ogre::Vector3 world = node->convertLocalToWorldPosition(local);
+                const float depth = (world - camPosWorld).dotProduct(camera->getDerivedDirection());
+                if (depth <= 0.0f) continue; // behind camera
+                if (depth < bestDepth) {
+                    bestDepth = depth;
+                    bestEdgeIdx = static_cast<int>(e);
+                    bestT = t;
+                    bestLocal = local;
+                }
             }
 
-            // Closest-point-on-line-segment against the ray in local space.
-            const Ogre::Vector3 d = p1 - p0;
-            const float dd = d.dotProduct(d);
-            if (dd > 1e-10f) {
-                const Ogre::Vector3 w = localOrigin - p0;
-                const float t = std::clamp(d.dotProduct(w) / dd, 0.0f, 1.0f);
-
-                // We still need the HE edge index. Build a quick lookup
-                // on the fly: iterate HE edges and match by vertex pair.
-                HalfEdgeMesh tmp;
-                if (tmp.buildFromEditableMesh(*m_editableMesh)) {
-                    for (size_t e = 0; e < tmp.edgeCount(); ++e) {
-                        auto [a, b] = tmp.edgeVertices(static_cast<int>(e));
-                        if ((a == edgePair.first && b == edgePair.second)
-                         || (a == edgePair.second && b == edgePair.first)) {
-                            out = {};
-                            out.kind = KnifePoint::OnEdge;
-                            out.edgeIndex = static_cast<int>(e);
-                            out.edgeT = t;
-                            out.localPosition = p0 + d * t;
-                            return true;
-                        }
-                    }
-                }
+            if (bestEdgeIdx >= 0) {
+                out = {};
+                out.kind = KnifePoint::OnEdge;
+                out.edgeIndex = bestEdgeIdx;
+                out.edgeT = bestT;
+                out.localPosition = bestLocal;
+                return true;
             }
         }
     }

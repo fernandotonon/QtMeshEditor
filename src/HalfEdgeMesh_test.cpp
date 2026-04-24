@@ -3308,3 +3308,92 @@ TEST(HalfEdgeMeshStandalone, SplitEdgePreservesSubmeshCount) {
     ASSERT_TRUE(he.toEditableMesh(back));
     EXPECT_EQ(back.subMeshes().size(), static_cast<size_t>(beforeSubCount));
 }
+
+// ===========================================================================
+// cutPath — knife walk-and-cut along a polyline
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, CutPathCrossesInteriorDiagonalAndLinksEndpoints) {
+    // Two triangles share a diagonal v1-v2. A horizontal cut from the
+    // midpoint of v0-v1 to the midpoint of v2-v3 crosses the diagonal at
+    // its midpoint, so the final mesh must have:
+    //   - 3 new vertices (both endpoints plus one on the diagonal),
+    //   - the cut visible as a chain of real edges end-to-end.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int edgeBottom = findEdge(he, 0, 1);
+    const int edgeTop = findEdge(he, 2, 3);
+    ASSERT_GE(edgeBottom, 0);
+    ASSERT_GE(edgeTop, 0);
+
+    const auto newVerts = he.cutPath({{edgeBottom, 0.5f}, {edgeTop, 0.5f}});
+    ASSERT_EQ(newVerts.size(), 3u)
+        << "expected 2 endpoint verts + 1 diagonal-crossing vert";
+    EXPECT_TRUE(he.validate());
+
+    // All three new vertices should sit on the x=0.5 cut line.
+    for (int v : newVerts) {
+        EXPECT_NEAR(he.vertex(v).position.x, 0.5f, 1e-3f);
+    }
+
+    // The cut must exist as real edges: every consecutive pair of cut
+    // vertices (sorted by y) should be connected by an HE edge.
+    std::vector<int> orderedCutVerts = newVerts;
+    std::sort(orderedCutVerts.begin(), orderedCutVerts.end(),
+              [&](int a, int b) {
+                  return he.vertex(a).position.y < he.vertex(b).position.y;
+              });
+    for (size_t i = 0; i + 1 < orderedCutVerts.size(); ++i) {
+        EXPECT_GE(findEdge(he, orderedCutVerts[i], orderedCutVerts[i + 1]), 0)
+            << "consecutive cut vertices should be connected by a real edge";
+    }
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, CutPathSingleTriangleStillProducesEndpointEdge) {
+    // Cutting both clicks onto edges of a single triangle doesn't need an
+    // interior edge crossing — two splitEdges already leave the M1↔M2
+    // segment as a real edge. cutPath should return exactly the two
+    // endpoint vertices in that case.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int edgeA = findEdge(he, 0, 1);
+    const int edgeB = findEdge(he, 1, 2);
+    ASSERT_GE(edgeA, 0);
+    ASSERT_GE(edgeB, 0);
+
+    const auto newVerts = he.cutPath({{edgeA, 0.5f}, {edgeB, 0.5f}});
+    ASSERT_EQ(newVerts.size(), 2u);
+    EXPECT_TRUE(he.validate());
+    EXPECT_GE(findEdge(he, newVerts[0], newVerts[1]), 0)
+        << "single-triangle cut should connect both endpoints directly";
+}
+
+TEST(HalfEdgeMeshStandalone, CutPathBailsOnFewerThanTwoPoints) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    EXPECT_TRUE(he.cutPath({}).empty());
+    const int edge = findEdge(he, 0, 1);
+    ASSERT_GE(edge, 0);
+    EXPECT_TRUE(he.cutPath({{edge, 0.5f}}).empty());
+}
+
+TEST(HalfEdgeMeshStandalone, CutPathFailsOnInvalidEdgeIndex) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int edge = findEdge(he, 0, 1);
+    ASSERT_GE(edge, 0);
+    // Negative / out-of-range edge indices short-circuit the walk.
+    EXPECT_TRUE(he.cutPath({{edge, 0.5f}, {-1, 0.5f}}).empty());
+}

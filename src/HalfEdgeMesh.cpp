@@ -3802,6 +3802,189 @@ bool HalfEdgeMesh::splitFace(int faceIdx, int vA, int vB)
     return true;
 }
 
+namespace {
+
+// Intersect two line segments in 3D, parameterised as
+//   A(sA) = a0 + sA * (a1 - a0),
+//   B(sB) = b0 + sB * (b1 - b0),
+// minimising |A(sA) - B(sB)|². Returns the parameter pair plus the
+// squared separation; callers decide whether that separation is small
+// enough to call the segments "coincident" for cut purposes.
+struct SegmentSegmentClosest {
+    float sA = 0.0f;
+    float sB = 0.0f;
+    float squaredSeparation = 0.0f;
+    bool degenerate = false; // true if either segment has ~zero length
+};
+
+SegmentSegmentClosest closestOnSegments(const Ogre::Vector3& a0, const Ogre::Vector3& a1,
+                                        const Ogre::Vector3& b0, const Ogre::Vector3& b1)
+{
+    SegmentSegmentClosest r;
+    const Ogre::Vector3 dA = a1 - a0;
+    const Ogre::Vector3 dB = b1 - b0;
+    const Ogre::Vector3 w0 = a0 - b0;
+    const float aa = dA.dotProduct(dA);
+    const float bb = dB.dotProduct(dB);
+    const float ab = dA.dotProduct(dB);
+    const float aw = dA.dotProduct(w0);
+    const float bw = dB.dotProduct(w0);
+    const float det = aa * bb - ab * ab;
+    if (aa < 1e-12f || bb < 1e-12f) { r.degenerate = true; return r; }
+    if (det < 1e-12f) {
+        // Parallel — pick the middle of the overlap on A.
+        r.sA = 0.5f;
+        r.sB = std::clamp((r.sA * ab + bw) / bb, 0.0f, 1.0f);
+    } else {
+        r.sA = (ab * bw - bb * aw) / det;
+        r.sB = (aa * bw - ab * aw) / det;
+    }
+    r.sA = std::clamp(r.sA, 0.0f, 1.0f);
+    r.sB = std::clamp(r.sB, 0.0f, 1.0f);
+    const Ogre::Vector3 pA = a0 + dA * r.sA;
+    const Ogre::Vector3 pB = b0 + dB * r.sB;
+    r.squaredSeparation = (pA - pB).squaredLength();
+    return r;
+}
+
+} // namespace
+
+std::vector<int> HalfEdgeMesh::cutPath(const std::vector<CutPoint>& points)
+{
+    std::vector<int> newVertices;
+    if (points.size() < 2) return newVertices;
+
+    // Resolve every click's edge to a stable (vA, vB) vertex pair BEFORE
+    // touching the mesh. Edge indices aren't stable across splitEdge
+    // (rebuildEdgesAndTwins reorders them) but vertex indices are append-
+    // only, so we can re-find the edge each time by its endpoints.
+    std::vector<std::pair<int, int>> clickEdgeVerts(points.size(), {-1, -1});
+    std::vector<float> clickT(points.size(), 0.0f);
+    for (size_t i = 0; i < points.size(); ++i) {
+        const int eIdx = points[i].edgeIndex;
+        if (eIdx < 0 || eIdx >= static_cast<int>(m_edges.size())) return newVertices;
+        clickEdgeVerts[i] = edgeVertices(eIdx);
+        clickT[i] = points[i].t;
+        if (clickEdgeVerts[i].first < 0 || clickEdgeVerts[i].second < 0) return newVertices;
+    }
+
+    // Helper: re-find the HE edge index whose endpoints are {va, vb}
+    // against the current mesh. Returns -1 if either vertex has been
+    // removed or the pair is no longer a logical edge.
+    auto findEdgeByVerts = [this](int va, int vb) -> int {
+        for (size_t e = 0; e < m_edges.size(); ++e) {
+            const auto [a, b] = edgeVertices(static_cast<int>(e));
+            if ((a == va && b == vb) || (a == vb && b == va))
+                return static_cast<int>(e);
+        }
+        return -1;
+    };
+
+    // Step 1: insert vertices at every click endpoint, re-resolving the
+    // edge each time because the previous split may have renumbered them.
+    std::vector<int> clickVerts(points.size(), -1);
+    for (size_t i = 0; i < points.size(); ++i) {
+        const int resolvedEdge = findEdgeByVerts(clickEdgeVerts[i].first,
+                                                 clickEdgeVerts[i].second);
+        if (resolvedEdge < 0) return newVertices;
+        const int v = splitEdge(resolvedEdge, clickT[i]);
+        if (v < 0) return newVertices;
+        clickVerts[i] = v;
+        newVertices.push_back(v);
+    }
+
+    // Step 2: for each consecutive pair, walk from one click vertex to the
+    // next through the tris between them. Every edge the straight-line
+    // cut crosses gets splitEdge'd so the cut materialises as real mesh
+    // edges.
+    constexpr int kMaxWalkSteps = 256;    // safety: real cuts visit <~10 tris
+    constexpr float kNearZero = 1e-5f;    // close-to-vertex tolerance
+    constexpr float kMinStep = 1e-4f;     // reject crossings that don't advance
+
+    for (size_t i = 0; i + 1 < clickVerts.size(); ++i) {
+        int vA = clickVerts[i];
+        const int vTarget = clickVerts[i + 1];
+        if (vA < 0 || vTarget < 0 || vA == vTarget) continue;
+
+        for (int step = 0; step < kMaxWalkSteps; ++step) {
+            if (vA == vTarget) break;
+
+            // Does vA already share a triangle with vTarget? Then the
+            // existing splitEdge semantics (two click splits on one tri
+            // produce the connecting edge automatically) already created
+            // the final cut edge — nothing more to do for this pair.
+            const auto facesAtA = facesAroundVertex(vA);
+            bool shareFace = false;
+            for (int f : facesAtA) {
+                const auto fv = faceVertices(f);
+                if (std::find(fv.begin(), fv.end(), vTarget) != fv.end()) {
+                    shareFace = true; break;
+                }
+            }
+            if (shareFace) break;
+
+            const Ogre::Vector3 pA = m_vertices[vA].position;
+            const Ogre::Vector3 pT = m_vertices[vTarget].position;
+
+            // Pick the face adjacent to vA whose straight-line to vTarget
+            // exits through an interior edge. For each candidate face,
+            // consider only edges not incident to vA: if the closest-point
+            // pair sits strictly inside the edge and advances us toward
+            // vTarget (sCut > kMinStep), that's an exit candidate. Among
+            // candidates, choose the smallest sCut (closest crossing).
+            int bestFace = -1;
+            int bestEdge = -1;
+            float bestT = 0.0f;
+            float bestSA = std::numeric_limits<float>::infinity();
+
+            for (int f : facesAtA) {
+                const auto fe = faceEdges(f);
+                for (int eIdx : fe) {
+                    const auto [ev0, ev1] = edgeVertices(eIdx);
+                    if (ev0 == vA || ev1 == vA) continue; // entry edge
+                    const Ogre::Vector3& b0 = m_vertices[ev0].position;
+                    const Ogre::Vector3& b1 = m_vertices[ev1].position;
+                    const auto hit = closestOnSegments(pA, pT, b0, b1);
+                    if (hit.degenerate) continue;
+                    if (hit.squaredSeparation > 1e-4f) continue;
+                    // Must actually advance from vA toward vTarget.
+                    if (hit.sA < kMinStep) continue;
+                    // Exit edge parameter must be strictly inside the
+                    // segment (endpoint-snap is a TODO).
+                    if (hit.sB < kNearZero || hit.sB > 1.0f - kNearZero) continue;
+                    if (hit.sA < bestSA) {
+                        bestSA = hit.sA;
+                        bestEdge = eIdx;
+                        bestT = hit.sB;
+                        bestFace = f;
+                    }
+                }
+            }
+
+            if (bestEdge < 0) {
+                // No valid forward exit found. Either the cut's ray went
+                // off the surface (click span not on a coplanar region)
+                // or the target sits on a face we don't share — give up
+                // on this pair and move on.
+                break;
+            }
+            (void)bestFace;
+
+            // Split the exit edge; the new vertex becomes the entry point
+            // for the next triangle. Because the previous iteration's vA
+            // and the new vertex now both live on the same triangle, the
+            // splitEdge pass already leaves the segment between them as a
+            // real mesh edge.
+            const int vMid = splitEdge(bestEdge, bestT);
+            if (vMid < 0) break;
+            newVertices.push_back(vMid);
+            vA = vMid;
+        }
+    }
+
+    return newVertices;
+}
+
 bool HalfEdgeMesh::validate() const
 {
     // Check 1: Twin symmetry

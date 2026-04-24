@@ -408,6 +408,45 @@ public:
      */
     bool splitFace(int faceIdx, int vA, int vB);
 
+    /**
+     * @brief A single click on a mesh edge, given as the edge index plus the
+     *        parametric position along it in [0,1]. The walk-and-cut knife
+     *        algorithm takes a list of these and produces a continuous chain
+     *        of real mesh edges between consecutive clicks.
+     */
+    struct CutPoint {
+        int edgeIndex = -1;
+        float t = 0.5f;
+    };
+
+    /**
+     * @brief Apply a knife cut defined by a sequence of edge clicks.
+     *
+     * For each pair of consecutive `CutPoint`s the algorithm:
+     *  - runs `splitEdge` at both endpoints (skipping duplicates the second
+     *    time an endpoint is encountered),
+     *  - walks triangles between the two new vertices along the 3D line that
+     *    connects them, running `splitEdge` at every interior edge the line
+     *    crosses,
+     *  - stops when the current triangle contains both the previous cut
+     *    vertex and the next endpoint — at that point the existing
+     *    splitEdge semantics already produce the closing cut edge.
+     *
+     * MVP scope:
+     *  - All intersections must land strictly inside edge segments. Cuts
+     *    that graze a vertex are not yet snapped.
+     *  - The algorithm walks only one face at a time; it doesn't bridge
+     *    disconnected submeshes.
+     *
+     * @param points Ordered clicks. Each must reference a currently-valid
+     *               edge of the mesh (indices are NOT re-validated against
+     *               mutations inside this call — callers must pass the list
+     *               resolved against the pre-cut mesh).
+     * @return Indices of every newly created vertex (endpoints + interior
+     *         crossings), in creation order. Empty on failure.
+     */
+    std::vector<int> cutPath(const std::vector<CutPoint>& points);
+
     /// @}
 
     /// @name Validation
