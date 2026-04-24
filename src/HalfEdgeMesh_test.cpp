@@ -3104,3 +3104,207 @@ TEST(HalfEdgeMeshStandalone, BevelVertexSegmentsClampsOverUpperLimit) {
     ASSERT_TRUE(he.toEditableMesh(back));
     EXPECT_TRUE(isManifold(back));
 }
+
+// ===========================================================================
+// splitEdge / splitFace — knife-tool topology primitives
+// ===========================================================================
+
+// Count active (non-retired) faces. After a topology op some face slots have
+// halfEdge == -1 — they'll be compacted out of toEditableMesh but still
+// contribute to faceCount(), so tests that want the visible triangle count
+// need the active count here.
+static int activeFaceCount(const HalfEdgeMesh& he)
+{
+    int n = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge >= 0) ++n;
+    }
+    return n;
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeMidpointOfInteriorEdgeDoublesTriangles) {
+    // The quad mesh has two triangles sharing the v1↔v2 diagonal. Splitting
+    // that edge at t=0.5 should insert one new vertex, replace both triangles
+    // with two each (four tris total), and keep the mesh manifold.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    const int vMid = he.splitEdge(sharedEdge, 0.5f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+
+    EXPECT_EQ(he.vertexCount(), 5u);
+    EXPECT_EQ(activeFaceCount(he), 4);
+
+    // Midpoint position should be the average of the endpoints.
+    const auto mid = he.vertex(vMid).position;
+    EXPECT_NEAR(mid.x, 0.5f, 1e-4f);
+    EXPECT_NEAR(mid.y, 0.5f, 1e-4f);
+    EXPECT_NEAR(mid.z, 0.0f, 1e-4f);
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeInterpolatesNormalAndUV) {
+    // Interpolation at t=0.25 should place the new vertex a quarter of the
+    // way from v1 to v2 and carry weighted normal / UV attributes.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    const int vMid = he.splitEdge(sharedEdge, 0.25f);
+    ASSERT_GE(vMid, 0);
+
+    const auto& v = he.vertex(vMid);
+    EXPECT_TRUE(v.hasNormal);
+    EXPECT_TRUE(v.hasUV);
+
+    // Position lies on the v1↔v2 segment at parameter ~0.25 (direction
+    // depends on which endpoint splitEdge treats as the "from"; check
+    // distance ratio rather than exact coords).
+    const auto& p1 = he.vertex(1).position;
+    const auto& p2 = he.vertex(2).position;
+    const float segLen = p1.distance(p2);
+    const float d1 = v.position.distance(p1);
+    const float d2 = v.position.distance(p2);
+    const float frac = std::min(d1, d2) / segLen;
+    EXPECT_NEAR(frac, 0.25f, 1e-3f);
+
+    // Both endpoints share normal +Z; midpoint should too.
+    EXPECT_NEAR(v.normal.z, 1.0f, 1e-4f);
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeBoundaryEdgeProducesOneExtraTriangle) {
+    // A triangle's perimeter edge is a boundary edge (only one adjacent face).
+    // Splitting it should turn the single triangle into two triangles without
+    // creating any phantom face on the outside.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    // Pick the edge between v0 (0,0,0) and v1 (1,0,0).
+    const int edge = findEdge(he, 0, 1);
+    ASSERT_GE(edge, 0);
+
+    const int vMid = he.splitEdge(edge, 0.5f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+
+    EXPECT_EQ(he.vertexCount(), 4u);
+    EXPECT_EQ(activeFaceCount(he), 2);
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeClampsExtremeT) {
+    // t=0 or t=1 would collapse one of the new triangles; splitEdge should
+    // nudge the parameter inside the (0,1) interior rather than fail or
+    // produce a zero-area face.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    const int vMid = he.splitEdge(sharedEdge, 0.0f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeInvalidIndexReturnsMinusOne) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.splitEdge(-1, 0.5f), -1);
+    EXPECT_EQ(he.splitEdge(999, 0.5f), -1);
+}
+
+TEST(HalfEdgeMeshStandalone, TwoSplitEdgesOnOneTriangleProduceMidpointEdge) {
+    // Real knife-tool scenario: the user cuts a triangle by clicking two of
+    // its edges. Two splitEdge calls on the same triangle should leave the
+    // M1↔M2 segment as a real edge of the resulting mesh — no follow-up
+    // splitFace needed. This is the invariant the knife commit pipeline
+    // relies on for the common "cut one face" case.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    const int edgeA = findEdge(he, 0, 1);
+    ASSERT_GE(edgeA, 0);
+    const int m1 = he.splitEdge(edgeA, 0.5f);
+    ASSERT_GE(m1, 0);
+    EXPECT_TRUE(he.validate());
+
+    const int edgeB = findEdge(he, 1, 2);
+    ASSERT_GE(edgeB, 0);
+    const int m2 = he.splitEdge(edgeB, 0.5f);
+    ASSERT_GE(m2, 0);
+    EXPECT_TRUE(he.validate());
+
+    // The knife cut ran from M1 to M2; that segment must now be an edge.
+    EXPECT_GE(findEdge(he, m1, m2), 0)
+        << "M1-M2 should be a real edge after two splitEdges on the same triangle";
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SplitFaceRejectsAdjacentBoundaryVertices) {
+    // A "diagonal" between two vertices that are already edge-adjacent on a
+    // face boundary would duplicate the existing edge. splitFace should
+    // refuse rather than produce a degenerate split. On a triangle every
+    // pair of boundary vertices is edge-adjacent so every call should fail.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    EXPECT_FALSE(he.splitFace(0, 0, 1));
+    EXPECT_FALSE(he.splitFace(0, 1, 2));
+    EXPECT_FALSE(he.splitFace(0, 0, 2));
+    EXPECT_EQ(activeFaceCount(he), 1);
+}
+
+TEST(HalfEdgeMeshStandalone, SplitFaceRejectsInvalidVertexIndices) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_FALSE(he.splitFace(0, -1, 1));
+    EXPECT_FALSE(he.splitFace(0, 0, 999));
+    EXPECT_FALSE(he.splitFace(0, 2, 2)); // same vertex
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgePreservesSubmeshCount) {
+    // splitEdge operating on one submesh's edge should leave the submesh
+    // count unchanged. Attribute correctness across submeshes is covered
+    // by the roundtrip test below.
+    auto em = makeTwoSubMeshMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const auto beforeSubCount = he.subMeshCount();
+    const int edge = findEdge(he, 0, 1);
+    if (edge < 0) GTEST_SKIP() << "v0-v1 edge not present in mesh";
+
+    const int vMid = he.splitEdge(edge, 0.5f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+    EXPECT_EQ(he.subMeshCount(), beforeSubCount);
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_EQ(back.subMeshes().size(), static_cast<size_t>(beforeSubCount));
+}

@@ -125,19 +125,26 @@ bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
 
 int HalfEdgeMesh::appendTriangle(int v0, int v1, int v2, int subMeshIndex)
 {
-    int fIdx = static_cast<int>(m_faces.size());
+    return appendFace({v0, v1, v2}, subMeshIndex);
+}
+
+int HalfEdgeMesh::appendFace(const std::vector<int>& vertices, int subMeshIndex)
+{
+    const int n = static_cast<int>(vertices.size());
+    if (n < 3) return -1;
+
+    const int fIdx = static_cast<int>(m_faces.size());
     HEFace f;
     f.subMeshIndex = subMeshIndex;
     m_faces.push_back(f);
 
-    int he0 = static_cast<int>(m_halfEdges.size());
-    int verts[3] = {v0, v1, v2};
-    for (int i = 0; i < 3; ++i) {
+    const int he0 = static_cast<int>(m_halfEdges.size());
+    for (int i = 0; i < n; ++i) {
         HalfEdge he;
-        he.vertex = verts[(i + 1) % 3]; // points TO the next vertex
+        he.vertex = vertices[(i + 1) % n]; // points TO the next vertex in the loop
         he.face = fIdx;
-        he.next = he0 + (i + 1) % 3;
-        he.prev = he0 + (i + 2) % 3;
+        he.next = he0 + (i + 1) % n;
+        he.prev = he0 + (i + n - 1) % n;
         m_halfEdges.push_back(he);
     }
     m_faces[fIdx].halfEdge = he0;
@@ -3580,6 +3587,219 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
     fixVertexHalfEdges();
 
     return newVertices;
+}
+
+namespace {
+
+// Interpolate a new vertex between two existing ones at parameter t.
+// Position / normal / UV / color / tangent / bone weights are lerped by t,
+// with an eps safety margin so an exactly-on-endpoint t doesn't collapse
+// the source face into degeneracy.
+HEVertex interpolateVertex(const HEVertex& a, const HEVertex& b, float t)
+{
+    HEVertex r;
+    r.position = a.position * (1.0f - t) + b.position * t;
+    r.normal   = a.normal   * (1.0f - t) + b.normal   * t;
+    if (r.normal.squaredLength() > 1e-12f) r.normal.normalise();
+    r.uv       = a.uv       * (1.0f - t) + b.uv       * t;
+    r.color    = a.color    * (1.0f - t) + b.color    * t;
+    r.tangent  = a.tangent  * (1.0f - t) + b.tangent  * t;
+    r.hasNormal  = a.hasNormal && b.hasNormal;
+    r.hasUV      = a.hasUV && b.hasUV;
+    r.hasColor   = a.hasColor && b.hasColor;
+    r.hasTangent = a.hasTangent && b.hasTangent;
+
+    // Union of bone influences by index, weights blended by t. Skip zero-
+    // weight entries so the list stays short on typical rigs.
+    auto addOrBlend = [&](unsigned short idx, float w) {
+        if (w <= 1e-6f) return;
+        for (auto& ba : r.boneAssignments) {
+            if (ba.first == idx) { ba.second += w; return; }
+        }
+        r.boneAssignments.emplace_back(idx, w);
+    };
+    for (const auto& ba : a.boneAssignments) addOrBlend(ba.first, ba.second * (1.0f - t));
+    for (const auto& ba : b.boneAssignments) addOrBlend(ba.first, ba.second * t);
+    return r;
+}
+
+} // namespace
+
+int HalfEdgeMesh::splitEdge(int edgeIdx, float t)
+{
+    if (edgeIdx < 0 || edgeIdx >= static_cast<int>(m_edges.size())) return -1;
+    const int heA = m_edges[edgeIdx].halfEdge;
+    if (heA < 0 || heA >= static_cast<int>(m_halfEdges.size())) return -1;
+
+    // Clamp t off the endpoints so neither new face degenerates to a sliver.
+    constexpr float kEps = 1e-4f;
+    t = std::clamp(t, kEps, 1.0f - kEps);
+
+    // Collect the two adjacent triangle descriptions while the old
+    // topology is still intact. Both faces must be triangles for this
+    // MVP; n-gon splitting needs ear-clip-aware rewiring.
+    struct TriFace {
+        int face;           // face index (for submesh lookup)
+        int subMeshIndex;
+        int vFrom;          // edge endpoint (start)
+        int vTo;            // edge endpoint (end)
+        int vOpp;           // third triangle vertex
+        int heFrom, heTo, heOpp; // the three half-edges of the triangle
+    };
+
+    auto describeFace = [&](int he, TriFace& out) -> bool {
+        if (he < 0 || he >= static_cast<int>(m_halfEdges.size())) return false;
+        if (m_halfEdges[he].face < 0) return false;
+        const int fIdx = m_halfEdges[he].face;
+        const auto verts = faceVertices(fIdx);
+        if (verts.size() != 3) return false;
+
+        // Identify which HE of the triangle is the one carrying `edgeIdx`.
+        // Traverse the face loop starting at the face's HE; the HE pointing
+        // "to" heVertex of `he` is the one sharing edgeIdx. Fill TriFace
+        // in face-loop order so we keep winding.
+        const int startHE = m_faces[fIdx].halfEdge;
+        int he0 = startHE;
+        int he1 = m_halfEdges[he0].next;
+        int he2 = m_halfEdges[he1].next;
+        int heIndices[3] = {he0, he1, he2};
+
+        int shareIdx = -1;
+        for (int i = 0; i < 3; ++i) {
+            if (heIndices[i] == he) { shareIdx = i; break; }
+        }
+        if (shareIdx < 0) return false;
+
+        out.face = fIdx;
+        out.subMeshIndex = m_faces[fIdx].subMeshIndex;
+        out.heFrom = heIndices[shareIdx];
+        out.heTo   = heIndices[(shareIdx + 1) % 3];
+        out.heOpp  = heIndices[(shareIdx + 2) % 3];
+
+        // Vertex layout: heFrom.prev.vertex -> heFrom.vertex -> heTo.vertex.
+        // The shared edge goes vFrom -> vTo. The third vertex is heTo.vertex.
+        out.vFrom = m_halfEdges[out.heOpp].vertex;
+        out.vTo   = m_halfEdges[out.heFrom].vertex;
+        out.vOpp  = m_halfEdges[out.heTo].vertex;
+        return true;
+    };
+
+    TriFace fA{}, fB{};
+    const bool hasA = describeFace(heA, fA);
+    const int heB = m_halfEdges[heA].twin;
+    const bool hasB = (heB >= 0) && describeFace(heB, fB);
+
+    if (!hasA && !hasB) return -1;
+
+    // Edge direction is fA.vFrom -> fA.vTo (with t measured from vFrom).
+    // If only fB exists (the edge sits on the boundary on the A side),
+    // fB.vFrom / fB.vTo run in the opposite direction, so re-measure t.
+    int vFrom = hasA ? fA.vFrom : fB.vTo;
+    int vTo   = hasA ? fA.vTo   : fB.vFrom;
+
+    // Create the midpoint vertex.
+    HEVertex mid = interpolateVertex(m_vertices[vFrom], m_vertices[vTo], t);
+    mid.halfEdge = -1;
+    const int vMid = static_cast<int>(m_vertices.size());
+    m_vertices.push_back(std::move(mid));
+
+    // Retire a face: set each of its half-edges' face to -1 and clear the
+    // face slot's halfEdge pointer so the four-call cleanup drops them.
+    auto retireFace = [&](const TriFace& tf) {
+        m_halfEdges[tf.heFrom].face = -1;
+        m_halfEdges[tf.heTo].face = -1;
+        m_halfEdges[tf.heOpp].face = -1;
+        m_faces[tf.face].halfEdge = -1;
+    };
+
+    if (hasA) {
+        retireFace(fA);
+        // Old triangle [vFrom, vTo, vOpp] wound as
+        // heOpp: vOpp -> vFrom, heFrom: vFrom -> vTo, heTo: vTo -> vOpp.
+        // New triangles share the vMid → vOpp diagonal and keep the same winding.
+        appendFace({fA.vFrom, vMid, fA.vOpp}, fA.subMeshIndex);
+        appendFace({vMid, fA.vTo, fA.vOpp}, fA.subMeshIndex);
+    }
+    if (hasB) {
+        retireFace(fB);
+        // fB's winding is reversed relative to fA (opposite twin). Using
+        // fB's own vFrom/vTo keeps its orientation intact.
+        appendFace({fB.vFrom, vMid, fB.vOpp}, fB.subMeshIndex);
+        appendFace({vMid, fB.vTo, fB.vOpp}, fB.subMeshIndex);
+    }
+
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+    return vMid;
+}
+
+bool HalfEdgeMesh::splitFace(int faceIdx, int vA, int vB)
+{
+    if (faceIdx < 0 || faceIdx >= static_cast<int>(m_faces.size())) return false;
+    if (vA == vB) return false;
+    if (vA < 0 || vB < 0) return false;
+    if (vA >= static_cast<int>(m_vertices.size())) return false;
+    if (vB >= static_cast<int>(m_vertices.size())) return false;
+    if (m_faces[faceIdx].halfEdge < 0) return false;
+
+    const auto verts = faceVertices(faceIdx);
+    if (verts.size() < 3 || verts.size() > 4) return false;
+
+    // Require both vA and vB to be on the boundary loop.
+    int posA = -1;
+    int posB = -1;
+    for (int i = 0; i < static_cast<int>(verts.size()); ++i) {
+        if (verts[i] == vA) posA = i;
+        if (verts[i] == vB) posB = i;
+    }
+    if (posA < 0 || posB < 0) return false;
+
+    // Reject splits that don't actually cut the face: adjacent boundary
+    // vertices are already connected by an edge, so a "diagonal" between
+    // them would be a duplicate.
+    const int n = static_cast<int>(verts.size());
+    const int gap = std::abs(posA - posB);
+    if (gap == 1 || gap == n - 1) return false;
+
+    const int subMeshIndex = m_faces[faceIdx].subMeshIndex;
+
+    // Retire the old face.
+    {
+        const int startHE = m_faces[faceIdx].halfEdge;
+        int he = startHE;
+        do {
+            const int next = m_halfEdges[he].next;
+            m_halfEdges[he].face = -1;
+            he = next;
+        } while (he != startHE);
+        m_faces[faceIdx].halfEdge = -1;
+    }
+
+    // Walk the old loop from vA to vB to collect one side, then from vB
+    // to vA for the other. appendFace needs at least 3 vertices, so a
+    // degenerate side (empty) bails the whole operation.
+    std::vector<int> sideAB;
+    for (int i = posA; ; i = (i + 1) % n) {
+        sideAB.push_back(verts[i]);
+        if (i == posB) break;
+    }
+    std::vector<int> sideBA;
+    for (int i = posB; ; i = (i + 1) % n) {
+        sideBA.push_back(verts[i]);
+        if (i == posA) break;
+    }
+    if (sideAB.size() < 3 || sideBA.size() < 3) return false;
+
+    appendFace(sideAB, subMeshIndex);
+    appendFace(sideBA, subMeshIndex);
+
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+    return true;
 }
 
 bool HalfEdgeMesh::validate() const

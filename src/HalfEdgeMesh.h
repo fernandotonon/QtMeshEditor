@@ -367,6 +367,47 @@ public:
                                    float profile = 0.5f,
                                    const std::vector<float>& profilePoints = {});
 
+    /**
+     * @brief Insert a new vertex on an edge at parametric position t, then
+     *        split each triangle that used the edge into two triangles.
+     *
+     * Interpolates the new vertex's position, normal, UV, color, tangent,
+     * and bone weights between the edge's endpoints using t. After the call
+     * the edge is replaced by two edges meeting at the new vertex, and
+     * each of the 1–2 adjacent triangles has been replaced by two
+     * triangles sharing the split point.
+     *
+     * MVP limits: works only on edges whose adjacent faces are triangles
+     * (n-gons would need ear-clip-aware splitting). Returns -1 on failure.
+     *
+     * @param edgeIdx The edge to split.
+     * @param t Parametric position along the edge in [0, 1]. Clamped into
+     *          the (epsilon, 1 - epsilon) interior so the resulting faces
+     *          aren't degenerate.
+     * @return The newly created vertex's index, or -1 on failure.
+     */
+    int splitEdge(int edgeIdx, float t);
+
+    /**
+     * @brief Split a face by inserting a diagonal edge between two of its
+     *        boundary vertices.
+     *
+     * Retires the old face and appends two new faces sharing the new
+     * diagonal edge. Vertices must both be on the face's boundary loop
+     * and must not already be adjacent (connected by a face-boundary
+     * edge), or the split would be degenerate.
+     *
+     * MVP limits: only splits triangles and quads (faces with 3 or 4
+     * boundary vertices). Higher n-gons aren't produced by the current
+     * pipeline.
+     *
+     * @param faceIdx The face to split.
+     * @param vA First boundary vertex.
+     * @param vB Second boundary vertex.
+     * @return true on success.
+     */
+    bool splitFace(int faceIdx, int vA, int vB);
+
     /// @}
 
     /// @name Validation
@@ -406,6 +447,12 @@ private:
     /// Returns the new face index. Does NOT update vertex or edge data —
     /// callers must rebuild edges/twins after adding all triangles.
     int appendTriangle(int v0, int v1, int v2, int subMeshIndex);
+
+    /// Append a polygon with N vertices (N >= 3) as a single face with
+    /// N half-edges. Returns the new face index, or -1 if vertices.size()
+    /// is invalid. Like appendTriangle, callers must run the
+    /// rebuild/compact/boundary/fix-vertex cleanup afterwards.
+    int appendFace(const std::vector<int>& vertices, int subMeshIndex);
 
     /// Rebuild m_edges, half-edge twin/edge fields, and clear edge state.
     /// Skips half-edges with face < 0. After this, every interior HE has
