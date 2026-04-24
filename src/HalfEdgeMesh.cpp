@@ -2928,14 +2928,16 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
                 int n = m_halfEdges[he].vertex;
                 const float edgeLen =
                     m_vertices[v].position.distance(m_vertices[n].position);
-                // On a shared edge both selected endpoints will each own
-                // half. On an unshared edge this vertex owns (nearly) all
-                // of it — but the single-vertex clamp that runs during
-                // sequential processing will re-clamp against mutated
-                // edge length, so unshared-edge budget is effectively
-                // the same 0.999 × edgeLen ceiling.
-                float share = selected.count(n) ? 0.5f : 1.0f;
-                float budget = edgeLen * 0.999f * share;
+                // Shared edges (both endpoints selected) split 50/50 with
+                // a near-full ceiling — each side reaches ~0.4995 × edgeLen,
+                // meeting the neighbour's bevel near the midpoint. Unshared
+                // edges use the same 0.499 × edgeLen safety clamp the
+                // single-vertex path would apply, so disconnected multi-
+                // vertex selections don't over-reach when the ScopedSkipClamp
+                // below bypasses the single-vertex re-clamp.
+                float budget = selected.count(n)
+                               ? edgeLen * 0.999f * 0.5f
+                               : edgeLen * 0.499f;
                 if (budget < minBudget) minBudget = budget;
                 int prev = m_halfEdges[he].prev;
                 int twin = m_halfEdges[prev].twin;

@@ -204,8 +204,13 @@ bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)
         // the user picks Translate/Rotate/Scale via the toolbar — they
         // see a tiny gizmo that pops to correct size only after their
         // first viewport click.
+        //
+        // Restrict the null-active fallback to a single deterministic
+        // viewport (index 0) so multi-viewport layouts don't race N
+        // cameras rescaling the shared gizmo singleton each frame.
         auto* active = transform->getActiveWidget();
-        if (active == this || active == nullptr) {
+        const bool isInitialFallbackViewport = (active == nullptr && getIndex() == 0);
+        if (active == this || isInitialFallbackViewport) {
             auto* camera = mCamera->getCamera();
             EditModeController::instance()->tickBevelGizmo(camera);
             transform->tickTransformGizmoScale(camera);

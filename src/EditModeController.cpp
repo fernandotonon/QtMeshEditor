@@ -1804,12 +1804,15 @@ bool EditModeController::beginBevel()
                         if (he < 0) break;
                         int n = hm.halfEdge(he).vertex;
                         float edgeLen = hm.vertex(v).position.distance(hm.vertex(n).position);
-                        // Mirror HalfEdgeMesh::bevelVertices's pre-budget:
-                        // shared edges split 50/50 between the two
-                        // selected endpoints; unshared edges let this
-                        // vertex own (nearly) all of it.
-                        float share = selected.count(n) ? 0.5f : 1.0f;
-                        float budget = edgeLen * 0.999f * share;
+                        // Mirror HalfEdgeMesh::bevelVertices's pre-budget
+                        // exactly: shared edges get 0.999 × edgeLen × 0.5
+                        // so both selected endpoints meet near midpoint;
+                        // unshared edges fall back to the single-vertex
+                        // 0.499 × edgeLen safety clamp to avoid over-reach
+                        // on disconnected selections.
+                        float budget = selected.count(n)
+                                       ? edgeLen * 0.999f * 0.5f
+                                       : edgeLen * 0.499f;
                         if (budget < cap) cap = budget;
                         int prev = hm.halfEdge(he).prev;
                         int twin = (prev >= 0) ? hm.halfEdge(prev).twin : -1;
@@ -1822,40 +1825,33 @@ bool EditModeController::beginBevel()
                 // Edge bevel: walk each selected edge, find its two
                 // adjacent faces, and take 0.4 × the shortest of the
                 // edge itself and its two opposite-vertex legs.
-                for (const auto& [gV1, gV2] : s.targetEdges) {
-                    // Map global verts to HE verts via position match.
-                    // (Global indices already align with HE vertex order
-                    // produced by buildFromEditableMesh — same submesh
-                    // iteration — so we can use them directly.)
-                    int v1 = gV1, v2 = gV2;
-                    if (v1 < 0 || v2 < 0
-                     || v1 >= static_cast<int>(hm.vertexCount())
-                     || v2 >= static_cast<int>(hm.vertexCount())) continue;
-                    float edgeLen = hm.vertex(v1).position.distance(hm.vertex(v2).position);
-                    float shortestAdj = edgeLen;
-                    // Walk v1's outgoing HEs to find the two incident faces.
-                    int startHE = hm.vertex(v1).halfEdge;
-                    if (startHE < 0) continue;
+                // Helper: walk outgoing half-edges from vertex `va` looking
+                // for the face whose next-vertex is `vb`; when found, shrink
+                // `shortestAdj` against the opposite-vertex legs (va→opp and
+                // vb→opp). Handles one adjacent face per call; we invoke it
+                // from both ends so both f1 and f2 contribute, mirroring
+                // HalfEdgeMesh::bevelEdges's effectiveWidth() which clamps
+                // against f1Opposite and f2Opposite symmetrically.
+                auto clampAgainstFace = [&](int va, int vb, float& shortestAdj) {
+                    int startHE = hm.vertex(va).halfEdge;
+                    if (startHE < 0) return;
                     int he = startHE;
-                    int faceHits = 0;
-                    for (int guard = 0; guard < 1024 && faceHits < 2; ++guard) {
+                    for (int guard = 0; guard < 1024; ++guard) {
                         if (he < 0) break;
-                        if (hm.halfEdge(he).vertex == v2) {
-                            // This face contains the v1→v2 edge. Find the
-                            // opposite vertex (the one that's neither v1 nor v2).
+                        if (hm.halfEdge(he).vertex == vb) {
                             int loopHE = hm.halfEdge(he).next;
                             while (loopHE != he) {
                                 int target = hm.halfEdge(loopHE).vertex;
-                                if (target != v1 && target != v2) {
+                                if (target != va && target != vb) {
                                     shortestAdj = std::min(shortestAdj,
-                                        hm.vertex(v1).position.distance(hm.vertex(target).position));
+                                        hm.vertex(va).position.distance(hm.vertex(target).position));
                                     shortestAdj = std::min(shortestAdj,
-                                        hm.vertex(v2).position.distance(hm.vertex(target).position));
+                                        hm.vertex(vb).position.distance(hm.vertex(target).position));
                                     break;
                                 }
                                 loopHE = hm.halfEdge(loopHE).next;
                             }
-                            ++faceHits;
+                            return; // one face per call
                         }
                         int prev = hm.halfEdge(he).prev;
                         int twin = (prev >= 0) ? hm.halfEdge(prev).twin : -1;
@@ -1863,6 +1859,22 @@ bool EditModeController::beginBevel()
                         he = twin;
                         if (he == startHE) break;
                     }
+                };
+
+                for (const auto& [gV1, gV2] : s.targetEdges) {
+                    // Global indices align with HE vertex order (same submesh
+                    // iteration as buildFromEditableMesh), so we can use them
+                    // directly.
+                    int v1 = gV1, v2 = gV2;
+                    if (v1 < 0 || v2 < 0
+                     || v1 >= static_cast<int>(hm.vertexCount())
+                     || v2 >= static_cast<int>(hm.vertexCount())) continue;
+                    float edgeLen = hm.vertex(v1).position.distance(hm.vertex(v2).position);
+                    float shortestAdj = edgeLen;
+                    // Both adjacent faces: the v1→v2 direction finds f1, the
+                    // v2→v1 direction finds f2.
+                    clampAgainstFace(v1, v2, shortestAdj);
+                    clampAgainstFace(v2, v1, shortestAdj);
                     float budget = shortestAdj * 0.4f;
                     if (budget < cap) cap = budget;
                 }
