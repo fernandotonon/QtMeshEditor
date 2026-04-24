@@ -564,6 +564,7 @@ void MainWindow::initToolBar()
 
     // AI Chat button — star icon is the common AI shorthand
     auto aiChatButton = new QToolButton(ui->objectsToolbar);
+    aiChatButton->setObjectName("aiChatToolbarButton");
     aiChatButton->setText("\u2728");  // ✨
     aiChatButton->setToolTip(tr("Open AI Chat"));
     QFont aiFont = aiChatButton->font();
@@ -816,7 +817,9 @@ void MainWindow::initToolBar()
 
     // AI Settings menu
     QMenu* aiMenu = menuBar()->addMenu(tr("&AI"));
+    aiMenu->setObjectName("menuAI");
     QAction* aiChatAction = aiMenu->addAction(QIcon(":/icones/ai.png"), tr("AI Chat..."));
+    aiChatAction->setObjectName("actionAIChatDock");
     connect(aiChatAction, &QAction::triggered, this, [this]() {
         if (m_chatDock) {
             m_chatDock->show();
@@ -832,6 +835,7 @@ void MainWindow::initToolBar()
 
     // Keyboard Shortcuts reference in Help menu
     QAction* shortcutsAction = ui->menuHelp->addAction(tr("Keyboard Shortcuts"));
+    shortcutsAction->setObjectName("actionKeyboardShortcuts");
     shortcutsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Slash));
     connect(shortcutsAction, &QAction::triggered, this, [this]() {
         SentryReporter::addBreadcrumb("ui.action", "Help > Keyboard Shortcuts opened");
@@ -865,6 +869,7 @@ void MainWindow::initToolBar()
     // Crash reporting toggle in Help menu
     ui->menuHelp->addSeparator();
     QAction* crashReportAction = ui->menuHelp->addAction(tr("Send Crash Reports"));
+    crashReportAction->setObjectName("actionCrashReports");
     crashReportAction->setCheckable(true);
     crashReportAction->setChecked(SentryReporter::isEnabled());
     connect(crashReportAction, &QAction::toggled, this, [](bool checked) {
@@ -2238,4 +2243,3 @@ void MainWindow::repositionWelcomeScreen()
     m_welcomeScreen->setGeometry(rect());
 }
 // LCOV_EXCL_STOP
-
