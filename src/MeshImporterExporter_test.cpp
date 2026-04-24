@@ -191,6 +191,10 @@ TEST(MeshImporterExporterStandaloneTest, Exporter_NullSceneNode_ReturnMinusOne) 
     EXPECT_EQ(MeshImporterExporter::exporter(nullptr, "", ""), -1);
 }
 
+TEST(MeshImporterExporterStandaloneTest, ExportCurrentPose_NullEntity_ReturnsMinusOne) {
+    EXPECT_EQ(MeshImporterExporter::exportCurrentPose(nullptr, "/tmp/pose_export.obj", "OBJ (*.obj)"), -1);
+}
+
 // ─── exportTextureName Tests ────────────────────────────────────────
 
 TEST(MeshImporterExporterStandaloneTest, ExportTextureName_PNG_Unchanged) {
@@ -294,6 +298,19 @@ TEST_F(MeshImporterExporterTest, Exporter_SceneNodeWithoutEntity_ReturnsMinusOne
     ASSERT_NE(sn, nullptr);
 
     EXPECT_EQ(MeshImporterExporter::exporter(sn, uri, format), -1);
+}
+
+TEST_F(MeshImporterExporterTest, ExportCurrentPose_EmptyOutput_ReturnsMinusOne)
+{
+    auto mesh = createInMemoryTriangleMesh("pose_empty_output_mesh");
+    ASSERT_NE(mesh, nullptr);
+
+    Ogre::SceneNode* node = Manager::getSingleton()->addSceneNode("PoseEmptyOutputNode");
+    ASSERT_NE(node, nullptr);
+    Ogre::Entity* entity = Manager::getSingleton()->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    EXPECT_EQ(MeshImporterExporter::exportCurrentPose(entity, "", "OBJ (*.obj)"), -1);
 }
 
 TEST_F(MeshImporterExporterTest, Importer_EmptyList_DoesNotCreateSceneNodes) {
@@ -1172,6 +1189,28 @@ TEST_F(SceneSaveLoadTest, Exporter_ObjFromSkeletalEntitySucceeds)
     EXPECT_EQ(result, 0);
     EXPECT_TRUE(QFileInfo::exists(objFile));
     EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/skeletal_export.material"));
+}
+
+TEST_F(SceneSaveLoadTest, ExportCurrentPose_StaticEntityWithoutSkeletonExportsViaFallback)
+{
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("pose_static_mesh");
+    ASSERT_NE(mesh, nullptr);
+
+    auto* node = manager->addSceneNode("PoseStaticNode");
+    ASSERT_NE(node, nullptr);
+    auto* entity = manager->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+    ASSERT_FALSE(entity->hasSkeleton());
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString objFile = tmpDir.path() + "/pose_static.obj";
+
+    const int result = MeshImporterExporter::exportCurrentPose(entity, objFile);
+    EXPECT_EQ(result, 0);
+    EXPECT_TRUE(QFileInfo::exists(objFile));
+    EXPECT_TRUE(QFileInfo::exists(tmpDir.path() + "/pose_static.material"));
 }
 
 // ─── LOD export tests ───────────────────────────────────────────────
