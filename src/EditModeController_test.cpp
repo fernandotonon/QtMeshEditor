@@ -15,6 +15,7 @@ The MIT License
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "UndoManager.h"
+#include "HalfEdgeMesh.h"
 #include <Ogre.h>
 #include <QSignalSpy>
 #include <set>
@@ -1430,6 +1431,23 @@ TEST_F(EditModeControllerBevelE2ETest, KnifeBeginOutsideEditModeFails) {
     EXPECT_FALSE(ctrl->knifeSessionActive());
 }
 
+// Resolve an HE edge index for an edge connecting two global vertex
+// indices in the controller's current EditableMesh. HE indices are an
+// internal-rebuild detail; the knife tests resolve by vertex pair so
+// harmless topology-order changes don't flake the assertions.
+static int resolveEdgeByVerts(int va, int vb) {
+    auto* mesh = EditModeController::instance()->currentMesh();
+    if (!mesh) return -1;
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*mesh)) return -1;
+    for (size_t e = 0; e < hm.edgeCount(); ++e) {
+        auto [a, b] = hm.edgeVertices(static_cast<int>(e));
+        if ((a == va && b == vb) || (a == vb && b == va))
+            return static_cast<int>(e);
+    }
+    return -1;
+}
+
 TEST_F(EditModeControllerBevelE2ETest, KnifeCommitWalkAndCutGrowsMeshManifoldly) {
     // End-to-end: open a knife session, programmatically push two OnEdge
     // clicks on distinct edges of the welded cube, commit. The walk-and-
@@ -1448,13 +1466,17 @@ TEST_F(EditModeControllerBevelE2ETest, KnifeCommitWalkAndCutGrowsMeshManifoldly)
     extractEntityBuffers(m_entity, posBefore, trisBefore);
     const size_t vertsBefore = posBefore.size();
 
-    // Push two edge clicks. Edge indices 0 and 5 land on different edges
-    // of the welded cube; the exact topology is an implementation
-    // detail but as long as they resolve to distinct edges the cut
-    // has something to do. (If either call fails the assert surfaces
-    // the mismatch immediately.)
-    ASSERT_TRUE(ctrl->addKnifePointOnEdge(0, 0.4f));
-    ASSERT_TRUE(ctrl->addKnifePointOnEdge(5, 0.6f));
+    // Welded cube verts 2..5 bound the top face (y=+1). Picking two
+    // perimeter edges of that face gives a knife cut that's guaranteed
+    // to land on the same coplanar region — the walk has something to
+    // do, and the topology is fixed regardless of HE-edge numbering.
+    const int edgeA = resolveEdgeByVerts(2, 3); // back-top edge
+    const int edgeB = resolveEdgeByVerts(4, 5); // front-top edge
+    ASSERT_GE(edgeA, 0);
+    ASSERT_GE(edgeB, 0);
+
+    ASSERT_TRUE(ctrl->addKnifePointOnEdge(edgeA, 0.4f));
+    ASSERT_TRUE(ctrl->addKnifePointOnEdge(edgeB, 0.6f));
     ASSERT_EQ(ctrl->knifePointCount(), 2);
 
     ASSERT_TRUE(ctrl->commitKnife());
@@ -1490,9 +1512,14 @@ TEST_F(EditModeControllerBevelE2ETest, KnifeCommitUndoRestoresOriginalVertexCoun
     extractEntityBuffers(m_entity, posBefore, trisBefore);
     const size_t vertsBefore = posBefore.size();
 
+    const int edgeA = resolveEdgeByVerts(2, 3);
+    const int edgeB = resolveEdgeByVerts(4, 5);
+    ASSERT_GE(edgeA, 0);
+    ASSERT_GE(edgeB, 0);
+
     ASSERT_TRUE(ctrl->beginKnife());
-    ASSERT_TRUE(ctrl->addKnifePointOnEdge(0, 0.5f));
-    ASSERT_TRUE(ctrl->addKnifePointOnEdge(5, 0.5f));
+    ASSERT_TRUE(ctrl->addKnifePointOnEdge(edgeA, 0.5f));
+    ASSERT_TRUE(ctrl->addKnifePointOnEdge(edgeB, 0.5f));
     ASSERT_TRUE(ctrl->commitKnife());
 
     UndoManager::getSingleton()->undo();

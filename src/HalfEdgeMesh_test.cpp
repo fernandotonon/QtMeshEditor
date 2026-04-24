@@ -3181,6 +3181,17 @@ TEST(HalfEdgeMeshStandalone, SplitEdgeInterpolatesNormalAndUV) {
 
     // Both endpoints share normal +Z; midpoint should too.
     EXPECT_NEAR(v.normal.z, 1.0f, 1e-4f);
+
+    // UV lerp: v1=(1,0), v2=(0,1). Any linear blend between them falls
+    // on the x+y=1 line regardless of the split direction, so check
+    // that invariant plus the correct distance from either endpoint.
+    // A broken `v.uv` lerp (e.g. zeroed out) fails both.
+    EXPECT_NEAR(v.uv.x + v.uv.y, 1.0f, 1e-4f)
+        << "UV lerp should stay on the segment between endpoints";
+    const float uvDist1 = std::hypot(v.uv.x - 1.0f, v.uv.y - 0.0f);
+    const float uvDist2 = std::hypot(v.uv.x - 0.0f, v.uv.y - 1.0f);
+    const float uvSeg = std::hypot(1.0f, 1.0f);
+    EXPECT_NEAR(std::min(uvDist1, uvDist2) / uvSeg, 0.25f, 1e-3f);
 }
 
 TEST(HalfEdgeMeshStandalone, SplitEdgeBoundaryEdgeProducesOneExtraTriangle) {
@@ -3279,12 +3290,31 @@ TEST(HalfEdgeMeshStandalone, SplitFaceRejectsAdjacentBoundaryVertices) {
 }
 
 TEST(HalfEdgeMeshStandalone, SplitFaceRejectsInvalidVertexIndices) {
+    // These guard paths run BEFORE the triangle-rejection in splitFace
+    // (see the ordered checks at the top of the implementation), so the
+    // assertions hit the invalid-vertex branches directly rather than
+    // getting short-circuited by the "every tri vertex pair is
+    // adjacent" rule. Covers: same-vertex, negative, out-of-range,
+    // and in-range-but-not-on-this-face.
     auto em = makeQuadMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
-    EXPECT_FALSE(he.splitFace(0, -1, 1));
-    EXPECT_FALSE(he.splitFace(0, 0, 999));
-    EXPECT_FALSE(he.splitFace(0, 2, 2)); // same vertex
+
+    EXPECT_FALSE(he.splitFace(0, 2, 2))
+        << "same-vertex pair should fail (check 2 — first guard)";
+    EXPECT_FALSE(he.splitFace(0, -1, 1))
+        << "negative index should fail (check 3)";
+    EXPECT_FALSE(he.splitFace(0, 0, 999))
+        << "out-of-range index should fail (check 5)";
+    EXPECT_FALSE(he.splitFace(-1, 0, 1))
+        << "invalid face index should fail (check 1)";
+
+    // Also verify the "vertex exists but isn't on this face" path.
+    // Triangle 0 of makeQuadMesh contains verts {0,1,2}; vertex 3
+    // exists in the mesh but is on triangle 1, so splitFace should
+    // reject before getting to adjacency checks.
+    EXPECT_FALSE(he.splitFace(0, 0, 3))
+        << "off-face valid vertex should fail the boundary-loop check";
 }
 
 TEST(HalfEdgeMeshStandalone, SplitEdgePreservesSubmeshCount) {
