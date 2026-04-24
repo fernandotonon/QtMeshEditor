@@ -428,6 +428,14 @@ private:
 
     int m_subMeshCount = 0;
     std::vector<std::string> m_materialNames;
+
+    // When true, bevelVertices trusts the caller's width and skips its
+    // per-vertex "min(width, 0.499 × minEdgeLen)" safety clamp. The
+    // multi-vertex pre-budgeted path sets this for its inner recursive
+    // single-vertex call so pre-budgeted values aren't re-clamped
+    // against a mutated mesh's edge lengths; it resets to false
+    // afterwards.
+    bool m_skipVertexBevelClamp = false;
 };
 
 #endif // HALFEDGEMESH_H

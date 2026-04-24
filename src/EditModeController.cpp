@@ -46,6 +46,122 @@ THE SOFTWARE.
 #include <algorithm>
 #include <limits>
 
+namespace {
+
+// Walk-guard budget: a manifold vertex's fan will close well under this.
+constexpr int kHERotateMaxSteps = 1024;
+
+// Rotate one step around a vertex along its outgoing half-edge fan:
+// `he` → prev → twin. Returns -1 when the rotation hits a boundary
+// (no twin) or when the walker loops back to `startHE`. Callers use
+// the -1 sentinel as a "stop iterating" signal, which flattens what
+// would otherwise be a nested prev/twin/sentinel triple in every
+// half-edge fan walker.
+int nextAroundVertex(const HalfEdgeMesh& hm, int he, int startHE)
+{
+    if (he < 0) return -1;
+    int prev = hm.halfEdge(he).prev;
+    if (prev < 0) return -1;
+    int twin = hm.halfEdge(prev).twin;
+    if (twin < 0 || twin == startHE) return -1;
+    return twin;
+}
+
+// Per-vertex max-width for a prospective multi-vertex bevel. Mirrors
+// HalfEdgeMesh::bevelVertices's pre-budget formula so the drag gizmo
+// caps at the same scalar the algorithm itself will apply:
+//   - shared edges (both endpoints selected) → 0.999 × edgeLen × 0.5
+//   - unshared edges → 0.499 × edgeLen (the single-vertex safety clamp)
+// The min across all incident edges of a target is that vertex's cap;
+// the min across all targets is the session cap.
+float computeVertexBevelCap(const HalfEdgeMesh& hm,
+                            const std::vector<int>& targets)
+{
+    float cap = std::numeric_limits<float>::infinity();
+    std::set<int> selected(targets.begin(), targets.end());
+
+    for (int v : targets) {
+        if (v < 0 || v >= static_cast<int>(hm.vertexCount())) continue;
+        int startHE = hm.vertex(v).halfEdge;
+        if (startHE < 0) continue;
+
+        int he = startHE;
+        for (int guard = 0; he >= 0 && guard < kHERotateMaxSteps; ++guard) {
+            const int n = hm.halfEdge(he).vertex;
+            const float edgeLen =
+                hm.vertex(v).position.distance(hm.vertex(n).position);
+            const float budget = selected.count(n)
+                                 ? edgeLen * 0.999f * 0.5f
+                                 : edgeLen * 0.499f;
+            if (budget < cap) cap = budget;
+            he = nextAroundVertex(hm, he, startHE);
+        }
+    }
+    return cap;
+}
+
+// Shrink `shortestAdj` against one of the two faces adjacent to the
+// (va, vb) edge. Walks outgoing half-edges from `va` looking for one
+// where `.vertex == vb`; when found, picks the face's opposite
+// vertex (the third of a triangle) and clamps `shortestAdj` by both
+// va→opp and vb→opp. Returns immediately after a hit — call this
+// twice, once from each endpoint, to cover both adjacent faces.
+void shrinkEdgeBevelAdjacency(const HalfEdgeMesh& hm,
+                              int va, int vb,
+                              float& shortestAdj)
+{
+    int startHE = hm.vertex(va).halfEdge;
+    if (startHE < 0) return;
+
+    int he = startHE;
+    for (int guard = 0; he >= 0 && guard < kHERotateMaxSteps; ++guard) {
+        if (hm.halfEdge(he).vertex == vb) {
+            // Found the va→vb HE; scan the face's other HEs for the
+            // opposite vertex (the non-va, non-vb one).
+            for (int loopHE = hm.halfEdge(he).next;
+                 loopHE != he;
+                 loopHE = hm.halfEdge(loopHE).next) {
+                const int target = hm.halfEdge(loopHE).vertex;
+                if (target == va || target == vb) continue;
+                shortestAdj = std::min(shortestAdj,
+                    hm.vertex(va).position.distance(hm.vertex(target).position));
+                shortestAdj = std::min(shortestAdj,
+                    hm.vertex(vb).position.distance(hm.vertex(target).position));
+                break;
+            }
+            return;
+        }
+        he = nextAroundVertex(hm, he, startHE);
+    }
+}
+
+// Per-edge max-width for a prospective multi-edge bevel. Mirrors
+// HalfEdgeMesh::bevelEdges::effectiveWidth — 0.4 × shortestAdj, where
+// shortestAdj is the min of (edge length, va→opp, vb→opp) across both
+// adjacent faces.
+float computeEdgeBevelCap(const HalfEdgeMesh& hm,
+                          const std::vector<std::pair<int,int>>& targets)
+{
+    float cap = std::numeric_limits<float>::infinity();
+
+    for (const auto& [v1, v2] : targets) {
+        if (v1 < 0 || v2 < 0) continue;
+        if (v1 >= static_cast<int>(hm.vertexCount())) continue;
+        if (v2 >= static_cast<int>(hm.vertexCount())) continue;
+
+        float shortestAdj = hm.vertex(v1).position.distance(hm.vertex(v2).position);
+        // v1 → v2 finds f1; v2 → v1 finds f2.
+        shrinkEdgeBevelAdjacency(hm, v1, v2, shortestAdj);
+        shrinkEdgeBevelAdjacency(hm, v2, v1, shortestAdj);
+
+        const float budget = shortestAdj * 0.4f;
+        if (budget < cap) cap = budget;
+    }
+    return cap;
+}
+
+} // namespace
+
 EditModeController* EditModeController::m_pSingleton = nullptr;
 
 EditModeController::EditModeController()
@@ -1177,7 +1293,8 @@ bool EditModeController::extrudeSelection()
     if (m_selectionMode != FaceMode)
         return false;
 
-    SentryReporter::addBreadcrumb("edit_mode", "Extrude selection");
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Extrude selection (faces=%1)").arg(m_selectedFaces.size()));
 
     // Snapshot for undo
     EditableMesh oldMesh;
@@ -1696,7 +1813,10 @@ bool EditModeController::beginBevel()
     const bool vertValid = (m_selectionMode == VertexMode && !m_selectedVertices.empty());
     if (!edgeValid && !vertValid) return false;
 
-    SentryReporter::addBreadcrumb("edit_mode", "Bevel: begin session");
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Bevel: begin session (%1=%2)")
+            .arg(edgeValid ? "edges" : "vertices")
+            .arg(edgeValid ? m_selectedEdges.size() : m_selectedVertices.size()));
 
     BevelSession s;
     s.kind = edgeValid ? BevelSession::Edges : BevelSession::Vertices;
@@ -1779,6 +1899,23 @@ bool EditModeController::beginBevel()
     s.axis = (normalSum.length() > 1e-6f) ? normalSum.normalisedCopy() : Ogre::Vector3::UNIT_Y;
     s.width = 0.05f; // 2.5% of a 2-unit cube — visible initial chamfer
 
+    // Compute the largest width the bevel algorithm will actually apply
+    // before its internal per-vertex/per-edge clamp takes over, so the
+    // drag handler can freeze the gizmo at the same scalar the topology
+    // op would freeze at. See the named helpers at the top of this file
+    // (computeVertexBevelCap / computeEdgeBevelCap) for the exact
+    // formulas, which mirror HalfEdgeMesh::bevelVertices and
+    // HalfEdgeMesh::bevelEdges respectively.
+    {
+        HalfEdgeMesh hm;
+        if (hm.buildFromEditableMesh(*m_editableMesh)) {
+            const float cap = (s.kind == BevelSession::Vertices)
+                              ? computeVertexBevelCap(hm, s.targetVertices)
+                              : computeEdgeBevelCap(hm, s.targetEdges);
+            if (cap > 0.0f && std::isfinite(cap)) s.maxWidth = cap;
+        }
+    }
+
     const bool applied = (s.kind == BevelSession::Edges)
         ? applyBevelTopology(s.targetEdges, s.width)
         : applyBevelVertexTopology(s.targetVertices, s.width);
@@ -1853,12 +1990,23 @@ void EditModeController::updateBevelFromDrag(const Ogre::Ray& startRay,
     // delta (drag away from the mesh) grows the bevel; negative shrinks it.
     float newWidth = startWidth + delta;
     if (newWidth < 1e-4f) newWidth = 1e-4f;
+
+    // Cap against the pre-computed per-session maximum so the shaft/handle
+    // don't slide past the point where the bevel algorithm's own clamp
+    // stops updating the mesh. Without this, the gizmo visibly grows
+    // while the bevel is frozen — a confusing UX signal.
+    bool capped = false;
+    if (std::isfinite(m_bevelSession.maxWidth) && newWidth > m_bevelSession.maxWidth) {
+        newWidth = m_bevelSession.maxWidth;
+        capped = true;
+    }
     updateBevelWidth(newWidth);
-    // Slide the handle cube along the shaft so it visually follows the drag.
-    // Base offset of 0.1 (the initial shaft tip) plus delta keeps the visible
-    // handle under the cursor. 0.02 minimum keeps it barely above the shaft
-    // base so it doesn't sink into the mesh when width is tiny.
-    float handleLocalY = std::max(0.02f, 0.4f + delta);
+
+    // Compute the handle position from the *effective* width delta so the
+    // visual shaft length matches the applied bevel. When capped, delta is
+    // pinned to (maxWidth - startWidth) so the handle freezes too.
+    float effectiveDelta = capped ? (newWidth - startWidth) : delta;
+    float handleLocalY = std::max(0.02f, 0.4f + effectiveDelta);
     m_bevelGizmo->setHandleOffset(handleLocalY);
 }
 
@@ -1980,7 +2128,10 @@ void EditModeController::commitBevel()
     if (!m_bevelSession.active)
         return;
 
-    SentryReporter::addBreadcrumb("edit_mode", "Bevel: commit");
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Bevel: commit (width=%1, segments=%2)")
+            .arg(m_bevelSession.width, 0, 'f', 4)
+            .arg(m_bevelSession.segments));
 
     auto* cmd = new EditMeshTopologyCommand(
         std::move(m_bevelSession.originalSubMeshes),
@@ -2002,7 +2153,10 @@ void EditModeController::cancelBevel()
     if (!m_bevelSession.active)
         return;
 
-    SentryReporter::addBreadcrumb("edit_mode", "Bevel: cancel");
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Bevel: cancel (width=%1, segments=%2)")
+            .arg(m_bevelSession.width, 0, 'f', 4)
+            .arg(m_bevelSession.segments));
 
     m_editableMesh->subMeshes() = std::move(m_bevelSession.originalSubMeshes);
     m_selectedVertices = std::move(m_bevelSession.origSelectedVertices);
