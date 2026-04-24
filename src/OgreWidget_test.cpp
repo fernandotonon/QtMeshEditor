@@ -243,6 +243,7 @@ TEST_F(OgreWidgetTest, RebuildRenderWindowPreservesBackgroundAndKeepsCamera)
     ASSERT_NE(widget->getSpaceCamera(), nullptr);
     ASSERT_NE(widget->getSpaceCamera()->getCamera(), nullptr);
     EXPECT_FLOAT_EQ(widget->getSpaceCamera()->getCameraSpeed(), 1.5f);
-    EXPECT_DOUBLE_EQ(widget->getSpaceCamera()->getCamera()->getNearClipDistance(), 0.05);
-    EXPECT_DOUBLE_EQ(widget->getSpaceCamera()->getCamera()->getFarClipDistance(), 5000.0);
+    // QSettings/Ogre path can introduce tiny float error vs exact literals (CI Linux).
+    EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getNearClipDistance(), 0.05, 1e-5);
+    EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getFarClipDistance(), 5000.0, 1e-3);
 }
