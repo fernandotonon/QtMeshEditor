@@ -2,11 +2,15 @@
 
 #include <QApplication>
 #include <QCoreApplication>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QPalette>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QUndoCommand>
 
+#include "AnimationWidget.h"
 #include "Manager.h"
 #include "PrimitiveObject.h"
 #include "PropertiesPanelController.h"
@@ -406,6 +410,204 @@ TEST_F(PropertiesPanelControllerTests, AnimationQueriesAreSafeWithoutAnimatedSel
     EXPECT_EQ(animationSpy.count(), 0);
     EXPECT_FALSE(controller->renameAnimation("missing", "old", "new"));
     EXPECT_FALSE(controller->renameAnimation("missing", "old", ""));
+}
+
+TEST_F(PropertiesPanelControllerTests, AnimationDataAndControlsWorkForAnimatedEntity)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("PanelAnimData");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_TRUE(entity->hasSkeleton());
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    AnimationWidget widget;
+    controller->setAnimationWidget(&widget);
+
+    EXPECT_TRUE(controller->hasAnimations());
+    const QVariantList groups = controller->animationData();
+    ASSERT_FALSE(groups.isEmpty());
+
+    QVariantMap entityGroup;
+    const QString entityName = QString::fromStdString(entity->getName());
+    for (const QVariant& entry : groups) {
+        const QVariantMap group = entry.toMap();
+        if (group.value("entity").toString() == entityName) {
+            entityGroup = group;
+            break;
+        }
+    }
+
+    ASSERT_FALSE(entityGroup.isEmpty());
+    EXPECT_TRUE(entityGroup.value("hasSkeleton").toBool());
+    EXPECT_FALSE(entityGroup.value("showSkeleton").toBool());
+    EXPECT_FALSE(entityGroup.value("showWeights").toBool());
+
+    const QVariantList animations = entityGroup.value("animations").toList();
+    ASSERT_FALSE(animations.isEmpty());
+
+    QVariantMap testAnim;
+    for (const QVariant& entry : animations) {
+        const QVariantMap anim = entry.toMap();
+        if (anim.value("name").toString() == "TestAnim") {
+            testAnim = anim;
+            break;
+        }
+    }
+    ASSERT_FALSE(testAnim.isEmpty());
+    EXPECT_FALSE(testAnim.value("enabled").toBool());
+    EXPECT_TRUE(testAnim.value("loop").toBool());
+    EXPECT_DOUBLE_EQ(testAnim.value("length").toDouble(), 1.0);
+
+    QSignalSpy animationSpy(controller, &PropertiesPanelController::animationStateChanged);
+    ASSERT_TRUE(animationSpy.isValid());
+
+    controller->toggleAnimationEnabled(entityName, "TestAnim", true);
+    Ogre::AnimationState* state = entity->getAnimationState("TestAnim");
+    ASSERT_NE(state, nullptr);
+    EXPECT_TRUE(state->getEnabled());
+    EXPECT_TRUE(state->getLoop());
+
+    controller->toggleAnimationLoop(entityName, "TestAnim", false);
+    EXPECT_FALSE(state->getLoop());
+    EXPECT_GE(animationSpy.count(), 2);
+}
+
+TEST_F(PropertiesPanelControllerTests, SkeletonAndWeightTogglesEmitForMatchingEntity)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    auto* mgr = Manager::getSingleton();
+    ASSERT_NE(mgr, nullptr);
+
+    Ogre::SceneNode* node = mgr->addSceneNode("PanelAnimToggleNode");
+    ASSERT_NE(node, nullptr);
+    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("PanelAnimToggleMesh");
+    Ogre::Entity* entity = mgr->getSceneMgr()->createEntity("PanelAnimToggleEntity", mesh);
+    ASSERT_NE(entity, nullptr);
+    node->attachObject(entity);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    AnimationWidget widget;
+    controller->setAnimationWidget(&widget);
+
+    QSignalSpy animationSpy(controller, &PropertiesPanelController::animationStateChanged);
+    ASSERT_TRUE(animationSpy.isValid());
+
+    controller->toggleSkeletonDebug("PanelAnimToggleEntity", true);
+    controller->toggleBoneWeights("PanelAnimToggleEntity", true);
+    const int afterMatchingEntity = animationSpy.count();
+    EXPECT_GE(afterMatchingEntity, 2);
+
+    controller->toggleSkeletonDebug("MissingEntity", true);
+    controller->toggleBoneWeights("MissingEntity", true);
+    EXPECT_EQ(animationSpy.count(), afterMatchingEntity);
+}
+
+TEST_F(PropertiesPanelControllerTests, RenameAnimationRenamesStateAndStopsPlayback)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    Ogre::Entity* entity = createAnimatedTestEntity("PanelRenameAnim");
+    ASSERT_NE(entity, nullptr);
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    SelectionSet::getSingleton()->selectOne(node);
+
+    const QString entityName = QString::fromStdString(entity->getName());
+    Ogre::AnimationState* state = entity->getAnimationState("TestAnim");
+    ASSERT_NE(state, nullptr);
+    state->setEnabled(true);
+    controller->setPlaying(true);
+
+    Ogre::SkeletonPtr skeleton = entity->getMesh()->getSkeleton();
+    ASSERT_TRUE(skeleton);
+    if (!skeleton->hasAnimation("AlreadyThere"))
+        skeleton->createAnimation("AlreadyThere", 0.5f);
+
+    EXPECT_FALSE(controller->renameAnimation(entityName, "TestAnim", "AlreadyThere"));
+    EXPECT_FALSE(controller->renameAnimation(entityName, "TestAnim", "TestAnim"));
+
+    QSignalSpy animationSpy(controller, &PropertiesPanelController::animationStateChanged);
+    ASSERT_TRUE(animationSpy.isValid());
+
+    EXPECT_TRUE(controller->renameAnimation(entityName, "TestAnim", "RenamedAnim"));
+    EXPECT_FALSE(controller->isPlaying());
+    EXPECT_GE(animationSpy.count(), 1);
+    EXPECT_FALSE(Manager::getSingleton()->hasAnimationName(entity, "TestAnim"));
+    EXPECT_TRUE(Manager::getSingleton()->hasAnimationName(entity, "RenamedAnim"));
+
+    Ogre::AnimationState* renamed = entity->getAnimationState("RenamedAnim");
+    ASSERT_NE(renamed, nullptr);
+    EXPECT_FALSE(renamed->getEnabled());
+}
+
+TEST_F(PropertiesPanelControllerTests, ExportCurrentPoseRequiresAnimatedSelectionAndWritesFile)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    auto* mgr = Manager::getSingleton();
+    ASSERT_NE(mgr, nullptr);
+    Ogre::SceneNode* plainNode = mgr->addSceneNode("PanelPosePlainNode");
+    ASSERT_NE(plainNode, nullptr);
+    Ogre::MeshPtr plainMesh = createInMemoryTriangleMesh("PanelPosePlainMesh");
+    Ogre::Entity* plainEntity = mgr->getSceneMgr()->createEntity("PanelPosePlainEntity", plainMesh);
+    ASSERT_NE(plainEntity, nullptr);
+    plainNode->attachObject(plainEntity);
+    SelectionSet::getSingleton()->selectOne(plainNode);
+
+    const QString plainPath = QDir::tempPath() + "/panel_pose_plain.obj";
+    QFile::remove(plainPath);
+    EXPECT_FALSE(controller->exportCurrentPose(plainPath));
+
+    Ogre::Entity* animatedEntity = createAnimatedTestEntity("PanelPoseAnimated");
+    ASSERT_NE(animatedEntity, nullptr);
+    Ogre::SceneNode* animatedNode = animatedEntity->getParentSceneNode();
+    ASSERT_NE(animatedNode, nullptr);
+    SelectionSet::getSingleton()->selectOne(animatedNode);
+
+    const QString animatedPath = QDir::tempPath() + "/panel_pose_animated.obj";
+    QFile::remove(animatedPath);
+    EXPECT_TRUE(controller->exportCurrentPose(animatedPath));
+    EXPECT_TRUE(QFileInfo::exists(animatedPath));
+    EXPECT_GT(QFileInfo(animatedPath).size(), 0);
+    QFile::remove(animatedPath);
+}
+
+TEST_F(PropertiesPanelControllerTests, SetSettingCoversViewportSentryAndThemeBranches)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    auto* mgr = Manager::getSingleton();
+    ASSERT_NE(mgr, nullptr);
+
+    mgr->CreateEmptyScene();
+    controller->setSetting("Viewport/gridVisible", false);
+    controller->setSetting("Viewport/gridVisible", true);
+    controller->setSetting("Viewport/cameraSpeed", 0.0);
+    controller->setSetting("Viewport/cameraSpeed", 2.0);
+    controller->setSetting("Viewport/nearClip", 0.1);
+    controller->setSetting("Viewport/farClip", 5000.0);
+    controller->setSetting("Sentry/enabled", false);
+    controller->setSetting("Telemetry/enabled", true);
+
+    controller->setSetting("Appearance/theme", "dark");
+    EXPECT_EQ(app->palette().color(QPalette::Window), QColor(53, 53, 53));
+
+    controller->setSetting("palette", "light");
+    EXPECT_EQ(app->palette().color(QPalette::Window), QColor("ghostwhite"));
 }
 
 TEST_F(PropertiesPanelControllerTests, PlayingStateOnlyEmitsWhenValueChanges)
