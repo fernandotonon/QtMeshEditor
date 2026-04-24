@@ -56,8 +56,12 @@ class OgreWidget : public QWidget, public Ogre::FrameListener
   void setBackgroundColor(const QColor& c);
   SpaceCamera* getSpaceCamera() const { return mCamera.get(); }
 
+  /// Recreate the Ogre render window (e.g. after MSAA / FSAA settings change).
+  void rebuildRenderWindow();
+
 protected:
   /*virtual*/ void initOgreWindow(void);
+  void teardownOgreWindow();
 
   QPaintEngine* paintEngine() const override;
   void resizeEvent(QResizeEvent *e) override;

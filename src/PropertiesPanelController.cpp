@@ -13,6 +13,7 @@
 #include "SpaceCamera.h"
 #include "EditorViewport.h"
 #include "ViewportGrid.h"
+#include "mainwindow.h"
 #include <QApplication>
 #include <QFileDialog>
 #include <QSettings>
@@ -801,6 +802,9 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
                 }
             }
         }
+    } else if (key == "Viewport/fsaaSamples") {
+        if (auto* mainWin = Manager::getSingleton()->getMainWindow())
+            mainWin->rebuildAllOgreViewports();
     } else if (key == "Sentry/enabled" || key == "Telemetry/enabled") {
         SentryReporter::setEnabled(value.toBool());
     } else if (key == "Appearance/theme" || key == "palette") {

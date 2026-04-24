@@ -1707,6 +1707,14 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     ui->action2x2_Grid->blockSignals(false);
 }
 
+void MainWindow::rebuildAllOgreViewports()
+{
+    for (EditorViewport* vp : mDockWidgetList) {
+        if (OgreWidget* w = vp->getOgreWidget())
+            w->rebuildRenderWindow();
+    }
+}
+
 void MainWindow::onWidgetClosing(EditorViewport* const& widget)
 {
     // Artificial MUTEX !!! don't know if required
