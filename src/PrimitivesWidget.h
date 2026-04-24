@@ -2,6 +2,7 @@
 #define PRIMITIVES_WIDGET_H
 
 #include <QWidget>
+#include <QString>
 #include <OgrePrerequisites.h>
 #include "PrimitiveObject.h"
 
@@ -34,6 +35,13 @@ public slots:
 protected:
     void setUiEmpty();
     void setUiMesh();
+    void applyPrimitiveUiConfig(const QString &type,
+                                bool sizeX, bool sizeY, bool sizeZ,
+                                bool radius, bool radius2, bool height,
+                                const QString &radiusText, const QString &radius2Text,
+                                bool segX, bool segY, bool segZ,
+                                const QString &segXText, const QString &segYText, const QString &segZText,
+                                bool uvTileVisible, bool switchUvVisible = true);
     void setUiCube();
     void setUiSphere();
     void setUiPlane();

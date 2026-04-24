@@ -39,21 +39,7 @@ THE SOFTWARE.
 #include <vector>
 
 #include "Manager.h"
-
-namespace {
-
-Ogre::Quaternion buildRotationQuat(const Ogre::Vector3 &rotate)
-{
-    if(rotate.x != 0)
-        return {Ogre::Degree(rotate.x), Ogre::Vector3::UNIT_Y};
-    if(rotate.y != 0)
-        return {Ogre::Degree(rotate.y), Ogre::Vector3::UNIT_Z};
-    if(rotate.z != 0)
-        return {Ogre::Degree(rotate.z), Ogre::Vector3::UNIT_X};
-    return Ogre::Quaternion::IDENTITY;
-}
-
-} // anonymous namespace
+#include "TransformMath.h"
 
 void SkeletonTransform::scaleSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_scale)
 {
@@ -97,7 +83,7 @@ void SkeletonTransform::translateSkeleton(const Ogre::Entity *_ent, const Ogre::
 void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate)
 {
     auto pivot = _ent->getMesh()->getBounds().getCenter();
-    rotateSkeleton(_ent, buildRotationQuat(_rotate), pivot);
+    rotateSkeleton(_ent, TransformMath::buildRotationQuat(_rotate), pivot);
 }
 
 void SkeletonTransform::rotateSkeleton(const Ogre::Entity *_ent, const Ogre::Quaternion &_quat,
