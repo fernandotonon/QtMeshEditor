@@ -100,30 +100,12 @@ protected:
         return createAnimatedTestEntity(name);
     }
 
-    QAction* findActionByText(QMenu* menu, const QString& text) const
+    QAction* findActionByObjectName(const QString& objectName) const
     {
-        if (!menu) {
+        if (!window) {
             return nullptr;
         }
-        for (QAction* action : menu->actions()) {
-            if (action && action->text() == text) {
-                return action;
-            }
-        }
-        return nullptr;
-    }
-
-    QAction* findTopLevelMenuAction(const QString& text) const
-    {
-        if (!window || !window->menuBar()) {
-            return nullptr;
-        }
-        for (QAction* action : window->menuBar()->actions()) {
-            if (action && action->text() == text) {
-                return action;
-            }
-        }
-        return nullptr;
+        return window->findChild<QAction*>(objectName);
     }
 
     void closeAnyOpenMessageBoxesSoon() const
@@ -747,14 +729,15 @@ TEST_F(MainWindowTest, EditModeKeyboardShortcutsCoverModeAndTopologyPaths)
 
 TEST_F(MainWindowTest, TriggeringDynamicHelpAndPreferencesActionsCreatesDialogs)
 {
-    QAction* shortcutsAction = findActionByText(window->ui->menuHelp, "Keyboard Shortcuts");
+    QAction* shortcutsAction = findActionByObjectName("actionKeyboardShortcuts");
     ASSERT_NE(shortcutsAction, nullptr);
     shortcutsAction->trigger();
     app->processEvents();
 
     bool foundShortcutsDialog = false;
     for (QWidget* w : QApplication::topLevelWidgets()) {
-        if (auto* quick = qobject_cast<QQuickWidget*>(w); quick && quick->windowTitle() == "Keyboard Shortcuts") {
+        if (auto* quick = qobject_cast<QQuickWidget*>(w);
+            quick && quick->source().toString().contains("ShortcutReference.qml")) {
             foundShortcutsDialog = true;
             quick->close();
         }
@@ -766,7 +749,8 @@ TEST_F(MainWindowTest, TriggeringDynamicHelpAndPreferencesActionsCreatesDialogs)
 
     bool foundPreferencesDialog = false;
     for (QWidget* w : QApplication::topLevelWidgets()) {
-        if (auto* quick = qobject_cast<QQuickWidget*>(w); quick && quick->windowTitle() == "Preferences") {
+        if (auto* quick = qobject_cast<QQuickWidget*>(w);
+            quick && quick->source().toString().contains("PreferencesDialog.qml")) {
             foundPreferencesDialog = true;
             quick->close();
         }
@@ -787,9 +771,7 @@ TEST_F(MainWindowTest, AiChatToolbarButtonAndMenuActionRevealDock)
     app->processEvents();
     EXPECT_TRUE(window->m_chatDock->isHidden());
 
-    QAction* aiMenu = findTopLevelMenuAction("&AI");
-    ASSERT_NE(aiMenu, nullptr);
-    QAction* aiChatAction = findActionByText(aiMenu->menu(), "AI Chat...");
+    QAction* aiChatAction = findActionByObjectName("actionAIChatDock");
     ASSERT_NE(aiChatAction, nullptr);
     aiChatAction->trigger();
     app->processEvents();
@@ -799,13 +781,7 @@ TEST_F(MainWindowTest, AiChatToolbarButtonAndMenuActionRevealDock)
     app->processEvents();
     EXPECT_TRUE(window->m_chatDock->isHidden());
 
-    QToolButton* aiButton = nullptr;
-    for (QToolButton* button : window->ui->objectsToolbar->findChildren<QToolButton*>()) {
-        if (button->toolTip() == "Open AI Chat") {
-            aiButton = button;
-            break;
-        }
-    }
+    QToolButton* aiButton = window->findChild<QToolButton*>("aiChatToolbarButton");
     ASSERT_NE(aiButton, nullptr);
     aiButton->click();
     app->processEvents();
@@ -988,7 +964,7 @@ TEST_F(MainWindowTest, ConstructorAppliesCustomPaletteFromSettings)
 
 TEST_F(MainWindowTest, CrashReportMenuToggleToEnabledShowsConfirmationPath)
 {
-    QAction* crashAction = findActionByText(window->ui->menuHelp, "Send Crash Reports");
+    QAction* crashAction = findActionByObjectName("actionCrashReports");
     ASSERT_NE(crashAction, nullptr);
     ASSERT_TRUE(crashAction->isCheckable());
 
