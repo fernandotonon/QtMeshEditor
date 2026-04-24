@@ -14,6 +14,7 @@ The MIT License
 #include "TestHelpers.h"
 #include "Manager.h"
 #include "SelectionSet.h"
+#include "UndoManager.h"
 #include <Ogre.h>
 #include <set>
 #include <utility>
@@ -1273,5 +1274,89 @@ TEST_F(EditModeControllerBevelE2ETest, KnifeBeginOutsideEditModeFails) {
     // Fresh fixture: edit mode is off. beginKnife should be a no-op.
     EXPECT_FALSE(ctrl->beginKnife());
     EXPECT_FALSE(ctrl->knifeSessionActive());
+}
+
+TEST_F(EditModeControllerBevelE2ETest, KnifeCommitWalkAndCutGrowsMeshManifoldly) {
+    // End-to-end: open a knife session, programmatically push two OnEdge
+    // clicks on distinct edges of the welded cube, commit. The walk-and-
+    // cut commit pipeline should splitEdge at both endpoints and (for
+    // this topology) potentially at interior crossings, leaving the
+    // mesh manifold with more vertices than before.
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ASSERT_TRUE(ctrl->beginKnife());
+
+    // Capture pre-commit vertex count directly from the entity's buffers
+    // so we're comparing against what Ogre actually holds, not just the
+    // EditableMesh snapshot.
+    std::vector<Ogre::Vector3> posBefore;
+    std::vector<std::array<unsigned, 3>> trisBefore;
+    extractEntityBuffers(m_entity, posBefore, trisBefore);
+    const size_t vertsBefore = posBefore.size();
+
+    // Push two edge clicks. Edge indices 0 and 5 land on different edges
+    // of the welded cube; the exact topology is an implementation
+    // detail but as long as they resolve to distinct edges the cut
+    // has something to do. (If either call fails the assert surfaces
+    // the mismatch immediately.)
+    ASSERT_TRUE(ctrl->addKnifePointOnEdge(0, 0.4f));
+    ASSERT_TRUE(ctrl->addKnifePointOnEdge(5, 0.6f));
+    ASSERT_EQ(ctrl->knifePointCount(), 2);
+
+    ASSERT_TRUE(ctrl->commitKnife());
+    EXPECT_FALSE(ctrl->knifeSessionActive());
+
+    std::vector<Ogre::Vector3> posAfter;
+    std::vector<std::array<unsigned, 3>> trisAfter;
+    extractEntityBuffers(m_entity, posAfter, trisAfter);
+    EXPECT_GT(posAfter.size(), vertsBefore)
+        << "knife commit should have inserted new vertices into the GPU mesh";
+
+    // Manifold check: every edge is used by exactly 1 or 2 triangles;
+    // no edge should be used more than twice (would be non-manifold).
+    std::map<std::pair<unsigned, unsigned>, int> edgeUse;
+    for (const auto& t : trisAfter) {
+        for (int k = 0; k < 3; ++k) {
+            unsigned u = t[k], v = t[(k + 1) % 3];
+            auto key = std::make_pair(std::min(u, v), std::max(u, v));
+            ++edgeUse[key];
+        }
+    }
+    for (auto& [key, count] : edgeUse) {
+        EXPECT_LE(count, 2) << "non-manifold edge in post-knife mesh";
+    }
+}
+
+TEST_F(EditModeControllerBevelE2ETest, KnifeCommitUndoRestoresOriginalVertexCount) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+
+    std::vector<Ogre::Vector3> posBefore;
+    std::vector<std::array<unsigned, 3>> trisBefore;
+    extractEntityBuffers(m_entity, posBefore, trisBefore);
+    const size_t vertsBefore = posBefore.size();
+
+    ASSERT_TRUE(ctrl->beginKnife());
+    ASSERT_TRUE(ctrl->addKnifePointOnEdge(0, 0.5f));
+    ASSERT_TRUE(ctrl->addKnifePointOnEdge(5, 0.5f));
+    ASSERT_TRUE(ctrl->commitKnife());
+
+    UndoManager::getSingleton()->undo();
+
+    std::vector<Ogre::Vector3> posAfterUndo;
+    std::vector<std::array<unsigned, 3>> trisAfterUndo;
+    extractEntityBuffers(m_entity, posAfterUndo, trisAfterUndo);
+    EXPECT_EQ(posAfterUndo.size(), vertsBefore)
+        << "undo after knife commit should restore original vertex count";
+}
+
+TEST_F(EditModeControllerBevelE2ETest, KnifePointOnInvalidEdgeRefused) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ASSERT_TRUE(ctrl->beginKnife());
+
+    EXPECT_FALSE(ctrl->addKnifePointOnEdge(-1, 0.5f));
+    EXPECT_FALSE(ctrl->addKnifePointOnEdge(9999, 0.5f));
+    EXPECT_EQ(ctrl->knifePointCount(), 0);
 }
 

@@ -2260,6 +2260,45 @@ bool EditModeController::addKnifePoint(OgreWidget* widget, int screenX, int scre
     return true;
 }
 
+bool EditModeController::addKnifePointOnEdge(int heEdgeIndex, float t)
+{
+    if (!m_knifeSession.active || !m_editableMesh) return false;
+
+    // Resolve the edge's endpoint vertices from a fresh HE build; we need
+    // them to place the KnifePoint's localPosition for the preview overlay
+    // and to expose the same data the widget-based path produces.
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return false;
+    if (heEdgeIndex < 0 || heEdgeIndex >= static_cast<int>(hm.edgeCount())) return false;
+    const auto [ga, gb] = hm.edgeVertices(heEdgeIndex);
+    if (ga < 0 || gb < 0) return false;
+
+    auto [subA, locA] = globalToLocal(ga);
+    auto [subB, locB] = globalToLocal(gb);
+    const auto& subs = m_editableMesh->subMeshes();
+    if (subA >= subs.size() || subB >= subs.size()) return false;
+    if (locA >= subs[subA].vertices.size() || locB >= subs[subB].vertices.size()) return false;
+
+    const auto& p0 = subs[subA].vertices[locA].position;
+    const auto& p1 = subs[subB].vertices[locB].position;
+    const float clampT = std::clamp(t, 0.0f, 1.0f);
+
+    KnifePoint pt;
+    pt.kind = KnifePoint::OnEdge;
+    pt.edgeIndex = heEdgeIndex;
+    pt.edgeT = clampT;
+    pt.localPosition = p0 + (p1 - p0) * clampT;
+
+    m_knifeSession.points.push_back(pt);
+    m_knifeSession.hoverValid = false;
+    updateKnifePreviewOverlay();
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Knife: point added programmatically (n=%1)").arg(m_knifeSession.points.size()));
+    emit knifeSessionChanged();
+    return true;
+}
+
 void EditModeController::updateKnifeHover(OgreWidget* widget, int screenX, int screenY)
 {
     if (!m_knifeSession.active || !widget) return;

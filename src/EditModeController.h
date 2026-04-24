@@ -316,6 +316,15 @@ public:
     void updateKnifeHover(OgreWidget* widget, int screenX, int screenY);
 
     /**
+     * @brief Programmatic cut-point entry: append a knife click at
+     *        parametric position `t` on an existing HE edge, resolved
+     *        against the current mesh. Used by scripted/automated knife
+     *        flows and by unit tests that can't run the widget-based
+     *        hit-test (headless CI, macOS without plugins).
+     */
+    bool addKnifePointOnEdge(int heEdgeIndex, float t);
+
+    /**
      * @brief Apply the current cut point list as splitEdge operations and
      *        push one undo command. Clears the session afterwards.
      *        No-op (returns false) if fewer than 2 points are confirmed.
