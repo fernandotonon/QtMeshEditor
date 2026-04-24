@@ -1293,7 +1293,8 @@ bool EditModeController::extrudeSelection()
     if (m_selectionMode != FaceMode)
         return false;
 
-    SentryReporter::addBreadcrumb("edit_mode", "Extrude selection");
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Extrude selection (faces=%1)").arg(m_selectedFaces.size()));
 
     // Snapshot for undo
     EditableMesh oldMesh;
@@ -1812,7 +1813,10 @@ bool EditModeController::beginBevel()
     const bool vertValid = (m_selectionMode == VertexMode && !m_selectedVertices.empty());
     if (!edgeValid && !vertValid) return false;
 
-    SentryReporter::addBreadcrumb("edit_mode", "Bevel: begin session");
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Bevel: begin session (%1=%2)")
+            .arg(edgeValid ? "edges" : "vertices")
+            .arg(edgeValid ? m_selectedEdges.size() : m_selectedVertices.size()));
 
     BevelSession s;
     s.kind = edgeValid ? BevelSession::Edges : BevelSession::Vertices;
@@ -2124,7 +2128,10 @@ void EditModeController::commitBevel()
     if (!m_bevelSession.active)
         return;
 
-    SentryReporter::addBreadcrumb("edit_mode", "Bevel: commit");
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Bevel: commit (width=%1, segments=%2)")
+            .arg(m_bevelSession.width, 0, 'f', 4)
+            .arg(m_bevelSession.segments));
 
     auto* cmd = new EditMeshTopologyCommand(
         std::move(m_bevelSession.originalSubMeshes),
@@ -2146,7 +2153,10 @@ void EditModeController::cancelBevel()
     if (!m_bevelSession.active)
         return;
 
-    SentryReporter::addBreadcrumb("edit_mode", "Bevel: cancel");
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Bevel: cancel (width=%1, segments=%2)")
+            .arg(m_bevelSession.width, 0, 'f', 4)
+            .arg(m_bevelSession.segments));
 
     m_editableMesh->subMeshes() = std::move(m_bevelSession.originalSubMeshes);
     m_selectedVertices = std::move(m_bevelSession.origSelectedVertices);
