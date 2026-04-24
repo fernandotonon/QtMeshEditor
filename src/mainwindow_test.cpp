@@ -6,13 +6,16 @@
 #include <QFile>
 #include <QKeyEvent>
 #include <QMenu>
+#include <QMenuBar>
 #include <QMimeData>
 #include <QMessageBox>
+#include <QQuickWidget>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QThread>
 #include <QTimer>
+#include <QToolButton>
 
 // NOTE: These access-specifier redefinitions are a pragmatic test-only workaround
 // to cover MainWindow internals. Prefer dedicated test APIs or friend tests when feasible.
@@ -25,7 +28,9 @@
 #include "Manager.h"
 #include "MCPServer.h"
 #include "SelectionSet.h"
+#include "SentryReporter.h"
 #include "TransformOperator.h"
+#include "EditModeController.h"
 #include "TestHelpers.h"
 #include "ui_mainwindow.h"
 
@@ -93,6 +98,25 @@ protected:
         }
 
         return createAnimatedTestEntity(name);
+    }
+
+    QAction* findActionByObjectName(const QString& objectName) const
+    {
+        if (!window) {
+            return nullptr;
+        }
+        return window->findChild<QAction*>(objectName);
+    }
+
+    void closeAnyOpenMessageBoxesSoon() const
+    {
+        QTimer::singleShot(0, [] {
+            for (QWidget* widget : QApplication::topLevelWidgets()) {
+                if (auto* messageBox = qobject_cast<QMessageBox*>(widget)) {
+                    messageBox->accept();
+                }
+            }
+        });
     }
 };
 
@@ -640,4 +664,318 @@ TEST_F(MainWindowTest, UngroupSelectedIgnoresNonGroupNode) {
 
     EXPECT_TRUE(manager->hasSceneNode("UngroupNoopNode"));
     EXPECT_EQ(SelectionSet::getSingleton()->getNodesCount(), 1);
+}
+TEST_F(MainWindowTest, EditModeKeyboardShortcutsCoverModeAndTopologyPaths)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
+    }
+
+    const std::string meshName = "mainwindow_shortcuts_mesh";
+    auto mesh = createInMemoryTriangleMesh(meshName);
+    auto* node = Manager::getSingleton()->addSceneNode("mainwindow_shortcuts_node");
+    ASSERT_NE(node, nullptr);
+    auto* entity = Manager::getSingleton()->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(node);
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ASSERT_TRUE(ctrl->isEditModeActive());
+
+    QKeyEvent key1(QEvent::KeyPress, Qt::Key_1, Qt::NoModifier);
+    window->keyPressEvent(&key1);
+    EXPECT_EQ(ctrl->selectionMode(), EditModeController::VertexMode);
+
+    QKeyEvent key2(QEvent::KeyPress, Qt::Key_2, Qt::NoModifier);
+    window->keyPressEvent(&key2);
+    EXPECT_EQ(ctrl->selectionMode(), EditModeController::EdgeMode);
+
+    QKeyEvent key3(QEvent::KeyPress, Qt::Key_3, Qt::NoModifier);
+    window->keyPressEvent(&key3);
+    EXPECT_EQ(ctrl->selectionMode(), EditModeController::FaceMode);
+
+    ctrl->selectFace(0, false);
+    QKeyEvent ctrlE(QEvent::KeyPress, Qt::Key_E, Qt::ControlModifier);
+    EXPECT_NO_THROW(window->keyPressEvent(&ctrlE));
+
+    ctrl->setSelectionMode(EditModeController::EdgeMode);
+    ctrl->selectEdge(0, 1, false);
+    QKeyEvent ctrlB(QEvent::KeyPress, Qt::Key_B, Qt::ControlModifier);
+    EXPECT_NO_THROW(window->keyPressEvent(&ctrlB));
+
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->deselectAll();
+    QKeyEvent ctrlA(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier);
+    window->keyPressEvent(&ctrlA);
+    EXPECT_GT(ctrl->selectedVertexCount(), 0);
+
+    QKeyEvent altA(QEvent::KeyPress, Qt::Key_A, Qt::AltModifier);
+    window->keyPressEvent(&altA);
+    EXPECT_EQ(ctrl->selectedVertexCount(), 0);
+
+    QKeyEvent tabKey(QEvent::KeyPress, Qt::Key_Tab, Qt::NoModifier);
+    window->keyPressEvent(&tabKey);
+    EXPECT_FALSE(ctrl->isEditModeActive());
+
+    if (ctrl->isEditModeActive()) {
+        ctrl->exitEditMode(false);
+    }
+    SelectionSet::getSingleton()->clear();
+    Manager::getSingleton()->destroySceneNode(node);
+}
+
+TEST_F(MainWindowTest, TriggeringDynamicHelpAndPreferencesActionsCreatesDialogs)
+{
+    QAction* shortcutsAction = findActionByObjectName("actionKeyboardShortcuts");
+    ASSERT_NE(shortcutsAction, nullptr);
+    shortcutsAction->trigger();
+    app->processEvents();
+
+    bool foundShortcutsDialog = false;
+    for (QWidget* w : QApplication::topLevelWidgets()) {
+        if (auto* quick = qobject_cast<QQuickWidget*>(w);
+            quick && quick->source().toString().contains("ShortcutReference.qml")) {
+            foundShortcutsDialog = true;
+            quick->close();
+        }
+    }
+    EXPECT_TRUE(foundShortcutsDialog);
+
+    window->ui->actionPreferences->trigger();
+    app->processEvents();
+
+    bool foundPreferencesDialog = false;
+    for (QWidget* w : QApplication::topLevelWidgets()) {
+        if (auto* quick = qobject_cast<QQuickWidget*>(w);
+            quick && quick->source().toString().contains("PreferencesDialog.qml")) {
+            foundPreferencesDialog = true;
+            quick->close();
+        }
+    }
+    EXPECT_TRUE(foundPreferencesDialog);
+}
+
+TEST_F(MainWindowTest, AiChatToolbarButtonAndMenuActionRevealDock)
+{
+    if (!window->m_chatDock) {
+        GTEST_SKIP() << "Skipping: chat dock not available in this build";
+    }
+
+    window->show();
+    app->processEvents();
+
+    window->m_chatDock->hide();
+    app->processEvents();
+    EXPECT_TRUE(window->m_chatDock->isHidden());
+
+    QAction* aiChatAction = findActionByObjectName("actionAIChatDock");
+    ASSERT_NE(aiChatAction, nullptr);
+    aiChatAction->trigger();
+    app->processEvents();
+    EXPECT_FALSE(window->m_chatDock->isHidden());
+
+    window->m_chatDock->hide();
+    app->processEvents();
+    EXPECT_TRUE(window->m_chatDock->isHidden());
+
+    QToolButton* aiButton = window->findChild<QToolButton*>("aiChatToolbarButton");
+    ASSERT_NE(aiButton, nullptr);
+    aiButton->click();
+    app->processEvents();
+    EXPECT_FALSE(window->m_chatDock->isHidden());
+}
+
+TEST_F(MainWindowTest, AssetBrowserMenuActionTracksDockVisibility)
+{
+    if (!window->m_assetBrowserDock) {
+        GTEST_SKIP() << "Skipping: asset browser dock not available in this build";
+    }
+
+    window->show();
+    app->processEvents();
+
+    window->m_assetBrowserDock->hide();
+    app->processEvents();
+    EXPECT_TRUE(window->m_assetBrowserDock->isHidden());
+
+    window->ui->actionAsset_Browser->setChecked(true);
+    app->processEvents();
+    EXPECT_TRUE(window->ui->actionAsset_Browser->isChecked());
+    EXPECT_FALSE(window->m_assetBrowserDock->isHidden());
+
+    window->ui->actionAsset_Browser->setChecked(false);
+    app->processEvents();
+    EXPECT_FALSE(window->ui->actionAsset_Browser->isChecked());
+    EXPECT_TRUE(window->m_assetBrowserDock->isHidden());
+}
+
+TEST_F(MainWindowTest, LoadFileQueuesNonSceneFileAndTracksRecentFiles)
+{
+    ASSERT_TRUE(tempDir.isValid());
+    const QString meshPath = tempDir.filePath("load_file.mesh");
+    QFile file(meshPath);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("mesh");
+    file.close();
+
+    window->loadFile(meshPath);
+
+    EXPECT_TRUE(window->mUriList.contains(meshPath));
+    EXPECT_TRUE(QSettings().value("RecentFiles/files").toStringList().contains(meshPath));
+}
+
+TEST_F(MainWindowTest, LoadFileScenePathUsesSceneImporterBranchWithoutQueueing)
+{
+    ASSERT_TRUE(tempDir.isValid());
+    const QString scenePath = tempDir.filePath("scene_only.scene.gltf");
+    QFile file(scenePath);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("{\"asset\":{\"version\":\"2.0\"}}");
+    file.close();
+
+    window->mUriList.clear();
+    window->loadFile(scenePath);
+
+    EXPECT_FALSE(window->mUriList.contains(scenePath));
+    EXPECT_TRUE(QSettings().value("RecentFiles/files").toStringList().contains(scenePath));
+}
+
+TEST_F(MainWindowTest, FrameEndedStatusMessageCoversSelectionKindsAndTransformSpace)
+{
+    auto* manager = Manager::getSingleton();
+    ASSERT_NE(manager, nullptr);
+
+    auto mesh = createInMemoryTriangleMesh("mainwindow_frameended_mesh");
+    auto* node = manager->addSceneNode("mainwindow_frameended_node");
+    ASSERT_NE(node, nullptr);
+    auto* entity = manager->createEntity(node, mesh);
+    ASSERT_NE(entity, nullptr);
+    ASSERT_GT(entity->getNumSubEntities(), 0u);
+
+    Ogre::FrameEvent evt{};
+    evt.timeSinceLastFrame = 0.016f;
+    evt.timeSinceLastEvent = 0.016f;
+
+    TransformOperator::getSingleton()->setTransformSpace(TransformOperator::SPACE_WORLD);
+    SelectionSet::getSingleton()->selectOne(node);
+    EXPECT_TRUE(window->frameEnded(evt));
+    EXPECT_TRUE(window->ui->statusBar->currentMessage().startsWith("World | Nodes: 1"));
+
+    SelectionSet::getSingleton()->selectOne(entity);
+    EXPECT_TRUE(window->frameEnded(evt));
+    EXPECT_TRUE(window->ui->statusBar->currentMessage().startsWith("World | Entities: 1"));
+
+    SelectionSet::getSingleton()->selectOne(entity->getSubEntity(0));
+    EXPECT_TRUE(window->frameEnded(evt));
+    EXPECT_TRUE(window->ui->statusBar->currentMessage().startsWith("World | Submeshes: 1"));
+
+    TransformOperator::getSingleton()->setTransformSpace(TransformOperator::SPACE_LOCAL);
+    SelectionSet::getSingleton()->clear();
+    EXPECT_TRUE(window->frameEnded(evt));
+    EXPECT_TRUE(window->ui->statusBar->currentMessage().startsWith("Local | No selection"));
+}
+
+TEST_F(MainWindowTest, FrameRenderingQueuedAdvancesEnabledAnimationWhenPlaying)
+{
+    Ogre::Entity* entity = createAnimatedEntity("mainwindow_frame_anim_entity");
+    if (!entity) {
+        GTEST_SKIP() << "Skipping: animated entity creation not supported in this environment";
+    }
+
+    Ogre::AnimationStateSet* states = entity->getAllAnimationStates();
+    ASSERT_NE(states, nullptr);
+    ASSERT_FALSE(states->getAnimationStates().empty());
+    Ogre::AnimationState* state = states->getAnimationStates().begin()->second;
+    ASSERT_NE(state, nullptr);
+
+    state->setEnabled(true);
+    state->setTimePosition(0.0f);
+
+    Ogre::FrameEvent evt{};
+    evt.timeSinceLastFrame = 0.2f;
+    evt.timeSinceLastEvent = 0.2f;
+
+    window->setPlaying(true);
+    EXPECT_TRUE(window->frameRenderingQueued(evt));
+    const float advanced = state->getTimePosition();
+    EXPECT_GT(advanced, 0.0f);
+
+    window->setPlaying(false);
+    EXPECT_TRUE(window->frameRenderingQueued(evt));
+    EXPECT_FLOAT_EQ(state->getTimePosition(), advanced);
+}
+
+TEST_F(MainWindowTest, DuplicateSelectedReplacesSelectionWithClonedNodes)
+{
+    auto* manager = Manager::getSingleton();
+    ASSERT_NE(manager, nullptr);
+
+    auto meshA = createInMemoryTriangleMesh("mainwindow_dup_mesh_a");
+    auto meshB = createInMemoryTriangleMesh("mainwindow_dup_mesh_b");
+    auto* nodeA = manager->addSceneNode("mainwindow_dup_node_a");
+    auto* nodeB = manager->addSceneNode("mainwindow_dup_node_b");
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+    ASSERT_NE(manager->createEntity(nodeA, meshA), nullptr);
+    ASSERT_NE(manager->createEntity(nodeB, meshB), nullptr);
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(nodeA);
+    SelectionSet::getSingleton()->append(nodeB);
+    ASSERT_EQ(SelectionSet::getSingleton()->getNodesCount(), 2);
+
+    window->duplicateSelected();
+
+    const QList<Ogre::SceneNode*> selected = SelectionSet::getSingleton()->getNodesSelectionList();
+    ASSERT_EQ(selected.size(), 2);
+    EXPECT_NE(selected[0], nodeA);
+    EXPECT_NE(selected[0], nodeB);
+    EXPECT_NE(selected[1], nodeA);
+    EXPECT_NE(selected[1], nodeB);
+    EXPECT_GE(manager->getSceneNodes().size(), 4);
+}
+
+TEST_F(MainWindowTest, ConstructorAppliesCustomPaletteFromSettings)
+{
+    delete window;
+    window = nullptr;
+
+    QSettings settings;
+    settings.setValue("palette", "custom");
+    settings.setValue("customPalette", QColor(12, 34, 56));
+
+    try {
+        window = new MainWindow();
+    } catch (const std::exception& e) {
+        GTEST_SKIP() << "Skipping: MainWindow reconstruction failed in this environment: " << e.what();
+    } catch (...) {
+        GTEST_SKIP() << "Skipping: MainWindow reconstruction failed in this environment";
+    }
+    ASSERT_NE(window, nullptr);
+
+    EXPECT_TRUE(window->ui->actionCustom->isChecked());
+    EXPECT_FALSE(window->ui->actionLight->isChecked());
+    EXPECT_FALSE(window->ui->actionDark->isChecked());
+    EXPECT_EQ(QSettings().value("palette").toString(), "custom");
+}
+
+TEST_F(MainWindowTest, CrashReportMenuToggleToEnabledShowsConfirmationPath)
+{
+    QAction* crashAction = findActionByObjectName("actionCrashReports");
+    ASSERT_NE(crashAction, nullptr);
+    ASSERT_TRUE(crashAction->isCheckable());
+
+    const bool oldEnabled = SentryReporter::isEnabled();
+    SentryReporter::setEnabled(false);
+    crashAction->setChecked(false);
+
+    closeAnyOpenMessageBoxesSoon();
+    crashAction->trigger();
+    app->processEvents();
+
+    EXPECT_TRUE(crashAction->isChecked());
+    SentryReporter::setEnabled(oldEnabled);
 }

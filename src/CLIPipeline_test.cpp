@@ -2243,6 +2243,12 @@ TEST(CLIPipelineCmdScanError, InvalidFileNameCaseReturns2)
     EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
 }
 
+TEST(CLIPipelineCmdScanError, MissingReportValueReturns2)
+{
+    TestArgv args({"qtmesh", "scan", "--report"});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 2);
+}
+
 TEST(CLIPipelineCmdScanError, NonDirectoryScanRootReturns2)
 {
     QTemporaryDir tmpDir;
@@ -2379,6 +2385,36 @@ TEST(CLIPipelineCmdScan, ReportAndSarifAreWrittenWithFailOnNever)
     const QString sarif = QString::fromUtf8(sarifFile.readAll());
     EXPECT_TRUE(sarif.contains("\"version\": \"2.1.0\""));
     EXPECT_TRUE(sarif.contains("\"tool\""));
+}
+
+TEST(CLIPipelineCmdScan, ReportAndSarifWriteFailuresDoNotChangeExitCode)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString scanFile = tmpDir.filePath("bad.fbx");
+    QFile invalid(scanFile);
+    ASSERT_TRUE(invalid.open(QIODevice::WriteOnly | QIODevice::Text));
+    invalid.write("not a real fbx");
+    invalid.close();
+
+    const QString reportDir = tmpDir.filePath("out_report_dir");
+    const QString sarifDir = tmpDir.filePath("out_sarif_dir");
+    ASSERT_TRUE(QDir().mkpath(reportDir));
+    ASSERT_TRUE(QDir().mkpath(sarifDir));
+
+    QByteArray rootBa = tmpDir.path().toUtf8();
+    QByteArray reportBa = reportDir.toUtf8();
+    QByteArray sarifBa = sarifDir.toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData(),
+                   "--json",
+                   "--report", reportBa.constData(),
+                   "--sarif", sarifBa.constData(),
+                   "--fail-on", "never"});
+
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+    EXPECT_TRUE(QFileInfo(reportDir).isDir());
+    EXPECT_TRUE(QFileInfo(sarifDir).isDir());
 }
 
 TEST(CLIPipelineCmdScan, FailOnWarningReturnsFailure)
@@ -2568,6 +2604,46 @@ TEST(CLIPipelineCmdScan, AutoDetectConfigWritesConfiguredReports)
     ASSERT_TRUE(reportFile.open(QIODevice::ReadOnly | QIODevice::Text));
     const QString report = QString::fromUtf8(reportFile.readAll());
     EXPECT_TRUE(report.contains("\"summary\""));
+}
+
+TEST(CLIPipelineCmdScan, AutoDetectConfigTextReportFormatWritesTextOutput)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ScopedCurrentDir cwd(tmpDir.path());
+
+    QDir root(tmpDir.path());
+    ASSERT_TRUE(root.mkpath("assets"));
+
+    const QString scanFile = tmpDir.filePath("assets/auto_bad.fbx");
+    QFile invalid(scanFile);
+    ASSERT_TRUE(invalid.open(QIODevice::WriteOnly | QIODevice::Text));
+    invalid.write("invalid fbx");
+    invalid.close();
+
+    const QString configPath = tmpDir.filePath("qtmesh.yml");
+    QFile cfg(configPath);
+    ASSERT_TRUE(cfg.open(QIODevice::WriteOnly | QIODevice::Text));
+    cfg.write(
+        "report:\n"
+        "  format: text\n"
+        "  output: auto/report.txt\n"
+        "  fail_on: never\n");
+    cfg.close();
+
+    QFile::remove(tmpDir.filePath("auto/report.txt"));
+
+    QByteArray rootBa = tmpDir.filePath("assets").toUtf8();
+    TestArgv args({"qtmesh", "scan", rootBa.constData()});
+    EXPECT_EQ(CLIPipeline::cmdScan(args.argc(), args.argv()), 0);
+
+    const QString autoReport = tmpDir.filePath("auto/report.txt");
+    EXPECT_TRUE(QFile::exists(autoReport));
+
+    QFile reportFile(autoReport);
+    ASSERT_TRUE(reportFile.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QString report = QString::fromUtf8(reportFile.readAll());
+    EXPECT_TRUE(report.contains("Summary:"));
 }
 
 TEST(CLIPipelineCmdScan, MaxVerticesOverrideReturnsFailure)

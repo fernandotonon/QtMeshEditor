@@ -15,6 +15,7 @@ The MIT License
 #include "Manager.h"
 #include "SelectionSet.h"
 #include <Ogre.h>
+#include <QSignalSpy>
 #include <set>
 #include <utility>
 #include <cmath>
@@ -565,6 +566,159 @@ TEST_F(EditModeControllerSelectionTest, HitTestEdgeNullCamera) {
 
     ctrl->exitEditMode(false);
     Manager::getSingleton()->destroySceneNode("EditCtrl_hitedge_null_node");
+}
+
+TEST_F(EditModeControllerSelectionTest, SoftSelectionSettersValidateInputAndEmitSignals) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+
+    QSignalSpy softSelSpy(ctrl, &EditModeController::softSelectionChanged);
+    ASSERT_TRUE(softSelSpy.isValid());
+
+    ctrl->setSoftSelectionEnabled(true);
+    EXPECT_TRUE(ctrl->softSelectionEnabled());
+    EXPECT_GE(softSelSpy.count(), 1);
+
+    const int countAfterEnable = softSelSpy.count();
+    ctrl->setSoftSelectionEnabled(true); // same value => no new emission
+    EXPECT_EQ(softSelSpy.count(), countAfterEnable);
+
+    ctrl->setSoftSelectionRadius(3.0);
+    EXPECT_DOUBLE_EQ(ctrl->softSelectionRadius(), 3.0);
+    EXPECT_GE(softSelSpy.count(), countAfterEnable + 1);
+
+    const int countAfterRadius = softSelSpy.count();
+    ctrl->setSoftSelectionRadius(-1.0); // invalid => ignored
+    EXPECT_DOUBLE_EQ(ctrl->softSelectionRadius(), 3.0);
+    EXPECT_EQ(softSelSpy.count(), countAfterRadius);
+
+    ctrl->setSoftSelectionFalloff(1);
+    EXPECT_EQ(ctrl->softSelectionFalloff(), 1);
+    EXPECT_GE(softSelSpy.count(), countAfterRadius + 1);
+
+    const int countAfterFalloff = softSelSpy.count();
+    ctrl->setSoftSelectionFalloff(9); // invalid => ignored
+    EXPECT_EQ(ctrl->softSelectionFalloff(), 1);
+    EXPECT_EQ(softSelSpy.count(), countAfterFalloff);
+
+    ctrl->exitEditMode(false);
+}
+
+TEST_F(EditModeControllerSelectionTest, SoftSelectionWeightComputationsCoverLinearSmoothAndFallbackPaths) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+
+    ctrl->selectVertex(0, false);
+    ASSERT_EQ(ctrl->selectedVertexCount(), 1);
+
+    ctrl->setSoftSelectionEnabled(true);
+    ctrl->setSoftSelectionRadius(3.0);
+    ctrl->setSoftSelectionFalloff(0); // linear
+
+    std::map<int, float> linearWeights = ctrl->getSoftSelectionWeights();
+    ASSERT_TRUE(linearWeights.count(0) > 0);
+    ASSERT_TRUE(linearWeights.count(1) > 0);
+    ASSERT_TRUE(linearWeights.count(2) > 0);
+    EXPECT_FLOAT_EQ(linearWeights[0], 1.0f);
+    EXPECT_NEAR(linearWeights[1], 2.0f / 3.0f, 0.05f);
+    EXPECT_NEAR(linearWeights[2], 2.0f / 3.0f, 0.05f);
+
+    ctrl->setSoftSelectionFalloff(1); // smooth
+    std::map<int, float> smoothWeights = ctrl->getSoftSelectionWeights();
+    ASSERT_TRUE(smoothWeights.count(1) > 0);
+    ASSERT_TRUE(smoothWeights.count(2) > 0);
+    EXPECT_GE(smoothWeights[1] + 1e-4f, linearWeights[1]);
+    EXPECT_GE(smoothWeights[2] + 1e-4f, linearWeights[2]);
+
+    // Omit selected vertex 0 in the positions map to exercise fallback to
+    // live mesh positions for selectedPositions.
+    ctrl->setSoftSelectionFalloff(0);
+    ctrl->setSoftSelectionRadius(1.0);
+    std::map<int, Ogre::Vector3> positions;
+    positions[1] = Ogre::Vector3(0.5f, 0.0f, 0.0f);
+    positions[2] = Ogre::Vector3(2.0f, 0.0f, 0.0f);
+
+    std::map<int, float> mapWeights = ctrl->computeSoftSelectionWeightsFromPositions(positions);
+    EXPECT_TRUE(mapWeights.count(0) > 0);
+    EXPECT_TRUE(mapWeights.count(1) > 0);
+    EXPECT_FALSE(mapWeights.count(2) > 0);
+    EXPECT_FLOAT_EQ(mapWeights[0], 1.0f);
+    EXPECT_NEAR(mapWeights[1], 0.5f, 0.05f);
+
+    ctrl->setSoftSelectionFalloff(1);
+    std::map<int, float> mapWeightsSmooth = ctrl->computeSoftSelectionWeightsFromPositions(positions);
+    EXPECT_TRUE(mapWeightsSmooth.count(1) > 0);
+    EXPECT_GE(mapWeightsSmooth[1] + 1e-4f, mapWeights[1]);
+
+    ctrl->exitEditMode(false);
+}
+
+TEST_F(EditModeControllerSelectionTest, HitTestingAndBoxSelectionWorkWithCamera) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    ASSERT_NE(sceneMgr, nullptr);
+    const std::string cameraName = "EditCtrl_hit_camera_" + std::to_string(++s_counter);
+    const std::string cameraNodeName = cameraName + "_node";
+    Ogre::Camera* camera = sceneMgr->createCamera(cameraName);
+    ASSERT_NE(camera, nullptr);
+    Ogre::SceneNode* cameraNode = sceneMgr->getRootSceneNode()->createChildSceneNode(cameraNodeName);
+    ASSERT_NE(cameraNode, nullptr);
+    cameraNode->attachObject(camera);
+    camera->setNearClipDistance(0.1f);
+    camera->setFarClipDistance(1000.0f);
+    camera->setAspectRatio(800.0f / 600.0f);
+    cameraNode->setPosition(0.0f, 0.0f, 5.0f);
+    cameraNode->lookAt(Ogre::Vector3(0.0f, 0.0f, 0.0f), Ogre::Node::TS_WORLD);
+
+    const int vpW = 800;
+    const int vpH = 600;
+    const QPoint screenV0 = EditModeController::worldToScreen(
+        m_node->convertLocalToWorldPosition(Ogre::Vector3(0.0f, 0.0f, 0.0f)),
+        camera, vpW, vpH);
+    const QPoint screenV1 = EditModeController::worldToScreen(
+        m_node->convertLocalToWorldPosition(Ogre::Vector3(1.0f, 0.0f, 0.0f)),
+        camera, vpW, vpH);
+    const QPoint screenV2 = EditModeController::worldToScreen(
+        m_node->convertLocalToWorldPosition(Ogre::Vector3(0.0f, 1.0f, 0.0f)),
+        camera, vpW, vpH);
+
+    const int hitVertex = ctrl->hitTestVertex(screenV0, camera, vpW, vpH, 25.0f);
+    EXPECT_GE(hitVertex, 0);
+
+    const QPoint edgeMid = EditModeController::worldToScreen(
+        m_node->convertLocalToWorldPosition(Ogre::Vector3(0.5f, 0.0f, 0.0f)),
+        camera, vpW, vpH);
+    auto edge = ctrl->hitTestEdge(edgeMid, camera, vpW, vpH, 25.0f);
+    EXPECT_NE(edge.first, -1);
+    EXPECT_NE(edge.second, -1);
+
+    const QPoint faceCenter = EditModeController::worldToScreen(
+        m_node->convertLocalToWorldPosition(Ogre::Vector3(0.2f, 0.2f, 0.0f)),
+        camera, vpW, vpH);
+    EXPECT_EQ(ctrl->hitTestFace(faceCenter, camera, vpW, vpH), 0);
+
+    QRect box(screenV0, screenV0);
+    box = box.united(QRect(screenV1, screenV1));
+    box = box.united(QRect(screenV2, screenV2));
+    box.adjust(-4, -4, 4, 4);
+    ctrl->boxSelectVertices(box, camera, vpW, vpH, false);
+    EXPECT_EQ(ctrl->selectedVertexCount(), 3);
+
+    // Turn camera away so geometry is behind the camera.
+    cameraNode->lookAt(Ogre::Vector3(0.0f, 0.0f, 10.0f), Ogre::Node::TS_WORLD);
+    EXPECT_EQ(ctrl->hitTestVertex(QPoint(vpW / 2, vpH / 2), camera, vpW, vpH, 25.0f), -1);
+    auto noEdge = ctrl->hitTestEdge(QPoint(vpW / 2, vpH / 2), camera, vpW, vpH, 25.0f);
+    EXPECT_EQ(noEdge.first, -1);
+    EXPECT_EQ(noEdge.second, -1);
+    ctrl->boxSelectVertices(QRect(0, 0, vpW, vpH), camera, vpW, vpH, false);
+    EXPECT_EQ(ctrl->selectedVertexCount(), 0);
+
+    cameraNode->detachObject(camera);
+    sceneMgr->destroyCamera(camera);
+    sceneMgr->destroySceneNode(cameraNode);
+    ctrl->exitEditMode(false);
 }
 
 TEST_F(EditModeControllerSelectionTest, SelectOperationsNotInEditMode) {
@@ -1193,4 +1347,3 @@ TEST_F(EditModeControllerBevelE2ETest, BevelCubeCornerVertexProducesClosedManifo
     for (auto& [_, c] : edgeUse) if (c == 1) ++boundaryEdges;
     EXPECT_EQ(boundaryEdges, 0u) << "vertex bevel leaves " << boundaryEdges << " boundary edges";
 }
-

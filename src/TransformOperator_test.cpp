@@ -225,6 +225,77 @@ TEST_F(TransformOperatorTests, PivotPointForNodeSelectionSupportsCenterBottomAnd
     expectVectorNear(op->getPivotPoint(), Ogre::Vector3(3.0f, 3.0f, 6.0f));
 }
 
+TEST_F(TransformOperatorTests, PivotPointForEntitySelectionSupportsCenterBottomAndOrigin)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    Ogre::Entity* entityA = createSelectedEntity("PivotEntityNodeA", "PivotEntityA", "PivotEntityMeshA");
+    Ogre::Entity* entityB = createSelectedEntity("PivotEntityNodeB", "PivotEntityB", "PivotEntityMeshB");
+    ASSERT_NE(entityA, nullptr);
+    ASSERT_NE(entityB, nullptr);
+
+    Ogre::SceneNode* nodeA = entityA->getParentSceneNode();
+    Ogre::SceneNode* nodeB = entityB->getParentSceneNode();
+    ASSERT_NE(nodeA, nullptr);
+    ASSERT_NE(nodeB, nullptr);
+
+    nodeA->setPosition(Ogre::Vector3(0.0f, 4.0f, 10.0f));
+    nodeB->setPosition(Ogre::Vector3(6.0f, 2.0f, 2.0f));
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->append(entityA);
+    SelectionSet::getSingleton()->append(entityB);
+
+    op->setPivotMode(TransformOperator::PIVOT_CENTER);
+    const Ogre::Vector3 center = op->getPivotPoint();
+    expectVectorNear(center, Ogre::Vector3(3.0f, 3.0f, 6.0f), 0.2f);
+
+    op->setPivotMode(TransformOperator::PIVOT_BOTTOM);
+    const Ogre::Vector3 bottom = op->getPivotPoint();
+    EXPECT_NEAR(bottom.x, 3.0f, 0.2f);
+    EXPECT_NEAR(bottom.z, 6.0f, 0.2f);
+    EXPECT_NEAR(bottom.y, 1.0f, 0.2f); // min Y of bbox: nodeB.y + meshMinY(-1)
+
+    op->setPivotMode(TransformOperator::PIVOT_ORIGIN);
+    expectVectorNear(op->getPivotPoint(), Ogre::Vector3(3.0f, 3.0f, 6.0f), 0.2f);
+}
+
+TEST_F(TransformOperatorTests, PivotPointForSubEntitySelectionSupportsCenterBottomAndOrigin)
+{
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
+    }
+
+    Ogre::Entity* entity = createSelectedEntity("PivotSubNode", "PivotSubEntity", "PivotSubMesh");
+    ASSERT_NE(entity, nullptr);
+    ASSERT_GT(entity->getNumSubEntities(), 0u);
+
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
+    node->setPosition(Ogre::Vector3(2.0f, 5.0f, -1.0f));
+
+    SelectionSet::getSingleton()->clear();
+    SelectionSet::getSingleton()->selectOne(entity->getSubEntity(0));
+    ASSERT_TRUE(SelectionSet::getSingleton()->hasSubEntities());
+
+    op->setPivotMode(TransformOperator::PIVOT_CENTER);
+    const Ogre::Vector3 center = op->getPivotPoint();
+    EXPECT_NEAR(center.x, 2.0f, 0.2f);
+    EXPECT_NEAR(center.y, 5.0f, 0.2f);
+    EXPECT_NEAR(center.z, -1.0f, 0.2f);
+
+    op->setPivotMode(TransformOperator::PIVOT_BOTTOM);
+    const Ogre::Vector3 bottom = op->getPivotPoint();
+    EXPECT_NEAR(bottom.x, center.x, 0.2f);
+    EXPECT_NEAR(bottom.z, center.z, 0.2f);
+    EXPECT_NEAR(bottom.y, 4.0f, 0.2f); // node.y + meshMinY(-1)
+
+    op->setPivotMode(TransformOperator::PIVOT_ORIGIN);
+    expectVectorNear(op->getPivotPoint(), node->getPosition(), 0.2f);
+}
+
 TEST_F(TransformOperatorTests, UpdateGizmoWithoutSelectionHidesEveryGizmo)
 {
     op->m_pRotationGizmo->setVisible(true);

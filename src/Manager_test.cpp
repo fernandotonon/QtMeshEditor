@@ -835,6 +835,79 @@ TEST_F(ManagerHeadlessTest, AddSceneNode_AutoNumbering_WithGap)
     EXPECT_TRUE(mgr->hasSceneNode("Plane1"));
 }
 
+TEST_F(ManagerHeadlessTest, DuplicateSceneNode_NullSourceReturnsNull)
+{
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    EXPECT_EQ(mgr->duplicateSceneNode(nullptr), nullptr);
+}
+
+TEST_F(ManagerHeadlessTest, DuplicateSceneNode_ClonesAnimatedEntityWithIndependentSkeleton)
+{
+    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    auto* mgr = Manager::getSingletonPtr();
+    ASSERT_NE(mgr, nullptr);
+
+    Ogre::Entity* sourceEntity = createAnimatedTestEntity("MgrDupAnim");
+    ASSERT_NE(sourceEntity, nullptr);
+    ASSERT_TRUE(sourceEntity->hasSkeleton());
+    Ogre::SceneNode* sourceNode = sourceEntity->getParentSceneNode();
+    ASSERT_NE(sourceNode, nullptr);
+
+    sourceNode->setPosition(3.0f, 4.0f, 5.0f);
+    sourceNode->setScale(1.5f, 2.0f, 2.5f);
+    sourceNode->setOrientation(Ogre::Quaternion(Ogre::Degree(20.0f), Ogre::Vector3::UNIT_Y));
+
+    Ogre::SceneNode* duplicateNode = mgr->duplicateSceneNode(sourceNode);
+    ASSERT_NE(duplicateNode, nullptr);
+    EXPECT_NE(duplicateNode, sourceNode);
+    EXPECT_NE(QString::fromStdString(duplicateNode->getName()), QString::fromStdString(sourceNode->getName()));
+
+    EXPECT_FLOAT_EQ(duplicateNode->getPosition().x, sourceNode->getPosition().x);
+    EXPECT_FLOAT_EQ(duplicateNode->getPosition().y, sourceNode->getPosition().y);
+    EXPECT_FLOAT_EQ(duplicateNode->getPosition().z, sourceNode->getPosition().z);
+    EXPECT_FLOAT_EQ(duplicateNode->getScale().x, sourceNode->getScale().x);
+    EXPECT_FLOAT_EQ(duplicateNode->getScale().y, sourceNode->getScale().y);
+    EXPECT_FLOAT_EQ(duplicateNode->getScale().z, sourceNode->getScale().z);
+    EXPECT_NEAR(duplicateNode->getOrientation().w, sourceNode->getOrientation().w, 1e-5f);
+    EXPECT_NEAR(duplicateNode->getOrientation().x, sourceNode->getOrientation().x, 1e-5f);
+    EXPECT_NEAR(duplicateNode->getOrientation().y, sourceNode->getOrientation().y, 1e-5f);
+    EXPECT_NEAR(duplicateNode->getOrientation().z, sourceNode->getOrientation().z, 1e-5f);
+
+    ASSERT_EQ(duplicateNode->numAttachedObjects(), 1u);
+    Ogre::MovableObject* attached = duplicateNode->getAttachedObject(0);
+    ASSERT_NE(attached, nullptr);
+    ASSERT_EQ(attached->getMovableType(), "Entity");
+    Ogre::Entity* duplicateEntity = static_cast<Ogre::Entity*>(attached);
+    ASSERT_NE(duplicateEntity, nullptr);
+
+    EXPECT_NE(duplicateEntity->getMesh()->getName(), sourceEntity->getMesh()->getName());
+    ASSERT_TRUE(sourceEntity->getMesh()->hasSkeleton());
+    ASSERT_TRUE(duplicateEntity->getMesh()->hasSkeleton());
+    EXPECT_NE(duplicateEntity->getMesh()->getSkeleton()->getName(),
+              sourceEntity->getMesh()->getSkeleton()->getName());
+    EXPECT_TRUE(duplicateEntity->getAllAnimationStates()->hasAnimationState("TestAnim"));
+
+    Ogre::AnimationState* sourceState = sourceEntity->getAnimationState("TestAnim");
+    Ogre::AnimationState* duplicateState = duplicateEntity->getAnimationState("TestAnim");
+    ASSERT_NE(sourceState, nullptr);
+    ASSERT_NE(duplicateState, nullptr);
+    EXPECT_FALSE(sourceState->getEnabled());
+    EXPECT_FALSE(duplicateState->getEnabled());
+
+    sourceState->setEnabled(true);
+    EXPECT_TRUE(sourceState->getEnabled());
+    EXPECT_FALSE(duplicateState->getEnabled());
+
+    Ogre::Animation* sourceAnim = sourceEntity->getMesh()->getSkeleton()->getAnimation("TestAnim");
+    Ogre::Animation* duplicateAnim = duplicateEntity->getMesh()->getSkeleton()->getAnimation("TestAnim");
+    ASSERT_NE(sourceAnim, nullptr);
+    ASSERT_NE(duplicateAnim, nullptr);
+    EXPECT_FLOAT_EQ(sourceAnim->getLength(), duplicateAnim->getLength());
+    EXPECT_EQ(sourceAnim->getNumNodeTracks(), duplicateAnim->getNumNodeTracks());
+}
+
 // Test hasAnimationName with createAnimatedTestEntity - multiple animation name checks
 TEST_F(ManagerHeadlessTest, HasAnimationName_MultipleChecks)
 {
