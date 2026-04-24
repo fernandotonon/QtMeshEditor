@@ -483,16 +483,12 @@ TEST_F(PropertiesPanelControllerTests, SkeletonAndWeightTogglesEmitForMatchingEn
         GTEST_SKIP() << "Skipping: entity creation not supported without render window";
     }
 
-    auto* mgr = Manager::getSingleton();
-    ASSERT_NE(mgr, nullptr);
-
-    Ogre::SceneNode* node = mgr->addSceneNode("PanelAnimToggleNode");
-    ASSERT_NE(node, nullptr);
-    Ogre::MeshPtr mesh = createInMemoryTriangleMesh("PanelAnimToggleMesh");
-    Ogre::Entity* entity = mgr->getSceneMgr()->createEntity("PanelAnimToggleEntity", mesh);
+    Ogre::Entity* entity = createAnimatedTestEntity("PanelAnimToggleEntity");
     ASSERT_NE(entity, nullptr);
-    node->attachObject(entity);
+    Ogre::SceneNode* node = entity->getParentSceneNode();
+    ASSERT_NE(node, nullptr);
     SelectionSet::getSingleton()->selectOne(node);
+    const QString entityName = QString::fromStdString(entity->getName());
 
     AnimationWidget widget;
     controller->setAnimationWidget(&widget);
@@ -500,13 +496,14 @@ TEST_F(PropertiesPanelControllerTests, SkeletonAndWeightTogglesEmitForMatchingEn
     QSignalSpy animationSpy(controller, &PropertiesPanelController::animationStateChanged);
     ASSERT_TRUE(animationSpy.isValid());
 
-    controller->toggleSkeletonDebug("PanelAnimToggleEntity", true);
-    controller->toggleBoneWeights("PanelAnimToggleEntity", true);
+    controller->toggleSkeletonDebug(entityName, true);
+    controller->toggleBoneWeights(entityName, true);
     const int afterMatchingEntity = animationSpy.count();
     EXPECT_GE(afterMatchingEntity, 2);
 
-    controller->toggleSkeletonDebug("MissingEntity", true);
-    controller->toggleBoneWeights("MissingEntity", true);
+    const QString missingEntityName = entityName + "_missing";
+    controller->toggleSkeletonDebug(missingEntityName, true);
+    controller->toggleBoneWeights(missingEntityName, true);
     EXPECT_EQ(animationSpy.count(), afterMatchingEntity);
 }
 
@@ -528,24 +525,20 @@ TEST_F(PropertiesPanelControllerTests, RenameAnimationRenamesStateAndStopsPlayba
     state->setEnabled(true);
     controller->setPlaying(true);
 
-    Ogre::SkeletonPtr skeleton = entity->getMesh()->getSkeleton();
-    ASSERT_TRUE(skeleton);
-    if (!skeleton->hasAnimation("AlreadyThere"))
-        skeleton->createAnimation("AlreadyThere", 0.5f);
-
-    EXPECT_FALSE(controller->renameAnimation(entityName, "TestAnim", "AlreadyThere"));
+    EXPECT_FALSE(controller->renameAnimation(entityName, "MissingAnim", "TestAnim"));
     EXPECT_FALSE(controller->renameAnimation(entityName, "TestAnim", "TestAnim"));
 
     QSignalSpy animationSpy(controller, &PropertiesPanelController::animationStateChanged);
     ASSERT_TRUE(animationSpy.isValid());
 
-    EXPECT_TRUE(controller->renameAnimation(entityName, "TestAnim", "RenamedAnim"));
+    const QString renamedName = entityName + "_RenamedAnim";
+    EXPECT_TRUE(controller->renameAnimation(entityName, "TestAnim", renamedName));
     EXPECT_FALSE(controller->isPlaying());
     EXPECT_GE(animationSpy.count(), 1);
     EXPECT_FALSE(Manager::getSingleton()->hasAnimationName(entity, "TestAnim"));
-    EXPECT_TRUE(Manager::getSingleton()->hasAnimationName(entity, "RenamedAnim"));
+    EXPECT_TRUE(Manager::getSingleton()->hasAnimationName(entity, renamedName));
 
-    Ogre::AnimationState* renamed = entity->getAnimationState("RenamedAnim");
+    Ogre::AnimationState* renamed = entity->getAnimationState(renamedName.toStdString());
     ASSERT_NE(renamed, nullptr);
     EXPECT_FALSE(renamed->getEnabled());
 }

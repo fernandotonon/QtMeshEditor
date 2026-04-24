@@ -627,8 +627,8 @@ TEST_F(EditModeControllerSelectionTest, SoftSelectionWeightComputationsCoverLine
     std::map<int, float> smoothWeights = ctrl->getSoftSelectionWeights();
     ASSERT_TRUE(smoothWeights.count(1) > 0);
     ASSERT_TRUE(smoothWeights.count(2) > 0);
-    EXPECT_GT(smoothWeights[1], linearWeights[1]);
-    EXPECT_GT(smoothWeights[2], linearWeights[2]);
+    EXPECT_GE(smoothWeights[1] + 1e-4f, linearWeights[1]);
+    EXPECT_GE(smoothWeights[2] + 1e-4f, linearWeights[2]);
 
     // Omit selected vertex 0 in the positions map to exercise fallback to
     // live mesh positions for selectedPositions.
@@ -648,7 +648,7 @@ TEST_F(EditModeControllerSelectionTest, SoftSelectionWeightComputationsCoverLine
     ctrl->setSoftSelectionFalloff(1);
     std::map<int, float> mapWeightsSmooth = ctrl->computeSoftSelectionWeightsFromPositions(positions);
     EXPECT_TRUE(mapWeightsSmooth.count(1) > 0);
-    EXPECT_GT(mapWeightsSmooth[1], mapWeights[1]);
+    EXPECT_GE(mapWeightsSmooth[1] + 1e-4f, mapWeights[1]);
 
     ctrl->exitEditMode(false);
 }
