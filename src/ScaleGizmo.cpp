@@ -98,14 +98,17 @@ void ScaleGizmo::createZaxis(const Ogre::ColourValue& colour)
 void ScaleGizmo::createSolidXaxis(const Ogre::ColourValue& colour)
 {
     float thickness = mScale / mSolidThickness;
-    float shaftLength = mScale * 0.85f;
+    // Negative shaft length so the handle visually sits on the screen
+    // right. See TranslationGizmo::createSolidXaxis for the rationale
+    // (camera looks from -Z toward +Z; world +X lands on screen-left).
+    float shaftLength = -mScale * 0.85f;
     float cubeHalf = thickness * mCubeSize;
 
     m_pXaxis->clear();
     m_pXaxis->begin(GUI_MATERIAL_NAME, Ogre::RenderOperation::OT_TRIANGLE_LIST);
         m_pXaxis->colour(colour);
 
-        // Shaft - thin box from origin to shaftLength along +X
+        // Shaft - thin box from origin to shaftLength along -X
         m_pXaxis->position(Ogre::Vector3(0,            thickness,  thickness));
         m_pXaxis->position(Ogre::Vector3(0,           -thickness,  thickness));
         m_pXaxis->position(Ogre::Vector3(shaftLength, -thickness,  thickness));
@@ -116,17 +119,25 @@ void ScaleGizmo::createSolidXaxis(const Ogre::ColourValue& colour)
         m_pXaxis->position(Ogre::Vector3(shaftLength, -thickness, -thickness));
         m_pXaxis->position(Ogre::Vector3(shaftLength,  thickness, -thickness));
 
-        m_pXaxis->quad(0, 1, 2, 3);
-        m_pXaxis->quad(7, 6, 5, 4);
-        m_pXaxis->quad(0, 3, 7, 4);
-        m_pXaxis->quad(2, 1, 5, 6);
-        m_pXaxis->quad(3, 2, 6, 7);
-        m_pXaxis->quad(1, 0, 4, 5);
+        // Shaft quads (winding flipped for the -X orientation)
+        m_pXaxis->quad(3, 2, 1, 0);
+        m_pXaxis->quad(4, 5, 6, 7);
+        m_pXaxis->quad(4, 7, 3, 0);
+        m_pXaxis->quad(6, 5, 1, 2);
+        m_pXaxis->quad(7, 6, 2, 3);
+        m_pXaxis->quad(5, 4, 0, 1);
 
-        // Cube handle at end of shaft
-        createCube(m_pXaxis, colour, Ogre::Vector3(mScale, 0, 0), cubeHalf);
+        // Cube handle at end of shaft (-X side)
+        createCube(m_pXaxis, colour, Ogre::Vector3(-mScale, 0, 0), cubeHalf);
 
     m_pXaxis->end();
+
+    // Re-assert the pickable bbox after the rebuild — ManualObject::end()
+    // computes an auto-bbox from vertex extents, which is tight to the
+    // shaft-and-cube geometry but doesn't include the gap between them.
+    // Explicit bbox matches what the user actually sees.
+    m_pXaxis->setBoundingBox(GizmoAxisHelpers::makeAxisBoundingBox(
+        GizmoAxisHelpers::Axis::X, -(mScale + cubeHalf), 0.0f, cubeHalf));
 }
 
 void ScaleGizmo::createSolidYaxis(const Ogre::ColourValue& colour)
@@ -161,6 +172,8 @@ void ScaleGizmo::createSolidYaxis(const Ogre::ColourValue& colour)
         createCube(m_pYaxis, colour, Ogre::Vector3(0, mScale, 0), cubeHalf);
 
     m_pYaxis->end();
+    m_pYaxis->setBoundingBox(GizmoAxisHelpers::makeAxisBoundingBox(
+        GizmoAxisHelpers::Axis::Y, 0.0f, mScale + cubeHalf, cubeHalf));
 }
 
 void ScaleGizmo::createSolidZaxis(const Ogre::ColourValue& colour)
@@ -195,6 +208,8 @@ void ScaleGizmo::createSolidZaxis(const Ogre::ColourValue& colour)
         createCube(m_pZaxis, colour, Ogre::Vector3(0, 0, mScale), cubeHalf);
 
     m_pZaxis->end();
+    m_pZaxis->setBoundingBox(GizmoAxisHelpers::makeAxisBoundingBox(
+        GizmoAxisHelpers::Axis::Z, 0.0f, mScale + cubeHalf, cubeHalf));
 }
 
 //////////////////////////////////////////
@@ -289,9 +304,22 @@ void ScaleGizmo::createAxis(void)
 
     GizmoAxisHelpers::forEachAxisIndexed(m_pXaxis, m_pYaxis, m_pZaxis,
                                          [this, cubeHalf](GizmoAxisHelpers::Axis axis, Ogre::ManualObject* axisObject) {
+                                             // X geometry is drawn along -X (see
+                                             // createSolidXaxis) to match the camera's view
+                                             // flip; its bbox mirrors that range. Y/Z keep
+                                             // the original [0, mScale + cubeHalf] extents.
+                                             Ogre::Real axisMin;
+                                             Ogre::Real axisMax;
+                                             if (axis == GizmoAxisHelpers::Axis::X) {
+                                                 axisMin = -(mScale + cubeHalf);
+                                                 axisMax = 0.0f;
+                                             } else {
+                                                 axisMin = 0.0f;
+                                                 axisMax = mScale + cubeHalf;
+                                             }
                                              axisObject->setBoundingBox(
                                                  GizmoAxisHelpers::makeAxisBoundingBox(
-                                                     axis, 0.0f, mScale + cubeHalf, cubeHalf));
+                                                     axis, axisMin, axisMax, cubeHalf));
                                          });
 
     mHighlighted = false;

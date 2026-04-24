@@ -1779,6 +1779,98 @@ bool EditModeController::beginBevel()
     s.axis = (normalSum.length() > 1e-6f) ? normalSum.normalisedCopy() : Ogre::Vector3::UNIT_Y;
     s.width = 0.05f; // 2.5% of a 2-unit cube — visible initial chamfer
 
+    // Compute the largest width the bevel algorithm will actually apply
+    // before its internal per-vertex/per-edge clamp takes over. For a
+    // vertex bevel, that's min over targets of (0.499 × shortestIncident
+    // × share), where `share = 0.5` when the far endpoint is also
+    // selected (shared-edge budget) and 1.0 otherwise — matching
+    // HalfEdgeMesh::bevelVertices's own formula exactly. For an edge
+    // bevel, the algorithm caps each edge at 0.4 × shortestAdjacent
+    // (HalfEdgeMesh.cpp:1060); the drag-side max is the min across
+    // selected edges. Both budgets are computed from the pre-bevel
+    // mesh so the cap is a fixed scalar the drag can check against.
+    {
+        HalfEdgeMesh hm;
+        if (hm.buildFromEditableMesh(*m_editableMesh)) {
+            float cap = std::numeric_limits<float>::infinity();
+            if (s.kind == BevelSession::Vertices) {
+                std::set<int> selected(s.targetVertices.begin(), s.targetVertices.end());
+                for (int v : s.targetVertices) {
+                    if (v < 0 || v >= static_cast<int>(hm.vertexCount())) continue;
+                    int startHE = hm.vertex(v).halfEdge;
+                    if (startHE < 0) continue;
+                    int he = startHE;
+                    for (int guard = 0; guard < 1024; ++guard) {
+                        if (he < 0) break;
+                        int n = hm.halfEdge(he).vertex;
+                        float edgeLen = hm.vertex(v).position.distance(hm.vertex(n).position);
+                        // Mirror HalfEdgeMesh::bevelVertices's pre-budget:
+                        // shared edges split 50/50 between the two
+                        // selected endpoints; unshared edges let this
+                        // vertex own (nearly) all of it.
+                        float share = selected.count(n) ? 0.5f : 1.0f;
+                        float budget = edgeLen * 0.999f * share;
+                        if (budget < cap) cap = budget;
+                        int prev = hm.halfEdge(he).prev;
+                        int twin = (prev >= 0) ? hm.halfEdge(prev).twin : -1;
+                        if (twin < 0) break;
+                        he = twin;
+                        if (he == startHE) break;
+                    }
+                }
+            } else {
+                // Edge bevel: walk each selected edge, find its two
+                // adjacent faces, and take 0.4 × the shortest of the
+                // edge itself and its two opposite-vertex legs.
+                for (const auto& [gV1, gV2] : s.targetEdges) {
+                    // Map global verts to HE verts via position match.
+                    // (Global indices already align with HE vertex order
+                    // produced by buildFromEditableMesh — same submesh
+                    // iteration — so we can use them directly.)
+                    int v1 = gV1, v2 = gV2;
+                    if (v1 < 0 || v2 < 0
+                     || v1 >= static_cast<int>(hm.vertexCount())
+                     || v2 >= static_cast<int>(hm.vertexCount())) continue;
+                    float edgeLen = hm.vertex(v1).position.distance(hm.vertex(v2).position);
+                    float shortestAdj = edgeLen;
+                    // Walk v1's outgoing HEs to find the two incident faces.
+                    int startHE = hm.vertex(v1).halfEdge;
+                    if (startHE < 0) continue;
+                    int he = startHE;
+                    int faceHits = 0;
+                    for (int guard = 0; guard < 1024 && faceHits < 2; ++guard) {
+                        if (he < 0) break;
+                        if (hm.halfEdge(he).vertex == v2) {
+                            // This face contains the v1→v2 edge. Find the
+                            // opposite vertex (the one that's neither v1 nor v2).
+                            int loopHE = hm.halfEdge(he).next;
+                            while (loopHE != he) {
+                                int target = hm.halfEdge(loopHE).vertex;
+                                if (target != v1 && target != v2) {
+                                    shortestAdj = std::min(shortestAdj,
+                                        hm.vertex(v1).position.distance(hm.vertex(target).position));
+                                    shortestAdj = std::min(shortestAdj,
+                                        hm.vertex(v2).position.distance(hm.vertex(target).position));
+                                    break;
+                                }
+                                loopHE = hm.halfEdge(loopHE).next;
+                            }
+                            ++faceHits;
+                        }
+                        int prev = hm.halfEdge(he).prev;
+                        int twin = (prev >= 0) ? hm.halfEdge(prev).twin : -1;
+                        if (twin < 0) break;
+                        he = twin;
+                        if (he == startHE) break;
+                    }
+                    float budget = shortestAdj * 0.4f;
+                    if (budget < cap) cap = budget;
+                }
+            }
+            if (cap > 0.0f && std::isfinite(cap)) s.maxWidth = cap;
+        }
+    }
+
     const bool applied = (s.kind == BevelSession::Edges)
         ? applyBevelTopology(s.targetEdges, s.width)
         : applyBevelVertexTopology(s.targetVertices, s.width);
@@ -1853,12 +1945,23 @@ void EditModeController::updateBevelFromDrag(const Ogre::Ray& startRay,
     // delta (drag away from the mesh) grows the bevel; negative shrinks it.
     float newWidth = startWidth + delta;
     if (newWidth < 1e-4f) newWidth = 1e-4f;
+
+    // Cap against the pre-computed per-session maximum so the shaft/handle
+    // don't slide past the point where the bevel algorithm's own clamp
+    // stops updating the mesh. Without this, the gizmo visibly grows
+    // while the bevel is frozen — a confusing UX signal.
+    bool capped = false;
+    if (std::isfinite(m_bevelSession.maxWidth) && newWidth > m_bevelSession.maxWidth) {
+        newWidth = m_bevelSession.maxWidth;
+        capped = true;
+    }
     updateBevelWidth(newWidth);
-    // Slide the handle cube along the shaft so it visually follows the drag.
-    // Base offset of 0.1 (the initial shaft tip) plus delta keeps the visible
-    // handle under the cursor. 0.02 minimum keeps it barely above the shaft
-    // base so it doesn't sink into the mesh when width is tiny.
-    float handleLocalY = std::max(0.02f, 0.4f + delta);
+
+    // Compute the handle position from the *effective* width delta so the
+    // visual shaft length matches the applied bevel. When capped, delta is
+    // pinned to (maxWidth - startWidth) so the handle freezes too.
+    float effectiveDelta = capped ? (newWidth - startWidth) : delta;
+    float handleLocalY = std::max(0.02f, 0.4f + effectiveDelta);
     m_bevelGizmo->setHandleOffset(handleLocalY);
 }
 

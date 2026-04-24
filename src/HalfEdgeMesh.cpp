@@ -2854,6 +2854,19 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
 // This MVP emits a flat cap (segments=1). Shaped profiles and segments>1
 // are TODO (rounded dome). Unused params are accepted for forward
 // compatibility with the edge-bevel API.
+namespace {
+// When true, bevelVertices trusts the caller's width and skips its per-
+// vertex "min(width, 0.499 × minEdgeLen)" safety clamp. Used only by the
+// multi-vertex pre-budgeted recursive call so the pre-budgeted values
+// aren't shrunk again by a now-mutated mesh's edge lengths.
+thread_local bool s_skipVertexBevelClamp = false;
+struct ScopedSkipClamp {
+    bool prev;
+    explicit ScopedSkipClamp(bool v) : prev(s_skipVertexBevelClamp) { s_skipVertexBevelClamp = v; }
+    ~ScopedSkipClamp() { s_skipVertexBevelClamp = prev; }
+};
+} // namespace
+
 std::vector<int> HalfEdgeMesh::bevelVertices(
     const std::vector<int>& vertexIndices,
     float width,
@@ -2915,11 +2928,14 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
                 int n = m_halfEdges[he].vertex;
                 const float edgeLen =
                     m_vertices[v].position.distance(m_vertices[n].position);
-                // If the far endpoint is also selected, each end owns
-                // half the edge; otherwise the whole shortest-edge-
-                // halves rule (match single-vertex clamp behaviour).
+                // On a shared edge both selected endpoints will each own
+                // half. On an unshared edge this vertex owns (nearly) all
+                // of it — but the single-vertex clamp that runs during
+                // sequential processing will re-clamp against mutated
+                // edge length, so unshared-edge budget is effectively
+                // the same 0.999 × edgeLen ceiling.
                 float share = selected.count(n) ? 0.5f : 1.0f;
-                float budget = edgeLen * 0.49f * share;
+                float budget = edgeLen * 0.999f * share;
                 if (budget < minBudget) minBudget = budget;
                 int prev = m_halfEdges[he].prev;
                 int twin = m_halfEdges[prev].twin;
@@ -2929,6 +2945,11 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             }
             if (minBudget < width) perVertexWidth[i] = minBudget;
         }
+        // Tell the single-vertex path to honor our pre-budgeted widths
+        // verbatim. Otherwise the single-vertex clamp re-clamps against
+        // the mutated mesh's edge lengths (prior bevels have shortened
+        // the shared edges), which produces asymmetric offsets.
+        ScopedSkipClamp skip(true);
         for (size_t i = 0; i < vertexIndices.size(); ++i) {
             auto added = bevelVertices({vertexIndices[i]}, perVertexWidth[i],
                                        segments, profile, profilePointsIn);
@@ -3107,7 +3128,9 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             float d = m_vertices[v].position.distance(m_vertices[tgt].position);
             if (d < minEdgeLen) minEdgeLen = d;
         }
-        const float offset = std::min(width, 0.49f * minEdgeLen);
+        const float offset = s_skipVertexBevelClamp
+                             ? width
+                             : std::min(width, 0.499f * minEdgeLen);
         if (offset <= 1e-6f) continue;
 
         VertBevelPlan plan;

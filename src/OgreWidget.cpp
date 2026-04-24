@@ -196,11 +196,20 @@ bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)
     // with multiple viewports, every camera rescales the same gizmo per
     // frame and the last-registered frame listener wins.
     auto* transform = TransformOperator::getSingleton();
-    if (mCamera && mCamera->getCamera() && transform
-        && transform->getActiveWidget() == this) {
-        auto* camera = mCamera->getCamera();
-        EditModeController::instance()->tickBevelGizmo(camera);
-        transform->tickTransformGizmoScale(camera);
+    if (mCamera && mCamera->getCamera() && transform) {
+        // Gate: tick when this viewport is the registered active one, OR
+        // when no viewport has been activated yet (first render before
+        // the user clicks anywhere). Without this fallback the gizmo
+        // renders at its authored 1.0 scale for the first frame after
+        // the user picks Translate/Rotate/Scale via the toolbar — they
+        // see a tiny gizmo that pops to correct size only after their
+        // first viewport click.
+        auto* active = transform->getActiveWidget();
+        if (active == this || active == nullptr) {
+            auto* camera = mCamera->getCamera();
+            EditModeController::instance()->tickBevelGizmo(camera);
+            transform->tickTransformGizmoScale(camera);
+        }
     }
     return true;
 }

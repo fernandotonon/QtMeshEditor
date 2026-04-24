@@ -34,6 +34,7 @@ THE SOFTWARE.
 #include <QPoint>
 #include <QRect>
 #include <QVariantList>
+#include <limits>
 #include <memory>
 #include <set>
 #include <map>
@@ -548,6 +549,12 @@ private:
         Ogre::Vector3 pivot = Ogre::Vector3::ZERO; ///< Gizmo pivot (chamfer region center).
         Ogre::Vector3 axis = Ogre::Vector3::UNIT_Y; ///< Gizmo axis (averaged surface normal).
         float width = 0.0f;                         ///< Currently-applied width.
+        // Computed at session start: the maximum width the bevel algorithm
+        // will actually use before its internal clamp kicks in. The drag
+        // handler clamps `width` — and the gizmo shaft/handle — against
+        // this so the visible shaft stops growing the instant the bevel
+        // caps, instead of the handle drifting past the capped bevel.
+        float maxWidth = std::numeric_limits<float>::infinity();
         int segments = 1;                           ///< Chamfer-strip segment count.
         /// Per-interior-point profile values (size = segments-1, each in
         /// [0, 1], 0.5 = flat). Empty when segments == 1.

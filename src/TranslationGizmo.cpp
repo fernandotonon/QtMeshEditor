@@ -71,7 +71,13 @@ void TranslationGizmo::createZaxis(const Ogre::ColourValue& colour)
 void TranslationGizmo::createSolidXaxis(const Ogre::ColourValue& colour)
 {
     float thickness = mScale / mSolidThickness;
-    float shaftLength = mScale * 0.85f; // Arrow shaft ends at 85% to make room for arrow head
+    // Negative shaft length so the arrow visually points toward world -X.
+    // The viewport camera is set up at world -Z looking toward +Z, which
+    // makes world +X appear on screen-left. Pointing geometry toward -X
+    // makes the arrow appear on screen-right, matching user expectation.
+    // Drag/pick math use UNIT_X internally and already produce screen-
+    // consistent motion, so only the visual needs flipping.
+    float shaftLength = -mScale * 0.85f;
     float headBaseRadius = thickness * 2.5f; // Arrow head base is 2.5x thicker than shaft
 
     m_pXaxis->clear();
@@ -89,34 +95,45 @@ void TranslationGizmo::createSolidXaxis(const Ogre::ColourValue& colour)
         m_pXaxis->position(Ogre::Vector3(shaftLength, -thickness, -thickness));
         m_pXaxis->position(Ogre::Vector3(shaftLength,  thickness, -thickness));
 
-        // Arrow shaft quads
-        m_pXaxis->quad(0, 1, 2, 3);
-        m_pXaxis->quad(7, 6, 5, 4);
-        m_pXaxis->quad(0, 3, 7, 4);
-        m_pXaxis->quad(2, 1, 5, 6);
-        m_pXaxis->quad(3, 2, 6, 7);
-        m_pXaxis->quad(1, 0, 4, 5);
+        // Arrow shaft quads (winding flipped because shaft runs toward -X)
+        m_pXaxis->quad(3, 2, 1, 0);
+        m_pXaxis->quad(4, 5, 6, 7);
+        m_pXaxis->quad(4, 7, 3, 0);
+        m_pXaxis->quad(6, 5, 1, 2);
+        m_pXaxis->quad(7, 6, 2, 3);
+        m_pXaxis->quad(5, 4, 0, 1);
 
-        // Arrow head - pyramid pointing in +X direction
+        // Arrow head - pyramid pointing in -X direction
         int headBaseIdx = 8;
         // Base of arrow head (square at shaftLength)
         m_pXaxis->position(Ogre::Vector3(shaftLength,  headBaseRadius,  headBaseRadius));
         m_pXaxis->position(Ogre::Vector3(shaftLength, -headBaseRadius,  headBaseRadius));
         m_pXaxis->position(Ogre::Vector3(shaftLength, -headBaseRadius, -headBaseRadius));
         m_pXaxis->position(Ogre::Vector3(shaftLength,  headBaseRadius, -headBaseRadius));
-        // Tip of arrow head (at mScale)
+        // Tip of arrow head (at -mScale)
         int headTipIdx = 12;
-        m_pXaxis->position(Ogre::Vector3(mScale, 0, 0));
+        m_pXaxis->position(Ogre::Vector3(-mScale, 0, 0));
 
-        // Arrow head faces (4 triangles forming a pyramid)
-        m_pXaxis->triangle(headBaseIdx, headBaseIdx+1, headTipIdx);     // Right face
-        m_pXaxis->triangle(headBaseIdx+1, headBaseIdx+2, headTipIdx);   // Bottom face
-        m_pXaxis->triangle(headBaseIdx+2, headBaseIdx+3, headTipIdx);    // Left face
-        m_pXaxis->triangle(headBaseIdx+3, headBaseIdx, headTipIdx);      // Top face
-        // Base quad of arrow head
-        m_pXaxis->quad(headBaseIdx, headBaseIdx+3, headBaseIdx+2, headBaseIdx+1);
+        // Arrow head faces (4 triangles forming a pyramid; winding
+        // reversed from +X version so outward-facing normals still
+        // face away from the shaft axis).
+        m_pXaxis->triangle(headBaseIdx+1, headBaseIdx, headTipIdx);
+        m_pXaxis->triangle(headBaseIdx+2, headBaseIdx+1, headTipIdx);
+        m_pXaxis->triangle(headBaseIdx+3, headBaseIdx+2, headTipIdx);
+        m_pXaxis->triangle(headBaseIdx, headBaseIdx+3, headTipIdx);
+        // Base quad of arrow head (winding reversed)
+        m_pXaxis->quad(headBaseIdx+1, headBaseIdx+2, headBaseIdx+3, headBaseIdx);
 
     m_pXaxis->end();
+
+    // Re-assert the pickable bbox after the rebuild. `end()` auto-
+    // computes a tight bbox from vertex extents, which can differ from
+    // the explicit bbox the caller set in createAxis. Re-setting here
+    // keeps picking consistent with the flipped-X geometry on every
+    // hover rebuild.
+    const float bbSize = (mScale / mSolidThickness) * 2.5f;
+    m_pXaxis->setBoundingBox(GizmoAxisHelpers::makeAxisBoundingBox(
+        GizmoAxisHelpers::Axis::X, -mScale, 0.0f, bbSize));
 }
 
 void TranslationGizmo::createSolidYaxis(const Ogre::ColourValue& colour)
@@ -352,10 +369,23 @@ void TranslationGizmo::createAxis(void)
 
     GizmoAxisHelpers::forEachAxisIndexed(m_pXaxis, m_pYaxis, m_pZaxis,
                                          [this, bbSize](GizmoAxisHelpers::Axis axis, Ogre::ManualObject* axisObject) {
-                                             const Ogre::Real axisMin =
-                                                 (axis == GizmoAxisHelpers::Axis::Z && mLeftHandCs) ? -mScale : 0.0f;
-                                             const Ogre::Real axisMax =
-                                                 (axis == GizmoAxisHelpers::Axis::Z && mLeftHandCs) ? 0.0f : mScale;
+                                             // The X geometry is drawn from 0 toward -mScale (see
+                                             // createSolidXaxis) to match the camera's view flip, so
+                                             // its bbox must mirror the same [-mScale, 0] extent —
+                                             // otherwise the visible arrow and the pickable region
+                                             // end up on opposite sides of the origin.
+                                             Ogre::Real axisMin;
+                                             Ogre::Real axisMax;
+                                             if (axis == GizmoAxisHelpers::Axis::X) {
+                                                 axisMin = -mScale;
+                                                 axisMax = 0.0f;
+                                             } else if (axis == GizmoAxisHelpers::Axis::Z && mLeftHandCs) {
+                                                 axisMin = -mScale;
+                                                 axisMax = 0.0f;
+                                             } else {
+                                                 axisMin = 0.0f;
+                                                 axisMax = mScale;
+                                             }
                                              axisObject->setBoundingBox(
                                                  GizmoAxisHelpers::makeAxisBoundingBox(axis, axisMin, axisMax, bbSize));
                                          });

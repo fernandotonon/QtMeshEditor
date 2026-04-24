@@ -2952,14 +2952,14 @@ TEST(HalfEdgeMeshStandalone, BevelVertexSymmetricBudgetOnSharedEdge) {
     ASSERT_TRUE(he.buildFromEditableMesh(em));
     // v4 = (-1, 1, 1), v5 = (1, 1, 1). Edge length = 2. Request a
     // width that would exceed half (i.e., collision territory).
-    const float requested = 100.0f; // huge → clamped to 0.49 * 1.0 = 0.49
+    const float requested = 100.0f; // huge → pre-budget caps each at 0.999
     auto newVerts = he.bevelVertices({4, 5}, requested);
     EXPECT_TRUE(he.validate());
 
     // Distance from v4 to v4's offsets should equal v5 to v5's offsets
-    // along the shared edge (both = 0.49 * 1.0 = 0.49). Pick the two
-    // offsets on the v4-v5 edge: they're the ones with y=1, z=1 and
-    // x in (-1, 1) range.
+    // along the shared edge. Each bevel reaches 0.999 × (edgeLen × share)
+    // = 0.999 × (2 × 0.5) = 0.999 from its corner, so the two offsets
+    // meet near the midpoint with a ~0.002-wide sliver between them.
     std::vector<Ogre::Vector3> onSharedEdge;
     for (int v : newVerts) {
         const auto& p = he.vertex(v).position;
@@ -2971,13 +2971,12 @@ TEST(HalfEdgeMeshStandalone, BevelVertexSymmetricBudgetOnSharedEdge) {
     }
     ASSERT_EQ(onSharedEdge.size(), 2u);
     const Ogre::Vector3 v4(-1, 1, 1), v5(1, 1, 1);
-    // Each vertex's offset should be 0.49 along the shared edge.
     float dist4 = std::min(onSharedEdge[0].distance(v4), onSharedEdge[1].distance(v4));
     float dist5 = std::min(onSharedEdge[0].distance(v5), onSharedEdge[1].distance(v5));
-    EXPECT_NEAR(dist4, dist5, 1e-4f)
+    EXPECT_NEAR(dist4, dist5, 1e-3f)
         << "offsets at each end of shared edge should be symmetric";
-    EXPECT_NEAR(dist4, 0.49f, 1e-3f)
-        << "each side should claim half the 1.0 shared half-edge budget";
+    EXPECT_NEAR(dist4, 0.999f, 2e-3f)
+        << "each side should reach to the midpoint of the 2-unit shared edge";
 }
 
 TEST(HalfEdgeMeshStandalone, BevelVertexOffsetIsClampedToHalfEdge) {
