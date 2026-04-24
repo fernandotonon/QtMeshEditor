@@ -125,19 +125,26 @@ bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
 
 int HalfEdgeMesh::appendTriangle(int v0, int v1, int v2, int subMeshIndex)
 {
-    int fIdx = static_cast<int>(m_faces.size());
+    return appendFace({v0, v1, v2}, subMeshIndex);
+}
+
+int HalfEdgeMesh::appendFace(const std::vector<int>& vertices, int subMeshIndex)
+{
+    const int n = static_cast<int>(vertices.size());
+    if (n < 3) return -1;
+
+    const int fIdx = static_cast<int>(m_faces.size());
     HEFace f;
     f.subMeshIndex = subMeshIndex;
     m_faces.push_back(f);
 
-    int he0 = static_cast<int>(m_halfEdges.size());
-    int verts[3] = {v0, v1, v2};
-    for (int i = 0; i < 3; ++i) {
+    const int he0 = static_cast<int>(m_halfEdges.size());
+    for (int i = 0; i < n; ++i) {
         HalfEdge he;
-        he.vertex = verts[(i + 1) % 3]; // points TO the next vertex
+        he.vertex = vertices[(i + 1) % n]; // points TO the next vertex in the loop
         he.face = fIdx;
-        he.next = he0 + (i + 1) % 3;
-        he.prev = he0 + (i + 2) % 3;
+        he.next = he0 + (i + 1) % n;
+        he.prev = he0 + (i + n - 1) % n;
         m_halfEdges.push_back(he);
     }
     m_faces[fIdx].halfEdge = he0;
@@ -3578,6 +3585,427 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
     compactBoundaryHalfEdges();
     buildBoundaryHalfEdges();
     fixVertexHalfEdges();
+
+    return newVertices;
+}
+
+namespace {
+
+// Interpolate a new vertex between two existing ones at parameter t.
+// Position / normal / UV / color / tangent / bone weights are lerped by t,
+// with an eps safety margin so an exactly-on-endpoint t doesn't collapse
+// the source face into degeneracy.
+HEVertex interpolateVertex(const HEVertex& a, const HEVertex& b, float t)
+{
+    HEVertex r;
+    r.position = a.position * (1.0f - t) + b.position * t;
+    r.normal   = a.normal   * (1.0f - t) + b.normal   * t;
+    if (r.normal.squaredLength() > 1e-12f) r.normal.normalise();
+    r.uv       = a.uv       * (1.0f - t) + b.uv       * t;
+    r.color    = a.color    * (1.0f - t) + b.color    * t;
+    r.tangent  = a.tangent  * (1.0f - t) + b.tangent  * t;
+    r.hasNormal  = a.hasNormal && b.hasNormal;
+    r.hasUV      = a.hasUV && b.hasUV;
+    r.hasColor   = a.hasColor && b.hasColor;
+    r.hasTangent = a.hasTangent && b.hasTangent;
+
+    // Union of bone influences by index, weights blended by t. Skip zero-
+    // weight entries so the list stays short on typical rigs.
+    auto addOrBlend = [&](unsigned short idx, float w) {
+        if (w <= 1e-6f) return;
+        for (auto& ba : r.boneAssignments) {
+            if (ba.first == idx) { ba.second += w; return; }
+        }
+        r.boneAssignments.emplace_back(idx, w);
+    };
+    for (const auto& ba : a.boneAssignments) addOrBlend(ba.first, ba.second * (1.0f - t));
+    for (const auto& ba : b.boneAssignments) addOrBlend(ba.first, ba.second * t);
+    return r;
+}
+
+} // namespace
+
+int HalfEdgeMesh::splitEdge(int edgeIdx, float t)
+{
+    if (edgeIdx < 0 || edgeIdx >= static_cast<int>(m_edges.size())) return -1;
+    const int heA = m_edges[edgeIdx].halfEdge;
+    if (heA < 0 || heA >= static_cast<int>(m_halfEdges.size())) return -1;
+
+    // Clamp t off the endpoints so neither new face degenerates to a sliver.
+    constexpr float kEps = 1e-4f;
+    t = std::clamp(t, kEps, 1.0f - kEps);
+
+    // Collect the two adjacent triangle descriptions while the old
+    // topology is still intact. Both faces must be triangles for this
+    // MVP; n-gon splitting needs ear-clip-aware rewiring.
+    struct TriFace {
+        int face;           // face index (for submesh lookup)
+        int subMeshIndex;
+        int vFrom;          // edge endpoint (start)
+        int vTo;            // edge endpoint (end)
+        int vOpp;           // third triangle vertex
+        int heFrom, heTo, heOpp; // the three half-edges of the triangle
+    };
+
+    auto describeFace = [&](int he, TriFace& out) -> bool {
+        if (he < 0 || he >= static_cast<int>(m_halfEdges.size())) return false;
+        if (m_halfEdges[he].face < 0) return false;
+        const int fIdx = m_halfEdges[he].face;
+        const auto verts = faceVertices(fIdx);
+        if (verts.size() != 3) return false;
+
+        // Identify which HE of the triangle is the one carrying `edgeIdx`.
+        // Traverse the face loop starting at the face's HE; the HE pointing
+        // "to" heVertex of `he` is the one sharing edgeIdx. Fill TriFace
+        // in face-loop order so we keep winding.
+        const int startHE = m_faces[fIdx].halfEdge;
+        int he0 = startHE;
+        int he1 = m_halfEdges[he0].next;
+        int he2 = m_halfEdges[he1].next;
+        int heIndices[3] = {he0, he1, he2};
+
+        int shareIdx = -1;
+        for (int i = 0; i < 3; ++i) {
+            if (heIndices[i] == he) { shareIdx = i; break; }
+        }
+        if (shareIdx < 0) return false;
+
+        out.face = fIdx;
+        out.subMeshIndex = m_faces[fIdx].subMeshIndex;
+        out.heFrom = heIndices[shareIdx];
+        out.heTo   = heIndices[(shareIdx + 1) % 3];
+        out.heOpp  = heIndices[(shareIdx + 2) % 3];
+
+        // Vertex layout: heFrom.prev.vertex -> heFrom.vertex -> heTo.vertex.
+        // The shared edge goes vFrom -> vTo. The third vertex is heTo.vertex.
+        out.vFrom = m_halfEdges[out.heOpp].vertex;
+        out.vTo   = m_halfEdges[out.heFrom].vertex;
+        out.vOpp  = m_halfEdges[out.heTo].vertex;
+        return true;
+    };
+
+    TriFace fA{}, fB{};
+    const bool hasA = describeFace(heA, fA);
+    const int heB = m_halfEdges[heA].twin;
+    const bool hasValidB = (heB >= 0);
+    const bool hasB = hasValidB && describeFace(heB, fB);
+
+    if (!hasA && !hasB) return -1;
+
+    // splitEdge is a triangle-only MVP: if either adjacent face exists
+    // and isn't a triangle, bail before we mutate. Partially splitting
+    // would desync the other side's half-edge pointers against a face
+    // that's still an n-gon, producing silent topology corruption.
+    // (A face "exists" here means its twin is non-boundary. Boundary
+    // half-edges — face == -1 — are fine.)
+    if (!hasA && m_halfEdges[heA].face >= 0) return -1;
+    if (!hasB && hasValidB && m_halfEdges[heB].face >= 0) return -1;
+
+    // Edge direction is fA.vFrom -> fA.vTo (with t measured from vFrom).
+    // If only fB exists (the edge sits on the boundary on the A side),
+    // fB.vFrom / fB.vTo run in the opposite direction, so re-measure t.
+    int vFrom = hasA ? fA.vFrom : fB.vTo;
+    int vTo   = hasA ? fA.vTo   : fB.vFrom;
+
+    // Create the midpoint vertex.
+    HEVertex mid = interpolateVertex(m_vertices[vFrom], m_vertices[vTo], t);
+    mid.halfEdge = -1;
+    const int vMid = static_cast<int>(m_vertices.size());
+    m_vertices.push_back(std::move(mid));
+
+    // Retire a face: set each of its half-edges' face to -1 and clear the
+    // face slot's halfEdge pointer so the four-call cleanup drops them.
+    auto retireFace = [&](const TriFace& tf) {
+        m_halfEdges[tf.heFrom].face = -1;
+        m_halfEdges[tf.heTo].face = -1;
+        m_halfEdges[tf.heOpp].face = -1;
+        m_faces[tf.face].halfEdge = -1;
+    };
+
+    if (hasA) {
+        retireFace(fA);
+        // Old triangle [vFrom, vTo, vOpp] wound as
+        // heOpp: vOpp -> vFrom, heFrom: vFrom -> vTo, heTo: vTo -> vOpp.
+        // New triangles share the vMid → vOpp diagonal and keep the same winding.
+        appendFace({fA.vFrom, vMid, fA.vOpp}, fA.subMeshIndex);
+        appendFace({vMid, fA.vTo, fA.vOpp}, fA.subMeshIndex);
+    }
+    if (hasB) {
+        retireFace(fB);
+        // fB's winding is reversed relative to fA (opposite twin). Using
+        // fB's own vFrom/vTo keeps its orientation intact.
+        appendFace({fB.vFrom, vMid, fB.vOpp}, fB.subMeshIndex);
+        appendFace({vMid, fB.vTo, fB.vOpp}, fB.subMeshIndex);
+    }
+
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+    return vMid;
+}
+
+bool HalfEdgeMesh::splitFace(int faceIdx, int vA, int vB)
+{
+    if (faceIdx < 0 || faceIdx >= static_cast<int>(m_faces.size())) return false;
+    if (vA == vB) return false;
+    if (vA < 0 || vB < 0) return false;
+    if (vA >= static_cast<int>(m_vertices.size())) return false;
+    if (vB >= static_cast<int>(m_vertices.size())) return false;
+    if (m_faces[faceIdx].halfEdge < 0) return false;
+
+    const auto verts = faceVertices(faceIdx);
+    if (verts.size() < 3 || verts.size() > 4) return false;
+
+    // Require both vA and vB to be on the boundary loop.
+    int posA = -1;
+    int posB = -1;
+    for (int i = 0; i < static_cast<int>(verts.size()); ++i) {
+        if (verts[i] == vA) posA = i;
+        if (verts[i] == vB) posB = i;
+    }
+    if (posA < 0 || posB < 0) return false;
+
+    // Reject splits that don't actually cut the face: adjacent boundary
+    // vertices are already connected by an edge, so a "diagonal" between
+    // them would be a duplicate.
+    const int n = static_cast<int>(verts.size());
+    const int gap = std::abs(posA - posB);
+    if (gap == 1 || gap == n - 1) return false;
+
+    const int subMeshIndex = m_faces[faceIdx].subMeshIndex;
+
+    // Retire the old face.
+    {
+        const int startHE = m_faces[faceIdx].halfEdge;
+        int he = startHE;
+        do {
+            const int next = m_halfEdges[he].next;
+            m_halfEdges[he].face = -1;
+            he = next;
+        } while (he != startHE);
+        m_faces[faceIdx].halfEdge = -1;
+    }
+
+    // Walk the old loop from vA to vB to collect one side, then from vB
+    // to vA for the other. appendFace needs at least 3 vertices, so a
+    // degenerate side (empty) bails the whole operation.
+    std::vector<int> sideAB;
+    for (int i = posA; ; i = (i + 1) % n) {
+        sideAB.push_back(verts[i]);
+        if (i == posB) break;
+    }
+    std::vector<int> sideBA;
+    for (int i = posB; ; i = (i + 1) % n) {
+        sideBA.push_back(verts[i]);
+        if (i == posA) break;
+    }
+    if (sideAB.size() < 3 || sideBA.size() < 3) return false;
+
+    appendFace(sideAB, subMeshIndex);
+    appendFace(sideBA, subMeshIndex);
+
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+    return true;
+}
+
+namespace {
+
+// Intersect two line segments in 3D, parameterised as
+//   A(sA) = a0 + sA * (a1 - a0),
+//   B(sB) = b0 + sB * (b1 - b0),
+// minimising |A(sA) - B(sB)|². Returns the parameter pair plus the
+// squared separation; callers decide whether that separation is small
+// enough to call the segments "coincident" for cut purposes.
+struct SegmentSegmentClosest {
+    float sA = 0.0f;
+    float sB = 0.0f;
+    float squaredSeparation = 0.0f;
+    bool degenerate = false; // true if either segment has ~zero length
+};
+
+SegmentSegmentClosest closestOnSegments(const Ogre::Vector3& a0, const Ogre::Vector3& a1,
+                                        const Ogre::Vector3& b0, const Ogre::Vector3& b1)
+{
+    SegmentSegmentClosest r;
+    const Ogre::Vector3 dA = a1 - a0;
+    const Ogre::Vector3 dB = b1 - b0;
+    const Ogre::Vector3 w0 = a0 - b0;
+    const float aa = dA.dotProduct(dA);
+    const float bb = dB.dotProduct(dB);
+    const float ab = dA.dotProduct(dB);
+    const float aw = dA.dotProduct(w0);
+    const float bw = dB.dotProduct(w0);
+    const float det = aa * bb - ab * ab;
+    if (aa < 1e-12f || bb < 1e-12f) { r.degenerate = true; return r; }
+    if (det < 1e-12f) {
+        // Parallel — pick the middle of the overlap on A.
+        r.sA = 0.5f;
+        r.sB = std::clamp((r.sA * ab + bw) / bb, 0.0f, 1.0f);
+    } else {
+        r.sA = (ab * bw - bb * aw) / det;
+        r.sB = (aa * bw - ab * aw) / det;
+    }
+    r.sA = std::clamp(r.sA, 0.0f, 1.0f);
+    r.sB = std::clamp(r.sB, 0.0f, 1.0f);
+    const Ogre::Vector3 pA = a0 + dA * r.sA;
+    const Ogre::Vector3 pB = b0 + dB * r.sB;
+    r.squaredSeparation = (pA - pB).squaredLength();
+    return r;
+}
+
+} // namespace
+
+std::vector<int> HalfEdgeMesh::cutPath(const std::vector<CutPoint>& points)
+{
+    std::vector<int> newVertices;
+    if (points.size() < 2) return newVertices;
+
+    // Resolve every click's edge to a stable (vA, vB) vertex pair BEFORE
+    // touching the mesh. Edge indices aren't stable across splitEdge
+    // (rebuildEdgesAndTwins reorders them) but vertex indices are append-
+    // only, so we can re-find the edge each time by its endpoints.
+    std::vector<std::pair<int, int>> clickEdgeVerts(points.size(), {-1, -1});
+    std::vector<float> clickT(points.size(), 0.0f);
+    for (size_t i = 0; i < points.size(); ++i) {
+        const int eIdx = points[i].edgeIndex;
+        if (eIdx < 0 || eIdx >= static_cast<int>(m_edges.size())) return newVertices;
+        clickEdgeVerts[i] = edgeVertices(eIdx);
+        clickT[i] = points[i].t;
+        if (clickEdgeVerts[i].first < 0 || clickEdgeVerts[i].second < 0) return newVertices;
+    }
+
+    // Helper: re-find the HE edge index whose endpoints are {va, vb}
+    // against the current mesh. Returns -1 if either vertex has been
+    // removed or the pair is no longer a logical edge.
+    auto findEdgeByVerts = [this](int va, int vb) -> int {
+        for (size_t e = 0; e < m_edges.size(); ++e) {
+            const auto [a, b] = edgeVertices(static_cast<int>(e));
+            if ((a == va && b == vb) || (a == vb && b == va))
+                return static_cast<int>(e);
+        }
+        return -1;
+    };
+
+    // Snapshot the whole HE representation so partial failures can roll
+    // back cleanly (e.g. two CutPoints referencing the same underlying
+    // edge: the first split removes it, the second findEdgeByVerts
+    // returns -1). Without this the caller sees a half-mutated mesh.
+    const auto snapHalfEdges = m_halfEdges;
+    const auto snapVertices = m_vertices;
+    const auto snapFaces = m_faces;
+    const auto snapEdges = m_edges;
+    auto restore = [&]() {
+        m_halfEdges = snapHalfEdges;
+        m_vertices = snapVertices;
+        m_faces = snapFaces;
+        m_edges = snapEdges;
+    };
+
+    // Step 1: insert vertices at every click endpoint, re-resolving the
+    // edge each time because the previous split may have renumbered them.
+    std::vector<int> clickVerts(points.size(), -1);
+    for (size_t i = 0; i < points.size(); ++i) {
+        const int resolvedEdge = findEdgeByVerts(clickEdgeVerts[i].first,
+                                                 clickEdgeVerts[i].second);
+        if (resolvedEdge < 0) { restore(); newVertices.clear(); return newVertices; }
+        const int v = splitEdge(resolvedEdge, clickT[i]);
+        if (v < 0) { restore(); newVertices.clear(); return newVertices; }
+        clickVerts[i] = v;
+        newVertices.push_back(v);
+    }
+
+    // Step 2: for each consecutive pair, walk from one click vertex to the
+    // next through the tris between them. Every edge the straight-line
+    // cut crosses gets splitEdge'd so the cut materialises as real mesh
+    // edges.
+    constexpr int kMaxWalkSteps = 256;    // safety: real cuts visit <~10 tris
+    constexpr float kNearZero = 1e-5f;    // close-to-vertex tolerance
+    constexpr float kMinStep = 1e-4f;     // reject crossings that don't advance
+
+    for (size_t i = 0; i + 1 < clickVerts.size(); ++i) {
+        int vA = clickVerts[i];
+        const int vTarget = clickVerts[i + 1];
+        if (vA < 0 || vTarget < 0 || vA == vTarget) continue;
+
+        for (int step = 0; step < kMaxWalkSteps; ++step) {
+            if (vA == vTarget) break;
+
+            // Does vA already share a triangle with vTarget? Then the
+            // existing splitEdge semantics (two click splits on one tri
+            // produce the connecting edge automatically) already created
+            // the final cut edge — nothing more to do for this pair.
+            const auto facesAtA = facesAroundVertex(vA);
+            bool shareFace = false;
+            for (int f : facesAtA) {
+                const auto fv = faceVertices(f);
+                if (std::find(fv.begin(), fv.end(), vTarget) != fv.end()) {
+                    shareFace = true; break;
+                }
+            }
+            if (shareFace) break;
+
+            const Ogre::Vector3 pA = m_vertices[vA].position;
+            const Ogre::Vector3 pT = m_vertices[vTarget].position;
+
+            // Pick the face adjacent to vA whose straight-line to vTarget
+            // exits through an interior edge. For each candidate face,
+            // consider only edges not incident to vA: if the closest-point
+            // pair sits strictly inside the edge and advances us toward
+            // vTarget (sCut > kMinStep), that's an exit candidate. Among
+            // candidates, choose the smallest sCut (closest crossing).
+            int bestFace = -1;
+            int bestEdge = -1;
+            float bestT = 0.0f;
+            float bestSA = std::numeric_limits<float>::infinity();
+
+            for (int f : facesAtA) {
+                const auto fe = faceEdges(f);
+                for (int eIdx : fe) {
+                    const auto [ev0, ev1] = edgeVertices(eIdx);
+                    if (ev0 == vA || ev1 == vA) continue; // entry edge
+                    const Ogre::Vector3& b0 = m_vertices[ev0].position;
+                    const Ogre::Vector3& b1 = m_vertices[ev1].position;
+                    const auto hit = closestOnSegments(pA, pT, b0, b1);
+                    if (hit.degenerate) continue;
+                    if (hit.squaredSeparation > 1e-4f) continue;
+                    // Must actually advance from vA toward vTarget.
+                    if (hit.sA < kMinStep) continue;
+                    // Exit edge parameter must be strictly inside the
+                    // segment (endpoint-snap is a TODO).
+                    if (hit.sB < kNearZero || hit.sB > 1.0f - kNearZero) continue;
+                    if (hit.sA < bestSA) {
+                        bestSA = hit.sA;
+                        bestEdge = eIdx;
+                        bestT = hit.sB;
+                        bestFace = f;
+                    }
+                }
+            }
+
+            if (bestEdge < 0) {
+                // No valid forward exit found. Either the cut's ray went
+                // off the surface (click span not on a coplanar region)
+                // or the target sits on a face we don't share — give up
+                // on this pair and move on.
+                break;
+            }
+            (void)bestFace;
+
+            // Split the exit edge; the new vertex becomes the entry point
+            // for the next triangle. Because the previous iteration's vA
+            // and the new vertex now both live on the same triangle, the
+            // splitEdge pass already leaves the segment between them as a
+            // real mesh edge.
+            const int vMid = splitEdge(bestEdge, bestT);
+            if (vMid < 0) break;
+            newVertices.push_back(vMid);
+            vA = vMid;
+        }
+    }
 
     return newVertices;
 }

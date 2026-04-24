@@ -657,17 +657,36 @@ void MainWindow::initToolBar()
     });
     QAction* bevelAction = ui->objectsToolbar->addWidget(bevelButton);
 
+    // Knife: opens a multi-point cut session. Available in edit mode
+    // regardless of selection component (vertex/edge/face), because
+    // the knife's own hit-test snaps to geometry.
+    auto knifeButton = new QToolButton(ui->objectsToolbar);
+    knifeButton->setText(QStringLiteral("\u2702"));  // ✂ scissors
+    knifeButton->setToolTip(tr("Knife — place cut points, Enter to commit, Esc to cancel (K)"));
+    knifeButton->setFont(topoFont);
+    knifeButton->setStyleSheet(topoBtnStyle);
+    connect(knifeButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Knife");
+        auto* c = EditModeController::instance();
+        // Pressing the button while a session is already open commits
+        // it — matches the bevel button pattern (click = open / commit).
+        if (c->knifeSessionActive()) c->commitKnife();
+        else                         c->beginKnife();
+    });
+    QAction* knifeAction = ui->objectsToolbar->addWidget(knifeButton);
+
     // Context-aware visibility + enabled:
     //  - Hidden entirely when NOT in edit mode.
     //  - In edit mode: stay visible but only enable when the current
     //    mode matches AND the relevant element type actually has a
     //    non-empty selection.
-    auto refreshTopoButtons = [extrudeButton, bevelButton,
-                               extrudeAction, bevelAction]() {
+    auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton,
+                               extrudeAction, bevelAction, knifeAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
         bevelAction->setVisible(active);
+        knifeAction->setVisible(active);
         if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
         const bool hasFaces = c->selectedFaceCount() > 0;
@@ -676,6 +695,9 @@ void MainWindow::initToolBar()
         extrudeButton->setEnabled(mode == 2 && hasFaces);
         bevelButton->setEnabled((mode == 1 && hasEdges)
                              || (mode == 0 && hasVerts));
+        // Knife is always enabled in edit mode; the session has its own
+        // point-based hit-tests and doesn't need a pre-existing selection.
+        knifeButton->setEnabled(true);
     };
     refreshTopoButtons();
     connect(editCtrlForTopo, &EditModeController::editModeChanged,
@@ -1040,6 +1062,30 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         return;
     }
 
+    // Knife session: Esc cancels, Enter commits. Every other key is
+    // swallowed while the session is open — otherwise selection-mode
+    // shortcuts (1/2/3), Ctrl+E/B, Ctrl+A, and friends would silently
+    // mutate state mid-cut and leave the user with a preview that no
+    // longer matches the tool they're in. The user can't mean those
+    // keys while the knife preview is on screen.
+    if (editCtrl->knifeSessionActive()) {
+        if (event->key() == Qt::Key_Escape) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Esc — cancel knife");
+            editCtrl->cancelKnife();
+            event->accept();
+            return;
+        }
+        if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) {
+            SentryReporter::addBreadcrumb("ui.shortcut", "Enter — commit knife");
+            editCtrl->commitKnife();
+            event->accept();
+            return;
+        }
+        // Swallow everything else so fall-through handlers don't fire.
+        event->accept();
+        return;
+    }
+
     if (editCtrl->isEditModeActive()) {
         switch (event->key()) {
         case Qt::Key_1:
@@ -1085,6 +1131,16 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             if (event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier)) {
                 SentryReporter::addBreadcrumb("ui.shortcut", "Cmd+B — Bevel (edit mode)");
                 editCtrl->bevelSelection();
+                event->accept();
+                return;
+            }
+            break;
+        case Qt::Key_K:
+            // K: enter knife mode. No modifier required — follows the
+            // Blender convention for topology tools.
+            if (!(event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier | Qt::AltModifier))) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "K — Knife (edit mode)");
+                editCtrl->beginKnife();
                 event->accept();
                 return;
             }

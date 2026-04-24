@@ -289,6 +289,66 @@ public:
     Q_INVOKABLE void resetBevelProfile();
     /// @}
 
+    /// @name Knife tool
+    /// @{
+    /**
+     * @brief Enter knife mode. The user places cut points along mesh
+     *        surface (left-click), commits with commitKnife (Enter or
+     *        double-click) or cancels with cancelKnife (Esc). While
+     *        active, knifeSessionActive() returns true and the viewport
+     *        draws a live preview of the pending cut line.
+     */
+    Q_INVOKABLE bool beginKnife();
+
+    /**
+     * @brief Record a cut point from a viewport click. The hit-test
+     *        priority is vertex → edge → face (so snaps are sticky at
+     *        geometry boundaries). Called from TransformOperator's
+     *        mouse handler when the knife session is active.
+     */
+    bool addKnifePoint(OgreWidget* widget, int screenX, int screenY);
+
+    /**
+     * @brief Update the hover preview. Called from the mouse-move path
+     *        while knife is active; redraws the provisional segment
+     *        between the last confirmed point and the cursor.
+     */
+    void updateKnifeHover(OgreWidget* widget, int screenX, int screenY);
+
+    /**
+     * @brief Programmatic cut-point entry: append a knife click at
+     *        parametric position `t` on an existing HE edge, resolved
+     *        against the current mesh. Used by scripted/automated knife
+     *        flows and by unit tests that can't run the widget-based
+     *        hit-test (headless CI, macOS without plugins).
+     */
+    bool addKnifePointOnEdge(int heEdgeIndex, float t);
+
+    /**
+     * @brief Apply the current cut point list as splitEdge operations and
+     *        push one undo command. Clears the session afterwards.
+     *        No-op (returns false) if fewer than 2 points are confirmed.
+     */
+    Q_INVOKABLE bool commitKnife();
+
+    /// @brief Abandon the current knife session without mutating the mesh.
+    Q_INVOKABLE void cancelKnife();
+
+    /// @brief Whether a knife session is active. Exposed as a Q_PROPERTY
+    ///        so QML bindings get a real bool.
+    Q_PROPERTY(bool knifeSessionActiveValue READ knifeSessionActive
+               NOTIFY knifeSessionChanged)
+    bool knifeSessionActive() const { return m_knifeSession.active; }
+
+    /// @brief Count of confirmed cut points. QML uses this to decide
+    ///        whether Enter would commit or is a no-op.
+    Q_PROPERTY(int knifePointCountValue READ knifePointCount
+               NOTIFY knifeSessionChanged)
+    int knifePointCount() const {
+        return static_cast<int>(m_knifeSession.points.size());
+    }
+    /// @}
+
     /// @name Vertex transform support
     /// @{
     /// Get the centroid of selected vertices in local mesh space.
@@ -493,6 +553,9 @@ signals:
     void validationChanged();
     /// Emitted when the bevel profile points vector changes (size or value).
     void bevelProfilePointsChanged();
+    /// Emitted whenever the knife session starts, gains a point, or ends —
+    /// so QML toolbar state and preview overlay refresh together.
+    void knifeSessionChanged();
 
 private slots:
     void onSelectionChanged();
@@ -562,6 +625,52 @@ private:
     };
     BevelSession m_bevelSession;
     std::unique_ptr<class BevelGizmo> m_bevelGizmo;
+
+    // Knife session state — populated on beginKnife, mutated by each
+    // addKnifePoint / updateKnifeHover, consumed on commitKnife.
+    struct KnifePoint {
+        enum Kind { OnVertex, OnEdge, OnFace };
+        Kind kind = OnFace;
+        // OnVertex: vertexIndex. OnEdge: edgeIndex + edgeT. OnFace:
+        // triangleIndex + world-space position (no splitEdge needed for
+        // on-face points — they land inside a face and the commit
+        // pipeline handles them separately).
+        int vertexIndex = -1;
+        int edgeIndex = -1;
+        float edgeT = 0.5f;
+        int triangleIndex = -1;
+        // Local-space position of the point (for preview rendering and
+        // on-face fallback placement).
+        Ogre::Vector3 localPosition = Ogre::Vector3::ZERO;
+    };
+
+    struct KnifeSession {
+        bool active = false;
+        std::vector<KnifePoint> points;      ///< Confirmed points in click order.
+        bool hoverValid = false;             ///< True while cursor hit-test is hitting the mesh.
+        KnifePoint hover;                    ///< Preview point under the cursor.
+    };
+    KnifeSession m_knifeSession;
+
+    /// Hit-test a screen-space point for knife placement. Priority:
+    /// snap to existing vertex within pixelRadius, else snap to edge
+    /// within pixelRadius, else ray-cast to a face. Writes the result
+    /// into `out` and returns true on a successful hit.
+    bool knifeHitTest(const QPoint& screenPos, OgreWidget* widget,
+                      KnifePoint& out) const;
+
+    /// Rebuild the knife preview overlay from the current session
+    /// (confirmed points + hover), creating it on first use.
+    void updateKnifePreviewOverlay();
+
+    /// Destroy the knife preview overlay at session end.
+    void destroyKnifePreviewOverlay();
+
+    Ogre::ManualObject* m_overlayKnife = nullptr;
+    // Independent scene node for the knife preview so its entity-mirror
+    // transform doesn't fight with selection overlays, which expect
+    // m_overlayNode parked at the origin with local-space geometry.
+    Ogre::SceneNode* m_overlayKnifeNode = nullptr;
 
     /// Apply a bevel at `width` to `edges` assuming the mesh is at its
     /// pre-bevel snapshot state. Updates selection to the new chamfer verts.

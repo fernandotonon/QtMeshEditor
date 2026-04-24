@@ -320,6 +320,9 @@ void EditModeController::exitEditMode(bool commitChanges)
         if (commitChanges) commitBevel();
         else cancelBevel();
     }
+    // Knife session is always abandoned on exit — committing implicitly
+    // would be surprising mid-cut.
+    if (m_knifeSession.active) cancelKnife();
 
     if (commitChanges && m_editableMesh && m_editEntity) {
         bool ok = m_editableMesh->commitToEntity(m_editEntity);
@@ -1809,6 +1812,9 @@ bool EditModeController::beginBevel()
         return false;
     if (!m_editModeActive || !m_editableMesh || !m_editEntity)
         return false;
+    // Knife and bevel are mutually exclusive — a stray knife session would
+    // keep its preview overlay visible behind the bevel gizmo.
+    if (m_knifeSession.active) cancelKnife();
     const bool edgeValid = (m_selectionMode == EdgeMode && !m_selectedEdges.empty());
     const bool vertValid = (m_selectionMode == VertexMode && !m_selectedVertices.empty());
     if (!edgeValid && !vertValid) return false;
@@ -2216,6 +2222,447 @@ bool EditModeController::bevelSelection()
         return true;
     }
     return beginBevel();
+}
+
+// ===========================================================================
+// Knife tool
+// ===========================================================================
+
+bool EditModeController::beginKnife()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return false;
+    if (m_knifeSession.active) return true;
+    // Knife lives alongside bevel but they shouldn't both be active.
+    if (m_bevelSession.active) cancelBevel();
+
+    m_knifeSession = {};
+    m_knifeSession.active = true;
+
+    SentryReporter::addBreadcrumb("edit_mode", "Knife: begin session");
+    emit knifeSessionChanged();
+    return true;
+}
+
+bool EditModeController::addKnifePoint(OgreWidget* widget, int screenX, int screenY)
+{
+    if (!m_knifeSession.active || !widget) return false;
+
+    KnifePoint pt;
+    if (!knifeHitTest(QPoint(screenX, screenY), widget, pt)) return false;
+
+    m_knifeSession.points.push_back(pt);
+    m_knifeSession.hoverValid = false;
+    updateKnifePreviewOverlay();
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Knife: point added (n=%1)").arg(m_knifeSession.points.size()));
+    emit knifeSessionChanged();
+    return true;
+}
+
+bool EditModeController::addKnifePointOnEdge(int heEdgeIndex, float t)
+{
+    if (!m_knifeSession.active || !m_editableMesh) return false;
+
+    // Resolve the edge's endpoint vertices from a fresh HE build; we need
+    // them to place the KnifePoint's localPosition for the preview overlay
+    // and to expose the same data the widget-based path produces.
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return false;
+    if (heEdgeIndex < 0 || heEdgeIndex >= static_cast<int>(hm.edgeCount())) return false;
+    const auto [ga, gb] = hm.edgeVertices(heEdgeIndex);
+    if (ga < 0 || gb < 0) return false;
+
+    auto [subA, locA] = globalToLocal(ga);
+    auto [subB, locB] = globalToLocal(gb);
+    const auto& subs = m_editableMesh->subMeshes();
+    if (subA >= subs.size() || subB >= subs.size()) return false;
+    if (locA >= subs[subA].vertices.size() || locB >= subs[subB].vertices.size()) return false;
+
+    const auto& p0 = subs[subA].vertices[locA].position;
+    const auto& p1 = subs[subB].vertices[locB].position;
+    const float clampT = std::clamp(t, 0.0f, 1.0f);
+
+    KnifePoint pt;
+    pt.kind = KnifePoint::OnEdge;
+    pt.edgeIndex = heEdgeIndex;
+    pt.edgeT = clampT;
+    pt.localPosition = p0 + (p1 - p0) * clampT;
+
+    m_knifeSession.points.push_back(pt);
+    m_knifeSession.hoverValid = false;
+    updateKnifePreviewOverlay();
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Knife: point added programmatically (n=%1)").arg(m_knifeSession.points.size()));
+    emit knifeSessionChanged();
+    return true;
+}
+
+void EditModeController::updateKnifeHover(OgreWidget* widget, int screenX, int screenY)
+{
+    if (!m_knifeSession.active || !widget) return;
+    m_knifeSession.hoverValid =
+        knifeHitTest(QPoint(screenX, screenY), widget, m_knifeSession.hover);
+    updateKnifePreviewOverlay();
+}
+
+bool EditModeController::commitKnife()
+{
+    if (!m_knifeSession.active) return false;
+    if (m_knifeSession.points.size() < 2) {
+        SentryReporter::addBreadcrumb("edit_mode",
+            "Knife: commit rejected (fewer than 2 points)");
+        cancelKnife();
+        return false;
+    }
+
+    // Snapshot for undo.
+    EditableMesh snapshot;
+    std::vector<EditableSubMesh> originalSubMeshes = m_editableMesh->subMeshes();
+
+    // Build an HE view once and hand the confirmed-click list to cutPath,
+    // which runs the walk-and-cut algorithm: splits each click endpoint
+    // and every interior edge crossed by the straight-line cut between
+    // consecutive endpoints, so the visible preview becomes a real chain
+    // of mesh edges. OnFace/OnVertex clicks aren't yet in scope — the
+    // commit skips them and proceeds on the OnEdge subset.
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) {
+        cancelKnife();
+        return false;
+    }
+
+    // Refuse the commit if any confirmed point isn't snapped to an edge.
+    // OnFace and OnVertex captures exist for the preview, but the MVP
+    // commit pipeline only knows how to cut along edges; silently
+    // dropping a face click would produce a mesh that doesn't match the
+    // line the user just drew, which is worse than failing the commit.
+    for (const auto& p : m_knifeSession.points) {
+        if (p.kind != KnifePoint::OnEdge) {
+            SentryReporter::addBreadcrumb("edit_mode",
+                "Knife: commit rejected (non-edge point — only edge cuts supported)");
+            cancelKnife();
+            return false;
+        }
+    }
+
+    std::vector<HalfEdgeMesh::CutPoint> cpts;
+    cpts.reserve(m_knifeSession.points.size());
+    for (const auto& p : m_knifeSession.points) {
+        cpts.push_back({p.edgeIndex, p.edgeT});
+    }
+    if (cpts.size() < 2) {
+        SentryReporter::addBreadcrumb("edit_mode",
+            "Knife: commit rejected (fewer than 2 edge clicks)");
+        cancelKnife();
+        return false;
+    }
+    const auto cutVerts = hm.cutPath(cpts);
+    if (cutVerts.empty()) {
+        SentryReporter::addBreadcrumb("edit_mode",
+            "Knife: commit rejected (cutPath failed)");
+        cancelKnife();
+        return false;
+    }
+    const int inserted = static_cast<int>(cutVerts.size());
+
+    // Write the modified mesh back. Topology changed (new verts and
+    // tris), so we must resize the Ogre buffers and re-initialise the
+    // entity's subentity caches — same sequence applyBevelTopology
+    // uses. Capture per-subentity material names first so the wireframe
+    // / MaterialEditor overrides survive the deinit/init round-trip;
+    // invalidate RTSS afterwards so its shader cache picks up the new
+    // vertex layout.
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) {
+        cancelKnife();
+        return false;
+    }
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+
+    std::vector<std::string> preMats;
+    preMats.reserve(m_editEntity->getNumSubEntities());
+    for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+        preMats.push_back(m_editEntity->getSubEntity(i)->getMaterialName());
+    }
+
+    m_editEntity->_deinitialise();
+    m_editEntity->_initialise(true);
+
+    for (unsigned int i = 0;
+         i < m_editEntity->getNumSubEntities() && i < preMats.size(); ++i) {
+        if (!preMats[i].empty())
+            m_editEntity->getSubEntity(i)->setMaterialName(preMats[i]);
+    }
+
+    if (auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
+            if (!matName.empty())
+                shaderGen->invalidateMaterial(
+                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
+        }
+    }
+
+    // Clear edge/face selection — pre-cut IDs refer to retired topology
+    // slots and the walk added new vertices that aren't in any existing
+    // set. Leaving stale indices risks crashes in later overlay updates.
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        "Knife");
+    UndoManager::getSingleton()->push(cmd);
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Knife: commit (points=%1, cuts=%2)")
+            .arg(m_knifeSession.points.size()).arg(inserted));
+
+    m_knifeSession = {};
+    destroyKnifePreviewOverlay();
+    emit knifeSessionChanged();
+    emit meshDataChanged();
+    return true;
+}
+
+void EditModeController::cancelKnife()
+{
+    if (!m_knifeSession.active) return;
+    SentryReporter::addBreadcrumb("edit_mode", "Knife: cancel");
+    m_knifeSession = {};
+    destroyKnifePreviewOverlay();
+    emit knifeSessionChanged();
+}
+
+bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widget,
+                                      KnifePoint& out) const
+{
+    if (!m_editableMesh || !m_editEntity || !widget) return false;
+    auto* spaceCam = widget->getSpaceCamera();
+    auto* camera = spaceCam ? spaceCam->getCamera() : nullptr;
+    if (!camera) return false;
+
+    const int vw = widget->width();
+    const int vh = widget->height();
+
+    // Priority 1: vertex snap. Uses the same radius as regular edit-mode
+    // vertex picking so the user's eye can predict the snap.
+    const int snapVert = hitTestVertex(screenPos, camera, vw, vh, 10.0f);
+    if (snapVert >= 0) {
+        auto [subIdx, localIdx] = globalToLocal(snapVert);
+        if (subIdx < m_editableMesh->subMeshes().size()
+         && localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size()) {
+            out = {};
+            out.kind = KnifePoint::OnVertex;
+            out.vertexIndex = snapVert;
+            out.localPosition = m_editableMesh->subMeshes()[subIdx].vertices[localIdx].position;
+            return true;
+        }
+    }
+
+    // Priority 2: edge snap. Knife needs a depth-aware variant of the
+    // regular edge hit-test: when front and back edges of a cube overlap
+    // in screen space, the generic hitTestEdge can pick either (iteration
+    // order decides). That lands the cut on an edge facing away from the
+    // camera, which the user experiences as "the vertex drops somewhere
+    // random on the edge I couldn't even see." Here we walk all edges,
+    // keep only those within the screen-space pixel radius, then pick the
+    // one whose closest-point sits nearest the camera.
+    {
+        const Ogre::Real nx = static_cast<Ogre::Real>(screenPos.x()) / vw;
+        const Ogre::Real ny = static_cast<Ogre::Real>(screenPos.y()) / vh;
+        const Ogre::Ray ray = camera->getCameraToViewportRay(nx, ny);
+        Ogre::SceneNode* node = m_editEntity->getParentSceneNode();
+
+        Ogre::Vector3 rO = ray.getOrigin();
+        Ogre::Vector3 rD = ray.getDirection();
+        if (node) {
+            const Ogre::Affine3 worldToLocal = node->_getFullTransform().inverse();
+            rO = worldToLocal * rO;
+            rD = worldToLocal.linear() * rD;
+        }
+
+        HalfEdgeMesh tmp;
+        if (tmp.buildFromEditableMesh(*m_editableMesh)) {
+            const Ogre::Vector3 camPosWorld = camera->getDerivedPosition();
+            constexpr float kPixelRadius = 10.0f;
+            float bestDepth = std::numeric_limits<float>::infinity();
+            int bestEdgeIdx = -1;
+            float bestT = 0.5f;
+            Ogre::Vector3 bestLocal = Ogre::Vector3::ZERO;
+
+            for (size_t e = 0; e < tmp.edgeCount(); ++e) {
+                auto [gv0, gv1] = tmp.edgeVertices(static_cast<int>(e));
+                if (gv0 < 0 || gv1 < 0) continue;
+                auto [sub0, loc0] = globalToLocal(gv0);
+                auto [sub1, loc1] = globalToLocal(gv1);
+                if (sub0 >= m_editableMesh->subMeshes().size()) continue;
+                if (sub1 >= m_editableMesh->subMeshes().size()) continue;
+                const auto& sA = m_editableMesh->subMeshes()[sub0];
+                const auto& sB = m_editableMesh->subMeshes()[sub1];
+                if (loc0 >= sA.vertices.size() || loc1 >= sB.vertices.size()) continue;
+
+                const auto& p0 = sA.vertices[loc0].position;
+                const auto& p1 = sB.vertices[loc1].position;
+
+                // Screen-space pixel distance: reject edges outside the
+                // snap radius outright.
+                if (!node) continue;
+                const Ogre::Vector3 wp0 = node->convertLocalToWorldPosition(p0);
+                const Ogre::Vector3 wp1 = node->convertLocalToWorldPosition(p1);
+                const QPoint sp0 = worldToScreen(wp0, camera, vw, vh);
+                const QPoint sp1 = worldToScreen(wp1, camera, vw, vh);
+                if (pointToSegmentDistance(screenPos, sp0, sp1) > kPixelRadius)
+                    continue;
+
+                // Closest point on the edge segment to the click ray, in
+                // local mesh space. Solves the 2x2 system for the edge
+                // parameter s and ray parameter u that minimize |P(s)-R(u)|².
+                const Ogre::Vector3 d = p1 - p0;
+                const float a = d.dotProduct(d);
+                const float b = d.dotProduct(rD);
+                const float c = rD.dotProduct(rD);
+                const float det = a * c - b * b;
+                float t = 0.5f;
+                if (a > 1e-10f && det > 1e-10f) {
+                    const Ogre::Vector3 w0 = p0 - rO;
+                    const float dW = d.dotProduct(w0);
+                    const float rW = rD.dotProduct(w0);
+                    t = std::clamp((b * rW - c * dW) / det, 0.0f, 1.0f);
+                }
+                const Ogre::Vector3 local = p0 + d * t;
+                const Ogre::Vector3 world = node->convertLocalToWorldPosition(local);
+                const float depth = (world - camPosWorld).dotProduct(camera->getDerivedDirection());
+                if (depth <= 0.0f) continue; // behind camera
+                if (depth < bestDepth) {
+                    bestDepth = depth;
+                    bestEdgeIdx = static_cast<int>(e);
+                    bestT = t;
+                    bestLocal = local;
+                }
+            }
+
+            if (bestEdgeIdx >= 0) {
+                out = {};
+                out.kind = KnifePoint::OnEdge;
+                out.edgeIndex = bestEdgeIdx;
+                out.edgeT = bestT;
+                out.localPosition = bestLocal;
+                return true;
+            }
+        }
+    }
+
+    // Priority 3: face ray-cast. Used for preview only in the MVP —
+    // commit pipeline doesn't yet handle on-face points.
+    const int triHit = hitTestFace(screenPos, camera, vw, vh);
+    if (triHit >= 0) {
+        out = {};
+        out.kind = KnifePoint::OnFace;
+        out.triangleIndex = triHit;
+        // Re-intersect the ray to get the local hit position for preview.
+        const Ogre::Real nx = static_cast<Ogre::Real>(screenPos.x()) / vw;
+        const Ogre::Real ny = static_cast<Ogre::Real>(screenPos.y()) / vh;
+        const Ogre::Ray ray = camera->getCameraToViewportRay(nx, ny);
+        Ogre::SceneNode* node = m_editEntity->getParentSceneNode();
+        Ogre::Affine3 worldToLocal = node ? node->_getFullTransform().inverse() : Ogre::Affine3::IDENTITY;
+        Ogre::Vector3 localOrigin = worldToLocal * ray.getOrigin();
+        Ogre::Vector3 localDir = worldToLocal.linear() * ray.getDirection();
+        localDir.normalise();
+
+        // Walk the mesh to find the tri and intersect.
+        int globalTriOffset = 0;
+        for (const auto& sub : m_editableMesh->subMeshes()) {
+            for (size_t ti = 0; ti < sub.triangles.size(); ++ti) {
+                if (globalTriOffset + static_cast<int>(ti) != triHit) continue;
+                const auto& tri = sub.triangles[ti];
+                const auto& v0 = sub.vertices[tri.indices[0]].position;
+                const auto& v1 = sub.vertices[tri.indices[1]].position;
+                const auto& v2 = sub.vertices[tri.indices[2]].position;
+                const float t = rayTriangleIntersect(localOrigin, localDir, v0, v1, v2);
+                if (t >= 0.0f) out.localPosition = localOrigin + localDir * t;
+            }
+            globalTriOffset += static_cast<int>(sub.triangles.size());
+        }
+        return true;
+    }
+
+    return false;
+}
+
+void EditModeController::updateKnifePreviewOverlay()
+{
+    if (!m_editModeActive || !m_editEntity) return;
+    auto* sceneMgr = m_editEntity->_getManager();
+    if (!sceneMgr) return;
+
+    // Knife preview owns its own scene node so updating its entity-
+    // mirror transform doesn't stomp on the selection overlay node's
+    // origin-parked / local-space geometry. Selection overlays live on
+    // m_overlayNode; knife on m_overlayKnifeNode.
+    if (!m_overlayKnifeNode) {
+        m_overlayKnifeNode = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    }
+    if (!m_overlayKnife) {
+        m_overlayKnife = sceneMgr->createManualObject("EditMode_KnifeOverlay");
+        m_overlayKnife->setDynamic(true);
+        m_overlayKnife->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
+        m_overlayKnifeNode->attachObject(m_overlayKnife);
+    }
+
+    // Mirror the entity's world transform so knife points drawn in local
+    // space sit on the mesh.
+    if (auto* entNode = m_editEntity->getParentSceneNode()) {
+        m_overlayKnifeNode->setPosition(entNode->_getDerivedPosition());
+        m_overlayKnifeNode->setOrientation(entNode->_getDerivedOrientation());
+        m_overlayKnifeNode->setScale(entNode->_getDerivedScale());
+    }
+
+    m_overlayKnife->clear();
+    if (m_knifeSession.points.empty() && !m_knifeSession.hoverValid) return;
+
+    const Ogre::ColourValue solid(1.0f, 0.85f, 0.2f, 1.0f);  // yellow for confirmed
+    const Ogre::ColourValue ghost(1.0f, 0.85f, 0.2f, 0.45f); // dimmer for hover
+
+    m_overlayKnife->begin("EditMode/EdgeSelection", Ogre::RenderOperation::OT_LINE_LIST);
+
+    // Confirmed polyline.
+    for (size_t i = 1; i < m_knifeSession.points.size(); ++i) {
+        m_overlayKnife->position(m_knifeSession.points[i - 1].localPosition);
+        m_overlayKnife->colour(solid);
+        m_overlayKnife->position(m_knifeSession.points[i].localPosition);
+        m_overlayKnife->colour(solid);
+    }
+    // Hover segment from last confirmed to cursor.
+    if (!m_knifeSession.points.empty() && m_knifeSession.hoverValid) {
+        m_overlayKnife->position(m_knifeSession.points.back().localPosition);
+        m_overlayKnife->colour(ghost);
+        m_overlayKnife->position(m_knifeSession.hover.localPosition);
+        m_overlayKnife->colour(ghost);
+    }
+
+    m_overlayKnife->end();
+}
+
+void EditModeController::destroyKnifePreviewOverlay()
+{
+    auto* sceneMgr = m_editEntity ? m_editEntity->_getManager() : nullptr;
+    if (m_overlayKnife) {
+        if (m_overlayKnifeNode) m_overlayKnifeNode->detachObject(m_overlayKnife);
+        if (sceneMgr) sceneMgr->destroyManualObject(m_overlayKnife);
+        m_overlayKnife = nullptr;
+    }
+    if (m_overlayKnifeNode) {
+        if (sceneMgr) sceneMgr->destroySceneNode(m_overlayKnifeNode);
+        m_overlayKnifeNode = nullptr;
+    }
 }
 
 // ===========================================================================

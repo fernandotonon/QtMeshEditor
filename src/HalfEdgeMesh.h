@@ -367,6 +367,95 @@ public:
                                    float profile = 0.5f,
                                    const std::vector<float>& profilePoints = {});
 
+    /**
+     * @brief Insert a new vertex on an edge at parametric position t, then
+     *        split each triangle that used the edge into two triangles.
+     *
+     * Interpolates the new vertex's position, normal, UV, color, tangent,
+     * and bone weights between the edge's endpoints using t. After the call
+     * the edge is replaced by two edges meeting at the new vertex, and
+     * each of the 1–2 adjacent triangles has been replaced by two
+     * triangles sharing the split point.
+     *
+     * MVP limits: works only on edges whose adjacent faces are triangles
+     * (n-gons would need ear-clip-aware splitting). Returns -1 on failure.
+     *
+     * @param edgeIdx The edge to split.
+     * @param t Parametric position along the edge in [0, 1]. Clamped into
+     *          the (epsilon, 1 - epsilon) interior so the resulting faces
+     *          aren't degenerate.
+     * @return The newly created vertex's index, or -1 on failure.
+     */
+    int splitEdge(int edgeIdx, float t);
+
+    /**
+     * @brief Split an n-gon face by inserting a diagonal edge between two
+     *        of its boundary vertices, where n ∈ {3, 4}.
+     *
+     * Retires the old face and appends two new faces sharing the new
+     * diagonal edge. Both vertices must be on the face's boundary loop
+     * and must NOT already be adjacent on that loop (connected by a
+     * boundary edge of the face) — either would duplicate an existing
+     * edge or collapse one of the new faces.
+     *
+     * Consequence: on a triangle every pair of vertices is adjacent, so
+     * splitFace always rejects triangles. The knife pipeline doesn't
+     * need that case anyway — two splitEdges on one triangle already
+     * leave the cut segment as a real edge (see the
+     * TwoSplitEdgesOnOneTriangleProduceMidpointEdge invariant).
+     *
+     * Faces with more than 4 boundary vertices are also rejected: the
+     * current pipeline doesn't produce them, and splitting them cleanly
+     * would need an ear-clip-aware rewire. appendFace itself accepts
+     * any n ≥ 3, so the cap here is a scope choice and can be lifted
+     * later without changing this method's contract.
+     *
+     * @param faceIdx The face to split.
+     * @param vA First boundary vertex.
+     * @param vB Second boundary vertex.
+     * @return true on success.
+     */
+    bool splitFace(int faceIdx, int vA, int vB);
+
+    /**
+     * @brief A single click on a mesh edge, given as the edge index plus the
+     *        parametric position along it in [0,1]. The walk-and-cut knife
+     *        algorithm takes a list of these and produces a continuous chain
+     *        of real mesh edges between consecutive clicks.
+     */
+    struct CutPoint {
+        int edgeIndex = -1;
+        float t = 0.5f;
+    };
+
+    /**
+     * @brief Apply a knife cut defined by a sequence of edge clicks.
+     *
+     * For each pair of consecutive `CutPoint`s the algorithm:
+     *  - runs `splitEdge` at both endpoints (skipping duplicates the second
+     *    time an endpoint is encountered),
+     *  - walks triangles between the two new vertices along the 3D line that
+     *    connects them, running `splitEdge` at every interior edge the line
+     *    crosses,
+     *  - stops when the current triangle contains both the previous cut
+     *    vertex and the next endpoint — at that point the existing
+     *    splitEdge semantics already produce the closing cut edge.
+     *
+     * MVP scope:
+     *  - All intersections must land strictly inside edge segments. Cuts
+     *    that graze a vertex are not yet snapped.
+     *  - The algorithm walks only one face at a time; it doesn't bridge
+     *    disconnected submeshes.
+     *
+     * @param points Ordered clicks. Each must reference a currently-valid
+     *               edge of the mesh (indices are NOT re-validated against
+     *               mutations inside this call — callers must pass the list
+     *               resolved against the pre-cut mesh).
+     * @return Indices of every newly created vertex (endpoints + interior
+     *         crossings), in creation order. Empty on failure.
+     */
+    std::vector<int> cutPath(const std::vector<CutPoint>& points);
+
     /// @}
 
     /// @name Validation
@@ -406,6 +495,12 @@ private:
     /// Returns the new face index. Does NOT update vertex or edge data —
     /// callers must rebuild edges/twins after adding all triangles.
     int appendTriangle(int v0, int v1, int v2, int subMeshIndex);
+
+    /// Append a polygon with N vertices (N >= 3) as a single face with
+    /// N half-edges. Returns the new face index, or -1 if vertices.size()
+    /// is invalid. Like appendTriangle, callers must run the
+    /// rebuild/compact/boundary/fix-vertex cleanup afterwards.
+    int appendFace(const std::vector<int>& vertices, int subMeshIndex);
 
     /// Rebuild m_edges, half-edge twin/edge fields, and clear edge state.
     /// Skips half-edges with face < 0. After this, every interior HE has

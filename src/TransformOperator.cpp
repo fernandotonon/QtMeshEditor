@@ -892,10 +892,22 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 {
     if (e->button()==Qt::LeftButton)
     {
+        auto* editCtrl = EditModeController::instance();
+
+        // Knife session is active: left-click adds a cut point at the
+        // hovered position. Nothing else (selection, bevel, transform)
+        // fires while the knife is open — the session is dismissed with
+        // Enter (commit) or Esc (cancel), or automatically on edit-mode
+        // exit.
+        if (editCtrl->knifeSessionActive())
+        {
+            editCtrl->addKnifePoint(m_pActiveWidget, e->pos().x(), e->pos().y());
+            return;
+        }
+
         // Bevel session is active: priority path. If the click hits the
         // gizmo handle → start a width-drag; anywhere else → commit the
         // current width and fall through to normal selection.
-        auto* editCtrl = EditModeController::instance();
         if (editCtrl->bevelSessionActive())
         {
             auto* hit = performRaySelection(e->pos(), /*findGizmo=*/true);
@@ -1039,6 +1051,16 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
 void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 {
+    // Knife hover preview: cheap to update on every move while the session
+    // is active, and draws the ghost segment from the last confirmed
+    // point to the cursor. Does not consume the event — other handlers
+    // (camera, gizmo drag) still run below.
+    if (auto* editCtrl = EditModeController::instance();
+        editCtrl->knifeSessionActive() && m_pActiveWidget)
+    {
+        editCtrl->updateKnifeHover(m_pActiveWidget, e->pos().x(), e->pos().y());
+    }
+
     // Bevel gizmo drag: priority path.
     if (mBevelDragActive && EditModeController::instance()->bevelSessionActive())
     {
