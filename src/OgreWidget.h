@@ -56,6 +56,9 @@ class OgreWidget : public QWidget, public Ogre::FrameListener
   void setBackgroundColor(const QColor& c);
   SpaceCamera* getSpaceCamera() const { return mCamera.get(); }
 
+  /// MSAA sample count reported by the render target (0 if off / no window).
+  unsigned int fsaaSamples() const;
+
   /// Recreate the Ogre render window (e.g. after MSAA / FSAA settings change).
   void rebuildRenderWindow();
 

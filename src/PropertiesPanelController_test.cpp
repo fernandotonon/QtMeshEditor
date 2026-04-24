@@ -18,6 +18,7 @@
 #include "TestHelpers.h"
 #include "TransformOperator.h"
 #include "UndoManager.h"
+#include "ViewportSettingsKeys.h"
 
 class PropertiesPanelControllerTests : public ::testing::Test
 {
@@ -587,12 +588,12 @@ TEST_F(PropertiesPanelControllerTests, SetSettingCoversViewportSentryAndThemeBra
     ASSERT_NE(mgr, nullptr);
 
     mgr->CreateEmptyScene();
-    controller->setSetting("Viewport/gridVisible", false);
-    controller->setSetting("Viewport/gridVisible", true);
-    controller->setSetting("Viewport/cameraSpeed", 0.0);
-    controller->setSetting("Viewport/cameraSpeed", 2.0);
-    controller->setSetting("Viewport/nearClip", 0.1);
-    controller->setSetting("Viewport/farClip", 5000.0);
+    controller->setSetting(ViewportSettingsKeys::gridVisible(), false);
+    controller->setSetting(ViewportSettingsKeys::gridVisible(), true);
+    controller->setSetting(ViewportSettingsKeys::cameraSpeed(), 0.0);
+    controller->setSetting(ViewportSettingsKeys::cameraSpeed(), 2.0);
+    controller->setSetting(ViewportSettingsKeys::nearClip(), 0.1);
+    controller->setSetting(ViewportSettingsKeys::farClip(), 5000.0);
     controller->setSetting("Sentry/enabled", false);
     controller->setSetting("Telemetry/enabled", true);
 
@@ -875,6 +876,24 @@ TEST_F(PropertiesPanelControllerTests, GetSettingReturnsDefaultWhenKeyMissing)
     EXPECT_EQ(controller->getSetting(key, QVariant("defaultVal")).toString(), "defaultVal");
     EXPECT_EQ(controller->getSetting(key, QVariant(99)).toInt(), 99);
     EXPECT_EQ(controller->getSetting(key, QVariant(true)).toBool(), true);
+}
+
+TEST_F(PropertiesPanelControllerTests, FsaaSamplesSetSettingPersists)
+{
+    const QString& key = ViewportSettingsKeys::fsaaSamples();
+    QSettings settings;
+    const QVariant saved = settings.value(key);
+
+    controller->setSetting(key, 8);
+    EXPECT_EQ(controller->getSetting(key, 0).toInt(), 8);
+
+    controller->setSetting(key, 0);
+    EXPECT_EQ(controller->getSetting(key, 99).toInt(), 0);
+
+    if (saved.isValid())
+        settings.setValue(key, saved);
+    else
+        settings.remove(key);
 }
 
 // ---- undoHistory / undoIndex / clearUndoHistory (additional tests) ----

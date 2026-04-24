@@ -100,6 +100,7 @@ TransformOperator.h
 PrimitivesWidget.h
 PrimitiveObject.h
 ViewportGrid.h
+ViewportSettingsKeys.h
 AnimationWidget.h
 SelectionSet.h
 SelectionBoxObject.h

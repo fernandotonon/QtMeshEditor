@@ -32,6 +32,9 @@
 #include "TransformOperator.h"
 #include "EditModeController.h"
 #include "TestHelpers.h"
+#include "EditorViewport.h"
+#include "ViewportSettingsKeys.h"
+#include "OgreWidget.h"
 #include "ui_mainwindow.h"
 
 class MainWindowTest : public ::testing::Test {
@@ -187,6 +190,18 @@ TEST_F(MainWindowTest, SetPlayingFalse) {
     window->setPlaying(true);
     window->setPlaying(false);
     EXPECT_FALSE(window->isPlaying);
+}
+
+TEST_F(MainWindowTest, RebuildAllOgreViewportsDoesNotCrash)
+{
+    ASSERT_FALSE(window->mDockWidgetList.isEmpty());
+    QSettings settings;
+    settings.setValue(ViewportSettingsKeys::fsaaSamples(), 4);
+    EXPECT_NO_THROW(window->rebuildAllOgreViewports());
+    app->processEvents();
+    auto* ow = window->mDockWidgetList.first()->getOgreWidget();
+    ASSERT_NE(ow, nullptr);
+    EXPECT_NO_THROW(ow->fsaaSamples());
 }
 
 // ---- Cycle all transform states via keyboard ----

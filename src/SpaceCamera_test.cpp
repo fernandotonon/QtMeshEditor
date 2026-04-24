@@ -812,6 +812,34 @@ TEST_F(SpaceCameraWidgetIntegrationTest, SetCameraPositionAdjustsCameraNodeDista
     EXPECT_LT(afterZ, 0.0f);
 }
 
+TEST_F(SpaceCameraWidgetIntegrationTest, ViewportPoseRoundTripRestoresTargetAndCamera)
+{
+    Ogre::Vector3 t0, c0, t1, c1;
+    Ogre::Quaternion q0, q1;
+
+    camera->setTargetPosition(Ogre::Vector3(1.0f, 2.0f, -3.0f));
+    camera->setCameraPosition(Ogre::Vector3(10.0f, 11.0f, 50.0f));
+    camera->getViewportPose(t0, c0, q0);
+
+    camera->setTargetPosition(Ogre::Vector3(0.0f, 0.0f, 0.0f));
+    camera->setCameraPosition(Ogre::Vector3(0.0f, 1.0f, -25.0f));
+
+    camera->applyViewportPose(t0, c0, q0);
+    camera->getViewportPose(t1, c1, q1);
+
+    const Ogre::Real eps = 0.08f;
+    EXPECT_NEAR(t0.x, t1.x, eps);
+    EXPECT_NEAR(t0.y, t1.y, eps);
+    EXPECT_NEAR(t0.z, t1.z, eps);
+    EXPECT_NEAR(c0.x, c1.x, eps);
+    EXPECT_NEAR(c0.y, c1.y, eps);
+    EXPECT_NEAR(c0.z, c1.z, eps);
+    EXPECT_NEAR(q0.w, q1.w, eps);
+    EXPECT_NEAR(q0.x, q1.x, eps);
+    EXPECT_NEAR(q0.y, q1.y, eps);
+    EXPECT_NEAR(q0.z, q1.z, eps);
+}
+
 TEST_F(SpaceCameraWidgetIntegrationTest, WheelEventControlModifierUsesZoomPath)
 {
     Ogre::SceneNode* cameraNode = camera->getCamera()->getParentSceneNode();

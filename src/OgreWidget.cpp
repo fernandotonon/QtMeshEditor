@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include <Ogre.h>
 
 #include "GlobalDefinitions.h"
+#include "ViewportSettingsKeys.h"
 
 #include "OgreWidget.h"
 #include "Manager.h"
@@ -51,13 +52,13 @@ void applyViewportCameraFromSettings(SpaceCamera* cam)
     if (!cam || !cam->getCamera())
         return;
     QSettings settings;
-    Ogre::Real speed = settings.value(QStringLiteral("Viewport/cameraSpeed"), 1.0).toReal();
+    Ogre::Real speed = settings.value(ViewportSettingsKeys::cameraSpeed(), 1.0).toReal();
     if (speed > 0)
         cam->setCameraSpeed(speed);
     cam->getCamera()->setNearClipDistance(
-        settings.value(QStringLiteral("Viewport/nearClip"), 0.1).toDouble());
+        settings.value(ViewportSettingsKeys::nearClip(), 0.1).toDouble());
     cam->getCamera()->setFarClipDistance(
-        settings.value(QStringLiteral("Viewport/farClip"), 10000.0).toDouble());
+        settings.value(ViewportSettingsKeys::farClip(), 10000.0).toDouble());
 }
 }
 
@@ -151,6 +152,11 @@ QColor OgreWidget::getBackgroundColor() const
 const Ogre::Viewport* OgreWidget::getViewport() const
 {   return mViewport;   }
 
+unsigned int OgreWidget::fsaaSamples() const
+{
+    return mOgreWindow ? mOgreWindow->getFSAA() : 0u;
+}
+
 void OgreWidget::setBackgroundColor(const QColor& c)
 {
     Ogre::ColourValue ogreColour;
@@ -184,7 +190,7 @@ void OgreWidget::initOgreWindow(void)
 
     {
         QSettings settings;
-        const int fsaa = settings.value(QStringLiteral("Viewport/fsaaSamples"), 4).toInt();
+        const int fsaa = settings.value(ViewportSettingsKeys::fsaaSamples(), 4).toInt();
         if (fsaa > 0)
             params["FSAA"] = Ogre::StringConverter::toString(fsaa);
     }
@@ -264,7 +270,7 @@ void OgreWidget::rebuildRenderWindow()
     Ogre::Vector3 targetW, camW;
     Ogre::Quaternion orientW;
     bool restorePose = false;
-    if (mCamera && mCamera->getCamera())
+    if (mCamera && mCamera->getCamera() && mViewport)
     {
         restorePose = true;
         mCamera->getViewportPose(targetW, camW, orientW);

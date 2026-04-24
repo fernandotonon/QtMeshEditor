@@ -13,6 +13,7 @@
 #include "SpaceCamera.h"
 #include "EditorViewport.h"
 #include "ViewportGrid.h"
+#include "ViewportSettingsKeys.h"
 #include "mainwindow.h"
 #include <QApplication>
 #include <QFileDialog>
@@ -757,6 +758,64 @@ QVariantList PropertiesPanelController::scaleStepPresets() const
     return result;
 }
 
+namespace
+{
+/// Handles Viewport/* keys for setSetting; returns true if @p key was handled.
+bool tryApplyViewportSetting(const QString& key, const QVariant& value)
+{
+    if (key == ViewportSettingsKeys::gridVisible()) {
+        auto* grid = Manager::getSingleton()->getViewportGrid();
+        if (grid) {
+            grid->setVisible(value.toBool());
+        }
+        return true;
+    }
+    if (key == ViewportSettingsKeys::cameraSpeed()) {
+        Ogre::Real speed = value.toReal();
+        if (speed <= 0) {
+            speed = 0.5f;
+        }
+        // Apply to the active viewport (TransformOperator tracks it)
+        auto* activeWidget = TransformOperator::getSingleton()->getActiveWidget();
+        if (activeWidget && activeWidget->getSpaceCamera()) {
+            activeWidget->getSpaceCamera()->setCameraSpeed(speed);
+        }
+        // Also apply to all viewports
+        auto* mainWin = Manager::getSingleton()->getMainWindow();
+        if (mainWin) {
+            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
+                if (ow->getSpaceCamera()) {
+                    ow->getSpaceCamera()->setCameraSpeed(speed);
+                }
+            }
+        }
+        return true;
+    }
+    if (key == ViewportSettingsKeys::nearClip() || key == ViewportSettingsKeys::farClip()) {
+        auto* mainWin = Manager::getSingleton()->getMainWindow();
+        if (mainWin) {
+            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
+                if (ow->getSpaceCamera() && ow->getSpaceCamera()->getCamera()) {
+                    if (key == ViewportSettingsKeys::nearClip()) {
+                        ow->getSpaceCamera()->getCamera()->setNearClipDistance(value.toReal());
+                    } else {
+                        ow->getSpaceCamera()->getCamera()->setFarClipDistance(value.toReal());
+                    }
+                }
+            }
+        }
+        return true;
+    }
+    if (key == ViewportSettingsKeys::fsaaSamples()) {
+        if (auto* mainWin = Manager::getSingleton()->getMainWindow()) {
+            mainWin->rebuildAllOgreViewports();
+        }
+        return true;
+    }
+    return false;
+}
+} // namespace
+
 // Generic QSettings accessors for Preferences dialog
 QVariant PropertiesPanelController::getSetting(const QString& key, const QVariant& defaultValue) const
 {
@@ -771,41 +830,10 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
     SentryReporter::addBreadcrumb("ui.action",
         QString("Preference changed: %1").arg(key));
 
-    // Apply settings immediately to the running app
-    if (key == "Viewport/gridVisible") {
-        auto* grid = Manager::getSingleton()->getViewportGrid();
-        if (grid) grid->setVisible(value.toBool());
-    } else if (key == "Viewport/cameraSpeed") {
-        Ogre::Real speed = value.toReal();
-        if (speed <= 0) speed = 0.5f;
-        // Apply to the active viewport (TransformOperator tracks it)
-        auto* activeWidget = TransformOperator::getSingleton()->getActiveWidget();
-        if (activeWidget && activeWidget->getSpaceCamera())
-            activeWidget->getSpaceCamera()->setCameraSpeed(speed);
-        // Also apply to all viewports
-        auto* mainWin = Manager::getSingleton()->getMainWindow();
-        if (mainWin) {
-            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
-                if (ow->getSpaceCamera())
-                    ow->getSpaceCamera()->setCameraSpeed(speed);
-            }
-        }
-    } else if (key == "Viewport/nearClip" || key == "Viewport/farClip") {
-        auto* mainWin = Manager::getSingleton()->getMainWindow();
-        if (mainWin) {
-            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
-                if (ow->getSpaceCamera() && ow->getSpaceCamera()->getCamera()) {
-                    if (key == "Viewport/nearClip")
-                        ow->getSpaceCamera()->getCamera()->setNearClipDistance(value.toReal());
-                    else
-                        ow->getSpaceCamera()->getCamera()->setFarClipDistance(value.toReal());
-                }
-            }
-        }
-    } else if (key == "Viewport/fsaaSamples") {
-        if (auto* mainWin = Manager::getSingleton()->getMainWindow())
-            mainWin->rebuildAllOgreViewports();
-    } else if (key == "Sentry/enabled" || key == "Telemetry/enabled") {
+    if (tryApplyViewportSetting(key, value)) {
+        return;
+    }
+    if (key == "Sentry/enabled" || key == "Telemetry/enabled") {
         SentryReporter::setEnabled(value.toBool());
     } else if (key == "Appearance/theme" || key == "palette") {
         QString theme = value.toString().toLower();
