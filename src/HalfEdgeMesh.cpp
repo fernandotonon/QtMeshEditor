@@ -2915,11 +2915,17 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
                 int n = m_halfEdges[he].vertex;
                 const float edgeLen =
                     m_vertices[v].position.distance(m_vertices[n].position);
-                // If the far endpoint is also selected, each end owns
-                // half the edge; otherwise the whole shortest-edge-
-                // halves rule (match single-vertex clamp behaviour).
-                float share = selected.count(n) ? 0.5f : 1.0f;
-                float budget = edgeLen * 0.49f * share;
+                // Shared edges (both endpoints selected) split 50/50 with
+                // a near-full ceiling — each side reaches ~0.4995 × edgeLen,
+                // meeting the neighbour's bevel near the midpoint. Unshared
+                // edges use the same 0.499 × edgeLen safety clamp the
+                // single-vertex path would apply, so disconnected multi-
+                // vertex selections don't over-reach when
+                // m_skipVertexBevelClamp (set below) bypasses the single-
+                // vertex re-clamp.
+                float budget = selected.count(n)
+                               ? edgeLen * 0.999f * 0.5f
+                               : edgeLen * 0.499f;
                 if (budget < minBudget) minBudget = budget;
                 int prev = m_halfEdges[he].prev;
                 int twin = m_halfEdges[prev].twin;
@@ -2929,11 +2935,19 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             }
             if (minBudget < width) perVertexWidth[i] = minBudget;
         }
+        // Tell the single-vertex path to honor our pre-budgeted widths
+        // verbatim. Otherwise the single-vertex clamp re-clamps against
+        // the mutated mesh's edge lengths (prior bevels have shortened
+        // the shared edges), which produces asymmetric offsets. Flag is
+        // reset after the loop so a later top-level bevelVertices call
+        // starts with the usual safety clamp enabled.
+        m_skipVertexBevelClamp = true;
         for (size_t i = 0; i < vertexIndices.size(); ++i) {
             auto added = bevelVertices({vertexIndices[i]}, perVertexWidth[i],
                                        segments, profile, profilePointsIn);
             newVertices.insert(newVertices.end(), added.begin(), added.end());
         }
+        m_skipVertexBevelClamp = false;
         return newVertices;
     }
 
@@ -3107,7 +3121,9 @@ std::vector<int> HalfEdgeMesh::bevelVertices(
             float d = m_vertices[v].position.distance(m_vertices[tgt].position);
             if (d < minEdgeLen) minEdgeLen = d;
         }
-        const float offset = std::min(width, 0.49f * minEdgeLen);
+        const float offset = m_skipVertexBevelClamp
+                             ? width
+                             : std::min(width, 0.499f * minEdgeLen);
         if (offset <= 1e-6f) continue;
 
         VertBevelPlan plan;

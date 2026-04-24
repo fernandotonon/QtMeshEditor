@@ -108,6 +108,17 @@ void SceneTreeModel::buildChildren(Ogre::SceneNode* sceneNode, SceneTreeItem* pa
         if (name.isEmpty() || Manager::getSingleton()->isForbiddenNodeName(name))
             continue;
 
+        // Hide transient gizmo scaffolding that editor code creates as
+        // children of the root scene node (currently: BevelGizmo's handle
+        // rig). Matched on the exact names the gizmo creates — see
+        // BevelGizmo.cpp — so a user mesh sharing the suffix doesn't
+        // vanish from the tree. A future gizmo with different names
+        // needs to add its own entries here.
+        if (name == "BevelGizmo_Node"
+         || name == "BevelGizmo_Shaft"
+         || name == "BevelGizmo_Handle")
+            continue;
+
         auto* nodeItem = new SceneTreeItem(name, SceneTreeItem::Node, childNode, parentItem);
         parentItem->appendChild(nodeItem);
 
