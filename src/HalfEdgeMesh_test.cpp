@@ -3397,3 +3397,27 @@ TEST(HalfEdgeMeshStandalone, CutPathFailsOnInvalidEdgeIndex) {
     // Negative / out-of-range edge indices short-circuit the walk.
     EXPECT_TRUE(he.cutPath({{edge, 0.5f}, {-1, 0.5f}}).empty());
 }
+
+TEST(HalfEdgeMeshStandalone, CutPathRollsBackWhenSecondEdgeDuplicatesFirst) {
+    // If two CutPoints reference the same underlying edge (same
+    // endpoint vertex pair), the first splitEdge removes that edge and
+    // the second lookup fails. cutPath must roll back, leaving the
+    // mesh byte-identical to its pre-call state — otherwise callers
+    // see a half-applied cut.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const size_t vertsBefore = he.vertexCount();
+    const size_t facesBefore = he.faceCount();
+    const size_t edgesBefore = he.edgeCount();
+
+    const int edge = findEdge(he, 1, 2); // shared diagonal
+    ASSERT_GE(edge, 0);
+    const auto result = he.cutPath({{edge, 0.3f}, {edge, 0.7f}});
+    EXPECT_TRUE(result.empty()) << "duplicate-edge cutPath must fail";
+
+    EXPECT_EQ(he.vertexCount(), vertsBefore);
+    EXPECT_EQ(he.faceCount(), facesBefore);
+    EXPECT_EQ(he.edgeCount(), edgesBefore);
+    EXPECT_TRUE(he.validate());
+}

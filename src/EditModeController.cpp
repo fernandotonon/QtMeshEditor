@@ -2333,12 +2333,24 @@ bool EditModeController::commitKnife()
         return false;
     }
 
+    // Refuse the commit if any confirmed point isn't snapped to an edge.
+    // OnFace and OnVertex captures exist for the preview, but the MVP
+    // commit pipeline only knows how to cut along edges; silently
+    // dropping a face click would produce a mesh that doesn't match the
+    // line the user just drew, which is worse than failing the commit.
+    for (const auto& p : m_knifeSession.points) {
+        if (p.kind != KnifePoint::OnEdge) {
+            SentryReporter::addBreadcrumb("edit_mode",
+                "Knife: commit rejected (non-edge point — only edge cuts supported)");
+            cancelKnife();
+            return false;
+        }
+    }
+
     std::vector<HalfEdgeMesh::CutPoint> cpts;
     cpts.reserve(m_knifeSession.points.size());
     for (const auto& p : m_knifeSession.points) {
-        if (p.kind == KnifePoint::OnEdge && p.edgeIndex >= 0) {
-            cpts.push_back({p.edgeIndex, p.edgeT});
-        }
+        cpts.push_back({p.edgeIndex, p.edgeT});
     }
     if (cpts.size() < 2) {
         SentryReporter::addBreadcrumb("edit_mode",
@@ -2357,9 +2369,11 @@ bool EditModeController::commitKnife()
 
     // Write the modified mesh back. Topology changed (new verts and
     // tris), so we must resize the Ogre buffers and re-initialise the
-    // entity's subentity caches — same sequence EditMeshTopologyCommand
-    // uses on undo/redo. Without this the EditableMesh is updated but
-    // the GPU buffers still hold the pre-cut topology.
+    // entity's subentity caches — same sequence applyBevelTopology
+    // uses. Capture per-subentity material names first so the wireframe
+    // / MaterialEditor overrides survive the deinit/init round-trip;
+    // invalidate RTSS afterwards so its shader cache picks up the new
+    // vertex layout.
     EditableMesh updated;
     if (!hm.toEditableMesh(updated)) {
         cancelKnife();
@@ -2367,8 +2381,37 @@ bool EditModeController::commitKnife()
     }
     m_editableMesh->subMeshes() = std::move(updated.subMeshes());
     m_editableMesh->resizeEntityBuffers(m_editEntity);
+
+    std::vector<std::string> preMats;
+    preMats.reserve(m_editEntity->getNumSubEntities());
+    for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+        preMats.push_back(m_editEntity->getSubEntity(i)->getMaterialName());
+    }
+
     m_editEntity->_deinitialise();
     m_editEntity->_initialise(true);
+
+    for (unsigned int i = 0;
+         i < m_editEntity->getNumSubEntities() && i < preMats.size(); ++i) {
+        if (!preMats[i].empty())
+            m_editEntity->getSubEntity(i)->setMaterialName(preMats[i]);
+    }
+
+    if (auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
+            if (!matName.empty())
+                shaderGen->invalidateMaterial(
+                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
+        }
+    }
+
+    // Clear edge/face selection — pre-cut IDs refer to retired topology
+    // slots and the walk added new vertices that aren't in any existing
+    // set. Leaving stale indices risks crashes in later overlay updates.
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
 
     auto* cmd = new EditMeshTopologyCommand(
         std::move(originalSubMeshes),
@@ -2560,22 +2603,26 @@ void EditModeController::updateKnifePreviewOverlay()
     auto* sceneMgr = m_editEntity->_getManager();
     if (!sceneMgr) return;
 
-    if (!m_overlayNode) {
-        m_overlayNode = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    // Knife preview owns its own scene node so updating its entity-
+    // mirror transform doesn't stomp on the selection overlay node's
+    // origin-parked / local-space geometry. Selection overlays live on
+    // m_overlayNode; knife on m_overlayKnifeNode.
+    if (!m_overlayKnifeNode) {
+        m_overlayKnifeNode = sceneMgr->getRootSceneNode()->createChildSceneNode();
     }
     if (!m_overlayKnife) {
         m_overlayKnife = sceneMgr->createManualObject("EditMode_KnifeOverlay");
         m_overlayKnife->setDynamic(true);
         m_overlayKnife->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
-        m_overlayNode->attachObject(m_overlayKnife);
+        m_overlayKnifeNode->attachObject(m_overlayKnife);
     }
 
     // Mirror the entity's world transform so knife points drawn in local
     // space sit on the mesh.
     if (auto* entNode = m_editEntity->getParentSceneNode()) {
-        m_overlayNode->setPosition(entNode->_getDerivedPosition());
-        m_overlayNode->setOrientation(entNode->_getDerivedOrientation());
-        m_overlayNode->setScale(entNode->_getDerivedScale());
+        m_overlayKnifeNode->setPosition(entNode->_getDerivedPosition());
+        m_overlayKnifeNode->setOrientation(entNode->_getDerivedOrientation());
+        m_overlayKnifeNode->setScale(entNode->_getDerivedScale());
     }
 
     m_overlayKnife->clear();
@@ -2606,11 +2653,16 @@ void EditModeController::updateKnifePreviewOverlay()
 
 void EditModeController::destroyKnifePreviewOverlay()
 {
-    if (!m_overlayKnife) return;
     auto* sceneMgr = m_editEntity ? m_editEntity->_getManager() : nullptr;
-    if (m_overlayNode) m_overlayNode->detachObject(m_overlayKnife);
-    if (sceneMgr) sceneMgr->destroyManualObject(m_overlayKnife);
-    m_overlayKnife = nullptr;
+    if (m_overlayKnife) {
+        if (m_overlayKnifeNode) m_overlayKnifeNode->detachObject(m_overlayKnife);
+        if (sceneMgr) sceneMgr->destroyManualObject(m_overlayKnife);
+        m_overlayKnife = nullptr;
+    }
+    if (m_overlayKnifeNode) {
+        if (sceneMgr) sceneMgr->destroySceneNode(m_overlayKnifeNode);
+        m_overlayKnifeNode = nullptr;
+    }
 }
 
 // ===========================================================================

@@ -389,17 +389,26 @@ public:
     int splitEdge(int edgeIdx, float t);
 
     /**
-     * @brief Split a face by inserting a diagonal edge between two of its
-     *        boundary vertices.
+     * @brief Split an n-gon face by inserting a diagonal edge between two
+     *        of its boundary vertices, where n ∈ {3, 4}.
      *
      * Retires the old face and appends two new faces sharing the new
-     * diagonal edge. Vertices must both be on the face's boundary loop
-     * and must not already be adjacent (connected by a face-boundary
-     * edge), or the split would be degenerate.
+     * diagonal edge. Both vertices must be on the face's boundary loop
+     * and must NOT already be adjacent on that loop (connected by a
+     * boundary edge of the face) — either would duplicate an existing
+     * edge or collapse one of the new faces.
      *
-     * MVP limits: only splits triangles and quads (faces with 3 or 4
-     * boundary vertices). Higher n-gons aren't produced by the current
-     * pipeline.
+     * Consequence: on a triangle every pair of vertices is adjacent, so
+     * splitFace always rejects triangles. The knife pipeline doesn't
+     * need that case anyway — two splitEdges on one triangle already
+     * leave the cut segment as a real edge (see the
+     * TwoSplitEdgesOnOneTriangleProduceMidpointEdge invariant).
+     *
+     * Faces with more than 4 boundary vertices are also rejected: the
+     * current pipeline doesn't produce them, and splitting them cleanly
+     * would need an ear-clip-aware rewire. appendFace itself accepts
+     * any n ≥ 3, so the cap here is a scope choice and can be lifted
+     * later without changing this method's contract.
      *
      * @param faceIdx The face to split.
      * @param vA First boundary vertex.

@@ -1062,8 +1062,12 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         return;
     }
 
-    // Knife session: Esc cancels, Enter commits. These override selection
-    // mode shortcuts while the session is open.
+    // Knife session: Esc cancels, Enter commits. Every other key is
+    // swallowed while the session is open — otherwise selection-mode
+    // shortcuts (1/2/3), Ctrl+E/B, Ctrl+A, and friends would silently
+    // mutate state mid-cut and leave the user with a preview that no
+    // longer matches the tool they're in. The user can't mean those
+    // keys while the knife preview is on screen.
     if (editCtrl->knifeSessionActive()) {
         if (event->key() == Qt::Key_Escape) {
             SentryReporter::addBreadcrumb("ui.shortcut", "Esc — cancel knife");
@@ -1077,6 +1081,9 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             event->accept();
             return;
         }
+        // Swallow everything else so fall-through handlers don't fire.
+        event->accept();
+        return;
     }
 
     if (editCtrl->isEditModeActive()) {

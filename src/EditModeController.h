@@ -667,6 +667,10 @@ private:
     void destroyKnifePreviewOverlay();
 
     Ogre::ManualObject* m_overlayKnife = nullptr;
+    // Independent scene node for the knife preview so its entity-mirror
+    // transform doesn't fight with selection overlays, which expect
+    // m_overlayNode parked at the origin with local-space geometry.
+    Ogre::SceneNode* m_overlayKnifeNode = nullptr;
 
     /// Apply a bevel at `width` to `edges` assuming the mesh is at its
     /// pre-bevel snapshot state. Updates selection to the new chamfer verts.

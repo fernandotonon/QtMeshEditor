@@ -3687,9 +3687,19 @@ int HalfEdgeMesh::splitEdge(int edgeIdx, float t)
     TriFace fA{}, fB{};
     const bool hasA = describeFace(heA, fA);
     const int heB = m_halfEdges[heA].twin;
-    const bool hasB = (heB >= 0) && describeFace(heB, fB);
+    const bool hasValidB = (heB >= 0);
+    const bool hasB = hasValidB && describeFace(heB, fB);
 
     if (!hasA && !hasB) return -1;
+
+    // splitEdge is a triangle-only MVP: if either adjacent face exists
+    // and isn't a triangle, bail before we mutate. Partially splitting
+    // would desync the other side's half-edge pointers against a face
+    // that's still an n-gon, producing silent topology corruption.
+    // (A face "exists" here means its twin is non-boundary. Boundary
+    // half-edges — face == -1 — are fine.)
+    if (!hasA && m_halfEdges[heA].face >= 0) return -1;
+    if (!hasB && hasValidB && m_halfEdges[heB].face >= 0) return -1;
 
     // Edge direction is fA.vFrom -> fA.vTo (with t measured from vFrom).
     // If only fB exists (the edge sits on the boundary on the A side),
@@ -3880,15 +3890,30 @@ std::vector<int> HalfEdgeMesh::cutPath(const std::vector<CutPoint>& points)
         return -1;
     };
 
+    // Snapshot the whole HE representation so partial failures can roll
+    // back cleanly (e.g. two CutPoints referencing the same underlying
+    // edge: the first split removes it, the second findEdgeByVerts
+    // returns -1). Without this the caller sees a half-mutated mesh.
+    const auto snapHalfEdges = m_halfEdges;
+    const auto snapVertices = m_vertices;
+    const auto snapFaces = m_faces;
+    const auto snapEdges = m_edges;
+    auto restore = [&]() {
+        m_halfEdges = snapHalfEdges;
+        m_vertices = snapVertices;
+        m_faces = snapFaces;
+        m_edges = snapEdges;
+    };
+
     // Step 1: insert vertices at every click endpoint, re-resolving the
     // edge each time because the previous split may have renumbered them.
     std::vector<int> clickVerts(points.size(), -1);
     for (size_t i = 0; i < points.size(); ++i) {
         const int resolvedEdge = findEdgeByVerts(clickEdgeVerts[i].first,
                                                  clickEdgeVerts[i].second);
-        if (resolvedEdge < 0) return newVertices;
+        if (resolvedEdge < 0) { restore(); newVertices.clear(); return newVertices; }
         const int v = splitEdge(resolvedEdge, clickT[i]);
-        if (v < 0) return newVertices;
+        if (v < 0) { restore(); newVertices.clear(); return newVertices; }
         clickVerts[i] = v;
         newVertices.push_back(v);
     }
