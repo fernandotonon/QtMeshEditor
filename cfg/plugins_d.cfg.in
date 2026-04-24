@@ -3,7 +3,8 @@
 # Define plugin folder
 PluginFolder=@PLUGIN_DIR@
 
-# Define plugins
+# Define plugins (keep aligned with plugins.cfg.in — Codec_STBI is required for common image formats)
 Plugin=RenderSystem_GL@PLUGIN_DEBUG_POSTFIX@
 Plugin=Plugin_OctreeSceneManager@PLUGIN_DEBUG_POSTFIX@
+Plugin=Codec_STBI@PLUGIN_DEBUG_POSTFIX@
 #Plugin=Plugin_CgProgramManager
