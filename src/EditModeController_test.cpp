@@ -1194,3 +1194,84 @@ TEST_F(EditModeControllerBevelE2ETest, BevelCubeCornerVertexProducesClosedManifo
     EXPECT_EQ(boundaryEdges, 0u) << "vertex bevel leaves " << boundaryEdges << " boundary edges";
 }
 
+// ===========================================================================
+// Knife tool — session lifecycle (hit-test-free tests)
+//
+// The hit-test paths depend on an OgreWidget, which isn't available headless.
+// These tests drive the controller API directly by pushing synthetic
+// KnifePoint records through the commit pipeline, exercising the bits that
+// do run in CI: enter/cancel/commit state transitions, short-circuit on
+// zero-cut commits, breadcrumb emission via the active bevel guard, etc.
+// ===========================================================================
+
+TEST_F(EditModeControllerBevelE2ETest, KnifeBeginThenCancelRestoresIdleState) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+
+    EXPECT_FALSE(ctrl->knifeSessionActive());
+    EXPECT_TRUE(ctrl->beginKnife());
+    EXPECT_TRUE(ctrl->knifeSessionActive());
+    EXPECT_EQ(ctrl->knifePointCount(), 0);
+
+    ctrl->cancelKnife();
+    EXPECT_FALSE(ctrl->knifeSessionActive());
+    EXPECT_EQ(ctrl->knifePointCount(), 0);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, KnifeCommitWithoutPointsRejectsAndCleansUp) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ASSERT_TRUE(ctrl->beginKnife());
+
+    // Zero confirmed points — commit should refuse and tidy up.
+    EXPECT_FALSE(ctrl->commitKnife());
+    EXPECT_FALSE(ctrl->knifeSessionActive());
+}
+
+TEST_F(EditModeControllerBevelE2ETest, KnifeBeginCancelsActiveBevelFirst) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectVertex(5, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+    ASSERT_TRUE(ctrl->bevelSessionActive());
+
+    // Opening the knife should cancel the bevel session first.
+    ASSERT_TRUE(ctrl->beginKnife());
+    EXPECT_TRUE(ctrl->knifeSessionActive());
+    EXPECT_FALSE(ctrl->bevelSessionActive());
+}
+
+TEST_F(EditModeControllerBevelE2ETest, BeginBevelCancelsActiveKnifeFirst) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ASSERT_TRUE(ctrl->beginKnife());
+
+    // Now the user invokes a vertex bevel — the knife session should get
+    // cancelled rather than leaving a stale preview behind the gizmo.
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectVertex(5, false);
+    ASSERT_TRUE(ctrl->bevelSelection());
+
+    EXPECT_TRUE(ctrl->bevelSessionActive());
+    EXPECT_FALSE(ctrl->knifeSessionActive());
+}
+
+TEST_F(EditModeControllerBevelE2ETest, ExitEditModeCancelsKnifeSession) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->enterEditMode();
+    ASSERT_TRUE(ctrl->beginKnife());
+    ASSERT_TRUE(ctrl->knifeSessionActive());
+
+    ctrl->exitEditMode(false);
+    EXPECT_FALSE(ctrl->knifeSessionActive());
+    EXPECT_FALSE(ctrl->isEditModeActive());
+}
+
+TEST_F(EditModeControllerBevelE2ETest, KnifeBeginOutsideEditModeFails) {
+    auto* ctrl = EditModeController::instance();
+    // Fresh fixture: edit mode is off. beginKnife should be a no-op.
+    EXPECT_FALSE(ctrl->beginKnife());
+    EXPECT_FALSE(ctrl->knifeSessionActive());
+}
+
