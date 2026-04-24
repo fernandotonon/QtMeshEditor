@@ -3104,3 +3104,350 @@ TEST(HalfEdgeMeshStandalone, BevelVertexSegmentsClampsOverUpperLimit) {
     ASSERT_TRUE(he.toEditableMesh(back));
     EXPECT_TRUE(isManifold(back));
 }
+
+// ===========================================================================
+// splitEdge / splitFace — knife-tool topology primitives
+// ===========================================================================
+
+// Count active (non-retired) faces. After a topology op some face slots have
+// halfEdge == -1 — they'll be compacted out of toEditableMesh but still
+// contribute to faceCount(), so tests that want the visible triangle count
+// need the active count here.
+static int activeFaceCount(const HalfEdgeMesh& he)
+{
+    int n = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge >= 0) ++n;
+    }
+    return n;
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeMidpointOfInteriorEdgeDoublesTriangles) {
+    // The quad mesh has two triangles sharing the v1↔v2 diagonal. Splitting
+    // that edge at t=0.5 should insert one new vertex, replace both triangles
+    // with two each (four tris total), and keep the mesh manifold.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    const int vMid = he.splitEdge(sharedEdge, 0.5f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+
+    EXPECT_EQ(he.vertexCount(), 5u);
+    EXPECT_EQ(activeFaceCount(he), 4);
+
+    // Midpoint position should be the average of the endpoints.
+    const auto mid = he.vertex(vMid).position;
+    EXPECT_NEAR(mid.x, 0.5f, 1e-4f);
+    EXPECT_NEAR(mid.y, 0.5f, 1e-4f);
+    EXPECT_NEAR(mid.z, 0.0f, 1e-4f);
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeInterpolatesNormalAndUV) {
+    // Interpolation at t=0.25 should place the new vertex a quarter of the
+    // way from v1 to v2 and carry weighted normal / UV attributes.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    const int vMid = he.splitEdge(sharedEdge, 0.25f);
+    ASSERT_GE(vMid, 0);
+
+    const auto& v = he.vertex(vMid);
+    EXPECT_TRUE(v.hasNormal);
+    EXPECT_TRUE(v.hasUV);
+
+    // Position lies on the v1↔v2 segment at parameter ~0.25 (direction
+    // depends on which endpoint splitEdge treats as the "from"; check
+    // distance ratio rather than exact coords).
+    const auto& p1 = he.vertex(1).position;
+    const auto& p2 = he.vertex(2).position;
+    const float segLen = p1.distance(p2);
+    const float d1 = v.position.distance(p1);
+    const float d2 = v.position.distance(p2);
+    const float frac = std::min(d1, d2) / segLen;
+    EXPECT_NEAR(frac, 0.25f, 1e-3f);
+
+    // Both endpoints share normal +Z; midpoint should too.
+    EXPECT_NEAR(v.normal.z, 1.0f, 1e-4f);
+
+    // UV lerp: v1=(1,0), v2=(0,1). Any linear blend between them falls
+    // on the x+y=1 line regardless of the split direction, so check
+    // that invariant plus the correct distance from either endpoint.
+    // A broken `v.uv` lerp (e.g. zeroed out) fails both.
+    EXPECT_NEAR(v.uv.x + v.uv.y, 1.0f, 1e-4f)
+        << "UV lerp should stay on the segment between endpoints";
+    const float uvDist1 = std::hypot(v.uv.x - 1.0f, v.uv.y - 0.0f);
+    const float uvDist2 = std::hypot(v.uv.x - 0.0f, v.uv.y - 1.0f);
+    const float uvSeg = std::hypot(1.0f, 1.0f);
+    EXPECT_NEAR(std::min(uvDist1, uvDist2) / uvSeg, 0.25f, 1e-3f);
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeBoundaryEdgeProducesOneExtraTriangle) {
+    // A triangle's perimeter edge is a boundary edge (only one adjacent face).
+    // Splitting it should turn the single triangle into two triangles without
+    // creating any phantom face on the outside.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    // Pick the edge between v0 (0,0,0) and v1 (1,0,0).
+    const int edge = findEdge(he, 0, 1);
+    ASSERT_GE(edge, 0);
+
+    const int vMid = he.splitEdge(edge, 0.5f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+
+    EXPECT_EQ(he.vertexCount(), 4u);
+    EXPECT_EQ(activeFaceCount(he), 2);
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeClampsExtremeT) {
+    // t=0 or t=1 would collapse one of the new triangles; splitEdge should
+    // nudge the parameter inside the (0,1) interior rather than fail or
+    // produce a zero-area face.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    const int vMid = he.splitEdge(sharedEdge, 0.0f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeInvalidIndexReturnsMinusOne) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.splitEdge(-1, 0.5f), -1);
+    EXPECT_EQ(he.splitEdge(999, 0.5f), -1);
+}
+
+TEST(HalfEdgeMeshStandalone, TwoSplitEdgesOnOneTriangleProduceMidpointEdge) {
+    // Real knife-tool scenario: the user cuts a triangle by clicking two of
+    // its edges. Two splitEdge calls on the same triangle should leave the
+    // M1↔M2 segment as a real edge of the resulting mesh — no follow-up
+    // splitFace needed. This is the invariant the knife commit pipeline
+    // relies on for the common "cut one face" case.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    const int edgeA = findEdge(he, 0, 1);
+    ASSERT_GE(edgeA, 0);
+    const int m1 = he.splitEdge(edgeA, 0.5f);
+    ASSERT_GE(m1, 0);
+    EXPECT_TRUE(he.validate());
+
+    const int edgeB = findEdge(he, 1, 2);
+    ASSERT_GE(edgeB, 0);
+    const int m2 = he.splitEdge(edgeB, 0.5f);
+    ASSERT_GE(m2, 0);
+    EXPECT_TRUE(he.validate());
+
+    // The knife cut ran from M1 to M2; that segment must now be an edge.
+    EXPECT_GE(findEdge(he, m1, m2), 0)
+        << "M1-M2 should be a real edge after two splitEdges on the same triangle";
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SplitFaceRejectsAdjacentBoundaryVertices) {
+    // A "diagonal" between two vertices that are already edge-adjacent on a
+    // face boundary would duplicate the existing edge. splitFace should
+    // refuse rather than produce a degenerate split. On a triangle every
+    // pair of boundary vertices is edge-adjacent so every call should fail.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    EXPECT_FALSE(he.splitFace(0, 0, 1));
+    EXPECT_FALSE(he.splitFace(0, 1, 2));
+    EXPECT_FALSE(he.splitFace(0, 0, 2));
+    EXPECT_EQ(activeFaceCount(he), 1);
+}
+
+TEST(HalfEdgeMeshStandalone, SplitFaceRejectsInvalidVertexIndices) {
+    // These guard paths run BEFORE the triangle-rejection in splitFace
+    // (see the ordered checks at the top of the implementation), so the
+    // assertions hit the invalid-vertex branches directly rather than
+    // getting short-circuited by the "every tri vertex pair is
+    // adjacent" rule. Covers: same-vertex, negative, out-of-range,
+    // and in-range-but-not-on-this-face.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    EXPECT_FALSE(he.splitFace(0, 2, 2))
+        << "same-vertex pair should fail (check 2 — first guard)";
+    EXPECT_FALSE(he.splitFace(0, -1, 1))
+        << "negative index should fail (check 3)";
+    EXPECT_FALSE(he.splitFace(0, 0, 999))
+        << "out-of-range index should fail (check 5)";
+    EXPECT_FALSE(he.splitFace(-1, 0, 1))
+        << "invalid face index should fail (check 1)";
+
+    // Also verify the "vertex exists but isn't on this face" path.
+    // Triangle 0 of makeQuadMesh contains verts {0,1,2}; vertex 3
+    // exists in the mesh but is on triangle 1, so splitFace should
+    // reject before getting to adjacency checks.
+    EXPECT_FALSE(he.splitFace(0, 0, 3))
+        << "off-face valid vertex should fail the boundary-loop check";
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgePreservesSubmeshCount) {
+    // splitEdge operating on one submesh's edge should leave the submesh
+    // count unchanged. Attribute correctness across submeshes is covered
+    // by the roundtrip test below.
+    auto em = makeTwoSubMeshMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const auto beforeSubCount = he.subMeshCount();
+    const int edge = findEdge(he, 0, 1);
+    if (edge < 0) GTEST_SKIP() << "v0-v1 edge not present in mesh";
+
+    const int vMid = he.splitEdge(edge, 0.5f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+    EXPECT_EQ(he.subMeshCount(), beforeSubCount);
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_EQ(back.subMeshes().size(), static_cast<size_t>(beforeSubCount));
+}
+
+// ===========================================================================
+// cutPath — knife walk-and-cut along a polyline
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, CutPathCrossesInteriorDiagonalAndLinksEndpoints) {
+    // Two triangles share a diagonal v1-v2. A horizontal cut from the
+    // midpoint of v0-v1 to the midpoint of v2-v3 crosses the diagonal at
+    // its midpoint, so the final mesh must have:
+    //   - 3 new vertices (both endpoints plus one on the diagonal),
+    //   - the cut visible as a chain of real edges end-to-end.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int edgeBottom = findEdge(he, 0, 1);
+    const int edgeTop = findEdge(he, 2, 3);
+    ASSERT_GE(edgeBottom, 0);
+    ASSERT_GE(edgeTop, 0);
+
+    const auto newVerts = he.cutPath({{edgeBottom, 0.5f}, {edgeTop, 0.5f}});
+    ASSERT_EQ(newVerts.size(), 3u)
+        << "expected 2 endpoint verts + 1 diagonal-crossing vert";
+    EXPECT_TRUE(he.validate());
+
+    // All three new vertices should sit on the x=0.5 cut line.
+    for (int v : newVerts) {
+        EXPECT_NEAR(he.vertex(v).position.x, 0.5f, 1e-3f);
+    }
+
+    // The cut must exist as real edges: every consecutive pair of cut
+    // vertices (sorted by y) should be connected by an HE edge.
+    std::vector<int> orderedCutVerts = newVerts;
+    std::sort(orderedCutVerts.begin(), orderedCutVerts.end(),
+              [&](int a, int b) {
+                  return he.vertex(a).position.y < he.vertex(b).position.y;
+              });
+    for (size_t i = 0; i + 1 < orderedCutVerts.size(); ++i) {
+        EXPECT_GE(findEdge(he, orderedCutVerts[i], orderedCutVerts[i + 1]), 0)
+            << "consecutive cut vertices should be connected by a real edge";
+    }
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, CutPathSingleTriangleStillProducesEndpointEdge) {
+    // Cutting both clicks onto edges of a single triangle doesn't need an
+    // interior edge crossing — two splitEdges already leave the M1↔M2
+    // segment as a real edge. cutPath should return exactly the two
+    // endpoint vertices in that case.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int edgeA = findEdge(he, 0, 1);
+    const int edgeB = findEdge(he, 1, 2);
+    ASSERT_GE(edgeA, 0);
+    ASSERT_GE(edgeB, 0);
+
+    const auto newVerts = he.cutPath({{edgeA, 0.5f}, {edgeB, 0.5f}});
+    ASSERT_EQ(newVerts.size(), 2u);
+    EXPECT_TRUE(he.validate());
+    EXPECT_GE(findEdge(he, newVerts[0], newVerts[1]), 0)
+        << "single-triangle cut should connect both endpoints directly";
+}
+
+TEST(HalfEdgeMeshStandalone, CutPathBailsOnFewerThanTwoPoints) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    EXPECT_TRUE(he.cutPath({}).empty());
+    const int edge = findEdge(he, 0, 1);
+    ASSERT_GE(edge, 0);
+    EXPECT_TRUE(he.cutPath({{edge, 0.5f}}).empty());
+}
+
+TEST(HalfEdgeMeshStandalone, CutPathFailsOnInvalidEdgeIndex) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const int edge = findEdge(he, 0, 1);
+    ASSERT_GE(edge, 0);
+    // Negative / out-of-range edge indices short-circuit the walk.
+    EXPECT_TRUE(he.cutPath({{edge, 0.5f}, {-1, 0.5f}}).empty());
+}
+
+TEST(HalfEdgeMeshStandalone, CutPathRollsBackWhenSecondEdgeDuplicatesFirst) {
+    // If two CutPoints reference the same underlying edge (same
+    // endpoint vertex pair), the first splitEdge removes that edge and
+    // the second lookup fails. cutPath must roll back, leaving the
+    // mesh byte-identical to its pre-call state — otherwise callers
+    // see a half-applied cut.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const size_t vertsBefore = he.vertexCount();
+    const size_t facesBefore = he.faceCount();
+    const size_t edgesBefore = he.edgeCount();
+
+    const int edge = findEdge(he, 1, 2); // shared diagonal
+    ASSERT_GE(edge, 0);
+    const auto result = he.cutPath({{edge, 0.3f}, {edge, 0.7f}});
+    EXPECT_TRUE(result.empty()) << "duplicate-edge cutPath must fail";
+
+    EXPECT_EQ(he.vertexCount(), vertsBefore);
+    EXPECT_EQ(he.faceCount(), facesBefore);
+    EXPECT_EQ(he.edgeCount(), edgesBefore);
+    EXPECT_TRUE(he.validate());
+}
