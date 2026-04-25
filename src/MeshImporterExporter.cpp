@@ -1167,9 +1167,9 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         exportMaterial(e, file);
     } else if (_format == "FBX Binary (*.fbx)") {
         bool ok = FBXExporter::exportFBX(e, _uri);
-        if (ok)
-            exportMaterial(e, file);
-        else
+        // FBXExporter embeds textures (Video.Content) so avoid emitting sidecar
+        // .material and extracted image files next to the FBX.
+        if (!ok)
             return -1;
     } else {
         // Export using Assimp — build aiScene directly from Ogre mesh data
@@ -1263,8 +1263,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
             }
             else
             {
-                // Export texture files alongside the model
-                exportMaterial(e, file);
+                // Export texture files alongside the model.
+                // For FBX we aim for a single-file export (embedded textures), so skip sidecars.
+                if (_format != "FBX Binary (*.fbx)")
+                    exportMaterial(e, file);
             }
 
             delete scene;
@@ -1499,7 +1501,11 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
                                                 exportFlags);
             if (aiResult == AI_SUCCESS) {
                 result = 0;
-                exportMaterial(entity, file);
+                // For FBX, prefer a single-file export. Assimp FBX export may still
+                // reference textures by name, but our current expectation for FBX is
+                // "no sidecar dumps" (materials/textures are embedded or handled by importer).
+                if (fmt != "FBX Binary (*.fbx)")
+                    exportMaterial(entity, file);
             } else {
                 auto msg = QString("Assimp export (pose) to %1 failed: %2")
                     .arg(formatId).arg(exporter.GetErrorString());
