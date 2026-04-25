@@ -8,6 +8,8 @@
 #include <QStringList>
 #include <functional>
 
+struct aiScene;
+
 enum class Severity { Info, Warning, Error };
 
 struct Finding {
@@ -83,6 +85,12 @@ public:
 
     /// Inspect a single asset file using Assimp (lightweight, no Ogre needed).
     static AssetInfo inspectAsset(const QString& filePath, const QString& scanRoot);
+
+    /// After `Assimp::Importer::ReadFile`, whether the result would make `inspectAsset` set
+    /// `loadError` (e.g. null scene, or no mesh and no animations). A scene may have
+    /// the incomplete flag set and still be acceptable if it has animations. Unit-tested.
+    static bool isAssimpResultLoadFailure(const aiScene* scene, const char* assimpErrorString,
+                                         QString* outErrorMessage = nullptr);
 
     /// Evaluate all configured rules against one asset.
     static QList<Finding> evaluateRules(const AssetInfo& asset, const ScanConfig& config);

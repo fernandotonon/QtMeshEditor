@@ -102,6 +102,28 @@ QStringList ScanEngine::enumerateFiles(const ScanConfig& config, const QString& 
 // Asset inspection via Assimp (lightweight — no Ogre needed)
 // ---------------------------------------------------------------------------
 
+bool ScanEngine::isAssimpResultLoadFailure(const aiScene* scene, const char* assimpErrorString,
+                                            QString* outErrorMessage)
+{
+    if (!scene) {
+        QString e = assimpErrorString ? QString::fromUtf8(assimpErrorString) : QString();
+        if (e.isEmpty())
+            e = QStringLiteral("Assimp failed to read file");
+        if (outErrorMessage)
+            *outErrorMessage = e;
+        return true;
+    }
+    if (scene->mNumMeshes == 0 && !scene->HasAnimations()) {
+        QString e = assimpErrorString ? QString::fromUtf8(assimpErrorString) : QString();
+        if (e.isEmpty())
+            e = QStringLiteral("Scene has no meshes and no animations");
+        if (outErrorMessage)
+            *outErrorMessage = e;
+        return true;
+    }
+    return false;
+}
+
 AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanRoot)
 {
     AssetInfo info;
@@ -111,14 +133,19 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
     info.fileSize = QFileInfo(filePath).size();
 
     Assimp::Importer importer;
+    importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+
     // Triangulate for consistent vertex/face counts; otherwise minimal processing.
     const aiScene* scene = importer.ReadFile(
         filePath.toStdString(),
         aiProcess_Triangulate | aiProcess_ValidateDataStructure);
 
-    if (!scene || (scene->mFlags & AI_SCENE_FLAGS_INCOMPLETE)) {
+    // A null scene is a true load failure.  Do NOT treat AI_SCENE_FLAGS_INCOMPLETE
+    // as fatal: Assimp sets it on many valid FBX files (e.g. Unreal/ Mixamo
+    // animation takes with no mesh geometry).  Match AssimpToOgreImporter: use
+    // mesh/animation presence as the authoritative check.
+    if (isAssimpResultLoadFailure(scene, importer.GetErrorString(), &info.errorMessage)) {
         info.loadError = true;
-        info.errorMessage = QString::fromUtf8(importer.GetErrorString());
         return info;
     }
 
