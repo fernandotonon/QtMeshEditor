@@ -51,6 +51,15 @@ public:
         float scale       = 1e-3f;     // unitless multiplier delta
     };
 
+    /// Map a preset name (case-insensitive: "conservative" / "balanced" /
+    /// "aggressive") to the corresponding tolerance triple. Single source of
+    /// truth shared by the CLI, MCP and Inspector — bumping a preset value in
+    /// one place updates every surface. Unknown presets fall back to the
+    /// "balanced" defaults and `*outOk` is set to false so callers can surface
+    /// a usage error.
+    static SimplifyTolerances tolerancesForPreset(const std::string& preset,
+                                                  bool* outOk = nullptr);
+
     /// Simplify an animation by removing keyframes that are within tolerance of
     /// the lerp/slerp interpolation between their immediate neighbors. First and
     /// last keyframes are always preserved. Returns the number of keyframes removed.

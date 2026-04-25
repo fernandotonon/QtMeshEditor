@@ -2210,27 +2210,17 @@ QJsonObject MCPServer::toolResampleAnimation(const QJsonObject &args)
     }
 }
 
-// Shared helper: resolve entity + skeleton + animation list and build the
-// SimplifyTolerances from MCP args. Used by both simplify_animation and
-// analyze_animation. On error returns an error JSON object — caller checks
-// for the "isError" flag and propagates.
+// Build SimplifyTolerances from MCP args. Reads "preset" via the shared
+// AnimationMerger::tolerancesForPreset helper (so CLI/MCP/Inspector stay in
+// sync), then layers per-axis overrides from "tolerance",
+// "rotation_tolerance_deg", and "scale_tolerance". Sets *outOk to false on
+// an unknown preset string so the caller can surface a usage error.
 static AnimationMerger::SimplifyTolerances tolerancesFromMcpArgs(const QJsonObject &args, bool *outOk = nullptr)
 {
-    AnimationMerger::SimplifyTolerances tol; // Balanced default
-    bool ok = true;
-
-    const QString preset = args.value("preset").toString().toLower();
-    if (!preset.isEmpty()) {
-        if (preset == "conservative") {
-            tol.translation = 1e-4f; tol.rotationDeg = 0.05f; tol.scale = 1e-4f;
-        } else if (preset == "balanced") {
-            tol.translation = 1e-3f; tol.rotationDeg = 0.5f;  tol.scale = 1e-3f;
-        } else if (preset == "aggressive") {
-            tol.translation = 1e-2f; tol.rotationDeg = 1.0f;  tol.scale = 1e-2f;
-        } else {
-            ok = false;
-        }
-    }
+    bool presetOk = true;
+    const std::string preset = args.value("preset").toString().toStdString();
+    AnimationMerger::SimplifyTolerances tol =
+        AnimationMerger::tolerancesForPreset(preset, &presetOk);
 
     if (args.contains("tolerance"))
         tol.translation = static_cast<float>(args.value("tolerance").toDouble(tol.translation));
@@ -2239,7 +2229,7 @@ static AnimationMerger::SimplifyTolerances tolerancesFromMcpArgs(const QJsonObje
     if (args.contains("scale_tolerance"))
         tol.scale = static_cast<float>(args.value("scale_tolerance").toDouble(tol.scale));
 
-    if (outOk) *outOk = ok;
+    if (outOk) *outOk = presetOk;
     return tol;
 }
 
@@ -2292,13 +2282,14 @@ QJsonObject MCPServer::toolSimplifyAnimation(const QJsonObject &args)
         int totalRemoved = 0;
         int totalOriginal = 0;
         for (const auto& name : animNames) {
-            int origTotal = 0, origRedundant = 0;
-            AnimationMerger::analyzeRedundantKeyframes(
-                skel->getAnimation(name), tol, &origTotal, &origRedundant);
-            totalOriginal += origTotal;
+            // Counting raw keyframes via the track list is O(N) — calling
+            // analyzeRedundantKeyframes here would re-run the full simplifier
+            // pass and discard the result, doubling per-animation work.
+            const Ogre::Animation* anim = skel->getAnimation(name);
+            for (const auto& [handle, track] : anim->_getNodeTrackList())
+                totalOriginal += static_cast<int>(track->getNumKeyFrames());
 
-            int removed = AnimationMerger::simplifyAnimation(skel.get(), name, tol);
-            totalRemoved += removed;
+            totalRemoved += AnimationMerger::simplifyAnimation(skel.get(), name, tol);
         }
 
         entity->refreshAvailableAnimationState();

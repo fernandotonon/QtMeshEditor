@@ -254,6 +254,7 @@ void CLIPipeline::printUsage()
         "  anim <file> --simplify [--preset {conservative|balanced|aggressive}] [--tolerance T] [--rotation-tolerance-deg D] [-o <output>] [--animation <name>]\n"
         "                                    Remove redundant keyframes (tolerance-based, preserves sharp keys)\n"
         "                                    Default preset: balanced (~1mm / 0.5°)\n"
+        "                                    --tolerance T sets translation+scale tolerance (world units)\n"
         "  anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]\n"
         "                                    Report % redundant keyframes and projected file-size savings\n"
         "  validate <file> [--json]          Validate mesh geometry (exit 1 if errors found)\n"
@@ -1074,23 +1075,17 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         if (arg == "--analyze")  { analyzeMode  = true; continue; }
         if (arg == "--preset" && i + 1 < argc) {
             QString preset = QString(argv[++i]).toLower();
-            if (preset == "conservative") {
-                simplifyTranslationTol = 1e-4f;
-                simplifyRotationDegTol = 0.05f;
-                simplifyScaleTol       = 1e-4f;
-            } else if (preset == "balanced") {
-                simplifyTranslationTol = 1e-3f;
-                simplifyRotationDegTol = 0.5f;
-                simplifyScaleTol       = 1e-3f;
-            } else if (preset == "aggressive") {
-                simplifyTranslationTol = 1e-2f;
-                simplifyRotationDegTol = 1.0f;
-                simplifyScaleTol       = 1e-2f;
-            } else {
+            bool presetOk = true;
+            const auto presetTol = AnimationMerger::tolerancesForPreset(
+                preset.toStdString(), &presetOk);
+            if (!presetOk) {
                 err() << "Error: Unknown preset '" << preset
                       << "'. Use conservative, balanced, or aggressive." << Qt::endl;
                 return 2;
             }
+            simplifyTranslationTol = presetTol.translation;
+            simplifyRotationDegTol = presetTol.rotationDeg;
+            simplifyScaleTol       = presetTol.scale;
             continue;
         }
         if (arg == "--tolerance" && i + 1 < argc) {
@@ -1130,6 +1125,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         err() << "       qtmesh anim <file> --resample N [-o <output>] [--animation <name>]" << Qt::endl;
         err() << "       qtmesh anim <file> --decimate-step S [-o <output>] [--animation <name>]" << Qt::endl;
         err() << "       qtmesh anim <file> --simplify [--preset {conservative|balanced|aggressive}] [--tolerance T] [--rotation-tolerance-deg D] [-o <output>] [--animation <name>]" << Qt::endl;
+        err() << "                          (--tolerance T sets translation+scale tolerance in world units)" << Qt::endl;
         err() << "       qtmesh anim <file> --analyze [--json] [--preset ...] [--tolerance T] [--rotation-tolerance-deg D]" << Qt::endl;
         return 2;
     }
@@ -1146,7 +1142,13 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
 
     if (!initOgreHeadless()) return 1;
 
-    QString animOp = listMode ? "list" : (renameMode ? "rename" : (resampleMode ? "resample" : (decimateMode ? "decimate" : "merge")));
+    QString animOp = listMode      ? "list"
+                   : renameMode    ? "rename"
+                   : resampleMode  ? "resample"
+                   : decimateMode  ? "decimate"
+                   : simplifyMode  ? "simplify"
+                   : analyzeMode   ? "analyze"
+                                   : "merge";
     SentryReporter::addBreadcrumb("cli.anim", QString("Anim %1 .%2%3")
         .arg(animOp, fi.suffix(), mergeMode ? QString(" files=%1").arg(mergeFiles.size()) : ""));
 
@@ -1407,13 +1409,19 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         const qint64 originalSize = QFileInfo(filePath).size();
         const double pctTotal = totalOriginal > 0
             ? (100.0 * totalRedundant / totalOriginal) : 0.0;
+        // The whole-file projection only makes sense when we analyzed the
+        // whole file. With --animation NAME we only see one clip, so scaling
+        // originalSize by its redundancy % would overstate savings. Skip the
+        // projection when filtering and let the per-anim percent stand alone.
+        const bool wholeFile = animationFilter.isEmpty();
         // Keyframe data dominates animation-only files; project the saved bytes
         // proportionally to the % of redundant keys. This is an estimate — actual
         // savings depend on the exporter and how much non-keyframe data the file
         // contains (mesh, materials, embedded textures).
-        const qint64 projectedSize = static_cast<qint64>(
-            originalSize * (1.0 - (pctTotal / 100.0)));
-        const qint64 savedBytes = originalSize - projectedSize;
+        const qint64 projectedSize = wholeFile
+            ? static_cast<qint64>(originalSize * (1.0 - (pctTotal / 100.0)))
+            : originalSize;
+        const qint64 savedBytes = wholeFile ? (originalSize - projectedSize) : 0;
 
         auto formatBytes = [](qint64 bytes) -> QString {
             if (bytes >= 1024 * 1024)
@@ -1428,8 +1436,13 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                 QJsonObject root;
                 root["file"] = QFileInfo(filePath).fileName();
                 root["originalSize"] = originalSize;
-                root["projectedSize"] = projectedSize;
-                root["savedBytes"] = savedBytes;
+                if (wholeFile) {
+                    // Only include the projection when we analyzed the whole
+                    // file — otherwise consumers might scale these numbers
+                    // and double-count savings.
+                    root["projectedSize"] = projectedSize;
+                    root["savedBytes"] = savedBytes;
+                }
                 root["totalKeyframes"] = totalOriginal;
                 root["redundantKeyframes"] = totalRedundant;
                 root["redundantPercent"] = pctTotal;
@@ -1462,11 +1475,13 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
                 }
                 report += QString("  Total: %1/%2 keyframes redundant (%3%)\n")
                     .arg(totalRedundant).arg(totalOriginal).arg(pctTotal, 0, 'f', 1);
-                if (totalRedundant > 0 && originalSize > 0) {
+                if (wholeFile && totalRedundant > 0 && originalSize > 0) {
                     report += QString("  Simplify to save ~%1. Original size: %2, projected size: %3\n")
                         .arg(formatBytes(savedBytes))
                         .arg(formatBytes(originalSize))
                         .arg(formatBytes(projectedSize));
+                } else if (!wholeFile) {
+                    report += QString("  (Whole-file size projection skipped because --animation filtered to one clip)\n");
                 }
                 cliWrite(report);
             }
@@ -1495,9 +1510,14 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             return 1;
         }
 
+        // Compute the percentage from the actual removed count rather than the
+        // pre-simplify analysis number — keeps the line internally consistent
+        // even if simplifyAnimation and analyzeRedundantKeyframes ever drift.
+        const double removedPct = totalOriginal > 0
+            ? (100.0 * totalRemoved / totalOriginal) : 0.0;
         cliWrite(QString("Simplified %1 animation(s): removed %2/%3 keyframes (%4%)\nOutput: %5\n")
             .arg(animsProcessed).arg(totalRemoved).arg(totalOriginal)
-            .arg(pctTotal, 0, 'f', 1).arg(outFi.fileName()));
+            .arg(removedPct, 0, 'f', 1).arg(outFi.fileName()));
         return 0;
     }
 

@@ -613,25 +613,11 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
     return false;
 }
 
-// Map a preset name to the underlying tolerance triple. Conservative is the
-// pre-2.30 default (~0.1mm / 0.05°) — only collapses keys with no measurable
-// drift. Balanced is the new default (1mm / 0.5°), invisible on meter-scale
-// character clips. Aggressive (1cm / 1°) is for cutscene/secondary motion
-// where small drift is acceptable in exchange for much smaller files.
+// Forwards to AnimationMerger::tolerancesForPreset — single source of truth
+// shared by CLI, MCP and Inspector.
 static AnimationMerger::SimplifyTolerances tolerancesForPreset(const QString& preset)
 {
-    AnimationMerger::SimplifyTolerances tol; // balanced
-    const QString p = preset.toLower();
-    if (p == "conservative") {
-        tol.translation = 1e-4f;
-        tol.rotationDeg = 0.05f;
-        tol.scale       = 1e-4f;
-    } else if (p == "aggressive") {
-        tol.translation = 1e-2f;
-        tol.rotationDeg = 1.0f;
-        tol.scale       = 1e-2f;
-    }
-    return tol;
+    return AnimationMerger::tolerancesForPreset(preset.toStdString());
 }
 
 QVariantMap PropertiesPanelController::analyzeAnimationKeyframes(const QString& entityName,

@@ -734,6 +734,135 @@ TEST_F(AnimationMergerTest, SimplifyAnimationNullAndMissing)
     Ogre::SkeletonManager::getSingleton().remove(skel);
 }
 
+TEST_F(AnimationMergerTest, SimplifyAnimationAntipodalRotation)
+{
+    // Quaternions q and -q represent the same rotation. The simplifier's
+    // hemisphere alignment must treat them as equivalent so it doesn't
+    // pretend a stationary rotation is "moving" via the long way around.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "simplify_antipodal_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("turn", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+
+    // Five keys whose rotations alternate q / -q (same orientation, flipped
+    // representation). Translation/scale are constant, so the only way the
+    // simplifier could keep middle keys is if it failed to align hemispheres.
+    const Ogre::Quaternion q = Ogre::Quaternion(Ogre::Degree(45), Ogre::Vector3::UNIT_Y);
+    for (int i = 0; i < 5; ++i) {
+        float t = i / 4.0f;
+        auto* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3::ZERO);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+        kf->setRotation((i % 2 == 0)
+            ? q
+            : Ogre::Quaternion(-q.w, -q.x, -q.y, -q.z));
+    }
+
+    AnimationMerger::simplifyAnimation(skel.get(), "turn");
+    auto* newTrack = skel->getAnimation("turn")->_getNodeTrackList().begin()->second;
+    EXPECT_EQ(newTrack->getNumKeyFrames(), 2u);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, SimplifyAnimationScaleOnlyTrack)
+{
+    // Scale tolerance has its own branch in the simplifier — exercise it
+    // independently by holding translation/rotation constant and varying
+    // only the scale.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "simplify_scale_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("breathe", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+
+    // Linear scale ramp from (1,1,1) to (2,1,1) with 11 keys — every middle
+    // key sits exactly on the lerp.
+    for (int i = 0; i < 11; ++i) {
+        float t = i / 10.0f;
+        auto* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3::ZERO);
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3(1.0f + t, 1.0f, 1.0f));
+    }
+
+    AnimationMerger::SimplifyTolerances tightTol;
+    tightTol.scale = 1e-6f;
+    int total = 0, redundant = 0;
+    AnimationMerger::analyzeRedundantKeyframes(skel->getAnimation("breathe"),
+                                               tightTol, &total, &redundant);
+    EXPECT_GT(redundant, 0); // perfect linear ramp collapses regardless of tolerance
+
+    // Add 1% scale wobble — tight tolerance must keep it.
+    skel->removeAnimation("breathe");
+    auto* anim2 = skel->createAnimation("breathe", 1.0f);
+    auto* track2 = anim2->createNodeTrack(0);
+    track2->setAssociatedNode(bone);
+    for (int i = 0; i < 11; ++i) {
+        float t = i / 10.0f;
+        float wobble = (i % 2 == 0) ? 0.01f : -0.01f;
+        auto* kf = track2->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3::ZERO);
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3(1.0f + t + wobble, 1.0f, 1.0f));
+    }
+    int totalT = 0, redundantTight = 0;
+    AnimationMerger::analyzeRedundantKeyframes(skel->getAnimation("breathe"),
+                                               tightTol, &totalT, &redundantTight);
+    EXPECT_EQ(redundantTight, 0);
+
+    AnimationMerger::SimplifyTolerances looseTol;
+    looseTol.scale = 0.1f;
+    int totalL = 0, redundantLoose = 0;
+    AnimationMerger::analyzeRedundantKeyframes(skel->getAnimation("breathe"),
+                                               looseTol, &totalL, &redundantLoose);
+    EXPECT_GT(redundantLoose, 5);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST(AnimationMergerStandaloneTest, TolerancesForPresetMapping)
+{
+    // The shared preset table is the contract between CLI / MCP / Inspector;
+    // pin the values so a future tweak forces an explicit update everywhere.
+    auto cons = AnimationMerger::tolerancesForPreset("conservative");
+    EXPECT_FLOAT_EQ(cons.translation, 1e-4f);
+    EXPECT_FLOAT_EQ(cons.rotationDeg, 0.05f);
+
+    auto bal = AnimationMerger::tolerancesForPreset("balanced");
+    EXPECT_FLOAT_EQ(bal.translation, 1e-3f);
+    EXPECT_FLOAT_EQ(bal.rotationDeg, 0.5f);
+
+    auto agg = AnimationMerger::tolerancesForPreset("aggressive");
+    EXPECT_FLOAT_EQ(agg.translation, 1e-2f);
+    EXPECT_FLOAT_EQ(agg.rotationDeg, 1.0f);
+
+    // Empty string falls back to balanced and is reported as OK
+    bool ok = false;
+    auto def = AnimationMerger::tolerancesForPreset("", &ok);
+    EXPECT_TRUE(ok);
+    EXPECT_FLOAT_EQ(def.translation, 1e-3f);
+
+    // Unknown preset reports !ok but still returns balanced defaults
+    bool ok2 = true;
+    auto bad = AnimationMerger::tolerancesForPreset("garbage", &ok2);
+    EXPECT_FALSE(ok2);
+    EXPECT_FLOAT_EQ(bad.translation, 1e-3f);
+
+    // Case-insensitive
+    bool ok3 = false;
+    auto upper = AnimationMerger::tolerancesForPreset("AGGRESSIVE", &ok3);
+    EXPECT_TRUE(ok3);
+    EXPECT_FLOAT_EQ(upper.translation, 1e-2f);
+}
+
 // Standalone test that doesn't need Ogre initialization
 TEST(AnimationMergerStandaloneTest, MergeNoSkeletonError)
 {

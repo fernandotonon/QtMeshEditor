@@ -1713,15 +1713,33 @@ Rectangle {
                                         Keys.onEscapePressed: visible = false
                                     }
 
-                                    // Simplify button — removes redundant keyframes from this animation
+                                    // Simplify button — removes redundant keyframes from this animation.
+                                    // Hidden for non-skeletal entities since simplifyAnimation
+                                    // requires skeletal node tracks.
                                     Rectangle {
                                         id: simplifyBtn
+                                        visible: grp.hasSkeleton
                                         width: 22; height: 18; radius: 3
                                         anchors.verticalCenter: parent.verticalCenter
                                         color: simplifyMouse.pressed ? Qt.darker(PropertiesPanelController.headerColor, 1.2)
                                              : simplifyMouse.containsMouse ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
                                              : PropertiesPanelController.headerColor
                                         border.color: PropertiesPanelController.borderColor; border.width: 1
+
+                                        // Lazy-cached redundancy analysis. The walk is O(N keyframes),
+                                        // ~25ms on a Mixamo clip — running it from a binding fires on
+                                        // every delegate refresh, which dominates the inspector frame
+                                        // budget. We compute on first hover, then re-run whenever the
+                                        // user changes the preset.
+                                        property var cachedAnalysis: null
+                                        function refreshAnalysis() {
+                                            cachedAnalysis = PropertiesPanelController.analyzeAnimationKeyframes(
+                                                grp.entity, modelData.name, entityGroupColumn.simplifyPreset)
+                                        }
+                                        Connections {
+                                            target: entityGroupColumn
+                                            function onSimplifyPresetChanged() { simplifyBtn.cachedAnalysis = null }
+                                        }
 
                                         Text {
                                             anchors.centerIn: parent
@@ -1731,20 +1749,26 @@ Rectangle {
                                         ToolTip.visible: simplifyMouse.containsMouse
                                         ToolTip.delay: 600
                                         ToolTip.text: {
-                                            var preset = entityGroupColumn.simplifyPreset
-                                            var a = PropertiesPanelController.analyzeAnimationKeyframes(grp.entity, modelData.name, preset)
-                                            if (!a || a.total === 0) return "Simplify (analyze unavailable)"
-                                            return "Simplify (" + preset + "): " + a.redundant + " of " + a.total
+                                            var a = simplifyBtn.cachedAnalysis
+                                            if (!a) return "Simplify (hover to analyze…)"
+                                            if (a.total === 0) return "Simplify (analyze unavailable)"
+                                            return "Simplify (" + entityGroupColumn.simplifyPreset + "): "
+                                                   + a.redundant + " of " + a.total
                                                    + " keyframes redundant (" + a.percent.toFixed(1) + "%)"
                                         }
                                         MouseArea {
                                             id: simplifyMouse; anchors.fill: parent; hoverEnabled: true
+                                            onEntered: {
+                                                if (!simplifyBtn.cachedAnalysis)
+                                                    simplifyBtn.refreshAnalysis()
+                                            }
                                             onClicked: {
                                                 var preset = entityGroupColumn.simplifyPreset
                                                 var removed = PropertiesPanelController.simplifyAnimation(grp.entity, modelData.name, preset)
                                                 simplifyResultPopup.removed = removed
                                                 simplifyResultPopup.animName = modelData.name
                                                 simplifyResultPopup.open()
+                                                simplifyBtn.cachedAnalysis = null  // invalidate after mutation
                                             }
                                         }
                                     }

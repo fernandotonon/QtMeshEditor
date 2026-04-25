@@ -4007,15 +4007,17 @@ TEST_F(MCPServerProtocolTest, ToolsListIncludesSimplifyAndAnalyzeAnimation)
     EXPECT_TRUE(names.contains("analyze_animation"));
 
     // Spot-check the schema also exposes the preset/tolerance args so the LLM
-    // can find them without us hand-holding it.
+    // can find them without us hand-holding it. Both tools must surface the
+    // same knob set — they're paired (analyze previews what simplify will do).
     for (const auto& v : tools) {
         const QJsonObject t = v.toObject();
-        if (t.value("name").toString() != "simplify_animation") continue;
+        const QString toolName = t.value("name").toString();
+        if (toolName != "simplify_animation" && toolName != "analyze_animation") continue;
         const QJsonObject schema = t.value("inputSchema").toObject();
         const QJsonObject props = schema.value("properties").toObject();
-        EXPECT_TRUE(props.contains("preset"));
-        EXPECT_TRUE(props.contains("tolerance"));
-        EXPECT_TRUE(props.contains("rotation_tolerance_deg"));
+        EXPECT_TRUE(props.contains("preset")) << toolName.toStdString();
+        EXPECT_TRUE(props.contains("tolerance")) << toolName.toStdString();
+        EXPECT_TRUE(props.contains("rotation_tolerance_deg")) << toolName.toStdString();
     }
 }
 

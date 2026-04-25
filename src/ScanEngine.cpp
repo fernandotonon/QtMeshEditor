@@ -103,126 +103,171 @@ QStringList ScanEngine::enumerateFiles(const ScanConfig& config, const QString& 
 // ---------------------------------------------------------------------------
 // Redundant-keyframe analysis (Assimp-side, no Ogre).
 //
-// Mirrors AnimationMerger::simplifyAnimation but operates on aiNodeAnim's raw
-// position/rotation/scale arrays. A key is redundant when removing it leaves
-// the lerp/slerp from its neighbors within tolerance — i.e. its motion is
-// implied by the curve. First and last keys per channel are always kept.
+// Mirrors AnimationMerger::simplifyAnimation, which treats an Ogre node
+// keyframe atomically (a single record holding T+R+S at one time). We build
+// the same per-node view from Assimp by unioning the position/rotation/scale
+// time arrays per aiNodeAnim and sampling all three streams at each unique
+// time. Then a key is redundant when removing it leaves the lerp/slerp of
+// the *atomic* neighbors within tolerance for every channel — same definition
+// the simplifier applies. First and last keys per node track are preserved.
 // ---------------------------------------------------------------------------
 
 namespace {
 
 struct RedundancyTolerances {
-    double translation = 1e-4;
-    double rotationDeg = 0.05;
-    double scale       = 1e-4;
+    double translation = 1e-3;
+    double rotationDeg = 0.5;
+    double scale       = 1e-3;
 };
 
-template <typename Vec>
-static int countRedundantVecKeys(const Vec* keys, unsigned numKeys, double tol)
+struct NodeKey {
+    double time = 0.0;
+    double tx = 0.0, ty = 0.0, tz = 0.0;     // position
+    double sx = 1.0, sy = 1.0, sz = 1.0;     // scale
+    double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0; // rotation
+};
+
+// Sample a sorted aiVectorKey array at time `t` using piecewise-linear
+// interpolation (Assimp's storage convention). Empty arrays return the
+// supplied default.
+static aiVector3D sampleVecKeys(const aiVectorKey* keys, unsigned n, double t,
+                                const aiVector3D& fallback)
 {
-    if (numKeys < 3) return 0;
-    std::vector<unsigned> kept;
-    kept.reserve(numKeys);
-    kept.push_back(0);
-
-    auto vecRedundant = [&](unsigned a, unsigned b, unsigned c) {
-        const auto& kA = keys[a];
-        const auto& kB = keys[b];
-        const auto& kC = keys[c];
-        const double span = kC.mTime - kA.mTime;
-        if (span <= 1e-7) return true;
-        const double t = (kB.mTime - kA.mTime) / span;
-        if (t <= 0.0 || t >= 1.0) return false;
-        const double lx = kA.mValue.x + (kC.mValue.x - kA.mValue.x) * t;
-        const double ly = kA.mValue.y + (kC.mValue.y - kA.mValue.y) * t;
-        const double lz = kA.mValue.z + (kC.mValue.z - kA.mValue.z) * t;
-        const double dx = lx - kB.mValue.x;
-        const double dy = ly - kB.mValue.y;
-        const double dz = lz - kB.mValue.z;
-        return std::sqrt(dx*dx + dy*dy + dz*dz) <= tol;
-    };
-
-    for (unsigned i = 1; i + 1 < numKeys; ++i) {
-        kept.push_back(i);
-        while (kept.size() >= 3) {
-            unsigned a = kept[kept.size() - 3];
-            unsigned b = kept[kept.size() - 2];
-            unsigned c = kept[kept.size() - 1];
-            if (vecRedundant(a, b, c))
-                kept.erase(kept.begin() + (kept.size() - 2));
-            else
-                break;
+    if (n == 0) return fallback;
+    if (n == 1 || t <= keys[0].mTime) return keys[0].mValue;
+    if (t >= keys[n-1].mTime) return keys[n-1].mValue;
+    // Linear scan — channel arrays are short (~hundreds), no need for binary search.
+    for (unsigned i = 1; i < n; ++i) {
+        if (t <= keys[i].mTime) {
+            const double span = keys[i].mTime - keys[i-1].mTime;
+            if (span <= 1e-9) return keys[i].mValue;
+            const float u = static_cast<float>((t - keys[i-1].mTime) / span);
+            return keys[i-1].mValue + (keys[i].mValue - keys[i-1].mValue) * u;
         }
     }
-    kept.push_back(numKeys - 1);
-    while (kept.size() >= 3) {
-        unsigned a = kept[kept.size() - 3];
-        unsigned b = kept[kept.size() - 2];
-        unsigned c = kept[kept.size() - 1];
-        if (vecRedundant(a, b, c))
-            kept.erase(kept.begin() + (kept.size() - 2));
-        else
-            break;
-    }
-    return static_cast<int>(numKeys) - static_cast<int>(kept.size());
+    return keys[n-1].mValue;
 }
 
-static int countRedundantQuatKeys(const aiQuatKey* keys, unsigned numKeys, double tolDeg)
+static aiQuaternion sampleQuatKeys(const aiQuatKey* keys, unsigned n, double t,
+                                   const aiQuaternion& fallback)
 {
-    if (numKeys < 3) return 0;
-    std::vector<unsigned> kept;
-    kept.reserve(numKeys);
+    if (n == 0) return fallback;
+    if (n == 1 || t <= keys[0].mTime) return keys[0].mValue;
+    if (t >= keys[n-1].mTime) return keys[n-1].mValue;
+    for (unsigned i = 1; i < n; ++i) {
+        if (t <= keys[i].mTime) {
+            const double span = keys[i].mTime - keys[i-1].mTime;
+            if (span <= 1e-9) return keys[i].mValue;
+            const float u = static_cast<float>((t - keys[i-1].mTime) / span);
+            aiQuaternion out;
+            aiQuaternion::Interpolate(out, keys[i-1].mValue, keys[i].mValue, u);
+            return out;
+        }
+    }
+    return keys[n-1].mValue;
+}
+
+// Union of distinct times across T/R/S streams for one aiNodeAnim, in order.
+static std::vector<double> unionTimes(const aiNodeAnim* ch)
+{
+    std::vector<double> times;
+    times.reserve(ch->mNumPositionKeys + ch->mNumRotationKeys + ch->mNumScalingKeys);
+    for (unsigned i = 0; i < ch->mNumPositionKeys; ++i)
+        times.push_back(ch->mPositionKeys[i].mTime);
+    for (unsigned i = 0; i < ch->mNumRotationKeys; ++i)
+        times.push_back(ch->mRotationKeys[i].mTime);
+    for (unsigned i = 0; i < ch->mNumScalingKeys; ++i)
+        times.push_back(ch->mScalingKeys[i].mTime);
+    std::sort(times.begin(), times.end());
+    times.erase(std::unique(times.begin(), times.end(),
+        [](double a, double b) { return std::fabs(a - b) < 1e-7; }), times.end());
+    return times;
+}
+
+// Quaternion dot product (avoids depending on Assimp's operator).
+static double quatDot(const aiQuaternion& a, const aiQuaternion& b)
+{
+    return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w;
+}
+static aiQuaternion alignedTo(const aiQuaternion& q, const aiQuaternion& ref)
+{
+    if (quatDot(q, ref) < 0.0)
+        return aiQuaternion(-q.w, -q.x, -q.y, -q.z);
+    return q;
+}
+
+// Decide whether key B (between A and C) can be safely dropped given that
+// the atomic node value contains T, R, and S — i.e. all three channels must
+// be within their respective tolerances at B's time.
+static bool nodeKeyIsRedundant(const NodeKey& a, const NodeKey& b, const NodeKey& c,
+                               const RedundancyTolerances& tol)
+{
+    const double span = c.time - a.time;
+    if (span <= 1e-7) return true;
+    const double u = (b.time - a.time) / span;
+    if (u <= 0.0 || u >= 1.0) return false;
+
+    // Translation
+    const double dtx = (a.tx + (c.tx - a.tx) * u) - b.tx;
+    const double dty = (a.ty + (c.ty - a.ty) * u) - b.ty;
+    const double dtz = (a.tz + (c.tz - a.tz) * u) - b.tz;
+    if (std::sqrt(dtx*dtx + dty*dty + dtz*dtz) > tol.translation) return false;
+
+    // Scale
+    const double dsx = (a.sx + (c.sx - a.sx) * u) - b.sx;
+    const double dsy = (a.sy + (c.sy - a.sy) * u) - b.sy;
+    const double dsz = (a.sz + (c.sz - a.sz) * u) - b.sz;
+    if (std::sqrt(dsx*dsx + dsy*dsy + dsz*dsz) > tol.scale) return false;
+
+    // Rotation: slerp on hemisphere-aligned quats, compare angular distance.
+    const aiQuaternion qA(static_cast<float>(a.qw), static_cast<float>(a.qx),
+                          static_cast<float>(a.qy), static_cast<float>(a.qz));
+    aiQuaternion qC(static_cast<float>(c.qw), static_cast<float>(c.qx),
+                    static_cast<float>(c.qy), static_cast<float>(c.qz));
+    aiQuaternion qB(static_cast<float>(b.qw), static_cast<float>(b.qx),
+                    static_cast<float>(b.qy), static_cast<float>(b.qz));
+    qC = alignedTo(qC, qA);
+    qB = alignedTo(qB, qA);
+    aiQuaternion slerp;
+    aiQuaternion::Interpolate(slerp, qA, qC, static_cast<float>(u));
+    double d = std::fabs(quatDot(slerp, qB));
+    if (d > 1.0) d = 1.0;
+    const double angleDeg = std::acos(d) * 2.0 * 180.0 / M_PI;
+    return angleDeg <= tol.rotationDeg;
+}
+
+// Walk one node's atomic keys and count how many would be folded out by
+// simplifyAnimation under the same tolerances. First/last preserved.
+static int countRedundantNodeKeys(const std::vector<NodeKey>& keys,
+                                  const RedundancyTolerances& tol)
+{
+    if (keys.size() < 3) return 0;
+    std::vector<size_t> kept;
+    kept.reserve(keys.size());
     kept.push_back(0);
-
-    auto dot = [](const aiQuaternion& a, const aiQuaternion& b) {
-        return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w;
-    };
-    auto aligned = [&](aiQuaternion q, const aiQuaternion& ref) {
-        if (dot(q, ref) < 0.0) { q.w = -q.w; q.x = -q.x; q.y = -q.y; q.z = -q.z; }
-        return q;
-    };
-    auto quatRedundant = [&](unsigned a, unsigned b, unsigned c) {
-        const auto& kA = keys[a];
-        const auto& kB = keys[b];
-        const auto& kC = keys[c];
-        const double span = kC.mTime - kA.mTime;
-        if (span <= 1e-7) return true;
-        const double t = (kB.mTime - kA.mTime) / span;
-        if (t <= 0.0 || t >= 1.0) return false;
-        aiQuaternion qPrev = kA.mValue;
-        aiQuaternion qNext = aligned(kC.mValue, qPrev);
-        aiQuaternion qCur  = aligned(kB.mValue, qPrev);
-        aiQuaternion slerp;
-        aiQuaternion::Interpolate(slerp, qPrev, qNext, static_cast<float>(t));
-        double d = std::fabs(dot(slerp, qCur));
-        if (d > 1.0) d = 1.0;
-        const double angleDeg = std::acos(d) * 2.0 * 180.0 / M_PI;
-        return angleDeg <= tolDeg;
-    };
-
-    for (unsigned i = 1; i + 1 < numKeys; ++i) {
+    for (size_t i = 1; i + 1 < keys.size(); ++i) {
         kept.push_back(i);
         while (kept.size() >= 3) {
-            unsigned a = kept[kept.size() - 3];
-            unsigned b = kept[kept.size() - 2];
-            unsigned c = kept[kept.size() - 1];
-            if (quatRedundant(a, b, c))
+            const size_t a = kept[kept.size() - 3];
+            const size_t b = kept[kept.size() - 2];
+            const size_t c = kept[kept.size() - 1];
+            if (nodeKeyIsRedundant(keys[a], keys[b], keys[c], tol))
                 kept.erase(kept.begin() + (kept.size() - 2));
             else
                 break;
         }
     }
-    kept.push_back(numKeys - 1);
+    kept.push_back(keys.size() - 1);
     while (kept.size() >= 3) {
-        unsigned a = kept[kept.size() - 3];
-        unsigned b = kept[kept.size() - 2];
-        unsigned c = kept[kept.size() - 1];
-        if (quatRedundant(a, b, c))
+        const size_t a = kept[kept.size() - 3];
+        const size_t b = kept[kept.size() - 2];
+        const size_t c = kept[kept.size() - 1];
+        if (nodeKeyIsRedundant(keys[a], keys[b], keys[c], tol))
             kept.erase(kept.begin() + (kept.size() - 2));
         else
             break;
     }
-    return static_cast<int>(numKeys) - static_cast<int>(kept.size());
+    return static_cast<int>(keys.size()) - static_cast<int>(kept.size());
 }
 
 static void analyzeAnimationRedundancy(const aiAnimation* anim,
@@ -233,12 +278,28 @@ static void analyzeAnimationRedundancy(const aiAnimation* anim,
     int redundant = 0;
     for (unsigned c = 0; c < anim->mNumChannels; ++c) {
         const aiNodeAnim* ch = anim->mChannels[c];
-        total += static_cast<int>(ch->mNumPositionKeys);
-        total += static_cast<int>(ch->mNumRotationKeys);
-        total += static_cast<int>(ch->mNumScalingKeys);
-        redundant += countRedundantVecKeys(ch->mPositionKeys, ch->mNumPositionKeys, tol.translation);
-        redundant += countRedundantQuatKeys(ch->mRotationKeys, ch->mNumRotationKeys, tol.rotationDeg);
-        redundant += countRedundantVecKeys(ch->mScalingKeys,  ch->mNumScalingKeys,  tol.scale);
+        const std::vector<double> times = unionTimes(ch);
+        if (times.empty()) continue;
+
+        // Build atomic node keys by sampling every stream at each unique time.
+        std::vector<NodeKey> keys;
+        keys.reserve(times.size());
+        for (double t : times) {
+            NodeKey k;
+            k.time = t;
+            const aiVector3D pos = sampleVecKeys(ch->mPositionKeys, ch->mNumPositionKeys, t,
+                                                 aiVector3D(0,0,0));
+            const aiVector3D scl = sampleVecKeys(ch->mScalingKeys, ch->mNumScalingKeys, t,
+                                                 aiVector3D(1,1,1));
+            const aiQuaternion rot = sampleQuatKeys(ch->mRotationKeys, ch->mNumRotationKeys, t,
+                                                    aiQuaternion(1,0,0,0));
+            k.tx = pos.x; k.ty = pos.y; k.tz = pos.z;
+            k.sx = scl.x; k.sy = scl.y; k.sz = scl.z;
+            k.qw = rot.w; k.qx = rot.x; k.qy = rot.y; k.qz = rot.z;
+            keys.push_back(k);
+        }
+        total += static_cast<int>(keys.size());
+        redundant += countRedundantNodeKeys(keys, tol);
     }
     if (outTotal)     *outTotal     = total;
     if (outRedundant) *outRedundant = redundant;
@@ -331,6 +392,15 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
             maxKeys = std::max(maxKeys, ch->mNumScalingKeys);
         }
         info.animationKeyframeCounts.append(static_cast<int>(maxKeys));
+
+        // Always compute redundant-keyframe counts under the default
+        // (Balanced) tolerances. The scan rule re-evaluates with its own
+        // configured tolerances if it's enabled — these defaults just keep
+        // the JSON report informative for tooling that consumes it.
+        int animTotal = 0, animRedundant = 0;
+        analyzeAnimationRedundancy(anim, RedundancyTolerances{}, &animTotal, &animRedundant);
+        info.totalKeyframes     += animTotal;
+        info.redundantKeyframes += animRedundant;
     }
 
     // Material names + texture references
@@ -646,8 +716,10 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
                 redundant += r;
             }
 
-            const_cast<AssetInfo&>(asset).totalKeyframes     = total;
-            const_cast<AssetInfo&>(asset).redundantKeyframes = redundant;
+            // The default-tolerance numbers were already filled at inspectAsset
+            // time, so we don't write back here — the rule's percentage may use
+            // different tolerances than the JSON report's totals, and we don't
+            // want them to diverge mid-scan.
 
             if (total > 0) {
                 const double pct = 100.0 * redundant / total;

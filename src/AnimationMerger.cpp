@@ -6,6 +6,7 @@
 #include <QSet>
 #include <QMap>
 #include <QRegularExpression>
+#include <cctype>
 #include <unordered_map>
 
 // Registry: skeleton name → up-axis (1=Y-up, 2=Z-up).
@@ -545,9 +546,9 @@ int AnimationMerger::simplifyAnimation(Ogre::Skeleton* skel,
     Ogre::Animation* srcAnim = skel->getAnimation(animName);
 
     struct TrackData {
-        unsigned short handle;
-        Ogre::Node* associatedNode;
-        bool useShortestPath;
+        unsigned short handle = 0;
+        Ogre::Node* associatedNode = nullptr;
+        bool useShortestPath = true;
         std::vector<SimpleKey> keys;
     };
 
@@ -626,6 +627,35 @@ void AnimationMerger::analyzeRedundantKeyframes(const Ogre::Animation* anim,
 
     if (outOriginal)  *outOriginal  = original;
     if (outRedundant) *outRedundant = redundant;
+}
+
+AnimationMerger::SimplifyTolerances AnimationMerger::tolerancesForPreset(
+    const std::string& preset, bool* outOk)
+{
+    SimplifyTolerances tol; // balanced default
+
+    // Lowercase comparison without bringing in QString — keeps this header
+    // safe to call from any TU that already pulls in AnimationMerger.h.
+    std::string p = preset;
+    for (auto& c : p) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    bool ok = true;
+    if (p.empty() || p == "balanced") {
+        // tol already holds the balanced defaults from SimplifyTolerances{}.
+    } else if (p == "conservative") {
+        tol.translation = 1e-4f;
+        tol.rotationDeg = 0.05f;
+        tol.scale       = 1e-4f;
+    } else if (p == "aggressive") {
+        tol.translation = 1e-2f;
+        tol.rotationDeg = 1.0f;
+        tol.scale       = 1e-2f;
+    } else {
+        ok = false; // tol stays at balanced so callers that ignore outOk still get something usable
+    }
+
+    if (outOk) *outOk = ok;
+    return tol;
 }
 
 bool AnimationMerger::areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const Ogre::SkeletonPtr& b)
