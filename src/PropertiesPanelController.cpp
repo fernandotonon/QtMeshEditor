@@ -5,6 +5,8 @@
 #include "PrimitiveObject.h"
 #include "AnimationWidget.h"
 #include "SkeletonTransform.h"
+#include "AnimationMerger.h"
+#include "SentryReporter.h"
 #include "MeshImporterExporter.h"
 #include "UndoManager.h"
 #include "Manager.h"
@@ -609,6 +611,90 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
         }
     }
     return false;
+}
+
+// Forwards to AnimationMerger::tolerancesForPreset — single source of truth
+// shared by CLI, MCP and Inspector.
+static AnimationMerger::SimplifyTolerances tolerancesForPreset(const QString& preset)
+{
+    return AnimationMerger::tolerancesForPreset(preset.toStdString());
+}
+
+QVariantMap PropertiesPanelController::analyzeAnimationKeyframes(const QString& entityName,
+                                                                 const QString& animName,
+                                                                 const QString& preset)
+{
+    QVariantMap result;
+    result["total"] = 0;
+    result["redundant"] = 0;
+    result["percent"] = 0.0;
+
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities) {
+        if (QString::fromStdString(ent->getName()) != entityName) continue;
+        if (!ent->hasSkeleton()) return result;
+        Ogre::SkeletonPtr skel = ent->getMesh()->getSkeleton();
+        if (!skel || !skel->hasAnimation(animName.toStdString())) return result;
+
+        int total = 0;
+        int redundant = 0;
+        AnimationMerger::analyzeRedundantKeyframes(
+            skel->getAnimation(animName.toStdString()),
+            tolerancesForPreset(preset),
+            &total, &redundant);
+        result["total"] = total;
+        result["redundant"] = redundant;
+        result["percent"] = total > 0 ? (100.0 * redundant / total) : 0.0;
+        return result;
+    }
+    return result;
+}
+
+int PropertiesPanelController::simplifyAnimation(const QString& entityName,
+                                                 const QString& animName,
+                                                 const QString& preset)
+{
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities) {
+        if (QString::fromStdString(ent->getName()) != entityName) continue;
+        if (!ent->hasSkeleton()) return 0;
+        Ogre::SkeletonPtr skel = ent->getMesh()->getSkeleton();
+        if (!skel || !skel->hasAnimation(animName.toStdString())) return 0;
+
+        // Stop playback and disable debug overlays before mutating skeleton
+        // tracks — same precaution as renameAnimation, since we recreate the
+        // animation under the hood.
+        if (mAnimationWidget) {
+            if (mAnimationWidget->isSkeletonDebugActive(ent))
+                mAnimationWidget->toggleSkeletonDebug(ent, false);
+            if (mAnimationWidget->isBoneWeightsShown(ent))
+                mAnimationWidget->toggleBoneWeights(ent, false);
+        }
+        setPlaying(false);
+        if (auto* animSet = ent->getAllAnimationStates()) {
+            for (const auto& [key, state] : animSet->getAnimationStates())
+                state->setEnabled(false);
+        }
+
+        const int removed = AnimationMerger::simplifyAnimation(
+            skel.get(), animName.toStdString(), tolerancesForPreset(preset));
+
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Simplify animation '%1' (%2): removed %3 keyframes")
+                .arg(animName, preset).arg(removed));
+
+        ent->refreshAvailableAnimationState();
+
+        // Re-select to refresh widget tables (avoids stale pointers).
+        auto nodes = SelectionSet::getSingleton()->getNodesSelectionList();
+        SelectionSet::getSingleton()->clear();
+        for (auto* node : nodes)
+            SelectionSet::getSingleton()->append(node);
+
+        emit animationStateChanged();
+        return removed;
+    }
+    return 0;
 }
 
 bool PropertiesPanelController::exportCurrentPose(const QString& path)

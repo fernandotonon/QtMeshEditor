@@ -166,6 +166,22 @@ TEST(ScanConfigTest, LoadFromVariantMap)
     EXPECT_EQ(config.failOn, "warning");
 }
 
+TEST(ScanConfigTest, LoadRedundantKeyframesRule)
+{
+    QString yaml =
+        "rules:\n"
+        "  redundant_keyframes_pct: 30\n"
+        "  redundant_keyframes_translation_tol: 0.001\n"
+        "  redundant_keyframes_rotation_deg_tol: 0.1\n"
+        "  redundant_keyframes_scale_tol: 0.0005\n";
+
+    ScanConfig config = ScanConfig::fromVariantMap(parseSimpleYaml(yaml));
+    EXPECT_DOUBLE_EQ(config.redundantKeyframesPctThreshold, 30.0);
+    EXPECT_DOUBLE_EQ(config.redundantKeyframesTranslationTol, 0.001);
+    EXPECT_DOUBLE_EQ(config.redundantKeyframesRotationDegTol, 0.1);
+    EXPECT_DOUBLE_EQ(config.redundantKeyframesScaleTol, 0.0005);
+}
+
 TEST(ScanConfigTest, DefaultConstructorIncludesAssimpGlobPatterns)
 {
     const ScanConfig c;
@@ -1483,6 +1499,66 @@ TEST(ScanEngineTest, AssimpReadPolicy_IncompleteFlagWithAnimIsNotLoadFailure)
     QString err;
     EXPECT_FALSE(ScanEngine::isAssimpResultLoadFailure(scene, "", &err)) << qPrintable(err);
     delete scene;
+}
+
+TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesDisabledByDefault)
+{
+    const QString filePath = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(filePath)) {
+        GTEST_SKIP() << "Animated fixture missing: " << filePath.toStdString();
+    }
+
+    const AssetInfo info = ScanEngine::inspectAsset(filePath, QFileInfo(filePath).absolutePath());
+    ScanConfig config;
+    QList<Finding> findings = ScanEngine::evaluateRules(info, config);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule, "redundant_keyframes_pct");
+}
+
+TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesFiresOnMixamoFixture)
+{
+    // Mixamo clips bake one key per frame per bone, so a low threshold should
+    // light up the rule and the message must include the projected savings.
+    const QString filePath = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(filePath)) {
+        GTEST_SKIP() << "Animated fixture missing: " << filePath.toStdString();
+    }
+
+    const AssetInfo info = ScanEngine::inspectAsset(filePath, QFileInfo(filePath).absolutePath());
+    ScanConfig config;
+    config.redundantKeyframesPctThreshold = 1.0; // 1% — almost any baked clip exceeds this
+
+    QList<Finding> findings = ScanEngine::evaluateRules(info, config);
+    bool found = false;
+    for (const auto& f : findings) {
+        if (f.rule == "redundant_keyframes_pct") {
+            found = true;
+            EXPECT_EQ(f.severity, Severity::Warning);
+            EXPECT_TRUE(f.message.contains("redundant keyframes"));
+            EXPECT_TRUE(f.message.contains("Simplify it to save"));
+            EXPECT_TRUE(f.message.contains("Original size"));
+            EXPECT_TRUE(f.message.contains("projected size"));
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesRespectsHighThreshold)
+{
+    // Setting the threshold above 100% should disable the warning even when
+    // the file has redundant keys.
+    const QString filePath = testDataDir() + "/Twist Dance.fbx";
+    if (!QFile::exists(filePath)) {
+        GTEST_SKIP() << "Animated fixture missing: " << filePath.toStdString();
+    }
+
+    const AssetInfo info = ScanEngine::inspectAsset(filePath, QFileInfo(filePath).absolutePath());
+    ScanConfig config;
+    config.redundantKeyframesPctThreshold = 200.0;
+
+    QList<Finding> findings = ScanEngine::evaluateRules(info, config);
+    for (const auto& f : findings)
+        EXPECT_NE(f.rule, "redundant_keyframes_pct");
 }
 
 namespace {

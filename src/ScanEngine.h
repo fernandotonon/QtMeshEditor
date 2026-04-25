@@ -46,6 +46,11 @@ struct AssetInfo {
     QList<int> animationKeyframeCounts;    // max keyframes per animation
     QStringList boneNames;                 // unique bone names
 
+    // Redundant-keyframe analysis (filled when scan rule is active).
+    // Total keyframes summed across all tracks of all animations.
+    int totalKeyframes = 0;
+    int redundantKeyframes = 0;
+
     bool loadError = false;
     QString errorMessage;
 };
