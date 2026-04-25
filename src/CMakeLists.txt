@@ -78,6 +78,7 @@ AnimationControlController.h
 GlobalDefinitions.h
 Euler.h
 about.h
+AppSettingsKeys.h
 mainwindow.h
 Manager.h
 material.h

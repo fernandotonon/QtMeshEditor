@@ -19,6 +19,7 @@
 #include "TransformOperator.h"
 #include "UndoManager.h"
 #include "ViewportSettingsKeys.h"
+#include "AppSettingsKeys.h"
 
 class PropertiesPanelControllerTests : public ::testing::Test
 {
@@ -594,13 +595,13 @@ TEST_F(PropertiesPanelControllerTests, SetSettingCoversViewportSentryAndThemeBra
     controller->setSetting(ViewportSettingsKeys::cameraSpeed(), 2.0);
     controller->setSetting(ViewportSettingsKeys::nearClip(), 0.1);
     controller->setSetting(ViewportSettingsKeys::farClip(), 5000.0);
-    controller->setSetting("Sentry/enabled", false);
-    controller->setSetting("Telemetry/enabled", true);
+    controller->setSetting(AppSettingsKeys::sentryEnabled(), false);
+    controller->setSetting(AppSettingsKeys::telemetryEnabled(), true);
 
-    controller->setSetting("Appearance/theme", "dark");
+    controller->setSetting(AppSettingsKeys::appearanceTheme(), "dark");
     EXPECT_EQ(app->palette().color(QPalette::Window), QColor(53, 53, 53));
 
-    controller->setSetting("palette", "light");
+    controller->setSetting(AppSettingsKeys::palette(), "light");
     EXPECT_EQ(app->palette().color(QPalette::Window), QColor("ghostwhite"));
 }
 

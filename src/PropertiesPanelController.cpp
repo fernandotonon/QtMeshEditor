@@ -14,6 +14,7 @@
 #include "EditorViewport.h"
 #include "ViewportGrid.h"
 #include "ViewportSettingsKeys.h"
+#include "AppSettingsKeys.h"
 #include "mainwindow.h"
 #include <QApplication>
 #include <QFileDialog>
@@ -760,59 +761,109 @@ QVariantList PropertiesPanelController::scaleStepPresets() const
 
 namespace
 {
-/// Handles Viewport/* keys for setSetting; returns true if @p key was handled.
+void applyGridVisibleFromSettings(const QVariant& value)
+{
+    auto* grid = Manager::getSingleton()->getViewportGrid();
+    if (grid) {
+        grid->setVisible(value.toBool());
+    }
+}
+
+void applyCameraSpeedToAllViewports(Ogre::Real speed)
+{
+    if (speed <= 0) {
+        speed = 0.5f;
+    }
+    auto* activeWidget = TransformOperator::getSingleton()->getActiveWidget();
+    if (activeWidget && activeWidget->getSpaceCamera()) {
+        activeWidget->getSpaceCamera()->setCameraSpeed(speed);
+    }
+    auto* mainWin = Manager::getSingleton()->getMainWindow();
+    if (!mainWin) {
+        return;
+    }
+    for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
+        if (ow->getSpaceCamera()) {
+            ow->getSpaceCamera()->setCameraSpeed(speed);
+        }
+    }
+}
+
+void applyClipPlaneToAllViewports(const QString& key, const QVariant& value)
+{
+    const bool isNear = (key == ViewportSettingsKeys::nearClip());
+    const Ogre::Real v = value.toReal();
+    auto* mainWin = Manager::getSingleton()->getMainWindow();
+    if (!mainWin) {
+        return;
+    }
+    for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
+        Ogre::Camera* cam = nullptr;
+        if (ow->getSpaceCamera()) {
+            cam = ow->getSpaceCamera()->getCamera();
+        }
+        if (!cam) {
+            continue;
+        }
+        if (isNear) {
+            cam->setNearClipDistance(v);
+        } else {
+            cam->setFarClipDistance(v);
+        }
+    }
+}
+
+void applyFsaaByRebuildingViewports()
+{
+    if (auto* mainWin = Manager::getSingleton()->getMainWindow()) {
+        mainWin->rebuildAllOgreViewports();
+    }
+}
+
 bool tryApplyViewportSetting(const QString& key, const QVariant& value)
 {
     if (key == ViewportSettingsKeys::gridVisible()) {
-        auto* grid = Manager::getSingleton()->getViewportGrid();
-        if (grid) {
-            grid->setVisible(value.toBool());
-        }
+        applyGridVisibleFromSettings(value);
         return true;
     }
     if (key == ViewportSettingsKeys::cameraSpeed()) {
-        Ogre::Real speed = value.toReal();
-        if (speed <= 0) {
-            speed = 0.5f;
-        }
-        // Apply to the active viewport (TransformOperator tracks it)
-        auto* activeWidget = TransformOperator::getSingleton()->getActiveWidget();
-        if (activeWidget && activeWidget->getSpaceCamera()) {
-            activeWidget->getSpaceCamera()->setCameraSpeed(speed);
-        }
-        // Also apply to all viewports
-        auto* mainWin = Manager::getSingleton()->getMainWindow();
-        if (mainWin) {
-            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
-                if (ow->getSpaceCamera()) {
-                    ow->getSpaceCamera()->setCameraSpeed(speed);
-                }
-            }
-        }
+        applyCameraSpeedToAllViewports(value.toReal());
         return true;
     }
     if (key == ViewportSettingsKeys::nearClip() || key == ViewportSettingsKeys::farClip()) {
-        auto* mainWin = Manager::getSingleton()->getMainWindow();
-        if (mainWin) {
-            for (auto* ow : mainWin->findChildren<OgreWidget*>()) {
-                if (ow->getSpaceCamera() && ow->getSpaceCamera()->getCamera()) {
-                    if (key == ViewportSettingsKeys::nearClip()) {
-                        ow->getSpaceCamera()->getCamera()->setNearClipDistance(value.toReal());
-                    } else {
-                        ow->getSpaceCamera()->getCamera()->setFarClipDistance(value.toReal());
-                    }
-                }
-            }
-        }
+        applyClipPlaneToAllViewports(key, value);
         return true;
     }
     if (key == ViewportSettingsKeys::fsaaSamples()) {
-        if (auto* mainWin = Manager::getSingleton()->getMainWindow()) {
-            mainWin->rebuildAllOgreViewports();
-        }
+        applyFsaaByRebuildingViewports();
         return true;
     }
     return false;
+}
+
+void applyEditorThemeFromString(const QString& themeLower)
+{
+    if (themeLower == QStringLiteral("dark")) {
+        QPalette dark;
+        dark.setColor(QPalette::Window, QColor(53, 53, 53));
+        dark.setColor(QPalette::WindowText, Qt::white);
+        dark.setColor(QPalette::Base, QColor(35, 35, 35));
+        dark.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
+        dark.setColor(QPalette::ToolTipBase, QColor(25, 25, 25));
+        dark.setColor(QPalette::ToolTipText, Qt::white);
+        dark.setColor(QPalette::Text, Qt::white);
+        dark.setColor(QPalette::Button, QColor(53, 53, 53));
+        dark.setColor(QPalette::ButtonText, Qt::white);
+        dark.setColor(QPalette::Link, QColor(42, 130, 218));
+        dark.setColor(QPalette::Highlight, QColor(42, 130, 218));
+        dark.setColor(QPalette::HighlightedText, Qt::black);
+        QApplication::setPalette(dark);
+        return;
+    }
+    if (themeLower == QStringLiteral("light")) {
+        QApplication::setPalette(QColor(QStringLiteral("ghostwhite")));
+    }
+    // "system" = use platform default (may require restart)
 }
 } // namespace
 
@@ -833,29 +884,11 @@ void PropertiesPanelController::setSetting(const QString& key, const QVariant& v
     if (tryApplyViewportSetting(key, value)) {
         return;
     }
-    if (key == "Sentry/enabled" || key == "Telemetry/enabled") {
+    if (key == AppSettingsKeys::sentryEnabled() || key == AppSettingsKeys::telemetryEnabled()) {
         SentryReporter::setEnabled(value.toBool());
-    } else if (key == "Appearance/theme" || key == "palette") {
-        QString theme = value.toString().toLower();
-        if (theme == "dark") {
-            // Match MainWindow::on_actionDark_toggled — use dark palette
-            QPalette dark;
-            dark.setColor(QPalette::Window, QColor(53, 53, 53));
-            dark.setColor(QPalette::WindowText, Qt::white);
-            dark.setColor(QPalette::Base, QColor(35, 35, 35));
-            dark.setColor(QPalette::AlternateBase, QColor(53, 53, 53));
-            dark.setColor(QPalette::ToolTipBase, QColor(25, 25, 25));
-            dark.setColor(QPalette::ToolTipText, Qt::white);
-            dark.setColor(QPalette::Text, Qt::white);
-            dark.setColor(QPalette::Button, QColor(53, 53, 53));
-            dark.setColor(QPalette::ButtonText, Qt::white);
-            dark.setColor(QPalette::Link, QColor(42, 130, 218));
-            dark.setColor(QPalette::Highlight, QColor(42, 130, 218));
-            dark.setColor(QPalette::HighlightedText, Qt::black);
-            QApplication::setPalette(dark);
-        } else if (theme == "light") {
-            QApplication::setPalette(QColor("ghostwhite"));
-        }
-        // System = use platform default (requires restart)
+        return;
+    }
+    if (key == AppSettingsKeys::appearanceTheme() || key == AppSettingsKeys::palette()) {
+        applyEditorThemeFromString(value.toString().toLower());
     }
 }

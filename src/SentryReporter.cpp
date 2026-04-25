@@ -1,4 +1,5 @@
 #include "SentryReporter.h"
+#include "AppSettingsKeys.h"
 #include <QSettings>
 #include <QMessageBox>
 #include <QCoreApplication>
@@ -59,19 +60,19 @@ void SentryReporter::shutdown()
 bool SentryReporter::isEnabled()
 {
     QSettings settings;
-    return settings.value("Sentry/enabled", true).toBool();
+    return settings.value(AppSettingsKeys::sentryEnabled(), true).toBool();
 }
 
 void SentryReporter::setEnabled(bool enabled)
 {
     QSettings settings;
-    settings.setValue("Sentry/enabled", enabled);
+    settings.setValue(AppSettingsKeys::sentryEnabled(), enabled);
 }
 
 bool SentryReporter::isFirstLaunch()
 {
     QSettings settings;
-    return !settings.contains("Sentry/enabled");
+    return !settings.contains(AppSettingsKeys::sentryEnabled());
 }
 
 void SentryReporter::showConsentDialog()
