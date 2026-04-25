@@ -49,6 +49,9 @@ public:
     void loadFile(const QString& filePath);
     void setMCPServer(MCPServer* server);
 
+    /// Recreate Ogre render windows (e.g. after MSAA samples change in Preferences).
+    void rebuildAllOgreViewports();
+
     void keyPressEvent(QKeyEvent *event) override;
     void dropEvent(QDropEvent *event) override;
     

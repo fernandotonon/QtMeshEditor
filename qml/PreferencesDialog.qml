@@ -294,9 +294,17 @@ Rectangle {
 
                     // --- Viewport Tab ---
                     Column {
+                        id: viewportTabColumn
                         width: parent.width - 32
                         spacing: 12
                         visible: currentTab === 2
+
+                        property int msaaSelection: 4
+                        Component.onCompleted: {
+                            var v = parseInt(readSetting("Viewport/fsaaSamples", 4))
+                            if (v === 0 || v === 2 || v === 4 || v === 8)
+                                msaaSelection = v
+                        }
 
                         // Grid visibility (themed checkbox)
                         Row {
@@ -316,6 +324,72 @@ Rectangle {
                                 }
                             }
                             Text { text: "Show Grid"; font.pixelSize: 12; color: textColor; anchors.verticalCenter: parent.verticalCenter }
+                        }
+
+                        // MSAA (applied immediately; render windows are recreated)
+                        Column {
+                            width: parent.width
+                            spacing: 4
+
+                            Text {
+                                text: "Anti-aliasing (MSAA)"
+                                font.pixelSize: 12
+                                font.bold: true
+                                color: textColor
+                            }
+
+                            Flow {
+                                spacing: 3
+                                width: parent.width
+
+                                Repeater {
+                                    model: [
+                                        { "label": "Off", "value": 0 },
+                                        { "label": "2×", "value": 2 },
+                                        { "label": "4×", "value": 4 },
+                                        { "label": "8×", "value": 8 }
+                                    ]
+
+                                    Rectangle {
+                                        width: Math.max(44, (parent.width - 9) / 4)
+                                        height: 24
+                                        radius: 3
+                                        color: modelData.value === viewportTabColumn.msaaSelection ? highlightColor
+                                             : msaaBtnMa.containsMouse ? Qt.lighter(panelColor, 1.5)
+                                             : Qt.darker(panelColor, 1.1)
+                                        border.color: borderColor
+                                        border.width: 1
+                                        Behavior on color { ColorAnimation { duration: 50 } }
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: modelData.label
+                                            color: textColor
+                                            font.pixelSize: 11
+                                        }
+
+                                        MouseArea {
+                                            id: msaaBtnMa
+                                            anchors.fill: parent
+                                            hoverEnabled: true
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                viewportTabColumn.msaaSelection = modelData.value
+                                                writeSetting("Viewport/fsaaSamples", modelData.value)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            Text {
+                                text: "Higher values smooth edges but cost more GPU time. Off may look jagged on high-DPI displays."
+                                font.pixelSize: 11
+                                font.italic: true
+                                color: dimTextColor
+                                wrapMode: Text.WordWrap
+                                width: parent.width
+                            }
                         }
 
                         // Camera speed

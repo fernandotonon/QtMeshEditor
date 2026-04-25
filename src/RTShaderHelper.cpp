@@ -284,9 +284,10 @@ void RTShaderHelper::applyNormalMap(Ogre::MaterialPtr& mat, const std::string& n
             return;
         }
 
-        auto* perPixelSRS = shaderGen->createSubRenderState(
-            Ogre::RTShader::SRS_PER_PIXEL_LIGHTING);
-        renderState->addTemplateSubRenderState(perPixelSRS);
+        // Do not add SRS_PER_PIXEL_LIGHTING here: the ShaderGenerator scheme's global
+        // RenderState already includes it (resetToBuiltinSubRenderStates). Adding another
+        // replaces that instance during TargetRenderState::link() with a fresh default,
+        // which breaks lighting + normal map generation.
 
         auto* normalMapSRS = shaderGen->createSubRenderState(
             Ogre::RTShader::SRS_NORMALMAP);

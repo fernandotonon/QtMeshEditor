@@ -1027,6 +1027,11 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 if (en->getMesh() && en->getMesh()->getSkeleton())
                     AnimationMerger::registerSkeletonUpAxis(
                         en->getMesh()->getSkeleton()->getName(), importer.getSceneUpAxis());
+
+                // Same as .mesh/.xml path: ensure tangents exist and RTSS normal maps are
+                // applied after the Entity exists (import-time material setup can run before
+                // mesh data is finalized; Assimp sometimes omits tangents on awkward assets).
+                applyNormalMapsToEntity(en);
             }
 
             sn->setPosition(0,0,0);

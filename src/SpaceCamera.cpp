@@ -137,6 +137,30 @@ void SpaceCamera::setTargetPosition(const Ogre::Vector3 &pos)
 void SpaceCamera::setAspectRatio(const Ogre::Real& ratio)
 {    mCamera->setAspectRatio(ratio); }
 
+void SpaceCamera::getViewportPose(Ogre::Vector3& outTargetWorld, Ogre::Vector3& outCamWorld,
+                                  Ogre::Quaternion& outTargetOrient) const
+{
+    if (!mTarget || !mCamera)
+        return;
+    outTargetWorld = mTarget->_getDerivedPosition();
+    outCamWorld = mCamera->getDerivedPosition();
+    outTargetOrient = mTarget->getOrientation();
+}
+
+void SpaceCamera::applyViewportPose(const Ogre::Vector3& targetWorld, const Ogre::Vector3& camWorld,
+                                    const Ogre::Quaternion& targetOrient)
+{
+    if (!mTarget || !mCameraNode || !mCamera)
+        return;
+    Ogre::SceneNode* parent = mTarget->getParentSceneNode();
+    if (parent)
+        mTarget->setPosition(parent->convertWorldToLocalPosition(targetWorld));
+    else
+        mTarget->setPosition(targetWorld);
+    mTarget->setOrientation(targetOrient);
+    setCameraPosition(camWorld);
+}
+
 //////////////////////////////////////////////////////////////////////////////////
 //Frame listener
 

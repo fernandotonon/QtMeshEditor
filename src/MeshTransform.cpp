@@ -31,19 +31,9 @@ THE SOFTWARE.
 #include <limits>
 #include "Manager.h"
 #include "SkeletonTransform.h"
+#include "TransformMath.h"
 
 namespace {
-
-Ogre::Quaternion buildRotationQuat(const Ogre::Vector3 &rotate)
-{
-    if(rotate.x != 0)
-        return {Ogre::Degree(rotate.x), Ogre::Vector3::UNIT_Y};
-    if(rotate.y != 0)
-        return {Ogre::Degree(rotate.y), Ogre::Vector3::UNIT_Z};
-    if(rotate.z != 0)
-        return {Ogre::Degree(rotate.z), Ogre::Vector3::UNIT_X};
-    return Ogre::Quaternion::IDENTITY;
-}
 
 // Iterates all unique vertex data blocks in a mesh, calling transformFn(pos) for each
 // vertex position. Writes back the transformed position and updates mesh bounds.
@@ -143,7 +133,7 @@ void MeshTransform::translateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 
 
 void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Vector3 &_rotate)
 {
-    rotateMesh(_ent, buildRotationQuat(_rotate));
+    rotateMesh(_ent, TransformMath::buildRotationQuat(_rotate));
 }
 
 void MeshTransform::rotateMesh(const Ogre::Entity *_ent, const Ogre::Quaternion &_quat)

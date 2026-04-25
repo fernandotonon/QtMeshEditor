@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include <QSettings>
+#include "AppSettingsKeys.h"
 #include "SentryReporter.h"
 
 class SentryReporterTest : public ::testing::Test {
@@ -7,12 +8,12 @@ protected:
     void SetUp() override {
         // Clear any previous Sentry settings
         QSettings settings;
-        settings.remove("Sentry/enabled");
+        settings.remove(AppSettingsKeys::sentryEnabled());
     }
 
     void TearDown() override {
         QSettings settings;
-        settings.remove("Sentry/enabled");
+        settings.remove(AppSettingsKeys::sentryEnabled());
     }
 };
 

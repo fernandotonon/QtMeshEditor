@@ -2,6 +2,8 @@
 #include "ScanConfig.h"
 #include "ScanEngine.h"
 
+#include <assimp/scene.h>
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -1439,6 +1441,48 @@ TEST(ScanEngineTest, InspectAsset_AnimatedFixtureCollectsAnimationMetadata)
     EXPECT_FALSE(info.animationDurations.isEmpty());
     EXPECT_FALSE(info.animationKeyframeCounts.isEmpty());
     EXPECT_EQ(info.animationNames.size(), info.animationDurations.size());
+}
+
+TEST(ScanEngineTest, AssimpReadPolicy_NullSceneIsLoadFailure)
+{
+    QString err;
+    EXPECT_TRUE(ScanEngine::isAssimpResultLoadFailure(nullptr, "read failed", &err));
+    EXPECT_EQ(err, QStringLiteral("read failed"));
+}
+
+TEST(ScanEngineTest, AssimpReadPolicy_NullSceneUsesDefaultMessage)
+{
+    QString err;
+    EXPECT_TRUE(ScanEngine::isAssimpResultLoadFailure(nullptr, "", &err));
+    EXPECT_EQ(err, QStringLiteral("Assimp failed to read file"));
+}
+
+TEST(ScanEngineTest, AssimpReadPolicy_EmptyContentNoMeshNoAnimIsLoadFailure)
+{
+    aiScene scene {};
+    EXPECT_EQ(scene.mNumMeshes, 0u);
+    EXPECT_FALSE(scene.HasAnimations());
+    QString err;
+    EXPECT_TRUE(ScanEngine::isAssimpResultLoadFailure(&scene, nullptr, &err));
+    EXPECT_EQ(err, QStringLiteral("Scene has no meshes and no animations"));
+}
+
+TEST(ScanEngineTest, AssimpReadPolicy_IncompleteFlagWithAnimIsNotLoadFailure)
+{
+    // Mimics Assimp: animation-only FBX often sets AI_SCENE_FLAGS_INCOMPLETE; scan must still
+    // accept the scene if HasAnimations() is true.  Use heap arrays so ~aiScene can delete[]
+    // them the same way Importer-owned scenes do.
+    aiScene* scene = new aiScene();
+    scene->mNumMeshes     = 0;
+    scene->mNumAnimations = 1;
+    scene->mAnimations    = new aiAnimation*[1];
+    scene->mAnimations[0]   = new aiAnimation();
+    scene->mFlags         = AI_SCENE_FLAGS_INCOMPLETE;
+
+    ASSERT_TRUE(scene->HasAnimations());
+    QString err;
+    EXPECT_FALSE(ScanEngine::isAssimpResultLoadFailure(scene, "", &err)) << qPrintable(err);
+    delete scene;
 }
 
 namespace {

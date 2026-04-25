@@ -65,6 +65,12 @@ class SpaceCamera : Ogre::FrameListener
         void setTargetPosition(const Ogre::Vector3 &pos);
         void setAspectRatio(const Ogre::Real& ratio);
 
+        /// Save/restore camera rig for rebuild (e.g. MSAA toggle) without losing the view.
+        void getViewportPose(Ogre::Vector3& outTargetWorld, Ogre::Vector3& outCamWorld,
+                             Ogre::Quaternion& outTargetOrient) const;
+        void applyViewportPose(const Ogre::Vector3& targetWorld, const Ogre::Vector3& camWorld,
+                               const Ogre::Quaternion& targetOrient);
+
         /// FrameListener
         bool frameStarted(const Ogre::FrameEvent& event);
         bool frameEnded(const Ogre::FrameEvent& event);

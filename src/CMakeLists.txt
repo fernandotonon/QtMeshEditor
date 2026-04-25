@@ -78,6 +78,7 @@ AnimationControlController.h
 GlobalDefinitions.h
 Euler.h
 about.h
+AppSettingsKeys.h
 mainwindow.h
 Manager.h
 material.h
@@ -100,6 +101,7 @@ TransformOperator.h
 PrimitivesWidget.h
 PrimitiveObject.h
 ViewportGrid.h
+ViewportSettingsKeys.h
 AnimationWidget.h
 SelectionSet.h
 SelectionBoxObject.h
@@ -353,6 +355,16 @@ else()
         COMMENT "Creating qtmesh symlink -> ${CMAKE_PROJECT_NAME}"
     )
 endif()
+
+# Dev runs expect `media/` beside the executable: resources.cfg uses
+# media/materials/* and RTShaderHelper adds media/RTShaderLib + media/Main
+# (OgreUnifiedShader.h). Without this copy the viewport can stay black.
+add_custom_command(TARGET ${CMAKE_PROJECT_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/media
+        $<TARGET_FILE_DIR:${CMAKE_PROJECT_NAME}>/media
+    COMMENT "Copying media/ next to QtMeshEditor (materials + RTSS)"
+)
 
 ##############################################################
 #  Linking the executable

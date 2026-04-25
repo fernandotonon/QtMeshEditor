@@ -261,6 +261,9 @@ TEST_F(ManagerHeadlessTest, IsValidFileExtention)
     QString glbFile = "model.glb";
     EXPECT_TRUE(mgr->isValidFileExtention(glbFile));
 
+    QString vrmFile = "avatar.vrm";
+    EXPECT_TRUE(mgr->isValidFileExtention(vrmFile));
+
     QString stlFile = "print.stl";
     EXPECT_TRUE(mgr->isValidFileExtention(stlFile));
 
@@ -282,6 +285,7 @@ TEST_F(ManagerHeadlessTest, IsValidFileExtention)
     EXPECT_FALSE(validExts.isEmpty());
     EXPECT_TRUE(validExts.contains(".mesh"));
     EXPECT_TRUE(validExts.contains(".fbx"));
+    EXPECT_TRUE(validExts.contains(".vrm"));
 }
 
 TEST_F(ManagerHeadlessTest, CreateEmptyScene)

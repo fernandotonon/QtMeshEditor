@@ -3501,7 +3501,7 @@ QJsonArray MCPServer::buildToolsList()
     // open_scene
     {
         QJsonObject props;
-        props["file_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to a scene file to open (*.scene.glb, *.scene.gltf, *.glb, *.gltf)"}};
+        props["file_path"] = QJsonObject{{"type", "string"}, {"description", "Absolute path to a scene file to open (*.scene.glb, *.scene.gltf, *.glb, *.gltf, *.vrm)"}};
         appendTool(
             "open_scene",
             "Open a scene file, replacing the current scene. Loads all meshes with their transforms, materials, skeletons, and animations. "

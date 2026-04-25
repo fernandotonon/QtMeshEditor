@@ -1355,7 +1355,7 @@ void MainWindow::on_actionOpen_Scene_triggered()
 
     QString fileName = QFileDialog::getOpenFileName(this, tr("Open Scene"),
                                                     "",
-                                                    tr("Scene Files (*.scene.glb *.scene.gltf);;glTF Files (*.gltf *.glb);;All Files (*)"),
+                                                    tr("Scene Files (*.scene.glb *.scene.gltf);;glTF / VRM (*.gltf *.glb *.vrm);;All Files (*)"),
                                                     nullptr, QFileDialog::DontUseNativeDialog);
     if (fileName.isEmpty()) return;
 
@@ -1761,6 +1761,14 @@ void MainWindow::createEditorViewport(/*TODO add the type of view (perspective, 
     ui->action1x1_Side_by_Side->blockSignals(false);
     ui->action1x1_Upper_and_Lower->blockSignals(false);
     ui->action2x2_Grid->blockSignals(false);
+}
+
+void MainWindow::rebuildAllOgreViewports()
+{
+    for (EditorViewport* vp : mDockWidgetList) {
+        if (OgreWidget* w = vp->getOgreWidget())
+            w->rebuildRenderWindow();
+    }
 }
 
 void MainWindow::onWidgetClosing(EditorViewport* const& widget)

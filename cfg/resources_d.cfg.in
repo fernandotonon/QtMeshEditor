@@ -6,9 +6,12 @@
 
 
 # Resource locations to be added to the default path
+# Keep [General] in sync with resources.cfg.in so Debug dev builds match Release/install.
 [General]
 #FileSystem=media/models
-#FileSystem=media/materials/programs
-#FileSystem=media/materials/programs/GLSL
+# GLSL/CG sources for materials that declare vertex_program/fragment_program (e.g. Example_BumpMapping*)
+FileSystem=media/materials/programs/GLSL150
+FileSystem=media/materials/programs/GLSL
+FileSystem=media/materials/programs
 FileSystem=media/materials/scripts
 FileSystem=media/materials/textures

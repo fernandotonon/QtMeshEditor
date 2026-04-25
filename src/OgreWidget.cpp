@@ -31,10 +31,12 @@ THE SOFTWARE.
 #include <QCoreApplication>
 #include <QTimer>
 #include <QNativeGestureEvent>
+#include <QSettings>
 
 #include <Ogre.h>
 
 #include "GlobalDefinitions.h"
+#include "ViewportSettingsKeys.h"
 
 #include "OgreWidget.h"
 #include "Manager.h"
@@ -43,6 +45,22 @@ THE SOFTWARE.
 #include "QtInputManager.h"
 #include "EditModeController.h"
 #include "TransformOperator.h"
+
+namespace {
+void applyViewportCameraFromSettings(SpaceCamera* cam)
+{
+    if (!cam || !cam->getCamera())
+        return;
+    QSettings settings;
+    Ogre::Real speed = settings.value(ViewportSettingsKeys::cameraSpeed(), 1.0).toReal();
+    if (speed > 0)
+        cam->setCameraSpeed(speed);
+    cam->getCamera()->setNearClipDistance(
+        settings.value(ViewportSettingsKeys::nearClip(), 0.1).toDouble());
+    cam->getCamera()->setFarClipDistance(
+        settings.value(ViewportSettingsKeys::farClip(), 10000.0).toDouble());
+}
+}
 
 OgreWidget::OgreWidget( QWidget *parent ):
     QWidget( parent )
@@ -134,6 +152,11 @@ QColor OgreWidget::getBackgroundColor() const
 const Ogre::Viewport* OgreWidget::getViewport() const
 {   return mViewport;   }
 
+unsigned int OgreWidget::fsaaSamples() const
+{
+    return mOgreWindow ? mOgreWindow->getFSAA() : 0u;
+}
+
 void OgreWidget::setBackgroundColor(const QColor& c)
 {
     Ogre::ColourValue ogreColour;
@@ -165,6 +188,13 @@ void OgreWidget::initOgreWindow(void)
     params["macAPICocoaUseNSView"] = "true";
 #endif
 
+    {
+        QSettings settings;
+        const int fsaa = settings.value(ViewportSettingsKeys::fsaaSamples(), 4).toInt();
+        if (fsaa > 0)
+            params["FSAA"] = Ogre::StringConverter::toString(fsaa);
+    }
+
     QString name = "Viewport " + QString::number(getIndex());
     while (mOgreRoot->getRenderTarget(name.toStdString())) {
         name+=".";
@@ -186,6 +216,85 @@ void OgreWidget::initOgreWindow(void)
     mViewport->setMaterialScheme(Ogre::MSN_SHADERGEN);
 
     mOgreRoot->addFrameListener(this);
+
+    if (mCamera)
+        applyViewportCameraFromSettings(mCamera.get());
+}
+
+void OgreWidget::teardownOgreWindow()
+{
+    if (mOgreRoot)
+    {
+        try {
+            mOgreRoot->removeFrameListener(this);
+        } catch (...) {
+        }
+    }
+
+    mCamera.reset();
+
+    if (mOgreWindow)
+    {
+        try {
+            try {
+                mOgreWindow->removeAllViewports();
+            } catch (...) {
+            }
+
+            if (mOgreRoot)
+            {
+                try {
+                    mOgreRoot->detachRenderTarget(mOgreWindow);
+                } catch (...) {
+                }
+            }
+
+            try {
+                mOgreWindow->setActive(false);
+            } catch (...) {
+            }
+
+            mViewport = nullptr;
+            mOgreWindow = nullptr;
+        } catch (...) {
+            mViewport = nullptr;
+            mOgreWindow = nullptr;
+        }
+    }
+}
+
+void OgreWidget::rebuildRenderWindow()
+{
+    QColor bg = getBackgroundColor();
+    uint visMask = SCENE_VISIBILITY_FLAGS;
+    Ogre::Vector3 targetW, camW;
+    Ogre::Quaternion orientW;
+    bool restorePose = false;
+    if (mCamera && mCamera->getCamera() && mViewport)
+    {
+        restorePose = true;
+        mCamera->getViewportPose(targetW, camW, orientW);
+        visMask = mViewport->getVisibilityMask();
+    }
+
+    teardownOgreWindow();
+    initOgreWindow();
+
+    setBackgroundColor(bg);
+    if (mViewport)
+        mViewport->setVisibilityMask(visMask);
+
+    if (restorePose && mCamera)
+        mCamera->applyViewportPose(targetW, camW, orientW);
+
+    if (mOgreWindow)
+    {
+        mOgreWindow->resize(width(), height());
+        mOgreWindow->windowMovedOrResized();
+    }
+    if (mCamera)
+        mCamera->setAspectRatio((Ogre::Real)width() / (Ogre::Real)height());
+    update();
 }
 
 bool OgreWidget::frameStarted(const Ogre::FrameEvent& e)

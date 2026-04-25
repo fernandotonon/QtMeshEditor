@@ -4,11 +4,13 @@
 #include <QFocusEvent>
 #include <QSignalSpy>
 #include <QThread>
+#include <QSettings>
 #include <QWheelEvent>
 #include <exception>
 
 #include "EditorViewport.h"
 #include "GlobalDefinitions.h"
+#include "ViewportSettingsKeys.h"
 #include "Manager.h"
 #include "SpaceCamera.h"
 #include "mainwindow.h"
@@ -213,4 +215,35 @@ TEST_F(OgreWidgetTest, FocusEventsEmitSignalAndToggleVisibilityMask)
     widget->focusOutEvent(&focusOut);
     EXPECT_TRUE(focusOut.isAccepted());
     EXPECT_EQ(widget->getViewport()->getVisibilityMask(), SCENE_VISIBILITY_FLAGS);
+}
+
+TEST_F(OgreWidgetTest, FsaaSamplesMatchesRenderTarget)
+{
+    ASSERT_NE(widget->getViewport(), nullptr);
+    Ogre::RenderTarget* target = widget->getViewport()->getTarget();
+    ASSERT_NE(target, nullptr);
+    EXPECT_EQ(widget->fsaaSamples(), target->getFSAA());
+}
+
+TEST_F(OgreWidgetTest, RebuildRenderWindowPreservesBackgroundAndKeepsCamera)
+{
+    QSettings settings;
+    settings.setValue(ViewportSettingsKeys::fsaaSamples(), 2);
+    settings.setValue(ViewportSettingsKeys::cameraSpeed(), 1.5);
+    settings.setValue(ViewportSettingsKeys::nearClip(), 0.05);
+    settings.setValue(ViewportSettingsKeys::farClip(), 5000.0);
+
+    const QColor bg(18, 52, 86);
+    widget->setBackgroundColor(bg);
+
+    EXPECT_NO_THROW(widget->rebuildRenderWindow());
+    app->processEvents();
+
+    EXPECT_EQ(widget->getBackgroundColor(), bg);
+    ASSERT_NE(widget->getSpaceCamera(), nullptr);
+    ASSERT_NE(widget->getSpaceCamera()->getCamera(), nullptr);
+    EXPECT_FLOAT_EQ(widget->getSpaceCamera()->getCameraSpeed(), 1.5f);
+    // QSettings/Ogre path can introduce tiny float error vs exact literals (CI Linux).
+    EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getNearClipDistance(), 0.05, 1e-5);
+    EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getFarClipDistance(), 5000.0, 1e-3);
 }

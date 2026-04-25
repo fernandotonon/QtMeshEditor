@@ -143,359 +143,151 @@ void PrimitivesWidget::setUVTileVisible(bool visible)
     pb_switchUV->setVisible(visible);
 }
 
-void PrimitivesWidget::setUiCube()
+void PrimitivesWidget::applyPrimitiveUiConfig(const QString &type,
+                                              bool sizeX, bool sizeY, bool sizeZ,
+                                              bool radius, bool radius2, bool height,
+                                              const QString &radiusText, const QString &radius2Text,
+                                              bool segX, bool segY, bool segZ,
+                                              const QString &segXText, const QString &segYText, const QString &segZText,
+                                              bool uvTileVisible, bool switchUvVisible)
 {
-
-    edit_type->setText(tr("Cube"));
+    edit_type->setText(type);
 
     gb_Geometry->show();
     gb_Mesh->show();
 
-    edit_sizeX->show();
-    edit_sizeY->show();
-    edit_sizeZ->show();
+    edit_sizeX->setVisible(sizeX);
+    edit_sizeY->setVisible(sizeY);
+    edit_sizeZ->setVisible(sizeZ);
 
-    label_sizeX->show();
-    label_sizeY->show();
-    label_sizeZ->show();
+    label_sizeX->setVisible(sizeX);
+    label_sizeY->setVisible(sizeY);
+    label_sizeZ->setVisible(sizeZ);
 
-    label_radius->hide();
-    label_radius2->hide();
-    label_height->hide();
+    label_radius->setVisible(radius);
+    label_radius2->setVisible(radius2);
+    label_height->setVisible(height);
 
-    edit_radius->hide();
-    edit_radius2->hide();
-    edit_height->hide();
+    edit_radius->setVisible(radius);
+    edit_radius2->setVisible(radius2);
+    edit_height->setVisible(height);
 
-    label_numSegX->show();
-    label_numSegY->show();
-    label_numSegZ->show();
+    if(!radiusText.isEmpty())  label_radius->setText(radiusText);
+    if(!radius2Text.isEmpty()) label_radius2->setText(radius2Text);
 
-    edit_numSegX->show();
-    edit_numSegY->show();
-    edit_numSegZ->show();
+    label_numSegX->setVisible(segX);
+    label_numSegY->setVisible(segY);
+    label_numSegZ->setVisible(segZ);
 
-    setUVTileVisible(true);
-    pb_switchUV->setVisible(false);
+    edit_numSegX->setVisible(segX);
+    edit_numSegY->setVisible(segY);
+    edit_numSegZ->setVisible(segZ);
 
-    label_numSegX->setText(tr("Seg X"));
-    label_numSegY->setText(tr("Seg Y"));
-    label_numSegZ->setText(tr("Seg Z"));
+    setUVTileVisible(uvTileVisible);
+    pb_switchUV->setVisible(switchUvVisible && uvTileVisible);
 
+    if(!segXText.isEmpty()) label_numSegX->setText(segXText);
+    if(!segYText.isEmpty()) label_numSegY->setText(segYText);
+    if(!segZText.isEmpty()) label_numSegZ->setText(segZText);
+}
+
+void PrimitivesWidget::setUiCube()
+{
+    applyPrimitiveUiConfig(tr("Cube"),
+                           true, true, true,
+                           false, false, false,
+                           QString(), QString(),
+                           true, true, true,
+                           tr("Seg X"), tr("Seg Y"), tr("Seg Z"),
+                           true, false);
 }
 
 void PrimitivesWidget::setUiSphere()
 {
-    edit_type->setText(tr("Sphere"));
-
-    gb_Geometry->show();
-    gb_Mesh->show();
-
-    edit_sizeX->hide();
-    edit_sizeY->hide();
-    edit_sizeZ->hide();
-
-    label_sizeX->hide();
-    label_sizeY->hide();
-    label_sizeZ->hide();
-
-    label_radius->show();
-    label_radius2->hide();
-    label_height->hide();
-
-    edit_radius->show();
-    edit_radius2->hide();
-    edit_height->hide();
-
-    label_radius->setText(tr("Radius"));
-
-    label_numSegX->show();
-    label_numSegY->show();
-    label_numSegZ->hide();
-
-    edit_numSegX->show();
-    edit_numSegY->show();
-    edit_numSegZ->hide();
-
-    setUVTileVisible(true);
-
-    label_numSegX->setText(tr("Seg Ring"));
-    label_numSegY->setText(tr("Seg Loop"));
-
+    applyPrimitiveUiConfig(tr("Sphere"),
+                           false, false, false,
+                           true, false, false,
+                           tr("Radius"), QString(),
+                           true, true, false,
+                           tr("Seg Ring"), tr("Seg Loop"), QString(),
+                           true);
 }
 
 void PrimitivesWidget::setUiPlane()
 {
-    edit_type->setText(tr("Plane"));
-
-    gb_Geometry->show();
-    gb_Mesh->show();
-
-    edit_sizeX->show();
-    edit_sizeY->show();
-    edit_sizeZ->hide();
-
-    label_sizeX->show();
-    label_sizeY->show();
-    label_sizeZ->hide();
-
-    label_radius->hide();
-    label_radius2->hide();
-    label_height->hide();
-
-    edit_radius->hide();
-    edit_radius2->hide();
-    edit_height->hide();
-
-    label_numSegX->show();
-    label_numSegY->show();
-    label_numSegZ->hide();
-
-    edit_numSegX->show();
-    edit_numSegY->show();
-    edit_numSegZ->hide();
-
-    setUVTileVisible(true);
-
-    label_numSegX->setText(tr("Seg X"));
-    label_numSegY->setText(tr("Seg Y"));
-
+    applyPrimitiveUiConfig(tr("Plane"),
+                           true, true, false,
+                           false, false, false,
+                           QString(), QString(),
+                           true, true, false,
+                           tr("Seg X"), tr("Seg Y"), QString(),
+                           true);
 }
 
 void PrimitivesWidget::setUiCylinder()
 {
-    edit_type->setText(tr("Cylinder"));
-
-    gb_Geometry->show();
-    gb_Mesh->show();
-
-    edit_sizeX->hide();
-    edit_sizeY->hide();
-    edit_sizeZ->hide();
-
-    label_sizeX->hide();
-    label_sizeY->hide();
-    label_sizeZ->hide();
-
-    label_radius->show();
-    label_radius2->hide();
-    label_height->show();
-
-    edit_radius->show();
-    edit_radius2->hide();
-    edit_height->show();
-
-    label_radius->setText(tr("Radius"));
-
-    label_numSegX->show();
-    label_numSegY->hide();
-    label_numSegZ->show();
-
-    edit_numSegX->show();
-    edit_numSegY->hide();
-    edit_numSegZ->show();
-
-    setUVTileVisible(true);
-
-    label_numSegX->setText(tr("Seg Base"));
-    label_numSegZ->setText(tr("Seg Height"));
+    applyPrimitiveUiConfig(tr("Cylinder"),
+                           false, false, false,
+                           true, false, true,
+                           tr("Radius"), QString(),
+                           true, false, true,
+                           tr("Seg Base"), QString(), tr("Seg Height"),
+                           true);
 }
 
 void PrimitivesWidget::setUiCone()
 {
-    edit_type->setText(tr("Cone"));
-
-    gb_Geometry->show();
-    gb_Mesh->show();
-
-    edit_sizeX->hide();
-    edit_sizeY->hide();
-    edit_sizeZ->hide();
-
-    label_sizeX->hide();
-    label_sizeY->hide();
-    label_sizeZ->hide();
-
-    label_radius->show();
-    label_radius2->hide();
-    label_height->show();
-
-    edit_radius->show();
-    edit_radius2->hide();
-    edit_height->show();
-
-    label_radius->setText(tr("Radius"));
-
-    label_numSegX->show();
-    label_numSegY->hide();
-    label_numSegZ->show();
-
-    edit_numSegX->show();
-    edit_numSegY->hide();
-    edit_numSegZ->show();
-
-    setUVTileVisible(true);
-
-    label_numSegX->setText(tr("Seg Base"));
-    label_numSegZ->setText(tr("Seg Height"));
+    applyPrimitiveUiConfig(tr("Cone"),
+                           false, false, false,
+                           true, false, true,
+                           tr("Radius"), QString(),
+                           true, false, true,
+                           tr("Seg Base"), QString(), tr("Seg Height"),
+                           true);
 }
 
 void PrimitivesWidget::setUiTorus()
 {
-    edit_type->setText(tr("Torus"));
-
-    gb_Geometry->show();
-    gb_Mesh->show();
-
-    edit_sizeX->hide();
-    edit_sizeY->hide();
-    edit_sizeZ->hide();
-
-    label_sizeX->hide();
-    label_sizeY->hide();
-    label_sizeZ->hide();
-
-    label_radius->show();
-    label_radius2->show();
-    label_height->hide();
-
-    edit_radius->show();
-    edit_radius2->show();
-    edit_height->hide();
-
-    label_radius->setText(tr("Radius"));
-    label_radius2->setText(tr("Section Radius"));
-
-    label_numSegX->show();
-    label_numSegY->show();
-    label_numSegZ->hide();
-
-    edit_numSegX->show();
-    edit_numSegY->show();
-    edit_numSegZ->hide();
-
-    setUVTileVisible(true);
-
-    label_numSegX->setText(tr("Seg Circle"));
-    label_numSegY->setText(tr("Seg Section"));
+    applyPrimitiveUiConfig(tr("Torus"),
+                           false, false, false,
+                           true, true, false,
+                           tr("Radius"), tr("Section Radius"),
+                           true, true, false,
+                           tr("Seg Circle"), tr("Seg Section"), QString(),
+                           true);
 }
 
 void PrimitivesWidget::setUiTube()
 {
-    edit_type->setText(tr("Tube"));
-
-    gb_Geometry->show();
-    gb_Mesh->show();
-
-    edit_sizeX->hide();
-    edit_sizeY->hide();
-    edit_sizeZ->hide();
-
-    label_sizeX->hide();
-    label_sizeY->hide();
-    label_sizeZ->hide();
-
-    label_radius->show();
-    label_radius2->show();
-    label_height->show();
-
-    edit_radius->show();
-    edit_radius2->show();
-    edit_height->show();
-
-    label_radius->setText(tr("Outer Radius"));
-    label_radius2->setText(tr("Inner Radius"));
-
-    label_numSegX->show();
-    label_numSegY->hide();
-    label_numSegZ->show();
-
-    edit_numSegX->show();
-    edit_numSegY->hide();
-    edit_numSegZ->show();
-
-    setUVTileVisible(true);
-
-    label_numSegX->setText(tr("Seg Base"));
-    label_numSegZ->setText(tr("Seg Height"));
+    applyPrimitiveUiConfig(tr("Tube"),
+                           false, false, false,
+                           true, true, true,
+                           tr("Outer Radius"), tr("Inner Radius"),
+                           true, false, true,
+                           tr("Seg Base"), QString(), tr("Seg Height"),
+                           true);
 }
 
 void PrimitivesWidget::setUiCapsule()
 {
-    edit_type->setText(tr("Capsule"));
-
-    gb_Geometry->show();
-    gb_Mesh->show();
-
-    edit_sizeX->hide();
-    edit_sizeY->hide();
-    edit_sizeZ->hide();
-
-    label_sizeX->hide();
-    label_sizeY->hide();
-    label_sizeZ->hide();
-
-    label_radius->show();
-    label_radius2->hide();
-    label_height->show();
-
-    edit_radius->show();
-    edit_radius2->hide();
-    edit_height->show();
-
-    label_radius->setText(tr("Radius"));
-
-    label_numSegX->show();
-    label_numSegY->show();
-    label_numSegZ->show();
-
-    edit_numSegX->show();
-    edit_numSegY->show();
-    edit_numSegZ->show();
-
-    setUVTileVisible(true);
-
-    label_numSegX->setText(tr("Seg Ring"));
-    label_numSegY->setText(tr("Seg Loop"));
-    label_numSegZ->setText(tr("Seg Height"));
+    applyPrimitiveUiConfig(tr("Capsule"),
+                           false, false, false,
+                           true, false, true,
+                           tr("Radius"), QString(),
+                           true, true, true,
+                           tr("Seg Ring"), tr("Seg Loop"), tr("Seg Height"),
+                           true);
 }
 
 void PrimitivesWidget::setUiIcoSphere()
 {
-    edit_type->setText(tr("IcoSphere"));
-
-    gb_Geometry->show();
-    gb_Mesh->show();
-
-    edit_sizeX->hide();
-    edit_sizeY->hide();
-    edit_sizeZ->hide();
-
-    label_sizeX->hide();
-    label_sizeY->hide();
-    label_sizeZ->hide();
-
-    label_radius->show();
-    label_radius2->hide();
-    label_height->hide();
-
-    edit_radius->show();
-    edit_radius2->hide();
-    edit_height->hide();
-
-    label_radius->setText(tr("Radius"));
-
-    label_numSegX->show();
-    label_numSegY->hide();
-    label_numSegZ->hide();
-
-    edit_numSegX->show();
-    edit_numSegY->hide();
-    edit_numSegZ->hide();
-
-    setUVTileVisible(true);
-
-    label_numSegX->setText(tr("Iterations"));
+    applyPrimitiveUiConfig(tr("IcoSphere"),
+                           false, false, false,
+                           true, false, false,
+                           tr("Radius"), QString(),
+                           true, false, false,
+                           tr("Iterations"), QString(), QString(),
+                           true);
 }
 
 void PrimitivesWidget::setUiRoundedBox()
