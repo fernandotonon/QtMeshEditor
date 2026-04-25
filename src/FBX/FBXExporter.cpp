@@ -40,6 +40,8 @@ THE SOFTWARE.
 #include <OgreMaterialManager.h>
 #include <OgreTechnique.h>
 #include <OgrePass.h>
+#include <OgreResourceGroupManager.h>
+#include <OgreDataStream.h>
 
 #include <fstream>
 #include <vector>
@@ -1582,6 +1584,54 @@ private:
     }
 
     // ── Texture objects ─────────────────────────────────────────
+    static std::vector<uint8_t> readOgreResourceBytes(const std::string& resourceName)
+    {
+        try {
+            auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+            Ogre::DataStreamPtr stream;
+
+            // Prefer the group Assimp/Ogre says contains the resource, but fall back to scanning
+            // all groups. (Some pipelines create dynamic groups with non-trivial names, e.g. paths.)
+            Ogre::String preferred = rgm.findGroupContainingResource(resourceName);
+            if (!preferred.empty() && rgm.resourceExists(preferred, resourceName))
+                stream = rgm.openResource(resourceName, preferred);
+            if (stream.isNull() && rgm.resourceExists(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, resourceName))
+                stream = rgm.openResource(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            if (stream.isNull()) {
+                const auto groups = rgm.getResourceGroups();
+                for (const auto& g : groups) {
+                    if (rgm.resourceExists(g, resourceName)) {
+                        stream = rgm.openResource(resourceName, g);
+                        if (!stream.isNull()) break;
+                    }
+                }
+            }
+            if (stream.isNull())
+                return {};
+
+            std::vector<uint8_t> data;
+            const size_t sz = stream->size();
+            if (sz > 0 && sz != static_cast<size_t>(-1)) {
+                data.resize(sz);
+                const size_t read = stream->read(data.data(), sz);
+                data.resize(read);
+                return data;
+            }
+
+            // Fallback if size is unknown: read in chunks
+            constexpr size_t kChunk = 64 * 1024;
+            std::vector<uint8_t> chunk(kChunk);
+            while (!stream->eof()) {
+                const size_t n = stream->read(chunk.data(), kChunk);
+                if (n == 0) break;
+                data.insert(data.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(n));
+            }
+            return data;
+        } catch (...) {
+            return {};
+        }
+    }
+
     void writeTextureObjects()
     {
         std::set<std::string> seen;
@@ -1635,6 +1685,16 @@ private:
                 m_w.beginNode("Type"); m_w.writePropertyS("Clip"); m_w.endProperties(); m_w.endNodeLeaf();
                 m_w.beginNode("FileName"); m_w.writePropertyS(texName); m_w.endProperties(); m_w.endNodeLeaf();
                 m_w.beginNode("RelativeFilename"); m_w.writePropertyS(texName); m_w.endProperties(); m_w.endNodeLeaf();
+
+                // Embed texture bytes when the resource is available. Many tools (e.g. Mixamo exports)
+                // expect texture payloads to be embedded via Video.Content.
+                const auto bytes = readOgreResourceBytes(texName);
+                if (!bytes.empty()) {
+                    m_w.beginNode("Content");
+                    m_w.writePropertyR(bytes);
+                    m_w.endProperties();
+                    m_w.endNodeLeaf();
+                }
 
                 m_w.endNode(); // Video
             }
