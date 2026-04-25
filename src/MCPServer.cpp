@@ -414,6 +414,8 @@ const QMap<QString, MCPServer::ToolHandler>& MCPServer::toolHandlers()
         {QStringLiteral("toggle_mesh_info"), &MCPServer::toolToggleMeshInfo},
         {QStringLiteral("merge_animations"), &MCPServer::toolMergeAnimations},
         {QStringLiteral("resample_animation"), &MCPServer::toolResampleAnimation},
+        {QStringLiteral("simplify_animation"), &MCPServer::toolSimplifyAnimation},
+        {QStringLiteral("analyze_animation"), &MCPServer::toolAnalyzeAnimation},
         {QStringLiteral("save_scene"), &MCPServer::toolSaveScene},
         {QStringLiteral("open_scene"), &MCPServer::toolOpenScene},
         {QStringLiteral("validate_mesh"), &MCPServer::toolValidateMesh},
@@ -451,6 +453,7 @@ bool MCPServer::isHeavyTool(const QString &name)
         QStringLiteral("create_material"),
         QStringLiteral("merge_animations"),
         QStringLiteral("resample_animation"),
+        QStringLiteral("simplify_animation"),
         QStringLiteral("save_scene"),
         QStringLiteral("open_scene")
     };
@@ -2207,6 +2210,201 @@ QJsonObject MCPServer::toolResampleAnimation(const QJsonObject &args)
     }
 }
 
+// Shared helper: resolve entity + skeleton + animation list and build the
+// SimplifyTolerances from MCP args. Used by both simplify_animation and
+// analyze_animation. On error returns an error JSON object — caller checks
+// for the "isError" flag and propagates.
+static AnimationMerger::SimplifyTolerances tolerancesFromMcpArgs(const QJsonObject &args, bool *outOk = nullptr)
+{
+    AnimationMerger::SimplifyTolerances tol; // Balanced default
+    bool ok = true;
+
+    const QString preset = args.value("preset").toString().toLower();
+    if (!preset.isEmpty()) {
+        if (preset == "conservative") {
+            tol.translation = 1e-4f; tol.rotationDeg = 0.05f; tol.scale = 1e-4f;
+        } else if (preset == "balanced") {
+            tol.translation = 1e-3f; tol.rotationDeg = 0.5f;  tol.scale = 1e-3f;
+        } else if (preset == "aggressive") {
+            tol.translation = 1e-2f; tol.rotationDeg = 1.0f;  tol.scale = 1e-2f;
+        } else {
+            ok = false;
+        }
+    }
+
+    if (args.contains("tolerance"))
+        tol.translation = static_cast<float>(args.value("tolerance").toDouble(tol.translation));
+    if (args.contains("rotation_tolerance_deg"))
+        tol.rotationDeg = static_cast<float>(args.value("rotation_tolerance_deg").toDouble(tol.rotationDeg));
+    if (args.contains("scale_tolerance"))
+        tol.scale = static_cast<float>(args.value("scale_tolerance").toDouble(tol.scale));
+
+    if (outOk) *outOk = ok;
+    return tol;
+}
+
+QJsonObject MCPServer::toolSimplifyAnimation(const QJsonObject &args)
+{
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        bool presetOk = true;
+        AnimationMerger::SimplifyTolerances tol = tolerancesFromMcpArgs(args, &presetOk);
+        if (!presetOk)
+            return makeErrorResult("Error: Unknown preset. Use conservative, balanced, or aggressive.");
+
+        QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        QList<Ogre::Entity*> allEntities = mgr->getEntities();
+        if (!entityName.isEmpty()) {
+            for (auto* ent : allEntities) {
+                if (ent && QString::fromStdString(ent->getName()) == entityName) {
+                    entity = ent; break;
+                }
+            }
+            if (!entity)
+                return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        } else {
+            for (auto* ent : allEntities) {
+                if (ent && ent->hasSkeleton()) { entity = ent; break; }
+            }
+        }
+        if (!entity || !entity->hasSkeleton())
+            return makeErrorResult("Error: No entity with skeleton found");
+
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        if (!skel)
+            return makeErrorResult("Error: No skeleton found");
+
+        QString animName = args["animation_name"].toString();
+        std::vector<std::string> animNames;
+        if (!animName.isEmpty()) {
+            if (!skel->hasAnimation(animName.toStdString()))
+                return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+            animNames.push_back(animName.toStdString());
+        } else {
+            for (unsigned short i = 0; i < skel->getNumAnimations(); ++i)
+                animNames.push_back(skel->getAnimation(i)->getName());
+        }
+
+        int totalRemoved = 0;
+        int totalOriginal = 0;
+        for (const auto& name : animNames) {
+            int origTotal = 0, origRedundant = 0;
+            AnimationMerger::analyzeRedundantKeyframes(
+                skel->getAnimation(name), tol, &origTotal, &origRedundant);
+            totalOriginal += origTotal;
+
+            int removed = AnimationMerger::simplifyAnimation(skel.get(), name, tol);
+            totalRemoved += removed;
+        }
+
+        entity->refreshAvailableAnimationState();
+
+        const double pct = totalOriginal > 0 ? (100.0 * totalRemoved / totalOriginal) : 0.0;
+        QString result = QString("Simplified %1 animation(s): removed %2/%3 keyframes (%4%) using tolerances "
+                                 "translation=%5, rotation=%6°, scale=%7")
+            .arg(animNames.size()).arg(totalRemoved).arg(totalOriginal)
+            .arg(pct, 0, 'f', 1).arg(tol.translation).arg(tol.rotationDeg).arg(tol.scale);
+
+        result += "\n\nAnimations:";
+        for (unsigned short i = 0; i < skel->getNumAnimations(); ++i) {
+            auto* anim = skel->getAnimation(i);
+            int maxKf = 0;
+            for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+                int kfCount = static_cast<int>(track->getNumKeyFrames());
+                if (kfCount > maxKf) maxKf = kfCount;
+            }
+            result += QString("\n  - %1 (%2s, %3 keyframes)")
+                .arg(QString::fromStdString(anim->getName()))
+                .arg(anim->getLength(), 0, 'f', 2)
+                .arg(maxKf);
+        }
+        return makeSuccessResult(result);
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
+QJsonObject MCPServer::toolAnalyzeAnimation(const QJsonObject &args)
+{
+    try {
+        Manager* mgr = Manager::getSingletonPtr();
+        if (!mgr)
+            return makeErrorResult("Error: Manager not available");
+
+        bool presetOk = true;
+        AnimationMerger::SimplifyTolerances tol = tolerancesFromMcpArgs(args, &presetOk);
+        if (!presetOk)
+            return makeErrorResult("Error: Unknown preset. Use conservative, balanced, or aggressive.");
+
+        QString entityName = args["entity_name"].toString();
+        Ogre::Entity* entity = nullptr;
+        QList<Ogre::Entity*> allEntities = mgr->getEntities();
+        if (!entityName.isEmpty()) {
+            for (auto* ent : allEntities) {
+                if (ent && QString::fromStdString(ent->getName()) == entityName) {
+                    entity = ent; break;
+                }
+            }
+            if (!entity)
+                return makeErrorResult(QString("Error: Entity '%1' not found").arg(entityName));
+        } else {
+            for (auto* ent : allEntities) {
+                if (ent && ent->hasSkeleton()) { entity = ent; break; }
+            }
+        }
+        if (!entity || !entity->hasSkeleton())
+            return makeErrorResult("Error: No entity with skeleton found");
+
+        Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
+        if (!skel)
+            return makeErrorResult("Error: No skeleton found");
+
+        QString animName = args["animation_name"].toString();
+        std::vector<std::string> animNames;
+        if (!animName.isEmpty()) {
+            if (!skel->hasAnimation(animName.toStdString()))
+                return makeErrorResult(QString("Error: Animation '%1' not found").arg(animName));
+            animNames.push_back(animName.toStdString());
+        } else {
+            for (unsigned short i = 0; i < skel->getNumAnimations(); ++i)
+                animNames.push_back(skel->getAnimation(i)->getName());
+        }
+
+        QString result = QString("Redundant-keyframe analysis (translation=%1, rotation=%2°, scale=%3):")
+            .arg(tol.translation).arg(tol.rotationDeg).arg(tol.scale);
+
+        int grandTotal = 0;
+        int grandRedundant = 0;
+        for (const auto& name : animNames) {
+            int total = 0, redundant = 0;
+            AnimationMerger::analyzeRedundantKeyframes(skel->getAnimation(name), tol, &total, &redundant);
+            grandTotal += total;
+            grandRedundant += redundant;
+            const double pct = total > 0 ? (100.0 * redundant / total) : 0.0;
+            result += QString("\n  %1: %2/%3 keyframes redundant (%4%)")
+                .arg(QString::fromStdString(name)).arg(redundant).arg(total).arg(pct, 0, 'f', 1);
+        }
+
+        const double totalPct = grandTotal > 0 ? (100.0 * grandRedundant / grandTotal) : 0.0;
+        result += QString("\n  Total: %1/%2 keyframes redundant (%3%)")
+            .arg(grandRedundant).arg(grandTotal).arg(totalPct, 0, 'f', 1);
+
+        return makeSuccessResult(result);
+
+    } catch (Ogre::Exception& e) {
+        return makeErrorResult(QString("Error: Ogre exception — %1").arg(e.getFullDescription().c_str()));
+    } catch (std::exception& e) {
+        return makeErrorResult(QString("Error: %1").arg(e.what()));
+    }
+}
+
 QJsonObject MCPServer::toolSaveScene(const QJsonObject &args)
 {
     try {
@@ -3481,6 +3679,42 @@ QJsonArray MCPServer::buildToolsList()
             "Resample or decimate animation keyframes. Use target_keyframes for uniform resampling (interpolated) "
             "or decimate_step to keep every Nth original keyframe. Reduces animation data size while preserving "
             "bone hierarchy. Use list_skeletal_animations to see the result.",
+            props
+        );
+    }
+
+    // simplify_animation
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
+        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to simplify. If omitted, all animations are processed."}};
+        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative' (~0.1mm/0.05°), 'balanced' (~1mm/0.5°, default), or 'aggressive' (~1cm/1°). Higher tolerance removes more keys."}};
+        props["tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override translation tolerance in world units. Falls back to the preset value when omitted."}};
+        props["rotation_tolerance_deg"] = QJsonObject{{"type", "number"}, {"description", "Override rotation tolerance in degrees. Falls back to the preset value when omitted."}};
+        props["scale_tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override scale tolerance (unitless). Falls back to the preset value when omitted."}};
+        appendTool(
+            "simplify_animation",
+            "Remove redundant keyframes whose values are within tolerance of the lerp/slerp interpolation between their "
+            "neighbors. Preserves first/last keys and any keyframe representing a sharp pose change. Tolerance-based, "
+            "so it shrinks baked Mixamo-style clips dramatically while staying visually identical. Use 'analyze_animation' "
+            "first to preview how many keys would be removed.",
+            props
+        );
+    }
+
+    // analyze_animation
+    {
+        QJsonObject props;
+        props["entity_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the entity. If omitted, uses the first entity with a skeleton."}};
+        props["animation_name"] = QJsonObject{{"type", "string"}, {"description", "Name of the animation to analyze. If omitted, all animations are reported."}};
+        props["preset"] = QJsonObject{{"type", "string"}, {"description", "Tolerance preset: 'conservative', 'balanced' (default), or 'aggressive'."}};
+        props["tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override translation tolerance."}};
+        props["rotation_tolerance_deg"] = QJsonObject{{"type", "number"}, {"description", "Override rotation tolerance in degrees."}};
+        props["scale_tolerance"] = QJsonObject{{"type", "number"}, {"description", "Override scale tolerance."}};
+        appendTool(
+            "analyze_animation",
+            "Report how many keyframes are redundant (would be removed by simplify_animation) under the given "
+            "tolerances, without modifying the animation. Useful for previewing savings before committing.",
             props
         );
     }

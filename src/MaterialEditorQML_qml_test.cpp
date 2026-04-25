@@ -16,6 +16,7 @@
 #include "LLMManager.h"
 #include "ModelDownloader.h"
 #include "QMLMaterialHighlighter.h"
+#include "ThemeManager.h"
 
 class MaterialEditorQMLIntegrationTest : public ::testing::Test {
 protected:
@@ -194,6 +195,14 @@ protected:
             }
         );
         qmlRegisterType<QMLMaterialHighlighter>("MaterialEditorQML", 1, 0, "MaterialHighlighter");
+
+        // ThemedComboBox imports ThemeManager — must be registered for components
+        // that depend on ThemedComboBox (Pass/Texture panels, MaterialEditorWindow).
+        qmlRegisterSingletonType<ThemeManager>("ThemeManager", 1, 0, "ThemeManager",
+            [](QQmlEngine *eng, QJSEngine *js) -> QObject * {
+                return ThemeManager::qmlInstance(eng, js);
+            }
+        );
 
         // Let the engine find sub-components via the compiled-in qmldir
         engine->addImportPath("qrc:/");

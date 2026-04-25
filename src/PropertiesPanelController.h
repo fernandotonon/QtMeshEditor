@@ -198,6 +198,20 @@ public:
     Q_INVOKABLE void toggleBoneWeights(const QString& entityName, bool show);
     Q_INVOKABLE bool renameAnimation(const QString& entityName, const QString& oldName, const QString& newName);
 
+    /// Analyze an animation's redundant keyframes without modifying it.
+    /// `preset` is one of: "conservative", "balanced", "aggressive".
+    /// Returns a map with: total, redundant, percent.
+    Q_INVOKABLE QVariantMap analyzeAnimationKeyframes(const QString& entityName,
+                                                      const QString& animName,
+                                                      const QString& preset = QStringLiteral("balanced"));
+
+    /// Remove redundant keyframes from an animation in-place. Returns the
+    /// number of keyframes removed (0 on no-op or failure).
+    /// `preset` is one of: "conservative", "balanced", "aggressive".
+    Q_INVOKABLE int simplifyAnimation(const QString& entityName,
+                                      const QString& animName,
+                                      const QString& preset = QStringLiteral("balanced"));
+
     /// Export the current animated pose of the first selected animated entity as a static mesh.
     /// Opens a file save dialog if no path is provided.
     Q_INVOKABLE bool exportCurrentPose(const QString& path = QString());

@@ -3985,6 +3985,40 @@ TEST_F(MCPServerProtocolTest, ProcessMessageToolsListDispatchesToHandler)
     EXPECT_TRUE(response["result"].toObject()["tools"].isArray());
 }
 
+TEST_F(MCPServerProtocolTest, ToolsListIncludesSimplifyAndAnalyzeAnimation)
+{
+    // Guard against accidentally dropping the new redundant-keyframe tools
+    // from the dispatch table or schema registration.
+    const QJsonObject request{
+        {"jsonrpc", "2.0"},
+        {"id", 42},
+        {"method", "tools/list"},
+        {"params", QJsonObject{}}
+    };
+
+    const QJsonObject response = processAndRead(QJsonDocument(request).toJson(QJsonDocument::Compact));
+    ASSERT_TRUE(response.contains("result"));
+    const QJsonArray tools = response["result"].toObject()["tools"].toArray();
+    QSet<QString> names;
+    for (const auto& v : tools)
+        names.insert(v.toObject().value("name").toString());
+
+    EXPECT_TRUE(names.contains("simplify_animation"));
+    EXPECT_TRUE(names.contains("analyze_animation"));
+
+    // Spot-check the schema also exposes the preset/tolerance args so the LLM
+    // can find them without us hand-holding it.
+    for (const auto& v : tools) {
+        const QJsonObject t = v.toObject();
+        if (t.value("name").toString() != "simplify_animation") continue;
+        const QJsonObject schema = t.value("inputSchema").toObject();
+        const QJsonObject props = schema.value("properties").toObject();
+        EXPECT_TRUE(props.contains("preset"));
+        EXPECT_TRUE(props.contains("tolerance"));
+        EXPECT_TRUE(props.contains("rotation_tolerance_deg"));
+    }
+}
+
 TEST_F(MCPServerProtocolTest, ProcessMessageResourcesListDispatchesToHandler)
 {
     const QJsonObject request{

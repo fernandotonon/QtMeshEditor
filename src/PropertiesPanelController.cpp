@@ -5,6 +5,8 @@
 #include "PrimitiveObject.h"
 #include "AnimationWidget.h"
 #include "SkeletonTransform.h"
+#include "AnimationMerger.h"
+#include "SentryReporter.h"
 #include "MeshImporterExporter.h"
 #include "UndoManager.h"
 #include "Manager.h"
@@ -609,6 +611,104 @@ bool PropertiesPanelController::renameAnimation(const QString& entityName, const
         }
     }
     return false;
+}
+
+// Map a preset name to the underlying tolerance triple. Conservative is the
+// pre-2.30 default (~0.1mm / 0.05°) — only collapses keys with no measurable
+// drift. Balanced is the new default (1mm / 0.5°), invisible on meter-scale
+// character clips. Aggressive (1cm / 1°) is for cutscene/secondary motion
+// where small drift is acceptable in exchange for much smaller files.
+static AnimationMerger::SimplifyTolerances tolerancesForPreset(const QString& preset)
+{
+    AnimationMerger::SimplifyTolerances tol; // balanced
+    const QString p = preset.toLower();
+    if (p == "conservative") {
+        tol.translation = 1e-4f;
+        tol.rotationDeg = 0.05f;
+        tol.scale       = 1e-4f;
+    } else if (p == "aggressive") {
+        tol.translation = 1e-2f;
+        tol.rotationDeg = 1.0f;
+        tol.scale       = 1e-2f;
+    }
+    return tol;
+}
+
+QVariantMap PropertiesPanelController::analyzeAnimationKeyframes(const QString& entityName,
+                                                                 const QString& animName,
+                                                                 const QString& preset)
+{
+    QVariantMap result;
+    result["total"] = 0;
+    result["redundant"] = 0;
+    result["percent"] = 0.0;
+
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities) {
+        if (QString::fromStdString(ent->getName()) != entityName) continue;
+        if (!ent->hasSkeleton()) return result;
+        Ogre::SkeletonPtr skel = ent->getMesh()->getSkeleton();
+        if (!skel || !skel->hasAnimation(animName.toStdString())) return result;
+
+        int total = 0;
+        int redundant = 0;
+        AnimationMerger::analyzeRedundantKeyframes(
+            skel->getAnimation(animName.toStdString()),
+            tolerancesForPreset(preset),
+            &total, &redundant);
+        result["total"] = total;
+        result["redundant"] = redundant;
+        result["percent"] = total > 0 ? (100.0 * redundant / total) : 0.0;
+        return result;
+    }
+    return result;
+}
+
+int PropertiesPanelController::simplifyAnimation(const QString& entityName,
+                                                 const QString& animName,
+                                                 const QString& preset)
+{
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities) {
+        if (QString::fromStdString(ent->getName()) != entityName) continue;
+        if (!ent->hasSkeleton()) return 0;
+        Ogre::SkeletonPtr skel = ent->getMesh()->getSkeleton();
+        if (!skel || !skel->hasAnimation(animName.toStdString())) return 0;
+
+        // Stop playback and disable debug overlays before mutating skeleton
+        // tracks — same precaution as renameAnimation, since we recreate the
+        // animation under the hood.
+        if (mAnimationWidget) {
+            if (mAnimationWidget->isSkeletonDebugActive(ent))
+                mAnimationWidget->toggleSkeletonDebug(ent, false);
+            if (mAnimationWidget->isBoneWeightsShown(ent))
+                mAnimationWidget->toggleBoneWeights(ent, false);
+        }
+        setPlaying(false);
+        if (auto* animSet = ent->getAllAnimationStates()) {
+            for (const auto& [key, state] : animSet->getAnimationStates())
+                state->setEnabled(false);
+        }
+
+        const int removed = AnimationMerger::simplifyAnimation(
+            skel.get(), animName.toStdString(), tolerancesForPreset(preset));
+
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Simplify animation '%1' (%2): removed %3 keyframes")
+                .arg(animName, preset).arg(removed));
+
+        ent->refreshAvailableAnimationState();
+
+        // Re-select to refresh widget tables (avoids stale pointers).
+        auto nodes = SelectionSet::getSingleton()->getNodesSelectionList();
+        SelectionSet::getSingleton()->clear();
+        for (auto* node : nodes)
+            SelectionSet::getSingleton()->append(node);
+
+        emit animationStateChanged();
+        return removed;
+    }
+    return 0;
 }
 
 bool PropertiesPanelController::exportCurrentPose(const QString& path)

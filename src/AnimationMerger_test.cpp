@@ -593,6 +593,147 @@ TEST_F(AnimationMergerTest, DecimateStepTooSmall)
     Ogre::SkeletonManager::getSingleton().remove(skel);
 }
 
+TEST_F(AnimationMergerTest, SimplifyAnimationLinearMotionCollapses)
+{
+    // Linear translation across 11 evenly-spaced keys should collapse to 2.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "simplify_linear_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("walk", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+    for (int i = 0; i < 11; ++i) {
+        float t = i / 10.0f;
+        auto* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3(t, 0, 0));
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    int removed = AnimationMerger::simplifyAnimation(skel.get(), "walk");
+    EXPECT_EQ(removed, 9);
+
+    auto* newTrack = skel->getAnimation("walk")->_getNodeTrackList().begin()->second;
+    EXPECT_EQ(newTrack->getNumKeyFrames(), 2u);
+    EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(0)->getTime(), 0.0f);
+    EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(1)->getTime(), 1.0f);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, SimplifyAnimationKeepsNonLinearKeys)
+{
+    // V-shape (motion reverses at midpoint) cannot be collapsed past the apex.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "simplify_vshape_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("bob", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+    // Up at t=0, peak at t=0.5, back down at t=1.0
+    for (int i = 0; i < 11; ++i) {
+        float t = i / 10.0f;
+        float y = (t < 0.5f) ? t : (1.0f - t); // tent function
+        auto* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3(0, y, 0));
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    AnimationMerger::simplifyAnimation(skel.get(), "bob");
+
+    auto* newTrack = skel->getAnimation("bob")->_getNodeTrackList().begin()->second;
+    // Should keep the apex — first/peak/last == 3 keys.
+    EXPECT_EQ(newTrack->getNumKeyFrames(), 3u);
+    EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(1)->getTime(), 0.5f);
+    EXPECT_NEAR(newTrack->getNodeKeyFrame(1)->getTranslate().y, 0.5f, 1e-5f);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, SimplifyAnimationToleranceControlsAggressiveness)
+{
+    // Slight noise added to a linear curve. Tight tolerance keeps everything;
+    // loose tolerance collapses it.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "simplify_tol_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("noisy", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+    for (int i = 0; i < 11; ++i) {
+        float t = i / 10.0f;
+        // 5mm wobble around the linear path
+        float jitter = (i % 2 == 0) ? 0.005f : -0.005f;
+        auto* kf = track->createNodeKeyFrame(t);
+        kf->setTranslate(Ogre::Vector3(t, jitter, 0));
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    AnimationMerger::SimplifyTolerances tightTol;
+    tightTol.translation = 1e-6f;
+    int total = 0, redundantTight = 0;
+    AnimationMerger::analyzeRedundantKeyframes(skel->getAnimation("noisy"),
+                                               tightTol, &total, &redundantTight);
+    EXPECT_EQ(redundantTight, 0);
+
+    AnimationMerger::SimplifyTolerances looseTol;
+    looseTol.translation = 0.1f;
+    int totalLoose = 0, redundantLoose = 0;
+    AnimationMerger::analyzeRedundantKeyframes(skel->getAnimation("noisy"),
+                                               looseTol, &totalLoose, &redundantLoose);
+    EXPECT_GT(redundantLoose, 5);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, SimplifyAnimationPreservesEndpoints)
+{
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "simplify_endpoints_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    auto* bone = skel->createBone("root", 0);
+    skel->setBindingPose();
+
+    auto* anim = skel->createAnimation("hold", 1.0f);
+    auto* track = anim->createNodeTrack(0);
+    track->setAssociatedNode(bone);
+    // 5 identical keyframes — all middle ones are trivially redundant.
+    for (int i = 0; i < 5; ++i) {
+        auto* kf = track->createNodeKeyFrame(i / 4.0f);
+        kf->setTranslate(Ogre::Vector3(0, 0, 0));
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    AnimationMerger::simplifyAnimation(skel.get(), "hold");
+    auto* newTrack = skel->getAnimation("hold")->_getNodeTrackList().begin()->second;
+    EXPECT_EQ(newTrack->getNumKeyFrames(), 2u);
+    EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(0)->getTime(), 0.0f);
+    EXPECT_FLOAT_EQ(newTrack->getNodeKeyFrame(1)->getTime(), 1.0f);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
+TEST_F(AnimationMergerTest, SimplifyAnimationNullAndMissing)
+{
+    EXPECT_EQ(AnimationMerger::simplifyAnimation(nullptr, "x"), 0);
+
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "simplify_missing_skel", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    skel->createBone("root", 0);
+    skel->setBindingPose();
+    EXPECT_EQ(AnimationMerger::simplifyAnimation(skel.get(), "nonexistent"), 0);
+
+    Ogre::SkeletonManager::getSingleton().remove(skel);
+}
+
 // Standalone test that doesn't need Ogre initialization
 TEST(AnimationMergerStandaloneTest, MergeNoSkeletonError)
 {

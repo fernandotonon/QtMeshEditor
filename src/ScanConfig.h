@@ -50,6 +50,14 @@ struct ScanConfig {
     QStringList requireAnimationNames; // wildcard patterns: walk, run, "attack*", "dance_*"
     QStringList requireBoneNames;      // wildcard patterns: r_hand_attach, top_head
 
+    // Redundant-keyframe detection. When enabled, the scanner analyzes each
+    // animation's keyframes and warns if a meaningful share could be safely
+    // removed via tolerance-based simplification. Defaults disable the check.
+    double redundantKeyframesPctThreshold = 0.0; // 0 = disabled; e.g. 30.0 = warn at >=30%
+    double redundantKeyframesTranslationTol = 1e-3;  // Balanced preset (~1mm)
+    double redundantKeyframesRotationDegTol = 0.5;
+    double redundantKeyframesScaleTol = 1e-3;
+
     // scoped rules — path-specific overrides
     QList<ScanScope> scopes;
 

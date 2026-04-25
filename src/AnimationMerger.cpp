@@ -403,6 +403,231 @@ int AnimationMerger::decimateAnimation(Ogre::Skeleton* skel,
     return totalRemoved;
 }
 
+// ---------------------------------------------------------------------------
+// Redundant-keyframe simplification (tolerance-based, preserves sharp keys).
+//
+// A key K_i is "redundant" when the curve evaluated at K_i.time without that
+// key — i.e. lerp/slerp between K_{i-1} and K_{i+1} — matches K_i within the
+// configured tolerance. Walks each track once and removes redundant keys
+// iteratively (a key adjacent to a removed key may become redundant itself
+// after removal). First and last keyframes are always preserved.
+//
+// Mixamo-style clips bake one key per frame per bone with smooth motion
+// between keys, so tolerance-based removal typically eliminates 60–80% of
+// keys without visible drift.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct SimpleKey {
+    float time;
+    Ogre::Vector3 translate;
+    Ogre::Quaternion rotation;
+    Ogre::Vector3 scale;
+};
+
+// Choose the equivalent quaternion (q or -q) that lies on the same hemisphere
+// as `ref`. Quaternion antipodes represent the same rotation but slerp/dot
+// behave incorrectly across the hemisphere boundary.
+static Ogre::Quaternion alignedTo(const Ogre::Quaternion& q, const Ogre::Quaternion& ref)
+{
+    return (q.Dot(ref) < 0.0f) ? Ogre::Quaternion(-q.w, -q.x, -q.y, -q.z) : q;
+}
+
+static bool keyIsRedundant(const SimpleKey& prev,
+                           const SimpleKey& cur,
+                           const SimpleKey& next,
+                           const AnimationMerger::SimplifyTolerances& tol)
+{
+    // Degenerate: zero-width interval — the middle key cannot affect playback,
+    // so treat it as redundant.
+    const float span = next.time - prev.time;
+    if (span <= 1e-7f)
+        return true;
+
+    const float t = (cur.time - prev.time) / span;
+    if (t <= 0.0f || t >= 1.0f)
+        return false;
+
+    // Translation: linear lerp.
+    const Ogre::Vector3 lerpT = prev.translate + (next.translate - prev.translate) * t;
+    if ((lerpT - cur.translate).length() > tol.translation)
+        return false;
+
+    // Scale: linear lerp.
+    const Ogre::Vector3 lerpS = prev.scale + (next.scale - prev.scale) * t;
+    if ((lerpS - cur.scale).length() > tol.scale)
+        return false;
+
+    // Rotation: slerp on hemisphere-aligned quaternions, then compare with the
+    // angular-distance metric (acos|dot|, doubled to give the rotation angle).
+    const Ogre::Quaternion qPrev = prev.rotation;
+    const Ogre::Quaternion qNext = alignedTo(next.rotation, qPrev);
+    const Ogre::Quaternion qCur  = alignedTo(cur.rotation,  qPrev);
+    const Ogre::Quaternion slerpR = Ogre::Quaternion::Slerp(t, qPrev, qNext, /*shortestPath*/ true);
+
+    float dot = std::abs(slerpR.Dot(qCur));
+    if (dot > 1.0f) dot = 1.0f;
+    const float angleDeg = Ogre::Math::ACos(dot).valueDegrees() * 2.0f;
+    if (angleDeg > tol.rotationDeg)
+        return false;
+
+    return true;
+}
+
+// Walk a track's keys, remove redundant ones iteratively. Always preserves
+// the first and last keyframe. Returns the number of keys removed.
+static int simplifyTrackKeys(std::vector<SimpleKey>& keys,
+                             const AnimationMerger::SimplifyTolerances& tol)
+{
+    if (keys.size() < 3)
+        return 0;
+
+    // `kept` holds indices into the original `keys` array of keys we plan to keep.
+    // We extend it left-to-right and only commit a middle key when we're sure it
+    // can't be folded out by a later neighbor. Specifically, after appending
+    // index i, we look back at the previous "tentative" index j = kept[size-2]:
+    // if keys[j] is redundant given (kept[size-3], i) as neighbors, we drop j.
+    // This handles runs of collinear keys correctly.
+    std::vector<size_t> kept;
+    kept.reserve(keys.size());
+    kept.push_back(0);
+
+    for (size_t i = 1; i + 1 < keys.size(); ++i) {
+        kept.push_back(i);
+        // Try to fold out the previous tentative middle key while possible.
+        while (kept.size() >= 3) {
+            const size_t a = kept[kept.size() - 3];
+            const size_t b = kept[kept.size() - 2];
+            const size_t c = kept[kept.size() - 1];
+            if (keyIsRedundant(keys[a], keys[b], keys[c], tol)) {
+                kept.erase(kept.begin() + (kept.size() - 2));
+            } else {
+                break;
+            }
+        }
+    }
+    // Always keep the last keyframe; fold middle ones against it too.
+    kept.push_back(keys.size() - 1);
+    while (kept.size() >= 3) {
+        const size_t a = kept[kept.size() - 3];
+        const size_t b = kept[kept.size() - 2];
+        const size_t c = kept[kept.size() - 1];
+        if (keyIsRedundant(keys[a], keys[b], keys[c], tol)) {
+            kept.erase(kept.begin() + (kept.size() - 2));
+        } else {
+            break;
+        }
+    }
+
+    if (kept.size() == keys.size())
+        return 0;
+
+    std::vector<SimpleKey> reduced;
+    reduced.reserve(kept.size());
+    for (auto idx : kept)
+        reduced.push_back(keys[idx]);
+
+    int removed = static_cast<int>(keys.size() - reduced.size());
+    keys = std::move(reduced);
+    return removed;
+}
+
+} // namespace
+
+int AnimationMerger::simplifyAnimation(Ogre::Skeleton* skel,
+                                       const std::string& animName,
+                                       const SimplifyTolerances& tol)
+{
+    if (!skel || !skel->hasAnimation(animName))
+        return 0;
+
+    Ogre::Animation* srcAnim = skel->getAnimation(animName);
+
+    struct TrackData {
+        unsigned short handle;
+        Ogre::Node* associatedNode;
+        bool useShortestPath;
+        std::vector<SimpleKey> keys;
+    };
+
+    std::vector<TrackData> tracks;
+    int totalRemoved = 0;
+
+    for (const auto& [handle, srcTrack] : srcAnim->_getNodeTrackList())
+    {
+        TrackData td;
+        td.handle = handle;
+        td.associatedNode = srcTrack->getAssociatedNode();
+        td.useShortestPath = srcTrack->getUseShortestRotationPath();
+
+        unsigned short numKf = srcTrack->getNumKeyFrames();
+        td.keys.reserve(numKf);
+        for (unsigned short k = 0; k < numKf; ++k) {
+            const auto* kf = srcTrack->getNodeKeyFrame(k);
+            td.keys.push_back({kf->getTime(), kf->getTranslate(), kf->getRotation(), kf->getScale()});
+        }
+
+        totalRemoved += simplifyTrackKeys(td.keys, tol);
+        tracks.push_back(std::move(td));
+    }
+
+    if (totalRemoved == 0)
+        return 0;
+
+    const float animLength    = srcAnim->getLength();
+    const auto interpMode     = srcAnim->getInterpolationMode();
+    const auto rotInterpMode  = srcAnim->getRotationInterpolationMode();
+
+    skel->removeAnimation(animName);
+    Ogre::Animation* newAnim = skel->createAnimation(animName, animLength);
+    newAnim->setInterpolationMode(interpMode);
+    newAnim->setRotationInterpolationMode(rotInterpMode);
+
+    for (const auto& td : tracks) {
+        auto* newTrack = newAnim->createNodeTrack(td.handle);
+        if (td.associatedNode)
+            newTrack->setAssociatedNode(td.associatedNode);
+        newTrack->setUseShortestRotationPath(td.useShortestPath);
+        for (const auto& k : td.keys) {
+            auto* kf = newTrack->createNodeKeyFrame(k.time);
+            kf->setTranslate(k.translate);
+            kf->setRotation(k.rotation);
+            kf->setScale(k.scale);
+        }
+    }
+
+    return totalRemoved;
+}
+
+void AnimationMerger::analyzeRedundantKeyframes(const Ogre::Animation* anim,
+                                                const SimplifyTolerances& tol,
+                                                int* outOriginal,
+                                                int* outRedundant)
+{
+    int original = 0;
+    int redundant = 0;
+
+    if (anim) {
+        for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+            unsigned short numKf = track->getNumKeyFrames();
+            original += numKf;
+            if (numKf < 3) continue;
+
+            std::vector<SimpleKey> keys;
+            keys.reserve(numKf);
+            for (unsigned short k = 0; k < numKf; ++k) {
+                const auto* kf = track->getNodeKeyFrame(k);
+                keys.push_back({kf->getTime(), kf->getTranslate(), kf->getRotation(), kf->getScale()});
+            }
+            redundant += simplifyTrackKeys(keys, tol);
+        }
+    }
+
+    if (outOriginal)  *outOriginal  = original;
+    if (outRedundant) *outRedundant = redundant;
+}
+
 bool AnimationMerger::areSkeletonsCompatible(const Ogre::SkeletonPtr& a, const Ogre::SkeletonPtr& b)
 {
     if (!a || !b)
