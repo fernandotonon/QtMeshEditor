@@ -40,6 +40,47 @@ public:
                                  const std::string& animName,
                                  int step);
 
+    /// Tolerances for redundant-keyframe detection. A keyframe is "redundant"
+    /// when removing it leaves the lerp/slerp from its neighbors within tolerance
+    /// of the original value. Defaults are the "Balanced" preset — visually
+    /// indistinguishable on meter-scale character clips (e.g. Mixamo) while
+    /// dropping 40–60% of baked keys. Tighten for high-precision capture data.
+    struct SimplifyTolerances {
+        float translation = 1e-3f;     // world units (~1mm on meter-scale rigs)
+        float rotationDeg = 0.5f;      // degrees of angular drift
+        float scale       = 1e-3f;     // unitless multiplier delta
+    };
+
+    /// Map a preset name (case-insensitive: "conservative" / "balanced" /
+    /// "aggressive") to the corresponding tolerance triple. Single source of
+    /// truth shared by the CLI, MCP and Inspector — bumping a preset value in
+    /// one place updates every surface. Unknown presets fall back to the
+    /// "balanced" defaults and `*outOk` is set to false so callers can surface
+    /// a usage error.
+    static SimplifyTolerances tolerancesForPreset(const std::string& preset,
+                                                  bool* outOk = nullptr);
+
+    /// Simplify an animation by removing keyframes that are within tolerance of
+    /// the lerp/slerp interpolation between their immediate neighbors. First and
+    /// last keyframes are always preserved. Returns the number of keyframes removed.
+    static int simplifyAnimation(Ogre::Skeleton* skel,
+                                 const std::string& animName,
+                                 const SimplifyTolerances& tol);
+
+    /// Overload using default tolerances.
+    static int simplifyAnimation(Ogre::Skeleton* skel,
+                                 const std::string& animName) {
+        return simplifyAnimation(skel, animName, SimplifyTolerances{});
+    }
+
+    /// Count redundant keyframes across all tracks of an animation without modifying it.
+    /// outOriginal is the total keyframes (sum across tracks); outRedundant is how many
+    /// would be removed by simplifyAnimation() with the same tolerances.
+    static void analyzeRedundantKeyframes(const Ogre::Animation* anim,
+                                          const SimplifyTolerances& tol,
+                                          int* outOriginal,
+                                          int* outRedundant);
+
     /// Merge animations from sourceEntities into baseEntity's skeleton.
     /// Convenience wrapper; forwards an empty skeleton list to the 4-argument overload.
     static Ogre::Entity* mergeAnimations(

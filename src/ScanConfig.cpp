@@ -268,6 +268,14 @@ void ScanConfig::applyRuleOverrides(const QVariantMap& r)
     if (r.contains("min_anim_duration"))     minAnimDuration      = r["min_anim_duration"].toDouble();
     if (r.contains("require_animation_names")) requireAnimationNames = r["require_animation_names"].toStringList();
     if (r.contains("require_bone_names"))    requireBoneNames     = r["require_bone_names"].toStringList();
+    if (r.contains("redundant_keyframes_pct"))
+        redundantKeyframesPctThreshold = r["redundant_keyframes_pct"].toDouble();
+    if (r.contains("redundant_keyframes_translation_tol"))
+        redundantKeyframesTranslationTol = r["redundant_keyframes_translation_tol"].toDouble();
+    if (r.contains("redundant_keyframes_rotation_deg_tol"))
+        redundantKeyframesRotationDegTol = r["redundant_keyframes_rotation_deg_tol"].toDouble();
+    if (r.contains("redundant_keyframes_scale_tol"))
+        redundantKeyframesScaleTol = r["redundant_keyframes_scale_tol"].toDouble();
 }
 
 ScanConfig ScanConfig::withScopeOverrides(const QString& relativePath) const
@@ -400,6 +408,14 @@ ScanConfig ScanConfig::fromVariantMap(const QVariantMap& root)
             config.requireAnimationNames = rules.value("require_animation_names").toStringList();
         if (rules.contains("require_bone_names"))
             config.requireBoneNames = rules.value("require_bone_names").toStringList();
+        config.redundantKeyframesPctThreshold = rules.value(
+            "redundant_keyframes_pct", config.redundantKeyframesPctThreshold).toDouble();
+        config.redundantKeyframesTranslationTol = rules.value(
+            "redundant_keyframes_translation_tol", config.redundantKeyframesTranslationTol).toDouble();
+        config.redundantKeyframesRotationDegTol = rules.value(
+            "redundant_keyframes_rotation_deg_tol", config.redundantKeyframesRotationDegTol).toDouble();
+        config.redundantKeyframesScaleTol = rules.value(
+            "redundant_keyframes_scale_tol", config.redundantKeyframesScaleTol).toDouble();
     }
 
     // scopes section — map of path patterns to rule override maps

@@ -19,7 +19,9 @@
 #include "SentryReporter.h"
 
 #include <algorithm>
+#include <cmath>
 #include <set>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // Glob matching
@@ -97,6 +99,213 @@ QStringList ScanEngine::enumerateFiles(const ScanConfig& config, const QString& 
     result.sort(Qt::CaseInsensitive);
     return result;
 }
+
+// ---------------------------------------------------------------------------
+// Redundant-keyframe analysis (Assimp-side, no Ogre).
+//
+// Mirrors AnimationMerger::simplifyAnimation, which treats an Ogre node
+// keyframe atomically (a single record holding T+R+S at one time). We build
+// the same per-node view from Assimp by unioning the position/rotation/scale
+// time arrays per aiNodeAnim and sampling all three streams at each unique
+// time. Then a key is redundant when removing it leaves the lerp/slerp of
+// the *atomic* neighbors within tolerance for every channel — same definition
+// the simplifier applies. First and last keys per node track are preserved.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct RedundancyTolerances {
+    double translation = 1e-3;
+    double rotationDeg = 0.5;
+    double scale       = 1e-3;
+};
+
+struct NodeKey {
+    double time = 0.0;
+    double tx = 0.0, ty = 0.0, tz = 0.0;     // position
+    double sx = 1.0, sy = 1.0, sz = 1.0;     // scale
+    double qx = 0.0, qy = 0.0, qz = 0.0, qw = 1.0; // rotation
+};
+
+// Sample a sorted aiVectorKey array at time `t` using piecewise-linear
+// interpolation (Assimp's storage convention). Empty arrays return the
+// supplied default.
+static aiVector3D sampleVecKeys(const aiVectorKey* keys, unsigned n, double t,
+                                const aiVector3D& fallback)
+{
+    if (n == 0) return fallback;
+    if (n == 1 || t <= keys[0].mTime) return keys[0].mValue;
+    if (t >= keys[n-1].mTime) return keys[n-1].mValue;
+    // Linear scan — channel arrays are short (~hundreds), no need for binary search.
+    for (unsigned i = 1; i < n; ++i) {
+        if (t <= keys[i].mTime) {
+            const double span = keys[i].mTime - keys[i-1].mTime;
+            if (span <= 1e-9) return keys[i].mValue;
+            const float u = static_cast<float>((t - keys[i-1].mTime) / span);
+            return keys[i-1].mValue + (keys[i].mValue - keys[i-1].mValue) * u;
+        }
+    }
+    return keys[n-1].mValue;
+}
+
+static aiQuaternion sampleQuatKeys(const aiQuatKey* keys, unsigned n, double t,
+                                   const aiQuaternion& fallback)
+{
+    if (n == 0) return fallback;
+    if (n == 1 || t <= keys[0].mTime) return keys[0].mValue;
+    if (t >= keys[n-1].mTime) return keys[n-1].mValue;
+    for (unsigned i = 1; i < n; ++i) {
+        if (t <= keys[i].mTime) {
+            const double span = keys[i].mTime - keys[i-1].mTime;
+            if (span <= 1e-9) return keys[i].mValue;
+            const float u = static_cast<float>((t - keys[i-1].mTime) / span);
+            aiQuaternion out;
+            aiQuaternion::Interpolate(out, keys[i-1].mValue, keys[i].mValue, u);
+            return out;
+        }
+    }
+    return keys[n-1].mValue;
+}
+
+// Union of distinct times across T/R/S streams for one aiNodeAnim, in order.
+static std::vector<double> unionTimes(const aiNodeAnim* ch)
+{
+    std::vector<double> times;
+    times.reserve(ch->mNumPositionKeys + ch->mNumRotationKeys + ch->mNumScalingKeys);
+    for (unsigned i = 0; i < ch->mNumPositionKeys; ++i)
+        times.push_back(ch->mPositionKeys[i].mTime);
+    for (unsigned i = 0; i < ch->mNumRotationKeys; ++i)
+        times.push_back(ch->mRotationKeys[i].mTime);
+    for (unsigned i = 0; i < ch->mNumScalingKeys; ++i)
+        times.push_back(ch->mScalingKeys[i].mTime);
+    std::sort(times.begin(), times.end());
+    times.erase(std::unique(times.begin(), times.end(),
+        [](double a, double b) { return std::fabs(a - b) < 1e-7; }), times.end());
+    return times;
+}
+
+// Quaternion dot product (avoids depending on Assimp's operator).
+static double quatDot(const aiQuaternion& a, const aiQuaternion& b)
+{
+    return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w;
+}
+static aiQuaternion alignedTo(const aiQuaternion& q, const aiQuaternion& ref)
+{
+    if (quatDot(q, ref) < 0.0)
+        return aiQuaternion(-q.w, -q.x, -q.y, -q.z);
+    return q;
+}
+
+// Decide whether key B (between A and C) can be safely dropped given that
+// the atomic node value contains T, R, and S — i.e. all three channels must
+// be within their respective tolerances at B's time.
+static bool nodeKeyIsRedundant(const NodeKey& a, const NodeKey& b, const NodeKey& c,
+                               const RedundancyTolerances& tol)
+{
+    const double span = c.time - a.time;
+    if (span <= 1e-7) return true;
+    const double u = (b.time - a.time) / span;
+    if (u <= 0.0 || u >= 1.0) return false;
+
+    // Translation
+    const double dtx = (a.tx + (c.tx - a.tx) * u) - b.tx;
+    const double dty = (a.ty + (c.ty - a.ty) * u) - b.ty;
+    const double dtz = (a.tz + (c.tz - a.tz) * u) - b.tz;
+    if (std::sqrt(dtx*dtx + dty*dty + dtz*dtz) > tol.translation) return false;
+
+    // Scale
+    const double dsx = (a.sx + (c.sx - a.sx) * u) - b.sx;
+    const double dsy = (a.sy + (c.sy - a.sy) * u) - b.sy;
+    const double dsz = (a.sz + (c.sz - a.sz) * u) - b.sz;
+    if (std::sqrt(dsx*dsx + dsy*dsy + dsz*dsz) > tol.scale) return false;
+
+    // Rotation: slerp on hemisphere-aligned quats, compare angular distance.
+    const aiQuaternion qA(static_cast<float>(a.qw), static_cast<float>(a.qx),
+                          static_cast<float>(a.qy), static_cast<float>(a.qz));
+    aiQuaternion qC(static_cast<float>(c.qw), static_cast<float>(c.qx),
+                    static_cast<float>(c.qy), static_cast<float>(c.qz));
+    aiQuaternion qB(static_cast<float>(b.qw), static_cast<float>(b.qx),
+                    static_cast<float>(b.qy), static_cast<float>(b.qz));
+    qC = alignedTo(qC, qA);
+    qB = alignedTo(qB, qA);
+    aiQuaternion slerp;
+    aiQuaternion::Interpolate(slerp, qA, qC, static_cast<float>(u));
+    double d = std::fabs(quatDot(slerp, qB));
+    if (d > 1.0) d = 1.0;
+    const double angleDeg = std::acos(d) * 2.0 * 180.0 / M_PI;
+    return angleDeg <= tol.rotationDeg;
+}
+
+// Walk one node's atomic keys and count how many would be folded out by
+// simplifyAnimation under the same tolerances. First/last preserved.
+static int countRedundantNodeKeys(const std::vector<NodeKey>& keys,
+                                  const RedundancyTolerances& tol)
+{
+    if (keys.size() < 3) return 0;
+    std::vector<size_t> kept;
+    kept.reserve(keys.size());
+    kept.push_back(0);
+    for (size_t i = 1; i + 1 < keys.size(); ++i) {
+        kept.push_back(i);
+        while (kept.size() >= 3) {
+            const size_t a = kept[kept.size() - 3];
+            const size_t b = kept[kept.size() - 2];
+            const size_t c = kept[kept.size() - 1];
+            if (nodeKeyIsRedundant(keys[a], keys[b], keys[c], tol))
+                kept.erase(kept.begin() + (kept.size() - 2));
+            else
+                break;
+        }
+    }
+    kept.push_back(keys.size() - 1);
+    while (kept.size() >= 3) {
+        const size_t a = kept[kept.size() - 3];
+        const size_t b = kept[kept.size() - 2];
+        const size_t c = kept[kept.size() - 1];
+        if (nodeKeyIsRedundant(keys[a], keys[b], keys[c], tol))
+            kept.erase(kept.begin() + (kept.size() - 2));
+        else
+            break;
+    }
+    return static_cast<int>(keys.size()) - static_cast<int>(kept.size());
+}
+
+static void analyzeAnimationRedundancy(const aiAnimation* anim,
+                                       const RedundancyTolerances& tol,
+                                       int* outTotal, int* outRedundant)
+{
+    int total = 0;
+    int redundant = 0;
+    for (unsigned c = 0; c < anim->mNumChannels; ++c) {
+        const aiNodeAnim* ch = anim->mChannels[c];
+        const std::vector<double> times = unionTimes(ch);
+        if (times.empty()) continue;
+
+        // Build atomic node keys by sampling every stream at each unique time.
+        std::vector<NodeKey> keys;
+        keys.reserve(times.size());
+        for (double t : times) {
+            NodeKey k;
+            k.time = t;
+            const aiVector3D pos = sampleVecKeys(ch->mPositionKeys, ch->mNumPositionKeys, t,
+                                                 aiVector3D(0,0,0));
+            const aiVector3D scl = sampleVecKeys(ch->mScalingKeys, ch->mNumScalingKeys, t,
+                                                 aiVector3D(1,1,1));
+            const aiQuaternion rot = sampleQuatKeys(ch->mRotationKeys, ch->mNumRotationKeys, t,
+                                                    aiQuaternion(1,0,0,0));
+            k.tx = pos.x; k.ty = pos.y; k.tz = pos.z;
+            k.sx = scl.x; k.sy = scl.y; k.sz = scl.z;
+            k.qw = rot.w; k.qx = rot.x; k.qy = rot.y; k.qz = rot.z;
+            keys.push_back(k);
+        }
+        total += static_cast<int>(keys.size());
+        redundant += countRedundantNodeKeys(keys, tol);
+    }
+    if (outTotal)     *outTotal     = total;
+    if (outRedundant) *outRedundant = redundant;
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Asset inspection via Assimp (lightweight — no Ogre needed)
@@ -183,6 +392,15 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
             maxKeys = std::max(maxKeys, ch->mNumScalingKeys);
         }
         info.animationKeyframeCounts.append(static_cast<int>(maxKeys));
+
+        // Always compute redundant-keyframe counts under the default
+        // (Balanced) tolerances. The scan rule re-evaluates with its own
+        // configured tolerances if it's enabled — these defaults just keep
+        // the JSON report informative for tooling that consumes it.
+        int animTotal = 0, animRedundant = 0;
+        analyzeAnimationRedundancy(anim, RedundancyTolerances{}, &animTotal, &animRedundant);
+        info.totalKeyframes     += animTotal;
+        info.redundantKeyframes += animRedundant;
     }
 
     // Material names + texture references
@@ -466,6 +684,67 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
                 findings.append({asset.relativePath, "require_animation_names", Severity::Error,
                                  QString("Required animation '%1' not found (has: %2)")
                                      .arg(required, asset.animationNames.join(", "))});
+            }
+        }
+    }
+
+    // ---- redundant_keyframes_pct ----
+    // Walks the animation channels under the configured tolerances and warns if
+    // a meaningful share could be folded out by `qtmesh anim --simplify`.
+    if (config.redundantKeyframesPctThreshold > 0.0 && asset.animationCount > 0) {
+        Assimp::Importer importer;
+        const aiScene* scene = importer.ReadFile(
+            asset.filePath.toStdString(),
+            aiProcess_ValidateDataStructure);
+        // Use the same accept-policy as inspectAsset so animation-only FBX
+        // (which carries AI_SCENE_FLAGS_INCOMPLETE) still goes through the rule.
+        QString reimportErr;
+        const bool readFailed = ScanEngine::isAssimpResultLoadFailure(
+            scene, importer.GetErrorString(), &reimportErr);
+        if (!readFailed) {
+            RedundancyTolerances tol;
+            tol.translation = config.redundantKeyframesTranslationTol;
+            tol.rotationDeg = config.redundantKeyframesRotationDegTol;
+            tol.scale       = config.redundantKeyframesScaleTol;
+
+            int total = 0;
+            int redundant = 0;
+            for (unsigned i = 0; i < scene->mNumAnimations; ++i) {
+                int t = 0, r = 0;
+                analyzeAnimationRedundancy(scene->mAnimations[i], tol, &t, &r);
+                total += t;
+                redundant += r;
+            }
+
+            // The default-tolerance numbers were already filled at inspectAsset
+            // time, so we don't write back here — the rule's percentage may use
+            // different tolerances than the JSON report's totals, and we don't
+            // want them to diverge mid-scan.
+
+            if (total > 0) {
+                const double pct = 100.0 * redundant / total;
+                if (pct >= config.redundantKeyframesPctThreshold) {
+                    const qint64 originalSize  = asset.fileSize;
+                    const qint64 projectedSize = static_cast<qint64>(
+                        originalSize * (1.0 - (pct / 100.0)));
+                    const qint64 savedBytes    = originalSize - projectedSize;
+
+                    auto formatBytes = [](qint64 bytes) -> QString {
+                        if (bytes >= 1024 * 1024)
+                            return QString("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 2);
+                        if (bytes >= 1024)
+                            return QString("%1 KB").arg(bytes / 1024.0, 0, 'f', 1);
+                        return QString("%1 B").arg(bytes);
+                    };
+
+                    findings.append({asset.relativePath, "redundant_keyframes_pct", Severity::Warning,
+                        QString("%1% redundant keyframes (%2/%3). Simplify it to save ~%4. "
+                                "Original size: %5, projected size: %6")
+                            .arg(pct, 0, 'f', 1).arg(redundant).arg(total)
+                            .arg(formatBytes(savedBytes))
+                            .arg(formatBytes(originalSize))
+                            .arg(formatBytes(projectedSize))});
+                }
             }
         }
     }
@@ -767,6 +1046,10 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
             for (const auto& b : asset.boneNames) bones.append(b);
             ao["bones"] = bones;
         }
+        if (asset.totalKeyframes > 0) {
+            ao["totalKeyframes"]     = asset.totalKeyframes;
+            ao["redundantKeyframes"] = asset.redundantKeyframes;
+        }
 
         if (asset.loadError)
             ao["loadError"] = true;
@@ -866,6 +1149,7 @@ QString ScanEngine::formatSarif(const ScanResult& result)
     ruleDescriptions["min_vertex_count"]        = "Asset has fewer than minimum vertices";
     ruleDescriptions["require_animation_names"] = "Required animation not found in asset";
     ruleDescriptions["require_bone_names"]      = "Required bone not found in skeleton";
+    ruleDescriptions["redundant_keyframes_pct"] = "Animation contains redundant keyframes that could be safely simplified";
 
     // Collect unique rules used in findings
     QSet<QString> usedRules;

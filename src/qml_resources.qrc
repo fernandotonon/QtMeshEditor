@@ -22,6 +22,7 @@
     <file alias="TransformField.qml">../qml/TransformField.qml</file>
     <file alias="SceneTreeNode.qml">../qml/SceneTreeNode.qml</file>
     <file alias="ProfileGraph.qml">../qml/ProfileGraph.qml</file>
+    <file alias="ThemedComboBox.qml">../qml/ThemedComboBox.qml</file>
   </qresource>
   <qresource prefix="/AnimationControl">
     <file alias="AnimationControlPanel.qml">../qml/AnimationControlPanel.qml</file>

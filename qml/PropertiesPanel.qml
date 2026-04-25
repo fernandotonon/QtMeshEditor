@@ -1181,20 +1181,11 @@ Rectangle {
                 spacing: 6
                 width: parent.width - 16
 
-                ComboBox {
+                ThemedComboBox {
                     id: exportFormatCombo
                     width: 90; height: 26
                     model: ["gltf", "glb", "fbx", "obj", "mesh"]
-                    background: Rectangle {
-                        color: PropertiesPanelController.headerColor
-                        border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 3
-                    }
-                    contentItem: Text {
-                        leftPadding: 6
-                        text: exportFormatCombo.displayText
-                        color: PropertiesPanelController.textColor; font.pixelSize: 11
-                        verticalAlignment: Text.AlignVCenter
-                    }
+                    font.pixelSize: 11
                 }
 
                 Rectangle {
@@ -1641,10 +1632,37 @@ Rectangle {
 
                     // Expanded content
                     Column {
+                        id: entityGroupColumn
                         visible: groupExpanded
                         width: parent.width
                         spacing: 2
                         leftPadding: 8
+
+                        // Per-entity tolerance preset for the Simplify button.
+                        // Stored on the column so every animation row in this group reads
+                        // the same value.
+                        property string simplifyPreset: "balanced"
+
+                        // Tolerance preset row
+                        Row {
+                            spacing: 6; topPadding: 4; bottomPadding: 2
+                            Text {
+                                text: "Simplify tolerance:"
+                                color: PropertiesPanelController.textColor; font.pixelSize: 10
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            ThemedComboBox {
+                                id: simplifyPresetCombo
+                                width: 130; height: 22
+                                model: ["Conservative", "Balanced", "Aggressive"]
+                                currentIndex: 1
+                                font.pixelSize: 10
+                                onActivated: {
+                                    var v = ["conservative", "balanced", "aggressive"][currentIndex]
+                                    entityGroupColumn.simplifyPreset = v
+                                }
+                            }
+                        }
 
                         // Animation rows
                         Repeater {
@@ -1693,6 +1711,66 @@ Rectangle {
                                         Rectangle { anchors.fill: parent; anchors.margins: -2; z: -1; color: PropertiesPanelController.inputColor; border.color: PropertiesPanelController.highlightColor; border.width: 1; radius: 2 }
                                         onEditingFinished: { if (text.length > 0 && text !== modelData.name) PropertiesPanelController.renameAnimation(grp.entity, modelData.name, text); visible = false }
                                         Keys.onEscapePressed: visible = false
+                                    }
+
+                                    // Simplify button — removes redundant keyframes from this animation.
+                                    // Hidden for non-skeletal entities since simplifyAnimation
+                                    // requires skeletal node tracks.
+                                    Rectangle {
+                                        id: simplifyBtn
+                                        visible: grp.hasSkeleton
+                                        width: 22; height: 18; radius: 3
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        color: simplifyMouse.pressed ? Qt.darker(PropertiesPanelController.headerColor, 1.2)
+                                             : simplifyMouse.containsMouse ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
+                                             : PropertiesPanelController.headerColor
+                                        border.color: PropertiesPanelController.borderColor; border.width: 1
+
+                                        // Lazy-cached redundancy analysis. The walk is O(N keyframes),
+                                        // ~25ms on a Mixamo clip — running it from a binding fires on
+                                        // every delegate refresh, which dominates the inspector frame
+                                        // budget. We compute on first hover, then re-run whenever the
+                                        // user changes the preset.
+                                        property var cachedAnalysis: null
+                                        function refreshAnalysis() {
+                                            cachedAnalysis = PropertiesPanelController.analyzeAnimationKeyframes(
+                                                grp.entity, modelData.name, entityGroupColumn.simplifyPreset)
+                                        }
+                                        Connections {
+                                            target: entityGroupColumn
+                                            function onSimplifyPresetChanged() { simplifyBtn.cachedAnalysis = null }
+                                        }
+
+                                        Text {
+                                            anchors.centerIn: parent
+                                            text: "\u2702"  // scissors — keyframe trimming
+                                            color: PropertiesPanelController.textColor; font.pixelSize: 11
+                                        }
+                                        ToolTip.visible: simplifyMouse.containsMouse
+                                        ToolTip.delay: 600
+                                        ToolTip.text: {
+                                            var a = simplifyBtn.cachedAnalysis
+                                            if (!a) return "Simplify (hover to analyze…)"
+                                            if (a.total === 0) return "Simplify (analyze unavailable)"
+                                            return "Simplify (" + entityGroupColumn.simplifyPreset + "): "
+                                                   + a.redundant + " of " + a.total
+                                                   + " keyframes redundant (" + a.percent.toFixed(1) + "%)"
+                                        }
+                                        MouseArea {
+                                            id: simplifyMouse; anchors.fill: parent; hoverEnabled: true
+                                            onEntered: {
+                                                if (!simplifyBtn.cachedAnalysis)
+                                                    simplifyBtn.refreshAnalysis()
+                                            }
+                                            onClicked: {
+                                                var preset = entityGroupColumn.simplifyPreset
+                                                var removed = PropertiesPanelController.simplifyAnimation(grp.entity, modelData.name, preset)
+                                                simplifyResultPopup.removed = removed
+                                                simplifyResultPopup.animName = modelData.name
+                                                simplifyResultPopup.open()
+                                                simplifyBtn.cachedAnalysis = null  // invalidate after mutation
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1901,6 +1979,45 @@ Rectangle {
 
             // Bottom padding
             Item { width: 1; height: 8 }
+        }
+    }
+
+    // Result popup for the per-animation Simplify button.
+    Popup {
+        id: simplifyResultPopup
+        modal: true; focus: true
+        anchors.centerIn: Overlay.overlay
+        padding: 16
+        property int removed: 0
+        property string animName: ""
+        background: Rectangle {
+            color: PropertiesPanelController.panelColor
+            border.color: PropertiesPanelController.borderColor; border.width: 1
+            radius: 4
+        }
+        contentItem: Column {
+            spacing: 10
+            Text {
+                text: simplifyResultPopup.removed > 0
+                      ? "Removed " + simplifyResultPopup.removed + " redundant keyframe(s) from '" + simplifyResultPopup.animName + "'."
+                      : "No redundant keyframes found in '" + simplifyResultPopup.animName + "'."
+                color: PropertiesPanelController.textColor
+                font.pixelSize: 12
+                wrapMode: Text.WordWrap; width: 320
+            }
+            Rectangle {
+                width: 80; height: 24; radius: 3
+                anchors.right: parent.right
+                color: simplifyOkMouse.containsMouse
+                    ? Qt.lighter(PropertiesPanelController.headerColor, 1.2)
+                    : PropertiesPanelController.headerColor
+                border.color: PropertiesPanelController.borderColor
+                Text { anchors.centerIn: parent; text: "OK"; color: PropertiesPanelController.textColor; font.pixelSize: 11 }
+                MouseArea {
+                    id: simplifyOkMouse; anchors.fill: parent; hoverEnabled: true
+                    onClicked: simplifyResultPopup.close()
+                }
+            }
         }
     }
 }

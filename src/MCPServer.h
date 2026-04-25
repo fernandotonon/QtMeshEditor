@@ -153,6 +153,8 @@ private:
     QJsonObject toolToggleMeshInfo(const QJsonObject &args);
     QJsonObject toolMergeAnimations(const QJsonObject &args);
     QJsonObject toolResampleAnimation(const QJsonObject &args);
+    QJsonObject toolSimplifyAnimation(const QJsonObject &args);
+    QJsonObject toolAnalyzeAnimation(const QJsonObject &args);
     QJsonObject toolSaveScene(const QJsonObject &args);
     QJsonObject toolOpenScene(const QJsonObject &args);
     QJsonObject toolValidateMesh(const QJsonObject &args);
@@ -226,7 +228,8 @@ private:
     // MCP Protocol version
     static constexpr const char* MCP_VERSION = "2024-11-05";
     static constexpr const char* SERVER_NAME = "QtMeshEditor";
-    static constexpr const char* SERVER_VERSION = "1.3.0";
+    // 1.4.0 — added simplify_animation / analyze_animation tools
+    static constexpr const char* SERVER_VERSION = "1.4.0";
 };
 
 #endif // MCPSERVER_H
