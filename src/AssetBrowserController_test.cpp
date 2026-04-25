@@ -226,6 +226,7 @@ TEST_F(AssetBrowserControllerTests, FileTypeClassification) {
     auto* abc = AssetBrowserController::instance();
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.fbx"), "mesh");
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.gltf"), "mesh");
+    EXPECT_EQ(abc->fileTypeForPath("/foo/bar.vrm"), "mesh");
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.obj"), "mesh");
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.png"), "texture");
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.jpg"), "texture");

@@ -23,6 +23,7 @@ scan:
     - "**/*.fbx"
     - "**/*.glb"
     - "**/*.gltf"
+    - "**/*.vrm"
     - "**/*.obj"
   exclude:
     - "**/third_party/**"
@@ -32,7 +33,7 @@ scan:
 
 rules:
   # Format restrictions
-  allowed_formats: [fbx, glb, gltf, obj]
+  allowed_formats: [fbx, glb, gltf, vrm, obj]
   forbidden_extensions: [dae, 3ds]
 
   # Size & complexity limits

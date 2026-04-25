@@ -336,6 +336,7 @@ QString CLIPipeline::formatForExtension(const QString& path)
         {".glb2", "glTF 2.0 Binary (*.glb2)"},
         {".gltf", "glTF 2.0 (*.gltf)"},
         {".gltf2", "glTF 2.0 (*.gltf2)"},
+        {".vrm", "VRM / glTF 2.0 (*.vrm)"},
         {".dae", "Collada (*.dae)"},
         {".obj", "OBJ (*.obj)"},
         {".stl", "STL (*.stl)"},

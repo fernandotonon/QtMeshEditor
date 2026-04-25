@@ -497,6 +497,7 @@ TEST(CLIPipelineFormatForExtension, PathWithDirectories)
     EXPECT_EQ(CLIPipeline::formatForExtension("/tmp/dir/model.glb"), "glTF 2.0 Binary (*.glb)");
     EXPECT_EQ(CLIPipeline::formatForExtension("/tmp/dir/model.gltf"), "glTF 2.0 (*.gltf)");
     EXPECT_EQ(CLIPipeline::formatForExtension("C:\\dir\\model.gltf2"), "glTF 2.0 (*.gltf2)");
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.vrm"), "VRM / glTF 2.0 (*.vrm)");
 }
 
 // --- printUsage / printVersion smoke tests ---

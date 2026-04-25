@@ -12,7 +12,7 @@
 AssetBrowserController* AssetBrowserController::m_pSingleton = nullptr;
 
 const QStringList AssetBrowserController::s_meshExtensions = {
-    "fbx", "gltf", "glb", "gltf2", "obj", "dae", "stl", "mesh", "3ds", "blend", "ply",
+    "fbx", "gltf", "glb", "gltf2", "vrm", "obj", "dae", "stl", "mesh", "3ds", "blend", "ply",
     "x", "x3d", "lwo", "lws", "ac", "ms3d", "cob", "scn", "bvh", "irrmesh", "irr",
     "mdl", "md2", "md3", "md5mesh", "smd", "ogex", "b3d", "q3d", "nff", "off",
     "raw", "ter", "hmp", "assbin", "mesh.xml"

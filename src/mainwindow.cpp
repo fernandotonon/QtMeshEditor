@@ -1355,7 +1355,7 @@ void MainWindow::on_actionOpen_Scene_triggered()
 
     QString fileName = QFileDialog::getOpenFileName(this, tr("Open Scene"),
                                                     "",
-                                                    tr("Scene Files (*.scene.glb *.scene.gltf);;glTF Files (*.gltf *.glb);;All Files (*)"),
+                                                    tr("Scene Files (*.scene.glb *.scene.gltf);;glTF / VRM (*.gltf *.glb *.vrm);;All Files (*)"),
                                                     nullptr, QFileDialog::DontUseNativeDialog);
     if (fileName.isEmpty()) return;
 
