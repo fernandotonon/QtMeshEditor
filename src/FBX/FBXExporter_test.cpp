@@ -7,6 +7,7 @@
 #include <QFile>
 #include <QDir>
 #include <QTemporaryFile>
+#include <QTemporaryDir>
 #include <QCoreApplication>
 #include <QApplication>
 #include <QThread>
@@ -452,6 +453,7 @@ class FBXExporterCoverageTest : public ::testing::Test {
 protected:
     QApplication* app = nullptr;
     int meshCounter = 0;
+    QTemporaryDir textureDir;
 
     void SetUp() override {
         SelectionSet::kill();
@@ -464,7 +466,38 @@ protected:
         if (!tryInitOgre()) {
             GTEST_SKIP() << "Skipping: Ogre initialization failed";
         }
+        if (!canLoadMeshFiles()) {
+            GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
+        }
         createStandardOgreMaterials();
+
+        // Provide a real texture file so FBXExporter can embed Video.Content.
+        ASSERT_TRUE(textureDir.isValid());
+        const QString texPath = QDir(textureDir.path()).filePath("diffuse_tex.png");
+        QFile tex(texPath);
+        ASSERT_TRUE(tex.open(QIODevice::WriteOnly));
+        // 1x1 transparent PNG
+        const QByteArray png =
+            QByteArray::fromHex(
+                "89504E470D0A1A0A"
+                "0000000D49484452"
+                "0000000100000001"
+                "08060000001F15C489"
+                "0000000A49444154"
+                "789C63600000020001"
+                "E221BC3300000000"
+                "49454E44AE426082");
+        tex.write(png);
+        tex.close();
+
+        auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+        const Ogre::String texGroup = "FBXExporterTestTextures";
+        if (!rgm.resourceGroupExists(texGroup))
+            rgm.createResourceGroup(texGroup);
+        rgm.addResourceLocation(textureDir.path().toStdString(), "FileSystem", texGroup, false);
+        // Don't touch the DEFAULT group (it may already be initialized by the engine).
+        // Initialize only our dedicated test group so openResource() can find the texture.
+        try { rgm.initialiseResourceGroup(texGroup); } catch (...) {}
     }
 
     void TearDown() override {
@@ -1884,6 +1917,13 @@ TEST_F(FBXExporterCoverageTest, TextureAndVideo) {
     auto* vidType = vidNodes[0]->find("Type");
     ASSERT_NE(vidType, nullptr);
     EXPECT_EQ(vidType->properties[0].stringVal, "Clip");
+
+    // Embedded payload should exist
+    auto* content = vidNodes[0]->find("Content");
+    ASSERT_NE(content, nullptr);
+    ASSERT_FALSE(content->properties.empty());
+    EXPECT_EQ(content->properties[0].type, 'R');
+    EXPECT_GT(content->properties[0].stringVal.size(), 0u);
 
     cleanup(r);
 }

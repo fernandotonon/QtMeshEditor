@@ -40,6 +40,8 @@ THE SOFTWARE.
 #include <OgreMaterialManager.h>
 #include <OgreTechnique.h>
 #include <OgrePass.h>
+#include <OgreResourceGroupManager.h>
+#include <OgreDataStream.h>
 
 #include <fstream>
 #include <vector>
@@ -1582,6 +1584,64 @@ private:
     }
 
     // ── Texture objects ─────────────────────────────────────────
+    static std::vector<uint8_t> readOgreResourceBytes(const std::string& resourceName)
+    {
+        const auto readAll = [](const Ogre::DataStreamPtr& stream) -> std::vector<uint8_t> {
+            if (!stream)
+                return {};
+
+            std::vector<uint8_t> data;
+            if (const size_t sz = stream->size(); sz > 0 && sz != static_cast<size_t>(-1)) {
+                data.resize(sz);
+                const size_t n = stream->read(data.data(), sz);
+                data.resize(n);
+                return data;
+            }
+
+            // Fallback if size is unknown: read in chunks
+            constexpr size_t kChunk = 64 * 1024;
+            std::vector<uint8_t> chunk(kChunk);
+            while (!stream->eof()) {
+                const size_t n = stream->read(chunk.data(), kChunk);
+                if (n == 0)
+                    break;
+                data.insert(data.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(n));
+            }
+            return data;
+        };
+
+        try {
+            const auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+            const auto openInGroup = [&](const Ogre::String& group) -> Ogre::DataStreamPtr {
+                if (group.empty() || !rgm.resourceExists(group, resourceName))
+                    return {};
+                return rgm.openResource(resourceName, group);
+            };
+
+            // Prefer the group Ogre says contains it.
+            if (const Ogre::String preferred = rgm.findGroupContainingResource(resourceName); !preferred.empty()) {
+                if (auto stream = openInGroup(preferred))
+                    return readAll(stream);
+            }
+
+            // Then try default group.
+            if (auto stream = openInGroup(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+                return readAll(stream);
+
+            // Finally scan all groups (dynamic groups may exist, e.g. path-based groups).
+            for (const auto& g : rgm.getResourceGroups()) {
+                if (auto stream = openInGroup(g))
+                    return readAll(stream);
+            }
+
+            return {};
+        } catch (const Ogre::Exception&) {
+            return {};
+        } catch (const std::exception&) {
+            return {};
+        }
+    }
+
     void writeTextureObjects()
     {
         std::set<std::string> seen;
@@ -1635,6 +1695,15 @@ private:
                 m_w.beginNode("Type"); m_w.writePropertyS("Clip"); m_w.endProperties(); m_w.endNodeLeaf();
                 m_w.beginNode("FileName"); m_w.writePropertyS(texName); m_w.endProperties(); m_w.endNodeLeaf();
                 m_w.beginNode("RelativeFilename"); m_w.writePropertyS(texName); m_w.endProperties(); m_w.endNodeLeaf();
+
+                // Embed texture bytes when the resource is available. Many tools (e.g. Mixamo exports)
+                // expect texture payloads to be embedded via Video.Content.
+                if (const auto bytes = readOgreResourceBytes(texName); !bytes.empty()) {
+                    m_w.beginNode("Content");
+                    m_w.writePropertyR(bytes);
+                    m_w.endProperties();
+                    m_w.endNodeLeaf();
+                }
 
                 m_w.endNode(); // Video
             }
