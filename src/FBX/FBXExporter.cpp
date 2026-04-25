@@ -1586,35 +1586,15 @@ private:
     // ── Texture objects ─────────────────────────────────────────
     static std::vector<uint8_t> readOgreResourceBytes(const std::string& resourceName)
     {
-        try {
-            auto& rgm = Ogre::ResourceGroupManager::getSingleton();
-            Ogre::DataStreamPtr stream;
-
-            // Prefer the group Assimp/Ogre says contains the resource, but fall back to scanning
-            // all groups. (Some pipelines create dynamic groups with non-trivial names, e.g. paths.)
-            Ogre::String preferred = rgm.findGroupContainingResource(resourceName);
-            if (!preferred.empty() && rgm.resourceExists(preferred, resourceName))
-                stream = rgm.openResource(resourceName, preferred);
-            if (stream.isNull() && rgm.resourceExists(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, resourceName))
-                stream = rgm.openResource(resourceName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
-            if (stream.isNull()) {
-                const auto groups = rgm.getResourceGroups();
-                for (const auto& g : groups) {
-                    if (rgm.resourceExists(g, resourceName)) {
-                        stream = rgm.openResource(resourceName, g);
-                        if (!stream.isNull()) break;
-                    }
-                }
-            }
-            if (stream.isNull())
+        const auto readAll = [](const Ogre::DataStreamPtr& stream) -> std::vector<uint8_t> {
+            if (!stream)
                 return {};
 
             std::vector<uint8_t> data;
-            const size_t sz = stream->size();
-            if (sz > 0 && sz != static_cast<size_t>(-1)) {
+            if (const size_t sz = stream->size(); sz > 0 && sz != static_cast<size_t>(-1)) {
                 data.resize(sz);
-                const size_t read = stream->read(data.data(), sz);
-                data.resize(read);
+                const size_t n = stream->read(data.data(), sz);
+                data.resize(n);
                 return data;
             }
 
@@ -1623,11 +1603,41 @@ private:
             std::vector<uint8_t> chunk(kChunk);
             while (!stream->eof()) {
                 const size_t n = stream->read(chunk.data(), kChunk);
-                if (n == 0) break;
+                if (n == 0)
+                    break;
                 data.insert(data.end(), chunk.begin(), chunk.begin() + static_cast<std::ptrdiff_t>(n));
             }
             return data;
-        } catch (...) {
+        };
+
+        try {
+            const auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+            const auto openInGroup = [&](const Ogre::String& group) -> Ogre::DataStreamPtr {
+                if (group.empty() || !rgm.resourceExists(group, resourceName))
+                    return {};
+                return rgm.openResource(resourceName, group);
+            };
+
+            // Prefer the group Ogre says contains it.
+            if (const Ogre::String preferred = rgm.findGroupContainingResource(resourceName); !preferred.empty()) {
+                if (auto stream = openInGroup(preferred))
+                    return readAll(stream);
+            }
+
+            // Then try default group.
+            if (auto stream = openInGroup(Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME))
+                return readAll(stream);
+
+            // Finally scan all groups (dynamic groups may exist, e.g. path-based groups).
+            for (const auto& g : rgm.getResourceGroups()) {
+                if (auto stream = openInGroup(g))
+                    return readAll(stream);
+            }
+
+            return {};
+        } catch (const Ogre::Exception&) {
+            return {};
+        } catch (const std::exception&) {
             return {};
         }
     }
@@ -1688,8 +1698,7 @@ private:
 
                 // Embed texture bytes when the resource is available. Many tools (e.g. Mixamo exports)
                 // expect texture payloads to be embedded via Video.Content.
-                const auto bytes = readOgreResourceBytes(texName);
-                if (!bytes.empty()) {
+                if (const auto bytes = readOgreResourceBytes(texName); !bytes.empty()) {
                     m_w.beginNode("Content");
                     m_w.writePropertyR(bytes);
                     m_w.endProperties();
