@@ -349,6 +349,42 @@ public:
     }
     /// @}
 
+    /// @name Merge vertices
+    /// @{
+    /**
+     * @brief Collapse the current vertex selection into a single survivor at
+     *        their centroid. No-op if fewer than 2 vertices are selected or
+     *        the selection spans submeshes (HE refuses cross-submesh merges
+     *        to preserve UV seams). Pushes one undo command labeled
+     *        "Merge At Center". Returns the count of removed vertices
+     *        (selection size minus 1) on success, 0 otherwise.
+     */
+    Q_INVOKABLE int mergeAtCenter();
+
+    /**
+     * @brief Collapse selected vertices to the position of the first
+     *        (lowest-index) vertex in the selection. Same constraints and
+     *        behavior as mergeAtCenter() otherwise.
+     */
+    Q_INVOKABLE int mergeAtFirst();
+
+    /**
+     * @brief Collapse selected vertices to the position of the last
+     *        (highest-index) vertex in the selection.
+     */
+    Q_INVOKABLE int mergeAtLast();
+
+    /**
+     * @brief Fuse any pair of selected vertices that lie within `threshold`
+     *        of each other (default 1e-4 ≈ 0.1 mm at meter scale). Each
+     *        cluster collapses to its centroid. Useful for cleaning up
+     *        duplicate vertices left by extrudes / mirror operations.
+     *
+     * @return Total vertices retired across all clusters.
+     */
+    Q_INVOKABLE int mergeByDistance(float threshold = 1e-4f);
+    /// @}
+
     /// @name Vertex transform support
     /// @{
     /// Get the centroid of selected vertices in local mesh space.

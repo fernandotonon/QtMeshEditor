@@ -3451,3 +3451,161 @@ TEST(HalfEdgeMeshStandalone, CutPathRollsBackWhenSecondEdgeDuplicatesFirst) {
     EXPECT_EQ(he.edgeCount(), edgesBefore);
     EXPECT_TRUE(he.validate());
 }
+
+// ===========================================================================
+// Merge vertices
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesNoOpOnLessThanTwoInputs) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const auto vertsBefore = he.vertexCount();
+    EXPECT_EQ(he.mergeVertices({}, Ogre::Vector3::ZERO), 0);
+    EXPECT_EQ(he.mergeVertices({0}, Ogre::Vector3::ZERO), 0);
+    EXPECT_EQ(he.vertexCount(), vertsBefore);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesCollapsesSharedEdgeRetiringBothTriangles) {
+    // The quad mesh has two triangles sharing the v1↔v2 diagonal. Merging
+    // those two endpoints fuses the diagonal into one vertex and both
+    // triangles become degenerate (two of their three verts collapse).
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 2);
+
+    const Ogre::Vector3 mid(0.5f, 0.5f, 0.0f);
+    const int retired = he.mergeVertices({1, 2}, mid);
+    EXPECT_EQ(retired, 1) << "one vertex retires; the other becomes the survivor";
+    EXPECT_EQ(activeFaceCount(he), 0)
+        << "both triangles collapsed because they each touched both merged verts";
+    EXPECT_TRUE(he.validate());
+
+    // Survivor moved to the requested centroid.
+    EXPECT_NEAR(he.vertex(1).position.x, mid.x, 1e-5f);
+    EXPECT_NEAR(he.vertex(1).position.y, mid.y, 1e-5f);
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesNonAdjacentPairKeepsTriangleAlive) {
+    // Build a strip of three triangles where merging two non-adjacent verts
+    // doesn't make any triangle a duplicate. Layout (top-down):
+    //
+    //   v0─v1─v2─v3
+    //    \ /\ /\ /
+    //    v4─v5─v6
+    //
+    // Triangles: (0,1,4), (1,5,4), (1,2,5), (2,6,5), (2,3,6).
+    // Merging v0 and v3 doesn't affect any triangle's vertex set since
+    // v0 only appears in tri (0,1,4) and v3 only in tri (2,3,6) — both
+    // survive with distinct sorted-vert keys.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "Strip";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        v.uv = Ogre::Vector2(x * 0.25f, y); v.hasUV = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 1), mkV(1, 1), mkV(2, 1), mkV(3, 1),  // 0..3 top row
+        mkV(0.5f, 0), mkV(1.5f, 0), mkV(2.5f, 0),    // 4..6 bottom row
+    };
+    auto mkT = [](int a, int b, int c) {
+        EditableTriangle t;
+        t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+        return t;
+    };
+    sub.triangles = {
+        mkT(0, 1, 4), mkT(1, 5, 4), mkT(1, 2, 5),
+        mkT(2, 6, 5), mkT(2, 3, 6),
+    };
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 5);
+
+    // Move v0 onto v3's position so the survivor sits at the strip's right
+    // edge. v0 and v3 share no triangle, so neither face becomes degenerate
+    // nor a duplicate.
+    const int retired = he.mergeVertices({0, 3}, Ogre::Vector3(3, 1, 0));
+    EXPECT_EQ(retired, 1);
+    EXPECT_EQ(activeFaceCount(he), 5)
+        << "non-adjacent merge on this strip keeps every triangle distinct";
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesByDistanceFusesCoincidentVerts) {
+    // Build a mesh with two pairs of near-coincident vertices and confirm
+    // mergeVerticesByDistance picks them up.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "Mat";
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        v.uv = Ogre::Vector2(0, 0); v.hasUV = true;
+        return v;
+    };
+    // Two nearly-coincident pairs (within 1e-5 of each other) plus a far one,
+    // arranged so distinct triangles cover all of them.
+    sub.vertices = {
+        mkV(0, 0, 0),                       // 0
+        mkV(1e-6f, 0, 0),                   // 1 — coincident with 0
+        mkV(1, 0, 0),                       // 2
+        mkV(1.0f + 1e-6f, 0, 0),            // 3 — coincident with 2
+        mkV(0.5f, 1, 0),                    // 4 — far apex
+    };
+    auto mkT = [](int a, int b, int c) {
+        EditableTriangle t;
+        t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+        return t;
+    };
+    sub.triangles = { mkT(0, 2, 4), mkT(1, 3, 4) };
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(activeFaceCount(he), 2);
+
+    // Loose threshold catches both pairs; they fuse to a single triangle.
+    const int retired = he.mergeVerticesByDistance({0, 1, 2, 3, 4}, 1e-3f);
+    EXPECT_EQ(retired, 2);
+    EXPECT_EQ(activeFaceCount(he), 1)
+        << "the two near-duplicate triangles collapse to one";
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesRefusesCrossSubmeshSelection) {
+    // Same-position verts in different submeshes must NOT fuse — that
+    // would silently bridge a UV seam / material boundary.
+    auto em = makeTwoSubMeshMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const auto vertsBefore = he.vertexCount();
+
+    // Pick one vertex from each submesh (sub0 has indices 0..2, sub1 has 3..5).
+    const int retired = he.mergeVertices({0, 3}, Ogre::Vector3::ZERO);
+    EXPECT_EQ(retired, 0) << "cross-submesh merge must be refused";
+    EXPECT_EQ(he.vertexCount(), vertsBefore);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesByDistanceIgnoresVertsBeyondThreshold) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const auto vertsBefore = he.vertexCount();
+
+    // Quad verts are 1.0 apart on either axis — a 1e-3 threshold is far
+    // tighter than any real spacing here, so nothing should fuse.
+    const int retired = he.mergeVerticesByDistance({0, 1, 2, 3}, 1e-3f);
+    EXPECT_EQ(retired, 0);
+    EXPECT_EQ(he.vertexCount(), vertsBefore);
+    EXPECT_TRUE(he.validate());
+}

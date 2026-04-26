@@ -29,10 +29,12 @@ THE SOFTWARE.
 #include "HalfEdgeMesh.h"
 #include "EditableMesh.h"
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cmath>
 #include <functional>
 #include <set>
+#include <tuple>
 #include <unordered_set>
 
 bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
@@ -4008,6 +4010,188 @@ std::vector<int> HalfEdgeMesh::cutPath(const std::vector<CutPoint>& points)
     }
 
     return newVertices;
+}
+
+int HalfEdgeMesh::mergeVertices(const std::vector<int>& vertexIndices,
+                                const Ogre::Vector3& targetPos)
+{
+    // 1. Pick a survivor and build the doomed set, filtering out invalid /
+    //    out-of-range indices and dedup'ing along the way. Anything < 2
+    //    valid distinct verts is a no-op.
+    int survivor = -1;
+    std::set<int> doomed;
+    for (int v : vertexIndices) {
+        if (v < 0 || v >= static_cast<int>(m_vertices.size())) continue;
+        if (m_vertices[v].halfEdge < 0) continue; // already retired
+        if (survivor == -1) {
+            survivor = v;
+            continue;
+        }
+        if (v == survivor) continue;
+        doomed.insert(v);
+    }
+    if (survivor == -1 || doomed.empty()) return 0;
+
+    // 2. Refuse cross-submesh merges. The HE build pipeline keeps a
+    //    distinct HEVertex per (submesh, localVert) pair so UV seams and
+    //    material boundaries survive; collapsing across that boundary
+    //    would silently fuse them. Cheap check: every face touching the
+    //    merge set must agree on subMeshIndex with the survivor's faces.
+    auto collectSubmeshes = [&](int v, std::set<int>& out) {
+        const auto faces = facesAroundVertex(v);
+        for (int f : faces) {
+            if (f >= 0 && f < static_cast<int>(m_faces.size())
+                && m_faces[f].halfEdge >= 0) {
+                out.insert(m_faces[f].subMeshIndex);
+            }
+        }
+    };
+    std::set<int> mergeSubs;
+    collectSubmeshes(survivor, mergeSubs);
+    for (int v : doomed) collectSubmeshes(v, mergeSubs);
+    if (mergeSubs.size() > 1) return 0;
+
+    // 3. Move the survivor to targetPos and re-point every half-edge
+    //    that pointed TO a doomed vertex so it now points to the survivor.
+    m_vertices[survivor].position = targetPos;
+
+    for (auto& he : m_halfEdges) {
+        if (he.face < 0) continue;            // skip retired / boundary HEs
+        if (doomed.count(he.vertex))
+            he.vertex = survivor;
+    }
+
+    // 4. Retire every triangle that is now degenerate (any two of its
+    //    three vertices identical) OR a duplicate of an earlier surviving
+    //    triangle. Mergers commonly produce duplicates: e.g. two
+    //    coincident-vertex pairs each collapse to a single vert and the
+    //    two triangles that used to differ only by those two indices end
+    //    up with identical vertex sets. We compare unordered vertex sets
+    //    (sub-mesh agnostic — same trio in the same submesh is a dup).
+    auto retireFace = [&](int f) {
+        int startHE = m_faces[f].halfEdge;
+        if (startHE < 0) return;
+        int he = startHE;
+        do {
+            int next = m_halfEdges[he].next;
+            m_halfEdges[he].face = -1;
+            m_halfEdges[he].twin = -1;
+            m_halfEdges[he].next = -1;
+            m_halfEdges[he].prev = -1;
+            he = next;
+        } while (he != startHE && he >= 0);
+        m_faces[f].halfEdge = -1;
+    };
+
+    auto canonicalKey = [&](const std::vector<int>& verts, int subIdx)
+        -> std::tuple<int, int, int, int> {
+        std::array<int, 3> sorted = {verts[0], verts[1], verts[2]};
+        std::sort(sorted.begin(), sorted.end());
+        return {subIdx, sorted[0], sorted[1], sorted[2]};
+    };
+
+    int retiredFaces = 0;
+    std::set<std::tuple<int, int, int, int>> seenFaces;
+    for (int f = 0; f < static_cast<int>(m_faces.size()); ++f) {
+        int startHE = m_faces[f].halfEdge;
+        if (startHE < 0) continue;
+
+        const auto verts = faceVertices(f);
+        if (verts.size() != 3) continue;
+        const bool degenerate = (verts[0] == verts[1])
+                             || (verts[1] == verts[2])
+                             || (verts[0] == verts[2]);
+        if (degenerate) {
+            retireFace(f);
+            ++retiredFaces;
+            continue;
+        }
+        // Duplicate-of-earlier check: triangle with same {subMesh, sorted-verts}
+        // collapses into the first occurrence.
+        const auto key = canonicalKey(verts, m_faces[f].subMeshIndex);
+        if (!seenFaces.insert(key).second) {
+            retireFace(f);
+            ++retiredFaces;
+        }
+    }
+
+    // 5. Mark the doomed vertex slots as retired (halfEdge = -1) so
+    //    later operations skip them. Their physical entries stay in
+    //    m_vertices but become inert.
+    for (int v : doomed) {
+        m_vertices[v].halfEdge = -1;
+    }
+
+    // 6. Rebuild edge tables. After the rewrite, two formerly-distinct
+    //    edges may now share endpoints, and twin links need to be
+    //    recomputed. The standard trio mirrors splitFace / extrude.
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+
+    return static_cast<int>(doomed.size());
+}
+
+int HalfEdgeMesh::mergeVerticesByDistance(const std::vector<int>& vertexIndices,
+                                          float threshold)
+{
+    if (vertexIndices.size() < 2 || threshold <= 0.0f) return 0;
+
+    // Filter to live vertices, keep original ordering — the first vertex
+    // of each cluster becomes the survivor (matches Blender's "Merge By
+    // Distance" deterministic-survivor behavior).
+    std::vector<int> alive;
+    alive.reserve(vertexIndices.size());
+    for (int v : vertexIndices) {
+        if (v >= 0 && v < static_cast<int>(m_vertices.size())
+            && m_vertices[v].halfEdge >= 0) {
+            alive.push_back(v);
+        }
+    }
+    if (alive.size() < 2) return 0;
+
+    // Union-find over alive[]: pair-scan in O(N²). N is the selected-
+    // vertex count, which is small in practice (hundreds at most). If
+    // this becomes a bottleneck, swap in a uniform spatial hash.
+    std::vector<int> parent(alive.size());
+    for (size_t i = 0; i < parent.size(); ++i) parent[i] = static_cast<int>(i);
+    std::function<int(int)> find = [&](int i) {
+        while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+        return i;
+    };
+    auto unite = [&](int a, int b) {
+        int ra = find(a), rb = find(b);
+        if (ra == rb) return;
+        // Lower index wins so cluster.front() == oldest selection slot.
+        if (ra < rb) parent[rb] = ra; else parent[ra] = rb;
+    };
+
+    const float t2 = threshold * threshold;
+    for (size_t i = 0; i < alive.size(); ++i) {
+        for (size_t j = i + 1; j < alive.size(); ++j) {
+            const auto& pa = m_vertices[alive[i]].position;
+            const auto& pb = m_vertices[alive[j]].position;
+            if (pa.squaredDistance(pb) <= t2)
+                unite(static_cast<int>(i), static_cast<int>(j));
+        }
+    }
+
+    // Group cluster members and dispatch one mergeVertices() per cluster
+    // with cluster centroid as the target. Clusters of size 1 are skipped.
+    std::map<int, std::vector<int>> clusters;
+    for (size_t i = 0; i < alive.size(); ++i)
+        clusters[find(static_cast<int>(i))].push_back(alive[i]);
+
+    int totalRetired = 0;
+    for (auto& [root, members] : clusters) {
+        if (members.size() < 2) continue;
+        Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+        for (int v : members) centroid += m_vertices[v].position;
+        centroid /= static_cast<float>(members.size());
+        totalRetired += mergeVertices(members, centroid);
+    }
+    return totalRetired;
 }
 
 bool HalfEdgeMesh::validate() const

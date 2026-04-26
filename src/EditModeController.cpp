@@ -2432,6 +2432,224 @@ bool EditModeController::commitKnife()
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// Merge vertices
+//
+// All four public entry points share the same plumbing: take the current
+// VertexMode selection, run an HEMesh transform, write the result back. The
+// only thing that changes between them is which target position we hand to
+// the HE primitive (centroid / first / last / per-cluster centroid for
+// by-distance). `applyMergeOp` factors that boilerplate.
+// ---------------------------------------------------------------------------
+namespace {
+// Shared post-mesh-mutation hook used by knife + merge: rewrite the entity's
+// Ogre buffers, save / restore per-subentity material overrides, and tell
+// RTSS to re-link shaders against the new vertex layout. Captures locally
+// to avoid a public helper just for this.
+inline void rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
+    std::vector<std::string> preMats;
+    preMats.reserve(ent->getNumSubEntities());
+    for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i)
+        preMats.push_back(ent->getSubEntity(i)->getMaterialName());
+
+    ent->_deinitialise();
+    ent->_initialise(true);
+
+    for (unsigned int i = 0;
+         i < ent->getNumSubEntities() && i < preMats.size(); ++i) {
+        if (!preMats[i].empty())
+            ent->getSubEntity(i)->setMaterialName(preMats[i]);
+    }
+
+    if (auto* sg = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+        for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+            const std::string& m = ent->getSubEntity(i)->getMaterialName();
+            if (!m.empty())
+                sg->invalidateMaterial(
+                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, m);
+        }
+    }
+}
+} // namespace
+
+int EditModeController::mergeAtCenter()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+    if (m_selectionMode != VertexMode) return 0;
+    if (m_selectedVertices.size() < 2) return 0;
+
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    // m_selectedVertices already holds HE-aligned indices (build is
+    // submesh-contiguous, matching localToGlobal).
+    std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+
+    Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+    for (int v : verts) centroid += hm.vertex(v).position;
+    centroid /= static_cast<float>(verts.size());
+
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const int retired = hm.mergeVertices(verts, centroid);
+    if (retired == 0) return 0;
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    // Vertex indices have shifted (toEditableMesh re-packs per submesh).
+    // Clear all selections — safer than trying to map the survivor's new
+    // index, since the user's intent post-merge is usually a fresh
+    // selection on the merged-up cluster anyway.
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        "Merge At Center");
+    UndoManager::getSingleton()->push(cmd);
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Merge: At Center (removed=%1)").arg(retired));
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return retired;
+}
+
+int EditModeController::mergeAtFirst()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+    if (m_selectionMode != VertexMode) return 0;
+    if (m_selectedVertices.size() < 2) return 0;
+
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+    // std::set iteration is sorted, so verts.front() is the lowest index.
+    const Ogre::Vector3 target = hm.vertex(verts.front()).position;
+
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const int retired = hm.mergeVertices(verts, target);
+    if (retired == 0) return 0;
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        "Merge At First");
+    UndoManager::getSingleton()->push(cmd);
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Merge: At First (removed=%1)").arg(retired));
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return retired;
+}
+
+int EditModeController::mergeAtLast()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+    if (m_selectionMode != VertexMode) return 0;
+    if (m_selectedVertices.size() < 2) return 0;
+
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+    // verts.back() is the highest index (set is sorted ascending).
+    // mergeVertices uses index 0 as the survivor, so move the desired
+    // anchor to the front and re-target manually.
+    const Ogre::Vector3 target = hm.vertex(verts.back()).position;
+
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const int retired = hm.mergeVertices(verts, target);
+    if (retired == 0) return 0;
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        "Merge At Last");
+    UndoManager::getSingleton()->push(cmd);
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Merge: At Last (removed=%1)").arg(retired));
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return retired;
+}
+
+int EditModeController::mergeByDistance(float threshold)
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+    if (m_selectionMode != VertexMode) return 0;
+    if (m_selectedVertices.size() < 2) return 0;
+    if (threshold <= 0.0f) return 0;
+
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const int retired = hm.mergeVerticesByDistance(verts, threshold);
+    if (retired == 0) return 0;
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        "Merge By Distance");
+    UndoManager::getSingleton()->push(cmd);
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Merge: By Distance (threshold=%1, removed=%2)")
+            .arg(threshold).arg(retired));
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return retired;
+}
+
 void EditModeController::cancelKnife()
 {
     if (!m_knifeSession.active) return;
