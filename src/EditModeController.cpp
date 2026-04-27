@@ -2517,6 +2517,11 @@ int EditModeController::mergeAtCenter()
 
     SentryReporter::addBreadcrumb("edit_mode",
         QString("Merge: At Center (removed=%1)").arg(retired));
+    // Selection sets were cleared above (vertex IDs are stale post-merge).
+    // Redraw the overlay so the previously-selected highlights stop
+    // showing — the live geometry has new index order and the old
+    // markers point at unrelated verts.
+    updateSelectionOverlay();
     emit editSelectionChanged();
     emit meshDataChanged();
     return retired;
@@ -2559,6 +2564,7 @@ int EditModeController::mergeAtFirst()
 
     SentryReporter::addBreadcrumb("edit_mode",
         QString("Merge: At First (removed=%1)").arg(retired));
+    updateSelectionOverlay();
     emit editSelectionChanged();
     emit meshDataChanged();
     return retired;
@@ -2603,6 +2609,7 @@ int EditModeController::mergeAtLast()
 
     SentryReporter::addBreadcrumb("edit_mode",
         QString("Merge: At Last (removed=%1)").arg(retired));
+    updateSelectionOverlay();
     emit editSelectionChanged();
     emit meshDataChanged();
     return retired;
@@ -2645,6 +2652,7 @@ int EditModeController::mergeByDistance(float threshold)
     SentryReporter::addBreadcrumb("edit_mode",
         QString("Merge: By Distance (threshold=%1, removed=%2)")
             .arg(threshold).arg(retired));
+    updateSelectionOverlay();
     emit editSelectionChanged();
     emit meshDataChanged();
     return retired;
