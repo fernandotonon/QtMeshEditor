@@ -3609,3 +3609,145 @@ TEST(HalfEdgeMeshStandalone, MergeVerticesByDistanceIgnoresVertsBeyondThreshold)
     EXPECT_EQ(he.vertexCount(), vertsBefore);
     EXPECT_TRUE(he.validate());
 }
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesSurvivorTakesTargetPosition) {
+    // Verify the explicit target position is written to the survivor —
+    // independently of whether the target equals any input vertex's
+    // pre-merge position. Important for "Merge At Cursor" futures.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    // Pick (10, 20, 30) — far from any quad vert — so we can spot-check the
+    // write rather than confusing it with an existing position.
+    const Ogre::Vector3 target(10.0f, 20.0f, 30.0f);
+    const int retired = he.mergeVertices({0, 3}, target);
+    EXPECT_EQ(retired, 1);
+    // Survivor is the first input (index 0).
+    EXPECT_NEAR(he.vertex(0).position.x, target.x, 1e-5f);
+    EXPECT_NEAR(he.vertex(0).position.y, target.y, 1e-5f);
+    EXPECT_NEAR(he.vertex(0).position.z, target.z, 1e-5f);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesPreservesSurvivorBoneWeights) {
+    // The merge keeps the survivor's attributes verbatim and discards the
+    // doomed verts'. Pin that contract: survivor's bone weights must be
+    // unchanged after merge so skinned meshes don't deform unexpectedly.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "Skinned";
+
+    auto mkV = [](float x, float y, unsigned short bone, float weight) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        EditableBoneAssignment ba;
+        ba.boneIndex = bone;
+        ba.weight = weight;
+        v.boneAssignments.push_back(ba);
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 0, /*bone=*/3, /*weight=*/0.7f),  // survivor
+        mkV(1, 0, /*bone=*/8, /*weight=*/0.4f),  // doomed
+        mkV(0, 1, /*bone=*/8, /*weight=*/0.5f),
+    };
+    EditableTriangle tri;
+    tri.indices[0] = 0; tri.indices[1] = 1; tri.indices[2] = 2;
+    sub.triangles = {tri};
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    // Survivor vert 0 has bone 3 / weight 0.7. Merging in vert 1 (bone 8)
+    // must NOT overwrite — survivor wins.
+    he.mergeVertices({0, 1}, Ogre::Vector3::ZERO);
+    ASSERT_EQ(he.vertex(0).boneAssignments.size(), 1u);
+    EXPECT_EQ(he.vertex(0).boneAssignments[0].first, 3);
+    EXPECT_FLOAT_EQ(he.vertex(0).boneAssignments[0].second, 0.7f);
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesThreeVertCluster) {
+    // Merging three verts in one call: one survivor, two retired. All three
+    // verts share the only triangle, which collapses entirely.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 2);
+
+    // Verts 0, 1, 2 form one triangle. Merging all three retires that
+    // triangle and leaves the other (1,3,2) — but its verts 1 and 2 also
+    // collapsed onto survivor 0, so it becomes (0,3,0) → degenerate.
+    const int retired = he.mergeVertices({0, 1, 2}, Ogre::Vector3(0.5f, 0.5f, 0));
+    EXPECT_EQ(retired, 2) << "two doomed verts retire";
+    EXPECT_EQ(activeFaceCount(he), 0)
+        << "every triangle had at least two of {0,1,2} so all collapse";
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesInvalidIndicesAreFiltered) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const auto vertsBefore = he.vertexCount();
+
+    // Mix valid indices, out-of-range indices, and a duplicate. The
+    // duplicate and out-of-range entries are silently filtered, leaving
+    // {0, 1} as the actual merge set.
+    const int retired = he.mergeVertices({0, 1, -1, 9999, 1, 0},
+                                          Ogre::Vector3::ZERO);
+    EXPECT_EQ(retired, 1) << "{-1, 9999} dropped, dup {0, 1} dedup'd";
+    EXPECT_EQ(he.vertex(1).halfEdge, -1)
+        << "vert 1 retired";
+    EXPECT_TRUE(he.validate());
+    Q_UNUSED(vertsBefore);
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesAlreadyRetiredVertsAreSkipped) {
+    // Run a first merge to retire vert 1, then call merge again with a
+    // selection that includes the now-retired vert 1. It must be filtered
+    // out without crashing or producing junk topology.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    // First pass: merge 1 + 2 (collapses both quad triangles).
+    ASSERT_EQ(he.mergeVertices({1, 2}, Ogre::Vector3(0.5f, 0.5f, 0)), 1);
+    // vert 1 is retired (m_vertices[1].halfEdge == -1) but vert 2 absorbed
+    // into vert 1 via doomed=2; verify the second merge call doesn't choke
+    // when we hand it the retired index.
+    const int retired = he.mergeVertices({0, 2, 3}, Ogre::Vector3::ZERO);
+    EXPECT_GE(retired, 0) << "retired-input filter must not crash";
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesByDistanceEmptyInputIsNoOp) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const auto vertsBefore = he.vertexCount();
+    EXPECT_EQ(he.mergeVerticesByDistance({}, 1e-3f), 0);
+    EXPECT_EQ(he.mergeVerticesByDistance({0}, 1e-3f), 0);
+    EXPECT_EQ(he.mergeVerticesByDistance({0, 1}, -1.0f), 0)
+        << "negative threshold is rejected";
+    EXPECT_EQ(he.vertexCount(), vertsBefore);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, MergeVerticesOnBoundaryEdge) {
+    // One-triangle mesh — every edge is a boundary. Merging two of its
+    // verts must retire the triangle and leave the survivor without
+    // crashing the boundary half-edge bookkeeping.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    const int retired = he.mergeVertices({0, 1}, Ogre::Vector3(0.5f, 0, 0));
+    EXPECT_EQ(retired, 1);
+    EXPECT_EQ(activeFaceCount(he), 0)
+        << "the single tri collapses since 0 and 1 fused";
+    EXPECT_TRUE(he.validate());
+}
