@@ -4138,6 +4138,15 @@ int HalfEdgeMesh::mergeVerticesByDistance(const std::vector<int>& vertexIndices,
 {
     if (vertexIndices.size() < 2 || threshold <= 0.0f) return 0;
 
+    // Defensive clamp on the squared-distance comparand: if a caller
+    // passes a huge threshold (or one mis-converted from world to mesh
+    // units), `threshold * threshold` overflows to +∞ and every pair
+    // satisfies the comparison, collapsing the entire selection into one
+    // cluster. Cap at sqrt(FLT_MAX/2) — well past any realistic mesh
+    // diagonal and still leaves headroom in the squared form.
+    constexpr float kMaxThreshold = 1.0e18f;
+    if (threshold > kMaxThreshold) threshold = kMaxThreshold;
+
     // Filter to live vertices, keep original ordering — the first vertex
     // of each cluster becomes the survivor (matches Blender's "Merge By
     // Distance" deterministic-survivor behavior).
@@ -4150,6 +4159,17 @@ int HalfEdgeMesh::mergeVerticesByDistance(const std::vector<int>& vertexIndices,
         }
     }
     if (alive.size() < 2) return 0;
+
+    // Compute each candidate vertex's submesh up front so the union step
+    // only fuses pairs in the same submesh. mergeVertices() refuses
+    // cross-submesh inputs anyway, so a mixed cluster would silently
+    // drop everything; pre-partitioning preserves the same-submesh
+    // pairs the user actually wanted to fuse. (Codex P2)
+    auto vertexSubmesh = [&](int v) -> int {
+        const auto faces = facesAroundVertex(v);
+        if (faces.empty()) return -1;
+        return m_faces[faces.front()].subMeshIndex;
+    };
 
     // Union-find over alive[]: pair-scan in O(N²). N is the selected-
     // vertex count, which is small in practice (hundreds at most). If
@@ -4167,9 +4187,16 @@ int HalfEdgeMesh::mergeVerticesByDistance(const std::vector<int>& vertexIndices,
         if (ra < rb) parent[rb] = ra; else parent[ra] = rb;
     };
 
+    std::vector<int> aliveSubs;
+    aliveSubs.reserve(alive.size());
+    for (int v : alive) aliveSubs.push_back(vertexSubmesh(v));
+
     const float t2 = threshold * threshold;
     for (size_t i = 0; i < alive.size(); ++i) {
         for (size_t j = i + 1; j < alive.size(); ++j) {
+            // Skip cross-submesh pairs entirely — UV seams / material
+            // boundaries must survive.
+            if (aliveSubs[i] != aliveSubs[j]) continue;
             const auto& pa = m_vertices[alive[i]].position;
             const auto& pb = m_vertices[alive[j]].position;
             if (pa.squaredDistance(pb) <= t2)

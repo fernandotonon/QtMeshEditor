@@ -36,6 +36,7 @@ THE SOFTWARE.
 #include <QVariantList>
 #include <limits>
 #include <memory>
+#include <functional>
 #include <set>
 #include <map>
 #include <utility>
@@ -46,6 +47,7 @@ THE SOFTWARE.
 #include "EditableMesh.h" // BevelSession stores std::vector<EditableSubMesh> by value
 
 class OgreWidget;
+class HalfEdgeMesh;
 
 namespace Ogre {
     class Entity;
@@ -599,6 +601,16 @@ private slots:
 private:
     EditModeController();
     ~EditModeController() override;
+
+    /// Shared post-merge plumbing: snapshot mesh + selection, run the
+    /// HE-side `mergeFn`, write back, recompute normals, refresh entity,
+    /// re-select the survivor(s) by hunting `survivorTargets` positions
+    /// in the re-packed mesh, and push one EditMeshTopologyCommand.
+    /// Returns the retired-vertex count (0 on no-op / refusal).
+    int applyMergeAndRefresh(
+        const QString& opLabel,
+        const std::function<int(HalfEdgeMesh&)>& mergeFn,
+        const std::vector<Ogre::Vector3>& survivorTargets);
 
     /// Build or rebuild the selection overlay ManualObject.
     void updateSelectionOverlay();
