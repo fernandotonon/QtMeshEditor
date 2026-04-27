@@ -4362,15 +4362,40 @@ int HalfEdgeMesh::dissolveEdges(const std::vector<int>& edgeIndices)
 {
     if (edgeIndices.empty()) return 0;
 
-    // Process edges sequentially against the live mesh. We re-resolve
-    // each edge's two faces every iteration; an earlier dissolve in the
-    // same call may have retired one of them, in which case this edge
-    // becomes a no-op rather than a manifold bug.
+    // Edge slots are reordered by rebuildEdgesAndTwins() at the end of
+    // each iteration. Snapshot endpoint vertex pairs (vertex slots are
+    // append-only and stable across rebuilds) and re-resolve the edge
+    // index by pair on every iteration. Mirrors cutPath's pattern.
+    // Found by Codex P1 + CodeRabbit Major.
+    std::vector<std::pair<int,int>> targetVerts;
+    targetVerts.reserve(edgeIndices.size());
+    {
+        std::set<std::pair<int,int>> seenPairs;
+        for (int e : edgeIndices) {
+            if (e < 0 || e >= static_cast<int>(m_edges.size())) continue;
+            if (m_edges[e].halfEdge < 0) continue;
+            auto [a, b] = edgeVertices(e);
+            if (a < 0 || b < 0) continue;
+            auto key = std::make_pair(std::min(a, b), std::max(a, b));
+            if (!seenPairs.insert(key).second) continue;
+            targetVerts.push_back(key);
+        }
+    }
+
+    auto findEdgeByVerts = [this](int va, int vb) -> int {
+        for (size_t e = 0; e < m_edges.size(); ++e) {
+            if (m_edges[e].halfEdge < 0) continue;
+            auto [a, b] = edgeVertices(static_cast<int>(e));
+            if ((a == va && b == vb) || (a == vb && b == va))
+                return static_cast<int>(e);
+        }
+        return -1;
+    };
+
     int dissolved = 0;
-    std::set<int> processedHandles; // dedup repeat indices in the input
-    for (int e : edgeIndices) {
-        if (!processedHandles.insert(e).second) continue;
-        if (e < 0 || e >= static_cast<int>(m_edges.size())) continue;
+    for (const auto& [va, vb] : targetVerts) {
+        const int e = findEdgeByVerts(va, vb);
+        if (e < 0) continue;                  // earlier dissolve removed this edge
         if (m_edges[e].halfEdge < 0) continue;
 
         auto [fA, fB] = edgeFaces(e);

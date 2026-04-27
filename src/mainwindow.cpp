@@ -1242,24 +1242,36 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                 return;
             }
             break;
-        case Qt::Key_X:
+        case Qt::Key_X: {
             // X: delete current edit-mode selection.
             // Ctrl/Cmd+X: dissolve current selection.
-            // Outside edit mode, X falls through to the Object-mode
-            // "toggle transform space" handler below.
+            // If nothing is selected we fall through so the outer Object-
+            // mode "toggle World/Local space" handler runs — same gating
+            // as the toolbar's refreshTopoButtons. (CodeRabbit Minor)
+            const int mode = editCtrl->selectionMode();
+            const bool hasSelection =
+                   (mode == EditModeController::VertexMode && editCtrl->selectedVertexCount() > 0)
+                || (mode == EditModeController::EdgeMode   && editCtrl->selectedEdgeCount()   > 0)
+                || (mode == EditModeController::FaceMode   && editCtrl->selectedFaceCount()   > 0);
             if (event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier)) {
-                SentryReporter::addBreadcrumb("ui.shortcut", "Ctrl+X — Dissolve (edit mode)");
-                editCtrl->dissolveSelection();
-                event->accept();
-                return;
+                if (hasSelection) {
+                    SentryReporter::addBreadcrumb("ui.shortcut", "Ctrl+X — Dissolve (edit mode)");
+                    editCtrl->dissolveSelection();
+                    event->accept();
+                    return;
+                }
+                break;
             }
-            if (!(event->modifiers() & Qt::AltModifier)) {
-                SentryReporter::addBreadcrumb("ui.shortcut", "X — Delete (edit mode)");
-                editCtrl->deleteSelection();
-                event->accept();
-                return;
+            if (!(event->modifiers() & (Qt::AltModifier | Qt::ShiftModifier))) {
+                if (hasSelection) {
+                    SentryReporter::addBreadcrumb("ui.shortcut", "X — Delete (edit mode)");
+                    editCtrl->deleteSelection();
+                    event->accept();
+                    return;
+                }
             }
             break;
+        }
         default:
             break;
         }

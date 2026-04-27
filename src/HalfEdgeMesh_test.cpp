@@ -3962,3 +3962,60 @@ TEST(HalfEdgeMeshStandalone, DissolveVerticesLowValenceIsSkipped) {
     EXPECT_EQ(activeFaceCount(he), 1);
     EXPECT_TRUE(he.validate());
 }
+
+TEST(HalfEdgeMeshStandalone, DissolveEdgesMultipleDisjointEdgesAllProcessed) {
+    // Regression for Codex P1 / CodeRabbit Major: dissolveEdges used to
+    // iterate over the input by raw edge index, but rebuildEdgesAndTwins
+    // reorders edges after each iteration. Two disjoint interior diagonals
+    // selected together used to dissolve only the first reliably.
+    //
+    // Build a 2×1 quad strip:
+    //   v0─v1─v2
+    //   │ ╲│ ╲│
+    //   v3─v4─v5
+    // Triangles: (0,1,3),(1,4,3),(1,2,4),(2,5,4) — two interior diagonals
+    // (1↔3) and (2↔4). Both must dissolve; result is two non-degenerate quads
+    // (4 triangles total) regardless of insertion order.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "Strip";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        v.uv = Ogre::Vector2(x * 0.5f, y); v.hasUV = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),       // 0 1 2 (top)
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),       // 3 4 5 (bottom)
+    };
+    auto mkT = [](int a, int b, int c) {
+        EditableTriangle t;
+        t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+        return t;
+    };
+    sub.triangles = {
+        mkT(0, 1, 3), mkT(1, 4, 3), mkT(1, 2, 4), mkT(2, 5, 4),
+    };
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 4);
+
+    const int diagL = findEdge(he, 1, 3);
+    const int diagR = findEdge(he, 2, 4);
+    ASSERT_GE(diagL, 0);
+    ASSERT_GE(diagR, 0);
+
+    EXPECT_EQ(he.dissolveEdges({diagL, diagR}), 2)
+        << "both interior diagonals must dissolve regardless of edge-slot reordering";
+    EXPECT_EQ(activeFaceCount(he), 4)
+        << "two quads, fan-triangulated, still 4 triangles";
+    EXPECT_TRUE(he.validate());
+
+    // Both old diagonals should be gone.
+    EXPECT_EQ(findEdge(he, 1, 3), -1);
+    EXPECT_EQ(findEdge(he, 2, 4), -1);
+}

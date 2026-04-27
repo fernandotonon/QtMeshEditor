@@ -2783,27 +2783,31 @@ int EditModeController::deleteSelection()
         mutate = [verts](HalfEdgeMesh& hm) { return hm.deleteVertices(verts); };
     } else if (m_selectionMode == EdgeMode) {
         if (m_selectedEdges.empty()) return 0;
-        // The selected-edge set is keyed by (minVertex, maxVertex) global
-        // pairs. We need the live HE edge index for each pair, so build a
-        // probe HEMesh just to translate.
-        HalfEdgeMesh probe;
-        if (!probe.buildFromEditableMesh(*m_editableMesh)) return 0;
-        std::vector<int> edgeIdxs;
-        edgeIdxs.reserve(m_selectedEdges.size());
-        for (const auto& [a, b] : m_selectedEdges) {
-            int target = std::min(a, b), other = std::max(a, b);
-            for (size_t e = 0; e < probe.edgeCount(); ++e) {
-                auto [ev1, ev2] = probe.edgeVertices(static_cast<int>(e));
-                int ea = std::min(ev1, ev2), eb = std::max(ev1, ev2);
-                if (ea == target && eb == other) {
-                    edgeIdxs.push_back(static_cast<int>(e));
-                    break;
+        // Resolve selected-edge global vertex pairs against the LIVE hm
+        // inside the mutate lambda, not against a separate probe build.
+        // applyTopologyMutationNoSurvivor builds its own HalfEdgeMesh, and
+        // probe-vs-real edge ordering can drift if HE construction is not
+        // deterministic against shared input. Keep both lookups on the
+        // same instance. (CodeRabbit Major)
+        const std::vector<std::pair<int,int>> selectedEdges(
+            m_selectedEdges.begin(), m_selectedEdges.end());
+        opLabel = "Delete Edges";
+        mutate = [selectedEdges](HalfEdgeMesh& hm) {
+            std::vector<int> edgeIdxs;
+            edgeIdxs.reserve(selectedEdges.size());
+            for (const auto& [a, b] : selectedEdges) {
+                const int target = std::min(a, b), other = std::max(a, b);
+                for (size_t e = 0; e < hm.edgeCount(); ++e) {
+                    auto [ev1, ev2] = hm.edgeVertices(static_cast<int>(e));
+                    if (std::min(ev1, ev2) == target
+                        && std::max(ev1, ev2) == other) {
+                        edgeIdxs.push_back(static_cast<int>(e));
+                        break;
+                    }
                 }
             }
-        }
-        if (edgeIdxs.empty()) return 0;
-        opLabel = "Delete Edges";
-        mutate = [edgeIdxs](HalfEdgeMesh& hm) { return hm.deleteEdges(edgeIdxs); };
+            return edgeIdxs.empty() ? 0 : hm.deleteEdges(edgeIdxs);
+        };
     } else { // FaceMode
         if (m_selectedFaces.empty()) return 0;
         std::vector<int> faces(m_selectedFaces.begin(), m_selectedFaces.end());
@@ -2839,24 +2843,25 @@ int EditModeController::dissolveSelection()
         mutate = [verts](HalfEdgeMesh& hm) { return hm.dissolveVertices(verts); };
     } else if (m_selectionMode == EdgeMode) {
         if (m_selectedEdges.empty()) return 0;
-        HalfEdgeMesh probe;
-        if (!probe.buildFromEditableMesh(*m_editableMesh)) return 0;
-        std::vector<int> edgeIdxs;
-        edgeIdxs.reserve(m_selectedEdges.size());
-        for (const auto& [a, b] : m_selectedEdges) {
-            int target = std::min(a, b), other = std::max(a, b);
-            for (size_t e = 0; e < probe.edgeCount(); ++e) {
-                auto [ev1, ev2] = probe.edgeVertices(static_cast<int>(e));
-                int ea = std::min(ev1, ev2), eb = std::max(ev1, ev2);
-                if (ea == target && eb == other) {
-                    edgeIdxs.push_back(static_cast<int>(e));
-                    break;
+        const std::vector<std::pair<int,int>> selectedEdges(
+            m_selectedEdges.begin(), m_selectedEdges.end());
+        opLabel = "Dissolve Edges";
+        mutate = [selectedEdges](HalfEdgeMesh& hm) {
+            std::vector<int> edgeIdxs;
+            edgeIdxs.reserve(selectedEdges.size());
+            for (const auto& [a, b] : selectedEdges) {
+                const int target = std::min(a, b), other = std::max(a, b);
+                for (size_t e = 0; e < hm.edgeCount(); ++e) {
+                    auto [ev1, ev2] = hm.edgeVertices(static_cast<int>(e));
+                    if (std::min(ev1, ev2) == target
+                        && std::max(ev1, ev2) == other) {
+                        edgeIdxs.push_back(static_cast<int>(e));
+                        break;
+                    }
                 }
             }
-        }
-        if (edgeIdxs.empty()) return 0;
-        opLabel = "Dissolve Edges";
-        mutate = [edgeIdxs](HalfEdgeMesh& hm) { return hm.dissolveEdges(edgeIdxs); };
+            return edgeIdxs.empty() ? 0 : hm.dissolveEdges(edgeIdxs);
+        };
     } else { // FaceMode
         if (m_selectedFaces.empty()) return 0;
         // On a pure triangle mesh, face dissolve and face delete are

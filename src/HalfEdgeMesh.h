@@ -565,8 +565,9 @@ public:
      *
      * For each non-boundary vertex of valence N >= 3, retires the N
      * triangles around it and re-triangulates the resulting N-gon hole
-     * via a fan from the lowest-index boundary vertex. Boundary
-     * vertices and vertices of valence < 3 are skipped.
+     * via a fan whose apex is the loop's first vertex in winding order
+     * (i.e. the first non-`v` vertex of the lowest-indexed incident
+     * face). Boundary vertices and vertices of valence < 3 are skipped.
      *
      * @param vertexIndices Vertices to dissolve.
      * @return Number of vertices actually dissolved.
