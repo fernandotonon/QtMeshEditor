@@ -500,6 +500,80 @@ public:
     int mergeVerticesByDistance(const std::vector<int>& vertexIndices,
                                 float threshold = 1e-4f);
 
+    /**
+     * @brief Delete a set of faces (triangles).
+     *
+     * Retires each face's half-edges and the face itself. Vertices and
+     * edges that no longer participate in any face are also retired so
+     * `toEditableMesh` doesn't carry orphaned geometry forward. Surviving
+     * vertices on the deletion boundary become boundary vertices.
+     *
+     * @param faceIndices Faces to retire. Out-of-range / already-retired
+     *        entries are ignored.
+     * @return Number of faces actually retired.
+     */
+    int deleteFaces(const std::vector<int>& faceIndices);
+
+    /**
+     * @brief Delete a set of edges, removing their adjacent faces.
+     *
+     * For each edge, retires both adjacent faces (or one, on a boundary
+     * edge). Vertices that lose all incident faces are also retired.
+     *
+     * @param edgeIndices Edges to delete.
+     * @return Number of faces removed across all edges.
+     */
+    int deleteEdges(const std::vector<int>& edgeIndices);
+
+    /**
+     * @brief Delete a set of vertices, removing every adjacent face.
+     *
+     * Mirrors Blender's "Delete Vertices": every face that touches one
+     * of the targeted vertices is retired, and the vertices themselves
+     * are retired afterwards. Edges that fall out of all surviving
+     * faces are dropped during the standard rebuild.
+     *
+     * @param vertexIndices Vertices to delete.
+     * @return Number of vertices actually retired.
+     */
+    int deleteVertices(const std::vector<int>& vertexIndices);
+
+    /**
+     * @brief Dissolve a set of edges, merging each edge's two adjacent
+     *        triangles into a single face.
+     *
+     * For each interior edge whose two adjacent faces are both triangles,
+     * retires the pair and emits the merged quad fan-triangulated into
+     * two triangles that share the *other* diagonal. The result removes
+     * the dissolved edge from the mesh while keeping a watertight
+     * triangulation. Boundary edges and edges with one or zero adjacent
+     * faces are skipped.
+     *
+     * Edges that share a vertex with another edge in the input are
+     * processed sequentially against the live topology — earlier
+     * dissolves may invalidate later ones; those late entries become
+     * no-ops rather than errors.
+     *
+     * @param edgeIndices Edges to dissolve.
+     * @return Number of edges actually dissolved.
+     */
+    int dissolveEdges(const std::vector<int>& edgeIndices);
+
+    /**
+     * @brief Dissolve a set of interior vertices, merging the surrounding
+     *        face fan into a single triangulated polygon.
+     *
+     * For each non-boundary vertex of valence N >= 3, retires the N
+     * triangles around it and re-triangulates the resulting N-gon hole
+     * via a fan whose apex is the loop's first vertex in winding order
+     * (i.e. the first non-`v` vertex of the lowest-indexed incident
+     * face). Boundary vertices and vertices of valence < 3 are skipped.
+     *
+     * @param vertexIndices Vertices to dissolve.
+     * @return Number of vertices actually dissolved.
+     */
+    int dissolveVertices(const std::vector<int>& vertexIndices);
+
     /// @}
 
     /// @name Validation

@@ -782,7 +782,7 @@ TEST_F(PropertiesPanelControllerTests, ShortcutDataContainsExpectedTransformShor
     EXPECT_EQ(rShortcut["description"].toString(), "Scale mode");
 }
 
-TEST_F(PropertiesPanelControllerTests, ShortcutDataHasAllSixCategories)
+TEST_F(PropertiesPanelControllerTests, ShortcutDataHasAllSevenCategories)
 {
     QVariantList shortcuts = controller->shortcutData();
     QSet<QString> categories;
@@ -793,10 +793,11 @@ TEST_F(PropertiesPanelControllerTests, ShortcutDataHasAllSixCategories)
     EXPECT_TRUE(categories.contains("Transform"));
     EXPECT_TRUE(categories.contains("Navigation"));
     EXPECT_TRUE(categories.contains("Editing"));
+    EXPECT_TRUE(categories.contains("Edit Mode"));
     EXPECT_TRUE(categories.contains("File"));
     EXPECT_TRUE(categories.contains("View"));
     EXPECT_TRUE(categories.contains("Help"));
-    EXPECT_EQ(categories.size(), 6);
+    EXPECT_EQ(categories.size(), 7);
 }
 
 // ---- getSetting / setSetting tests ----

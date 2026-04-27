@@ -2702,6 +2702,212 @@ int EditModeController::mergeByDistance(float threshold)
         survivorTargets);
 }
 
+// ---------------------------------------------------------------------------
+// Delete / Dissolve dispatchers
+//
+// Both ops follow the same plumbing as merge (snapshot mesh + selection,
+// run a HE mutation, write back, recompute normals, refresh entity, push
+// undo) but they don't have a survivor position to re-select on, so they
+// share a separate helper that simply clears the selection on success.
+// ---------------------------------------------------------------------------
+namespace {
+// Run an HE mutation that does not need to re-select survivors (delete /
+// dissolve). Returns the count produced by the mutation. Wraps the same
+// snapshot/undo/normals/refresh sequence as applyMergeAndRefresh.
+int applyTopologyMutationNoSurvivor(
+    EditModeController* self,
+    EditableMesh* editableMesh,
+    Ogre::Entity* editEntity,
+    std::set<int>& selVerts,
+    std::set<std::pair<int,int>>& selEdges,
+    std::set<int>& selFaces,
+    int normalsMode,
+    const QString& opLabel,
+    const std::function<int(HalfEdgeMesh&)>& mutate)
+{
+    if (!editableMesh || !editEntity) return 0;
+
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*editableMesh)) return 0;
+
+    auto originalSubMeshes = editableMesh->subMeshes();
+    const auto preSelectedVerts = selVerts;
+    const auto preSelectedEdges = selEdges;
+    const auto preSelectedFaces = selFaces;
+
+    const int affected = mutate(hm);
+    if (affected == 0) return 0;
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    editableMesh->subMeshes() = std::move(updated.subMeshes());
+
+    if (normalsMode == 0)
+        editableMesh->recalculateNormals();
+    else
+        editableMesh->recalculateNormalsFlat();
+
+    editableMesh->resizeEntityBuffers(editEntity);
+    rewriteEntityAfterTopologyChange(editEntity);
+
+    selVerts.clear();
+    selEdges.clear();
+    selFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        editableMesh->subMeshes(),
+        preSelectedVerts, preSelectedEdges, preSelectedFaces,
+        selVerts, selEdges, selFaces,
+        opLabel);
+    UndoManager::getSingleton()->push(cmd);
+
+    // Refresh degenerate-triangle bookkeeping so the Inspector's
+    // validation badge doesn't carry a stale count past a delete /
+    // dissolve. Other topology paths (extrude, bevel, knife, merge)
+    // do this; CodeRabbit Minor flagged the omission.
+    if (self) self->validateMesh();
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("%1 (count=%2)").arg(opLabel).arg(affected));
+
+    return affected;
+}
+} // namespace
+
+int EditModeController::deleteSelection()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+
+    // Cancel any active interactive preview before mutating topology.
+    // A live bevel snapshot or knife point list would otherwise replay
+    // against the post-delete mesh on the next commit/cancel and either
+    // overwrite the delete result or crash on stale indices.
+    // (CodeRabbit Major)
+    if (m_bevelSession.active) cancelBevel();
+    if (m_knifeSession.active) cancelKnife();
+
+    QString opLabel;
+    std::function<int(HalfEdgeMesh&)> mutate;
+
+    if (m_selectionMode == VertexMode) {
+        if (m_selectedVertices.empty()) return 0;
+        std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+        opLabel = "Delete Vertices";
+        mutate = [verts](HalfEdgeMesh& hm) { return hm.deleteVertices(verts); };
+    } else if (m_selectionMode == EdgeMode) {
+        if (m_selectedEdges.empty()) return 0;
+        // Resolve selected-edge global vertex pairs against the LIVE hm
+        // inside the mutate lambda, not against a separate probe build.
+        // applyTopologyMutationNoSurvivor builds its own HalfEdgeMesh, and
+        // probe-vs-real edge ordering can drift if HE construction is not
+        // deterministic against shared input. Keep both lookups on the
+        // same instance. (CodeRabbit Major)
+        const std::vector<std::pair<int,int>> selectedEdges(
+            m_selectedEdges.begin(), m_selectedEdges.end());
+        opLabel = "Delete Edges";
+        mutate = [selectedEdges](HalfEdgeMesh& hm) {
+            std::vector<int> edgeIdxs;
+            edgeIdxs.reserve(selectedEdges.size());
+            for (const auto& [a, b] : selectedEdges) {
+                const int target = std::min(a, b), other = std::max(a, b);
+                for (size_t e = 0; e < hm.edgeCount(); ++e) {
+                    auto [ev1, ev2] = hm.edgeVertices(static_cast<int>(e));
+                    if (std::min(ev1, ev2) == target
+                        && std::max(ev1, ev2) == other) {
+                        edgeIdxs.push_back(static_cast<int>(e));
+                        break;
+                    }
+                }
+            }
+            return edgeIdxs.empty() ? 0 : hm.deleteEdges(edgeIdxs);
+        };
+    } else { // FaceMode
+        if (m_selectedFaces.empty()) return 0;
+        std::vector<int> faces(m_selectedFaces.begin(), m_selectedFaces.end());
+        opLabel = "Delete Faces";
+        mutate = [faces](HalfEdgeMesh& hm) { return hm.deleteFaces(faces); };
+    }
+
+    const int affected = applyTopologyMutationNoSurvivor(
+        this, m_editableMesh.get(), m_editEntity,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        m_normalsMode, opLabel, mutate);
+
+    if (affected == 0) return 0;
+
+    updateSelectionOverlay();
+    refreshNormalVisualizer();
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return affected;
+}
+
+int EditModeController::dissolveSelection()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+
+    // Cancel any active interactive preview before mutating topology —
+    // see deleteSelection() for the rationale. (CodeRabbit Major)
+    if (m_bevelSession.active) cancelBevel();
+    if (m_knifeSession.active) cancelKnife();
+
+    QString opLabel;
+    std::function<int(HalfEdgeMesh&)> mutate;
+
+    if (m_selectionMode == VertexMode) {
+        if (m_selectedVertices.empty()) return 0;
+        std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+        opLabel = "Dissolve Vertices";
+        mutate = [verts](HalfEdgeMesh& hm) { return hm.dissolveVertices(verts); };
+    } else if (m_selectionMode == EdgeMode) {
+        if (m_selectedEdges.empty()) return 0;
+        const std::vector<std::pair<int,int>> selectedEdges(
+            m_selectedEdges.begin(), m_selectedEdges.end());
+        opLabel = "Dissolve Edges";
+        mutate = [selectedEdges](HalfEdgeMesh& hm) {
+            std::vector<int> edgeIdxs;
+            edgeIdxs.reserve(selectedEdges.size());
+            for (const auto& [a, b] : selectedEdges) {
+                const int target = std::min(a, b), other = std::max(a, b);
+                for (size_t e = 0; e < hm.edgeCount(); ++e) {
+                    auto [ev1, ev2] = hm.edgeVertices(static_cast<int>(e));
+                    if (std::min(ev1, ev2) == target
+                        && std::max(ev1, ev2) == other) {
+                        edgeIdxs.push_back(static_cast<int>(e));
+                        break;
+                    }
+                }
+            }
+            return edgeIdxs.empty() ? 0 : hm.dissolveEdges(edgeIdxs);
+        };
+    } else { // FaceMode
+        if (m_selectedFaces.empty()) return 0;
+        // On a pure triangle mesh, face dissolve and face delete are
+        // identical — there are no coplanar neighbors to merge into a
+        // single n-gon, so the hole boundary is the same in both cases.
+        // Wire face dissolve to deleteFaces so the menu entry stays
+        // active and predictable; an n-gon-aware variant can replace
+        // this once the rest of the pipeline supports n-gons.
+        std::vector<int> faces(m_selectedFaces.begin(), m_selectedFaces.end());
+        opLabel = "Dissolve Faces";
+        mutate = [faces](HalfEdgeMesh& hm) { return hm.deleteFaces(faces); };
+    }
+
+    const int affected = applyTopologyMutationNoSurvivor(
+        this, m_editableMesh.get(), m_editEntity,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        m_normalsMode, opLabel, mutate);
+
+    if (affected == 0) return 0;
+
+    updateSelectionOverlay();
+    refreshNormalVisualizer();
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return affected;
+}
+
 void EditModeController::cancelKnife()
 {
     if (!m_knifeSession.active) return;

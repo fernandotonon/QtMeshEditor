@@ -387,6 +387,37 @@ public:
     Q_INVOKABLE int mergeByDistance(float threshold = 1e-4f);
     /// @}
 
+    /// @name Delete / Dissolve
+    /// @{
+    /**
+     * @brief Delete the current edit-mode selection.
+     *
+     * Dispatches by selection mode:
+     *   - VertexMode → HEMesh::deleteVertices on the selected vertex set
+     *   - EdgeMode   → HEMesh::deleteEdges on the selected edges
+     *   - FaceMode   → HEMesh::deleteFaces on the selected triangles
+     *
+     * Pushes one undo command labeled "Delete <Mode>". Returns the
+     * number of elements actually retired, or 0 on no-op.
+     */
+    Q_INVOKABLE int deleteSelection();
+
+    /**
+     * @brief Dissolve the current edit-mode selection.
+     *
+     * Dispatches by selection mode:
+     *   - VertexMode → HEMesh::dissolveVertices
+     *   - EdgeMode   → HEMesh::dissolveEdges
+     *   - FaceMode   → HEMesh::deleteFaces (same result as Delete Faces
+     *                  on a pure triangle mesh — there are no coplanar
+     *                  neighbors to merge into an n-gon)
+     *
+     * Pushes one undo command labeled "Dissolve <Mode>". Returns the
+     * number of elements actually dissolved, or 0 on no-op.
+     */
+    Q_INVOKABLE int dissolveSelection();
+    /// @}
+
     /// @name Vertex transform support
     /// @{
     /// Get the centroid of selected vertices in local mesh space.

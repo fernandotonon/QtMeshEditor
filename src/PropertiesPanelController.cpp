@@ -276,6 +276,17 @@ QVariantList PropertiesPanelController::shortcutData() const
     data << entry("Editing", "Ctrl + Shift + G", "Ungroup nodes");
     data << entry("Editing", "Delete",         "Remove selected");
 
+    // Edit Mode (topology tools — active only when Tab has entered Edit Mode)
+    data << entry("Edit Mode", "Tab",           "Toggle Edit Mode");
+    data << entry("Edit Mode", "1 / 2 / 3",     "Vertex / Edge / Face selection");
+    data << entry("Edit Mode", "M",             "Merge vertices at center");
+#ifdef Q_OS_MACOS
+    data << entry("Edit Mode", "Cmd + X",       "Dissolve selection");
+#else
+    data << entry("Edit Mode", "Ctrl + X",      "Dissolve selection");
+#endif
+    data << entry("Edit Mode", "X",             "Delete selection");
+
     // File
     data << entry("File", "Ctrl + O",       "Open scene");
     data << entry("File", "Ctrl + S",       "Save scene");

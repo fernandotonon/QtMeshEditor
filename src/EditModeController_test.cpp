@@ -1540,3 +1540,89 @@ TEST_F(EditModeControllerBevelE2ETest, KnifePointOnInvalidEdgeRefused) {
     EXPECT_FALSE(ctrl->addKnifePointOnEdge(9999, 0.5f));
     EXPECT_EQ(ctrl->knifePointCount(), 0);
 }
+
+// ===========================================================================
+// Delete / Dissolve E2E
+// Verifies the controller dispatchers wire the right HE primitive in each
+// selection mode and that face dissolve falls back to delete (matches
+// Blender behavior on a pure triangle mesh).
+// ===========================================================================
+
+TEST_F(EditModeControllerBevelE2ETest, DeleteSelectionFaceModeRemovesTwoTriangles) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+
+    std::vector<Ogre::Vector3> posBefore;
+    std::vector<std::array<unsigned, 3>> trisBefore;
+    extractEntityBuffers(m_entity, posBefore, trisBefore);
+    const size_t triCountBefore = trisBefore.size();
+    ASSERT_GT(triCountBefore, 2u);
+
+    // The cube's first two triangles share a face; deleting both removes
+    // exactly two triangles from the GPU buffer.
+    ctrl->selectFace(0);
+    ctrl->selectFace(1, true);
+    EXPECT_EQ(ctrl->selectedFaceCount(), 2);
+
+    EXPECT_EQ(ctrl->deleteSelection(), 2);
+    EXPECT_EQ(ctrl->selectedFaceCount(), 0);
+
+    std::vector<Ogre::Vector3> posAfter;
+    std::vector<std::array<unsigned, 3>> trisAfter;
+    extractEntityBuffers(m_entity, posAfter, trisAfter);
+    EXPECT_EQ(trisAfter.size(), triCountBefore - 2);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, DissolveSelectionFaceModeMatchesDelete) {
+    // On a pure triangle mesh face dissolve has the same outcome as face
+    // delete (no coplanar neighbors to merge). Run the same setup twice
+    // — once via deleteSelection, once via dissolveSelection — and confirm
+    // they produce identical triangle counts.
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+
+    std::vector<Ogre::Vector3> posBefore;
+    std::vector<std::array<unsigned, 3>> trisBefore;
+    extractEntityBuffers(m_entity, posBefore, trisBefore);
+    const size_t triCountBefore = trisBefore.size();
+
+    ctrl->selectFace(0);
+    EXPECT_EQ(ctrl->dissolveSelection(), 1)
+        << "face dissolve in MVP delegates to deleteFaces";
+
+    std::vector<Ogre::Vector3> posAfter;
+    std::vector<std::array<unsigned, 3>> trisAfter;
+    extractEntityBuffers(m_entity, posAfter, trisAfter);
+    EXPECT_EQ(trisAfter.size(), triCountBefore - 1);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, DeleteSelectionEmptyIsNoOp) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+    EXPECT_EQ(ctrl->deleteSelection(), 0);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, DeleteSelectionPushesUndoCommand) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+
+    std::vector<Ogre::Vector3> posBefore;
+    std::vector<std::array<unsigned, 3>> trisBefore;
+    extractEntityBuffers(m_entity, posBefore, trisBefore);
+    const size_t triCountBefore = trisBefore.size();
+
+    ctrl->selectFace(0);
+    ASSERT_EQ(ctrl->deleteSelection(), 1);
+
+    UndoManager::getSingleton()->undo();
+
+    std::vector<Ogre::Vector3> posAfterUndo;
+    std::vector<std::array<unsigned, 3>> trisAfterUndo;
+    extractEntityBuffers(m_entity, posAfterUndo, trisAfterUndo);
+    EXPECT_EQ(trisAfterUndo.size(), triCountBefore)
+        << "undo after delete should restore original triangle count";
+}

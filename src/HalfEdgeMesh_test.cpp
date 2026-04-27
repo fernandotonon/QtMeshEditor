@@ -3751,3 +3751,271 @@ TEST(HalfEdgeMeshStandalone, MergeVerticesOnBoundaryEdge) {
         << "the single tri collapses since 0 and 1 fused";
     EXPECT_TRUE(he.validate());
 }
+
+// ---------------------------------------------------------------------------
+// Delete / Dissolve
+// ---------------------------------------------------------------------------
+
+namespace {
+    // Build a 6-vertex hexagonal fan around a center vertex (v0). Used to
+    // exercise dissolveVertices with a clean valence-6 interior umbrella.
+    EditableMesh makeHexFan()
+    {
+        EditableMesh em;
+        EditableSubMesh sub;
+        sub.materialName = "Hex";
+        auto mkV = [](float x, float y) {
+            EditableVertex v;
+            v.position = Ogre::Vector3(x, y, 0);
+            v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+            v.uv = Ogre::Vector2((x + 1) * 0.5f, (y + 1) * 0.5f); v.hasUV = true;
+            return v;
+        };
+        // v0 = center; v1..v6 = ring at radius 1, every 60°.
+        sub.vertices = {
+            mkV(0.0f, 0.0f),
+            mkV(1.0f, 0.0f),
+            mkV(0.5f, 0.866f),
+            mkV(-0.5f, 0.866f),
+            mkV(-1.0f, 0.0f),
+            mkV(-0.5f, -0.866f),
+            mkV(0.5f, -0.866f),
+        };
+        auto mkT = [](int a, int b, int c) {
+            EditableTriangle t;
+            t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+            return t;
+        };
+        sub.triangles = {
+            mkT(0, 1, 2), mkT(0, 2, 3), mkT(0, 3, 4),
+            mkT(0, 4, 5), mkT(0, 5, 6), mkT(0, 6, 1),
+        };
+        em.subMeshes().push_back(std::move(sub));
+        return em;
+    }
+} // namespace
+
+TEST(HalfEdgeMeshStandalone, DeleteFacesEmptyIsNoOp) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.deleteFaces({}), 0);
+    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DeleteFacesRetiresOneTriangleOfQuad) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 2);
+
+    EXPECT_EQ(he.deleteFaces({0}), 1);
+    EXPECT_EQ(activeFaceCount(he), 1);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DeleteFacesIgnoresOutOfRangeAndDuplicates) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.deleteFaces({0, 0, 99, -1}), 1);
+    EXPECT_EQ(activeFaceCount(he), 1);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DeleteFacesRetiresOrphanVertex) {
+    // The hex fan has v0 at the center, only referenced by deleted faces.
+    // Once we delete every face containing v0, it has no incident faces left
+    // and should be retired.
+    auto em = makeHexFan();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    std::vector<int> all;
+    for (size_t f = 0; f < he.faceCount(); ++f) all.push_back(static_cast<int>(f));
+    EXPECT_EQ(he.deleteFaces(all), 6);
+    EXPECT_EQ(activeFaceCount(he), 0);
+    // Every vertex's halfEdge should be -1 since no face survives.
+    for (size_t v = 0; v < he.vertexCount(); ++v)
+        EXPECT_LT(he.vertex(static_cast<int>(v)).halfEdge, 0);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DeleteEdgesRemovesAdjacentFaces) {
+    // The quad mesh shares the v1↔v2 diagonal between two triangles.
+    // Deleting that edge should retire both adjacent faces.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const int diag = findEdge(he, 1, 2);
+    ASSERT_GE(diag, 0);
+    EXPECT_EQ(he.deleteEdges({diag}), 2);
+    EXPECT_EQ(activeFaceCount(he), 0);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DeleteEdgesBoundaryEdgeRemovesOneFace) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const int boundary = findEdge(he, 0, 1);
+    ASSERT_GE(boundary, 0);
+    EXPECT_EQ(he.deleteEdges({boundary}), 1);
+    EXPECT_EQ(activeFaceCount(he), 1);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DeleteVerticesRemovesAllIncidentFaces) {
+    // Deleting v0 from the hex fan removes all 6 surrounding triangles.
+    auto em = makeHexFan();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.deleteVertices({0}), 1);
+    EXPECT_EQ(activeFaceCount(he), 0);
+    EXPECT_LT(he.vertex(0).halfEdge, 0);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DeleteVerticesIgnoresInvalidIndices) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.deleteVertices({-1, 99, 0}), 1);
+    EXPECT_LT(he.vertex(0).halfEdge, 0);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DissolveEdgesEmptyIsNoOp) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.dissolveEdges({}), 0);
+    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DissolveEdgesQuadDiagonalRetriangulatesOtherDiagonal) {
+    // Quad: tris (0,1,2) and (1,3,2) share diagonal v1↔v2. Dissolving the
+    // diagonal should keep face count at 2 (still triangulated as a quad)
+    // but with the OTHER diagonal active (0↔3).
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const int diag = findEdge(he, 1, 2);
+    ASSERT_GE(diag, 0);
+
+    EXPECT_EQ(he.dissolveEdges({diag}), 1);
+    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_TRUE(he.validate());
+
+    // The new diagonal must connect v0 and v3.
+    EXPECT_GE(findEdge(he, 0, 3), 0);
+    // Old diagonal should be gone (or no longer exist as an edge).
+    EXPECT_EQ(findEdge(he, 1, 2), -1);
+}
+
+TEST(HalfEdgeMeshStandalone, DissolveEdgesBoundaryEdgeIsSkipped) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const int boundary = findEdge(he, 0, 1);
+    ASSERT_GE(boundary, 0);
+    EXPECT_EQ(he.dissolveEdges({boundary}), 0)
+        << "boundary edges have no second face to merge into";
+    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DissolveVerticesHexFanCenterCollapsesToHexagon) {
+    // The hex fan's v0 has valence 6, all triangles. Dissolving v0 should
+    // produce 4 triangles (n-gon with n=6 fan-triangulated from one vertex).
+    auto em = makeHexFan();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 6);
+
+    EXPECT_EQ(he.dissolveVertices({0}), 1);
+    EXPECT_EQ(activeFaceCount(he), 4)
+        << "hexagon fan-triangulated from one corner has n-2 = 4 triangles";
+    EXPECT_LT(he.vertex(0).halfEdge, 0);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DissolveVerticesBoundaryVertexIsSkipped) {
+    // In the quad mesh every vertex sits on the boundary loop. dissolveVertices
+    // must refuse to operate on any of them.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.dissolveVertices({0, 1, 2, 3}), 0);
+    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DissolveVerticesLowValenceIsSkipped) {
+    // A single triangle: every vertex has valence 2. dissolveVertices skips
+    // valence < 3 since there's no umbrella to merge.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.dissolveVertices({0, 1, 2}), 0);
+    EXPECT_EQ(activeFaceCount(he), 1);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, DissolveEdgesMultipleDisjointEdgesAllProcessed) {
+    // Regression for Codex P1 / CodeRabbit Major: dissolveEdges used to
+    // iterate over the input by raw edge index, but rebuildEdgesAndTwins
+    // reorders edges after each iteration. Two disjoint interior diagonals
+    // selected together used to dissolve only the first reliably.
+    //
+    // Build a 2×1 quad strip:
+    //   v0─v1─v2
+    //   │ ╲│ ╲│
+    //   v3─v4─v5
+    // Triangles: (0,1,3),(1,4,3),(1,2,4),(2,5,4) — two interior diagonals
+    // (1↔3) and (2↔4). Both must dissolve; result is two non-degenerate quads
+    // (4 triangles total) regardless of insertion order.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "Strip";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        v.uv = Ogre::Vector2(x * 0.5f, y); v.hasUV = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),       // 0 1 2 (top)
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),       // 3 4 5 (bottom)
+    };
+    auto mkT = [](int a, int b, int c) {
+        EditableTriangle t;
+        t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
+        return t;
+    };
+    sub.triangles = {
+        mkT(0, 1, 3), mkT(1, 4, 3), mkT(1, 2, 4), mkT(2, 5, 4),
+    };
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 4);
+
+    const int diagL = findEdge(he, 1, 3);
+    const int diagR = findEdge(he, 2, 4);
+    ASSERT_GE(diagL, 0);
+    ASSERT_GE(diagR, 0);
+
+    EXPECT_EQ(he.dissolveEdges({diagL, diagR}), 2)
+        << "both interior diagonals must dissolve regardless of edge-slot reordering";
+    EXPECT_EQ(activeFaceCount(he), 4)
+        << "two quads, fan-triangulated, still 4 triangles";
+    EXPECT_TRUE(he.validate());
+
+    // Both old diagonals should be gone.
+    EXPECT_EQ(findEdge(he, 1, 3), -1);
+    EXPECT_EQ(findEdge(he, 2, 4), -1);
+}

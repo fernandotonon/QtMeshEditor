@@ -4221,6 +4221,366 @@ int HalfEdgeMesh::mergeVerticesByDistance(const std::vector<int>& vertexIndices,
     return totalRetired;
 }
 
+// ---------------------------------------------------------------------------
+// Delete / Dissolve
+//
+// Deletion is the simplest topology op: zero out the half-edges of the
+// targeted faces, mark the face slot retired (halfEdge == -1), and let the
+// rebuild trio re-derive edges, twins, and boundary loops. Vertex variants
+// fan out from the vertex's incident faces, edge variants from the edge's
+// 1-or-2 adjacent faces.
+//
+// Dissolve is delete + retriangulate: the targeted element is removed but
+// the *region* it bounded survives as a fan-triangulated patch, so the
+// surface stays watertight.
+// ---------------------------------------------------------------------------
+
+namespace {
+// Retire a face by index: blank every half-edge in its loop, then null the
+// face's halfEdge pointer. Mirrors the lambda inside mergeVertices but
+// pulled out so the delete/dissolve paths share it.
+void retireFaceImpl(std::vector<HalfEdge>& halfEdges,
+                    std::vector<HEFace>& faces,
+                    int faceIdx)
+{
+    if (faceIdx < 0 || faceIdx >= static_cast<int>(faces.size())) return;
+    int startHE = faces[faceIdx].halfEdge;
+    if (startHE < 0) return;
+    int he = startHE;
+    do {
+        int next = halfEdges[he].next;
+        halfEdges[he].face = -1;
+        halfEdges[he].twin = -1;
+        halfEdges[he].next = -1;
+        halfEdges[he].prev = -1;
+        he = next;
+    } while (he != startHE && he >= 0);
+    faces[faceIdx].halfEdge = -1;
+}
+} // namespace
+
+int HalfEdgeMesh::deleteFaces(const std::vector<int>& faceIndices)
+{
+    if (faceIndices.empty()) return 0;
+
+    // 1. Collect the unique set of currently-live target faces, plus the
+    //    set of vertices touched by them. After the retire pass we'll
+    //    drop any vertex that had ALL its incident faces deleted.
+    std::set<int> doomedFaces;
+    std::set<int> touchedVerts;
+    for (int f : faceIndices) {
+        if (f < 0 || f >= static_cast<int>(m_faces.size())) continue;
+        if (m_faces[f].halfEdge < 0) continue;
+        if (!doomedFaces.insert(f).second) continue;
+        for (int v : faceVertices(f)) touchedVerts.insert(v);
+    }
+    if (doomedFaces.empty()) return 0;
+
+    // 2. Retire the target faces.
+    for (int f : doomedFaces) retireFaceImpl(m_halfEdges, m_faces, f);
+
+    // 3. Drop vertices whose entire incident-face set was retired. We
+    //    re-query facesAroundVertex (which respects halfEdge < 0 retire
+    //    flags) — a vertex with zero live faces becomes inert.
+    for (int v : touchedVerts) {
+        // Vertex's halfEdge may now point at a retired HE; refresh first.
+        // facesAroundVertex returns empty either way once everything is gone,
+        // so checking it is enough.
+        bool anyAlive = false;
+        for (int he = 0; he < static_cast<int>(m_halfEdges.size()); ++he) {
+            if (m_halfEdges[he].face < 0) continue;
+            if (m_halfEdges[he].vertex == v) { anyAlive = true; break; }
+            // Also check the "from" side: prev->vertex == v
+            int prev = m_halfEdges[he].prev;
+            if (prev >= 0 && m_halfEdges[prev].vertex == v) {
+                anyAlive = true;
+                break;
+            }
+        }
+        if (!anyAlive) m_vertices[v].halfEdge = -1;
+    }
+
+    // 4. Standard rebuild trio: edges, boundary, vertex pointers. Same
+    //    sequence used by mergeVertices.
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+
+    return static_cast<int>(doomedFaces.size());
+}
+
+int HalfEdgeMesh::deleteEdges(const std::vector<int>& edgeIndices)
+{
+    if (edgeIndices.empty()) return 0;
+
+    // Resolve each edge to its 0-2 adjacent faces. We feed the union set
+    // into deleteFaces so the rebuild + orphan-vertex pass run once.
+    std::set<int> doomedFaces;
+    for (int e : edgeIndices) {
+        if (e < 0 || e >= static_cast<int>(m_edges.size())) continue;
+        if (m_edges[e].halfEdge < 0) continue;
+        auto [fA, fB] = edgeFaces(e);
+        if (fA >= 0) doomedFaces.insert(fA);
+        if (fB >= 0) doomedFaces.insert(fB);
+    }
+    if (doomedFaces.empty()) return 0;
+
+    std::vector<int> faces(doomedFaces.begin(), doomedFaces.end());
+    return deleteFaces(faces);
+}
+
+int HalfEdgeMesh::deleteVertices(const std::vector<int>& vertexIndices)
+{
+    if (vertexIndices.empty()) return 0;
+
+    // Collect the union of faces incident to any targeted vertex.
+    std::set<int> doomedVerts;
+    std::set<int> doomedFaces;
+    for (int v : vertexIndices) {
+        if (v < 0 || v >= static_cast<int>(m_vertices.size())) continue;
+        if (m_vertices[v].halfEdge < 0) continue;
+        if (!doomedVerts.insert(v).second) continue;
+        for (int f : facesAroundVertex(v)) doomedFaces.insert(f);
+    }
+    if (doomedVerts.empty()) return 0;
+
+    if (!doomedFaces.empty()) {
+        std::vector<int> faces(doomedFaces.begin(), doomedFaces.end());
+        deleteFaces(faces);
+    }
+
+    // Mark the vertex slots retired even if they had no live faces (a
+    // vertex with no faces is unreachable from toEditableMesh anyway, but
+    // explicitly retiring keeps subsequent operations honest).
+    for (int v : doomedVerts) m_vertices[v].halfEdge = -1;
+
+    return static_cast<int>(doomedVerts.size());
+}
+
+int HalfEdgeMesh::dissolveEdges(const std::vector<int>& edgeIndices)
+{
+    if (edgeIndices.empty()) return 0;
+
+    // Edge slots are reordered by rebuildEdgesAndTwins() at the end of
+    // each iteration. Snapshot endpoint vertex pairs (vertex slots are
+    // append-only and stable across rebuilds) and re-resolve the edge
+    // index by pair on every iteration. Mirrors cutPath's pattern.
+    // Found by Codex P1 + CodeRabbit Major.
+    std::vector<std::pair<int,int>> targetVerts;
+    targetVerts.reserve(edgeIndices.size());
+    {
+        std::set<std::pair<int,int>> seenPairs;
+        for (int e : edgeIndices) {
+            if (e < 0 || e >= static_cast<int>(m_edges.size())) continue;
+            if (m_edges[e].halfEdge < 0) continue;
+            auto [a, b] = edgeVertices(e);
+            if (a < 0 || b < 0) continue;
+            auto key = std::make_pair(std::min(a, b), std::max(a, b));
+            if (!seenPairs.insert(key).second) continue;
+            targetVerts.push_back(key);
+        }
+    }
+
+    auto findEdgeByVerts = [this](int va, int vb) -> int {
+        for (size_t e = 0; e < m_edges.size(); ++e) {
+            if (m_edges[e].halfEdge < 0) continue;
+            auto [a, b] = edgeVertices(static_cast<int>(e));
+            if ((a == va && b == vb) || (a == vb && b == va))
+                return static_cast<int>(e);
+        }
+        return -1;
+    };
+
+    int dissolved = 0;
+    for (const auto& [va, vb] : targetVerts) {
+        const int e = findEdgeByVerts(va, vb);
+        if (e < 0) continue;                  // earlier dissolve removed this edge
+        if (m_edges[e].halfEdge < 0) continue;
+
+        auto [fA, fB] = edgeFaces(e);
+        if (fA < 0 || fB < 0) continue;                     // boundary
+        if (m_faces[fA].halfEdge < 0 || m_faces[fB].halfEdge < 0) continue;
+        if (m_faces[fA].subMeshIndex != m_faces[fB].subMeshIndex) continue;
+
+        const auto vA = faceVertices(fA);
+        const auto vB = faceVertices(fB);
+        if (vA.size() != 3 || vB.size() != 3) continue; // MVP: triangle pairs
+
+        const auto [eu, ev] = edgeVertices(e);
+        // Find the "third" vertex of each face — the one not on the shared edge.
+        auto thirdVert = [eu, ev](const std::vector<int>& v) {
+            for (int x : v) if (x != eu && x != ev) return x;
+            return -1;
+        };
+        const int oppA = thirdVert(vA);
+        const int oppB = thirdVert(vB);
+        if (oppA < 0 || oppB < 0 || oppA == oppB) continue;
+
+        // Dissolving (eu, ev) means re-triangulating the {eu, oppA, ev, oppB}
+        // quad using the *other* diagonal (oppA, oppB). We need to preserve
+        // the original winding of fA so the outward normal stays sane: if
+        // fA traverses (eu -> ev -> oppA), the new triangles are
+        // (eu, oppB, oppA) and (ev, oppA, oppB) (winding flipped by the
+        // shared diagonal direction). Easier in practice: pull the boundary
+        // loop directly off fA and fB.
+        //
+        // Walk fA from oppA and collect the three boundary verts in order.
+        // Then concatenate fB's boundary starting at oppB. That gives a
+        // 4-vertex loop in correct CCW order, which we fan-triangulate
+        // (oppA, x, oppB) and (oppA, oppB, y) — but easier: just use
+        // (oppA, vA_next_after_oppA, oppB) and (oppA, oppB, vB_next_after_oppB).
+        auto faceLoopFrom = [this](int faceIdx, int startVert) -> std::vector<int> {
+            std::vector<int> out;
+            int startHE = m_faces[faceIdx].halfEdge;
+            int he = startHE;
+            // Find the HE whose `prev->vertex == startVert` (HE points away
+            // from startVert).
+            do {
+                int prev = m_halfEdges[he].prev;
+                if (prev >= 0 && m_halfEdges[prev].vertex == startVert) break;
+                he = m_halfEdges[he].next;
+            } while (he != startHE && he >= 0);
+            int cur = he;
+            for (int i = 0; i < 3 && cur >= 0; ++i) {
+                int prev = m_halfEdges[cur].prev;
+                if (prev < 0) break;
+                out.push_back(m_halfEdges[prev].vertex);
+                cur = m_halfEdges[cur].next;
+            }
+            return out;
+        };
+
+        const std::vector<int> loopA = faceLoopFrom(fA, oppA); // [oppA, ?, ?]
+        const std::vector<int> loopB = faceLoopFrom(fB, oppB); // [oppB, ?, ?]
+        if (loopA.size() != 3 || loopB.size() != 3) continue;
+
+        const int subIdx = m_faces[fA].subMeshIndex;
+        retireFaceImpl(m_halfEdges, m_faces, fA);
+        retireFaceImpl(m_halfEdges, m_faces, fB);
+
+        // The merged quad's CCW loop is loopA followed by the two non-oppB
+        // vertices of loopB (which are eu/ev) — but those are already in
+        // loopA, so loopA + [oppB] in the right slot is what we want. Since
+        // we want the new diagonal (oppA, oppB), the two new triangles are
+        // (loopA[0], loopA[1], oppB) and (loopA[0], oppB, loopA[2]) i.e.
+        // (oppA, neighborA1, oppB) and (oppA, oppB, neighborA2).
+        appendTriangle(loopA[0], loopA[1], oppB, subIdx);
+        appendTriangle(loopA[0], oppB,    loopA[2], subIdx);
+
+        // Rebuild incrementally per dissolve so the next edge in the input
+        // sees a coherent topology. This is O(|HE|) per dissolve; fine for
+        // interactive selections (tens to hundreds of edges).
+        rebuildEdgesAndTwins();
+        compactBoundaryHalfEdges();
+        buildBoundaryHalfEdges();
+        fixVertexHalfEdges();
+
+        ++dissolved;
+    }
+    return dissolved;
+}
+
+int HalfEdgeMesh::dissolveVertices(const std::vector<int>& vertexIndices)
+{
+    if (vertexIndices.empty()) return 0;
+
+    int dissolved = 0;
+    std::set<int> processed;
+    for (int v : vertexIndices) {
+        if (!processed.insert(v).second) continue;
+        if (v < 0 || v >= static_cast<int>(m_vertices.size())) continue;
+        if (m_vertices[v].halfEdge < 0) continue;
+        if (isVertexBoundary(v)) continue;        // MVP: skip boundary vertices
+
+        const auto incident = facesAroundVertex(v);
+        if (incident.size() < 3) continue;       // valence < 3 — nothing to dissolve
+
+        // All incident faces must share a submesh; otherwise dissolving would
+        // fuse material groups. Same constraint as mergeVertices.
+        const int subIdx = m_faces[incident.front()].subMeshIndex;
+        bool sameSub = true;
+        for (int f : incident) {
+            if (m_faces[f].subMeshIndex != subIdx) { sameSub = false; break; }
+            if (faceVertices(f).size() != 3) { sameSub = false; break; }
+        }
+        if (!sameSub) continue;
+
+        // Walk the boundary loop of the umbrella (the N-gon left after
+        // removing the central vertex). The standard half-edge trick: pick
+        // any outgoing HE from v, follow its next pointer (skipping v),
+        // then jump across the next HE's twin to walk to the next umbrella
+        // face. Each "next->vertex" along the way is one boundary vertex.
+        //
+        // We collect by walking the incident faces and pulling the two
+        // non-v vertices in winding order. With a manifold umbrella those
+        // pairs chain into a single closed loop.
+        std::vector<int> loop;
+        loop.reserve(incident.size());
+        // Build a small adjacency: face -> (boundaryStart, boundaryEnd) where
+        // the face's loop is (v -> boundaryStart -> boundaryEnd -> v).
+        std::map<int, std::pair<int,int>> faceEdges;
+        for (int f : incident) {
+            const auto vs = faceVertices(f);
+            int idxOfV = -1;
+            for (int i = 0; i < 3; ++i) if (vs[i] == v) { idxOfV = i; break; }
+            if (idxOfV < 0) { faceEdges.clear(); break; }
+            int a = vs[(idxOfV + 1) % 3];
+            int b = vs[(idxOfV + 2) % 3];
+            faceEdges[f] = {a, b};
+        }
+        if (faceEdges.empty()) continue;
+
+        // Chain the (start, end) pairs into one loop.
+        // Pick a starting face arbitrarily; walk via shared boundary verts.
+        std::set<int> remaining(incident.begin(), incident.end());
+        int curFace = *remaining.begin();
+        loop.push_back(faceEdges[curFace].first);
+        loop.push_back(faceEdges[curFace].second);
+        remaining.erase(curFace);
+
+        bool ok = true;
+        while (!remaining.empty()) {
+            int needed = loop.back();
+            int found = -1;
+            for (int f : remaining) {
+                if (faceEdges[f].first == needed) { found = f; break; }
+            }
+            if (found < 0) { ok = false; break; }
+            // The new face contributes its `second` vertex.
+            // (Its `first` matches the existing tail.)
+            loop.push_back(faceEdges[found].second);
+            remaining.erase(found);
+        }
+        if (!ok) continue;
+        // The loop should close — last == first. Drop the duplicate.
+        if (loop.size() < 4 || loop.front() != loop.back()) continue;
+        loop.pop_back();
+        if (loop.size() < 3) continue;
+
+        // Sanity: no duplicated boundary verts (would mean a non-manifold
+        // umbrella we can't safely fan-triangulate).
+        std::set<int> uniqueLoop(loop.begin(), loop.end());
+        if (uniqueLoop.size() != loop.size()) continue;
+
+        // Retire the old faces, fan-triangulate from loop[0]. New triangles:
+        //   (loop[0], loop[i], loop[i+1])  for i in [1, N-1)
+        for (int f : incident) retireFaceImpl(m_halfEdges, m_faces, f);
+        for (size_t i = 1; i + 1 < loop.size(); ++i) {
+            appendTriangle(loop[0], loop[i], loop[i + 1], subIdx);
+        }
+        m_vertices[v].halfEdge = -1; // retire the dissolved center
+
+        rebuildEdgesAndTwins();
+        compactBoundaryHalfEdges();
+        buildBoundaryHalfEdges();
+        fixVertexHalfEdges();
+
+        ++dissolved;
+    }
+    return dissolved;
+}
+
 bool HalfEdgeMesh::validate() const
 {
     // Check 1: Twin symmetry
