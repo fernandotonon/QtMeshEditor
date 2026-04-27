@@ -2762,6 +2762,12 @@ int applyTopologyMutationNoSurvivor(
         opLabel);
     UndoManager::getSingleton()->push(cmd);
 
+    // Refresh degenerate-triangle bookkeeping so the Inspector's
+    // validation badge doesn't carry a stale count past a delete /
+    // dissolve. Other topology paths (extrude, bevel, knife, merge)
+    // do this; CodeRabbit Minor flagged the omission.
+    if (self) self->validateMesh();
+
     SentryReporter::addBreadcrumb("edit_mode",
         QString("%1 (count=%2)").arg(opLabel).arg(affected));
 
@@ -2772,6 +2778,14 @@ int applyTopologyMutationNoSurvivor(
 int EditModeController::deleteSelection()
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+
+    // Cancel any active interactive preview before mutating topology.
+    // A live bevel snapshot or knife point list would otherwise replay
+    // against the post-delete mesh on the next commit/cancel and either
+    // overwrite the delete result or crash on stale indices.
+    // (CodeRabbit Major)
+    if (m_bevelSession.active) cancelBevel();
+    if (m_knifeSession.active) cancelKnife();
 
     QString opLabel;
     std::function<int(HalfEdgeMesh&)> mutate;
@@ -2832,6 +2846,11 @@ int EditModeController::deleteSelection()
 int EditModeController::dissolveSelection()
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+
+    // Cancel any active interactive preview before mutating topology —
+    // see deleteSelection() for the rationale. (CodeRabbit Major)
+    if (m_bevelSession.active) cancelBevel();
+    if (m_knifeSession.active) cancelKnife();
 
     QString opLabel;
     std::function<int(HalfEdgeMesh&)> mutate;
