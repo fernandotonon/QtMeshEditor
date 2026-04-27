@@ -44,6 +44,7 @@ THE SOFTWARE.
 #include <ProceduralSphereGenerator.h>
 #include <cmath>
 #include <algorithm>
+#include <numeric>
 #include <limits>
 
 namespace {
@@ -2430,6 +2431,275 @@ bool EditModeController::commitKnife()
     emit knifeSessionChanged();
     emit meshDataChanged();
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Merge vertices
+//
+// All four public entry points share the same plumbing: take the current
+// VertexMode selection, run an HEMesh transform, write the result back. The
+// only thing that changes between them is which target position we hand to
+// the HE primitive (centroid / first / last / per-cluster centroid for
+// by-distance). `applyMergeOp` factors that boilerplate.
+// ---------------------------------------------------------------------------
+namespace {
+// Shared post-mesh-mutation hook used by knife + merge: rewrite the entity's
+// Ogre buffers, save / restore per-subentity material overrides, and tell
+// RTSS to re-link shaders against the new vertex layout. Captures locally
+// to avoid a public helper just for this.
+inline void rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
+    std::vector<std::string> preMats;
+    preMats.reserve(ent->getNumSubEntities());
+    for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i)
+        preMats.push_back(ent->getSubEntity(i)->getMaterialName());
+
+    ent->_deinitialise();
+    ent->_initialise(true);
+
+    for (unsigned int i = 0;
+         i < ent->getNumSubEntities() && i < preMats.size(); ++i) {
+        if (!preMats[i].empty())
+            ent->getSubEntity(i)->setMaterialName(preMats[i]);
+    }
+
+    if (auto* sg = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
+        for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+            const std::string& m = ent->getSubEntity(i)->getMaterialName();
+            if (!m.empty())
+                sg->invalidateMaterial(
+                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, m);
+        }
+    }
+}
+} // namespace
+
+// Find global vertex indices of the survivor positions after toEditableMesh
+// re-packed the per-submesh arrays. Each survivor is the unique vertex at
+// `pos` (within `eps`) in the post-merge mesh. Mirrors the pattern bevel
+// uses to re-select its newly-created vertices.
+static std::set<int> findGlobalVertsByPosition(
+    const EditableMesh* mesh, const std::vector<Ogre::Vector3>& targets)
+{
+    std::set<int> result;
+    if (!mesh || targets.empty()) return result;
+
+    constexpr float eps2 = 1e-8f;
+    int globalIdx = 0;
+    for (const auto& sub : mesh->subMeshes()) {
+        for (size_t v = 0; v < sub.vertices.size(); ++v) {
+            for (const auto& pos : targets) {
+                if (sub.vertices[v].position.squaredDistance(pos) < eps2) {
+                    result.insert(globalIdx + static_cast<int>(v));
+                    break;
+                }
+            }
+        }
+        globalIdx += static_cast<int>(sub.vertices.size());
+    }
+    return result;
+}
+
+// Shared post-merge plumbing for all four merge ops. Captures pre-merge
+// selection for undo, runs the supplied HE-side merge, writes the new
+// submeshes back, recomputes normals, refreshes the entity, and re-selects
+// the survivor vertex (or vertices, for By Distance) by hunting the target
+// position(s) in the re-packed mesh.
+//
+// `mergeFn` does the actual HE mutation; it gets the prepared HEMesh and
+// must return the number of retired vertices (0 = no-op, abort).
+//
+// `survivorTargets` is the world-space position(s) the user expected the
+// survivor to land at — used to re-select after toEditableMesh re-packs.
+int EditModeController::applyMergeAndRefresh(
+    const QString& opLabel,
+    const std::function<int(HalfEdgeMesh&)>& mergeFn,
+    const std::vector<Ogre::Vector3>& survivorTargets)
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+    if (m_selectionMode != VertexMode) return 0;
+    if (m_selectedVertices.size() < 2) return 0;
+
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    // Snapshot mesh + selection BEFORE the mutation so undo restores both
+    // (CodeRabbit critical: previously the cleared selection was passed
+    // for both old and new state, leaving undo with an empty selection).
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const auto preSelectedVerts = m_selectedVertices;
+    const auto preSelectedEdges = m_selectedEdges;
+    const auto preSelectedFaces = m_selectedFaces;
+
+    const int retired = mergeFn(hm);
+    if (retired == 0) return 0;
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+
+    // Recompute normals so shading stays right across the new topology —
+    // bevel/extrude do this for the same reason. Respect the current
+    // smooth/flat mode so the user doesn't lose their setting on merge.
+    if (m_normalsMode == 0)
+        m_editableMesh->recalculateNormals();
+    else
+        m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    // Re-select survivor(s) by position. toEditableMesh re-packs per
+    // submesh so old indices are dead, but the position is stable —
+    // matches the bevel post-op refresh pattern.
+    m_selectedVertices = findGlobalVertsByPosition(m_editableMesh.get(),
+                                                   survivorTargets);
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        preSelectedVerts, preSelectedEdges, preSelectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        opLabel);
+    UndoManager::getSingleton()->push(cmd);
+
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("%1 (removed=%2)").arg(opLabel).arg(retired));
+
+    updateSelectionOverlay();
+    refreshNormalVisualizer();
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return retired;
+}
+
+int EditModeController::mergeAtCenter()
+{
+    if (m_selectedVertices.empty()) return 0;
+    HalfEdgeMesh probe; // peek at positions before the real run
+    if (!probe.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+    Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+    for (int v : verts) centroid += probe.vertex(v).position;
+    centroid /= static_cast<float>(verts.size());
+
+    return applyMergeAndRefresh("Merge At Center",
+        [&verts, centroid](HalfEdgeMesh& hm) {
+            return hm.mergeVertices(verts, centroid);
+        },
+        {centroid});
+}
+
+int EditModeController::mergeAtFirst()
+{
+    if (m_selectedVertices.empty()) return 0;
+    HalfEdgeMesh probe;
+    if (!probe.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+    // std::set iteration is sorted ascending — verts[0] is the lowest index.
+    const Ogre::Vector3 target = probe.vertex(verts.front()).position;
+
+    return applyMergeAndRefresh("Merge At First",
+        [&verts, target](HalfEdgeMesh& hm) {
+            return hm.mergeVertices(verts, target);
+        },
+        {target});
+}
+
+int EditModeController::mergeAtLast()
+{
+    if (m_selectedVertices.empty()) return 0;
+    HalfEdgeMesh probe;
+    if (!probe.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+    // Move the highest-index vert to the front so HEMesh::mergeVertices
+    // picks it as the survivor. Without this swap, the survivor is the
+    // lowest index (verts[0]) and only its *position* would be retargeted
+    // — semantically that's "Merge At First, with last's position", not
+    // "Merge At Last". Caught by Codex P1 + CodeRabbit.
+    std::swap(verts.front(), verts.back());
+    const Ogre::Vector3 target = probe.vertex(verts.front()).position;
+
+    return applyMergeAndRefresh("Merge At Last",
+        [&verts, target](HalfEdgeMesh& hm) {
+            return hm.mergeVertices(verts, target);
+        },
+        {target});
+}
+
+int EditModeController::mergeByDistance(float threshold)
+{
+    if (m_selectedVertices.empty()) return 0;
+
+    // Defensive clamp: very large thresholds (or finite-but-massive caller
+    // input) make t² overflow to +∞ in HEMesh, collapsing the entire
+    // selection into one cluster. 1e6 world units is well past anything
+    // realistic on a meter-scale mesh and stays safely under sqrt(FLT_MAX).
+    if (threshold <= 0.0f) return 0;
+    threshold = std::min(threshold, 1.0e6f);
+
+    HalfEdgeMesh probe;
+    if (!probe.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    std::vector<int> verts(m_selectedVertices.begin(), m_selectedVertices.end());
+
+    // Pre-compute the cluster centroids so we know what positions to
+    // re-select after the operation. Mirrors HEMesh's internal grouping
+    // (union-find by distance) but stays per-submesh because cross-submesh
+    // pairs are never fused — including them in the union step inflates
+    // clusters and causes the whole cluster to be rejected at HE level.
+    // Codex P2.
+    std::vector<Ogre::Vector3> survivorTargets;
+    {
+        // Group verts by submesh first.
+        std::map<int, std::vector<int>> bySubmesh;
+        for (int v : verts) {
+            const auto faces = probe.facesAroundVertex(v);
+            if (faces.empty()) continue;
+            int sub = probe.face(faces.front()).subMeshIndex;
+            bySubmesh[sub].push_back(v);
+        }
+        // Within each submesh, union by distance.
+        const float t2 = threshold * threshold;
+        for (auto& [sub, members] : bySubmesh) {
+            std::vector<int> parent(members.size());
+            std::iota(parent.begin(), parent.end(), 0);
+            std::function<int(int)> find = [&](int i) {
+                while (parent[i] != i) { parent[i] = parent[parent[i]]; i = parent[i]; }
+                return i;
+            };
+            for (size_t i = 0; i < members.size(); ++i) {
+                for (size_t j = i + 1; j < members.size(); ++j) {
+                    if (probe.vertex(members[i]).position.squaredDistance(
+                            probe.vertex(members[j]).position) <= t2) {
+                        int ri = find(static_cast<int>(i));
+                        int rj = find(static_cast<int>(j));
+                        if (ri != rj) parent[std::max(ri, rj)] = std::min(ri, rj);
+                    }
+                }
+            }
+            std::map<int, std::vector<int>> clusters;
+            for (size_t i = 0; i < members.size(); ++i)
+                clusters[find(static_cast<int>(i))].push_back(members[i]);
+            for (auto& [_, clusterMembers] : clusters) {
+                if (clusterMembers.size() < 2) continue;
+                Ogre::Vector3 c = Ogre::Vector3::ZERO;
+                for (int m : clusterMembers) c += probe.vertex(m).position;
+                c /= static_cast<float>(clusterMembers.size());
+                survivorTargets.push_back(c);
+            }
+        }
+    }
+
+    return applyMergeAndRefresh("Merge By Distance",
+        [&verts, threshold](HalfEdgeMesh& hm) {
+            return hm.mergeVerticesByDistance(verts, threshold);
+        },
+        survivorTargets);
 }
 
 void EditModeController::cancelKnife()

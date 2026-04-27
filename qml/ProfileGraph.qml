@@ -1,4 +1,4 @@
-import QtQuick 2.15
+import QtQuick
 
 // 2D graph control for the bevel profile. Displays N-1 vertically-
 // draggable control points for N segments; endpoints are fixed on the

@@ -456,6 +456,50 @@ public:
      */
     std::vector<int> cutPath(const std::vector<CutPoint>& points);
 
+    /**
+     * @brief Merge a set of vertices into a single survivor at `targetPos`.
+     *
+     * Picks `vertexIndices[0]` as the survivor, copies `targetPos` into its
+     * position, re-points every half-edge that referenced a doomed vertex
+     * to the survivor, retires triangles that become degenerate (two of
+     * their three vertices identical after the rewrite), then rebuilds the
+     * edge/twin/boundary tables. UVs/normals/bone weights/tangents on the
+     * survivor are kept as-is so the user gets a deterministic outcome —
+     * pre-merge attribute interpolation is a follow-up concern.
+     *
+     * Refuses any merge that would cross a submesh boundary, since
+     * dropping a vertex per submesh would silently fuse UV seams /
+     * material groups. Caller can group selections per-submesh upfront.
+     *
+     * @param vertexIndices The HE-vertex indices to merge. Order matters
+     *        only in that vertexIndices[0] becomes the survivor; the rest
+     *        are retired. Duplicates and invalid indices are ignored.
+     * @param targetPos The local-space position assigned to the survivor.
+     * @return Number of vertices that were actually retired (0 on no-op
+     *         or refusal). The survivor is not counted.
+     */
+    int mergeVertices(const std::vector<int>& vertexIndices,
+                      const Ogre::Vector3& targetPos);
+
+    /**
+     * @brief Find pairs of vertices within `threshold` of each other and
+     *        merge each cluster to its centroid. Operates only on the
+     *        provided candidate set (so the caller controls scope —
+     *        usually the current selection). Cross-submesh pairs are
+     *        skipped, same as `mergeVertices`.
+     *
+     * Implementation: union-find by spatial proximity. A vertex landing
+     * in two clusters joins both; the merged cluster collapses to the
+     * combined centroid.
+     *
+     * @param vertexIndices Candidate vertices.
+     * @param threshold World-space distance under which a pair fuses.
+     *        Defaults to 1e-4 (≈0.1 mm at meter scale).
+     * @return Number of vertices retired across all clusters.
+     */
+    int mergeVerticesByDistance(const std::vector<int>& vertexIndices,
+                                float threshold = 1e-4f);
+
     /// @}
 
     /// @name Validation

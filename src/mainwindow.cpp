@@ -675,18 +675,59 @@ void MainWindow::initToolBar()
     });
     QAction* knifeAction = ui->objectsToolbar->addWidget(knifeButton);
 
+    // Merge: vertex-mode-only collapse of the current selection. Drops a
+    // small popup so the user can pick the survivor target (Center / First
+    // / Last / By Distance) without having to memorise a four-key chord.
+    auto mergeButton = new QToolButton(ui->objectsToolbar);
+    mergeButton->setText(QStringLiteral("\u2A00"));   // ⨀ circled-dot — fuse
+    mergeButton->setToolTip(tr("Merge vertices… — collapse selection (M)"));
+    mergeButton->setFont(topoFont);
+    mergeButton->setStyleSheet(topoBtnStyle);
+    mergeButton->setPopupMode(QToolButton::InstantPopup);
+
+    auto mergeMenu = new QMenu(mergeButton);
+    auto* actAtCenter   = mergeMenu->addAction(tr("At Center"));
+    auto* actAtFirst    = mergeMenu->addAction(tr("At First"));
+    auto* actAtLast     = mergeMenu->addAction(tr("At Last"));
+    mergeMenu->addSeparator();
+    auto* actByDistance = mergeMenu->addAction(tr("By Distance"));
+    mergeButton->setMenu(mergeMenu);
+
+    auto runMerge = [](int (EditModeController::*op)(), const char* label) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Toolbar: Merge %1").arg(label));
+        auto* c = EditModeController::instance();
+        const int removed = (c->*op)();
+        Q_UNUSED(removed); // status reporting handled by Sentry breadcrumb for now
+    };
+    connect(actAtCenter, &QAction::triggered, this, [runMerge]() {
+        runMerge(&EditModeController::mergeAtCenter, "At Center");
+    });
+    connect(actAtFirst, &QAction::triggered, this, [runMerge]() {
+        runMerge(&EditModeController::mergeAtFirst, "At First");
+    });
+    connect(actAtLast, &QAction::triggered, this, [runMerge]() {
+        runMerge(&EditModeController::mergeAtLast, "At Last");
+    });
+    connect(actByDistance, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Merge By Distance");
+        EditModeController::instance()->mergeByDistance(1e-4f);
+    });
+    QAction* mergeAction = ui->objectsToolbar->addWidget(mergeButton);
+
     // Context-aware visibility + enabled:
     //  - Hidden entirely when NOT in edit mode.
     //  - In edit mode: stay visible but only enable when the current
     //    mode matches AND the relevant element type actually has a
     //    non-empty selection.
-    auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton,
-                               extrudeAction, bevelAction, knifeAction]() {
+    auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton,
+                               extrudeAction, bevelAction, knifeAction, mergeAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
         bevelAction->setVisible(active);
         knifeAction->setVisible(active);
+        mergeAction->setVisible(active);
         if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
         const bool hasFaces = c->selectedFaceCount() > 0;
@@ -698,6 +739,9 @@ void MainWindow::initToolBar()
         // Knife is always enabled in edit mode; the session has its own
         // point-based hit-tests and doesn't need a pre-existing selection.
         knifeButton->setEnabled(true);
+        // Merge needs a multi-vertex selection in vertex mode — the four
+        // operations (Center/First/Last/ByDistance) all require ≥2 verts.
+        mergeButton->setEnabled(mode == 0 && c->selectedVertexCount() >= 2);
     };
     refreshTopoButtons();
     connect(editCtrlForTopo, &EditModeController::editModeChanged,
@@ -1141,6 +1185,21 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             if (!(event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier | Qt::AltModifier))) {
                 SentryReporter::addBreadcrumb("ui.shortcut", "K — Knife (edit mode)");
                 editCtrl->beginKnife();
+                event->accept();
+                return;
+            }
+            break;
+        case Qt::Key_M:
+            // M: Merge At Center on the current vertex selection. Phase-4
+            // issue spec calls this out as the headline merge gesture; the
+            // other targets (First / Last / By Distance) remain on the
+            // toolbar dropdown. No modifier so it doesn't collide with
+            // platform shortcuts (Cmd+M minimises on macOS — guarded).
+            if (!(event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier | Qt::AltModifier))
+                && editCtrl->selectionMode() == EditModeController::VertexMode
+                && editCtrl->selectedVertexCount() >= 2) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "M — Merge At Center (edit mode)");
+                editCtrl->mergeAtCenter();
                 event->accept();
                 return;
             }

@@ -1629,8 +1629,11 @@ jobs:
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/MacOS/media
             sudo mkdir -p ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
 
-            # Create qt.conf to help Qt find plugins in the bundle
-            echo -e "[Paths]\nPlugins = PlugIns\nQml2Imports = PlugIns/qml" | sudo tee ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources/qt.conf
+            # Create qt.conf to help Qt find plugins in the bundle.
+            # QmlImports (Qt 6.5+) supersedes Qml2Imports (deprecated), but
+            # we set both for compat with anything still keying off the older
+            # name during plugin discovery.
+            echo -e "[Paths]\nPlugins = PlugIns\nQmlImports = PlugIns/qml\nQml2Imports = PlugIns/qml" | sudo tee ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources/qt.conf
             sudo cp -R ${{github.workspace}}/resources/icon.icns ${{github.workspace}}/bin/QtMeshEditor.app/Contents/Resources
             sudo cp -R ${{github.workspace}}/bin/Info.plist ${{github.workspace}}/bin/QtMeshEditor.app/Contents/
             
