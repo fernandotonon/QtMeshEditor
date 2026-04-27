@@ -2857,10 +2857,17 @@ int EditModeController::dissolveSelection()
         if (edgeIdxs.empty()) return 0;
         opLabel = "Dissolve Edges";
         mutate = [edgeIdxs](HalfEdgeMesh& hm) { return hm.dissolveEdges(edgeIdxs); };
-    } else {
-        // Face dissolve is not part of MVP — Phase 4 issue calls out vertex
-        // and edge dissolves only.
-        return 0;
+    } else { // FaceMode
+        if (m_selectedFaces.empty()) return 0;
+        // On a pure triangle mesh, face dissolve and face delete are
+        // identical — there are no coplanar neighbors to merge into a
+        // single n-gon, so the hole boundary is the same in both cases.
+        // Wire face dissolve to deleteFaces so the menu entry stays
+        // active and predictable; an n-gon-aware variant can replace
+        // this once the rest of the pipeline supports n-gons.
+        std::vector<int> faces(m_selectedFaces.begin(), m_selectedFaces.end());
+        opLabel = "Dissolve Faces";
+        mutate = [faces](HalfEdgeMesh& hm) { return hm.deleteFaces(faces); };
     }
 
     const int affected = applyTopologyMutationNoSurvivor(

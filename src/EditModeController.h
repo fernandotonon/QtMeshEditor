@@ -408,7 +408,9 @@ public:
      * Dispatches by selection mode:
      *   - VertexMode → HEMesh::dissolveVertices
      *   - EdgeMode   → HEMesh::dissolveEdges
-     *   - FaceMode   → no-op (face dissolve is not part of MVP)
+     *   - FaceMode   → HEMesh::deleteFaces (same result as Delete Faces
+     *                  on a pure triangle mesh — there are no coplanar
+     *                  neighbors to merge into an n-gon)
      *
      * Pushes one undo command labeled "Dissolve <Mode>". Returns the
      * number of elements actually dissolved, or 0 on no-op.
