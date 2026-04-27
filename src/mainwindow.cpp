@@ -715,19 +715,52 @@ void MainWindow::initToolBar()
     });
     QAction* mergeAction = ui->objectsToolbar->addWidget(mergeButton);
 
+    // Delete / Dissolve: works in any selection mode. The dropdown lets
+    // the user pick "Delete" (remove element + adjacent geometry) or
+    // "Dissolve" (remove element while keeping the surrounding region
+    // watertight). Bound to X (delete) and Ctrl+X / Cmd+X (dissolve).
+    auto deleteButton = new QToolButton(ui->objectsToolbar);
+    deleteButton->setText(QStringLiteral("\u2715"));  // ✕ (cross — destructive)
+    const QString deleteShortcutLabel =
+#ifdef Q_OS_MACOS
+        QStringLiteral("X / Cmd+X");
+#else
+        QStringLiteral("X / Ctrl+X");
+#endif
+    deleteButton->setToolTip(tr("Delete / Dissolve selection (%1)").arg(deleteShortcutLabel));
+    deleteButton->setFont(topoFont);
+    deleteButton->setStyleSheet(topoBtnStyle);
+    deleteButton->setPopupMode(QToolButton::InstantPopup);
+
+    auto deleteMenu = new QMenu(deleteButton);
+    auto* actDelete   = deleteMenu->addAction(tr("Delete"));
+    auto* actDissolve = deleteMenu->addAction(tr("Dissolve"));
+    deleteButton->setMenu(deleteMenu);
+
+    connect(actDelete, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Delete");
+        EditModeController::instance()->deleteSelection();
+    });
+    connect(actDissolve, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Dissolve");
+        EditModeController::instance()->dissolveSelection();
+    });
+    QAction* deleteAction = ui->objectsToolbar->addWidget(deleteButton);
+
     // Context-aware visibility + enabled:
     //  - Hidden entirely when NOT in edit mode.
     //  - In edit mode: stay visible but only enable when the current
     //    mode matches AND the relevant element type actually has a
     //    non-empty selection.
-    auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton,
-                               extrudeAction, bevelAction, knifeAction, mergeAction]() {
+    auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton, deleteButton,
+                               extrudeAction, bevelAction, knifeAction, mergeAction, deleteAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
         bevelAction->setVisible(active);
         knifeAction->setVisible(active);
         mergeAction->setVisible(active);
+        deleteAction->setVisible(active);
         if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
         const bool hasFaces = c->selectedFaceCount() > 0;
@@ -742,6 +775,11 @@ void MainWindow::initToolBar()
         // Merge needs a multi-vertex selection in vertex mode — the four
         // operations (Center/First/Last/ByDistance) all require ≥2 verts.
         mergeButton->setEnabled(mode == 0 && c->selectedVertexCount() >= 2);
+        // Delete works in any mode; enable when the matching selection is
+        // non-empty.
+        deleteButton->setEnabled((mode == 0 && hasVerts)
+                              || (mode == 1 && hasEdges)
+                              || (mode == 2 && hasFaces));
     };
     refreshTopoButtons();
     connect(editCtrlForTopo, &EditModeController::editModeChanged,
@@ -1200,6 +1238,24 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                 && editCtrl->selectedVertexCount() >= 2) {
                 SentryReporter::addBreadcrumb("ui.shortcut", "M — Merge At Center (edit mode)");
                 editCtrl->mergeAtCenter();
+                event->accept();
+                return;
+            }
+            break;
+        case Qt::Key_X:
+            // X: delete current edit-mode selection.
+            // Ctrl/Cmd+X: dissolve current selection.
+            // Outside edit mode, X falls through to the Object-mode
+            // "toggle transform space" handler below.
+            if (event->modifiers() & (Qt::ControlModifier | Qt::MetaModifier)) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "Ctrl+X — Dissolve (edit mode)");
+                editCtrl->dissolveSelection();
+                event->accept();
+                return;
+            }
+            if (!(event->modifiers() & Qt::AltModifier)) {
+                SentryReporter::addBreadcrumb("ui.shortcut", "X — Delete (edit mode)");
+                editCtrl->deleteSelection();
                 event->accept();
                 return;
             }
