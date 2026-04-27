@@ -1626,3 +1626,118 @@ TEST_F(EditModeControllerBevelE2ETest, DeleteSelectionPushesUndoCommand) {
     EXPECT_EQ(trisAfterUndo.size(), triCountBefore)
         << "undo after delete should restore original triangle count";
 }
+
+// ===========================================================================
+// Subdivide
+// ===========================================================================
+
+TEST_F(EditModeControllerBevelE2ETest, SubdivideSelectionVertexModeIsNoOp) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectVertex(0);
+    EXPECT_EQ(ctrl->subdivideSelection(), 0)
+        << "vertex selection alone doesn't define faces — should be a no-op";
+}
+
+TEST_F(EditModeControllerBevelE2ETest, SubdivideSelectionEmptyIsNoOp) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+    EXPECT_EQ(ctrl->subdivideSelection(), 0);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, SubdivideSelectionFaceModeAddsTriangles) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+
+    std::vector<Ogre::Vector3> posBefore;
+    std::vector<std::array<unsigned, 3>> trisBefore;
+    extractEntityBuffers(m_entity, posBefore, trisBefore);
+    const size_t triCountBefore = trisBefore.size();
+    ASSERT_GT(triCountBefore, 0u);
+
+    // Subdivide a single triangle. Itself splits into 4. The triangle
+    // sharing each of its edges retriangulates against the new midpoint
+    // — on a closed cube every edge has a neighbor, so 3 neighbors each
+    // gain 1 triangle (split into 2). Net +3 + 3 = 6 new triangles.
+    ctrl->selectFace(0);
+    EXPECT_EQ(ctrl->subdivideSelection(), 1);
+
+    std::vector<Ogre::Vector3> posAfter;
+    std::vector<std::array<unsigned, 3>> trisAfter;
+    extractEntityBuffers(m_entity, posAfter, trisAfter);
+    EXPECT_GT(trisAfter.size(), triCountBefore)
+        << "subdividing one face must produce more triangles, not fewer";
+    EXPECT_GT(posAfter.size(), posBefore.size())
+        << "midpoints must be appended to the vertex buffer";
+}
+
+TEST_F(EditModeControllerBevelE2ETest, SubdivideSelectionPushesUndoCommand) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+
+    std::vector<Ogre::Vector3> posBefore;
+    std::vector<std::array<unsigned, 3>> trisBefore;
+    extractEntityBuffers(m_entity, posBefore, trisBefore);
+    const size_t triCountBefore = trisBefore.size();
+
+    ctrl->selectFace(0);
+    ASSERT_EQ(ctrl->subdivideSelection(), 1);
+
+    UndoManager::getSingleton()->undo();
+
+    std::vector<Ogre::Vector3> posAfterUndo;
+    std::vector<std::array<unsigned, 3>> trisAfterUndo;
+    extractEntityBuffers(m_entity, posAfterUndo, trisAfterUndo);
+    EXPECT_EQ(trisAfterUndo.size(), triCountBefore)
+        << "undo after subdivide should restore original triangle count";
+}
+
+// ===========================================================================
+// Fill
+// ===========================================================================
+
+TEST_F(EditModeControllerBevelE2ETest, FillSelectionFaceModeIsNoOp) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+    ctrl->selectFace(0);
+    EXPECT_EQ(ctrl->fillSelection(), 0)
+        << "face selection cannot drive a fill — should be a no-op";
+}
+
+TEST_F(EditModeControllerBevelE2ETest, FillSelectionFewerThan3VerticesIsNoOp) {
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectVertex(0);
+    ctrl->selectVertex(1, true);
+    EXPECT_EQ(ctrl->fillSelection(), 0);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, FillSelectionDuplicateOfExistingTriIsRejected) {
+    // The cube's first triangle uses three of its corners. Filling the
+    // same three corners should be rejected by the HE-side dup check.
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ctrl->setSelectionMode(EditModeController::FaceMode);
+    ctrl->selectFace(0);
+
+    // Pull the three corner verts of triangle 0 out of the entity's GPU
+    // buffer so we know exactly which global verts to re-select.
+    std::vector<Ogre::Vector3> pos;
+    std::vector<std::array<unsigned, 3>> tris;
+    extractEntityBuffers(m_entity, pos, tris);
+    ASSERT_FALSE(tris.empty());
+    const auto t0 = tris[0];
+
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectVertex(static_cast<int>(t0[0]));
+    ctrl->selectVertex(static_cast<int>(t0[1]), true);
+    ctrl->selectVertex(static_cast<int>(t0[2]), true);
+    EXPECT_EQ(ctrl->fillSelection(), 0)
+        << "filling the same three corners as an existing tri must be rejected";
+}

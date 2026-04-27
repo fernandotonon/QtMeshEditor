@@ -4019,3 +4019,311 @@ TEST(HalfEdgeMeshStandalone, DissolveEdgesMultipleDisjointEdgesAllProcessed) {
     EXPECT_EQ(findEdge(he, 1, 3), -1);
     EXPECT_EQ(findEdge(he, 2, 4), -1);
 }
+
+// ===========================================================================
+// subdivideFaces — 1-to-4 triangle split with T-junction handling
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesEmptyIsNoOp) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_TRUE(he.subdivideFaces({}).empty());
+    EXPECT_EQ(activeFaceCount(he), 2);
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesSingleTriangleProducesFourSubTriangles) {
+    // A lone triangle subdivided → 3 new midpoint vertices, 4 sub-triangles.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(he.vertexCount(), 3u);
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    const auto newVerts = he.subdivideFaces({0});
+    EXPECT_EQ(newVerts.size(), 3u);
+    EXPECT_EQ(he.vertexCount(), 6u);
+    EXPECT_EQ(activeFaceCount(he), 4);
+    EXPECT_TRUE(he.validate());
+
+    // Each midpoint should land at the midpoint of one of the original edges.
+    const Ogre::Vector3 expected[3] = {
+        Ogre::Vector3(0.5f, 0.0f, 0.0f),    // mid(v0, v1)
+        Ogre::Vector3(0.5f, 0.5f, 0.0f),    // mid(v1, v2)
+        Ogre::Vector3(0.0f, 0.5f, 0.0f),    // mid(v2, v0)
+    };
+    for (const auto& exp : expected) {
+        bool found = false;
+        for (int v : newVerts) {
+            if (he.vertex(v).position.distance(exp) < 1e-4f) { found = true; break; }
+        }
+        EXPECT_TRUE(found) << "midpoint near (" << exp.x << ", " << exp.y << ", " << exp.z << ") not found";
+    }
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesQuadBothTrianglesProducesEightSubTriangles) {
+    // Quad has two triangles sharing the v1-v2 diagonal. Subdividing both
+    // should reuse the v1-v2 midpoint between them so the mesh stays
+    // manifold (no tear along the shared edge).
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 2);
+
+    const auto newVerts = he.subdivideFaces({0, 1});
+    // Edges: 4 unique boundary + 1 shared diagonal = 5 edges → 5 midpoints.
+    EXPECT_EQ(newVerts.size(), 5u);
+    EXPECT_EQ(activeFaceCount(he), 8); // 4 sub-triangles per face
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesAdjacentNonSelectedAvoidsTjunction) {
+    // Subdividing only triangle 0 of the quad splits the shared v1-v2
+    // diagonal. Triangle 1 (not selected) must be retriangulated against
+    // that midpoint so we don't leave a T-junction. Expect:
+    //   - 3 new midpoints (the 3 edges of triangle 0)
+    //   - triangle 0 → 4 sub-triangles
+    //   - triangle 1 → 2 sub-triangles (one edge split via the diagonal)
+    //   - total: 6 active triangles
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const auto newVerts = he.subdivideFaces({0});
+    EXPECT_EQ(newVerts.size(), 3u);
+    EXPECT_EQ(activeFaceCount(he), 6);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back))
+        << "non-selected adjacent triangle must be retriangulated to "
+           "avoid a T-junction at the new midpoint";
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesPreservesUVAtMidpoint) {
+    // UV / normal interpolation flows through the same `interpolateVertex`
+    // helper as splitEdge, but check the t=0.5 case explicitly here.
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const auto newVerts = he.subdivideFaces({0});
+    ASSERT_EQ(newVerts.size(), 3u);
+
+    // v0=(uv 0,0), v1=(uv 1,0), v2=(uv 0,1). Midpoints land at:
+    //   mid(v0,v1) → (0.5, 0)
+    //   mid(v1,v2) → (0.5, 0.5)
+    //   mid(v2,v0) → (0, 0.5)
+    std::set<std::pair<float,float>> expectedUV = {
+        {0.5f, 0.0f}, {0.5f, 0.5f}, {0.0f, 0.5f},
+    };
+    for (int v : newVerts) {
+        const auto& vert = he.vertex(v);
+        EXPECT_TRUE(vert.hasUV);
+        bool matched = false;
+        for (auto it = expectedUV.begin(); it != expectedUV.end(); ++it) {
+            if (std::abs(vert.uv.x - it->first) < 1e-4f
+             && std::abs(vert.uv.y - it->second) < 1e-4f) {
+                expectedUV.erase(it);
+                matched = true;
+                break;
+            }
+        }
+        EXPECT_TRUE(matched) << "unexpected UV (" << vert.uv.x << ", " << vert.uv.y << ")";
+    }
+    EXPECT_TRUE(expectedUV.empty()) << "every expected midpoint UV should match a new vertex";
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesSkipsRetiredAndOutOfRange) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    // Out-of-range and negative entries are ignored. With no live target
+    // remaining, the call is a no-op.
+    EXPECT_TRUE(he.subdivideFaces({-1, 99, 1000}).empty());
+    EXPECT_EQ(activeFaceCount(he), 2);
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesIsRoundtripSafe) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    he.subdivideFaces({0, 1});
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    HalfEdgeMesh he2;
+    ASSERT_TRUE(he2.buildFromEditableMesh(back));
+    EXPECT_TRUE(he2.validate());
+    EXPECT_EQ(activeFaceCount(he2), 8);
+}
+
+// ===========================================================================
+// fillSelection — face creation from selected vertices / closed loops
+// ===========================================================================
+
+// Build a 4-vertex mesh with a single triangle (v0, v1, v2). v3 is dangling
+// — has a position but no incident face. Used for fill rejection tests.
+static EditableMesh makeQuadMissingOneTriangle()
+{
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "FillMat";
+
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        v.uv = Ogre::Vector2(x, y); v.hasUV = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(0, 1), mkV(1, 1) };
+
+    EditableTriangle t;
+    t.indices[0] = 0; t.indices[1] = 1; t.indices[2] = 2;
+    sub.triangles = { t };
+    mesh.subMeshes().push_back(std::move(sub));
+    return mesh;
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionTooFewVerticesReturnsZero) {
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.fillSelection({}), 0);
+    EXPECT_EQ(he.fillSelection({0}), 0);
+    EXPECT_EQ(he.fillSelection({0, 1}), 0);
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionRejectsDuplicateVertices) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.fillSelection({0, 0, 1}), 0);
+    EXPECT_EQ(he.fillSelection({0, 1, 2, 1}), 0);
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionRejectsOutOfRangeVertices) {
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_EQ(he.fillSelection({0, 1, 99}), 0);
+    EXPECT_EQ(he.fillSelection({-1, 0, 1}), 0);
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionRejectsCrossSubMesh) {
+    auto em = makeTwoSubMeshMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    // Submesh 0 owns HE verts 0-2; submesh 1 owns 3-5. Picking one from
+    // each should refuse the fill (would silently weld material groups).
+    EXPECT_EQ(he.fillSelection({0, 1, 3}), 0);
+    EXPECT_EQ(activeFaceCount(he), 2) << "no faces created on cross-submesh fill";
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionRejectsDuplicateOfExistingTriangle) {
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    // The triangle (0, 1, 2) already exists.
+    EXPECT_EQ(he.fillSelection({0, 1, 2}), 0);
+    EXPECT_EQ(activeFaceCount(he), 1);
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionThreeVerticesEmitsOneTriangle) {
+    // Existing quad has triangles (0,1,2) and (1,3,2). Fill (0, 3, 1) —
+    // a different triangle that shares no winding with the existing two.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 2);
+
+    // Use the missing-one-triangle mesh: only triangle (0,1,2) exists.
+    // Filling (1, 3, 2) closes the quad into a planar manifold.
+    auto em2 = makeQuadMissingOneTriangle();
+    HalfEdgeMesh he2;
+    ASSERT_TRUE(he2.buildFromEditableMesh(em2));
+    ASSERT_EQ(activeFaceCount(he2), 1);
+
+    EXPECT_EQ(he2.fillSelection({1, 3, 2}), 1);
+    EXPECT_EQ(activeFaceCount(he2), 2);
+    EXPECT_TRUE(he2.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he2.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back))
+        << "filling a missing tri should produce a watertight quad";
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionFourVerticesEmitsTwoTriangles) {
+    // Build a 5-vertex submesh anchored by a single triangle. The
+    // remaining 4 vertices form a convex quad and share no edge with
+    // the anchor, so a 4-vertex fill into them is unambiguous.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "FillMat";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        // anchor triangle (0, 1, 2)
+        mkV(-2, -2), mkV(-1, -2), mkV(-2, -1),
+        // four corners of an isolated quad far from the anchor
+        mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1),
+    };
+    EditableTriangle anchor;
+    anchor.indices[0] = 0; anchor.indices[1] = 1; anchor.indices[2] = 2;
+    sub.triangles = { anchor };
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    // Fan-triangulate the (3, 4, 5, 6) quad from vertex 3. Produces
+    // (3, 4, 5) and (3, 5, 6) — a watertight 4-vertex fill.
+    EXPECT_EQ(he.fillSelection({3, 4, 5, 6}), 2);
+    EXPECT_EQ(activeFaceCount(he), 3);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionFiveVerticesFanTriangulatesIntoThree) {
+    // Pentagon fan-triangulated from vertexIndices[0]: 5 vertices → 3 tris.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "FillMat";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(2, 0.5f), mkV(1, 1), mkV(0, 1), mkV(0.5f, 0.5f) };
+    EditableTriangle anchor;
+    anchor.indices[0] = 0; anchor.indices[1] = 5; anchor.indices[2] = 4;
+    sub.triangles = { anchor };
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+
+    // Vertices 0..4 form a convex pentagon. Fill its loop in order.
+    EXPECT_EQ(he.fillSelection({0, 1, 2, 3, 4}), 3);
+    EXPECT_TRUE(he.validate());
+}

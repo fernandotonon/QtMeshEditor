@@ -2908,6 +2908,238 @@ int EditModeController::dissolveSelection()
     return affected;
 }
 
+int EditModeController::subdivideSelection()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+
+    // Cancel any active interactive preview before mutating topology —
+    // see deleteSelection() for the rationale.
+    if (m_bevelSession.active) cancelBevel();
+    if (m_knifeSession.active) cancelKnife();
+
+    // Resolve the target face set from the current selection. Face mode
+    // uses the selected triangles directly. Edge mode subdivides every
+    // triangle incident to a selected edge (Blender convention). Vertex
+    // mode is a no-op — vertex selection alone doesn't define faces.
+    std::vector<int> targetFaces;
+    if (m_selectionMode == FaceMode) {
+        if (m_selectedFaces.empty()) return 0;
+        targetFaces.assign(m_selectedFaces.begin(), m_selectedFaces.end());
+    } else if (m_selectionMode == EdgeMode) {
+        if (m_selectedEdges.empty()) return 0;
+        // Convert global vertex pairs → HE edge indices → incident faces.
+        // Build a probe HE structure to resolve. The actual mutation runs
+        // on a fresh HE inside the lambda below; we only need the face
+        // set here, and triangle indices map 1:1 between probe and live
+        // since both are built from the same EditableMesh.
+        HalfEdgeMesh probe;
+        if (!probe.buildFromEditableMesh(*m_editableMesh)) return 0;
+        std::set<int> faceSet;
+        for (const auto& [a, b] : m_selectedEdges) {
+            const int target = std::min(a, b), other = std::max(a, b);
+            for (size_t e = 0; e < probe.edgeCount(); ++e) {
+                auto [ev1, ev2] = probe.edgeVertices(static_cast<int>(e));
+                if (std::min(ev1, ev2) == target && std::max(ev1, ev2) == other) {
+                    auto [fA, fB] = probe.edgeFaces(static_cast<int>(e));
+                    if (fA >= 0) faceSet.insert(fA);
+                    if (fB >= 0) faceSet.insert(fB);
+                    break;
+                }
+            }
+        }
+        targetFaces.assign(faceSet.begin(), faceSet.end());
+    } else {
+        return 0; // VertexMode: nothing sensible to subdivide
+    }
+    if (targetFaces.empty()) return 0;
+
+    // Snapshot original mesh state for the undo command.
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const auto preSelectedVerts = m_selectedVertices;
+    const auto preSelectedEdges = m_selectedEdges;
+    const auto preSelectedFaces = m_selectedFaces;
+
+    // Capture target positions of the new midpoints BEFORE the mesh is
+    // re-packed by toEditableMesh — the indices change after the round
+    // trip, so we re-find the survivors by position (matches the merge
+    // pipeline pattern). HE-vertex positions are stable across the call.
+    const auto newVertHE = hm.subdivideFaces(targetFaces);
+    if (newVertHE.empty()) return 0;
+
+    std::vector<Ogre::Vector3> midpointPositions;
+    midpointPositions.reserve(newVertHE.size());
+    for (int v : newVertHE) {
+        midpointPositions.push_back(hm.vertex(v).position);
+    }
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+
+    if (m_normalsMode == 0) m_editableMesh->recalculateNormals();
+    else                     m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    // Re-find the new midpoints in the post-pack mesh and select them.
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+    const auto& subs = m_editableMesh->subMeshes();
+    int globalBase = 0;
+    for (const auto& sub : subs) {
+        for (size_t li = 0; li < sub.vertices.size(); ++li) {
+            for (const auto& tgt : midpointPositions) {
+                if (sub.vertices[li].position.squaredDistance(tgt) < 1e-10f) {
+                    m_selectedVertices.insert(globalBase + static_cast<int>(li));
+                    break;
+                }
+            }
+        }
+        globalBase += static_cast<int>(sub.vertices.size());
+    }
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        preSelectedVerts, preSelectedEdges, preSelectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        QStringLiteral("Subdivide"));
+    UndoManager::getSingleton()->push(cmd);
+
+    validateMesh();
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Subdivide (faces=%1, midpoints=%2)")
+            .arg(targetFaces.size()).arg(newVertHE.size()));
+
+    updateSelectionOverlay();
+    refreshNormalVisualizer();
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return static_cast<int>(targetFaces.size());
+}
+
+namespace {
+// Build the closed boundary loop implied by a set of selected edges. Returns
+// vertex indices in winding order, or an empty vector if the selection
+// doesn't form a single closed loop. "Closed" means: every endpoint is
+// shared by exactly two selected edges, the loop traversal returns to the
+// starting vertex, and the loop visits every input edge.
+std::vector<int> buildClosedEdgeLoop(
+    const std::set<std::pair<int,int>>& selectedEdges)
+{
+    if (selectedEdges.size() < 3) return {};
+
+    // adjacency[v] = vertices connected to v via selected edges
+    std::map<int, std::vector<int>> adj;
+    for (const auto& [a, b] : selectedEdges) {
+        adj[a].push_back(b);
+        adj[b].push_back(a);
+    }
+    // Every vertex on a closed loop has degree 2.
+    for (const auto& [v, nbrs] : adj) {
+        if (nbrs.size() != 2) return {};
+    }
+
+    // Walk the loop starting at the lowest-index vertex.
+    const int start = adj.begin()->first;
+    std::vector<int> loop;
+    loop.push_back(start);
+    int prev = -1;
+    int cur = start;
+    while (true) {
+        const auto& nbrs = adj.at(cur);
+        const int next = (nbrs[0] == prev) ? nbrs[1] : nbrs[0];
+        if (next == start) {
+            // Closed. Ensure we visited every selected edge by checking
+            // loop length matches the edge count.
+            if (loop.size() != selectedEdges.size()) return {};
+            return loop;
+        }
+        // Detect non-loop selections (a chain that revisits a vertex
+        // without closing). The degree-2 invariant above mostly catches
+        // these, but bail defensively.
+        if (loop.size() > selectedEdges.size()) return {};
+        loop.push_back(next);
+        prev = cur;
+        cur = next;
+    }
+}
+} // namespace
+
+int EditModeController::fillSelection()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+
+    if (m_bevelSession.active) cancelBevel();
+    if (m_knifeSession.active) cancelKnife();
+
+    std::vector<int> targetVerts;
+    if (m_selectionMode == VertexMode) {
+        if (m_selectedVertices.size() < 3) return 0;
+        // Use the user-supplied selection order. std::set iterates in
+        // ascending order — the resulting fan winding may not match the
+        // user's intent for non-convex inputs, but for the MVP we accept
+        // the std::set order. (The test suite documents this.)
+        targetVerts.assign(m_selectedVertices.begin(), m_selectedVertices.end());
+    } else if (m_selectionMode == EdgeMode) {
+        targetVerts = buildClosedEdgeLoop(m_selectedEdges);
+        if (targetVerts.size() < 3) return 0;
+    } else {
+        return 0; // FaceMode: nothing to fill
+    }
+
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const auto preSelectedVerts = m_selectedVertices;
+    const auto preSelectedEdges = m_selectedEdges;
+    const auto preSelectedFaces = m_selectedFaces;
+
+    const int created = hm.fillSelection(targetVerts);
+    if (created == 0) return 0;
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+
+    if (m_normalsMode == 0) m_editableMesh->recalculateNormals();
+    else                     m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    // Selection changes: clear edge selection (the loop edges are now
+    // interior or don't exist post-pack); leave vertex selection alone
+    // for vertex-mode fill so the user can chain operations. Faces stay
+    // empty.
+    m_selectedEdges.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        preSelectedVerts, preSelectedEdges, preSelectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        QStringLiteral("Fill"));
+    UndoManager::getSingleton()->push(cmd);
+
+    validateMesh();
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Fill (verts=%1, tris=%2)")
+            .arg(targetVerts.size()).arg(created));
+
+    updateSelectionOverlay();
+    refreshNormalVisualizer();
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return created;
+}
+
 void EditModeController::cancelKnife()
 {
     if (!m_knifeSession.active) return;
