@@ -1,5 +1,5 @@
-import QtQuick 2.15
-import QtQuick.Controls 2.15
+import QtQuick
+import QtQuick.Controls
 import ThemeManager 1.0
 
 // Themed ComboBox matching the look of the typeahead dropdowns elsewhere
