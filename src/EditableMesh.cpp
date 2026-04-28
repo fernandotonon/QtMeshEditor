@@ -35,6 +35,13 @@ THE SOFTWARE.
 #include <cmath>
 #include <cstring>
 
+// Assimp re-import path (loadFromAssimpFile) — drops aiProcess_Triangulate
+// so source n-gons survive into EditableSubMesh::faces. Quad migration #326,
+// chunk 3.
+#include <assimp/Importer.hpp>
+#include <assimp/scene.h>
+#include <assimp/postprocess.h>
+
 void triangulateFaces(EditableSubMesh& sub)
 {
     sub.triangles.clear();
@@ -137,6 +144,128 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
     }
 
     return true;
+}
+
+bool EditableMesh::loadFromAssimpFile(const std::string& path)
+{
+    if (path.empty()) return false;
+
+    // Spin up an independent Assimp::Importer so we don't disturb the
+    // existing AssimpToOgreImporter pipeline. Drop aiProcess_Triangulate
+    // so source quads survive into aiMesh::mFaces. Keep the rest of the
+    // post-processing aligned with the rendering importer so vertex
+    // attributes don't drift between the two views.
+    Assimp::Importer importer;
+    const unsigned int flags =
+        aiProcess_JoinIdenticalVertices |
+        aiProcess_GenSmoothNormals |
+        aiProcess_ValidateDataStructure |
+        aiProcess_LimitBoneWeights |
+        aiProcess_GlobalScale;
+    const aiScene* scene = importer.ReadFile(path, flags);
+    if (!scene || !scene->mRootNode || scene->mNumMeshes == 0) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "EditableMesh::loadFromAssimpFile: re-import failed for '" + path
+            + "' — " + std::string(importer.GetErrorString()));
+        return false;
+    }
+
+    m_subMeshes.clear();
+    m_subMeshes.reserve(scene->mNumMeshes);
+
+    for (unsigned m = 0; m < scene->mNumMeshes; ++m) {
+        const aiMesh* aim = scene->mMeshes[m];
+        if (!aim || aim->mNumVertices == 0) continue;
+
+        EditableSubMesh sub;
+        sub.usesSharedVertices = false;
+        // Material name is left empty here — the live Ogre::Mesh in the
+        // scene already carries the right material per submesh, and
+        // EditModeController doesn't write material assignments back
+        // through this path.
+        sub.materialName.clear();
+
+        // Vertices.
+        sub.vertices.resize(aim->mNumVertices);
+        const bool hasNormals = aim->HasNormals();
+        const bool hasUVs = aim->HasTextureCoords(0);
+        const bool hasColors = aim->HasVertexColors(0);
+        for (unsigned i = 0; i < aim->mNumVertices; ++i) {
+            EditableVertex& ev = sub.vertices[i];
+            const aiVector3D& p = aim->mVertices[i];
+            ev.position = Ogre::Vector3(p.x, p.y, p.z);
+            if (hasNormals) {
+                const aiVector3D& n = aim->mNormals[i];
+                ev.normal = Ogre::Vector3(n.x, n.y, n.z);
+                ev.hasNormal = true;
+            }
+            if (hasUVs) {
+                const aiVector3D& t = aim->mTextureCoords[0][i];
+                ev.uv = Ogre::Vector2(t.x, t.y);
+                ev.hasUV = true;
+            }
+            if (hasColors) {
+                const aiColor4D& c = aim->mColors[0][i];
+                ev.color = Ogre::ColourValue(c.r, c.g, c.b, c.a);
+                ev.hasColor = true;
+            }
+        }
+
+        // Bone weights, if any.
+        if (aim->mNumBones > 0) {
+            for (unsigned b = 0; b < aim->mNumBones; ++b) {
+                const aiBone* bone = aim->mBones[b];
+                if (!bone) continue;
+                for (unsigned w = 0; w < bone->mNumWeights; ++w) {
+                    const aiVertexWeight& vw = bone->mWeights[w];
+                    if (vw.mVertexId >= sub.vertices.size()) continue;
+                    EditableBoneAssignment eba;
+                    eba.boneIndex = static_cast<unsigned short>(b);
+                    eba.weight = vw.mWeight;
+                    sub.vertices[vw.mVertexId].boneAssignments.push_back(eba);
+                }
+            }
+        }
+
+        // Faces — this is the whole point of this method. Without
+        // aiProcess_Triangulate, aiMesh::mFaces retains the original
+        // polygon structure (3 / 4 / N indices per face). Build
+        // `EditableFace` directly; chunks 1+2 take care of GPU upload.
+        sub.faces.reserve(aim->mNumFaces);
+        bool sawNGon = false;
+        for (unsigned f = 0; f < aim->mNumFaces; ++f) {
+            const aiFace& face = aim->mFaces[f];
+            if (face.mNumIndices < 3) continue; // points / lines — skip
+            EditableFace ef;
+            ef.indices.reserve(face.mNumIndices);
+            bool inRange = true;
+            for (unsigned k = 0; k < face.mNumIndices; ++k) {
+                if (face.mIndices[k] >= aim->mNumVertices) {
+                    inRange = false;
+                    break;
+                }
+                ef.indices.push_back(face.mIndices[k]);
+            }
+            if (!inRange) continue;
+            if (face.mNumIndices > 3) sawNGon = true;
+            sub.faces.push_back(std::move(ef));
+        }
+
+        // Always populate `triangles` as the fan-triangulated mirror so
+        // legacy consumers (the GPU upload path before chunk 2's defensive
+        // resync, the normal-recalc path on triangle-only submeshes,
+        // every existing topology op) keep working unchanged.
+        triangulateFaces(sub);
+
+        // Honour the chunk-1 invariant: leave `faces` empty when every
+        // face was a triangle, so triangle-only assets don't surface as
+        // n-gon submeshes downstream.
+        if (!sawNGon) sub.faces.clear();
+
+        m_subMeshes.push_back(std::move(sub));
+    }
+
+    return !m_subMeshes.empty();
 }
 
 void EditableMesh::collapseToSingleSubmeshAndWeld(float tolerance)

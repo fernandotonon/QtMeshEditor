@@ -235,6 +235,39 @@ public:
     bool loadFromMesh(const Ogre::MeshPtr& mesh);
 
     /**
+     * @brief Re-import an asset directly via Assimp, preserving n-gons.
+     *
+     * Spins up a fresh `Assimp::Importer` and re-reads the source file
+     * with the triangulation post-process disabled, so source quads
+     * survive into `EditableSubMesh::faces` instead of being collapsed
+     * to triangles. The associated Ogre::Mesh in the live scene
+     * continues to use the triangulated index buffer for rendering;
+     * this path only feeds the editing-time representation.
+     *
+     * Skips skeleton, animation, material, and tangent processing —
+     * Edit Mode operates on positions, normals, UVs, vertex colors,
+     * and bone weights only. Materials are taken from the existing
+     * Ogre::Mesh by submesh order in `loadFromEntity` / similar paths.
+     *
+     * Vertices are read out of `aiMesh::mVertices` / `mNormals` /
+     * `mTextureCoords[0]` / `mColors[0]` / `mBones[].mWeights`. Faces
+     * are read from `aiMesh::mFaces` and stored in
+     * `EditableSubMesh::faces` (n-gon canonical), with `triangles`
+     * fan-triangulated to maintain the chunk-1 invariant.
+     *
+     * Cost: a second Assimp parse of the same file. Order of magnitude
+     * 10–100ms for typical assets; acceptable as a one-time cost on
+     * entering Edit Mode. Big assets (50MB+ FBX) may be noticeable.
+     *
+     * @param path The path the asset was originally imported from.
+     *             Should be the value cached on `Ogre::Mesh` via
+     *             `getUserObjectBindings().getUserAny("qtme.source_path")`.
+     * @return true on success; false if the file is missing, can't be
+     *         parsed, or contains no mesh data.
+     */
+    bool loadFromAssimpFile(const std::string& path);
+
+    /**
      * @brief Merge vertices at (approximately) coincident positions within
      *        each submesh.
      *

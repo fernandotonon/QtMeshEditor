@@ -997,9 +997,21 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 // DirectX .x is natively left-handed — skip ConvertToLeftHanded
                 // to avoid double-flipping geometry and UVs.
                 bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
-                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString(), convertLH, additionalFlags);
+                const std::string sourcePath = file.filePath().toStdString();
+                Ogre::MeshPtr mesh = importer.loadModel(sourcePath, convertLH, additionalFlags);
                 // Read coordinate system from metadata immediately — valid for both mesh and animation-only files.
                 if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
+                if (mesh) {
+                    // Cache the source file path so EditModeController can
+                    // re-import the asset through the n-gon-aware
+                    // EditableMesh::loadFromAssimpFile path. Quad-bearing
+                    // assets keep their polygon structure when entering
+                    // Edit Mode; without this cache only the triangulated
+                    // Ogre buffer is available and quads are lost.
+                    // (Quad migration #326, chunk 3.)
+                    mesh->getUserObjectBindings().setUserAny(
+                        "qtme.source_path", Ogre::Any(sourcePath));
+                }
                 if (!mesh) {
                     // Animation-only file: skeleton/animations were loaded, but there is no mesh.
                     // Collect into the caller-provided list; callers that want UI notifications
