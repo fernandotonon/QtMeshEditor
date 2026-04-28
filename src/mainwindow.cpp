@@ -747,17 +747,29 @@ void MainWindow::initToolBar()
     });
     QAction* deleteAction = ui->objectsToolbar->addWidget(deleteButton);
 
-    // Subdivide: face mode (subdivide selected triangles, retriangulate
-    // adjacent ones to avoid T-junctions) or edge mode (subdivide every
-    // triangle incident to a selected edge — Blender convention).
+    // Subdivide: dropdown with two modes.
+    //  - Standard: 1-to-4 triangle split on the selected faces/edges
+    //    (what was always there).
+    //  - Catmull-Clark: whole-mesh subdivide-surface step. Always
+    //    produces quads regardless of input topology.
     auto subdivideButton = new QToolButton(ui->objectsToolbar);
     subdivideButton->setText(QStringLiteral("\u229E"));  // ⊞ box-plus, evokes a 4-cell split
-    subdivideButton->setToolTip(tr("Subdivide selected faces / edges"));
+    subdivideButton->setToolTip(tr("Subdivide… (Standard / Catmull-Clark)"));
     subdivideButton->setFont(topoFont);
     subdivideButton->setStyleSheet(topoBtnStyle);
-    connect(subdivideButton, &QToolButton::clicked, this, []() {
-        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Subdivide");
+    subdivideButton->setPopupMode(QToolButton::InstantPopup);
+    auto subdivideMenu = new QMenu(subdivideButton);
+    auto* actSubStandard = subdivideMenu->addAction(tr("Standard (1-to-4 split, selected faces)"));
+    auto* actSubCC = subdivideMenu->addAction(tr("Catmull-Clark (whole mesh, smoothed quads)"));
+    subdivideButton->setMenu(subdivideMenu);
+
+    connect(actSubStandard, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Subdivide (standard)");
         EditModeController::instance()->subdivideSelection();
+    });
+    connect(actSubCC, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Subdivide (Catmull-Clark)");
+        EditModeController::instance()->subdivideCatmullClarkAll();
     });
     QAction* subdivideAction = ui->objectsToolbar->addWidget(subdivideButton);
 
@@ -811,9 +823,11 @@ void MainWindow::initToolBar()
         deleteButton->setEnabled((mode == 0 && hasVerts)
                               || (mode == 1 && hasEdges)
                               || (mode == 2 && hasFaces));
-        // Subdivide: needs faces (face mode) or edges (edge mode).
-        subdivideButton->setEnabled((mode == 2 && hasFaces)
-                                 || (mode == 1 && hasEdges));
+        // Subdivide: enabled whenever in edit mode. The Standard option
+        // self-gates on a face/edge selection (no-op otherwise);
+        // Catmull-Clark operates on the whole mesh and never needs a
+        // selection.
+        subdivideButton->setEnabled(true);
         // Fill: needs ≥3 verts (vertex mode) or ≥3 edges that form a
         // closed loop (edge mode — degree check happens at apply time).
         fillButton->setEnabled((mode == 0 && c->selectedVertexCount() >= 3)

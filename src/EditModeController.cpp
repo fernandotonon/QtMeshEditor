@@ -3083,6 +3083,63 @@ int EditModeController::subdivideSelection()
     return static_cast<int>(targetFaces.size());
 }
 
+int EditModeController::subdivideCatmullClarkAll()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+
+    // Cancel interactive previews — same rationale as deleteSelection
+    // (a stale bevel/knife snapshot would replay against post-CC topology).
+    if (m_bevelSession.active) cancelBevel();
+    if (m_knifeSession.active) cancelKnife();
+
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const auto preSelectedVerts = m_selectedVertices;
+    const auto preSelectedEdges = m_selectedEdges;
+    const auto preSelectedFaces = m_selectedFaces;
+
+    const auto newVerts = hm.subdivideCatmullClark();
+    if (newVerts.empty()) return 0;
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+
+    if (m_normalsMode == 0) m_editableMesh->recalculateNormals();
+    else                     m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    // Selection clears: post-CC topology has no stable mapping back to
+    // the pre-op selection (face/edge points didn't exist, vertex
+    // indices may have shifted on re-pack). Fresh start is the safe
+    // default; partial-CC with selection preservation is a follow-up.
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        preSelectedVerts, preSelectedEdges, preSelectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        QStringLiteral("Catmull-Clark Subdivide"));
+    UndoManager::getSingleton()->push(cmd);
+
+    validateMesh();
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Catmull-Clark Subdivide (newVerts=%1)").arg(newVerts.size()));
+
+    updateSelectionOverlay();
+    refreshNormalVisualizer();
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return static_cast<int>(newVerts.size());
+}
+
 namespace {
 // Build the closed BOUNDARY-EDGE loop implied by a set of selected edges.
 // Returns vertex indices in winding order, or an empty vector if any

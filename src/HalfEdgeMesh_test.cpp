@@ -4816,3 +4816,184 @@ TEST(HalfEdgeMeshStandalone, PromoteTrianglesToFacesProducesMatchingFaces) {
     // identical content)
     EXPECT_EQ(sub.triangles.size(), 2u);
 }
+
+// ===========================================================================
+// subdivideCatmullClark — chunk 5a quad-aware subdivision
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkOnSingleQuadProducesFourQuads) {
+    // A single quad → 1 face point + 4 edge points + 4 corners (the 4
+    // corners get smoothed in place — for a flat planar quad on a
+    // boundary, the boundary-vertex chord rule will have moved them).
+    // After CC: 4 output faces, each a quad.
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 0, 0), mkV(1, 0, 0), mkV(1, 1, 0), mkV(0, 1, 0),
+    };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    const auto newVerts = he.subdivideCatmullClark();
+    EXPECT_FALSE(newVerts.empty());
+    EXPECT_EQ(activeFaceCount(he), 4) << "1 quad → 4 sub-quads";
+
+    // Every output face should be a quad.
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        EXPECT_EQ(he.faceVertices(static_cast<int>(f)).size(), 4u)
+            << "Catmull-Clark always produces quads";
+    }
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkOnTriangleProducesThreeQuads) {
+    // A single triangle → 3 sub-quads (one per corner).
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    he.subdivideCatmullClark();
+    EXPECT_EQ(activeFaceCount(he), 3);
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        EXPECT_EQ(he.faceVertices(static_cast<int>(f)).size(), 4u);
+    }
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkOnCubeStaysClosed) {
+    // 12-tri cube → 36 sub-quads. Output is a closed manifold (no
+    // boundary edges), and toEditableMesh round-trips through the
+    // n-gon path so all 36 faces appear in EditableSubMesh::faces.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 12);
+
+    he.subdivideCatmullClark();
+    EXPECT_EQ(activeFaceCount(he), 36) << "12 tris × 3 sub-quads = 36";
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    auto s = statsOf(back);
+    EXPECT_EQ(s.boundaryEdges, 0u)
+        << "Catmull-Clark on a closed cube must stay closed";
+    EXPECT_TRUE(isManifold(back));
+    // n-gon path: faces non-empty since output is all quads.
+    ASSERT_FALSE(back.subMeshes().empty());
+    EXPECT_FALSE(back.subMeshes()[0].faces.empty())
+        << "all-quad output should populate EditableSubMesh::faces";
+    EXPECT_EQ(back.subMeshes()[0].faces.size(), 36u);
+    for (const auto& f : back.subMeshes()[0].faces) {
+        EXPECT_EQ(f.indices.size(), 4u) << "every output face is a quad";
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkOnQuadGridProducesFourTimesAsManyQuads) {
+    // 2x2 grid of 4 quads → 16 sub-quads (one per corner of each face).
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),
+        mkV(0, 2), mkV(1, 2), mkV(2, 2),
+    };
+    auto mkF = [](unsigned a, unsigned b, unsigned c, unsigned d) {
+        EditableFace f;
+        f.indices = {a, b, c, d};
+        return f;
+    };
+    sub.faces = {
+        mkF(0, 1, 4, 3), mkF(1, 2, 5, 4),
+        mkF(3, 4, 7, 6), mkF(4, 5, 8, 7),
+    };
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 4);
+
+    he.subdivideCatmullClark();
+    EXPECT_EQ(activeFaceCount(he), 16) << "4 quads × 4 sub-quads = 16";
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkPreservesPlanarFaceCenter) {
+    // For a planar regular quad on a closed manifold (e.g. the centre
+    // of a 3x3 quad grid), the face point should land exactly at the
+    // arithmetic centre of the four corners.
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const auto newVerts = he.subdivideCatmullClark();
+
+    // Find the face point (the only vertex with all 4 corners as 1-ring
+    // neighbours — exactly the face point on a single-quad mesh).
+    bool foundFacePoint = false;
+    for (int v : newVerts) {
+        const auto neighbours = he.verticesAroundVertex(v);
+        if (neighbours.size() == 4) {
+            const auto& p = he.vertex(v).position;
+            EXPECT_NEAR(p.x, 0.5f, 1e-4f);
+            EXPECT_NEAR(p.y, 0.5f, 1e-4f);
+            EXPECT_NEAR(p.z, 0.0f, 1e-4f);
+            foundFacePoint = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundFacePoint);
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkEmptyMeshIsNoOp) {
+    HalfEdgeMesh he;
+    EXPECT_TRUE(he.subdivideCatmullClark().empty());
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkRoundTripsThroughEditableMesh) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    he.subdivideCatmullClark();
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    HalfEdgeMesh he2;
+    ASSERT_TRUE(he2.buildFromEditableMesh(back));
+    EXPECT_TRUE(he2.validate());
+    // 2 input tris × 3 quads each = 6 output quads.
+    EXPECT_EQ(activeFaceCount(he2), 6);
+}

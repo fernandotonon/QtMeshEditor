@@ -604,6 +604,47 @@ public:
     std::vector<int> subdivideFaces(const std::vector<int>& faceIndices);
 
     /**
+     * @brief Subdivide every face by one Catmull-Clark step.
+     *
+     * The classic Catmull-Clark scheme. For each face F:
+     *  - Compute a face point Fp = average of its corner positions.
+     *  - For each edge E with endpoints (a, b) and adjacent face points
+     *    (Fp1, Fp2), compute the edge point Ep = (a + b + Fp1 + Fp2) / 4
+     *    on interior edges, or Ep = (a + b) / 2 on boundary edges.
+     *  - For each original vertex V of valence n with adjacent face
+     *    points Fi (mean F) and edge midpoints Ri (mean R, taken on
+     *    PRE-update positions), update V to (F + 2R + (n-3) V) / n on
+     *    interior vertices, or (V + Em1 + Em2) / 4 on boundary
+     *    vertices using its two boundary edge midpoints.
+     *  - Replace each face F (with n corners) by n quads, each formed
+     *    from (corner, neighbouring-edge-point, face-point,
+     *    other-neighbouring-edge-point).
+     *
+     * Output is ALWAYS quads, regardless of input — a triangle becomes
+     * 3 quads, a quad becomes 4 quads, an N-gon becomes N quads.
+     * Submesh assignments are preserved (each output quad inherits its
+     * source face's submesh).
+     *
+     * UVs / normals / colors / bone weights / tangents are blended
+     * with the same weights as positions (face point: avg of corners;
+     * edge point: avg of endpoints+adjacent face points; updated
+     * vertex: weighted blend per the rule above). For boundary
+     * vertices the chord rule keeps UV seams reasonable; geometry on
+     * a closed manifold is C¹ continuous in the limit.
+     *
+     * Skips faces that span multiple submeshes (would silently weld
+     * material groups). Cross-submesh edges are treated as boundaries
+     * for the smoothing rule, so submesh boundaries stay sharp.
+     *
+     * @return Indices of every newly created vertex (face points,
+     *         edge points, in creation order). The original vertex
+     *         slots are reused for the smoothed positions; their
+     *         indices are unchanged. Empty on no-op (all submeshes
+     *         empty / all faces invalid).
+     */
+    std::vector<int> subdivideCatmullClark();
+
+    /**
      * @brief Fill a face from selected vertices or a closed edge loop.
      *
      * Two input modes, picked by the caller:
