@@ -9,19 +9,113 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QMap>
+#include <QLocale>
 #include <QRegularExpression>
+#include <QTemporaryFile>
 #include <QTextStream>
+#include <QWidget>
 
+#include <assimp/Exporter.hpp>
 #include <assimp/Importer.hpp>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 
 #include "SentryReporter.h"
+#include "Manager.h"
+#include "SelectionSet.h"
+#include "MeshImporterExporter.h"
+#include "AnimationMerger.h"
+#include "FBX/FBXExporter.h"
+
+#include <OgreLogManager.h>
 
 #include <algorithm>
 #include <cmath>
 #include <set>
 #include <vector>
+
+namespace {
+
+bool ensureOgreHeadlessQuiet()
+{
+    // ScanEngine is normally Assimp-only and shouldn't spam Ogre logs when a fix path
+    // needs Ogre. Mirror CLIPipeline's default behavior: suppress debug output unless
+    // the user explicitly asked for verbose logs (ScanEngine has no --verbose flag).
+    if (!Ogre::LogManager::getSingletonPtr()) {
+        auto* logMgr = new Ogre::LogManager();
+        logMgr->createLog("ogre.log", true, false, true); // default, debugOut=false, suppressFile=true
+    } else {
+        auto* log = Ogre::LogManager::getSingleton().getDefaultLog();
+        if (log)
+            log->setDebugOutputEnabled(false);
+    }
+
+    try {
+        Manager::getSingleton();
+        // ScanEngine runs inside CLI/GUI processes where Qt is already initialized,
+        // but Ogre still needs a render target for hardware buffers to exist.
+        auto* root = Manager::getSingleton()->getRoot();
+        if (root) {
+            try {
+                if (root->getRenderTarget("ScanHidden") || root->getRenderTarget("CLIHidden") || root->getRenderTarget("TestHidden"))
+                    return true;
+            } catch (...) {
+                // ignore
+            }
+        }
+
+        static QWidget* hiddenWidget = nullptr;
+        if (!hiddenWidget) {
+            hiddenWidget = new QWidget();
+            hiddenWidget->setAttribute(Qt::WA_DontShowOnScreen);
+            hiddenWidget->resize(1, 1);
+            hiddenWidget->show();
+        }
+
+        try {
+            Ogre::NameValuePairList params;
+            params["externalWindowHandle"] = Ogre::StringConverter::toString(
+                static_cast<unsigned long>(hiddenWidget->winId()));
+#ifdef Q_OS_MACOS
+            params["macAPI"] = "cocoa";
+            params["macAPICocoaUseNSView"] = "true";
+#endif
+            Manager::getSingleton()->getRoot()->createRenderWindow(
+                "ScanHidden", 1, 1, false, &params);
+        } catch (...) {
+            return false;
+        }
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
+// MeshImporterExporter::importer appends to the scene without clearing prior imports.
+// Scan --fix runs multiple FBX imports in one process; stale entities/skeleton
+// handles would make entity/skeleton selection wrong and can corrupt Ogre state.
+static void clearOgreSceneForScanImport()
+{
+    if (!Manager::getSingletonPtr())
+        return;
+    SelectionSet::getSingleton()->clearList();
+    auto* manager = Manager::getSingleton();
+    const QList<Ogre::SceneNode*> sceneNodesCopy = manager->getSceneNodes();
+    for (auto* sn : sceneNodesCopy) {
+        if (sn)
+            manager->destroySceneNode(sn);
+    }
+}
+
+} // namespace
+
+static bool pathEndsWithInsensitive(const QString& p, QLatin1String suf)
+{
+    if (p.size() < suf.size())
+        return false;
+    return p.endsWith(suf, Qt::CaseInsensitive);
+}
 
 // ---------------------------------------------------------------------------
 // Glob matching
@@ -69,7 +163,23 @@ QStringList ScanEngine::enumerateFiles(const ScanConfig& config, const QString& 
     QDir rootDir(scanRoot);
     if (!rootDir.exists()) return result;
 
-    QDirIterator it(rootDir.absolutePath(), QDir::Files | QDir::NoDotAndDotDot,
+    QStringList nameFilters;
+    bool useNameFilters = !config.includePatterns.isEmpty();
+    static const QRegularExpression simpleExtRe(QStringLiteral(R"(^\*\*/\*\.([a-zA-Z0-9]+)$)"));
+    for (const auto& pattern : config.includePatterns) {
+        const auto m = simpleExtRe.match(pattern);
+        if (!m.hasMatch()) {
+            useNameFilters = false;
+            break;
+        }
+        nameFilters << QStringLiteral("*.%1").arg(m.captured(1));
+    }
+    if (useNameFilters && nameFilters.isEmpty())
+        useNameFilters = false;
+
+    QDirIterator it(rootDir.absolutePath(),
+                    useNameFilters ? nameFilters : QStringList(),
+                    QDir::Files | QDir::NoDotAndDotDot,
                     QDirIterator::Subdirectories);
 
     while (it.hasNext()) {
@@ -133,7 +243,7 @@ struct NodeKey {
 static aiVector3D sampleVecKeys(const aiVectorKey* keys, unsigned n, double t,
                                 const aiVector3D& fallback)
 {
-    if (n == 0) return fallback;
+    if (n == 0 || !keys) return fallback;
     if (n == 1 || t <= keys[0].mTime) return keys[0].mValue;
     if (t >= keys[n-1].mTime) return keys[n-1].mValue;
     // Linear scan — channel arrays are short (~hundreds), no need for binary search.
@@ -151,7 +261,7 @@ static aiVector3D sampleVecKeys(const aiVectorKey* keys, unsigned n, double t,
 static aiQuaternion sampleQuatKeys(const aiQuatKey* keys, unsigned n, double t,
                                    const aiQuaternion& fallback)
 {
-    if (n == 0) return fallback;
+    if (n == 0 || !keys) return fallback;
     if (n == 1 || t <= keys[0].mTime) return keys[0].mValue;
     if (t >= keys[n-1].mTime) return keys[n-1].mValue;
     for (unsigned i = 1; i < n; ++i) {
@@ -170,14 +280,22 @@ static aiQuaternion sampleQuatKeys(const aiQuatKey* keys, unsigned n, double t,
 // Union of distinct times across T/R/S streams for one aiNodeAnim, in order.
 static std::vector<double> unionTimes(const aiNodeAnim* ch)
 {
+    if (!ch)
+        return {};
     std::vector<double> times;
     times.reserve(ch->mNumPositionKeys + ch->mNumRotationKeys + ch->mNumScalingKeys);
-    for (unsigned i = 0; i < ch->mNumPositionKeys; ++i)
-        times.push_back(ch->mPositionKeys[i].mTime);
-    for (unsigned i = 0; i < ch->mNumRotationKeys; ++i)
-        times.push_back(ch->mRotationKeys[i].mTime);
-    for (unsigned i = 0; i < ch->mNumScalingKeys; ++i)
-        times.push_back(ch->mScalingKeys[i].mTime);
+    if (ch->mPositionKeys) {
+        for (unsigned i = 0; i < ch->mNumPositionKeys; ++i)
+            times.push_back(ch->mPositionKeys[i].mTime);
+    }
+    if (ch->mRotationKeys) {
+        for (unsigned i = 0; i < ch->mNumRotationKeys; ++i)
+            times.push_back(ch->mRotationKeys[i].mTime);
+    }
+    if (ch->mScalingKeys) {
+        for (unsigned i = 0; i < ch->mNumScalingKeys; ++i)
+            times.push_back(ch->mScalingKeys[i].mTime);
+    }
     std::sort(times.begin(), times.end());
     times.erase(std::unique(times.begin(), times.end(),
         [](double a, double b) { return std::fabs(a - b) < 1e-7; }), times.end());
@@ -276,8 +394,15 @@ static void analyzeAnimationRedundancy(const aiAnimation* anim,
 {
     int total = 0;
     int redundant = 0;
+    if (!anim || !anim->mChannels) {
+        if (outTotal) *outTotal = 0;
+        if (outRedundant) *outRedundant = 0;
+        return;
+    }
     for (unsigned c = 0; c < anim->mNumChannels; ++c) {
         const aiNodeAnim* ch = anim->mChannels[c];
+        if (!ch)
+            continue;
         const std::vector<double> times = unionTimes(ch);
         if (times.empty()) continue;
 
@@ -345,9 +470,17 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
     importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
 
     // Triangulate for consistent vertex/face counts; otherwise minimal processing.
-    const aiScene* scene = importer.ReadFile(
-        filePath.toStdString(),
-        aiProcess_Triangulate | aiProcess_ValidateDataStructure);
+    unsigned int readFlags = aiProcess_Triangulate | aiProcess_ValidateDataStructure;
+    const aiScene* scene = importer.ReadFile(filePath.toStdString(), readFlags);
+
+    if (isAssimpResultLoadFailure(scene, importer.GetErrorString(), nullptr) &&
+        (pathEndsWithInsensitive(filePath, QLatin1String(".fbx")) ||
+         pathEndsWithInsensitive(filePath, QLatin1String(".fbxa")))) {
+        readFlags = aiProcess_Triangulate | aiProcess_ValidateDataStructure |
+                    aiProcess_LimitBoneWeights | aiProcess_PopulateArmatureData |
+                    aiProcess_GlobalScale;
+        scene = importer.ReadFile(filePath.toStdString(), readFlags);
+    }
 
     // A null scene is a true load failure.  Do NOT treat AI_SCENE_FLAGS_INCOMPLETE
     // as fatal: Assimp sets it on many valid FBX files (e.g. Unreal/ Mixamo
@@ -366,10 +499,15 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
     std::set<std::string> uniqueBones;
     for (unsigned i = 0; i < scene->mNumMeshes; ++i) {
         const aiMesh* mesh = scene->mMeshes[i];
+        if (!mesh)
+            continue;
         info.vertexCount += mesh->mNumVertices;
         info.faceCount   += mesh->mNumFaces;
-        for (unsigned b = 0; b < mesh->mNumBones; ++b)
+        for (unsigned b = 0; b < mesh->mNumBones; ++b) {
+            if (!mesh->mBones[b])
+                continue;
             uniqueBones.insert(mesh->mBones[b]->mName.C_Str());
+        }
     }
     info.boneCount  = static_cast<unsigned int>(uniqueBones.size());
     info.hasSkeleton = !uniqueBones.empty();
@@ -379,17 +517,23 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
     // Animation details
     for (unsigned i = 0; i < scene->mNumAnimations; ++i) {
         const aiAnimation* anim = scene->mAnimations[i];
+        if (!anim)
+            continue;
         info.animationNames.append(QString::fromUtf8(anim->mName.C_Str()));
 
         double ticksPerSec = anim->mTicksPerSecond > 0 ? anim->mTicksPerSecond : 25.0;
         info.animationDurations.append(anim->mDuration / ticksPerSec);
 
         unsigned maxKeys = 0;
-        for (unsigned c = 0; c < anim->mNumChannels; ++c) {
-            const aiNodeAnim* ch = anim->mChannels[c];
-            maxKeys = std::max(maxKeys, ch->mNumPositionKeys);
-            maxKeys = std::max(maxKeys, ch->mNumRotationKeys);
-            maxKeys = std::max(maxKeys, ch->mNumScalingKeys);
+        if (anim->mChannels) {
+            for (unsigned c = 0; c < anim->mNumChannels; ++c) {
+                const aiNodeAnim* ch = anim->mChannels[c];
+                if (!ch)
+                    continue;
+                maxKeys = std::max(maxKeys, ch->mNumPositionKeys);
+                maxKeys = std::max(maxKeys, ch->mNumRotationKeys);
+                maxKeys = std::max(maxKeys, ch->mNumScalingKeys);
+            }
         }
         info.animationKeyframeCounts.append(static_cast<int>(maxKeys));
 
@@ -402,6 +546,10 @@ AssetInfo ScanEngine::inspectAsset(const QString& filePath, const QString& scanR
         info.totalKeyframes     += animTotal;
         info.redundantKeyframes += animRedundant;
     }
+
+    info.animationRedundantKeyframeRatio = (info.totalKeyframes > 0)
+        ? static_cast<double>(info.redundantKeyframes) / static_cast<double>(info.totalKeyframes)
+        : 0.0;
 
     // Material names + texture references
     for (unsigned i = 0; i < scene->mNumMaterials; ++i) {
@@ -710,6 +858,8 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
             int total = 0;
             int redundant = 0;
             for (unsigned i = 0; i < scene->mNumAnimations; ++i) {
+                if (!scene->mAnimations[i])
+                    continue;
                 int t = 0, r = 0;
                 analyzeAnimationRedundancy(scene->mAnimations[i], tol, &t, &r);
                 total += t;
@@ -739,11 +889,13 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
 
                     findings.append({asset.relativePath, "redundant_keyframes_pct", Severity::Warning,
                         QString("%1% redundant keyframes (%2/%3). Simplify it to save ~%4. "
-                                "Original size: %5, projected size: %6")
+                                "Original size: %5, projected size: %6. "
+                                "Run `qtmesh scan ... --fix` to apply (FBX uses the same simplify as `qtmesh anim --simplify`; use `--dry-run` to preview).")
                             .arg(pct, 0, 'f', 1).arg(redundant).arg(total)
                             .arg(formatBytes(savedBytes))
                             .arg(formatBytes(originalSize))
-                            .arg(formatBytes(projectedSize))});
+                            .arg(formatBytes(projectedSize)),
+                        /*fixable=*/true});
                 }
             }
         }
@@ -770,7 +922,138 @@ QList<Finding> ScanEngine::evaluateRules(const AssetInfo& asset, const ScanConfi
 // Auto-fixes
 // ---------------------------------------------------------------------------
 
-void ScanEngine::applyFixes(const ScanConfig& config, AssetInfo& asset,
+namespace {
+
+bool vecApproxEqualAssimp(const aiVector3D& a, const aiVector3D& b, float eps = 1e-6f)
+{
+    return (std::fabs(a.x - b.x) < eps && std::fabs(a.y - b.y) < eps && std::fabs(a.z - b.z) < eps);
+}
+
+bool quatApproxEqualAssimp(const aiQuaternion& a, const aiQuaternion& b, float eps = 1e-3f)
+{
+    const float d = std::fabs(a.w * b.w + a.x * b.x + a.y * b.y + a.z * b.z);
+    return d > 1.f - eps;
+}
+
+void compactVectorTrackInPlace(aiVectorKey*& keys, unsigned& n)
+{
+    if (n <= 2 || !keys)
+        return;
+    std::vector<aiVectorKey> out;
+    out.reserve(n);
+    out.push_back(keys[0]);
+    for (unsigned i = 1; i + 1 < n; ++i) {
+        if (!vecApproxEqualAssimp(keys[i].mValue, out.back().mValue))
+            out.push_back(keys[i]);
+    }
+    if (!vecApproxEqualAssimp(keys[n - 1].mValue, out.back().mValue))
+        out.push_back(keys[n - 1]);
+    if (out.size() == 1 && n >= 2) {
+        out.clear();
+        out.push_back(keys[0]);
+        out.push_back(keys[n - 1]);
+    }
+    const unsigned newN = static_cast<unsigned>(out.size());
+    if (newN == n)
+        return;
+    auto* nk = new aiVectorKey[newN];
+    for (unsigned i = 0; i < newN; ++i)
+        nk[i] = out[i];
+    delete[] keys;
+    keys = nk;
+    n = newN;
+}
+
+void compactQuatTrackInPlace(aiQuatKey*& keys, unsigned& n)
+{
+    if (n <= 2 || !keys)
+        return;
+    std::vector<aiQuatKey> out;
+    out.reserve(n);
+    out.push_back(keys[0]);
+    for (unsigned i = 1; i + 1 < n; ++i) {
+        if (!quatApproxEqualAssimp(keys[i].mValue, out.back().mValue))
+            out.push_back(keys[i]);
+    }
+    if (!quatApproxEqualAssimp(keys[n - 1].mValue, out.back().mValue))
+        out.push_back(keys[n - 1]);
+    if (out.size() == 1 && n >= 2) {
+        out.clear();
+        out.push_back(keys[0]);
+        out.push_back(keys[n - 1]);
+    }
+    const unsigned newN = static_cast<unsigned>(out.size());
+    if (newN == n)
+        return;
+    auto* nk = new aiQuatKey[newN];
+    for (unsigned i = 0; i < newN; ++i)
+        nk[i] = out[i];
+    delete[] keys;
+    keys = nk;
+    n = newN;
+}
+
+void stripRedundantAnimKeys(aiScene* scene)
+{
+    if (!scene)
+        return;
+    for (unsigned ai = 0; ai < scene->mNumAnimations; ++ai) {
+        aiAnimation* anim = scene->mAnimations[ai];
+        if (!anim || !anim->mChannels)
+            continue;
+        for (unsigned c = 0; c < anim->mNumChannels; ++c) {
+            aiNodeAnim* ch = anim->mChannels[c];
+            if (!ch)
+                continue;
+            compactVectorTrackInPlace(ch->mPositionKeys, ch->mNumPositionKeys);
+            compactQuatTrackInPlace(ch->mRotationKeys, ch->mNumRotationKeys);
+            compactVectorTrackInPlace(ch->mScalingKeys, ch->mNumScalingKeys);
+        }
+    }
+}
+
+long long totalAnimKeysForScene(const aiScene* scene)
+{
+    if (!scene)
+        return 0;
+    long long total = 0;
+    for (unsigned ai = 0; ai < scene->mNumAnimations; ++ai) {
+        const aiAnimation* anim = scene->mAnimations[ai];
+        if (!anim || !anim->mChannels)
+            continue;
+        for (unsigned c = 0; c < anim->mNumChannels; ++c) {
+            const aiNodeAnim* ch = anim->mChannels[c];
+            if (!ch)
+                continue;
+            total += static_cast<long long>(ch->mNumPositionKeys);
+            total += static_cast<long long>(ch->mNumRotationKeys);
+            total += static_cast<long long>(ch->mNumScalingKeys);
+        }
+    }
+    return total;
+}
+
+QString assimpExportFormatIdForAssetPath(const QString& outputPath)
+{
+    const QString suf = QFileInfo(outputPath).suffix().toLower();
+    static const QMap<QString, QString> fromExt{
+        {QStringLiteral("fbx"), QStringLiteral("fbx")},
+        {QStringLiteral("dae"), QStringLiteral("collada")},
+        {QStringLiteral("obj"), QStringLiteral("obj")},
+        {QStringLiteral("stl"), QStringLiteral("stl")},
+        {QStringLiteral("ply"), QStringLiteral("ply")},
+        {QStringLiteral("3ds"), QStringLiteral("3ds")},
+        {QStringLiteral("gltf"), QStringLiteral("gltf2")},
+        {QStringLiteral("glb"), QStringLiteral("glb2")},
+        {QStringLiteral("assbin"), QStringLiteral("assbin")},
+        {QStringLiteral("x"), QStringLiteral("x")},
+    };
+    return fromExt.value(suf, QStringLiteral("fbx"));
+}
+
+} // namespace
+
+void ScanEngine::applyFixes(const ScanConfig& config, const QString& scanRoot, AssetInfo& asset,
                             QList<Finding>& findings)
 {
     if (!config.fixEnabled) return;
@@ -801,6 +1084,217 @@ void ScanEngine::applyFixes(const ScanConfig& config, AssetInfo& asset,
                     f.message += " [fix failed: could not rename file]";
                 }
             }
+        } else if (f.rule == "redundant_keyframes_pct") {
+            if (config.dryRun) {
+                f.message += QStringLiteral(" [dry-run: would simplify animation keys (same as qtmesh anim --simplify)]");
+                continue;
+            }
+            const QString suf = QFileInfo(asset.filePath).suffix().toLower();
+            if (suf == QStringLiteral("fbx") || suf == QStringLiteral("fbxa")) {
+                // Ogre + tolerance-based simplify (same core as `qtmesh anim --simplify`) + custom FBX exporter.
+                if (!ensureOgreHeadlessQuiet()) {
+                    f.message = QStringLiteral("Fix failed: could not initialize Ogre");
+                    continue;
+                }
+
+                clearOgreSceneForScanImport();
+
+                QList<Ogre::SkeletonPtr> animOnlySkeletons;
+                MeshImporterExporter::importer({asset.filePath}, 0, &animOnlySkeletons);
+
+                auto& ents = Manager::getSingleton()->getEntities();
+                Ogre::Entity* entity = ents.isEmpty() ? nullptr : ents.last();
+                Ogre::SkeletonPtr skel;
+                if (entity && entity->hasSkeleton())
+                    skel = entity->getMesh()->getSkeleton();
+                if (!skel && !animOnlySkeletons.isEmpty())
+                    skel = animOnlySkeletons.last();
+
+                if (!skel) {
+                    f.message = QStringLiteral("Fix failed: could not load skeleton via Ogre importer");
+                    continue;
+                }
+
+                AnimationMerger::SimplifyTolerances tol;
+                tol.translation = static_cast<float>(config.redundantKeyframesTranslationTol);
+                tol.rotationDeg = static_cast<float>(config.redundantKeyframesRotationDegTol);
+                tol.scale = static_cast<float>(config.redundantKeyframesScaleTol);
+
+                // Compute total keyframes before simplifying (for reporting).
+                long long totalKeysBefore = 0;
+                for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+                    const Ogre::Animation* a = skel->getAnimation(ai);
+                    if (!a) continue;
+                    for (const auto& [handle, track] : a->_getNodeTrackList()) {
+                        Q_UNUSED(handle);
+                        if (!track) continue;
+                        totalKeysBefore += track->getNumKeyFrames();
+                    }
+                }
+
+                int totalRemoved = 0;
+                const unsigned short numAnims = skel->getNumAnimations();
+                std::vector<std::string> animNames;
+                animNames.reserve(numAnims);
+                for (unsigned short ai = 0; ai < numAnims; ++ai)
+                    animNames.push_back(skel->getAnimation(ai)->getName());
+
+                for (const auto& name : animNames)
+                    totalRemoved += AnimationMerger::simplifyAnimation(skel.get(), name, tol);
+
+                if (totalRemoved <= 0) {
+                    f.message = QStringLiteral("Fix not needed: no additional simplification within configured tolerances");
+                    f.severity = Severity::Info;
+                    f.skipped = true;
+                    continue;
+                }
+
+                // Export to a temp path first and only apply if it improves size.
+                const qint64 originalBytes = QFileInfo(asset.filePath).size();
+                const QString tmpPath = asset.filePath + QStringLiteral(".qtmesh-simplify.tmp");
+                if (QFile::exists(tmpPath))
+                    QFile::remove(tmpPath);
+
+                bool ok = false;
+                if (!entity) {
+                    ok = FBXExporter::exportSkeletonOnlyFBX(skel.get(), tmpPath);
+                } else {
+                    entity->refreshAvailableAnimationState();
+                    auto* node = entity->getParentSceneNode();
+                    ok = (MeshImporterExporter::exporter(node, tmpPath, QStringLiteral("FBX Binary (*.fbx)")) == 0);
+                }
+
+                if (!ok) {
+                    QFile::remove(tmpPath);
+                    f.message = QStringLiteral("Fix failed: FBX export failed");
+                    continue;
+                }
+
+                const qint64 rewrittenBytes = QFileInfo(tmpPath).size();
+                // The goal of this fix is to reduce animation payload. If the rewritten file
+                // isn't smaller, keep the original to avoid regressions from exporter variance.
+                if (originalBytes > 0 && rewrittenBytes >= originalBytes) {
+                    QFile::remove(tmpPath);
+                    f.message = QStringLiteral("output would be larger (%1 KB -> %2 KB), keeping original")
+                                    .arg(originalBytes / 1024)
+                                    .arg(rewrittenBytes / 1024);
+                    f.severity = Severity::Info;
+                    f.skipped = true;
+                    continue;
+                }
+
+                QFile orig(asset.filePath);
+                if (!orig.remove()) {
+                    QFile::remove(tmpPath);
+                    f.message = QStringLiteral("Fix failed: could not replace original file");
+                    continue;
+                }
+                if (!QFile::rename(tmpPath, asset.filePath)) {
+                    f.message = QStringLiteral("Fix failed: could not install rewritten file");
+                    continue;
+                }
+
+                SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                    QStringLiteral("Scan fix: simplified anim keys (custom FBX): %1").arg(asset.relativePath));
+                const qint64 savedBytes = (originalBytes > 0 && rewrittenBytes > 0) ? (originalBytes - rewrittenBytes) : 0;
+                const double keysPct = (totalKeysBefore > 0)
+                    ? (static_cast<double>(totalRemoved) * 100.0 / static_cast<double>(totalKeysBefore))
+                    : 0.0;
+                const double sizePct = (originalBytes > 0)
+                    ? (static_cast<double>(savedBytes) * 100.0 / static_cast<double>(originalBytes))
+                    : 0.0;
+                f.severity = Severity::Info;
+                f.bytesSaved = savedBytes;
+                f.keysRemoved = totalRemoved;
+                f.message = QStringLiteral("removed %1/%2 keys (%3%), saved %4 KB (%5%)")
+                                .arg(totalRemoved)
+                                .arg(totalKeysBefore)
+                                .arg(QString::number(keysPct, 'f', 1))
+                                .arg(savedBytes / 1024)
+                                .arg(QString::number(sizePct, 'f', 1));
+                f.fixed = true;
+                asset = inspectAsset(asset.filePath, scanRoot);
+                continue;
+            }
+
+            const qint64 originalBytes = QFileInfo(asset.filePath).size();
+            Assimp::Importer imp;
+            imp.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+            unsigned int impFlags = aiProcess_Triangulate | aiProcess_ValidateDataStructure;
+            const aiScene* loaded = imp.ReadFile(asset.filePath.toStdString(), impFlags);
+            if (isAssimpResultLoadFailure(loaded, imp.GetErrorString(), nullptr) &&
+                (pathEndsWithInsensitive(asset.filePath, QLatin1String(".fbx")) ||
+                 pathEndsWithInsensitive(asset.filePath, QLatin1String(".fbxa")))) {
+                impFlags = aiProcess_Triangulate | aiProcess_ValidateDataStructure |
+                           aiProcess_LimitBoneWeights | aiProcess_PopulateArmatureData |
+                           aiProcess_GlobalScale;
+                loaded = imp.ReadFile(asset.filePath.toStdString(), impFlags);
+            }
+            if (isAssimpResultLoadFailure(loaded, imp.GetErrorString(), nullptr)) {
+                f.message += QStringLiteral(" [fix failed: could not re-read asset]");
+                continue;
+            }
+            if (loaded->mNumAnimations == 0) {
+                f.message += QStringLiteral(" [fix failed: no animations in file]");
+                continue;
+            }
+            aiScene* mutScene = const_cast<aiScene*>(loaded);
+            const long long keysBefore = totalAnimKeysForScene(mutScene);
+            stripRedundantAnimKeys(mutScene);
+            const long long keysAfter = totalAnimKeysForScene(mutScene);
+            if (keysAfter >= keysBefore) {
+                f.message = QStringLiteral("Fix not needed: no reducible consecutive duplicate keys (per-channel)");
+                f.severity = Severity::Info;
+                f.skipped = true;
+                continue;
+            }
+
+            const QString tmpPath = asset.filePath + QStringLiteral(".qtmesh-strip.tmp");
+            if (QFile::exists(tmpPath))
+                QFile::remove(tmpPath);
+
+            const QString formatId = assimpExportFormatIdForAssetPath(asset.filePath);
+            const unsigned int exportFlags =
+                (formatId == QLatin1String("x")) ? 0u : aiProcess_ConvertToLeftHanded;
+
+            Assimp::Exporter exporter;
+            const aiReturn expRet = exporter.Export(mutScene, formatId.toStdString().c_str(),
+                                                    tmpPath.toStdString().c_str(), exportFlags);
+            if (expRet != AI_SUCCESS) {
+                QFile::remove(tmpPath);
+                f.message += QStringLiteral(" [fix failed: export: %1]")
+                                 .arg(QString::fromUtf8(exporter.GetErrorString()));
+                continue;
+            }
+            const qint64 rewrittenBytes = QFileInfo(tmpPath).size();
+            // Assimp FBX export is not size-stable; allow a small overhead so fixes still apply
+            // when they meaningfully improve animation data. Hard-skip large blowups.
+            const qint64 maxAllowedGrowthBytes = std::max<qint64>(64 * 1024, originalBytes / 20); // max(64KB, 5%)
+            const qint64 maxAllowedBytes = (originalBytes > 0) ? (originalBytes + maxAllowedGrowthBytes) : 0;
+            if (originalBytes > 0 && rewrittenBytes > maxAllowedBytes) {
+                QFile::remove(tmpPath);
+                f.message = QStringLiteral("output would be larger (%1 KB -> %2 KB), keeping original")
+                                .arg(originalBytes / 1024)
+                                .arg(rewrittenBytes / 1024);
+                f.severity = Severity::Info;
+                f.skipped = true;
+                continue;
+            }
+            QFile orig(asset.filePath);
+            if (!orig.remove()) {
+                QFile::remove(tmpPath);
+                f.message = QStringLiteral("Fix failed: could not replace original file");
+                continue;
+            }
+            if (!QFile::rename(tmpPath, asset.filePath)) {
+                f.message = QStringLiteral("Fix failed: could not install rewritten file");
+                continue;
+            }
+            SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+                QStringLiteral("Scan fix: stripped consecutive duplicate anim keys (Assimp): %1").arg(asset.relativePath));
+            f.message = QStringLiteral("Fixed: stripped consecutive duplicate animation keys (non-FBX path)");
+            f.fixed = true;
+            asset = inspectAsset(asset.filePath, scanRoot);
         }
     }
 }
@@ -843,15 +1337,25 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
             QList<Finding> findings = evaluateRules(asset, config);
 
             // Apply fixes where possible
-            applyFixes(config, asset, findings);
+            applyFixes(config, scanRoot, asset, findings);
 
             if (onAssetProcessed)
                 onAssetProcessed(asset, findings);
 
-            // Tally — fixed findings don't count toward error/warning totals
+            // Tally — fixed findings don't count toward error/warning totals.
+            // Note: Finding::skipped is "fix attempted but intentionally skipped" and should
+            // still be considered a pass at the asset level (it doesn't mean the asset was
+            // skipped from scanning).
             bool hasError = false, hasWarning = false;
+            bool hasFixSkipped = false;
             for (const auto& f : findings) {
-                if (f.fixed) { result.fixed++; continue; }
+                if (f.fixed) {
+                    result.fixed++;
+                    result.bytesSaved += std::max<qint64>(0, f.bytesSaved);
+                    result.keysRemoved += std::max<qint64>(0, f.keysRemoved);
+                    continue;
+                }
+                if (f.skipped) { hasFixSkipped = true; continue; }
                 switch (f.severity) {
                 case Severity::Error:   result.errors++;   hasError   = true; break;
                 case Severity::Warning: result.warnings++; hasWarning = true; break;
@@ -861,8 +1365,14 @@ ScanResult ScanEngine::run(const ScanConfig& config, const QString& rootOverride
 
             if (asset.loadError)
                 result.skipped++;
-            else if (!hasError && !hasWarning)
-                result.passed++;
+            else {
+                // A fix-skip is still a "pass" (nothing failed), but we also want to
+                // surface that something was skipped in the summary.
+                if (!hasError && !hasWarning)
+                    result.passed++;
+                if (hasFixSkipped)
+                    result.skipped++;
+            }
 
             result.scanned++;
             result.findings.append(findings);
@@ -927,7 +1437,7 @@ QString ScanEngine::formatText(const ScanResult& result, const ScanConfig& confi
 
         // Findings detail
         for (const auto& f : assetFindings) {
-            QString label = severityLabel(f.severity);
+            QString label = f.fixed ? QStringLiteral("FIXED") : severityLabel(f.severity);
             s << "         [" << label.trimmed().toLower() << "] "
               << f.rule << ": " << f.message << "\n";
         }
@@ -944,6 +1454,12 @@ QString ScanEngine::formatText(const ScanResult& result, const ScanConfig& confi
         s << "  ℹ Info:     " << result.infos << "\n";
     if (result.fixed > 0)
         s << "  🔧 Fixed:    " << result.fixed << "\n";
+    if (result.bytesSaved > 0)
+        s << "  📉 Saved:    " << QString::number(result.bytesSaved / (1024.0 * 1024.0), 'f', 2) << " MB\n";
+    if (result.keysRemoved > 0) {
+        const QString n = QLocale::system().toString(result.keysRemoved);
+        s << "  🧹 Keys removed: " << n << "\n";
+    }
     if (result.skipped > 0)
         s << "  ⏭ Skipped:  " << result.skipped << "\n";
     s << "  ⏱ Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
@@ -1009,6 +1525,10 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
     summary["infos"]    = result.infos;
     summary["fixed"]    = result.fixed;
     summary["skipped"]  = result.skipped;
+    if (result.bytesSaved > 0)
+        summary["bytesSaved"] = static_cast<qint64>(result.bytesSaved);
+    if (result.keysRemoved > 0)
+        summary["keysRemoved"] = static_cast<qint64>(result.keysRemoved);
     summary["elapsedMs"] = result.elapsedMs;
     root["summary"] = summary;
 
@@ -1027,6 +1547,8 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
         ao["hasSkeleton"]    = asset.hasSkeleton;
         ao["boneCount"]      = static_cast<int>(asset.boneCount);
         ao["textureRefCount"] = static_cast<int>(asset.textureRefCount);
+        if (asset.animationRedundantKeyframeRatio > 0.0)
+            ao["animationRedundantKeyframeRatio"] = asset.animationRedundantKeyframeRatio;
 
         if (!asset.animationNames.isEmpty()) {
             QJsonArray anims;
@@ -1064,6 +1586,7 @@ QJsonObject ScanEngine::scanReportToJsonObject(const ScanResult& result)
             fo["message"]  = findingMessageForExport(f);
             if (f.fixable) fo["fixable"] = true;
             if (f.fixed)   fo["fixed"]   = true;
+            if (f.skipped) fo["skipped"] = true;
             findingsArr.append(fo);
         }
         ao["findings"] = findingsArr;
@@ -1198,6 +1721,7 @@ QString ScanEngine::formatSarif(const ScanResult& result)
             QJsonObject props;
             props["fixable"] = true;
             if (f.fixed) props["fixed"] = true;
+            if (f.skipped) props["skipped"] = true;
             r["properties"] = props;
         }
 

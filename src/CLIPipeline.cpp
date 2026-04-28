@@ -8,20 +8,28 @@
 #include "SentryReporter.h"
 #include "ScanConfig.h"
 #include "ScanEngine.h"
+#include "FBX/FBXExporter.h"
 #include "QtMeshCloudClient.h"
 #include <QApplication>
 #include <QWidget>
 #include <QDir>
 #include <QFileInfo>
 #include <QJsonDocument>
+#include <QMap>
 #include <QDebug>
 #include <QTextStream>
+#include <QLocale>
 #include <QSysInfo>
 
 #include <assimp/Importer.hpp>
+#include <assimp/Exporter.hpp>
 #include <assimp/postprocess.h>
 #include <assimp/scene.h>
 #include <OgreSubMesh.h>
+
+#include <unordered_map>
+#include <vector>
+#include <memory>
 
 #include <set>
 #include <cstdio>
@@ -49,6 +57,250 @@ static void cliWrite(const QString& text)
         fwrite(utf8.constData(), 1, utf8.size(), stdout);
         fflush(stdout);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Animation-only export helpers (no mesh artifacts)
+// ---------------------------------------------------------------------------
+
+static aiMatrix4x4 ogreTransformToAi(const Ogre::Vector3& pos,
+                                     const Ogre::Quaternion& rot,
+                                     const Ogre::Vector3& scale)
+{
+    // Assimp uses row-major aiMatrix4x4; build from SRT.
+    aiMatrix4x4 s;
+    s.a1 = scale.x; s.b2 = scale.y; s.c3 = scale.z;
+    s.d4 = 1.0f;
+
+    Ogre::Matrix3 r3;
+    rot.ToRotationMatrix(r3);
+    aiMatrix4x4 r;
+    r.a1 = r3[0][0]; r.a2 = r3[0][1]; r.a3 = r3[0][2];
+    r.b1 = r3[1][0]; r.b2 = r3[1][1]; r.b3 = r3[1][2];
+    r.c1 = r3[2][0]; r.c2 = r3[2][1]; r.c3 = r3[2][2];
+    r.d4 = 1.0f;
+
+    aiMatrix4x4 t;
+    t.a4 = pos.x;
+    t.b4 = pos.y;
+    t.c4 = pos.z;
+    t.d4 = 1.0f;
+
+    return t * r * s;
+}
+
+static aiScene* buildAnimOnlyAiSceneFromSkeleton(const Ogre::Skeleton* skel)
+{
+    if (!skel)
+        return nullptr;
+
+    auto* scene = new aiScene();
+
+    // Root node
+    scene->mRootNode = new aiNode();
+    scene->mRootNode->mName = aiString("RootNode");
+    scene->mRootNode->mTransformation = aiMatrix4x4(); // identity
+
+    // Build bone node tree.
+    std::unordered_map<const Ogre::Bone*, aiNode*> boneToNode;
+    boneToNode.reserve(skel->getNumBones());
+
+    auto makeNodeForBone = [&](const Ogre::Bone* b) -> aiNode* {
+        auto it = boneToNode.find(b);
+        if (it != boneToNode.end())
+            return it->second;
+
+        auto* n = new aiNode();
+        n->mName = aiString(b->getName().c_str());
+        n->mTransformation = ogreTransformToAi(b->getPosition(), b->getOrientation(), b->getScale());
+        boneToNode[b] = n;
+        return n;
+    };
+
+    // Attach root bones under scene root; attach children under parents.
+    std::vector<aiNode*> rootBones;
+    rootBones.reserve(skel->getNumBones());
+
+    for (unsigned short i = 0; i < skel->getNumBones(); ++i) {
+        const Ogre::Bone* b = skel->getBone(i);
+        if (!b)
+            continue;
+
+        aiNode* node = makeNodeForBone(b);
+        const Ogre::Node* parent = b->getParent();
+        const Ogre::Bone* parentBone = dynamic_cast<const Ogre::Bone*>(parent);
+        if (!parentBone) {
+            rootBones.push_back(node);
+            continue;
+        }
+
+        aiNode* parentNode = makeNodeForBone(parentBone);
+        // Append as child
+        aiNode** newChildren = new aiNode*[parentNode->mNumChildren + 1];
+        for (unsigned int ci = 0; ci < parentNode->mNumChildren; ++ci)
+            newChildren[ci] = parentNode->mChildren[ci];
+        newChildren[parentNode->mNumChildren] = node;
+        delete[] parentNode->mChildren;
+        parentNode->mChildren = newChildren;
+        parentNode->mNumChildren += 1;
+        node->mParent = parentNode;
+    }
+
+    if (!rootBones.empty()) {
+        scene->mRootNode->mChildren = new aiNode*[rootBones.size()];
+        scene->mRootNode->mNumChildren = static_cast<unsigned int>(rootBones.size());
+        for (unsigned int i = 0; i < scene->mRootNode->mNumChildren; ++i) {
+            scene->mRootNode->mChildren[i] = rootBones[i];
+            rootBones[i]->mParent = scene->mRootNode;
+        }
+    }
+
+    // Animations
+    scene->mNumAnimations = skel->getNumAnimations();
+    scene->mAnimations = scene->mNumAnimations ? new aiAnimation*[scene->mNumAnimations] : nullptr;
+
+    for (unsigned short ai = 0; ai < skel->getNumAnimations(); ++ai) {
+        const Ogre::Animation* anim = skel->getAnimation(ai);
+        auto* a = new aiAnimation();
+        a->mName = aiString(anim->getName().c_str());
+        a->mDuration = anim->getLength();
+        a->mTicksPerSecond = 1.0; // key times are in seconds
+
+        // Collect bone tracks.
+        std::vector<const Ogre::NodeAnimationTrack*> tracks;
+        tracks.reserve(anim->getNumNodeTracks());
+        for (unsigned short ti = 0; ti < anim->getNumNodeTracks(); ++ti) {
+            const Ogre::NodeAnimationTrack* t = anim->getNodeTrack(ti);
+            if (t)
+                tracks.push_back(t);
+        }
+
+        a->mNumChannels = static_cast<unsigned int>(tracks.size());
+        a->mChannels = a->mNumChannels ? new aiNodeAnim*[a->mNumChannels] : nullptr;
+
+        for (unsigned int ci = 0; ci < a->mNumChannels; ++ci) {
+            const Ogre::NodeAnimationTrack* t = tracks[ci];
+            const Ogre::Node* target = t->getAssociatedNode();
+            const Ogre::Bone* bone = dynamic_cast<const Ogre::Bone*>(target);
+
+            auto* ch = new aiNodeAnim();
+            ch->mNodeName = aiString(bone ? bone->getName().c_str() : "Unknown");
+
+            const unsigned short kCount = t->getNumKeyFrames();
+            ch->mNumPositionKeys = kCount;
+            ch->mNumRotationKeys = kCount;
+            ch->mNumScalingKeys = kCount;
+            ch->mPositionKeys = kCount ? new aiVectorKey[kCount] : nullptr;
+            ch->mRotationKeys = kCount ? new aiQuatKey[kCount] : nullptr;
+            ch->mScalingKeys = kCount ? new aiVectorKey[kCount] : nullptr;
+
+            for (unsigned short ki = 0; ki < kCount; ++ki) {
+                const Ogre::TransformKeyFrame* kf = t->getNodeKeyFrame(ki);
+                const double time = kf->getTime();
+
+                const Ogre::Vector3 p = kf->getTranslate();
+                const Ogre::Quaternion r = kf->getRotation();
+                const Ogre::Vector3 s = kf->getScale();
+
+                ch->mPositionKeys[ki].mTime = time;
+                ch->mPositionKeys[ki].mValue = aiVector3D(p.x, p.y, p.z);
+
+                ch->mRotationKeys[ki].mTime = time;
+                ch->mRotationKeys[ki].mValue = aiQuaternion(r.w, r.x, r.y, r.z);
+
+                ch->mScalingKeys[ki].mTime = time;
+                ch->mScalingKeys[ki].mValue = aiVector3D(s.x, s.y, s.z);
+            }
+
+            a->mChannels[ci] = ch;
+        }
+
+        scene->mAnimations[ai] = a;
+    }
+
+    return scene;
+}
+
+static QString assimpExportFormatIdForAnimOnlyPath(const QString& outputPath)
+{
+    const QString fmt = CLIPipeline::formatForExtension(outputPath);
+    static const QMap<QString, QString> kUiToAssimp = {
+        {QStringLiteral("Collada (*.dae)"), QStringLiteral("collada")},
+        {QStringLiteral("X (*.x)"), QStringLiteral("x")},
+        {QStringLiteral("OBJ (*.obj)"), QStringLiteral("obj")},
+        {QStringLiteral("STL (*.stl)"), QStringLiteral("stl")},
+        {QStringLiteral("PLY (*.ply)"), QStringLiteral("ply")},
+        {QStringLiteral("3DS (*.3ds)"), QStringLiteral("3ds")},
+        {QStringLiteral("glTF 2.0 (*.gltf)"), QStringLiteral("gltf2")},
+        {QStringLiteral("glTF 2.0 (*.gltf2)"), QStringLiteral("gltf2")},
+        {QStringLiteral("glTF 2.0 Binary (*.glb)"), QStringLiteral("glb2")},
+        {QStringLiteral("glTF 2.0 Binary (*.glb2)"), QStringLiteral("glb2")},
+        {QStringLiteral("VRM / glTF 2.0 (*.vrm)"), QStringLiteral("gltf2")},
+        {QStringLiteral("FBX Binary (*.fbx)"), QStringLiteral("fbx")},
+        {QStringLiteral("Assimp Binary (*.assbin)"), QStringLiteral("assbin")},
+    };
+    if (auto it = kUiToAssimp.find(fmt); it != kUiToAssimp.end())
+        return it.value();
+    const QString suf = QFileInfo(outputPath).suffix().toLower();
+    static const QMap<QString, QString> kExtToAssimp = {
+        {QStringLiteral("fbx"), QStringLiteral("fbx")},
+        {QStringLiteral("dae"), QStringLiteral("collada")},
+        {QStringLiteral("obj"), QStringLiteral("obj")},
+        {QStringLiteral("stl"), QStringLiteral("stl")},
+        {QStringLiteral("ply"), QStringLiteral("ply")},
+        {QStringLiteral("3ds"), QStringLiteral("3ds")},
+        {QStringLiteral("gltf"), QStringLiteral("gltf2")},
+        {QStringLiteral("glb"), QStringLiteral("glb2")},
+        {QStringLiteral("vrm"), QStringLiteral("gltf2")},
+        {QStringLiteral("assbin"), QStringLiteral("assbin")},
+        {QStringLiteral("x"), QStringLiteral("x")},
+    };
+    return kExtToAssimp.value(suf, QStringLiteral("fbx"));
+}
+
+static bool exportAnimOnlyViaAssimp(const Ogre::SkeletonPtr& skel, const QString& outputPath, QString* outError = nullptr)
+{
+    if (!skel) {
+        if (outError) *outError = QStringLiteral("No skeleton");
+        return false;
+    }
+
+    std::unique_ptr<aiScene> scene(buildAnimOnlyAiSceneFromSkeleton(skel.get()));
+    if (!scene) {
+        if (outError) *outError = QStringLiteral("Failed to build animation-only scene");
+        return false;
+    }
+
+    const QString formatId = assimpExportFormatIdForAnimOnlyPath(outputPath);
+    const unsigned int exportFlags =
+        (formatId == QLatin1String("x")) ? 0u : aiProcess_ConvertToLeftHanded;
+
+    Assimp::Exporter exporter;
+    const aiReturn r = exporter.Export(scene.get(), formatId.toStdString().c_str(),
+                                       outputPath.toStdString().c_str(), exportFlags);
+    if (r != AI_SUCCESS) {
+        if (outError)
+            *outError = QString::fromUtf8(exporter.GetErrorString());
+        return false;
+    }
+    return true;
+}
+
+static bool exportAnimOnly(const Ogre::SkeletonPtr& skel, const QString& outputPath, QString* outError = nullptr)
+{
+    const QString suf = QFileInfo(outputPath).suffix().toLower();
+    if (suf == QStringLiteral("fbx") || suf == QStringLiteral("fbxa")) {
+        if (!skel) {
+            if (outError) *outError = QStringLiteral("No skeleton");
+            return false;
+        }
+        if (!FBXExporter::exportSkeletonOnlyFBX(skel.get(), outputPath)) {
+            if (outError) *outError = QStringLiteral("Custom FBX exporter failed");
+            return false;
+        }
+        return true;
+    }
+    return exportAnimOnlyViaAssimp(skel, outputPath, outError);
 }
 
 static bool cliSupportsColor()
@@ -91,9 +343,13 @@ static QString scanStatusLabel(bool hasError, bool hasWarning, bool colorize)
     return colorizeWord("OK", "32", colorize);
 }
 
-static QString findingSeverityTag(Severity severity)
+static QString findingSeverityTag(const Finding& f)
 {
-    switch (severity) {
+    if (f.fixed)
+        return "fixed";
+    if (f.skipped)
+        return "skipped";
+    switch (f.severity) {
     case Severity::Error:   return "error";
     case Severity::Warning: return "warn";
     case Severity::Info:    return "info";
@@ -108,6 +364,9 @@ static QString formatScanAssetLine(const AssetInfo& asset, const QList<Finding>&
     for (const auto& f : findings) {
         if (f.fixed)
             continue;
+        if (f.skipped) {
+            continue;
+        }
         if (f.severity == Severity::Error)
             hasError = true;
         else if (f.severity == Severity::Warning)
@@ -125,7 +384,7 @@ static QString formatScanAssetLine(const AssetInfo& asset, const QList<Finding>&
         s << status << "   " << asset.relativePath << "\n";
 
     for (const auto& f : findings) {
-        s << "         [" << findingSeverityTag(f.severity) << "] "
+        s << "         [" << findingSeverityTag(f) << "] "
           << f.rule << ": " << f.message << "\n";
     }
     return out;
@@ -141,6 +400,8 @@ static QString formatScanSummary(const ScanResult& result, bool colorize)
     const QString errorIcon = colorizeIconWhenPositive(QStringLiteral("✗"), result.errors, "31", colorize);
     const QString infoIcon = colorizeIconWhenPositive(QStringLiteral("ℹ"), result.infos, "36", colorize);
     const QString fixedIcon = colorizeIconWhenPositive(QStringLiteral("🔧"), result.fixed, "32", colorize);
+    const QString savedIcon = colorizeIconWhenPositive(QStringLiteral("📉"), result.bytesSaved > 0 ? 1 : 0, "32", colorize);
+    const QString keysIcon = colorizeIconWhenPositive(QStringLiteral("🧹"), result.keysRemoved > 0 ? 1 : 0, "32", colorize);
     const QString skippedIcon = colorizeWord(QStringLiteral("⏭"), "90", colorize);
     const QString timeIcon = colorizeWord(QStringLiteral("⏱"), "34", colorize);
 
@@ -154,6 +415,12 @@ static QString formatScanSummary(const ScanResult& result, bool colorize)
         s << "  " << infoIcon << " Info:     " << result.infos << "\n";
     if (result.fixed > 0)
         s << "  " << fixedIcon << " Fixed:    " << result.fixed << "\n";
+    if (result.bytesSaved > 0)
+        s << "  " << savedIcon << " Saved:    " << QString::number(result.bytesSaved / (1024.0 * 1024.0), 'f', 2) << " MB\n";
+    if (result.keysRemoved > 0) {
+        const QString n = QLocale::system().toString(result.keysRemoved);
+        s << "  " << keysIcon << " Keys removed: " << n << "\n";
+    }
     if (result.skipped > 0)
         s << "  " << skippedIcon << " Skipped:  " << result.skipped << "\n";
     s << "  " << timeIcon << " Time:     " << QString::number(result.elapsedMs / 1000.0, 'f', 1) << "s\n";
@@ -1014,18 +1281,19 @@ int CLIPipeline::cmdFix(int argc, char* argv[])
 int CLIPipeline::cmdAnim(int argc, char* argv[])
 {
     // Parse: anim <file> --list [--json]
+    //    or: anim <file> --analyze [--json]
     //    or: anim <file> --rename <old> <new> [-o <output>]
     //    or: anim <file> --merge <f1> [f2...] [-o <output>]
     //    or: anim <file> --resample N [-o <output>] [--animation <name>]
     //    or: anim <file> --decimate-step S [-o <output>] [--animation <name>]
     QString filePath, oldName, newName, outputPath, animationFilter;
     bool listMode = false;
+    bool analyzeMode = false;
     bool renameMode = false;
     bool mergeMode = false;
     bool resampleMode = false;
     bool decimateMode = false;
     bool simplifyMode = false;
-    bool analyzeMode = false;
     bool jsonOutput = false;
     int resampleCount = 0;
     int decimateStep = 0;
@@ -1045,6 +1313,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         QString arg(argv[i]);
         if (arg == "anim" || arg == "--cli") continue;
         if (arg == "--list") { listMode = true; continue; }
+        if (arg == "--analyze") { analyzeMode = true; continue; }
         if (arg == "--json") { jsonOutput = true; continue; }
         if (arg == "--rename" && i + 2 < argc) {
             renameMode = true;
@@ -1120,6 +1389,7 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         && !simplifyMode && !analyzeMode) {
         err() << "Error: Specify --list, --rename, --merge, --resample, --decimate-step, --simplify, or --analyze." << Qt::endl;
         err() << "Usage: qtmesh anim <file> --list [--json]" << Qt::endl;
+        err() << "       qtmesh anim <file> --analyze [--json]" << Qt::endl;
         err() << "       qtmesh anim <file> --rename <old> <new> [-o <output>]" << Qt::endl;
         err() << "       qtmesh anim <file> --merge <f1> [f2...] [-o <output>]" << Qt::endl;
         err() << "       qtmesh anim <file> --resample N [-o <output>] [--animation <name>]" << Qt::endl;
@@ -1152,26 +1422,30 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     SentryReporter::addBreadcrumb("cli.anim", QString("Anim %1 .%2%3")
         .arg(animOp, fi.suffix(), mergeMode ? QString(" files=%1").arg(mergeFiles.size()) : ""));
 
-    MeshImporterExporter::importer({fi.absoluteFilePath()});
+    // Support animation-only files: importer may populate animOnlySkeletons without creating entities.
+    QList<Ogre::SkeletonPtr> animOnlySkeletons;
+    MeshImporterExporter::importer({fi.absoluteFilePath()}, 0, &animOnlySkeletons);
 
     auto& entities = Manager::getSingleton()->getEntities();
-    if (entities.isEmpty()) {
+    Ogre::Entity* entity = nullptr;
+    Ogre::SkeletonPtr skel;
+
+    if (!entities.isEmpty()) {
+        entity = entities.first();
+        if (entity->hasSkeleton())
+            skel = entity->getMesh()->getSkeleton();
+    }
+
+    if (!skel && !animOnlySkeletons.isEmpty())
+        skel = animOnlySkeletons.first();
+
+    if (!skel) {
         SentryReporter::captureMessage(QString("CLI anim: import failed (.%1)").arg(fi.suffix()), "error");
         err() << "Error: Failed to load file: " << filePath << Qt::endl;
         return 1;
     }
 
-    Ogre::Entity* entity = entities.first();
-    if (!entity->hasSkeleton()) {
-        err() << "Error: File has no skeleton/animations." << Qt::endl;
-        return 1;
-    }
-
-    Ogre::SkeletonPtr skel = entity->getMesh()->getSkeleton();
-    if (!skel) {
-        err() << "Error: No skeleton found." << Qt::endl;
-        return 1;
-    }
+    const bool isAnimOnlyInput = (entity == nullptr);
 
     if (listMode) {
         if (skel->getNumAnimations() == 0) {
@@ -1203,16 +1477,53 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         return 0;
     }
 
+    if (analyzeMode) {
+        if (jsonOutput) {
+            QJsonObject root;
+            root["skeletonName"] = QString::fromStdString(skel->getName());
+            root["boneCount"] = static_cast<int>(skel->getNumBones());
+            QJsonArray animArr;
+            for (unsigned short i = 0; i < skel->getNumAnimations(); ++i) {
+                auto* anim = skel->getAnimation(i);
+                QJsonObject a;
+                a["name"] = QString::fromStdString(anim->getName());
+                a["duration"] = static_cast<double>(anim->getLength());
+                animArr.append(a);
+            }
+            root["animations"] = animArr;
+            cliWrite(QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)) + "\n");
+        } else {
+            QString out;
+            out += QString("Skeleton: %1 (%2 bones)\n")
+                       .arg(QString::fromStdString(skel->getName()))
+                       .arg(skel->getNumBones());
+            out += QString("Animations: %1\n").arg(skel->getNumAnimations());
+            for (unsigned short i = 0; i < skel->getNumAnimations(); ++i) {
+                auto* anim = skel->getAnimation(i);
+                out += QString("  %1  %2s\n")
+                           .arg(QString::fromStdString(anim->getName()))
+                           .arg(anim->getLength(), 0, 'f', 3);
+            }
+            cliWrite(out);
+        }
+        return 0;
+    }
+
     // Merge mode
     if (mergeMode) {
+        if (!entity) {
+            err() << "Error: --merge requires a base file with mesh geometry. "
+                     "An animation-only file cannot be used as the merge base." << Qt::endl;
+            return 1;
+        }
         // Load animation files; animation-only files (no mesh) produce a skeleton instead of entity.
-        QList<Ogre::SkeletonPtr> animOnlySkeletons;
+        QList<Ogre::SkeletonPtr> mergeAnimOnlySkeletons;
         for (const auto& f : mergeFiles) {
             int entityCountBefore = Manager::getSingleton()->getEntities().size();
-            int skelCountBefore = animOnlySkeletons.size();
-            MeshImporterExporter::importer({f}, 0, &animOnlySkeletons);
+            int skelCountBefore = mergeAnimOnlySkeletons.size();
+            MeshImporterExporter::importer({f}, 0, &mergeAnimOnlySkeletons);
             bool gotEntity = Manager::getSingleton()->getEntities().size() > entityCountBefore;
-            bool gotSkeleton = animOnlySkeletons.size() > skelCountBefore;
+            bool gotSkeleton = mergeAnimOnlySkeletons.size() > skelCountBefore;
             if (!gotEntity && !gotSkeleton) {
                 SentryReporter::captureMessage(QString("CLI anim: merge input import failed (.%1)").arg(QFileInfo(f).suffix()), "error");
                 err() << "Error: Failed to load animation file: " << f << Qt::endl;
@@ -1224,13 +1535,13 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
         // allEntities includes the base entity (already validated above) plus any
         // mesh entities from merge files. If no additional mesh entities AND no
         // animation-only skeletons were collected, there is nothing to merge.
-        if (allEntities.size() < 2 && animOnlySkeletons.isEmpty()) {
+        if (allEntities.size() < 2 && mergeAnimOnlySkeletons.isEmpty()) {
             err() << "Error: Need at least one source file to merge (got none)." << Qt::endl;
             return 1;
         }
 
         QString mergeErr;
-        Ogre::Entity* merged = AnimationMerger::mergeAnimations(allEntities.first(), allEntities, animOnlySkeletons, mergeErr);
+        Ogre::Entity* merged = AnimationMerger::mergeAnimations(allEntities.first(), allEntities, mergeAnimOnlySkeletons, mergeErr);
         if (!merged) {
             SentryReporter::captureMessage("CLI anim: merge failed", "error");
             err() << "Error: Merge failed: " << mergeErr << Qt::endl;
@@ -1287,15 +1598,23 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             return 1;
         }
 
-        entity->refreshAvailableAnimationState();
-
-        auto* node = entity->getParentSceneNode();
         QFileInfo outFi(outputPath);
-        int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), formatForExtension(outputPath));
-        if (result != 0) {
-            SentryReporter::captureMessage(QString("CLI anim: resample export failed (.%1)").arg(outFi.suffix()), "error");
-            err() << "Error: Export failed." << Qt::endl;
-            return 1;
+        if (isAnimOnlyInput) {
+            QString exportErr;
+            if (!exportAnimOnly(skel, outFi.absoluteFilePath(), &exportErr)) {
+                SentryReporter::captureMessage(QString("CLI anim: resample export failed (anim-only)"), "error");
+                err() << "Error: Export failed: " << exportErr << Qt::endl;
+                return 1;
+            }
+        } else {
+            entity->refreshAvailableAnimationState();
+            auto* node = entity->getParentSceneNode();
+            int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), formatForExtension(outputPath));
+            if (result != 0) {
+                SentryReporter::captureMessage(QString("CLI anim: resample export failed (.%1)").arg(outFi.suffix()), "error");
+                err() << "Error: Export failed." << Qt::endl;
+                return 1;
+            }
         }
 
         cliWrite(QString("Resampled %1 animation(s) to %2 keyframes (removed %3 keyframes)\nOutput: %4\n")
@@ -1340,15 +1659,23 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
             return 1;
         }
 
-        entity->refreshAvailableAnimationState();
-
-        auto* node = entity->getParentSceneNode();
         QFileInfo outFi(outputPath);
-        int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), formatForExtension(outputPath));
-        if (result != 0) {
-            SentryReporter::captureMessage(QString("CLI anim: decimate export failed (.%1)").arg(outFi.suffix()), "error");
-            err() << "Error: Export failed." << Qt::endl;
-            return 1;
+        if (isAnimOnlyInput) {
+            QString exportErr;
+            if (!exportAnimOnly(skel, outFi.absoluteFilePath(), &exportErr)) {
+                SentryReporter::captureMessage(QString("CLI anim: decimate export failed (anim-only)"), "error");
+                err() << "Error: Export failed: " << exportErr << Qt::endl;
+                return 1;
+            }
+        } else {
+            entity->refreshAvailableAnimationState();
+            auto* node = entity->getParentSceneNode();
+            int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), formatForExtension(outputPath));
+            if (result != 0) {
+                SentryReporter::captureMessage(QString("CLI anim: decimate export failed (.%1)").arg(outFi.suffix()), "error");
+                err() << "Error: Export failed." << Qt::endl;
+                return 1;
+            }
         }
 
         cliWrite(QString("Decimated %1 animation(s) with step %2 (removed %3 keyframes)\nOutput: %4\n")
@@ -1536,17 +1863,25 @@ int CLIPipeline::cmdAnim(int argc, char* argv[])
     }
 
     AnimationMerger::renameAnimation(skel.get(), oldName.toStdString(), newName.toStdString());
-    entity->refreshAvailableAnimationState();
 
-    auto* node = entity->getParentSceneNode();
     QFileInfo outFi(outputPath);
-    QString fmt = formatForExtension(outputPath);
-
-    int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), fmt);
-    if (result != 0) {
-        SentryReporter::captureMessage(QString("CLI anim: rename export failed (.%1)").arg(outFi.suffix()), "error");
-        err() << "Error: Export failed." << Qt::endl;
-        return 1;
+    if (isAnimOnlyInput) {
+        QString exportErr;
+        if (!exportAnimOnly(skel, outFi.absoluteFilePath(), &exportErr)) {
+            SentryReporter::captureMessage(QString("CLI anim: rename export failed (anim-only)"), "error");
+            err() << "Error: Export failed: " << exportErr << Qt::endl;
+            return 1;
+        }
+    } else {
+        entity->refreshAvailableAnimationState();
+        auto* node = entity->getParentSceneNode();
+        QString fmt = formatForExtension(outputPath);
+        int result = MeshImporterExporter::exporter(node, outFi.absoluteFilePath(), fmt);
+        if (result != 0) {
+            SentryReporter::captureMessage(QString("CLI anim: rename export failed (.%1)").arg(outFi.suffix()), "error");
+            err() << "Error: Export failed." << Qt::endl;
+            return 1;
+        }
     }
 
     cliWrite(QString("Renamed animation '%1' -> '%2'\nOutput: %3\n").arg(oldName, newName, outFi.fileName()));
@@ -2411,10 +2746,22 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
         config.failOn = failOn;
     }
 
+    auto stripOuterQuotesToken = [](QString s) {
+        s = s.trimmed();
+        if (s.size() >= 2) {
+            const QChar a = s.front(), b = s.back();
+            if ((a == '"' && b == '"') || (a == '\'' && b == '\''))
+                s = s.mid(1, s.size() - 2).trimmed();
+        }
+        return s;
+    };
+
     if (!includeArg.isEmpty()) {
         config.includePatterns.clear();
         for (const auto& p : includeArg.split(",")) {
-            QString pattern = p.trimmed();
+            QString pattern = stripOuterQuotesToken(p);
+            if (pattern.isEmpty())
+                continue;
             // Normalize bare extension patterns: *.fbx → **/*.fbx
             if (!pattern.contains("/") && !pattern.startsWith("**/"))
                 pattern = "**/" + pattern;
@@ -2423,7 +2770,9 @@ int CLIPipeline::cmdScan(int argc, char* argv[])
     }
     if (!excludeArg.isEmpty()) {
         for (const auto& p : excludeArg.split(",")) {
-            QString pattern = p.trimmed();
+            QString pattern = stripOuterQuotesToken(p);
+            if (pattern.isEmpty())
+                continue;
             if (!pattern.contains("/") && !pattern.startsWith("**/"))
                 pattern = "**/" + pattern;
             config.excludePatterns.append(pattern);
