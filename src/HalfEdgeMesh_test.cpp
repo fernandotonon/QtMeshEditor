@@ -4983,6 +4983,96 @@ TEST(HalfEdgeMeshStandalone, CatmullClarkEmptyMeshIsNoOp) {
     EXPECT_TRUE(he.subdivideCatmullClark().empty());
 }
 
+// ===========================================================================
+// subdivideFacesToQuads — chunk 4b: subdivide n-gons into quads on selection
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesToQuadsEmptyIsNoOp) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_TRUE(he.subdivideFacesToQuads({}).empty());
+    EXPECT_EQ(activeFaceCount(he), 2);
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesToQuadsOnQuadProducesFourQuads) {
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    he.subdivideFacesToQuads({0});
+    EXPECT_EQ(activeFaceCount(he), 4) << "1 quad → 4 sub-quads";
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        EXPECT_EQ(he.faceVertices(static_cast<int>(f)).size(), 4u)
+            << "every output face is a quad";
+    }
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesToQuadsOnTriangleProducesThreeQuads) {
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    he.subdivideFacesToQuads({0});
+    EXPECT_EQ(activeFaceCount(he), 3);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesToQuadsSharesEdgeMidpointsBetweenSelectedFaces) {
+    // Two adjacent quads in the same submesh sharing one edge.
+    // Selecting both should re-use the shared edge's midpoint so the
+    // boundary stays manifold (no T-junction, no duplicated vertex).
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    // 6 verts arranged as two side-by-side quads sharing edge (1,4).
+    sub.vertices = {
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),  // 0 1 2 (bottom)
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),  // 3 4 5 (top)
+    };
+    auto mkF = [](unsigned a, unsigned b, unsigned c, unsigned d) {
+        EditableFace f;
+        f.indices = {a, b, c, d};
+        return f;
+    };
+    sub.faces = { mkF(0, 1, 4, 3), mkF(1, 2, 5, 4) };
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    he.subdivideFacesToQuads({0, 1});
+    EXPECT_EQ(activeFaceCount(he), 8) << "2 quads × 4 sub-quads = 8";
+    EXPECT_TRUE(he.validate());
+
+    // Manifold check on round-trip.
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back))
+        << "shared midpoint between the two quads must keep mesh manifold";
+}
+
 TEST(HalfEdgeMeshStandalone, CatmullClarkRoundTripsThroughEditableMesh) {
     auto em = makeQuadMesh();
     HalfEdgeMesh he;

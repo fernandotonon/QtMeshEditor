@@ -870,7 +870,10 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
 
 // Apply RTSS normal map shaders to any materials that have a normal-map texture
 // unit. Called after loading .mesh/.xml files where MaterialProcessor doesn't run.
-static void applyNormalMapsToEntity(const Ogre::Entity* en)
+// Also reachable as MeshImporterExporter::applyNormalMapsToEntity for callers
+// that need to refresh bump-map RTSS state after a topology change wiped it
+// (chunk 4b: Edit Mode subdivide / extrude / etc.).
+void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
 {
     if (!en) return;
     auto& log = Ogre::LogManager::getSingleton();

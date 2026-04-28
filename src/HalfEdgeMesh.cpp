@@ -4830,6 +4830,26 @@ HEVertex averageHEVertices(const std::vector<const HEVertex*>& src)
     r.hasTangent = anyTan;
     if (r.normal.squaredLength() > 1e-12f) r.normal.normalise();
 
+    // Normalize the tangent's xyz component (w stores handedness/
+    // parity and stays as the average of input parities). RTSS's
+    // bump-map shader assumes unit-length tangents — without this
+    // step, averaged tangents at face / edge points end up with
+    // length < 1, the shader produces invalid TBN matrices, and
+    // the surface renders with no per-pixel lighting + no bump map
+    // (looks washed out, ambient-only). (Chunk 4b.)
+    {
+        Ogre::Vector3 txyz(r.tangent.x, r.tangent.y, r.tangent.z);
+        const float lenSq = txyz.squaredLength();
+        if (lenSq > 1e-12f) {
+            const float invLen = 1.0f / std::sqrt(lenSq);
+            r.tangent.x = txyz.x * invLen;
+            r.tangent.y = txyz.y * invLen;
+            r.tangent.z = txyz.z * invLen;
+            // Normalize w to ±1 (handedness is binary).
+            r.tangent.w = (r.tangent.w >= 0.0f) ? 1.0f : -1.0f;
+        }
+    }
+
     auto addBone = [&](unsigned short idx, float weight) {
         if (weight <= 1e-6f) return;
         for (auto& ba : r.boneAssignments) {
@@ -4852,6 +4872,113 @@ HEVertex midpointHEVertices(const HEVertex& a, const HEVertex& b)
 }
 
 } // namespace
+
+std::vector<int> HalfEdgeMesh::subdivideFacesToQuads(const std::vector<int>& faceIndices)
+{
+    std::vector<int> newVertices;
+    if (faceIndices.empty()) return newVertices;
+
+    // 1. Collect the unique set of currently-live target faces.
+    //    Accept any face with 3+ corners.
+    std::set<int> selectedFaces;
+    for (int f : faceIndices) {
+        if (f < 0 || f >= static_cast<int>(m_faces.size())) continue;
+        if (m_faces[f].halfEdge < 0) continue;
+        if (faceVertices(f).size() < 3) continue;
+        selectedFaces.insert(f);
+    }
+    if (selectedFaces.empty()) return newVertices;
+
+    // 2. For each selected face, compute a face point (arithmetic mean
+    //    of corners). Track per-face corner list + submesh for later
+    //    rewiring.
+    std::vector<int> facePointIdx(m_faces.size(), -1);
+    std::vector<std::vector<int>> faceCorners(m_faces.size());
+    std::vector<int> faceSubMesh(m_faces.size(), -1);
+
+    for (int f : selectedFaces) {
+        const auto verts = faceVertices(f);
+        std::vector<const HEVertex*> src;
+        src.reserve(verts.size());
+        for (int v : verts) src.push_back(&m_vertices[v]);
+        HEVertex fp = averageHEVertices(src);
+        fp.halfEdge = -1;
+        facePointIdx[f] = static_cast<int>(m_vertices.size());
+        m_vertices.push_back(std::move(fp));
+        newVertices.push_back(facePointIdx[f]);
+        faceCorners[f] = std::move(verts);
+        faceSubMesh[f] = m_faces[f].subMeshIndex;
+    }
+
+    // 3. For each unique edge on the selected faces, compute an edge
+    //    midpoint. SHARE midpoints across selected faces in the same
+    //    submesh so the boundary between two selected faces stays
+    //    watertight (no T-junction). Cross-submesh edges fall back to
+    //    per-face edge points (deliberately NOT shared, so material
+    //    seams keep their per-side normals/UVs).
+    auto edgeKey = [](int a, int b, int submesh) {
+        return std::make_tuple(std::min(a, b), std::max(a, b), submesh);
+    };
+    std::map<std::tuple<int, int, int>, int> edgePointForKey;
+
+    auto getOrMakeEdgePoint = [&](int va, int vb, int submesh) -> int {
+        const auto key = edgeKey(va, vb, submesh);
+        auto it = edgePointForKey.find(key);
+        if (it != edgePointForKey.end()) return it->second;
+        HEVertex mp = midpointHEVertices(m_vertices[va], m_vertices[vb]);
+        mp.halfEdge = -1;
+        const int idx = static_cast<int>(m_vertices.size());
+        m_vertices.push_back(std::move(mp));
+        newVertices.push_back(idx);
+        edgePointForKey[key] = idx;
+        return idx;
+    };
+
+    // 4. Retire each selected face and emit N quads in its place:
+    //    quad_i = [corner_i, edgePoint(corner_i, corner_{i+1}),
+    //             facePoint, edgePoint(corner_{i-1}, corner_i)]
+    auto retireFace = [&](int faceIdx) {
+        const int startHE = m_faces[faceIdx].halfEdge;
+        if (startHE < 0) return;
+        int he = startHE;
+        do {
+            const int next = m_halfEdges[he].next;
+            m_halfEdges[he].face = -1;
+            he = next;
+        } while (he != startHE && he >= 0);
+        m_faces[faceIdx].halfEdge = -1;
+    };
+
+    for (int f : selectedFaces) {
+        const auto& corners = faceCorners[f];
+        const int N = static_cast<int>(corners.size());
+        if (N < 3) continue;
+        const int subIdx = faceSubMesh[f];
+        const int fp = facePointIdx[f];
+
+        // Pre-resolve edge points for each consecutive pair.
+        std::vector<int> edgePts(N, -1);
+        for (int i = 0; i < N; ++i) {
+            edgePts[i] = getOrMakeEdgePoint(
+                corners[i], corners[(i + 1) % N], subIdx);
+        }
+
+        retireFace(f);
+
+        for (int i = 0; i < N; ++i) {
+            const int prev = (i + N - 1) % N;
+            const int corner = corners[i];
+            appendFace({corner, edgePts[i], fp, edgePts[prev]}, subIdx);
+        }
+    }
+
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+
+    return newVertices;
+}
 
 std::vector<int> HalfEdgeMesh::subdivideCatmullClark()
 {

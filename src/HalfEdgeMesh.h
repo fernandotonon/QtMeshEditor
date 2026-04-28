@@ -604,6 +604,43 @@ public:
     std::vector<int> subdivideFaces(const std::vector<int>& faceIndices);
 
     /**
+     * @brief Subdivide each selected n-gon face into N sub-quads, linearly.
+     *
+     * Geometrically equivalent to one Catmull-Clark step ON THE
+     * SELECTED FACES ONLY, minus the smoothing rules — face points and
+     * edge points land at the arithmetic mean of their inputs (linear
+     * subdivide, no chord/face-point blending into surrounding
+     * vertices). Output is always quads regardless of input N.
+     *
+     * Use this when you want to preserve quad structure on a partial
+     * selection without smoothing the corners. For triangle inputs the
+     * existing `subdivideFaces` 1-to-4 split is usually a better fit;
+     * for quad inputs `subdivideFaces` skips them as non-triangles, so
+     * this method fills that gap.
+     *
+     * Adjacent NON-selected faces sharing an edge with a subdivided
+     * face are NOT retriangulated — this means you'll get T-junctions
+     * along the boundary between selected and unselected regions on
+     * the same submesh. Most users will want to either (a) select
+     * full neighbour rings, or (b) use the whole-mesh
+     * `subdivideCatmullClark` instead. T-junction prevention is a
+     * follow-up.
+     *
+     * MVP scope:
+     *  - Faces must have 3+ corners. (3 → 3 quads, 4 → 4, N → N.)
+     *  - Cross-submesh boundary handling: edge midpoints are shared
+     *    only between selected faces in the same submesh. Cross-
+     *    submesh edges fall back to per-face edge points (no
+     *    sharing), which still produces a valid mesh — just slightly
+     *    duplicated vertices at material seams.
+     *
+     * @param faceIndices The HE face indices to subdivide.
+     * @return Indices of every newly created vertex (face points
+     *         followed by edge points). Empty on no-op.
+     */
+    std::vector<int> subdivideFacesToQuads(const std::vector<int>& faceIndices);
+
+    /**
      * @brief Subdivide every face by one Catmull-Clark step.
      *
      * The classic Catmull-Clark scheme. For each face F:

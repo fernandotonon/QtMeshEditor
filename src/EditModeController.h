@@ -665,6 +665,18 @@ public:
 
     /// Convert (subMeshIndex, localTriangleIndex) to a global triangle index.
     int localTriToGlobal(size_t subMeshIndex, size_t localTriIndex) const;
+
+    /// @brief Convert the current `m_selectedFaces` set (global triangle
+    /// indices) into a deduplicated list of HE face indices that
+    /// HalfEdgeMesh ops accept. Each unique HE face is reported once
+    /// regardless of how many of its fan-triangulated children appear
+    /// in the selection — so a quad selected via either of its
+    /// triangles maps to a single HE face.
+    ///
+    /// HE face indexing matches `HalfEdgeMesh::buildFromEditableMesh`
+    /// order: submesh 0's faces first (or its triangles, in legacy
+    /// triangle-only submeshes), then submesh 1's, etc.
+    std::vector<int> selectedFacesAsHEFaceIndices() const;
     /// @}
 
 signals:
