@@ -185,6 +185,7 @@ TEST(ScanConfigTest, LoadRedundantKeyframesRule)
 TEST(ScanConfigTest, DefaultConstructorIncludesAssimpGlobPatterns)
 {
     const ScanConfig c;
+    EXPECT_DOUBLE_EQ(c.redundantKeyframesPctThreshold, 40.0);
     EXPECT_GT(c.includePatterns.size(), 8);
     bool hasMeshGlob = false;
     bool hasFbxGlob = false;
@@ -1219,7 +1220,7 @@ TEST(ScanEngineTest, ApplyFixes_DisabledDoesNotChangeFindingsOrPath)
     config.fixEnabled = false;
     config.fileNameCase = "snake_case";
 
-    ScanEngine::applyFixes(config, asset, findings);
+    ScanEngine::applyFixes(config, QStringLiteral("/tmp"), asset, findings);
     EXPECT_EQ(asset.filePath, "/tmp/PlayerModel.fbx");
     EXPECT_FALSE(findings[0].fixed);
     EXPECT_FALSE(findings[0].message.contains("dry-run"));
@@ -1250,7 +1251,7 @@ TEST(ScanEngineTest, ApplyFixes_DryRunDoesNotRename)
     config.dryRun = true;
     config.fileNameCase = "snake_case";
 
-    ScanEngine::applyFixes(config, asset, findings);
+    ScanEngine::applyFixes(config, tmpDir.path(), asset, findings);
 
     const QString newPath = QDir(tmpDir.path()).filePath("player_model.obj");
     EXPECT_TRUE(QFile::exists(oldPath));
@@ -1284,7 +1285,7 @@ TEST(ScanEngineTest, ApplyFixes_RenameSuccessUpdatesAssetPaths)
     config.fixEnabled = true;
     config.fileNameCase = "snake_case";
 
-    ScanEngine::applyFixes(config, asset, findings);
+    ScanEngine::applyFixes(config, tmpDir.path(), asset, findings);
 
     const QString newPath = QDir(tmpDir.path()).filePath("nested/player_model.obj");
     EXPECT_FALSE(QFile::exists(oldPath));
@@ -1321,7 +1322,7 @@ TEST(ScanEngineTest, ApplyFixes_RenameFailureAddsFailureMessage)
     config.fixEnabled = true;
     config.fileNameCase = "snake_case";
 
-    ScanEngine::applyFixes(config, asset, findings);
+    ScanEngine::applyFixes(config, tmpDir.path(), asset, findings);
 
     EXPECT_TRUE(QFile::exists(oldPath));
     EXPECT_TRUE(QFile::exists(newPath));
@@ -1501,7 +1502,7 @@ TEST(ScanEngineTest, AssimpReadPolicy_IncompleteFlagWithAnimIsNotLoadFailure)
     delete scene;
 }
 
-TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesDisabledByDefault)
+TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesOffWhenThresholdZero)
 {
     const QString filePath = testDataDir() + "/Twist Dance.fbx";
     if (!QFile::exists(filePath)) {
@@ -1510,6 +1511,7 @@ TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesDisabledByDefault)
 
     const AssetInfo info = ScanEngine::inspectAsset(filePath, QFileInfo(filePath).absolutePath());
     ScanConfig config;
+    config.redundantKeyframesPctThreshold = 0.0; // opt-out
     QList<Finding> findings = ScanEngine::evaluateRules(info, config);
     for (const auto& f : findings)
         EXPECT_NE(f.rule, "redundant_keyframes_pct");
@@ -1534,6 +1536,7 @@ TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesFiresOnMixamoFixture)
         if (f.rule == "redundant_keyframes_pct") {
             found = true;
             EXPECT_EQ(f.severity, Severity::Warning);
+            EXPECT_TRUE(f.fixable);
             EXPECT_TRUE(f.message.contains("redundant keyframes"));
             EXPECT_TRUE(f.message.contains("Simplify it to save"));
             EXPECT_TRUE(f.message.contains("Original size"));
@@ -1636,4 +1639,46 @@ TEST(ScanEngineTest, MergeGithubActionsMetaIntoReport_PreservesExistingMeta)
     const QJsonObject meta = merged.value(QStringLiteral("meta")).toObject();
     EXPECT_EQ(meta.value(QStringLiteral("custom")).toInt(), 1);
     EXPECT_EQ(meta.value(QStringLiteral("repository")).toString(), QStringLiteral("acme/game"));
+}
+
+TEST(ScanEngineTest, EnumerateFiles_SimpleExtensionIncludesSkipUnmatchedExtensions)
+{
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    ASSERT_FALSE(writeMinimalObj(tmpDir.path(), QStringLiteral("a.obj")).isEmpty());
+    QFile noise(QDir(tmpDir.path()).filePath(QStringLiteral("readme.txt")));
+    ASSERT_TRUE(noise.open(QIODevice::WriteOnly));
+    noise.write("x");
+    noise.close();
+
+    ScanConfig config = ScanConfig::defaults();
+    config.includePatterns = {QStringLiteral("**/*.obj")};
+    config.excludePatterns.clear();
+
+    const QStringList files = ScanEngine::enumerateFiles(config, tmpDir.path());
+    ASSERT_EQ(files.size(), 1);
+    EXPECT_TRUE(files.first().endsWith(QStringLiteral("a.obj"), Qt::CaseInsensitive));
+}
+
+TEST(ScanEngineTest, ApplyFixes_RedundantKeyframesPctDryRun)
+{
+    AssetInfo asset;
+    asset.filePath = QStringLiteral("/no/such/path.fbx");
+    asset.relativePath = QStringLiteral("bad.fbx");
+
+    Finding finding;
+    finding.file = asset.relativePath;
+    finding.rule = QStringLiteral("redundant_keyframes_pct");
+    finding.severity = Severity::Warning;
+    finding.message = QStringLiteral("strip keys");
+    finding.fixable = true;
+    QList<Finding> findings{finding};
+
+    ScanConfig config = ScanConfig::defaults();
+    config.fixEnabled = true;
+    config.dryRun = true;
+
+    ScanEngine::applyFixes(config, QStringLiteral("/"), asset, findings);
+    EXPECT_FALSE(findings[0].fixed);
+    EXPECT_TRUE(findings[0].message.contains(QStringLiteral("dry-run")));
 }

@@ -33,6 +33,7 @@ THE SOFTWARE.
 #include "BoneProcessor.h"
 #include "MeshProcessor.h"
 #include <algorithm>
+#include <cstring>
 
 Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded, unsigned int additionalFlags) {
     skeleton.reset();  // Clear any skeleton from a previous import
@@ -59,15 +60,54 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         flags |= aiProcess_ConvertToLeftHanded;
     flags |= additionalFlags;
 
+    auto pathEndsWithInsensitive = [](const std::string& p, const char* suf) -> bool {
+        const size_t n = std::strlen(suf);
+        if (p.size() < n)
+            return false;
+        for (size_t i = 0; i < n; ++i) {
+            char a = p[p.size() - n + i];
+            char b = suf[i];
+            if (a >= 'A' && a <= 'Z')
+                a = static_cast<char>(a - 'A' + 'a');
+            if (b >= 'A' && b <= 'Z')
+                b = static_cast<char>(b - 'A' + 'a');
+            if (a != b)
+                return false;
+        }
+        return true;
+    };
+
     const aiScene* scene = importer.ReadFile(path, flags);
     // Do this immediately after ReadFile while the scene is still valid.
     m_sceneUpAxis = 1; // default: Y-up
     if (scene && scene->mMetaData)
         scene->mMetaData->Get("UpAxis", m_sceneUpAxis);
 
+    // Some FBX animation takes fail the full post-process stack (null scene or no root)
+    // but load with a lighter flag set. Retry once before giving up.
+    if ((!scene || !scene->mRootNode) &&
+        (pathEndsWithInsensitive(path, ".fbx") || pathEndsWithInsensitive(path, ".fbxa"))) {
+        unsigned int lightFlags = aiProcess_Triangulate |
+                                  aiProcess_ValidateDataStructure |
+                                  aiProcess_LimitBoneWeights |
+                                  aiProcess_PopulateArmatureData |
+                                  aiProcess_GlobalScale;
+        if (convertToLeftHanded)
+            lightFlags |= aiProcess_ConvertToLeftHanded;
+        lightFlags |= additionalFlags;
+        importer.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
+        scene = importer.ReadFile(path, lightFlags);
+        m_sceneUpAxis = 1;
+        if (scene && scene->mMetaData)
+            scene->mMetaData->Get("UpAxis", m_sceneUpAxis);
+    }
+
     // A null scene or missing root node is always fatal.
     if(!scene || !scene->mRootNode) {
-        Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + std::string(importer.GetErrorString()));
+        const char* errStr = importer.GetErrorString();
+        const std::string errMsg = (errStr && *errStr) ? std::string(errStr)
+                                                       : std::string("ReadFile failed (no scene / no root node)");
+        Ogre::LogManager::getSingleton().logError("ERROR::ASSIMP::" + errMsg);
         return {};
     }
     // animationOnly: the scene has no geometry (e.g. Unreal Engine retarget FBX).
