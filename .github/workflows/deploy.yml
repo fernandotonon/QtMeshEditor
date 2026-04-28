@@ -2,13 +2,15 @@ name: Deploy
 
 on:
    push:
-      branches: [ "master", "feat/quads" ]
+      branches: [ "master", "feat/quads", "feat/quads-*" ]
    pull_request:
       # `master` covers shipping work; `feat/quads` is the long-lived
       # quad-migration integration branch (#326) that chunked PRs land
-      # on before the final merge to master. Without it the chunked PRs
-      # would have no CI safety net.
-      branches: [ "master", "feat/quads" ]
+      # on before the final merge to master. The `feat/quads-*` glob
+      # covers chunked PRs that target a previous chunk's branch
+      # (stacked PRs). Without these, chunked PRs would have no CI
+      # safety net.
+      branches: [ "master", "feat/quads", "feat/quads-*" ]
    release:
       types: [published]
 
