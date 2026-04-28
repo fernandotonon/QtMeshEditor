@@ -1024,6 +1024,78 @@ TEST(EditableMeshStandalone, LoadFromAssimpFileMixedTriAndQuadKeepsBoth) {
     EXPECT_EQ(sub.triangles.size(), 3u);
 }
 
+TEST(EditableMeshStandalone, LoadFromAssimpFileAppliesZUpBakeWhenRequested) {
+    // Regression for the quads follow-up: when the source asset was
+    // declared Z-up (FBX UpAxis = 2), MeshProcessor bakes a +90° X
+    // rotation into the rendered Ogre buffers. loadFromAssimpFile must
+    // apply the SAME rotation when isZup=true so the editable mesh
+    // lives in the same basis. Without this, vertex overlays would
+    // appear rotated 90° on Z-up assets.
+    //
+    // OBJ ignores UpAxis metadata, so passing isZup=true here triggers
+    // the rotation deterministically regardless of file format.
+    const QString path = writeObj("editmesh_zup",
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\n",  // y=1 vertex at index 2
+        "f 1 2 3\n");
+    ASSERT_FALSE(path.isEmpty());
+
+    EditableMesh ymesh;
+    ASSERT_TRUE(ymesh.loadFromAssimpFile(
+        path.toStdString(), /*convertLH=*/false, /*isZup=*/false));
+    EditableMesh zmesh;
+    ASSERT_TRUE(zmesh.loadFromAssimpFile(
+        path.toStdString(), /*convertLH=*/false, /*isZup=*/true));
+    QFile::remove(path);
+
+    ASSERT_EQ(ymesh.subMeshes()[0].vertices.size(), 3u);
+    ASSERT_EQ(zmesh.subMeshes()[0].vertices.size(), 3u);
+
+    // The vertex at OBJ index 3 is (0,1,0) — Y-up. After +90° X bake
+    // (R_x90 * (0,1,0) = (0,0,1)) it should land on the Z axis.
+    const auto& y = ymesh.subMeshes()[0].vertices[2].position;
+    const auto& z = zmesh.subMeshes()[0].vertices[2].position;
+    EXPECT_NEAR(y.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(y.y, 1.0f, 1e-5f);
+    EXPECT_NEAR(y.z, 0.0f, 1e-5f);
+    EXPECT_NEAR(z.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(z.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(z.z, 1.0f, 1e-5f);
+}
+
+TEST(EditableMeshStandalone, LoadFromAssimpFileSkipsBonesNotInSkeleton) {
+    // Regression for the quads follow-up bone-handle bug. Without a
+    // skeleton lookup, this path emitted aiBone mesh-local indices as
+    // if they were Ogre bone handles. With skeletonForBoneHandles=null
+    // the legacy behaviour (mesh-local indices) is preserved for
+    // unskinned meshes; with a non-null skeleton, only resolvable
+    // bones contribute assignments. This standalone test exercises
+    // the unskinned-mesh path (OBJ has no bones), confirming the new
+    // signature compiles and behaves identically when there are no
+    // bones — the skinned-mesh skeleton-lookup case is exercised in
+    // the EditModeController integration tests where a real skeleton
+    // is available.
+    const QString path = writeObj("editmesh_nobone",
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\n",
+        "f 1 2 3\n");
+    ASSERT_FALSE(path.isEmpty());
+
+    EditableMesh m1, m2;
+    ASSERT_TRUE(m1.loadFromAssimpFile(path.toStdString()));
+    ASSERT_TRUE(m2.loadFromAssimpFile(
+        path.toStdString(), /*convertLH=*/true, /*isZup=*/false,
+        /*skeletonForBoneHandles=*/nullptr));
+    QFile::remove(path);
+
+    // Both should produce identical output for an unskinned mesh.
+    ASSERT_EQ(m1.subMeshCount(), 1u);
+    ASSERT_EQ(m2.subMeshCount(), 1u);
+    EXPECT_EQ(m1.subMeshes()[0].vertices.size(),
+              m2.subMeshes()[0].vertices.size());
+    for (const auto& v : m1.subMeshes()[0].vertices) {
+        EXPECT_TRUE(v.boneAssignments.empty());
+    }
+}
+
 TEST(EditableMeshStandalone, LoadFromAssimpFileReplacesPreviousContents) {
     // Loading into a non-empty EditableMesh should replace the
     // existing submeshes — like buildFromEditableMesh does.

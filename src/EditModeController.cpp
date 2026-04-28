@@ -318,8 +318,38 @@ bool EditModeController::enterEditMode()
                             convertLH = Ogre::any_cast<bool>(lhAny);
                         } catch (const Ogre::Exception&) {}
                     }
+                    // The original importer also caches the source up-
+                    // axis (1 = Y-up, 2 = Z-up). MeshProcessor bakes a
+                    // +90°-around-X rotation into the rendered buffers
+                    // for Z-up assets; we pass `isZup` so the editable
+                    // representation stays in the same basis. Without
+                    // this, FBX/glTF assets that declare Z-up would
+                    // surface vertex overlays rotated 90° relative to
+                    // the on-screen geometry, and a commit would write
+                    // the rotated positions back, silently rotating
+                    // the entity.
+                    bool isZup = false;
+                    const Ogre::Any& upAny =
+                        bindings.getUserAny("qtme.source_up_axis");
+                    if (upAny.has_value()) {
+                        try {
+                            isZup = (Ogre::any_cast<int>(upAny) == 2);
+                        } catch (const Ogre::Exception&) {}
+                    }
+                    // Resolve aiBone names against the live skeleton so
+                    // the n-gon path emits Ogre bone HANDLES (matching
+                    // MeshProcessor) instead of mesh-local aiBone
+                    // indices. Without this, a topology op on a skinned
+                    // mesh re-emits VertexBoneAssignments with wild
+                    // handles and skinning rebinds vertices to wrong
+                    // bones.
+                    const Ogre::Skeleton* skel = nullptr;
+                    if (meshPtr->hasSkeleton()) {
+                        skel = meshPtr->getSkeleton().get();
+                    }
                     if (!sourcePath.empty()
-                        && m_editableMesh->loadFromAssimpFile(sourcePath, convertLH)) {
+                        && m_editableMesh->loadFromAssimpFile(
+                               sourcePath, convertLH, isZup, skel)) {
                         loaded = true;
                         SentryReporter::addBreadcrumb("edit_mode",
                             "Edit Mode entered via n-gon import path");
