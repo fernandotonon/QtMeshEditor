@@ -1011,6 +1011,15 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     // (Quad migration #326, chunk 3.)
                     mesh->getUserObjectBindings().setUserAny(
                         "qtme.source_path", Ogre::Any(sourcePath));
+                    // ALSO cache the convert-to-left-handed flag so the
+                    // n-gon re-import uses the SAME coordinate-system
+                    // transform AssimpToOgreImporter::loadModel applied
+                    // when building the rendered Ogre mesh. Without this
+                    // the Edit-Mode vertex overlay would appear mirrored
+                    // (X flipped) relative to the on-screen geometry on
+                    // every non-.x asset. (Chunk 4.)
+                    mesh->getUserObjectBindings().setUserAny(
+                        "qtme.source_convert_lh", Ogre::Any(convertLH));
                 }
                 if (!mesh) {
                     // Animation-only file: skeleton/animations were loaded, but there is no mesh.

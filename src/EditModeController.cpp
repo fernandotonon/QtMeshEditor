@@ -299,8 +299,26 @@ bool EditModeController::enterEditMode()
                 try {
                     const std::string sourcePath =
                         Ogre::any_cast<std::string>(any);
+                    // The original importer cached its
+                    // convert-to-left-handed choice alongside the path.
+                    // Apply the SAME flag here so the editable mesh
+                    // stays in the same coordinate system as the
+                    // rendered Ogre buffers — without this, on every
+                    // non-.x asset the vertex / edge / face overlays
+                    // would draw mirrored (X flipped) relative to the
+                    // on-screen geometry. Defaults to true to match
+                    // AssimpToOgreImporter's behaviour for unknown
+                    // origins.
+                    bool convertLH = true;
+                    const Ogre::Any& lhAny =
+                        bindings.getUserAny("qtme.source_convert_lh");
+                    if (lhAny.has_value()) {
+                        try {
+                            convertLH = Ogre::any_cast<bool>(lhAny);
+                        } catch (const Ogre::Exception&) {}
+                    }
                     if (!sourcePath.empty()
-                        && m_editableMesh->loadFromAssimpFile(sourcePath)) {
+                        && m_editableMesh->loadFromAssimpFile(sourcePath, convertLH)) {
                         loaded = true;
                         SentryReporter::addBreadcrumb("edit_mode",
                             "Edit Mode entered via n-gon import path");

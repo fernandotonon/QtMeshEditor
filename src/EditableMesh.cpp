@@ -146,7 +146,8 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
     return true;
 }
 
-bool EditableMesh::loadFromAssimpFile(const std::string& path)
+bool EditableMesh::loadFromAssimpFile(const std::string& path,
+                                      bool convertToLeftHanded)
 {
     if (path.empty()) return false;
 
@@ -154,14 +155,20 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path)
     // existing AssimpToOgreImporter pipeline. Drop aiProcess_Triangulate
     // so source quads survive into aiMesh::mFaces. Keep the rest of the
     // post-processing aligned with the rendering importer so vertex
-    // attributes don't drift between the two views.
+    // attributes don't drift between the two views — including the
+    // ConvertToLeftHanded flip that AssimpToOgreImporter applies to
+    // every non-.x asset. Without matching that flag here, the
+    // editable mesh would end up mirrored (X flipped) relative to the
+    // rendered Ogre mesh, and the vertex/edge/face overlays would draw
+    // on the wrong side of the on-screen geometry. (Chunk 4 fix.)
     Assimp::Importer importer;
-    const unsigned int flags =
+    unsigned int flags =
         aiProcess_JoinIdenticalVertices |
         aiProcess_GenSmoothNormals |
         aiProcess_ValidateDataStructure |
         aiProcess_LimitBoneWeights |
         aiProcess_GlobalScale;
+    if (convertToLeftHanded) flags |= aiProcess_ConvertToLeftHanded;
     const aiScene* scene = importer.ReadFile(path, flags);
     if (!scene || !scene->mRootNode || scene->mNumMeshes == 0) {
         Ogre::LogManager::getSingleton().logMessage(
@@ -453,6 +460,7 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     // must use the legacy loadFromEntity path so user edits aren't
     // discarded by an n-gon re-import. (Quad migration #326, chunk 4.)
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_path");
+    mesh->getUserObjectBindings().eraseUserAny("qtme.source_convert_lh");
 
     return true;
 }
@@ -647,6 +655,7 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
 
     // Topology has changed — same rationale as commitToEntity above.
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_path");
+    mesh->getUserObjectBindings().eraseUserAny("qtme.source_convert_lh");
 
     return true;
 }
