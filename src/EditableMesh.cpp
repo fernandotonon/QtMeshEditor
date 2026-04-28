@@ -35,6 +35,45 @@ THE SOFTWARE.
 #include <cmath>
 #include <cstring>
 
+void triangulateFaces(EditableSubMesh& sub)
+{
+    sub.triangles.clear();
+    if (sub.faces.empty()) return;
+
+    // Best-effort capacity hint: every face emits N - 2 triangles, so
+    // for a quad-dominant mesh the average is ~2× the face count. The
+    // caller may have any mix of polygon sizes, so we don't try to be
+    // exact here.
+    sub.triangles.reserve(sub.faces.size() * 2);
+
+    for (const auto& face : sub.faces) {
+        if (!face.isValid()) continue;
+        const auto& idx = face.indices;
+        for (size_t i = 1; i + 1 < idx.size(); ++i) {
+            EditableTriangle t;
+            t.indices[0] = idx[0];
+            t.indices[1] = idx[i];
+            t.indices[2] = idx[i + 1];
+            sub.triangles.push_back(t);
+        }
+    }
+}
+
+void promoteTrianglesToFaces(EditableSubMesh& sub)
+{
+    sub.faces.clear();
+    sub.faces.reserve(sub.triangles.size());
+    for (const auto& tri : sub.triangles) {
+        EditableFace f;
+        f.indices = {tri.indices[0], tri.indices[1], tri.indices[2]};
+        sub.faces.push_back(std::move(f));
+    }
+    // Note: we deliberately do NOT call triangulateFaces() here. The
+    // existing `triangles` already mirrors what `faces` would generate
+    // (each face is a single triangle), so the canonical-faces invariant
+    // already holds.
+}
+
 bool EditableMesh::loadFromEntity(Ogre::Entity* entity)
 {
     if (!entity)

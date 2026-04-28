@@ -90,27 +90,65 @@ bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
         }
     }
 
-    // Phase 2: Append a face/3-HE triangle for each input triangle, skipping
-    // degenerates. Vertex outgoing-HE pointers are set during this loop.
+    // Phase 2: Append a face for each input face. Each submesh prefers
+    // `faces` (n-gon canonical storage) when non-empty; otherwise it
+    // falls back to `triangles` (legacy storage). The two-stream rule
+    // mirrors EditableSubMesh's invariant: `faces` is canonical iff it
+    // is non-empty. Skips degenerates and sets vertex outgoing-HE
+    // pointers as faces are added.
+    auto registerVertexHE = [this](int vGlobal, int heStart) {
+        if (m_vertices[vGlobal].halfEdge == -1) {
+            m_vertices[vGlobal].halfEdge = heStart;
+        }
+    };
+
     for (int s = 0; s < m_subMeshCount; ++s) {
         const auto& sub = subMeshes[s];
-        for (const auto& tri : sub.triangles) {
-            int v0 = vertexMap[s][tri.indices[0]];
-            int v1 = vertexMap[s][tri.indices[1]];
-            int v2 = vertexMap[s][tri.indices[2]];
 
-            // Skip degenerate triangles (any two vertices identical)
-            if (v0 == v1 || v1 == v2 || v0 == v2)
-                continue;
+        if (!sub.faces.empty()) {
+            for (const auto& face : sub.faces) {
+                if (!face.isValid()) continue;
+                std::vector<int> verts;
+                verts.reserve(face.indices.size());
+                bool degenerate = false;
+                for (unsigned int local : face.indices) {
+                    if (local >= vertexMap[s].size()) {
+                        degenerate = true;
+                        break;
+                    }
+                    verts.push_back(vertexMap[s][local]);
+                }
+                if (degenerate) continue;
+                // Reject faces with any duplicated vertex (would create
+                // a zero-area corner). Cheap O(N²) check is fine for
+                // typical N <= 8.
+                for (size_t i = 0; i < verts.size() && !degenerate; ++i) {
+                    for (size_t j = i + 1; j < verts.size(); ++j) {
+                        if (verts[i] == verts[j]) { degenerate = true; break; }
+                    }
+                }
+                if (degenerate) continue;
 
-            int he0 = static_cast<int>(m_halfEdges.size());
-            appendTriangle(v0, v1, v2, s);
+                int he0 = static_cast<int>(m_halfEdges.size());
+                appendFace(verts, s);
+                for (size_t i = 0; i < verts.size(); ++i) {
+                    registerVertexHE(verts[i], he0 + static_cast<int>(i));
+                }
+            }
+        } else {
+            for (const auto& tri : sub.triangles) {
+                int v0 = vertexMap[s][tri.indices[0]];
+                int v1 = vertexMap[s][tri.indices[1]];
+                int v2 = vertexMap[s][tri.indices[2]];
 
-            // Set vertex outgoing half-edge pointers (first wins)
-            int verts[3] = {v0, v1, v2};
-            for (int i = 0; i < 3; ++i) {
-                if (m_vertices[verts[i]].halfEdge == -1) {
-                    m_vertices[verts[i]].halfEdge = he0 + i;
+                if (v0 == v1 || v1 == v2 || v0 == v2) continue;
+
+                int he0 = static_cast<int>(m_halfEdges.size());
+                appendTriangle(v0, v1, v2, s);
+
+                int verts[3] = {v0, v1, v2};
+                for (int i = 0; i < 3; ++i) {
+                    registerVertexHE(verts[i], he0 + i);
                 }
             }
         }
@@ -392,23 +430,34 @@ bool HalfEdgeMesh::toEditableMesh(EditableMesh& editableMesh) const
     // Per-submesh: map from HE vertex index -> local vertex index
     std::vector<std::unordered_map<int, int>> vertexRemap(m_subMeshCount);
 
+    // Track whether any submesh ended up with a non-triangle face. If so,
+    // we mirror the face list into `EditableSubMesh::faces` so downstream
+    // n-gon-aware code (chunks 2+) sees the polygon structure. If every
+    // face is a triangle, we leave `faces` empty to keep the legacy path
+    // canonical.
+    std::vector<bool> hasNonTriangleFace(m_subMeshCount, false);
+
     for (int f = 0; f < static_cast<int>(m_faces.size()); ++f) {
         const auto& heFace = m_faces[f];
         int subIdx = heFace.subMeshIndex;
         auto& outSub = outSubMeshes[subIdx];
 
         auto verts = faceVertices(f);
-        if (verts.size() != 3)
-            continue;
+        // Accept any face with 3+ vertices. n-gons (4+) get fan-
+        // triangulated into the legacy `triangles` array AND mirrored
+        // into `faces` so the n-gon structure survives the round-trip.
+        // Faces with < 3 vertices are degenerate — silently skip.
+        if (verts.size() < 3) continue;
 
-        EditableTriangle tri;
-        for (int i = 0; i < 3; ++i) {
-            int heVertIdx = verts[i];
-
+        // Map every face vertex into the submesh's local vertex array,
+        // collecting the local indices in `localIdxs` for later.
+        std::vector<unsigned int> localIdxs;
+        localIdxs.reserve(verts.size());
+        for (int heVertIdx : verts) {
             auto it = vertexRemap[subIdx].find(heVertIdx);
+            int localIdx;
             if (it == vertexRemap[subIdx].end()) {
-                // Add this vertex to the submesh
-                int localIdx = static_cast<int>(outSub.vertices.size());
+                localIdx = static_cast<int>(outSub.vertices.size());
                 vertexRemap[subIdx][heVertIdx] = localIdx;
 
                 EditableVertex ev;
@@ -431,13 +480,39 @@ bool HalfEdgeMesh::toEditableMesh(EditableMesh& editableMesh) const
                 }
 
                 outSub.vertices.push_back(std::move(ev));
-                tri.indices[i] = localIdx;
             } else {
-                tri.indices[i] = it->second;
+                localIdx = it->second;
             }
+            localIdxs.push_back(static_cast<unsigned int>(localIdx));
         }
 
-        outSub.triangles.push_back(tri);
+        // Fan-triangulate the face into `triangles` (legacy storage):
+        //   tris = (v0, v_i, v_{i+1}) for i in [1, N-1)
+        for (size_t i = 1; i + 1 < localIdxs.size(); ++i) {
+            EditableTriangle tri;
+            tri.indices[0] = localIdxs[0];
+            tri.indices[1] = localIdxs[i];
+            tri.indices[2] = localIdxs[i + 1];
+            outSub.triangles.push_back(tri);
+        }
+
+        // Always record the face in `EditableSubMesh::faces` so the n-gon
+        // round-trip is information-preserving. We finalise below by
+        // clearing `faces` on submeshes that turned out to be all
+        // triangles (legacy invariant: faces is non-empty only when
+        // there's actually polygonal information to preserve).
+        EditableFace face;
+        face.indices = std::move(localIdxs);
+        if (face.indices.size() > 3) hasNonTriangleFace[subIdx] = true;
+        outSub.faces.push_back(std::move(face));
+    }
+
+    // Finalise: drop `faces` on triangle-only submeshes. This keeps the
+    // legacy invariant that `faces` is empty unless the submesh really
+    // contains n-gons, so downstream code that doesn't yet understand
+    // n-gons (every consumer of EditableSubMesh today) keeps working.
+    for (int s = 0; s < m_subMeshCount; ++s) {
+        if (!hasNonTriangleFace[s]) outSubMeshes[s].faces.clear();
     }
 
     return true;
@@ -4833,8 +4908,10 @@ bool HalfEdgeMesh::validate() const
                 return false;
         } while (he != startHE);
 
-        // Triangles should have exactly 3 half-edges
-        if (count != 3)
+        // Polygonal faces have at least 3 half-edges. Larger N-gons
+        // (quads etc.) are allowed by the data model — chunks 1+ of the
+        // quad migration drop the triangle-only assumption.
+        if (count < 3)
             return false;
     }
 

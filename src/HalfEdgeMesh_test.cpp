@@ -4574,3 +4574,245 @@ TEST(HalfEdgeMeshStandalone, FillSelectionUndoRoundTrip) {
     EXPECT_TRUE(he2.validate());
     EXPECT_EQ(activeFaceCount(he2), 2);
 }
+
+// ===========================================================================
+// EditableFace (n-gon) round-trip — chunk 1 of the quad migration
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, BuildFromQuadFacePopulatesSingleHEFace) {
+    // A submesh with a single 4-vertex EditableFace (no triangles)
+    // should produce ONE HalfEdgeMesh face of valence 4.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "QuadMat";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        v.uv = Ogre::Vector2(x, y); v.hasUV = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    // Note: triangles intentionally left empty — when faces is non-empty
+    // it's canonical, and HE should read faces directly.
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    EXPECT_EQ(activeFaceCount(he), 1);
+    EXPECT_EQ(he.faceVertices(0).size(), 4u)
+        << "quad EditableFace must produce a 4-valence HE face, not 2 triangles";
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, ToEditableMeshPreservesQuadInFaces) {
+    // Round-trip: build HE from a quad face, write back, verify the
+    // EditableSubMesh has a 4-vertex face (and triangles is the fan
+    // triangulation).
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "QuadMat";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    ASSERT_EQ(back.subMeshes().size(), 1u);
+    const auto& outSub = back.subMeshes()[0];
+
+    // n-gon faces preserved
+    ASSERT_EQ(outSub.faces.size(), 1u)
+        << "quad must round-trip as a single 4-vertex face";
+    EXPECT_EQ(outSub.faces[0].indices.size(), 4u);
+
+    // triangles is the fan triangulation (2 tris from a quad)
+    EXPECT_EQ(outSub.triangles.size(), 2u)
+        << "fan-triangulation: a quad emits N-2 = 2 triangles";
+
+    // Vertex count preserved
+    EXPECT_EQ(outSub.vertices.size(), 4u);
+}
+
+TEST(HalfEdgeMeshStandalone, ToEditableMeshLeavesFacesEmptyWhenAllTris) {
+    // The legacy invariant: if every face in the HE mesh is a triangle,
+    // `EditableSubMesh::faces` should be left empty so existing
+    // triangle-only consumers don't have to learn the new representation.
+    auto em = makeQuadMesh(); // two triangles
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    ASSERT_EQ(back.subMeshes().size(), 1u);
+    EXPECT_TRUE(back.subMeshes()[0].faces.empty())
+        << "all-triangle submeshes must NOT populate faces (legacy invariant)";
+    EXPECT_EQ(back.subMeshes()[0].triangles.size(), 2u);
+}
+
+TEST(HalfEdgeMeshStandalone, BuildFromMixedTriAndQuadSubMeshes) {
+    // Two submeshes: one triangle-only (legacy path), one quad-only
+    // (n-gon path). buildFromEditableMesh should produce 3 HE faces
+    // total (1 tri + 1 quad ... wait, 1 tri + 1 quad = 2 faces).
+    EditableMesh mesh;
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+
+    {
+        EditableSubMesh sub;
+        sub.materialName = "TriMat";
+        sub.vertices = { mkV(0, 0, 0), mkV(1, 0, 0), mkV(0, 1, 0) };
+        EditableTriangle t;
+        t.indices[0] = 0; t.indices[1] = 1; t.indices[2] = 2;
+        sub.triangles.push_back(t);
+        mesh.subMeshes().push_back(std::move(sub));
+    }
+    {
+        EditableSubMesh sub;
+        sub.materialName = "QuadMat";
+        sub.vertices = { mkV(0, 0, 1), mkV(1, 0, 1), mkV(1, 1, 1), mkV(0, 1, 1) };
+        EditableFace f;
+        f.indices = {0, 1, 2, 3};
+        sub.faces.push_back(std::move(f));
+        mesh.subMeshes().push_back(std::move(sub));
+    }
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    ASSERT_EQ(back.subMeshes().size(), 2u);
+    EXPECT_TRUE(back.subMeshes()[0].faces.empty())  // triangle submesh stays legacy
+        << "triangle submesh must not populate faces";
+    EXPECT_EQ(back.subMeshes()[1].faces.size(), 1u) // quad submesh has 1 face
+        << "quad submesh must populate faces with the polygon";
+    EXPECT_EQ(back.subMeshes()[1].faces[0].indices.size(), 4u);
+}
+
+TEST(HalfEdgeMeshStandalone, EditableFaceIsValidGuardsBadInputs) {
+    EditableFace empty;
+    EXPECT_FALSE(empty.isValid());
+
+    EditableFace pair;
+    pair.indices = {0, 1};
+    EXPECT_FALSE(pair.isValid());
+
+    EditableFace dup;
+    dup.indices = {0, 1, 1, 2};
+    EXPECT_FALSE(dup.isValid()) << "consecutive duplicate index pair must fail";
+
+    EditableFace okQuad;
+    okQuad.indices = {0, 1, 2, 3};
+    EXPECT_TRUE(okQuad.isValid());
+
+    EditableFace okTri;
+    okTri.indices = {0, 1, 2};
+    EXPECT_TRUE(okTri.isValid());
+}
+
+TEST(HalfEdgeMeshStandalone, BuildFromQuadFaceRejectsInvalidIndex) {
+    // An out-of-range index in EditableFace::indices must not crash —
+    // the face is silently skipped.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "Bad";
+    EditableVertex v;
+    v.position = Ogre::Vector3::ZERO;
+    sub.vertices = {v, v, v}; // 3 verts available
+    EditableFace f;
+    f.indices = {0, 1, 99}; // 99 is out of range
+    sub.faces.push_back(std::move(f));
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    EXPECT_TRUE(he.buildFromEditableMesh(mesh));
+    EXPECT_EQ(activeFaceCount(he), 0)
+        << "out-of-range face must be skipped, not crash";
+}
+
+// ===========================================================================
+// triangulateFaces / promoteTrianglesToFaces helpers
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, TriangulateFacesQuadProducesTwoTriangles) {
+    EditableSubMesh sub;
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+
+    triangulateFaces(sub);
+    ASSERT_EQ(sub.triangles.size(), 2u);
+    // Fan from vertex 0: (0, 1, 2) and (0, 2, 3).
+    EXPECT_EQ(sub.triangles[0].indices[0], 0u);
+    EXPECT_EQ(sub.triangles[0].indices[1], 1u);
+    EXPECT_EQ(sub.triangles[0].indices[2], 2u);
+    EXPECT_EQ(sub.triangles[1].indices[0], 0u);
+    EXPECT_EQ(sub.triangles[1].indices[1], 2u);
+    EXPECT_EQ(sub.triangles[1].indices[2], 3u);
+}
+
+TEST(HalfEdgeMeshStandalone, TriangulateFacesPentagonProducesThreeTriangles) {
+    EditableSubMesh sub;
+    EditableFace f;
+    f.indices = {10, 20, 30, 40, 50}; // arbitrary indices
+    sub.faces.push_back(std::move(f));
+
+    triangulateFaces(sub);
+    EXPECT_EQ(sub.triangles.size(), 3u) << "N=5 fan emits N-2 = 3 triangles";
+}
+
+TEST(HalfEdgeMeshStandalone, TriangulateFacesSkipsInvalidFaces) {
+    EditableSubMesh sub;
+    {
+        EditableFace bad; // <3 indices, isValid() false
+        bad.indices = {0, 1};
+        sub.faces.push_back(std::move(bad));
+    }
+    {
+        EditableFace good;
+        good.indices = {0, 1, 2};
+        sub.faces.push_back(std::move(good));
+    }
+    triangulateFaces(sub);
+    EXPECT_EQ(sub.triangles.size(), 1u) << "invalid face skipped";
+}
+
+TEST(HalfEdgeMeshStandalone, PromoteTrianglesToFacesProducesMatchingFaces) {
+    EditableSubMesh sub;
+    EditableTriangle t1, t2;
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    t2.indices[0] = 1; t2.indices[1] = 3; t2.indices[2] = 2;
+    sub.triangles = {t1, t2};
+
+    promoteTrianglesToFaces(sub);
+    ASSERT_EQ(sub.faces.size(), 2u);
+    EXPECT_EQ(sub.faces[0].indices.size(), 3u);
+    EXPECT_EQ(sub.faces[0].indices[0], 0u);
+    EXPECT_EQ(sub.faces[0].indices[1], 1u);
+    EXPECT_EQ(sub.faces[0].indices[2], 2u);
+    // triangles should still match the canonical faces invariant
+    // (every face is a triangle, so triangulateFaces would produce
+    // identical content)
+    EXPECT_EQ(sub.triangles.size(), 2u);
+}
