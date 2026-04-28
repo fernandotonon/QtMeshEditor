@@ -442,6 +442,28 @@ public:
     Q_INVOKABLE int subdivideSelection();
 
     /**
+     * @brief Subdivide the entire mesh by one Catmull-Clark step.
+     *
+     * Unlike `subdivideSelection` (which does a 1-to-4 triangle split
+     * on the selected faces only), this op operates on the whole mesh
+     * at once and produces an all-quad output regardless of input
+     * topology — a triangle becomes 3 quads, a quad becomes 4. Output
+     * geometry is smoothed via the classic Catmull-Clark rule (face
+     * points, edge points, smoothed vertex positions) so the surface
+     * approaches a C¹-continuous limit on closed manifolds.
+     *
+     * Selection is cleared after the op (the new face/edge points
+     * don't have stable analogues in the pre-op selection set, and
+     * partial-mesh CC needs a more sophisticated boundary blend that
+     * isn't in this MVP).
+     *
+     * Pushes one undo command labeled "Catmull-Clark Subdivide".
+     *
+     * @return Number of vertices added (0 on no-op).
+     */
+    Q_INVOKABLE int subdivideCatmullClarkAll();
+
+    /**
      * @brief Fill the current selection with new face(s).
      *
      * Vertex mode: 3 selected vertices → emit a triangle. 4 selected →

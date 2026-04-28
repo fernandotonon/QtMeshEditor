@@ -32,9 +32,11 @@ THE SOFTWARE.
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <set>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 
 bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
@@ -4790,6 +4792,344 @@ std::vector<int> HalfEdgeMesh::subdivideFaces(const std::vector<int>& faceIndice
         }
     }
 
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+
+    return newVertices;
+}
+
+namespace {
+
+// Average a list of HEVertex by uniform weight. Used for face points
+// (corners → face point) and as the base for edge / smoothing rules.
+// Position / normal / UV / color / tangent are summed and divided;
+// bone weights are accumulated per bone index. Output flags follow
+// the AND of input flags so a vertex with no UV doesn't fabricate one.
+HEVertex averageHEVertices(const std::vector<const HEVertex*>& src)
+{
+    HEVertex r;
+    if (src.empty()) return r;
+    const float w = 1.0f / static_cast<float>(src.size());
+    bool anyNorm = true, anyUV = true, anyCol = true, anyTan = true;
+    for (const auto* v : src) {
+        r.position += v->position * w;
+        r.normal   += v->normal   * w;
+        r.uv       += v->uv       * w;
+        r.color    += v->color    * w;
+        r.tangent  += v->tangent  * w;
+        anyNorm = anyNorm && v->hasNormal;
+        anyUV   = anyUV   && v->hasUV;
+        anyCol  = anyCol  && v->hasColor;
+        anyTan  = anyTan  && v->hasTangent;
+    }
+    r.hasNormal = anyNorm;
+    r.hasUV = anyUV;
+    r.hasColor = anyCol;
+    r.hasTangent = anyTan;
+    if (r.normal.squaredLength() > 1e-12f) r.normal.normalise();
+
+    auto addBone = [&](unsigned short idx, float weight) {
+        if (weight <= 1e-6f) return;
+        for (auto& ba : r.boneAssignments) {
+            if (ba.first == idx) { ba.second += weight; return; }
+        }
+        r.boneAssignments.emplace_back(idx, weight);
+    };
+    for (const auto* v : src) {
+        for (const auto& ba : v->boneAssignments) addBone(ba.first, ba.second * w);
+    }
+    return r;
+}
+
+// Midpoint of two HE vertices with the same attribute rules as
+// averageHEVertices. Used by the boundary-edge rule and by midpoint
+// computation for the interior smoothing R term.
+HEVertex midpointHEVertices(const HEVertex& a, const HEVertex& b)
+{
+    return averageHEVertices({&a, &b});
+}
+
+} // namespace
+
+std::vector<int> HalfEdgeMesh::subdivideCatmullClark()
+{
+    std::vector<int> newVertices;
+
+    // 0. Snapshot the live geometry. The algorithm reads from the
+    //    pre-step state for the smoothing rule, then writes new
+    //    geometry on top — so we keep a copy of every original vertex.
+    const std::vector<HEVertex> origVerts = m_vertices;
+    const int origVertexCount = static_cast<int>(origVerts.size());
+    const int origFaceCount = static_cast<int>(m_faces.size());
+    const int origEdgeCount = static_cast<int>(m_edges.size());
+    if (origVertexCount == 0 || origFaceCount == 0) return newVertices;
+
+    // 1. Compute one face point per live face. The face point is the
+    //    arithmetic mean of the face's corner vertices. Skip retired
+    //    faces (halfEdge < 0). Track the face's submesh so output
+    //    quads inherit it.
+    std::vector<int> facePointIdx(origFaceCount, -1); // HE-vertex idx of face point
+    std::vector<int> faceSubMesh(origFaceCount, -1);
+    std::vector<std::vector<int>> faceCornerIdxs(origFaceCount);
+    for (int f = 0; f < origFaceCount; ++f) {
+        if (m_faces[f].halfEdge < 0) continue;
+        const auto verts = faceVertices(f);
+        if (verts.size() < 3) continue;
+        // Cross-submesh skip: faceVertices only walks one face so the
+        // submesh check is implicit (the face IS one submesh's). The
+        // cross-submesh guard for SHARED edges happens in step 2.
+
+        std::vector<const HEVertex*> src;
+        src.reserve(verts.size());
+        for (int v : verts) src.push_back(&origVerts[v]);
+
+        HEVertex fp = averageHEVertices(src);
+        fp.halfEdge = -1;
+        facePointIdx[f] = static_cast<int>(m_vertices.size());
+        m_vertices.push_back(std::move(fp));
+        newVertices.push_back(facePointIdx[f]);
+
+        faceSubMesh[f] = m_faces[f].subMeshIndex;
+        faceCornerIdxs[f] = std::move(verts);
+    }
+
+    // 2. Compute one edge point per live edge. For an interior edge
+    //    with two adjacent faces in the SAME submesh:
+    //       Ep = (a + b + Fp1 + Fp2) / 4
+    //    For a boundary edge or a cross-submesh edge:
+    //       Ep = (a + b) / 2
+    //    Cross-submesh edges are treated as boundaries so material
+    //    seams stay sharp through the subdivision.
+    std::vector<int> edgePointIdx(origEdgeCount, -1);
+    std::vector<bool> edgeIsBoundary(origEdgeCount, false);
+    // Undirected (min,max)-vertex-pair → edgeIdx hash, populated as we
+    // walk live edges below. Used by the per-side rebuild to avoid an
+    // O(F·E) linear scan per face side.
+    std::unordered_map<std::uint64_t, int> edgeIdxByVertPair;
+    edgeIdxByVertPair.reserve(static_cast<size_t>(origEdgeCount) * 2u);
+    auto packVertPair = [](int a, int b) -> std::uint64_t {
+        const std::uint32_t lo = static_cast<std::uint32_t>(std::min(a, b));
+        const std::uint32_t hi = static_cast<std::uint32_t>(std::max(a, b));
+        return (static_cast<std::uint64_t>(hi) << 32) | static_cast<std::uint64_t>(lo);
+    };
+    for (int e = 0; e < origEdgeCount; ++e) {
+        if (m_edges[e].halfEdge < 0) continue;
+        const auto [va, vb] = edgeVertices(e);
+        if (va < 0 || vb < 0) continue;
+        edgeIdxByVertPair.emplace(packVertPair(va, vb), e);
+        const auto [fA, fB] = edgeFaces(e);
+
+        bool boundary = (fA < 0 || fB < 0);
+        if (!boundary) {
+            // Cross-submesh = treat as boundary.
+            if (m_faces[fA].subMeshIndex != m_faces[fB].subMeshIndex)
+                boundary = true;
+        }
+        edgeIsBoundary[e] = boundary;
+
+        HEVertex ep;
+        if (boundary) {
+            ep = midpointHEVertices(origVerts[va], origVerts[vb]);
+        } else {
+            std::vector<const HEVertex*> src;
+            src.reserve(4);
+            src.push_back(&origVerts[va]);
+            src.push_back(&origVerts[vb]);
+            // Adjacent face points are stored as new HE vertices already;
+            // read their positions back from m_vertices.
+            if (facePointIdx[fA] >= 0) src.push_back(&m_vertices[facePointIdx[fA]]);
+            if (facePointIdx[fB] >= 0) src.push_back(&m_vertices[facePointIdx[fB]]);
+            ep = averageHEVertices(src);
+        }
+        ep.halfEdge = -1;
+        edgePointIdx[e] = static_cast<int>(m_vertices.size());
+        m_vertices.push_back(std::move(ep));
+        newVertices.push_back(edgePointIdx[e]);
+    }
+
+    // 3. Update each ORIGINAL vertex in place using the smoothing rule.
+    //    Use origVerts (the snapshot) for any reads — m_vertices[v] is
+    //    being overwritten in this loop. For a boundary vertex, blend
+    //    against its two boundary-edge midpoints; that keeps mesh
+    //    boundaries continuous. For an interior vertex of valence n,
+    //    use Catmull-Clark's classic formula.
+    for (int v = 0; v < origVertexCount; ++v) {
+        if (origVerts[v].halfEdge < 0) continue;
+
+        const bool boundary = isVertexBoundary(v);
+        const auto incidentFaces = facesAroundVertex(v);
+        const auto incidentEdges = edgesAroundVertex(v);
+        if (incidentFaces.empty() || incidentEdges.empty()) continue;
+
+        if (boundary) {
+            // Find the two boundary edges this vertex is on. Their
+            // mid-points (using PRE-step geometry) plus the vertex's
+            // own position averaged 1:2:1 weighted is the standard
+            // chord rule: V' = (V + Em1 + Em2) / 4 where each Em is
+            // the boundary-edge midpoint between V and the other
+            // endpoint. We pre-computed boundary edge points in step 2
+            // already, so just reuse those.
+            std::vector<const HEVertex*> src;
+            src.reserve(3);
+            src.push_back(&origVerts[v]);
+            int boundaryEpsFound = 0;
+            for (int e : incidentEdges) {
+                if (!edgeIsBoundary[e]) continue;
+                if (edgePointIdx[e] >= 0) {
+                    src.push_back(&m_vertices[edgePointIdx[e]]);
+                    ++boundaryEpsFound;
+                }
+            }
+            if (boundaryEpsFound < 2) {
+                // Non-manifold corner or weird topology — leave the
+                // vertex alone rather than smoothing into a wrong place.
+                continue;
+            }
+            // Average the 3 contributors; this is V/3 + Em1/3 + Em2/3
+            // — close to the V/4 + (Em1+Em2)/4 + (Em1+Em2)/4 chord
+            // rule but slightly more centred on V. Acceptable for the
+            // interactive editor; tighter weights are a follow-up.
+            HEVertex updated = averageHEVertices(src);
+            updated.halfEdge = origVerts[v].halfEdge; // keep outgoing HE
+            m_vertices[v] = std::move(updated);
+        } else {
+            // Interior vertex of valence n.
+            //   F = average of adjacent face points
+            //   R = average of adjacent edge MIDPOINTS (NOT the new
+            //       edge points — that's the spec; midpoint = (a+b)/2)
+            //   V' = (F + 2R + (n-3) V) / n
+            const int n = static_cast<int>(incidentEdges.size());
+            if (n < 3) continue;
+
+            // F: average of adjacent face points (in PRE-step
+            // m_vertices slots).
+            HEVertex F;
+            {
+                std::vector<const HEVertex*> src;
+                src.reserve(incidentFaces.size());
+                for (int f : incidentFaces) {
+                    if (facePointIdx[f] >= 0)
+                        src.push_back(&m_vertices[facePointIdx[f]]);
+                }
+                if (src.empty()) continue;
+                F = averageHEVertices(src);
+            }
+
+            // R: average of edge midpoints (NOT the smoothed edge
+            // points). Compute midpoints on-the-fly from origVerts.
+            HEVertex R;
+            {
+                std::vector<HEVertex> midStorage;
+                midStorage.reserve(incidentEdges.size());
+                std::vector<const HEVertex*> src;
+                src.reserve(incidentEdges.size());
+                for (int e : incidentEdges) {
+                    const auto [ea, eb] = edgeVertices(e);
+                    if (ea < 0 || eb < 0) continue;
+                    midStorage.push_back(midpointHEVertices(
+                        origVerts[ea], origVerts[eb]));
+                    src.push_back(&midStorage.back());
+                }
+                if (src.empty()) continue;
+                R = averageHEVertices(src);
+            }
+
+            // V'_position = (F + 2R + (n-3) V) / n. Apply the same
+            // weighted blend to all attributes.
+            const float invN = 1.0f / static_cast<float>(n);
+            HEVertex updated;
+            updated.position =
+                (F.position + R.position * 2.0f
+                 + origVerts[v].position * static_cast<float>(n - 3)) * invN;
+            updated.normal =
+                (F.normal + R.normal * 2.0f
+                 + origVerts[v].normal * static_cast<float>(n - 3)) * invN;
+            if (updated.normal.squaredLength() > 1e-12f)
+                updated.normal.normalise();
+            updated.uv =
+                (F.uv + R.uv * 2.0f
+                 + origVerts[v].uv * static_cast<float>(n - 3)) * invN;
+            updated.color =
+                (F.color + R.color * 2.0f
+                 + origVerts[v].color * static_cast<float>(n - 3)) * invN;
+            updated.tangent =
+                (F.tangent + R.tangent * 2.0f
+                 + origVerts[v].tangent * static_cast<float>(n - 3)) * invN;
+            updated.hasNormal = F.hasNormal && R.hasNormal && origVerts[v].hasNormal;
+            updated.hasUV = F.hasUV && R.hasUV && origVerts[v].hasUV;
+            updated.hasColor = F.hasColor && R.hasColor && origVerts[v].hasColor;
+            updated.hasTangent = F.hasTangent && R.hasTangent && origVerts[v].hasTangent;
+            // Bone weights: use the original vertex's weights — the
+            // smoothed position is still mostly "near V", so preserving
+            // V's skinning is closer to correct than averaging across
+            // unrelated neighbours.
+            updated.boneAssignments = origVerts[v].boneAssignments;
+            updated.halfEdge = origVerts[v].halfEdge;
+            m_vertices[v] = std::move(updated);
+        }
+    }
+
+    // 4. Replace each face with its quad fan. For a face with corners
+    //    [c0, c1, ..., c(N-1)], emit N quads:
+    //       quad_i = (c_i, edgePoint(c_i, c_{i+1}), facePoint, edgePoint(c_{i-1}, c_i))
+    //    The output is always quads, regardless of input N (≥3).
+    auto retireFace = [&](int faceIdx) {
+        if (faceIdx < 0) return;
+        const int startHE = m_faces[faceIdx].halfEdge;
+        if (startHE < 0) return;
+        int he = startHE;
+        do {
+            const int next = m_halfEdges[he].next;
+            m_halfEdges[he].face = -1;
+            he = next;
+        } while (he != startHE && he >= 0);
+        m_faces[faceIdx].halfEdge = -1;
+    };
+
+    auto findEdgeIdxByVerts = [&](int va, int vb) -> int {
+        if (va < 0 || vb < 0) return -1;
+        auto it = edgeIdxByVertPair.find(packVertPair(va, vb));
+        return it == edgeIdxByVertPair.end() ? -1 : it->second;
+    };
+
+    for (int f = 0; f < origFaceCount; ++f) {
+        if (facePointIdx[f] < 0) continue;
+        const auto& corners = faceCornerIdxs[f];
+        const int N = static_cast<int>(corners.size());
+        if (N < 3) continue;
+
+        // Pre-resolve edge points for each consecutive corner pair so
+        // we don't search twice per quad.
+        std::vector<int> edgePointForSide(N, -1);
+        for (int i = 0; i < N; ++i) {
+            const int va = corners[i];
+            const int vb = corners[(i + 1) % N];
+            const int eIdx = findEdgeIdxByVerts(va, vb);
+            if (eIdx >= 0) edgePointForSide[i] = edgePointIdx[eIdx];
+        }
+
+        retireFace(f);
+
+        const int subIdx = faceSubMesh[f];
+        const int fp = facePointIdx[f];
+        for (int i = 0; i < N; ++i) {
+            const int prevSide = (i + N - 1) % N;
+            const int currSide = i;
+            const int corner = corners[i];
+            const int epPrev = edgePointForSide[prevSide];
+            const int epCurr = edgePointForSide[currSide];
+            if (epPrev < 0 || epCurr < 0) continue; // corrupt — skip
+            // Quad winding: (corner, ep_curr, face_point, ep_prev).
+            // Walking corner → ep_curr matches the direction
+            // corners[i] → corners[i+1], so the resulting quad is
+            // CCW relative to the original face's winding.
+            appendFace({corner, epCurr, fp, epPrev}, subIdx);
+        }
+    }
+
+    // 5. Rebuild edge / twin / boundary / vertex tables.
     rebuildEdgesAndTwins();
     compactBoundaryHalfEdges();
     buildBoundaryHalfEdges();
