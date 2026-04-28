@@ -120,8 +120,15 @@ Three singletons manage core state. All run on the main thread. Access via `Clas
 
 - **TransformOperator** (`src/TransformOperator.h/cpp`): Singleton implementing SELECT/TRANSLATE/ROTATE/SCALE modes. Owns three gizmos (TranslationGizmo, RotationGizmo, ScaleGizmo). Supports WORLD/LOCAL transform space. Mouse interaction: ray-cast gizmo for axis selection, plane intersection for drag transforms.
 - **ScaleGizmo** (`src/ScaleGizmo.h/cpp`): Scale gizmo with cube handles at axis endpoints. Follows TranslationGizmo pattern (ManualObject per axis, highlight/fade).
-- **Keyboard shortcuts** (Unity convention): `Q`=Select, `W`=Translate, `E`=Rotate, `R`=Scale, `F`=Frame selection, `X`=Toggle World/Local space.
+- **Keyboard shortcuts** (Unity convention): `Q`=Select, `W`=Translate, `E`=Rotate, `R`=Scale, `F`=Frame selection (in Edit Mode with a fillable selection: Fill instead), `X`=Toggle World/Local space (in Edit Mode with a selection: Delete; `Ctrl+X`=Dissolve).
 - **SpaceCamera::frameSelection()**: Computes bounding sphere of selection and positions camera to fit it in view.
+
+### Edit Mode (Phase 4 topology)
+
+- **EditModeController** (`src/EditModeController.h/cpp`): QML_SINGLETON managing Object/Edit mode state. `Tab` toggles. In edit mode, `1`/`2`/`3` switch Vertex/Edge/Face component selection.
+- **HalfEdgeMesh** (`src/HalfEdgeMesh.h/cpp`): Half-edge data structure built per-operation from EditableMesh, used for adjacency queries and topology mutations. Operations: `extrudeFaces`, `extrudeEdges`, `bevelEdges`, `bevelVertices`, `splitEdge`, `splitFace`, `cutPath` (knife), `mergeVertices`, `mergeVerticesByDistance`, `deleteFaces/Edges/Vertices`, `dissolveEdges/Vertices`, `subdivideFaces`, `fillSelection`. All push a single `EditMeshTopologyCommand` for undo.
+- **Subdivide**: 1-to-4 triangle split. Adjacent non-selected faces are retriangulated against the new midpoints to avoid T-junctions (1/2/3 split-edge cases). Wired to a toolbar button (⊞) — face mode subdivides selected tris, edge mode subdivides every triangle incident to a selected edge.
+- **Fill**: vertex mode fan-triangulates the selected verts (3 → triangle, 4 → quad, N → N-2 tris); edge mode detects a closed boundary loop via degree-2 walk and caps it. Toolbar button (◆) and `F` shortcut. Cross-submesh inputs and duplicates of existing triangles are rejected.
 
 ### Undo/Redo System
 

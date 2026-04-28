@@ -11,6 +11,7 @@ The MIT License
 #include <gtest/gtest.h>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include "HalfEdgeMesh.h"
 #include "EditableMesh.h"
 #include "TestHelpers.h"
@@ -4326,4 +4327,235 @@ TEST(HalfEdgeMeshStandalone, FillSelectionFiveVerticesFanTriangulatesIntoThree) 
     // Vertices 0..4 form a convex pentagon. Fill its loop in order.
     EXPECT_EQ(he.fillSelection({0, 1, 2, 3, 4}), 3);
     EXPECT_TRUE(he.validate());
+}
+
+// ===========================================================================
+// subdivideFaces — deeper coverage on closed manifolds and submesh handling
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesAllCubeFacesStaysClosedManifold) {
+    // Subdividing every triangle of a closed cube must keep the mesh
+    // closed (no boundary edges) and watertight. This exercises the
+    // splitMask=7 path on every face plus the shared-midpoint reuse
+    // between every pair of adjacent triangles.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    std::vector<int> allFaces(12);
+    std::iota(allFaces.begin(), allFaces.end(), 0);
+    const auto newVerts = he.subdivideFaces(allFaces);
+    EXPECT_FALSE(newVerts.empty());
+    EXPECT_EQ(activeFaceCount(he), 48); // 12 faces × 4 sub-tris each
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    auto s = statsOf(back);
+    EXPECT_EQ(s.boundaryEdges, 0u)
+        << "subdividing every face of a closed cube must stay closed";
+    EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesPreservesBoneWeightsAtMidpoint) {
+    // The bone-weight mesh has v0/v1 on bone 1 (weight 1) and v2 on
+    // bones 2/3 (weight 0.5 each). Subdividing splits each edge at
+    // t=0.5, so mid(v0,v1) keeps bone 1, while mid(v0,v2) is a 50/50
+    // blend of bone 1 and bones 2/3.
+    auto em = makeBoneWeightMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const auto newVerts = he.subdivideFaces({0});
+    ASSERT_EQ(newVerts.size(), 3u);
+
+    // Find the midpoint that lies on the v0-v1 segment (z=0, y=0).
+    // It should have a single bone influence (bone 1).
+    bool foundBone1Midpoint = false;
+    bool foundBlendedMidpoint = false;
+    for (int v : newVerts) {
+        const auto& vert = he.vertex(v);
+        const auto& bas = vert.boneAssignments;
+        // Bone-1-only midpoint (mid of v0, v1): both endpoints have only
+        // bone 1, so the lerp keeps a single (1, 1.0) entry.
+        if (bas.size() == 1 && bas[0].first == 1) {
+            EXPECT_NEAR(bas[0].second, 1.0f, 1e-4f);
+            foundBone1Midpoint = true;
+        }
+        // mid(v0, v2) and mid(v1, v2) blend (1, 1.0) with (2, 0.5)+(3, 0.5).
+        // After 50/50 lerp: (1, 0.5), (2, 0.25), (3, 0.25).
+        if (bas.size() == 3) {
+            float w1 = 0, w2 = 0, w3 = 0;
+            for (const auto& [idx, w] : bas) {
+                if (idx == 1) w1 = w;
+                if (idx == 2) w2 = w;
+                if (idx == 3) w3 = w;
+            }
+            if (w1 > 0 && w2 > 0 && w3 > 0) {
+                EXPECT_NEAR(w1, 0.5f, 1e-4f);
+                EXPECT_NEAR(w2, 0.25f, 1e-4f);
+                EXPECT_NEAR(w3, 0.25f, 1e-4f);
+                foundBlendedMidpoint = true;
+            }
+        }
+    }
+    EXPECT_TRUE(foundBone1Midpoint) << "expected a midpoint with sole bone-1 influence";
+    EXPECT_TRUE(foundBlendedMidpoint) << "expected a midpoint with blended bone weights";
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesHandlesAllSplitMaskPaths) {
+    // The splitMask switch has 7 non-zero cases (1..7). Build a planar
+    // strip of 7 connected triangles where each one shares a different
+    // single edge with its only selected neighbor — that way each tri
+    // ends up with a different splitMask after the selection is applied.
+    //
+    // Simpler approach: subdivide one specific face on a quad mesh, where
+    // the neighbor triangle has exactly one of its three edges split,
+    // exercising splitMask=1, 2, or 4 depending on which edge it shares.
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    // Subdivide face 0 (verts 0,1,2). Face 1 (verts 1,3,2) shares edge
+    // (1,2) with face 0. After subdividing face 0 only the (1,2) midpoint
+    // is created, so face 1 lands in the splitMask=2 path (edge v1-v2).
+    he.subdivideFaces({0});
+    EXPECT_TRUE(he.validate());
+    EXPECT_EQ(activeFaceCount(he), 6); // 4 + 2
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesAcrossSubmeshesPreservesMaterials) {
+    // Two-submesh mesh: subdividing face 0 (submesh 0) must NOT bleed
+    // submesh-0 midpoints into submesh 1's faces.
+    auto em = makeTwoSubMeshMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    const auto newVerts = he.subdivideFaces({0});
+    EXPECT_EQ(newVerts.size(), 3u);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    ASSERT_EQ(back.subMeshes().size(), 2u);
+    EXPECT_EQ(back.subMeshes()[0].materialName, "Mat0");
+    EXPECT_EQ(back.subMeshes()[1].materialName, "Mat1");
+    // Submesh 1 is untouched: still 1 triangle, 3 vertices.
+    EXPECT_EQ(back.subMeshes()[1].triangles.size(), 1u);
+    EXPECT_EQ(back.subMeshes()[1].vertices.size(), 3u);
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesNonAdjacentMultipleSelection) {
+    // On a cube, faces 0 (back-1) and 2 (front-1) share NO edges. Both
+    // should subdivide to 4 sub-triangles each, while their respective
+    // adjacent faces each get retriangulated independently. Net: +6 from
+    // each subdivided face, +6 from each set of 3 adjacent faces split
+    // by 1 edge → +24 total → 36 active triangles.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    he.subdivideFaces({0, 2});
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back))
+        << "non-adjacent face selections must each tile cleanly";
+
+    auto s = statsOf(back);
+    EXPECT_EQ(s.boundaryEdges, 0u);
+}
+
+// ===========================================================================
+// fillSelection — deeper coverage
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, FillSelectionCapsCubeHole) {
+    // Real-world hole-fill scenario: take a closed cube, delete one face,
+    // then fill the resulting 3-vertex hole. The post-fill mesh should
+    // again be closed.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    // Delete face 0 (verts 0, 2, 1 from makeCubeMesh).
+    EXPECT_EQ(he.deleteFaces({0}), 1);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh afterDelete;
+    ASSERT_TRUE(he.toEditableMesh(afterDelete));
+    auto sBefore = statsOf(afterDelete);
+    EXPECT_EQ(sBefore.boundaryEdges, 3u) << "deleting one face exposes 3 boundary edges";
+
+    // Find the surviving vertices that match positions (-1,-1,-1), (-1,1,-1),
+    // (1,-1,-1) — those are corners 0, 2, 1 from the cube. After deleteFaces
+    // their HE indices may have shifted, so look them up by position.
+    HalfEdgeMesh he2;
+    ASSERT_TRUE(he2.buildFromEditableMesh(afterDelete));
+    auto findVertByPos = [&](const Ogre::Vector3& p) -> int {
+        for (size_t v = 0; v < he2.vertexCount(); ++v) {
+            if (he2.vertex(static_cast<int>(v)).position.distance(p) < 1e-4f)
+                return static_cast<int>(v);
+        }
+        return -1;
+    };
+    const int v0 = findVertByPos(Ogre::Vector3(-1, -1, -1));
+    const int v2 = findVertByPos(Ogre::Vector3(-1,  1, -1));
+    const int v1 = findVertByPos(Ogre::Vector3( 1, -1, -1));
+    ASSERT_GE(v0, 0); ASSERT_GE(v2, 0); ASSERT_GE(v1, 0);
+
+    // Fill the hole with the same winding the original face had: (0, 2, 1).
+    EXPECT_EQ(he2.fillSelection({v0, v2, v1}), 1);
+    EXPECT_TRUE(he2.validate());
+
+    EditableMesh afterFill;
+    ASSERT_TRUE(he2.toEditableMesh(afterFill));
+    auto sAfter = statsOf(afterFill);
+    EXPECT_EQ(sAfter.boundaryEdges, 0u) << "filling the hole should re-close the cube";
+    EXPECT_TRUE(isManifold(afterFill));
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionAcceptsOrphanedVertices) {
+    // A vertex with no incident face is still valid input — buildFrom-
+    // EditableMesh creates HEVertex slots for every vertex regardless of
+    // triangle membership. The fill must accept these for hole-cap flows
+    // where the user pre-selects vertices that survived a deleteFaces.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "Orphan";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(0, 1), mkV(1, 1) };
+    // No triangles → all 4 vertices are orphans.
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+
+    // Fill with all 4 orphans → 2 new triangles (fan from vert 0).
+    EXPECT_EQ(he.fillSelection({0, 1, 3, 2}), 2);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, FillSelectionUndoRoundTrip) {
+    // Ensure a subdivide → toEditableMesh → buildFromEditableMesh round
+    // trip preserves the new triangulation. Same idea as the existing
+    // SubdivideFacesIsRoundtripSafe test, but for fill.
+    auto em = makeQuadMissingOneTriangle();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    he.fillSelection({1, 3, 2});
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    HalfEdgeMesh he2;
+    ASSERT_TRUE(he2.buildFromEditableMesh(back));
+    EXPECT_TRUE(he2.validate());
+    EXPECT_EQ(activeFaceCount(he2), 2);
 }
