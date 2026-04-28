@@ -162,6 +162,33 @@ void triangulateFaces(EditableSubMesh& sub);
 void promoteTrianglesToFaces(EditableSubMesh& sub);
 
 /**
+ * @brief Re-triangulate every submesh whose `faces` is non-empty.
+ *
+ * Convenience over `triangulateFaces(sub)` for a whole mesh: walks the
+ * submesh array and resyncs each one whose canonical face storage has
+ * changed. No-op for legacy triangle-only submeshes.
+ *
+ * Free function rather than a method on `EditableMesh` to keep the
+ * class size below SonarQube's 35-method ceiling.
+ *
+ * @param subMeshes The submesh vector to sync (typically `mesh.subMeshes()`).
+ */
+void syncTriangulation(std::vector<EditableSubMesh>& subMeshes);
+
+/**
+ * @brief Total polygonal-face count across a submesh vector.
+ *
+ * For each submesh, returns `faces.size()` when n-gons are canonical,
+ * else `triangles.size()`. The `EditableMesh::totalTriangleCount()`
+ * counterpart still reports the fan-triangulation count regardless of
+ * representation.
+ *
+ * Free function for the same reason as `syncTriangulation` — keeps
+ * `EditableMesh` below the class-method limit.
+ */
+size_t totalFaceCount(const std::vector<EditableSubMesh>& subMeshes);
+
+/**
  * @brief Indexed mesh representation for topology queries and editing.
  *
  * On Edit Mode enter, converts Ogre::Entity's SubMesh vertex/index buffers

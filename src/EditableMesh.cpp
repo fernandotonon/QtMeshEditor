@@ -323,16 +323,36 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
 }
 
 void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
-                                       const EditableSubMesh& editSub)
+                                       const EditableSubMesh& editSubIn)
 {
-    if (!subMesh || editSub.vertices.empty() || editSub.triangles.empty())
-        return;
+    if (!subMesh || editSubIn.vertices.empty()) return;
+
+    // n-gon synchronisation: if the caller populated `faces`, that's
+    // canonical and `triangles` is meant to be a fan-triangulation
+    // mirror. Re-triangulate defensively here so the GPU buffer always
+    // matches the live face data even if the caller forgot to call
+    // `triangulateFaces()` after mutating `faces`.
+    //
+    // We work on a local copy when re-triangulating is needed so the
+    // input EditableSubMesh stays untouched (this method takes the
+    // submesh by const&). Triangle-only submeshes incur no copy.
+    EditableSubMesh local;
+    const EditableSubMesh* editSub = &editSubIn;
+    if (!editSubIn.faces.empty()) {
+        local.vertices = editSubIn.vertices; // shallow-but-fine — we don't write
+        local.faces = editSubIn.faces;
+        local.materialName = editSubIn.materialName;
+        local.usesSharedVertices = editSubIn.usesSharedVertices;
+        triangulateFaces(local);
+        editSub = &local;
+    }
+    if (editSub->triangles.empty()) return;
 
     // Replace any existing vertex data with a fresh one.
     if (subMesh->vertexData) delete subMesh->vertexData;
     subMesh->useSharedVertices = false;
     subMesh->vertexData = new Ogre::VertexData();
-    subMesh->vertexData->vertexCount = editSub.vertices.size();
+    subMesh->vertexData->vertexCount = static_cast<uint32_t>(editSub->vertices.size());
 
     auto* decl = subMesh->vertexData->vertexDeclaration;
     auto* binding = subMesh->vertexData->vertexBufferBinding;
@@ -342,19 +362,19 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
     decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
     offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
 
-    bool hasNormals = editSub.vertices[0].hasNormal;
+    bool hasNormals = editSub->vertices[0].hasNormal;
     if (hasNormals) {
         decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
         offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
     }
 
-    bool hasUVs = editSub.vertices[0].hasUV;
+    bool hasUVs = editSub->vertices[0].hasUV;
     if (hasUVs) {
         decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
         offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
     }
 
-    bool hasTangents = editSub.vertices[0].hasTangent;
+    bool hasTangents = editSub->vertices[0].hasTangent;
     if (hasTangents) {
         decl->addElement(0, offset, Ogre::VET_FLOAT4, Ogre::VES_TANGENT);
         offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT4);
@@ -363,11 +383,11 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
     // Create interleaved vertex buffer.
     size_t vertSize = decl->getVertexSize(0);
     auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-        vertSize, editSub.vertices.size(),
+        vertSize, editSub->vertices.size(),
         Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
 
     auto* dest = static_cast<float*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-    for (const auto& v : editSub.vertices) {
+    for (const auto& v : editSub->vertices) {
         *dest++ = v.position.x;
         *dest++ = v.position.y;
         *dest++ = v.position.z;
@@ -386,22 +406,22 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
     binding->setBinding(0, vbuf);
 
     // Create index buffer (16-bit if possible, else 32-bit).
-    bool use32bit = editSub.vertices.size() > 65535;
+    bool use32bit = editSub->vertices.size() > 65535;
     auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
         use32bit ? Ogre::HardwareIndexBuffer::IT_32BIT : Ogre::HardwareIndexBuffer::IT_16BIT,
-        editSub.triangles.size() * 3,
+        editSub->triangles.size() * 3,
         Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
 
     if (use32bit) {
         auto* idx = static_cast<uint32_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for (const auto& tri : editSub.triangles) {
+        for (const auto& tri : editSub->triangles) {
             *idx++ = tri.indices[0];
             *idx++ = tri.indices[1];
             *idx++ = tri.indices[2];
         }
     } else {
         auto* idx = static_cast<uint16_t*>(ibuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-        for (const auto& tri : editSub.triangles) {
+        for (const auto& tri : editSub->triangles) {
             *idx++ = static_cast<uint16_t>(tri.indices[0]);
             *idx++ = static_cast<uint16_t>(tri.indices[1]);
             *idx++ = static_cast<uint16_t>(tri.indices[2]);
@@ -410,7 +430,7 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
     ibuf->unlock();
 
     subMesh->indexData->indexBuffer = ibuf;
-    subMesh->indexData->indexCount = editSub.triangles.size() * 3;
+    subMesh->indexData->indexCount = static_cast<uint32_t>(editSub->triangles.size() * 3);
     subMesh->indexData->indexStart = 0;
 }
 
@@ -543,6 +563,22 @@ size_t EditableMesh::totalTriangleCount() const
     return total;
 }
 
+size_t totalFaceCount(const std::vector<EditableSubMesh>& subMeshes)
+{
+    size_t total = 0;
+    for (const auto& sub : subMeshes) {
+        total += sub.faces.empty() ? sub.triangles.size() : sub.faces.size();
+    }
+    return total;
+}
+
+void syncTriangulation(std::vector<EditableSubMesh>& subMeshes)
+{
+    for (auto& sub : subMeshes) {
+        if (!sub.faces.empty()) triangulateFaces(sub);
+    }
+}
+
 void EditableMesh::setVertexPosition(size_t subMeshIndex, size_t vertexIndex, const Ogre::Vector3& pos)
 {
     if (subMeshIndex < m_subMeshes.size() && vertexIndex < m_subMeshes[subMeshIndex].vertices.size())
@@ -589,6 +625,11 @@ Ogre::Vector2 EditableMesh::getVertexUV(size_t subMeshIndex, size_t vertexIndex)
 void EditableMesh::recalculateNormals()
 {
     for (auto& sub : m_subMeshes) {
+        // n-gon sync: when faces is canonical, refresh the triangle
+        // mirror so the normal-accumulation loop below sees the actual
+        // current geometry. Triangle-only submeshes pay nothing here.
+        if (!sub.faces.empty()) triangulateFaces(sub);
+
         // Zero out all normals
         for (auto& v : sub.vertices) {
             v.normal = Ogre::Vector3::ZERO;
@@ -626,6 +667,8 @@ void EditableMesh::recalculateNormals()
 void EditableMesh::recalculateNormalsFlat()
 {
     for (auto& sub : m_subMeshes) {
+        if (!sub.faces.empty()) triangulateFaces(sub);
+
         // Zero out all normals
         for (auto& v : sub.vertices) {
             v.normal = Ogre::Vector3::ZERO;
