@@ -32,9 +32,11 @@ THE SOFTWARE.
 #include <array>
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <functional>
 #include <set>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 
 bool HalfEdgeMesh::buildFromEditableMesh(const EditableMesh& editableMesh)
@@ -4902,10 +4904,21 @@ std::vector<int> HalfEdgeMesh::subdivideCatmullClark()
     //    seams stay sharp through the subdivision.
     std::vector<int> edgePointIdx(origEdgeCount, -1);
     std::vector<bool> edgeIsBoundary(origEdgeCount, false);
+    // Undirected (min,max)-vertex-pair → edgeIdx hash, populated as we
+    // walk live edges below. Used by the per-side rebuild to avoid an
+    // O(F·E) linear scan per face side.
+    std::unordered_map<std::uint64_t, int> edgeIdxByVertPair;
+    edgeIdxByVertPair.reserve(static_cast<size_t>(origEdgeCount) * 2u);
+    auto packVertPair = [](int a, int b) -> std::uint64_t {
+        const std::uint32_t lo = static_cast<std::uint32_t>(std::min(a, b));
+        const std::uint32_t hi = static_cast<std::uint32_t>(std::max(a, b));
+        return (static_cast<std::uint64_t>(hi) << 32) | static_cast<std::uint64_t>(lo);
+    };
     for (int e = 0; e < origEdgeCount; ++e) {
         if (m_edges[e].halfEdge < 0) continue;
         const auto [va, vb] = edgeVertices(e);
         if (va < 0 || vb < 0) continue;
+        edgeIdxByVertPair.emplace(packVertPair(va, vb), e);
         const auto [fA, fB] = edgeFaces(e);
 
         bool boundary = (fA < 0 || fB < 0);
@@ -5076,14 +5089,9 @@ std::vector<int> HalfEdgeMesh::subdivideCatmullClark()
     };
 
     auto findEdgeIdxByVerts = [&](int va, int vb) -> int {
-        // Search the LIVE edges (after step-2 the m_edges array still
-        // describes the pre-step topology; we haven't rebuilt yet).
-        for (int e = 0; e < origEdgeCount; ++e) {
-            if (m_edges[e].halfEdge < 0) continue;
-            const auto [a, b] = edgeVertices(e);
-            if ((a == va && b == vb) || (a == vb && b == va)) return e;
-        }
-        return -1;
+        if (va < 0 || vb < 0) return -1;
+        auto it = edgeIdxByVertPair.find(packVertPair(va, vb));
+        return it == edgeIdxByVertPair.end() ? -1 : it->second;
     };
 
     for (int f = 0; f < origFaceCount; ++f) {
