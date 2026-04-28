@@ -90,7 +90,12 @@ static void addRTSSResources()
     auto& rgm = Ogre::ResourceGroupManager::getSingleton();
     auto& log = Ogre::LogManager::getSingleton();
 
-    // Collect candidate directories, then deduplicate via canonical paths
+    // Collect candidate directories. The macOS dev build keeps two copies
+    // of media/ (one inside the .app bundle, one alongside it for cmake
+    // --install) — they have IDENTICAL contents, so registering both
+    // re-parses every .program script and trips ItemIdentityException on
+    // duplicate GpuProgram declarations (e.g. Ogre/ShadowBlendVP). Pick
+    // the FIRST candidate that exists and stop.
     QStringList candidates;
     QString appDir = QCoreApplication::applicationDirPath();
 
@@ -106,22 +111,29 @@ static void addRTSSResources()
     candidates << appDir + "/../../../media/RTShaderLib";
 #endif
 
-    // For each RTShaderLib candidate, also try its sibling "Main" dir
-    // (contains OgreUnifiedShader.h needed by RTSS)
-    QStringList withMain = candidates;
-    for (const auto& c : candidates)
-        withMain << QDir(c + "/..").absolutePath() + "/Main";
-
-    // Deduplicate using canonical paths and add existing directories
-    QSet<QString> added;
-    for (const auto& path : withMain) {
-        QString canon = QDir(path).canonicalPath();
-        if (canon.isEmpty() || added.contains(canon))
-            continue;
-        added.insert(canon);
-        log.logMessage("RTSS: Adding resource location: " + canon.toStdString());
-        rgm.addResourceLocation(canon.toStdString(), "FileSystem", Ogre::RGN_INTERNAL);
+    // Pick the first existing RTShaderLib + sibling Main pair.
+    QString chosenLib;
+    QString chosenMain;
+    for (const auto& path : candidates) {
+        const QString canonLib = QDir(path).canonicalPath();
+        if (canonLib.isEmpty()) continue;
+        const QString sibMain = QDir(path + "/..").absolutePath() + "/Main";
+        const QString canonMain = QDir(sibMain).canonicalPath();
+        if (canonMain.isEmpty()) continue;
+        chosenLib = canonLib;
+        chosenMain = canonMain;
+        break;
     }
+
+    if (chosenLib.isEmpty()) {
+        log.logMessage("RTSS: No RTShaderLib directory found — shaders will fail to load");
+        return;
+    }
+
+    log.logMessage("RTSS: Adding resource location: " + chosenLib.toStdString());
+    rgm.addResourceLocation(chosenLib.toStdString(), "FileSystem", Ogre::RGN_INTERNAL);
+    log.logMessage("RTSS: Adding resource location: " + chosenMain.toStdString());
+    rgm.addResourceLocation(chosenMain.toStdString(), "FileSystem", Ogre::RGN_INTERNAL);
 }
 }
 

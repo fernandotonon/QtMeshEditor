@@ -418,6 +418,50 @@ public:
     Q_INVOKABLE int dissolveSelection();
     /// @}
 
+    /// @name Subdivide / Fill
+    /// @{
+    /**
+     * @brief Subdivide selected faces (1-to-4 triangle split).
+     *
+     * Face mode: subdivides the selected triangles. Adjacent non-selected
+     * triangles are retriangulated as needed to avoid T-junctions.
+     *
+     * Edge mode: subdivides the union of triangles incident to any
+     * selected edge (Blender convention — selecting an edge subdivides
+     * the surrounding faces).
+     *
+     * Vertex mode: no-op (vertex selection alone doesn't define faces
+     * to split).
+     *
+     * After the operation, the new midpoint vertices are selected so
+     * the user can immediately translate them. Pushes one undo command
+     * labeled "Subdivide".
+     *
+     * @return Number of triangles whose topology changed (0 on no-op).
+     */
+    Q_INVOKABLE int subdivideSelection();
+
+    /**
+     * @brief Fill the current selection with new face(s).
+     *
+     * Vertex mode: 3 selected vertices → emit a triangle. 4 selected →
+     * emit two triangles (fan from the first selected vertex). 5+ → fan-
+     * triangulate (N-2 triangles).
+     *
+     * Edge mode: detects a closed boundary edge loop in the selection
+     * and fan-triangulates it from the lowest-index loop vertex. The
+     * loop must be closed (every selected edge endpoint shared with
+     * exactly two selected edges).
+     *
+     * Face mode: no-op.
+     *
+     * Pushes one undo command labeled "Fill".
+     *
+     * @return Number of triangles created (0 on no-op or rejection).
+     */
+    Q_INVOKABLE int fillSelection();
+    /// @}
+
     /// @name Vertex transform support
     /// @{
     /// Get the centroid of selected vertices in local mesh space.

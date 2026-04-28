@@ -747,13 +747,42 @@ void MainWindow::initToolBar()
     });
     QAction* deleteAction = ui->objectsToolbar->addWidget(deleteButton);
 
+    // Subdivide: face mode (subdivide selected triangles, retriangulate
+    // adjacent ones to avoid T-junctions) or edge mode (subdivide every
+    // triangle incident to a selected edge — Blender convention).
+    auto subdivideButton = new QToolButton(ui->objectsToolbar);
+    subdivideButton->setText(QStringLiteral("\u229E"));  // ⊞ box-plus, evokes a 4-cell split
+    subdivideButton->setToolTip(tr("Subdivide selected faces / edges"));
+    subdivideButton->setFont(topoFont);
+    subdivideButton->setStyleSheet(topoBtnStyle);
+    connect(subdivideButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Subdivide");
+        EditModeController::instance()->subdivideSelection();
+    });
+    QAction* subdivideAction = ui->objectsToolbar->addWidget(subdivideButton);
+
+    // Fill: vertex mode (3-4+ verts → triangle / fan) or edge mode (closed
+    // boundary loop → fan-triangulated cap, useful for capping holes).
+    auto fillButton = new QToolButton(ui->objectsToolbar);
+    fillButton->setText(QStringLiteral("\u25C6"));  // ◆ filled diamond — "fill"
+    fillButton->setToolTip(tr("Fill selected vertices / edge loop (F)"));
+    fillButton->setFont(topoFont);
+    fillButton->setStyleSheet(topoBtnStyle);
+    connect(fillButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Fill");
+        EditModeController::instance()->fillSelection();
+    });
+    QAction* fillAction = ui->objectsToolbar->addWidget(fillButton);
+
     // Context-aware visibility + enabled:
     //  - Hidden entirely when NOT in edit mode.
     //  - In edit mode: stay visible but only enable when the current
     //    mode matches AND the relevant element type actually has a
     //    non-empty selection.
     auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton, deleteButton,
-                               extrudeAction, bevelAction, knifeAction, mergeAction, deleteAction]() {
+                               subdivideButton, fillButton,
+                               extrudeAction, bevelAction, knifeAction, mergeAction, deleteAction,
+                               subdivideAction, fillAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
@@ -761,6 +790,8 @@ void MainWindow::initToolBar()
         knifeAction->setVisible(active);
         mergeAction->setVisible(active);
         deleteAction->setVisible(active);
+        subdivideAction->setVisible(active);
+        fillAction->setVisible(active);
         if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
         const bool hasFaces = c->selectedFaceCount() > 0;
@@ -780,6 +811,13 @@ void MainWindow::initToolBar()
         deleteButton->setEnabled((mode == 0 && hasVerts)
                               || (mode == 1 && hasEdges)
                               || (mode == 2 && hasFaces));
+        // Subdivide: needs faces (face mode) or edges (edge mode).
+        subdivideButton->setEnabled((mode == 2 && hasFaces)
+                                 || (mode == 1 && hasEdges));
+        // Fill: needs ≥3 verts (vertex mode) or ≥3 edges that form a
+        // closed loop (edge mode — degree check happens at apply time).
+        fillButton->setEnabled((mode == 0 && c->selectedVertexCount() >= 3)
+                            || (mode == 1 && c->selectedEdgeCount() >= 3));
     };
     refreshTopoButtons();
     connect(editCtrlForTopo, &EditModeController::editModeChanged,
@@ -1296,6 +1334,31 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
        break;
     case Qt::Key_F:
     {
+        // In edit mode, F fills selected vertices / edge loop (Blender
+        // convention). Object mode + edit mode without a fillable
+        // selection both fall through to "frame selection" (zoom-to-fit).
+        auto* editCtrl = EditModeController::instance();
+        if (editCtrl->isEditModeActive()) {
+            const int mode = editCtrl->selectionMode();
+            const bool fillable =
+                   (mode == EditModeController::VertexMode
+                    && editCtrl->selectedVertexCount() >= 3)
+                || (mode == EditModeController::EdgeMode
+                    && editCtrl->selectedEdgeCount() >= 3);
+            if (fillable) {
+                // Only swallow the keypress when the fill actually
+                // produced geometry. Edge-mode selections that don't
+                // form a closed boundary loop, or vertex selections
+                // whose fan would duplicate an existing tri, return 0
+                // — in those cases fall through so F still acts as
+                // Frame-Selection. (Codex P2 / CodeRabbit Major)
+                if (editCtrl->fillSelection() > 0) {
+                    SentryReporter::addBreadcrumb("ui.shortcut", "F — Fill (edit mode)");
+                    event->accept();
+                    return;
+                }
+            }
+        }
         SentryReporter::addBreadcrumb("ui.shortcut", "F — Frame selection");
         // Frame selection: zoom camera to fit selected objects
         SpaceCamera* cam = nullptr;

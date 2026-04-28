@@ -4581,6 +4581,226 @@ int HalfEdgeMesh::dissolveVertices(const std::vector<int>& vertexIndices)
     return dissolved;
 }
 
+std::vector<int> HalfEdgeMesh::subdivideFaces(const std::vector<int>& faceIndices)
+{
+    std::vector<int> newVertices;
+    if (faceIndices.empty()) return newVertices;
+
+    // 1. Collect the unique set of currently-live target faces. Triangles
+    //    only — n-gons would need their own ear-clip handling and aren't in
+    //    the current pipeline (matches splitEdge / splitFace MVP scope).
+    std::set<int> selectedFaces;
+    for (int f : faceIndices) {
+        if (f < 0 || f >= static_cast<int>(m_faces.size())) continue;
+        if (m_faces[f].halfEdge < 0) continue;
+        if (faceVertices(f).size() != 3) continue;
+        selectedFaces.insert(f);
+    }
+    if (selectedFaces.empty()) return newVertices;
+
+    // 2. Build the set of edges that need a midpoint, keyed by undirected
+    //    vertex pair. Adjacent selected faces share endpoints, so the same
+    //    edge can be referenced twice — the map dedups it. Each edge maps
+    //    to the midpoint vertex index (filled in step 3).
+    std::map<std::pair<int,int>, int> midpointOf;
+    auto edgeKey = [](int a, int b) {
+        return std::make_pair(std::min(a, b), std::max(a, b));
+    };
+    for (int f : selectedFaces) {
+        const auto verts = faceVertices(f);
+        for (int i = 0; i < 3; ++i) {
+            const int a = verts[i];
+            const int b = verts[(i + 1) % 3];
+            midpointOf.emplace(edgeKey(a, b), -1);
+        }
+    }
+
+    // 3. Materialise a midpoint vertex for each unique edge. UVs / normals
+    //    / bone weights / tangents are interpolated linearly with t=0.5
+    //    via the existing `interpolateVertex` helper. Reuse the same
+    //    midpoint for both adjacent faces so the tessellation is watertight.
+    for (auto& [key, vMid] : midpointOf) {
+        HEVertex mid = interpolateVertex(m_vertices[key.first],
+                                         m_vertices[key.second], 0.5f);
+        mid.halfEdge = -1;
+        vMid = static_cast<int>(m_vertices.size());
+        m_vertices.push_back(std::move(mid));
+        newVertices.push_back(vMid);
+    }
+
+    // 4. Find every NON-selected face that has at least one of its edges
+    //    split. Those need to be retriangulated to avoid T-junctions where
+    //    one side of the edge has been refined and the other hasn't.
+    //    Selected faces are always fully refined (1 → 4 split) so we
+    //    handle them in the same loop.
+    auto retireFace = [&](int faceIdx) {
+        if (faceIdx < 0) return;
+        const int startHE = m_faces[faceIdx].halfEdge;
+        if (startHE < 0) return;
+        int he = startHE;
+        do {
+            const int next = m_halfEdges[he].next;
+            m_halfEdges[he].face = -1;
+            he = next;
+        } while (he != startHE && he >= 0);
+        m_faces[faceIdx].halfEdge = -1;
+    };
+
+    // Snapshot the live face count BEFORE we start emitting new ones —
+    // appendFace appends to m_faces and we must not iterate over its tail.
+    const int origFaceCount = static_cast<int>(m_faces.size());
+    for (int f = 0; f < origFaceCount; ++f) {
+        if (m_faces[f].halfEdge < 0) continue;
+        const auto verts = faceVertices(f);
+        if (verts.size() != 3) continue; // skip non-triangles
+
+        const int subIdx = m_faces[f].subMeshIndex;
+
+        // For each edge in winding order, look up its midpoint (or -1 if
+        // the edge wasn't split).
+        const int v0 = verts[0], v1 = verts[1], v2 = verts[2];
+        auto find = [&](int a, int b) {
+            auto it = midpointOf.find(edgeKey(a, b));
+            return (it != midpointOf.end()) ? it->second : -1;
+        };
+        const int m01 = find(v0, v1);
+        const int m12 = find(v1, v2);
+        const int m20 = find(v2, v0);
+        const int splitMask = (m01 >= 0 ? 1 : 0)
+                            | (m12 >= 0 ? 2 : 0)
+                            | (m20 >= 0 ? 4 : 0);
+        if (splitMask == 0) continue; // not adjacent to any subdivided edge
+
+        retireFace(f);
+
+        // Cases by which edges have midpoints. Winding order is preserved
+        // from the original triangle so face normals stay consistent.
+        switch (splitMask) {
+        case 1: // only v0-v1 split
+            appendTriangle(v0, m01, v2, subIdx);
+            appendTriangle(m01, v1, v2, subIdx);
+            break;
+        case 2: // only v1-v2 split
+            appendTriangle(v0, v1, m12, subIdx);
+            appendTriangle(v0, m12, v2, subIdx);
+            break;
+        case 4: // only v2-v0 split
+            appendTriangle(v0, v1, m20, subIdx);
+            appendTriangle(m20, v1, v2, subIdx);
+            break;
+        case 3: // v0-v1 and v1-v2 split (corner v1 is the "split corner")
+            appendTriangle(v0, m01, m12, subIdx);
+            appendTriangle(m01, v1, m12, subIdx);
+            appendTriangle(v0, m12, v2, subIdx);
+            break;
+        case 5: // v0-v1 and v2-v0 split (corner v0)
+            appendTriangle(v0, m01, m20, subIdx);
+            appendTriangle(m01, v1, m20, subIdx);
+            appendTriangle(m20, v1, v2, subIdx);
+            break;
+        case 6: // v1-v2 and v2-v0 split (corner v2)
+            appendTriangle(v0, v1, m20, subIdx);
+            appendTriangle(m20, v1, m12, subIdx);
+            appendTriangle(m20, m12, v2, subIdx);
+            break;
+        case 7: // all three split — full 1-to-4 subdivide
+            appendTriangle(v0, m01, m20, subIdx);
+            appendTriangle(m01, v1, m12, subIdx);
+            appendTriangle(m20, m12, v2, subIdx);
+            appendTriangle(m01, m12, m20, subIdx);
+            break;
+        default:
+            // splitMask is 3 bits, covered above. Should be unreachable.
+            break;
+        }
+    }
+
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+
+    return newVertices;
+}
+
+int HalfEdgeMesh::fillSelection(const std::vector<int>& vertexIndices)
+{
+    const int n = static_cast<int>(vertexIndices.size());
+    if (n < 3) return 0;
+
+    // 1. Validate inputs: every vertex must be in-range and unique. We do
+    //    NOT require the vertex to have an incident face — orphans (e.g.
+    //    left over after a deleteFaces) can legitimately be the corners
+    //    of a hole the user wants to cap.
+    std::set<int> seen;
+    for (int v : vertexIndices) {
+        if (v < 0 || v >= static_cast<int>(m_vertices.size())) return 0;
+        if (!seen.insert(v).second) return 0; // duplicate vertex
+    }
+
+    // 2. All vertices must share a submesh — otherwise the new face would
+    //    silently fuse material groups (same constraint as mergeVertices).
+    //    For vertices with at least one incident face, read the submesh
+    //    off that face. For orphaned vertices, fall back to a positional
+    //    submesh inference: the submesh of the FIRST inputs that has an
+    //    incident face. If every input is orphaned we have no way to
+    //    pick a target submesh, so default to submesh 0.
+    auto vertexSubMesh = [this](int v) -> int {
+        const auto faces = facesAroundVertex(v);
+        if (faces.empty()) return -1;
+        return m_faces[faces.front()].subMeshIndex;
+    };
+    int subIdx = -1;
+    for (int v : vertexIndices) {
+        const int s = vertexSubMesh(v);
+        if (s >= 0) { subIdx = s; break; }
+    }
+    if (subIdx < 0) subIdx = 0;
+    for (int v : vertexIndices) {
+        const int s = vertexSubMesh(v);
+        if (s >= 0 && s != subIdx) return 0;
+    }
+
+    // 2. Reject inputs that would duplicate any triangle the fan would
+    //    emit. For n=3 that's the single fan triangle; for larger N each
+    //    of the N-2 fan triangles is checked against existing faces
+    //    incident to the fan apex. Without this, the fan can recreate
+    //    overlapping faces on top of an already-triangulated region
+    //    (e.g. selecting all 4 verts of a closed quad). (CodeRabbit Major)
+    auto triangleExists = [this](int va, int vb, int vc) {
+        const std::set<int> target = {va, vb, vc};
+        for (int f : facesAroundVertex(va)) {
+            const auto fv = faceVertices(f);
+            if (fv.size() != 3) continue;
+            const std::set<int> tri(fv.begin(), fv.end());
+            if (tri == target) return true;
+        }
+        return false;
+    };
+    for (int i = 1; i + 1 < n; ++i) {
+        if (triangleExists(vertexIndices[0], vertexIndices[i],
+                           vertexIndices[i + 1]))
+            return 0;
+    }
+
+    // 3. Fan-triangulate from vertexIndices[0]. For n=3 emits one triangle;
+    //    for n=4 emits two; for general N emits N-2.
+    int triCount = 0;
+    for (int i = 1; i + 1 < n; ++i) {
+        appendTriangle(vertexIndices[0], vertexIndices[i],
+                       vertexIndices[i + 1], subIdx);
+        ++triCount;
+    }
+    if (triCount == 0) return 0;
+
+    rebuildEdgesAndTwins();
+    compactBoundaryHalfEdges();
+    buildBoundaryHalfEdges();
+    fixVertexHalfEdges();
+
+    return triCount;
+}
+
 bool HalfEdgeMesh::validate() const
 {
     // Check 1: Twin symmetry

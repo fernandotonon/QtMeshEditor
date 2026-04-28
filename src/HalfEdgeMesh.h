@@ -574,6 +574,61 @@ public:
      */
     int dissolveVertices(const std::vector<int>& vertexIndices);
 
+    /**
+     * @brief Subdivide selected triangles by 1-to-4 split.
+     *
+     * For each selected triangle, inserts a midpoint vertex on each of its
+     * three edges and replaces the triangle with four sub-triangles: three
+     * corner triangles plus a central one whose three vertices are the
+     * midpoints. Midpoints on shared edges are reused so adjacent selected
+     * triangles tile cleanly.
+     *
+     * Adjacent NON-selected triangles whose edges land on a midpoint are
+     * also retriangulated to avoid T-junctions:
+     *  - 1 split edge → split into 2 triangles fanned from the midpoint.
+     *  - 2 split edges → split into 3 triangles.
+     *  - 3 split edges → behaves like a selected face (4 sub-triangles).
+     *
+     * UVs / normals / bone weights are interpolated linearly along each
+     * subdivided edge by `interpolateVertex`. The midpoints land at edge
+     * centers (t = 0.5).
+     *
+     * MVP scope: faces must be triangles. N-gon faces are skipped. Faces
+     * spanning multiple submeshes still tile correctly because midpoints
+     * are keyed off vertex pairs (which inherit the face's submesh).
+     *
+     * @param faceIndices Triangles to subdivide.
+     * @return Indices of every newly created midpoint vertex (in creation
+     *         order). Empty on no-op.
+     */
+    std::vector<int> subdivideFaces(const std::vector<int>& faceIndices);
+
+    /**
+     * @brief Fill a face from selected vertices or a closed edge loop.
+     *
+     * Two input modes, picked by the caller:
+     *  - Vertex fill: 3 vertices → emits a single triangle. 4 vertices →
+     *    emits two triangles fan-triangulated from the first input vertex
+     *    in the order given. The caller is responsible for choosing a
+     *    sensible winding (the fill follows it verbatim).
+     *  - Loop fill: a closed boundary loop of any length N ≥ 3 →
+     *    fan-triangulated from `vertexIndices[0]`. Pass the loop's
+     *    boundary vertices in winding order.
+     *
+     * Both modes refuse cross-submesh inputs (would silently weld
+     * material groups), require all vertices alive, and reject inputs
+     * that would duplicate an existing face.
+     *
+     * UV / normals / bone weights of the new vertices are NOT modified —
+     * the new face inherits attributes from the existing per-vertex data.
+     *
+     * @param vertexIndices Boundary vertices in winding order. 3, 4, or
+     *        any N ≥ 3 for loop fill.
+     * @return Number of triangles created (1 for a 3-vertex fill, 2 for a
+     *         quad, N-2 for a longer loop). 0 on rejection.
+     */
+    int fillSelection(const std::vector<int>& vertexIndices);
+
     /// @}
 
     /// @name Validation
