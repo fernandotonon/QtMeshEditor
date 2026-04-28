@@ -161,6 +161,15 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
     // editable mesh would end up mirrored (X flipped) relative to the
     // rendered Ogre mesh, and the vertex/edge/face overlays would draw
     // on the wrong side of the on-screen geometry. (Chunk 4 fix.)
+    // Tangent handling: we deliberately do NOT request
+    // aiProcess_CalcTangentSpace here because that flag implicitly
+    // triangulates the mesh in Assimp, defeating the whole point of
+    // this n-gon-aware path. Instead, when tangents aren't already
+    // in the source file, the post-edit GPU upload pipeline rebuilds
+    // them via Ogre::Mesh::buildTangentVectors (run from
+    // applyNormalMapsToEntity / rewriteEntityAfterTopologyChange),
+    // which operates on the fan-triangulated index buffer and produces
+    // correct per-vertex tangents without disturbing `faces`.
     Assimp::Importer importer;
     unsigned int flags =
         aiProcess_JoinIdenticalVertices |
@@ -197,6 +206,7 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
         const bool hasNormals = aim->HasNormals();
         const bool hasUVs = aim->HasTextureCoords(0);
         const bool hasColors = aim->HasVertexColors(0);
+        const bool hasTangents = aim->HasTangentsAndBitangents();
         for (unsigned i = 0; i < aim->mNumVertices; ++i) {
             EditableVertex& ev = sub.vertices[i];
             const aiVector3D& p = aim->mVertices[i];
@@ -215,6 +225,22 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
                 const aiColor4D& c = aim->mColors[0][i];
                 ev.color = Ogre::ColourValue(c.r, c.g, c.b, c.a);
                 ev.hasColor = true;
+            }
+            if (hasTangents) {
+                const aiVector3D& t = aim->mTangents[i];
+                // RTSS expects FLOAT4 tangents with handedness in w.
+                // Compute parity from the input bitangent: if cross
+                // (normal × tangent) aligns with bitangent, parity =
+                // +1, else -1. Same convention MeshProcessor /
+                // applyNormalMapsToEntity use.
+                const aiVector3D& bt = aim->mBitangents[i];
+                Ogre::Vector3 normalV = ev.hasNormal ? ev.normal : Ogre::Vector3::UNIT_Z;
+                Ogre::Vector3 tangentV(t.x, t.y, t.z);
+                Ogre::Vector3 expectedBT = normalV.crossProduct(tangentV);
+                float parity = expectedBT.dotProduct(
+                    Ogre::Vector3(bt.x, bt.y, bt.z)) >= 0.0f ? 1.0f : -1.0f;
+                ev.tangent = Ogre::Vector4(t.x, t.y, t.z, parity);
+                ev.hasTangent = true;
             }
         }
 
@@ -726,6 +752,40 @@ void syncTriangulation(std::vector<EditableSubMesh>& subMeshes)
     }
 }
 
+int faceIndexForTriangle(const EditableSubMesh& sub,
+                         size_t localTri,
+                         size_t* outFirstTri,
+                         size_t* outTriCount)
+{
+    if (sub.faces.empty()) {
+        // Legacy triangle-only submesh: every triangle IS its own face.
+        if (outFirstTri) *outFirstTri = localTri;
+        if (outTriCount) *outTriCount = 1;
+        return -1;
+    }
+    // Walk the face array, accumulating each face's fan-triangulation
+    // length until we contain `localTri`. The chunk-1 invariant says
+    // `triangulateFaces` emits faces in order, each face producing
+    // (vertexCount - 2) triangles.
+    size_t running = 0;
+    for (size_t k = 0; k < sub.faces.size(); ++k) {
+        const auto& f = sub.faces[k];
+        const size_t n = f.indices.size();
+        if (n < 3) continue; // invalid face — triangulateFaces skipped it
+        const size_t triCount = n - 2;
+        if (localTri < running + triCount) {
+            if (outFirstTri) *outFirstTri = running;
+            if (outTriCount) *outTriCount = triCount;
+            return static_cast<int>(k);
+        }
+        running += triCount;
+    }
+    // Out-of-range — defensive fallback to single-triangle behaviour.
+    if (outFirstTri) *outFirstTri = localTri;
+    if (outTriCount) *outTriCount = 1;
+    return -1;
+}
+
 void EditableMesh::setVertexPosition(size_t subMeshIndex, size_t vertexIndex, const Ogre::Vector3& pos)
 {
     if (subMeshIndex < m_subMeshes.size() && vertexIndex < m_subMeshes[subMeshIndex].vertices.size())
@@ -773,8 +833,9 @@ void EditableMesh::recalculateNormals()
 {
     for (auto& sub : m_subMeshes) {
         // n-gon sync: when faces is canonical, refresh the triangle
-        // mirror so the normal-accumulation loop below sees the actual
-        // current geometry. Triangle-only submeshes pay nothing here.
+        // mirror so callers that consume `triangles` (GPU upload,
+        // legacy ops) stay in sync with `faces`. Triangle-only
+        // submeshes pay nothing here.
         if (!sub.faces.empty()) triangulateFaces(sub);
 
         // Zero out all normals
@@ -783,7 +844,13 @@ void EditableMesh::recalculateNormals()
             v.hasNormal = true;
         }
 
-        // Accumulate face normals (area-weighted)
+        // Always walk triangles for normal accumulation, even on
+        // n-gon submeshes. The Newell-per-polygon variant produced
+        // visibly correct flat shading on planar quads but broke
+        // bump-map / lighting on bumped meshes (likely a sign /
+        // magnitude convention mismatch with the rest of Ogre's
+        // pipeline). Reverting to the always-tri loop gets parity
+        // with what extrude / bevel / merge always used.
         for (const auto& tri : sub.triangles) {
             if (tri.indices[0] >= sub.vertices.size() ||
                 tri.indices[1] >= sub.vertices.size() ||
@@ -794,7 +861,6 @@ void EditableMesh::recalculateNormals()
             const Ogre::Vector3& v1 = sub.vertices[tri.indices[1]].position;
             const Ogre::Vector3& v2 = sub.vertices[tri.indices[2]].position;
 
-            // Cross product gives area-weighted face normal
             Ogre::Vector3 faceNormal = (v1 - v0).crossProduct(v2 - v0);
 
             sub.vertices[tri.indices[0]].normal += faceNormal;

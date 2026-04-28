@@ -189,6 +189,37 @@ void syncTriangulation(std::vector<EditableSubMesh>& subMeshes);
 size_t totalFaceCount(const std::vector<EditableSubMesh>& subMeshes);
 
 /**
+ * @brief Map a fan-triangulation triangle index to its source face index.
+ *
+ * Given a triangle index `localTri` in a submesh's `triangles` array,
+ * returns the index of the `EditableFace` in `sub.faces` that owns
+ * that triangle (the result of fan-triangulating that face), or -1 if
+ * `sub.faces` is empty (legacy triangle-only submesh — every triangle
+ * IS its own face). Output `outFirstTri` and `outTriCount` describe
+ * the contiguous range of triangles belonging to that face, so a
+ * caller can dilate a single-triangle selection back to the whole
+ * face it came from.
+ *
+ * Assumes the chunk-1 invariant holds: when `sub.faces` is non-empty,
+ * `sub.triangles` is its fan-triangulation produced by
+ * `triangulateFaces(sub)`. Calling this on a desynced submesh
+ * returns garbage; resync via `triangulateFaces(sub)` if in doubt.
+ *
+ * @param sub The submesh.
+ * @param localTri Index into `sub.triangles`.
+ * @param[out] outFirstTri First triangle index of the owning face's
+ *             range. (= localTri for legacy submeshes.)
+ * @param[out] outTriCount Number of triangles in the owning face's
+ *             range (1 for triangles, 2 for quads, N-2 for N-gons).
+ * @return Face index in `sub.faces`, or -1 if the submesh is in
+ *         legacy triangle-only mode.
+ */
+int faceIndexForTriangle(const EditableSubMesh& sub,
+                         size_t localTri,
+                         size_t* outFirstTri,
+                         size_t* outTriCount);
+
+/**
  * @brief Indexed mesh representation for topology queries and editing.
  *
  * On Edit Mode enter, converts Ogre::Entity's SubMesh vertex/index buffers

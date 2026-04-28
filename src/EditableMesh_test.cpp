@@ -1102,3 +1102,109 @@ TEST_F(EditableMeshTest, ResizeEntityBuffersClearsCachedSourcePath) {
     Manager::getSingleton()->destroySceneNode(
         "EditableMesh_resize_clear_path_node");
 }
+
+// ===========================================================================
+// faceIndexForTriangle (chunk 4b) — n-gon-aware selection mapping
+// ===========================================================================
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleLegacyTriangleSubmeshIsIdentity) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableTriangle t1, t2;
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    t2.indices[0] = 0; t2.indices[1] = 2; t2.indices[2] = 3;
+    sub.triangles = {t1, t2};
+    // faces deliberately empty — legacy triangle-only mode.
+
+    size_t firstTri = 99, count = 99;
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, &firstTri, &count), -1);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 1u);
+
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, &firstTri, &count), -1);
+    EXPECT_EQ(firstTri, 1u);
+    EXPECT_EQ(count, 1u);
+}
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleQuadMapsBothTrianglesToSameFace) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    triangulateFaces(sub); // produces 2 fan triangles
+
+    ASSERT_EQ(sub.triangles.size(), 2u);
+
+    // Both fan triangles map to face 0.
+    size_t firstTri = 99, count = 99;
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, &firstTri, &count), 0);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 2u) << "quad's owning face spans 2 triangles";
+
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, &firstTri, &count), 0);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 2u);
+}
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleMixedTriQuadMapsCorrectly) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v, v, v, v};
+    EditableFace tri;
+    tri.indices = {0, 1, 2};
+    EditableFace quad;
+    quad.indices = {3, 4, 5, 6};
+    sub.faces.push_back(std::move(tri));
+    sub.faces.push_back(std::move(quad));
+    triangulateFaces(sub); // 1 + 2 = 3 fan triangles
+
+    ASSERT_EQ(sub.triangles.size(), 3u);
+
+    // Triangle 0 → face 0 (the lone triangle).
+    size_t firstTri = 99, count = 99;
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, &firstTri, &count), 0);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 1u);
+
+    // Triangles 1 + 2 → face 1 (the quad).
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, &firstTri, &count), 1);
+    EXPECT_EQ(firstTri, 1u);
+    EXPECT_EQ(count, 2u);
+    EXPECT_EQ(faceIndexForTriangle(sub, 2, &firstTri, &count), 1);
+    EXPECT_EQ(firstTri, 1u);
+    EXPECT_EQ(count, 2u);
+}
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleOutOfRangeIsBenign) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    triangulateFaces(sub);
+
+    // Out-of-range triangle index returns -1 with a defensive
+    // single-triangle fallback.
+    size_t firstTri = 0, count = 0;
+    EXPECT_EQ(faceIndexForTriangle(sub, 99, &firstTri, &count), -1);
+    EXPECT_EQ(firstTri, 99u);
+    EXPECT_EQ(count, 1u);
+}
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleAcceptsNullOutPointers) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    triangulateFaces(sub);
+
+    // Caller can pass nullptr for either output if they don't care.
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, nullptr, nullptr), 0);
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, nullptr, nullptr), 0);
+}

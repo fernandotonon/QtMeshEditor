@@ -34,6 +34,7 @@ THE SOFTWARE.
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
 #include "Manager.h"
+#include "MeshImporterExporter.h"
 #include "NormalVisualizer.h"
 #include "BevelGizmo.h"
 #include "mainwindow.h"
@@ -600,24 +601,59 @@ void EditModeController::selectFace(int triIndex, bool addToSelection)
         m_selectedEdges.clear();
     }
 
-    m_selectedFaces.insert(triIndex);
-
-    // Also select the three vertices and three edges of the triangle
     auto [subIdx, localTri] = globalTriToLocal(triIndex);
-    if (subIdx < m_editableMesh->subMeshes().size()) {
-        const auto& tri = m_editableMesh->subMeshes()[subIdx].triangles[localTri];
-        int vertOffset = localToGlobal(subIdx, 0);
-        int g0 = vertOffset + static_cast<int>(tri.indices[0]);
-        int g1 = vertOffset + static_cast<int>(tri.indices[1]);
-        int g2 = vertOffset + static_cast<int>(tri.indices[2]);
+    if (subIdx >= m_editableMesh->subMeshes().size()) return;
+    const auto& sub = m_editableMesh->subMeshes()[subIdx];
 
-        m_selectedVertices.insert(g0);
-        m_selectedVertices.insert(g1);
-        m_selectedVertices.insert(g2);
+    // n-gon dilation: when the clicked triangle belongs to a face that
+    // has more than one fan triangle (a quad / N-gon), select EVERY
+    // fan triangle of that face so the user-visible "face" is the
+    // whole polygon — not just one half of a quad. Storage stays as
+    // global triangle indices for backward compat with delete /
+    // dissolve / undo serialization; downstream ops that need the
+    // HE-level face dedup it via faceIndexForTriangle. (Chunk 4b.)
+    size_t faceFirstTri = localTri, faceTriCount = 1;
+    const int faceK = faceIndexForTriangle(sub, localTri,
+                                           &faceFirstTri, &faceTriCount);
 
-        m_selectedEdges.insert({std::min(g0, g1), std::max(g0, g1)});
-        m_selectedEdges.insert({std::min(g1, g2), std::max(g1, g2)});
-        m_selectedEdges.insert({std::min(g0, g2), std::max(g0, g2)});
+    const int vertOffset = localToGlobal(subIdx, 0);
+
+    for (size_t t = 0; t < faceTriCount; ++t) {
+        const size_t tri = faceFirstTri + t;
+        if (tri >= sub.triangles.size()) continue;
+        const int gi = localTriToGlobal(subIdx, tri);
+        m_selectedFaces.insert(gi);
+
+        const auto& triData = sub.triangles[tri];
+        m_selectedVertices.insert(vertOffset + static_cast<int>(triData.indices[0]));
+        m_selectedVertices.insert(vertOffset + static_cast<int>(triData.indices[1]));
+        m_selectedVertices.insert(vertOffset + static_cast<int>(triData.indices[2]));
+    }
+
+    // Edge dilation: insert only the polygon's PERIMETER edges. For
+    // an n-gon submesh those come from the EditableFace's index loop
+    // (NOT the fan-triangulation, which would leak the artificial
+    // diagonal edge into the selection). For triangle-only submeshes
+    // every triangle edge IS a perimeter edge. (Chunk 4b edge fix.)
+    if (faceK >= 0 && faceK < static_cast<int>(sub.faces.size())) {
+        const auto& f = sub.faces[faceK];
+        const size_t n = f.indices.size();
+        for (size_t i = 0; i < n; ++i) {
+            const int g0 = vertOffset + static_cast<int>(f.indices[i]);
+            const int g1 = vertOffset + static_cast<int>(f.indices[(i + 1) % n]);
+            m_selectedEdges.insert({std::min(g0, g1), std::max(g0, g1)});
+        }
+    } else {
+        // Legacy single-triangle face: 3 edges = the triangle's edges.
+        if (faceFirstTri < sub.triangles.size()) {
+            const auto& triData = sub.triangles[faceFirstTri];
+            const int g0 = vertOffset + static_cast<int>(triData.indices[0]);
+            const int g1 = vertOffset + static_cast<int>(triData.indices[1]);
+            const int g2 = vertOffset + static_cast<int>(triData.indices[2]);
+            m_selectedEdges.insert({std::min(g0, g1), std::max(g0, g1)});
+            m_selectedEdges.insert({std::min(g1, g2), std::max(g1, g2)});
+            m_selectedEdges.insert({std::min(g0, g2), std::max(g0, g2)});
+        }
     }
 
     updateSelectionOverlay();
@@ -626,7 +662,33 @@ void EditModeController::selectFace(int triIndex, bool addToSelection)
 
 void EditModeController::deselectFace(int triIndex)
 {
-    if (m_selectedFaces.erase(triIndex) > 0) {
+    if (!m_editableMesh) return;
+    auto [subIdx, localTri] = globalTriToLocal(triIndex);
+    if (subIdx >= m_editableMesh->subMeshes().size()) {
+        // Out of range — try the legacy single-triangle erase as a
+        // best-effort fallback so callers with stale indices don't
+        // silently no-op.
+        if (m_selectedFaces.erase(triIndex) > 0) {
+            updateSelectionOverlay();
+            emit editSelectionChanged();
+        }
+        return;
+    }
+    const auto& sub = m_editableMesh->subMeshes()[subIdx];
+
+    // Mirror selectFace's dilation: deselect every fan triangle of
+    // the clicked face so the user sees the whole face de-highlighted.
+    size_t faceFirstTri = localTri, faceTriCount = 1;
+    faceIndexForTriangle(sub, localTri, &faceFirstTri, &faceTriCount);
+
+    bool anyErased = false;
+    for (size_t t = 0; t < faceTriCount; ++t) {
+        const size_t tri = faceFirstTri + t;
+        if (tri >= sub.triangles.size()) continue;
+        const int gi = localTriToGlobal(subIdx, tri);
+        if (m_selectedFaces.erase(gi) > 0) anyErased = true;
+    }
+    if (anyErased) {
         updateSelectionOverlay();
         emit editSelectionChanged();
     }
@@ -688,6 +750,53 @@ int EditModeController::localTriToGlobal(size_t subMeshIndex, size_t localTriInd
         offset += static_cast<int>(m_editableMesh->subMeshes()[si].triangles.size());
 
     return offset + static_cast<int>(localTriIndex);
+}
+
+std::vector<int> EditModeController::selectedFacesAsHEFaceIndices() const
+{
+    std::vector<int> result;
+    if (!m_editableMesh) return result;
+    if (m_selectedFaces.empty()) return result;
+
+    // The HE face index for a given (subIdx, localTri) depends on
+    // whether the submesh has a populated `faces` array. If it does,
+    // the HE face index = sum of prior submeshes' face counts +
+    // faceIndexForTriangle's result. If not (legacy triangle-only),
+    // HE face index = sum of prior submeshes' triangle counts +
+    // localTri.
+    //
+    // HalfEdgeMesh::buildFromEditableMesh visits submeshes in order;
+    // within a submesh, when faces is non-empty it appends one HE face
+    // per `EditableFace`, otherwise one per triangle. So the offsets
+    // match this rule.
+    const auto& subs = m_editableMesh->subMeshes();
+    std::vector<int> heBaseBySub(subs.size(), 0);
+    int running = 0;
+    for (size_t s = 0; s < subs.size(); ++s) {
+        heBaseBySub[s] = running;
+        running += subs[s].faces.empty()
+                   ? static_cast<int>(subs[s].triangles.size())
+                   : static_cast<int>(subs[s].faces.size());
+    }
+
+    // Walk the selection, dedup via a small set keyed on HE face idx.
+    std::set<int> uniq;
+    for (int gi : m_selectedFaces) {
+        const auto [subIdx, localTri] = globalTriToLocal(gi);
+        if (subIdx >= subs.size()) continue;
+        const auto& sub = subs[subIdx];
+        const int faceK = faceIndexForTriangle(sub, localTri, nullptr, nullptr);
+        if (faceK >= 0) {
+            // n-gon submesh: HE face index = base + faceK.
+            uniq.insert(heBaseBySub[subIdx] + faceK);
+        } else {
+            // Legacy triangle-only submesh: HE face index = base +
+            // localTri (one HE face per triangle).
+            uniq.insert(heBaseBySub[subIdx] + static_cast<int>(localTri));
+        }
+    }
+    result.assign(uniq.begin(), uniq.end());
+    return result;
 }
 
 // ===========================================================================
@@ -926,47 +1035,95 @@ std::pair<int,int> EditModeController::hitTestEdge(const QPoint& screenPos,
     float bestDist = pixelRadius;
     std::pair<int,int> bestEdge = {-1, -1};
 
+    const Ogre::Vector3 camPos = camera->getDerivedPosition();
+
+    auto considerEdge = [&](int li0, int li1, const EditableSubMesh& sub,
+                            int vertOffset) {
+        if (li0 >= static_cast<int>(sub.vertices.size()) ||
+            li1 >= static_cast<int>(sub.vertices.size()))
+            return;
+
+        Ogre::Vector3 wp0 = node->convertLocalToWorldPosition(sub.vertices[li0].position);
+        Ogre::Vector3 wp1 = node->convertLocalToWorldPosition(sub.vertices[li1].position);
+
+        // Skip edges where both endpoints are behind the camera
+        Ogre::Vector3 camDir = camera->getDerivedDirection();
+        bool behind0 = (wp0 - camPos).dotProduct(camDir) < 0;
+        bool behind1 = (wp1 - camPos).dotProduct(camDir) < 0;
+        if (behind0 && behind1) return;
+
+        QPoint sp0 = worldToScreen(wp0, camera, viewportWidth, viewportHeight);
+        QPoint sp1 = worldToScreen(wp1, camera, viewportWidth, viewportHeight);
+
+        float dist = pointToSegmentDistance(screenPos, sp0, sp1);
+        if (dist < bestDist) {
+            bestDist = dist;
+            int g0 = vertOffset + li0;
+            int g1 = vertOffset + li1;
+            bestEdge = {std::min(g0, g1), std::max(g0, g1)};
+        }
+    };
+
+    // Compute per-face front-facing flags so we can skip edges whose
+    // both adjacent polygons face away from the camera. Per-face
+    // (rather than per-edge) so a quad's perimeter edges all share
+    // the same culling decision once. Boundary edges (only one
+    // incident face) are kept if that one face faces the camera.
+    // (Chunk 4b: edge selection mirrors face selection's front-only
+    // behaviour.)
+    auto isPolygonFrontFacing = [&](const EditableSubMesh& sub,
+                                    const std::vector<unsigned int>& corners) -> bool {
+        if (corners.size() < 3) return false;
+        Ogre::Vector3 nrm = Ogre::Vector3::ZERO;
+        for (size_t i = 0; i < corners.size(); ++i) {
+            if (corners[i] >= sub.vertices.size()) return false;
+            const auto& a = sub.vertices[corners[i]].position;
+            const auto& b = sub.vertices[corners[(i + 1) % corners.size()]].position;
+            nrm.x += (a.y - b.y) * (a.z + b.z);
+            nrm.y += (a.z - b.z) * (a.x + b.x);
+            nrm.z += (a.x - b.x) * (a.y + b.y);
+        }
+        // Newell normal in local space → world space (rotate via node
+        // orientation, ignore translation since direction).
+        const Ogre::Vector3 worldNrm = node->_getDerivedOrientation() * nrm;
+        const Ogre::Vector3 anyCornerWorld =
+            node->convertLocalToWorldPosition(sub.vertices[corners[0]].position);
+        const Ogre::Vector3 toCam = camPos - anyCornerWorld;
+        return worldNrm.dotProduct(toCam) > 0.0f;
+    };
+
     for (size_t si = 0; si < m_editableMesh->subMeshes().size(); ++si) {
         const auto& sub = m_editableMesh->subMeshes()[si];
         int vertOffset = localToGlobal(si, 0);
 
-        for (const auto& tri : sub.triangles) {
-            // Check each of the 3 edges in the triangle
-            int localIndices[3] = {
-                static_cast<int>(tri.indices[0]),
-                static_cast<int>(tri.indices[1]),
-                static_cast<int>(tri.indices[2])
-            };
-
-            for (int e = 0; e < 3; ++e) {
-                int li0 = localIndices[e];
-                int li1 = localIndices[(e + 1) % 3];
-
-                if (li0 >= static_cast<int>(sub.vertices.size()) ||
-                    li1 >= static_cast<int>(sub.vertices.size()))
-                    continue;
-
-                Ogre::Vector3 wp0 = node->convertLocalToWorldPosition(sub.vertices[li0].position);
-                Ogre::Vector3 wp1 = node->convertLocalToWorldPosition(sub.vertices[li1].position);
-
-                // Skip edges where both endpoints are behind the camera
-                Ogre::Vector3 camPos = camera->getDerivedPosition();
-                Ogre::Vector3 camDir = camera->getDerivedDirection();
-                bool behind0 = (wp0 - camPos).dotProduct(camDir) < 0;
-                bool behind1 = (wp1 - camPos).dotProduct(camDir) < 0;
-                if (behind0 && behind1)
-                    continue;
-
-                QPoint sp0 = worldToScreen(wp0, camera, viewportWidth, viewportHeight);
-                QPoint sp1 = worldToScreen(wp1, camera, viewportWidth, viewportHeight);
-
-                float dist = pointToSegmentDistance(screenPos, sp0, sp1);
-                if (dist < bestDist) {
-                    bestDist = dist;
-                    int g0 = vertOffset + li0;
-                    int g1 = vertOffset + li1;
-                    bestEdge = {std::min(g0, g1), std::max(g0, g1)};
+        // n-gon path: iterate the polygon's perimeter edges only,
+        // skipping triangle-fan diagonals (which are NOT real polygon
+        // edges) and back-facing polygons. (Chunk 4b edge fix.)
+        if (!sub.faces.empty()) {
+            for (const auto& face : sub.faces) {
+                const size_t n = face.indices.size();
+                if (n < 3) continue;
+                if (!isPolygonFrontFacing(sub, face.indices)) continue;
+                for (size_t i = 0; i < n; ++i) {
+                    const int li0 = static_cast<int>(face.indices[i]);
+                    const int li1 = static_cast<int>(face.indices[(i + 1) % n]);
+                    considerEdge(li0, li1, sub, vertOffset);
                 }
+            }
+        } else {
+            // Legacy triangle-only submesh: every triangle edge IS a
+            // polygon edge. Apply the same front-facing filter using
+            // the triangle's own corners.
+            for (const auto& tri : sub.triangles) {
+                std::vector<unsigned int> corners = {
+                    tri.indices[0], tri.indices[1], tri.indices[2] };
+                if (!isPolygonFrontFacing(sub, corners)) continue;
+                considerEdge(static_cast<int>(tri.indices[0]),
+                             static_cast<int>(tri.indices[1]), sub, vertOffset);
+                considerEdge(static_cast<int>(tri.indices[1]),
+                             static_cast<int>(tri.indices[2]), sub, vertOffset);
+                considerEdge(static_cast<int>(tri.indices[0]),
+                             static_cast<int>(tri.indices[2]), sub, vertOffset);
             }
         }
     }
@@ -1375,7 +1532,11 @@ bool EditModeController::extrudeSelection()
     std::vector<int> newHEVertices;
 
     if (m_selectionMode == FaceMode && !m_selectedFaces.empty()) {
-        std::vector<int> faceIndices(m_selectedFaces.begin(), m_selectedFaces.end());
+        // Triangle indices → unique HE face indices (chunk 4b). On
+        // n-gon submeshes one quad selection produces multiple
+        // triangle entries that all map to the same HE face;
+        // dedup is critical so extrudeFaces doesn't double-process.
+        const std::vector<int> faceIndices = selectedFacesAsHEFaceIndices();
         newHEVertices = heMesh.extrudeFaces(faceIndices);
     } else if (m_selectionMode == EdgeMode && !m_selectedEdges.empty()) {
         // Convert (min,max) vertex-pair edge selections to HE edge indices
@@ -2513,6 +2674,10 @@ inline void rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
     for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i)
         preMats.push_back(ent->getSubEntity(i)->getMaterialName());
 
+    // Re-init the entity so its SubEntity caches (vertex / index
+    // counts, skeleton anim buffers) sync to the resized mesh.
+    // Without this the next render uses stale draw-call params and
+    // the topology change appears as holes / broken geometry.
     ent->_deinitialise();
     ent->_initialise(true);
 
@@ -2522,6 +2687,24 @@ inline void rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
             ent->getSubEntity(i)->setMaterialName(preMats[i]);
     }
 
+    // Invalidate the cached RTSS technique so the next render
+    // regenerates it against the new vertex declaration. Lazy regen
+    // via SchemeResolverListener::handleSchemeNotFound runs on the
+    // next render. (Same pattern every other topology op uses.)
+    //
+    // KNOWN ISSUE post-chunk-4: bump-mapped meshes loaded through
+    // the n-gon import path lose their bump map (and sometimes basic
+    // per-pixel lighting) after a topology op. The cause is that
+    // `EditableMesh::loadFromAssimpFile` deliberately skips
+    // aiProcess_CalcTangentSpace (it forces triangulation) and the
+    // post-edit GPU upload path doesn't always reliably trigger an
+    // Ogre `buildTangentVectors` rebuild. Various RTSS
+    // re-attach permutations (sync / deferred / via
+    // applyNormalMapsToEntity / invalidate-only) all reproduce the
+    // failure on the same model. Tracked for a follow-up fix-PR
+    // with proper shader-pipeline instrumentation rather than
+    // continued blind permutation. Triangle-only assets and
+    // procedural primitives are unaffected.
     if (auto* sg = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
         for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
             const std::string& m = ent->getSubEntity(i)->getMaterialName();
@@ -2884,7 +3067,7 @@ int EditModeController::deleteSelection()
         };
     } else { // FaceMode
         if (m_selectedFaces.empty()) return 0;
-        std::vector<int> faces(m_selectedFaces.begin(), m_selectedFaces.end());
+        const std::vector<int> faces = selectedFacesAsHEFaceIndices();
         opLabel = "Delete Faces";
         mutate = [faces](HalfEdgeMesh& hm) { return hm.deleteFaces(faces); };
     }
@@ -2949,7 +3132,7 @@ int EditModeController::dissolveSelection()
         // Wire face dissolve to deleteFaces so the menu entry stays
         // active and predictable; an n-gon-aware variant can replace
         // this once the rest of the pipeline supports n-gons.
-        std::vector<int> faces(m_selectedFaces.begin(), m_selectedFaces.end());
+        const std::vector<int> faces = selectedFacesAsHEFaceIndices();
         opLabel = "Dissolve Faces";
         mutate = [faces](HalfEdgeMesh& hm) { return hm.deleteFaces(faces); };
     }
@@ -2984,7 +3167,8 @@ int EditModeController::subdivideSelection()
     std::vector<int> targetFaces;
     if (m_selectionMode == FaceMode) {
         if (m_selectedFaces.empty()) return 0;
-        targetFaces.assign(m_selectedFaces.begin(), m_selectedFaces.end());
+        // Triangle indices → unique HE face indices (chunk 4b).
+        targetFaces = selectedFacesAsHEFaceIndices();
     } else if (m_selectionMode == EdgeMode) {
         if (m_selectedEdges.empty()) return 0;
         // Convert global vertex pairs → HE edge indices → incident faces.
@@ -3022,18 +3206,37 @@ int EditModeController::subdivideSelection()
     const auto preSelectedEdges = m_selectedEdges;
     const auto preSelectedFaces = m_selectedFaces;
 
+    // Split target faces by arity (chunk 4b): triangles take the
+    // 1-to-4 split via `subdivideFaces`, n-gons take the 1-to-N quad
+    // split via `subdivideFacesToQuads`. Without this dispatch, the
+    // existing `subdivideFaces` would silently skip non-triangles
+    // (its triangle-only MVP), making clicks on quads no-op.
+    std::vector<int> triFaces, ngonFaces;
+    for (int f : targetFaces) {
+        if (f < 0 || f >= static_cast<int>(hm.faceCount())) continue;
+        const auto verts = hm.faceVertices(f);
+        if (verts.size() == 3) triFaces.push_back(f);
+        else if (verts.size() > 3) ngonFaces.push_back(f);
+    }
+
     // Capture target positions of the new midpoints BEFORE the mesh is
     // re-packed by toEditableMesh — the indices change after the round
     // trip, so we re-find the survivors by position (matches the merge
     // pipeline pattern). HE-vertex positions are stable across the call.
-    const auto newVertHE = hm.subdivideFaces(targetFaces);
-    if (newVertHE.empty()) return 0;
-
-    std::vector<Ogre::Vector3> midpointPositions;
-    midpointPositions.reserve(newVertHE.size());
-    for (int v : newVertHE) {
-        midpointPositions.push_back(hm.vertex(v).position);
+    std::vector<int> newVertHE;
+    if (!triFaces.empty()) {
+        auto v = hm.subdivideFaces(triFaces);
+        newVertHE.insert(newVertHE.end(), v.begin(), v.end());
     }
+    if (!ngonFaces.empty()) {
+        // subdivideFacesToQuads must run AFTER subdivideFaces because
+        // both rebuild the edge tables; running tris first means n-gon
+        // edge lookups happen against the post-tri-split topology.
+        // Fortunately tri-split doesn't touch n-gon faces.
+        auto v = hm.subdivideFacesToQuads(ngonFaces);
+        newVertHE.insert(newVertHE.end(), v.begin(), v.end());
+    }
+    if (newVertHE.empty()) return 0;
 
     EditableMesh updated;
     if (!hm.toEditableMesh(updated)) return 0;
@@ -3045,23 +3248,17 @@ int EditModeController::subdivideSelection()
     m_editableMesh->resizeEntityBuffers(m_editEntity);
     rewriteEntityAfterTopologyChange(m_editEntity);
 
-    // Re-find the new midpoints in the post-pack mesh and select them.
+    // Clear the entire selection. The pre-op selectFace dilation
+    // populated vertex / edge sets that are now stale (vertex indices
+    // shifted on re-pack, and the inserted midpoints don't have
+    // stable analogues in the pre-op selection set). Re-finding new
+    // midpoints by position used to leave a partial vertex selection
+    // around — confusing for the user and inconsistent with delete /
+    // dissolve / Catmull-Clark which all clear after the op. Match
+    // that pattern here. (Chunk 4b polish.)
     m_selectedVertices.clear();
     m_selectedEdges.clear();
     m_selectedFaces.clear();
-    const auto& subs = m_editableMesh->subMeshes();
-    int globalBase = 0;
-    for (const auto& sub : subs) {
-        for (size_t li = 0; li < sub.vertices.size(); ++li) {
-            for (const auto& tgt : midpointPositions) {
-                if (sub.vertices[li].position.squaredDistance(tgt) < 1e-10f) {
-                    m_selectedVertices.insert(globalBase + static_cast<int>(li));
-                    break;
-                }
-            }
-        }
-        globalBase += static_cast<int>(sub.vertices.size());
-    }
 
     auto* cmd = new EditMeshTopologyCommand(
         std::move(originalSubMeshes),
