@@ -1,10 +1,14 @@
 name: Deploy
 
-on: 
+on:
    push:
-      branches: [ "master" ]
+      branches: [ "master", "feat/quads" ]
    pull_request:
-      branches: [ "master" ]
+      # `master` covers shipping work; `feat/quads` is the long-lived
+      # quad-migration integration branch (#326) that chunked PRs land
+      # on before the final merge to master. Without it the chunked PRs
+      # would have no CI safety net.
+      branches: [ "master", "feat/quads" ]
    release:
       types: [published]
 
