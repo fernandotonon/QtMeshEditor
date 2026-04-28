@@ -247,3 +247,14 @@ TEST_F(OgreWidgetTest, RebuildRenderWindowPreservesBackgroundAndKeepsCamera)
     EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getNearClipDistance(), 0.05, 1e-5);
     EXPECT_NEAR(widget->getSpaceCamera()->getCamera()->getFarClipDistance(), 5000.0, 1e-3);
 }
+
+TEST_F(OgreWidgetTest, FsaaDefaultsToZeroWhenUnset)
+{
+    QSettings settings;
+    settings.remove(ViewportSettingsKeys::fsaaSamples());
+
+    EXPECT_NO_THROW(widget->rebuildRenderWindow());
+    app->processEvents();
+
+    EXPECT_EQ(widget->fsaaSamples(), 0u);
+}

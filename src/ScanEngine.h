@@ -19,6 +19,13 @@ struct Finding {
     QString message;
     bool fixable = false;
     bool fixed = false;
+    /// True when a fix was attempted but intentionally skipped (e.g. would increase file size).
+    /// This is distinct from asset-level "skipped" due to loadError.
+    bool skipped = false;
+    /// Positive number of bytes saved by applying the fix (0 when not applicable).
+    qint64 bytesSaved = 0;
+    /// Positive number of keyframes removed by applying the fix (0 when not applicable).
+    qint64 keysRemoved = 0;
 };
 
 struct AssetInfo {
@@ -45,6 +52,8 @@ struct AssetInfo {
     QList<double> animationDurations;      // seconds per animation
     QList<int> animationKeyframeCounts;    // max keyframes per animation
     QStringList boneNames;                 // unique bone names
+    /// Fraction of atomic node keys that are redundant under balanced simplify tolerances (0..1), file-level aggregate.
+    double animationRedundantKeyframeRatio = 0.0;
 
     // Redundant-keyframe analysis (filled when scan rule is active).
     // Total keyframes summed across all tracks of all animations.
@@ -66,6 +75,8 @@ struct ScanResult {
     int infos    = 0;
     int fixed    = 0;
     int skipped  = 0;
+    qint64 bytesSaved = 0;
+    qint64 keysRemoved = 0;
     double elapsedMs = 0;
 
     /// Wall-clock bounds for reports, always UTC (`yyyy-MM-dd'T'HH:mm:ss.zzzZ`). Set by `ScanEngine::run`.
@@ -101,7 +112,8 @@ public:
     static QList<Finding> evaluateRules(const AssetInfo& asset, const ScanConfig& config);
 
     /// Apply safe auto-fixes for findings that support it.
-    static void applyFixes(const ScanConfig& config, AssetInfo& asset,
+    /// \a scanRoot is the directory \c asset.relativePath is relative to (same as \c ScanEngine::run).
+    static void applyFixes(const ScanConfig& config, const QString& scanRoot, AssetInfo& asset,
                            QList<Finding>& findings);
 
     // --- Formatters ---

@@ -1,6 +1,25 @@
 #include "MaterialProcessor.h"
 #include "RTShaderHelper.h"
 
+namespace {
+static Ogre::Pass* ensureFirstPass(const Ogre::MaterialPtr& mat)
+{
+    if (!mat)
+        return nullptr;
+    Ogre::Technique* tech = nullptr;
+    if (mat->getNumTechniques() == 0)
+        tech = mat->createTechnique();
+    else
+        tech = mat->getTechnique(0);
+
+    if (!tech)
+        return nullptr;
+    if (tech->getNumPasses() == 0)
+        return tech->createPass();
+    return tech->getPass(0);
+}
+} // namespace
+
 void MaterialProcessor::loadScene(const aiScene* scene)
 {
     for(auto i = 0u; i < scene->mNumMaterials; i++) {
@@ -42,6 +61,9 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
             }
             if(normalTexPtr) {
                 Ogre::LogManager::getSingleton().logMessage("MaterialProcessor: Applying RTSS normal map '" + normalFilename + "' to existing material '" + materialName + "'");
+                // Some materials can exist without any techniques/passes (e.g. partially loaded
+                // script materials). Ensure a valid pass exists before RTSS touches it.
+                (void)ensureFirstPass(existingMaterial);
                 applyRTSSNormalMap(existingMaterial, normalTexPtr->getName());
             }
         }
@@ -49,30 +71,33 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
     }
 
     Ogre::MaterialPtr ogreMaterial = Ogre::MaterialManager::getSingleton().create(materialName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    Ogre::Pass* pass = ensureFirstPass(ogreMaterial);
+    if (!pass)
+        return ogreMaterial;
 
     aiColor3D color(0.f, 0.f, 0.f);
     if(AI_SUCCESS == material->Get(AI_MATKEY_COLOR_DIFFUSE, color)) {
-        ogreMaterial->getTechnique(0)->getPass(0)->setDiffuse(color.r, color.g, color.b, 1.0f);
+        pass->setDiffuse(color.r, color.g, color.b, 1.0f);
     }
 
     if(AI_SUCCESS == material->Get(AI_MATKEY_COLOR_AMBIENT, color)) {
         // PBR-workflow exporters often set ambient to (0,0,0) which kills ambient
         // lighting in Ogre's Phong model. Keep Ogre's default (white) in that case.
         if(color.r > 0.001f || color.g > 0.001f || color.b > 0.001f)
-            ogreMaterial->getTechnique(0)->getPass(0)->setAmbient(color.r, color.g, color.b);
+            pass->setAmbient(color.r, color.g, color.b);
     }
 
     if(AI_SUCCESS == material->Get(AI_MATKEY_COLOR_SPECULAR, color)) {
-        ogreMaterial->getTechnique(0)->getPass(0)->setSpecular(color.r, color.g, color.b, 1.0f);
+        pass->setSpecular(color.r, color.g, color.b, 1.0f);
     }
 
     if(AI_SUCCESS == material->Get(AI_MATKEY_COLOR_EMISSIVE, color)) {
-        ogreMaterial->getTechnique(0)->getPass(0)->setSelfIllumination(color.r, color.g, color.b);
+        pass->setSelfIllumination(color.r, color.g, color.b);
     }
 
     float shininess = 0.0f;
     if(AI_SUCCESS == material->Get(AI_MATKEY_SHININESS, shininess)) {
-        ogreMaterial->getTechnique(0)->getPass(0)->setShininess(shininess);
+        pass->setShininess(shininess);
     }
 
     // Handle textures
@@ -85,7 +110,7 @@ Ogre::MaterialPtr MaterialProcessor::processMaterial(const aiMaterial *material,
         if(!texturePtr){
             texturePtr = loadTexture(textureFilename, path, scene);
         }
-        auto* tus = ogreMaterial->getTechnique(0)->getPass(0)->createTextureUnitState(texturePtr->getName());
+        auto* tus = pass->createTextureUnitState(texturePtr->getName());
         tus->setName("diffuse_map");
     }
 

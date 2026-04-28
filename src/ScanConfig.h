@@ -21,7 +21,8 @@ struct ScanConfig {
     /// Glob patterns; default ctor fills with all Assimp import extensions (plus Ogre .mesh / .mesh.xml).
     QStringList includePatterns;
     QStringList excludePatterns = {
-        "**/node_modules/**", "**/.git/**", "**/build/**", "**/Build/**"
+        "**/node_modules/**", "**/.git/**", "**/build/**", "**/Build/**",
+        "**/dist/**", "**/out/**", "**/.next/**", "**/target/**", "**/.cache/**"
     };
 
     // rules section — existence checks
@@ -53,7 +54,7 @@ struct ScanConfig {
     // Redundant-keyframe detection. When enabled, the scanner analyzes each
     // animation's keyframes and warns if a meaningful share could be safely
     // removed via tolerance-based simplification. Defaults disable the check.
-    double redundantKeyframesPctThreshold = 0.0; // 0 = disabled; e.g. 30.0 = warn at >=30%
+    double redundantKeyframesPctThreshold = 40.0; // 0 = disabled; default warns at >=40% redundant keys
     double redundantKeyframesTranslationTol = 1e-3;  // Balanced preset (~1mm)
     double redundantKeyframesRotationDegTol = 0.5;
     double redundantKeyframesScaleTol = 1e-3;
