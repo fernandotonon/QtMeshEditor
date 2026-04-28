@@ -474,6 +474,29 @@ public:
         return true;
     }
 
+    bool buildSkeletonOnly(const Ogre::Skeleton* skeleton)
+    {
+        if (!skeleton) return false;
+        m_skeletonOnly = true;
+        m_hasSkeleton = true;
+        m_skeleton = const_cast<Ogre::Skeleton*>(skeleton);
+        m_entity = nullptr;
+        m_mesh = nullptr;
+
+        m_skeleton->reset();
+
+        m_w.writeHeader();
+        writeHeaderExtension();
+        writeGlobalSettings();
+        writeDocuments();
+        writeReferences();
+        writeDefinitions();
+        writeObjects();
+        writeConnections();
+        m_w.writeFooter();
+        return true;
+    }
+
 private:
     int64_t nextId() { return m_nextId++; }
 
@@ -607,8 +630,8 @@ private:
     {
         // Count object types
         int defCount = 1; // GlobalSettings always
-        int modelCount = m_mesh->getNumSubMeshes(); // one mesh model per submesh
-        int geomCount = m_mesh->getNumSubMeshes();
+        int modelCount = (m_mesh ? static_cast<int>(m_mesh->getNumSubMeshes()) : 0); // one mesh model per submesh
+        int geomCount = (m_mesh ? static_cast<int>(m_mesh->getNumSubMeshes()) : 0);
         int matCount = 0;
         int deformerCount = 0;
         int nodeAttrCount = 0;
@@ -623,18 +646,20 @@ private:
         // Count unique materials and textures
         std::set<std::string> matNames;
         std::set<std::string> texNames;
-        for (const auto* sub : m_entity->getSubEntities())
-        {
-            auto mat = sub->getMaterial();
-            matNames.insert(mat->getName());
-            if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0)
+        if (m_entity) {
+            for (const auto* sub : m_entity->getSubEntities())
             {
-                auto* pass = mat->getTechnique(0)->getPass(0);
-                for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
+                auto mat = sub->getMaterial();
+                matNames.insert(mat->getName());
+                if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0)
                 {
-                    auto texName = pass->getTextureUnitState(ti)->getTextureName();
-                    if (!texName.empty())
-                        texNames.insert(texName);
+                    auto* pass = mat->getTechnique(0)->getPass(0);
+                    for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
+                    {
+                        auto texName = pass->getTextureUnitState(ti)->getTextureName();
+                        if (!texName.empty())
+                            texNames.insert(texName);
+                    }
                 }
             }
         }
@@ -650,16 +675,18 @@ private:
             poseCount = 1; // BindPose
 
             // Skin deformers (1 per submesh) + cluster deformers (1 per bone-per-submesh that has weights)
-            deformerCount = geomCount; // skin deformers
-            for (unsigned int si = 0; si < m_mesh->getNumSubMeshes(); ++si)
-            {
-                const auto* subMesh = m_mesh->getSubMesh(si);
-                const auto& boneAssignments = subMesh->useSharedVertices
-                    ? m_mesh->getBoneAssignments() : subMesh->getBoneAssignments();
-                std::set<unsigned short> boneIndices;
-                for (const auto& [_, vba] : boneAssignments)
-                    boneIndices.insert(vba.boneIndex);
-                deformerCount += static_cast<int>(boneIndices.size());
+            if (m_mesh) {
+                deformerCount = geomCount; // skin deformers
+                for (unsigned int si = 0; si < m_mesh->getNumSubMeshes(); ++si)
+                {
+                    const auto* subMesh = m_mesh->getSubMesh(si);
+                    const auto& boneAssignments = subMesh->useSharedVertices
+                        ? m_mesh->getBoneAssignments() : subMesh->getBoneAssignments();
+                    std::set<unsigned short> boneIndices;
+                    for (const auto& [_, vba] : boneAssignments)
+                        boneIndices.insert(vba.boneIndex);
+                    deformerCount += static_cast<int>(boneIndices.size());
+                }
             }
 
             if (m_skeleton->getNumAnimations() > 0)
@@ -745,14 +772,17 @@ private:
         m_w.beginNode("Objects");
         m_w.endProperties();
 
-        writeGeometryObjects();
-        writeMeshModels();
-        writeMaterialObjects();
-        writeTextureObjects();
+        if (!m_skeletonOnly) {
+            writeGeometryObjects();
+            writeMeshModels();
+            writeMaterialObjects();
+            writeTextureObjects();
+        }
         if (m_hasSkeleton)
         {
             writeBoneModels();
-            writeSkinDeformers();
+            if (!m_skeletonOnly)
+                writeSkinDeformers();
             writeBindPose();
             if (m_skeleton->getNumAnimations() > 0)
                 writeAnimations();
@@ -1400,6 +1430,34 @@ private:
                     sz[ki] = scl.z;
                 }
 
+                // Per-channel time arrays: collapse flat curves to a single key so FBX payloads
+                // stay smaller without changing motion (constant channel == one sample).
+                std::vector<int64_t> tTx = times, tTy = times, tTz = times;
+                std::vector<int64_t> tRx = times, tRy = times, tRz = times;
+                std::vector<int64_t> tSx = times, tSy = times, tSz = times;
+
+                auto compactIfFlat = [](std::vector<int64_t>& kt, std::vector<double>& v, double eps) {
+                    if (v.size() <= 1)
+                        return;
+                    const double r = v[0];
+                    for (size_t i = 1; i < v.size(); ++i) {
+                        if (std::fabs(v[i] - r) > eps)
+                            return;
+                    }
+                    kt.resize(1);
+                    v.resize(1);
+                };
+
+                compactIfFlat(tTx, tx, 1e-6);
+                compactIfFlat(tTy, ty, 1e-6);
+                compactIfFlat(tTz, tz, 1e-6);
+                compactIfFlat(tRx, rxArr, 1e-4); // Euler degrees
+                compactIfFlat(tRy, ryArr, 1e-4);
+                compactIfFlat(tRz, rzArr, 1e-4);
+                compactIfFlat(tSx, sx, 1e-6);
+                compactIfFlat(tSy, sy, 1e-6);
+                compactIfFlat(tSz, sz, 1e-6);
+
                 // AnimationCurveNode T
                 int64_t cnT = nextId();
                 writeAnimCurveNode(cnT, "T", "d|X", "d|Y", "d|Z",
@@ -1471,15 +1529,15 @@ private:
                     m_animCurveConns.push_back({curveId, curveNodeId, channel});
                 };
 
-                writeCurve(times, tx, cnT, "d|X");
-                writeCurve(times, ty, cnT, "d|Y");
-                writeCurve(times, tz, cnT, "d|Z");
-                writeCurve(times, rxArr, cnR, "d|X");
-                writeCurve(times, ryArr, cnR, "d|Y");
-                writeCurve(times, rzArr, cnR, "d|Z");
-                writeCurve(times, sx, cnS, "d|X");
-                writeCurve(times, sy, cnS, "d|Y");
-                writeCurve(times, sz, cnS, "d|Z");
+                writeCurve(tTx, tx, cnT, "d|X");
+                writeCurve(tTy, ty, cnT, "d|Y");
+                writeCurve(tTz, tz, cnT, "d|Z");
+                writeCurve(tRx, rxArr, cnR, "d|X");
+                writeCurve(tRy, ryArr, cnR, "d|Y");
+                writeCurve(tRz, rzArr, cnR, "d|Z");
+                writeCurve(tSx, sx, cnS, "d|X");
+                writeCurve(tSy, sy, cnS, "d|Y");
+                writeCurve(tSz, sz, cnS, "d|Z");
             }
         }
     }
@@ -1735,18 +1793,20 @@ private:
         {
             // Track (texName, matName, fbxProperty) tuples
             std::set<std::tuple<std::string, std::string, std::string>> texMatPairs;
-            for (const auto* sub : m_entity->getSubEntities())
-            {
-                auto mat = sub->getMaterial();
-                if (mat->getNumTechniques() == 0 || mat->getTechnique(0)->getNumPasses() == 0) continue;
-                auto* pass = mat->getTechnique(0)->getPass(0);
-                for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
+            if (m_entity) {
+                for (const auto* sub : m_entity->getSubEntities())
                 {
-                    auto* tus = pass->getTextureUnitState(ti);
-                    std::string texName = tus->getTextureName();
-                    if (!texName.empty()) {
-                        std::string fbxProp = (tus->getName() == "normal_map") ? "NormalMap" : "DiffuseColor";
-                        texMatPairs.insert({texName, mat->getName(), fbxProp});
+                    auto mat = sub->getMaterial();
+                    if (mat->getNumTechniques() == 0 || mat->getTechnique(0)->getNumPasses() == 0) continue;
+                    auto* pass = mat->getTechnique(0)->getPass(0);
+                    for (unsigned short ti = 0; ti < pass->getNumTextureUnitStates(); ++ti)
+                    {
+                        auto* tus = pass->getTextureUnitState(ti);
+                        std::string texName = tus->getTextureName();
+                        if (!texName.empty()) {
+                            std::string fbxProp = (tus->getName() == "normal_map") ? "NormalMap" : "DiffuseColor";
+                            texMatPairs.insert({texName, mat->getName(), fbxProp});
+                        }
                     }
                 }
             }
@@ -1787,15 +1847,17 @@ private:
                 }
             }
 
-            // Skin → Geometry
-            for (size_t i = 0; i < m_skinIds.size() && i < m_geomIds.size(); ++i)
-                writeConnection("OO", m_skinIds[i], m_geomIds[i]);
+            if (!m_skeletonOnly) {
+                // Skin → Geometry
+                for (size_t i = 0; i < m_skinIds.size() && i < m_geomIds.size(); ++i)
+                    writeConnection("OO", m_skinIds[i], m_geomIds[i]);
 
-            // Cluster → Skin, Bone → Cluster
-            for (const auto& cc : m_clusterConnections)
-            {
-                writeConnection("OO", cc.clusterId, cc.skinId);
-                writeConnection("OO", m_boneModelIds[cc.boneHandle], cc.clusterId);
+                // Cluster → Skin, Bone → Cluster
+                for (const auto& cc : m_clusterConnections)
+                {
+                    writeConnection("OO", cc.clusterId, cc.skinId);
+                    writeConnection("OO", m_boneModelIds[cc.boneHandle], cc.clusterId);
+                }
             }
 
             // AnimationStack → scene root
@@ -1979,6 +2041,7 @@ private:
     const Ogre::Mesh* m_mesh = nullptr;
     Ogre::Skeleton* m_skeleton = nullptr;
     bool m_hasSkeleton = false;
+    bool m_skeletonOnly = false;
 
     int64_t m_nextId = 1000000;
     int64_t m_documentId = 100000;
@@ -2048,6 +2111,34 @@ bool FBXExporter::exportFBX(const Ogre::Entity* entity, const QString& filePath)
     {
         Ogre::LogManager::getSingleton().logError(
             "FBXExporter: failed to build FBX document for " + std::string(entity->getName()));
+    }
+
+    return ok;
+}
+
+bool FBXExporter::exportSkeletonOnlyFBX(const Ogre::Skeleton* skeleton, const QString& filePath)
+{
+    if (!skeleton || filePath.isEmpty())
+        return false;
+
+    std::ofstream out(filePath.toStdString(), std::ios::binary);
+    if (!out.is_open())
+    {
+        Ogre::LogManager::getSingleton().logError(
+            "FBXExporter: failed to open " + filePath.toStdString() + " for writing");
+        return false;
+    }
+
+    FBXBinaryWriter writer(out);
+    FBXDocumentBuilder builder(writer);
+    bool ok = builder.buildSkeletonOnly(skeleton);
+
+    out.close();
+
+    if (!ok)
+    {
+        Ogre::LogManager::getSingleton().logError(
+            "FBXExporter: failed to build skeleton-only FBX document");
     }
 
     return ok;

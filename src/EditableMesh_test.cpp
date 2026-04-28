@@ -1047,3 +1047,58 @@ TEST(EditableMeshStandalone, LoadFromAssimpFileReplacesPreviousContents) {
     ASSERT_EQ(mesh.subMeshCount(), 1u);
     EXPECT_EQ(mesh.subMeshes()[0].vertices.size(), 4u);
 }
+
+// ===========================================================================
+// commitToEntity / resizeEntityBuffers wipe qtme.source_path (chunk 4)
+// ===========================================================================
+
+TEST_F(EditableMeshTest, CommitToEntityClearsCachedSourcePath) {
+    // Simulate: a freshly-imported asset has the source path tag
+    // attached. Commit-to-entity (a same-vertex-count edit) must clear
+    // the tag so the next enterEditMode falls back to the legacy
+    // loadFromEntity path instead of re-importing and discarding the
+    // user's edit.
+    auto meshPtr = createInMemoryTriangleMesh("EditableMesh_commit_clear_path");
+    auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_commit_clear_path_node");
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
+
+    meshPtr->getUserObjectBindings().setUserAny(
+        "qtme.source_path", Ogre::Any(std::string("/some/path.fbx")));
+    ASSERT_TRUE(meshPtr->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value());
+
+    EditableMesh editMesh;
+    ASSERT_TRUE(editMesh.loadFromEntity(entity));
+    EXPECT_TRUE(editMesh.commitToEntity(entity));
+
+    EXPECT_FALSE(meshPtr->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value())
+        << "commitToEntity must wipe the cached source path so subsequent "
+           "enterEditMode calls don't re-import and lose the edit";
+
+    Manager::getSingleton()->destroySceneNode(
+        "EditableMesh_commit_clear_path_node");
+}
+
+TEST_F(EditableMeshTest, ResizeEntityBuffersClearsCachedSourcePath) {
+    // Same rationale as above for the topology-edit path.
+    auto meshPtr = createInMemoryTriangleMesh("EditableMesh_resize_clear_path");
+    auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_resize_clear_path_node");
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
+
+    meshPtr->getUserObjectBindings().setUserAny(
+        "qtme.source_path", Ogre::Any(std::string("/some/path.fbx")));
+    ASSERT_TRUE(meshPtr->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value());
+
+    EditableMesh editMesh;
+    ASSERT_TRUE(editMesh.loadFromEntity(entity));
+    EXPECT_TRUE(editMesh.resizeEntityBuffers(entity));
+
+    EXPECT_FALSE(meshPtr->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value())
+        << "resizeEntityBuffers must wipe the cached source path";
+
+    Manager::getSingleton()->destroySceneNode(
+        "EditableMesh_resize_clear_path_node");
+}

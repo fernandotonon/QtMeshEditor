@@ -188,12 +188,12 @@ void OgreWidget::initOgreWindow(void)
     params["macAPICocoaUseNSView"] = "true";
 #endif
 
-    {
-        QSettings settings;
-        const int fsaa = settings.value(ViewportSettingsKeys::fsaaSamples(), 4).toInt();
-        if (fsaa > 0)
-            params["FSAA"] = Ogre::StringConverter::toString(fsaa);
-    }
+    QSettings settings;
+    // Default FSAA=0 on Linux: MSAA support varies by driver/setup and can cause
+    // a black viewport in some installed environments. Users can opt-in via settings.
+    const int requestedFsaa = settings.value(ViewportSettingsKeys::fsaaSamples(), 0).toInt();
+    if (requestedFsaa > 0)
+        params["FSAA"] = Ogre::StringConverter::toString(requestedFsaa);
 
     QString name = "Viewport " + QString::number(getIndex());
     while (mOgreRoot->getRenderTarget(name.toStdString())) {

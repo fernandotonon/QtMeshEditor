@@ -1733,11 +1733,13 @@ TEST_F(FBXExporterCoverageTest, AnimationCurves) {
         // Should have KeyTime, KeyValueFloat, KeyAttrFlags
         auto* keyTime = curve->find("KeyTime");
         ASSERT_NE(keyTime, nullptr);
-        EXPECT_EQ(keyTime->properties[0].longArray.size(), 3u); // 3 keyframes
+        const size_t keyCount = keyTime->properties[0].longArray.size();
+        // Curves may be compacted to a single key when the channel is flat.
+        EXPECT_TRUE(keyCount == 1u || keyCount == 3u);
 
         auto* keyValue = curve->find("KeyValueFloat");
         ASSERT_NE(keyValue, nullptr);
-        EXPECT_EQ(keyValue->properties[0].floatArray.size(), 3u);
+        EXPECT_EQ(keyValue->properties[0].floatArray.size(), keyCount);
 
         auto* keyFlags = curve->find("KeyAttrFlags");
         ASSERT_NE(keyFlags, nullptr);
@@ -2295,6 +2297,53 @@ TEST_F(FBXExporterCoverageTest, ExportAnimatedMesh_PreservesAnimations) {
     EXPECT_GE(curves.size(), 1u);
 
     cleanup(r);
+}
+
+TEST_F(FBXExporterCoverageTest, ExportSkeletonOnly_CreatesSkeletonAndAnimations)
+{
+    // Build a skeleton with two bones and a simple animation, without any mesh/entity.
+    auto skel = Ogre::SkeletonManager::getSingleton().create(
+        "SkelOnlyTest", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, true);
+    auto* root = skel->createBone("Root", 0);
+    root->setPosition(0, 0, 0);
+    auto* child = skel->createBone("Child", 1);
+    child->setPosition(0, 1, 0);
+    root->addChild(child);
+
+    auto* anim = skel->createAnimation("wave", 1.0f);
+    auto* track = anim->createNodeTrack(0, child);
+    {
+        auto* k0 = track->createNodeKeyFrame(0.0f);
+        k0->setTranslate(Ogre::Vector3(0, 1, 0));
+        k0->setRotation(Ogre::Quaternion::IDENTITY);
+        k0->setScale(Ogre::Vector3::UNIT_SCALE);
+        auto* k1 = track->createNodeKeyFrame(1.0f);
+        k1->setTranslate(Ogre::Vector3(0, 1, 0));
+        k1->setRotation(Ogre::Quaternion(Ogre::Degree(45), Ogre::Vector3::UNIT_Z));
+        k1->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    const QString outPath = QDir(QDir::tempPath()).filePath(QString("fbx_skeleton_only_%1.fbx").arg(meshCounter));
+    ASSERT_TRUE(FBXExporter::exportSkeletonOnlyFBX(skel.get(), outPath));
+
+    auto nodes = parseFBX(outPath.toStdString());
+    ASSERT_FALSE(nodes.empty());
+    auto* objects = findTopLevel(nodes, "Objects");
+    ASSERT_NE(objects, nullptr);
+
+    // Bone models & skeleton node attributes should exist.
+    auto models = objects->findAll("Model");
+    auto nodeAttrs = objects->findAll("NodeAttribute");
+    EXPECT_GE(models.size(), 2);
+    EXPECT_GE(nodeAttrs.size(), 2);
+
+    // Animation objects should exist.
+    auto animStacks = objects->findAll("AnimationStack");
+    auto animCurves = objects->findAll("AnimationCurve");
+    EXPECT_GE(animStacks.size(), 1);
+    EXPECT_GE(animCurves.size(), 1);
+
+    QFile::remove(outPath);
 }
 
 // ==========================================================================

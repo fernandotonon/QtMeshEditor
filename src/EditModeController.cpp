@@ -269,9 +269,69 @@ bool EditModeController::enterEditMode()
     QList<Ogre::Entity*> entities = sel->getResolvedEntities();
     m_editEntity = entities.first();
 
-    // Decompose mesh into editable data
+    // Decompose mesh into editable data. Two paths:
+    //
+    //  - n-gon path: when MeshImporterExporter has cached the source
+    //    file path (qtme.source_path) on the Ogre::Mesh AND no edit
+    //    has been committed since import (commitToEntity / resize-
+    //    EntityBuffers wipe the cache on mutation), re-import the
+    //    asset through Assimp with aiProcess_Triangulate disabled so
+    //    source quads survive into EditableSubMesh::faces.
+    //
+    //  - legacy path: read the live Ogre buffers via loadFromEntity.
+    //    This is what every prior chunk used, and what every code
+    //    path that doesn't have a source path (procedural primitives,
+    //    .scene.glb sub-entities, post-edit re-entries) falls back to.
+    //
+    // The n-gon path enables Catmull-Clark subdivision, loop cut, and
+    // any future quad-aware op to act on real source quads instead of
+    // the diagonal triangulation Assimp emits by default.
+    // (Quad migration #326, chunk 4.)
     m_editableMesh = std::make_unique<EditableMesh>();
-    if (!m_editableMesh->loadFromEntity(m_editEntity)) {
+
+    bool loaded = false;
+    {
+        const Ogre::MeshPtr meshPtr = m_editEntity->getMesh();
+        if (meshPtr) {
+            const auto& bindings = meshPtr->getUserObjectBindings();
+            const Ogre::Any& any = bindings.getUserAny("qtme.source_path");
+            if (any.has_value()) {
+                try {
+                    const std::string sourcePath =
+                        Ogre::any_cast<std::string>(any);
+                    // The original importer cached its
+                    // convert-to-left-handed choice alongside the path.
+                    // Apply the SAME flag here so the editable mesh
+                    // stays in the same coordinate system as the
+                    // rendered Ogre buffers — without this, on every
+                    // non-.x asset the vertex / edge / face overlays
+                    // would draw mirrored (X flipped) relative to the
+                    // on-screen geometry. Defaults to true to match
+                    // AssimpToOgreImporter's behaviour for unknown
+                    // origins.
+                    bool convertLH = true;
+                    const Ogre::Any& lhAny =
+                        bindings.getUserAny("qtme.source_convert_lh");
+                    if (lhAny.has_value()) {
+                        try {
+                            convertLH = Ogre::any_cast<bool>(lhAny);
+                        } catch (const Ogre::Exception&) {}
+                    }
+                    if (!sourcePath.empty()
+                        && m_editableMesh->loadFromAssimpFile(sourcePath, convertLH)) {
+                        loaded = true;
+                        SentryReporter::addBreadcrumb("edit_mode",
+                            "Edit Mode entered via n-gon import path");
+                    }
+                } catch (const Ogre::Exception&) {
+                    // The Any contained something other than a string —
+                    // shouldn't happen but fall through to the legacy
+                    // path defensively.
+                }
+            }
+        }
+    }
+    if (!loaded && !m_editableMesh->loadFromEntity(m_editEntity)) {
         SentryReporter::addBreadcrumb("edit_mode", "Failed to load mesh data for Edit Mode");
         m_editableMesh.reset();
         m_editEntity = nullptr;

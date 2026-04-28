@@ -262,10 +262,19 @@ public:
      * @param path The path the asset was originally imported from.
      *             Should be the value cached on `Ogre::Mesh` via
      *             `getUserObjectBindings().getUserAny("qtme.source_path")`.
+     * @param convertToLeftHanded If true, applies `aiProcess_ConvertToLeftHanded`
+     *             so the resulting positions / UVs match Ogre's left-handed
+     *             coordinate system. MUST match the flag the original
+     *             import used; otherwise the editable representation
+     *             will be mirrored (X flipped) relative to the rendered
+     *             mesh and the vertex/edge/face overlays will draw
+     *             on the wrong side. The original importer caches its
+     *             choice at `getUserAny("qtme.source_convert_lh")`.
      * @return true on success; false if the file is missing, can't be
      *         parsed, or contains no mesh data.
      */
-    bool loadFromAssimpFile(const std::string& path);
+    bool loadFromAssimpFile(const std::string& path,
+                            bool convertToLeftHanded = true);
 
     /**
      * @brief Merge vertices at (approximately) coincident positions within

@@ -30,12 +30,16 @@ THE SOFTWARE.
 #define FBXEXPORTER_H
 
 #include <OgreEntity.h>
+#include <OgreSkeleton.h>
 #include <QString>
 
 class FBXExporter
 {
 public:
     static bool exportFBX(const Ogre::Entity* entity, const QString& filePath);
+    /// Export an FBX containing only a skeleton + animations (no geometry).
+    /// This is intended for animation-only FBX round-tripping without introducing dummy meshes.
+    static bool exportSkeletonOnlyFBX(const Ogre::Skeleton* skeleton, const QString& filePath);
 };
 
 #endif // FBXEXPORTER_H

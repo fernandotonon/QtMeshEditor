@@ -8,6 +8,8 @@
 #include <QRegularExpression>
 #include <cctype>
 #include <unordered_map>
+#include <vector>
+#include <cmath>
 
 // Registry: skeleton name → up-axis (1=Y-up, 2=Z-up).
 // Populated by AnimationMerger::registerSkeletonUpAxis() at import time.
@@ -586,6 +588,8 @@ int AnimationMerger::simplifyAnimation(Ogre::Skeleton* skel,
     newAnim->setRotationInterpolationMode(rotInterpMode);
 
     for (const auto& td : tracks) {
+        if (td.keys.empty())
+            continue;
         auto* newTrack = newAnim->createNodeTrack(td.handle);
         if (td.associatedNode)
             newTrack->setAssociatedNode(td.associatedNode);
