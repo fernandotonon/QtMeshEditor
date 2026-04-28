@@ -269,9 +269,51 @@ bool EditModeController::enterEditMode()
     QList<Ogre::Entity*> entities = sel->getResolvedEntities();
     m_editEntity = entities.first();
 
-    // Decompose mesh into editable data
+    // Decompose mesh into editable data. Two paths:
+    //
+    //  - n-gon path: when MeshImporterExporter has cached the source
+    //    file path (qtme.source_path) on the Ogre::Mesh AND no edit
+    //    has been committed since import (commitToEntity / resize-
+    //    EntityBuffers wipe the cache on mutation), re-import the
+    //    asset through Assimp with aiProcess_Triangulate disabled so
+    //    source quads survive into EditableSubMesh::faces.
+    //
+    //  - legacy path: read the live Ogre buffers via loadFromEntity.
+    //    This is what every prior chunk used, and what every code
+    //    path that doesn't have a source path (procedural primitives,
+    //    .scene.glb sub-entities, post-edit re-entries) falls back to.
+    //
+    // The n-gon path enables Catmull-Clark subdivision, loop cut, and
+    // any future quad-aware op to act on real source quads instead of
+    // the diagonal triangulation Assimp emits by default.
+    // (Quad migration #326, chunk 4.)
     m_editableMesh = std::make_unique<EditableMesh>();
-    if (!m_editableMesh->loadFromEntity(m_editEntity)) {
+
+    bool loaded = false;
+    {
+        const Ogre::MeshPtr meshPtr = m_editEntity->getMesh();
+        if (meshPtr) {
+            const auto& bindings = meshPtr->getUserObjectBindings();
+            const Ogre::Any& any = bindings.getUserAny("qtme.source_path");
+            if (any.has_value()) {
+                try {
+                    const std::string sourcePath =
+                        Ogre::any_cast<std::string>(any);
+                    if (!sourcePath.empty()
+                        && m_editableMesh->loadFromAssimpFile(sourcePath)) {
+                        loaded = true;
+                        SentryReporter::addBreadcrumb("edit_mode",
+                            "Edit Mode entered via n-gon import path");
+                    }
+                } catch (const Ogre::Exception&) {
+                    // The Any contained something other than a string —
+                    // shouldn't happen but fall through to the legacy
+                    // path defensively.
+                }
+            }
+        }
+    }
+    if (!loaded && !m_editableMesh->loadFromEntity(m_editEntity)) {
         SentryReporter::addBreadcrumb("edit_mode", "Failed to load mesh data for Edit Mode");
         m_editableMesh.reset();
         m_editEntity = nullptr;

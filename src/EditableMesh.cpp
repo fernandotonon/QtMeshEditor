@@ -448,6 +448,12 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
         }
     }
 
+    // Clear the cached source-file path: the live GPU buffers have
+    // diverged from the imported asset. Subsequent enterEditMode calls
+    // must use the legacy loadFromEntity path so user edits aren't
+    // discarded by an n-gon re-import. (Quad migration #326, chunk 4.)
+    mesh->getUserObjectBindings().eraseUserAny("qtme.source_path");
+
     return true;
 }
 
@@ -638,6 +644,9 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
 
     // Recalculate bounds
     SubMeshTransform::recalculateMeshBounds(mesh);
+
+    // Topology has changed — same rationale as commitToEntity above.
+    mesh->getUserObjectBindings().eraseUserAny("qtme.source_path");
 
     return true;
 }

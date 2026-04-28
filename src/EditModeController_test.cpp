@@ -18,6 +18,9 @@ The MIT License
 #include "HalfEdgeMesh.h"
 #include <Ogre.h>
 #include <QSignalSpy>
+#include <QDir>
+#include <QFile>
+#include <QTextStream>
 #include <set>
 #include <utility>
 #include <cmath>
@@ -1875,4 +1878,108 @@ TEST_F(EditModeControllerBevelE2ETest, FillSelectionPushesUndoCommand) {
     extractEntityBuffers(m_entity, posAfterUndo, trisAfterUndo);
     EXPECT_EQ(trisAfterUndo.size(), triCountBefore - 1)
         << "undo after fill should drop back to the post-delete tri count";
+}
+
+// ===========================================================================
+// enterEditMode: n-gon import path (chunk 4)
+// ===========================================================================
+
+namespace {
+// Write a minimal quad OBJ to a temp file. Mirrors the helper in
+// EditableMesh_test.cpp (intentionally duplicated rather than shared
+// across translation units, since the test files don't share a TU).
+QString writeQuadObjForCtrl(const QString& baseName)
+{
+    const QString path = QDir::tempPath() + "/" + baseName + ".obj";
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return {};
+    QTextStream out(&f);
+    out << "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3 4\n";
+    f.close();
+    return path;
+}
+} // namespace
+
+TEST_F(EditModeControllerBevelE2ETest, EnterEditModeUsesNgonPathWhenSourceCached) {
+    // When the entity's mesh has qtme.source_path set, enterEditMode
+    // should re-import via Assimp with aiProcess_Triangulate disabled,
+    // populating EditableSubMesh::faces with the polygon structure.
+    const QString objPath = writeQuadObjForCtrl("ctrl_ngon_path");
+    ASSERT_FALSE(objPath.isEmpty());
+
+    // Tag the cube mesh from the fixture's setup with a source path
+    // pointing at the OBJ. enterEditMode should then re-import the OBJ
+    // (overriding the cube's geometry — that's fine, the test only
+    // verifies that the n-gon code path fired, not vertex content).
+    auto* mesh = m_entity->getMesh().get();
+    mesh->getUserObjectBindings().setUserAny(
+        "qtme.source_path", Ogre::Any(objPath.toStdString()));
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+
+    auto* editableMesh = ctrl->currentMesh();
+    ASSERT_NE(editableMesh, nullptr);
+    ASSERT_FALSE(editableMesh->subMeshes().empty());
+    EXPECT_FALSE(editableMesh->subMeshes()[0].faces.empty())
+        << "enterEditMode with source_path set should populate faces "
+           "via the n-gon-aware loadFromAssimpFile path";
+    EXPECT_EQ(editableMesh->subMeshes()[0].faces[0].indices.size(), 4u);
+
+    QFile::remove(objPath);
+}
+
+TEST_F(EditModeControllerBevelE2ETest, EnterEditModeFallsBackToLegacyWhenNoSourcePath) {
+    // The fixture's cube has no qtme.source_path tag. enterEditMode
+    // should fall through to loadFromEntity and produce the
+    // triangle-only legacy submesh shape (faces empty).
+    auto* mesh = m_entity->getMesh().get();
+    EXPECT_FALSE(mesh->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value())
+        << "fixture cube starts without source path — sanity check";
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+
+    auto* editableMesh = ctrl->currentMesh();
+    ASSERT_NE(editableMesh, nullptr);
+    ASSERT_FALSE(editableMesh->subMeshes().empty());
+    EXPECT_TRUE(editableMesh->subMeshes()[0].faces.empty())
+        << "no source path → legacy path → faces empty (chunk-1 invariant)";
+}
+
+TEST_F(EditModeControllerBevelE2ETest, EnterEditModeAfterEditDoesNotReimport) {
+    // Enter Edit Mode with the n-gon path (sets faces), make a
+    // committable edit, exit, re-enter. The second entry must use the
+    // legacy path because the first edit wiped qtme.source_path.
+    const QString objPath = writeQuadObjForCtrl("ctrl_ngon_post_edit");
+    ASSERT_FALSE(objPath.isEmpty());
+
+    auto* mesh = m_entity->getMesh().get();
+    mesh->getUserObjectBindings().setUserAny(
+        "qtme.source_path", Ogre::Any(objPath.toStdString()));
+
+    auto* ctrl = EditModeController::instance();
+    ASSERT_TRUE(ctrl->enterEditMode());
+    ASSERT_FALSE(ctrl->currentMesh()->subMeshes().empty());
+    ASSERT_FALSE(ctrl->currentMesh()->subMeshes()[0].faces.empty())
+        << "first entry must take the n-gon path";
+
+    // Commit any change (translate one vertex by zero — still triggers
+    // the commitToEntity path that wipes the source path).
+    ctrl->setSelectionMode(EditModeController::VertexMode);
+    ctrl->selectVertex(0);
+    ctrl->translateSelectedVertices(Ogre::Vector3::ZERO);
+    ctrl->exitEditMode(/*commitChanges*/ true);
+
+    EXPECT_FALSE(mesh->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value())
+        << "exitEditMode commit must have wiped the source path";
+
+    // Re-enter: should fall back to legacy path now.
+    ASSERT_TRUE(ctrl->enterEditMode());
+    EXPECT_TRUE(ctrl->currentMesh()->subMeshes()[0].faces.empty())
+        << "second entry (post-edit) must use legacy loadFromEntity path";
+
+    QFile::remove(objPath);
 }
