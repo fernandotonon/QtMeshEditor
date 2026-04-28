@@ -220,6 +220,9 @@ public:
 
     void setVertexUV(size_t subMeshIndex, size_t vertexIndex, const Ogre::Vector2& uv);
     Ogre::Vector2 getVertexUV(size_t subMeshIndex, size_t vertexIndex) const;
+
+    void setVertexColor(size_t subMeshIndex, size_t vertexIndex, const Ogre::ColourValue& color);
+    Ogre::ColourValue getVertexColor(size_t subMeshIndex, size_t vertexIndex) const;
     /// @}
 
     /**

@@ -298,53 +298,104 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
     auto* decl = subMesh->vertexData->vertexDeclaration;
     auto* binding = subMesh->vertexData->vertexBufferBinding;
 
-    // Build declaration: position, optional normal, uv, tangent (FLOAT4 with parity).
+    // Build declaration: position, optional normal, uv, color (diffuse), tangent (FLOAT4 with parity).
     size_t offset = 0;
     decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
     offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
 
-    bool hasNormals = editSub.vertices[0].hasNormal;
+    const auto anyVertex = [&](auto&& pred) {
+        for (const auto& v : editSub.vertices) {
+            if (pred(v))
+                return true;
+        }
+        return false;
+    };
+
+    bool hasNormals = anyVertex([](const EditableVertex& v) { return v.hasNormal; });
     if (hasNormals) {
         decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
         offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
     }
 
-    bool hasUVs = editSub.vertices[0].hasUV;
+    bool hasUVs = anyVertex([](const EditableVertex& v) { return v.hasUV; });
     if (hasUVs) {
         decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
         offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
     }
 
-    bool hasTangents = editSub.vertices[0].hasTangent;
+    // Colors use their own buffer source so we don't have to byte-pack into the float stream.
+    bool hasColors = anyVertex([](const EditableVertex& v) { return v.hasColor; });
+    if (hasColors) {
+        decl->addElement(1, 0, Ogre::VET_COLOUR, Ogre::VES_DIFFUSE);
+    }
+
+    bool hasTangents = anyVertex([](const EditableVertex& v) { return v.hasTangent; });
     if (hasTangents) {
         decl->addElement(0, offset, Ogre::VET_FLOAT4, Ogre::VES_TANGENT);
         offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT4);
     }
 
-    // Create interleaved vertex buffer.
-    size_t vertSize = decl->getVertexSize(0);
-    auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-        vertSize, editSub.vertices.size(),
+    // Create vertex buffer for source 0.
+    size_t vertSize0 = decl->getVertexSize(0);
+    auto vbuf0 = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        vertSize0, editSub.vertices.size(),
         Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
 
-    auto* dest = static_cast<float*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
-    for (const auto& v : editSub.vertices) {
-        *dest++ = v.position.x;
-        *dest++ = v.position.y;
-        *dest++ = v.position.z;
+    std::vector<unsigned char> buf0(vertSize0 * editSub.vertices.size(), 0);
+    for (size_t i = 0; i < editSub.vertices.size(); ++i) {
+        const auto& v = editSub.vertices[i];
+        unsigned char* base = buf0.data() + i * vertSize0;
+
+        if (const auto* e = decl->findElementBySemantic(Ogre::VES_POSITION)) {
+            Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+            p[0] = v.position.x; p[1] = v.position.y; p[2] = v.position.z;
+        }
+
         if (hasNormals) {
-            *dest++ = v.normal.x; *dest++ = v.normal.y; *dest++ = v.normal.z;
+            if (const auto* e = decl->findElementBySemantic(Ogre::VES_NORMAL)) {
+                Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+                Ogre::Vector3 n = v.hasNormal ? v.normal : Ogre::Vector3::ZERO;
+                p[0] = n.x; p[1] = n.y; p[2] = n.z;
+            }
         }
+
         if (hasUVs) {
-            *dest++ = v.uv.x; *dest++ = v.uv.y;
+            if (const auto* e = decl->findElementBySemantic(Ogre::VES_TEXTURE_COORDINATES)) {
+                Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+                Ogre::Vector2 uv = v.hasUV ? v.uv : Ogre::Vector2::ZERO;
+                p[0] = uv.x; p[1] = uv.y;
+            }
         }
+
         if (hasTangents) {
-            *dest++ = v.tangent.x; *dest++ = v.tangent.y;
-            *dest++ = v.tangent.z; *dest++ = v.tangent.w;
+            if (const auto* e = decl->findElementBySemantic(Ogre::VES_TANGENT)) {
+                Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
+                Ogre::Vector4 t = v.hasTangent ? v.tangent : Ogre::Vector4(0, 0, 0, 1);
+                p[0] = t.x; p[1] = t.y; p[2] = t.z; p[3] = t.w;
+            }
         }
     }
-    vbuf->unlock();
-    binding->setBinding(0, vbuf);
+    vbuf0->writeData(0, buf0.size(), buf0.data(), true);
+    binding->setBinding(0, vbuf0);
+
+    if (hasColors) {
+        const size_t vertSize1 = decl->getVertexSize(1);
+        auto vbuf1 = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+            vertSize1, editSub.vertices.size(),
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+        std::vector<unsigned char> buf1(vertSize1 * editSub.vertices.size(), 0);
+        for (size_t i = 0; i < editSub.vertices.size(); ++i) {
+            const auto& v = editSub.vertices[i];
+            unsigned char* base = buf1.data() + i * vertSize1;
+            if (const auto* e = decl->findElementBySemantic(Ogre::VES_DIFFUSE)) {
+                Ogre::RGBA* p; e->baseVertexPointerToElement(base, &p);
+                Ogre::ColourValue cv = v.hasColor ? v.color : Ogre::ColourValue::White;
+                *p = cv.getAsRGBA();
+            }
+        }
+        vbuf1->writeData(0, buf1.size(), buf1.data(), true);
+        binding->setBinding(1, vbuf1);
+    }
 
     // Create index buffer (16-bit if possible, else 32-bit).
     bool use32bit = editSub.vertices.size() > 65535;
@@ -545,6 +596,22 @@ Ogre::Vector2 EditableMesh::getVertexUV(size_t subMeshIndex, size_t vertexIndex)
     if (subMeshIndex < m_subMeshes.size() && vertexIndex < m_subMeshes[subMeshIndex].vertices.size())
         return m_subMeshes[subMeshIndex].vertices[vertexIndex].uv;
     return Ogre::Vector2::ZERO;
+}
+
+void EditableMesh::setVertexColor(size_t subMeshIndex, size_t vertexIndex, const Ogre::ColourValue& color)
+{
+    if (subMeshIndex < m_subMeshes.size() && vertexIndex < m_subMeshes[subMeshIndex].vertices.size()) {
+        auto& v = m_subMeshes[subMeshIndex].vertices[vertexIndex];
+        v.color = color;
+        v.hasColor = true;
+    }
+}
+
+Ogre::ColourValue EditableMesh::getVertexColor(size_t subMeshIndex, size_t vertexIndex) const
+{
+    if (subMeshIndex < m_subMeshes.size() && vertexIndex < m_subMeshes[subMeshIndex].vertices.size())
+        return m_subMeshes[subMeshIndex].vertices[vertexIndex].color;
+    return Ogre::ColourValue::White;
 }
 
 void EditableMesh::recalculateNormals()
@@ -863,6 +930,13 @@ bool EditableMesh::writeVertexData(Ogre::VertexData* vertexData, const std::vect
             Ogre::Real* p; e->baseVertexPointerToElement(base, &p);
             p[0] = vertices[j].uv.x;
             p[1] = vertices[j].uv.y;
+        });
+
+    writeAttribute(decl->findElementBySemantic(Ogre::VES_DIFFUSE),
+        [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
+            if (!vertices[j].hasColor) return;
+            Ogre::RGBA* p; e->baseVertexPointerToElement(base, &p);
+            *p = vertices[j].color.getAsRGBA();
         });
 
     return true;
