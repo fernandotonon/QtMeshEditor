@@ -33,7 +33,7 @@ THE SOFTWARE.
 #include "BoneProcessor.h"
 #include "MeshProcessor.h"
 #include <algorithm>
-#include <cstring>
+#include <string_view>
 
 Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool convertToLeftHanded, unsigned int additionalFlags) {
     skeleton.reset();  // Clear any skeleton from a previous import
@@ -60,8 +60,8 @@ Ogre::MeshPtr AssimpToOgreImporter::loadModel(const std::string& path, bool conv
         flags |= aiProcess_ConvertToLeftHanded;
     flags |= additionalFlags;
 
-    auto pathEndsWithInsensitive = [](const std::string& p, const char* suf) -> bool {
-        const size_t n = std::strlen(suf);
+    auto pathEndsWithInsensitive = [](const std::string& p, std::string_view suf) -> bool {
+        const size_t n = suf.size();
         if (p.size() < n)
             return false;
         for (size_t i = 0; i < n; ++i) {

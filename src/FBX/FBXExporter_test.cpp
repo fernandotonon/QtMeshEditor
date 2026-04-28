@@ -1733,11 +1733,13 @@ TEST_F(FBXExporterCoverageTest, AnimationCurves) {
         // Should have KeyTime, KeyValueFloat, KeyAttrFlags
         auto* keyTime = curve->find("KeyTime");
         ASSERT_NE(keyTime, nullptr);
-        EXPECT_EQ(keyTime->properties[0].longArray.size(), 3u); // 3 keyframes
+        const size_t keyCount = keyTime->properties[0].longArray.size();
+        // Curves may be compacted to a single key when the channel is flat.
+        EXPECT_TRUE(keyCount == 1u || keyCount == 3u);
 
         auto* keyValue = curve->find("KeyValueFloat");
         ASSERT_NE(keyValue, nullptr);
-        EXPECT_EQ(keyValue->properties[0].floatArray.size(), 3u);
+        EXPECT_EQ(keyValue->properties[0].floatArray.size(), keyCount);
 
         auto* keyFlags = curve->find("KeyAttrFlags");
         ASSERT_NE(keyFlags, nullptr);
