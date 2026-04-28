@@ -69,17 +69,97 @@ struct EditableTriangle {
 };
 
 /**
+ * @brief A polygonal face referencing N >= 3 vertices by index.
+ *
+ * Used for the n-gon (quad-aware) representation that complements the
+ * legacy triangle-only path. While the editor is being migrated to
+ * quads, both `EditableSubMesh::faces` and `EditableSubMesh::triangles`
+ * coexist:
+ *
+ *  - When `faces` is empty, the submesh is in legacy triangle-only mode
+ *    and `triangles` is the canonical storage.
+ *  - When `faces` is non-empty, `faces` is canonical and `triangles` is
+ *    a fan-triangulated mirror that downstream code (GPU upload, render,
+ *    legacy topology ops) consumes. Helper utilities keep the two
+ *    representations in sync.
+ *
+ * The fan-triangulation rule is `[v0, vi, vi+1]` for `i in [1, N-1)`,
+ * matching what `HalfEdgeMesh::appendFace` and `fillSelection` already
+ * produce. Convex polygons (the only case the importer is expected to
+ * produce) survive that rule cleanly; concave n-gons need a future
+ * ear-clip pass.
+ */
+struct EditableFace {
+    std::vector<unsigned int> indices;
+
+    /// @return true if this face has at least 3 vertices and no
+    ///         consecutive duplicate index pair (naive sanity check).
+    bool isValid() const
+    {
+        if (indices.size() < 3) return false;
+        for (size_t i = 0; i < indices.size(); ++i) {
+            if (indices[i] == indices[(i + 1) % indices.size()]) return false;
+        }
+        return true;
+    }
+
+    /// @return Number of vertices on this face (>= 3 when valid).
+    size_t vertexCount() const { return indices.size(); }
+};
+
+/**
  * @brief An editable copy of a single Ogre SubMesh.
  *
- * Contains all vertices, triangles, and the material name. Tracks whether
- * the original SubMesh used shared vertex data.
+ * Contains all vertices, triangles, faces, and the material name. Tracks
+ * whether the original SubMesh used shared vertex data.
+ *
+ * The `faces` (n-gon) array is the canonical face storage when it is
+ * non-empty; `triangles` then mirrors it as a fan-triangulation kept in
+ * sync by `triangulateFaces()`. When `faces` is empty, `triangles` is
+ * canonical and the submesh is in legacy triangle-only mode.
  */
 struct EditableSubMesh {
     std::vector<EditableVertex> vertices;
     std::vector<EditableTriangle> triangles;
+    std::vector<EditableFace> faces;
     std::string materialName;
     bool usesSharedVertices = false;
 };
+
+/**
+ * @brief Fan-triangulate every face in `faces` into `triangles`.
+ *
+ * Triangulation rule: each face emits `n - 2` triangles fanned from
+ * `indices[0]`, i.e. `(v0, v_i, v_{i+1})` for `i in [1, n-1)`. This
+ * matches `HalfEdgeMesh::appendFace` and `fillSelection` so a face that
+ * survives an HE round-trip recovers the same triangulation it started
+ * with.
+ *
+ * Caller's responsibility: call this whenever `faces` is mutated to
+ * keep `triangles` in sync. Code paths that don't yet understand n-gons
+ * (GPU upload, legacy topology ops) consume `triangles`.
+ *
+ * Skips invalid faces (`vertexCount < 3`) silently. Replaces any
+ * existing contents of `triangles`.
+ *
+ * @param sub The submesh whose `faces` will be triangulated. After
+ *            return, `sub.triangles` contains the fan-triangulation.
+ */
+void triangulateFaces(EditableSubMesh& sub);
+
+/**
+ * @brief Build trivial single-triangle faces from existing `triangles`.
+ *
+ * Inverse of `triangulateFaces` — used when a legacy triangle-only
+ * submesh needs to be promoted into the n-gon representation. After the
+ * call, every triangle has a corresponding 3-index `EditableFace`. The
+ * existing `triangles` array is preserved (the result still satisfies
+ * the canonical-faces invariant: `triangles[i] == fan(faces[i])`).
+ *
+ * @param sub The submesh to promote. Existing contents of `sub.faces`
+ *            are replaced.
+ */
+void promoteTrianglesToFaces(EditableSubMesh& sub);
 
 /**
  * @brief Indexed mesh representation for topology queries and editing.
