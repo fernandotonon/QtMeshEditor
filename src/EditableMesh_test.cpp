@@ -1208,3 +1208,32 @@ TEST(EditableMeshStandalone, FaceIndexForTriangleAcceptsNullOutPointers) {
     EXPECT_EQ(faceIndexForTriangle(sub, 0, nullptr, nullptr), 0);
     EXPECT_EQ(faceIndexForTriangle(sub, 1, nullptr, nullptr), 0);
 }
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleSkipsInvalidFaces) {
+    // Regression for chunk-4b drift bug: a face with consecutive
+    // duplicate indices passes `n >= 3` but fails isValid(), so it
+    // produces zero triangles in `triangles`. faceIndexForTriangle
+    // must skip it the same way triangulateFaces does — otherwise the
+    // mapping for triangles after it points to the wrong source face.
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v, v, v};
+    EditableFace bad;        // 4 indices but [0]==[1] — !isValid()
+    bad.indices = {0, 0, 1, 2};
+    EditableFace good;       // valid quad → 2 fan triangles
+    good.indices = {2, 3, 4, 5};
+    sub.faces.push_back(std::move(bad));
+    sub.faces.push_back(std::move(good));
+    triangulateFaces(sub);
+
+    ASSERT_EQ(sub.triangles.size(), 2u);
+    size_t firstTri = 0, count = 0;
+    // Both triangles must map to face index 1 (the good face),
+    // not face 0 (which contributed nothing to `triangles`).
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, &firstTri, &count), 1);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 2u);
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, &firstTri, &count), 1);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 2u);
+}

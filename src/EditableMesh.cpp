@@ -770,9 +770,13 @@ int faceIndexForTriangle(const EditableSubMesh& sub,
     size_t running = 0;
     for (size_t k = 0; k < sub.faces.size(); ++k) {
         const auto& f = sub.faces[k];
-        const size_t n = f.indices.size();
-        if (n < 3) continue; // invalid face — triangulateFaces skipped it
-        const size_t triCount = n - 2;
+        // Skip exactly the same set triangulateFaces() skips. Using
+        // n < 3 alone would drift the mapping for faces that pass the
+        // size check but fail isValid() (e.g. consecutive duplicate
+        // indices), since those produce zero triangles in `triangles`
+        // but would otherwise consume slots in `running`.
+        if (!f.isValid()) continue;
+        const size_t triCount = f.indices.size() - 2;
         if (localTri < running + triCount) {
             if (outFirstTri) *outFirstTri = running;
             if (outTriCount) *outTriCount = triCount;

@@ -774,9 +774,19 @@ std::vector<int> EditModeController::selectedFacesAsHEFaceIndices() const
     int running = 0;
     for (size_t s = 0; s < subs.size(); ++s) {
         heBaseBySub[s] = running;
-        running += subs[s].faces.empty()
-                   ? static_cast<int>(subs[s].triangles.size())
-                   : static_cast<int>(subs[s].faces.size());
+        if (subs[s].faces.empty()) {
+            running += static_cast<int>(subs[s].triangles.size());
+        } else {
+            // Match HalfEdgeMesh::buildFromEditableMesh, which only
+            // appends faces that pass isValid(). Counting raw faces
+            // here would over-shoot the offset and shift later
+            // submeshes' HE face indices.
+            int valid = 0;
+            for (const auto& f : subs[s].faces) {
+                if (f.isValid()) ++valid;
+            }
+            running += valid;
+        }
     }
 
     // Walk the selection, dedup via a small set keyed on HE face idx.
