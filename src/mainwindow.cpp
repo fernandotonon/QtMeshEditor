@@ -1346,10 +1346,17 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
                 || (mode == EditModeController::EdgeMode
                     && editCtrl->selectedEdgeCount() >= 3);
             if (fillable) {
-                SentryReporter::addBreadcrumb("ui.shortcut", "F — Fill (edit mode)");
-                editCtrl->fillSelection();
-                event->accept();
-                return;
+                // Only swallow the keypress when the fill actually
+                // produced geometry. Edge-mode selections that don't
+                // form a closed boundary loop, or vertex selections
+                // whose fan would duplicate an existing tri, return 0
+                // — in those cases fall through so F still acts as
+                // Frame-Selection. (Codex P2 / CodeRabbit Major)
+                if (editCtrl->fillSelection() > 0) {
+                    SentryReporter::addBreadcrumb("ui.shortcut", "F — Fill (edit mode)");
+                    event->accept();
+                    return;
+                }
             }
         }
         SentryReporter::addBreadcrumb("ui.shortcut", "F — Frame selection");

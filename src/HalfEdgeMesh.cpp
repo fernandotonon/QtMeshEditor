@@ -4761,21 +4761,26 @@ int HalfEdgeMesh::fillSelection(const std::vector<int>& vertexIndices)
         if (s >= 0 && s != subIdx) return 0;
     }
 
-    // 2. Reject inputs that would duplicate an existing face.
-    //    For n=3 we check the three undirected edges all already exist
-    //    on a single face. For larger loops we just guard against the
-    //    triangle case to keep the logic small — n-gon dup detection
-    //    isn't worth the complexity for the MVP and the hole-fill
-    //    pipeline naturally produces unique loops anyway.
-    if (n == 3) {
-        const auto faces = facesAroundVertex(vertexIndices[0]);
-        for (int f : faces) {
+    // 2. Reject inputs that would duplicate any triangle the fan would
+    //    emit. For n=3 that's the single fan triangle; for larger N each
+    //    of the N-2 fan triangles is checked against existing faces
+    //    incident to the fan apex. Without this, the fan can recreate
+    //    overlapping faces on top of an already-triangulated region
+    //    (e.g. selecting all 4 verts of a closed quad). (CodeRabbit Major)
+    auto triangleExists = [this](int va, int vb, int vc) {
+        const std::set<int> target = {va, vb, vc};
+        for (int f : facesAroundVertex(va)) {
             const auto fv = faceVertices(f);
             if (fv.size() != 3) continue;
-            std::set<int> a(fv.begin(), fv.end());
-            std::set<int> b(vertexIndices.begin(), vertexIndices.end());
-            if (a == b) return 0; // identical triangle already exists
+            const std::set<int> tri(fv.begin(), fv.end());
+            if (tri == target) return true;
         }
+        return false;
+    };
+    for (int i = 1; i + 1 < n; ++i) {
+        if (triangleExists(vertexIndices[0], vertexIndices[i],
+                           vertexIndices[i + 1]))
+            return 0;
     }
 
     // 3. Fan-triangulate from vertexIndices[0]. For n=3 emits one triangle;

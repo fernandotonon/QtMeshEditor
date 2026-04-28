@@ -4542,6 +4542,21 @@ TEST(HalfEdgeMeshStandalone, FillSelectionAcceptsOrphanedVertices) {
     EXPECT_TRUE(he.validate());
 }
 
+TEST(HalfEdgeMeshStandalone, FillSelectionRejectsLargerFanThatDuplicatesExistingTri) {
+    // Regression for CodeRabbit Major: when n > 3, individual fan
+    // triangles can still duplicate existing tris. The quad-missing-one
+    // mesh has triangle (0,1,2) already present. Filling (0,1,2,3) would
+    // fan into (0,1,2) [duplicate!] + (0,2,3). With the wider dup-check
+    // this must refuse and leave the mesh untouched.
+    auto em = makeQuadMissingOneTriangle();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    EXPECT_EQ(he.fillSelection({0, 1, 2, 3}), 0)
+        << "n>3 fan must also reject duplicates of existing tris";
+    EXPECT_EQ(activeFaceCount(he), 1) << "rejected fill must not mutate the mesh";
+}
+
 TEST(HalfEdgeMeshStandalone, FillSelectionUndoRoundTrip) {
     // Ensure a subdivide → toEditableMesh → buildFromEditableMesh round
     // trip preserves the new triangulation. Same idea as the existing

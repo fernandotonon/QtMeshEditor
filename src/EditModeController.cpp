@@ -3024,17 +3024,44 @@ int EditModeController::subdivideSelection()
 }
 
 namespace {
-// Build the closed boundary loop implied by a set of selected edges. Returns
-// vertex indices in winding order, or an empty vector if the selection
-// doesn't form a single closed loop. "Closed" means: every endpoint is
-// shared by exactly two selected edges, the loop traversal returns to the
-// starting vertex, and the loop visits every input edge.
+// Build the closed BOUNDARY-EDGE loop implied by a set of selected edges.
+// Returns vertex indices in winding order, or an empty vector if any
+// selected edge is interior (touches two faces) or the selection doesn't
+// form a single closed cycle.
+//
+// Boundary check rationale (Codex P1): a closed cycle of interior edges
+// is the perimeter of an already-triangulated region; filling it would
+// stack overlapping triangles on top of existing geometry. Hole-fill is
+// the intended use case — every selected edge must therefore have
+// exactly one incident face in the live mesh.
+//
+// "Closed" means: every endpoint is shared by exactly two selected
+// edges, the loop traversal returns to the starting vertex, and the
+// loop visits every input edge.
 std::vector<int> buildClosedEdgeLoop(
-    const std::set<std::pair<int,int>>& selectedEdges)
+    const std::set<std::pair<int,int>>& selectedEdges,
+    const HalfEdgeMesh& hm)
 {
     if (selectedEdges.size() < 3) return {};
 
-    // adjacency[v] = vertices connected to v via selected edges
+    // 1. Every selected edge must be a boundary edge (one incident face)
+    //    in the live mesh. Resolve each (vA, vB) pair against hm and
+    //    refuse if any interior edge slips in.
+    for (const auto& [a, b] : selectedEdges) {
+        const int target = std::min(a, b), other = std::max(a, b);
+        bool resolved = false;
+        for (size_t e = 0; e < hm.edgeCount(); ++e) {
+            auto [ev1, ev2] = hm.edgeVertices(static_cast<int>(e));
+            if (std::min(ev1, ev2) != target
+                || std::max(ev1, ev2) != other) continue;
+            resolved = true;
+            if (!hm.isEdgeBoundary(static_cast<int>(e))) return {};
+            break;
+        }
+        if (!resolved) return {}; // edge no longer present in mesh
+    }
+
+    // 2. adjacency[v] = vertices connected to v via selected edges
     std::map<int, std::vector<int>> adj;
     for (const auto& [a, b] : selectedEdges) {
         adj[a].push_back(b);
@@ -3045,7 +3072,7 @@ std::vector<int> buildClosedEdgeLoop(
         if (nbrs.size() != 2) return {};
     }
 
-    // Walk the loop starting at the lowest-index vertex.
+    // 3. Walk the loop starting at the lowest-index vertex.
     const int start = adj.begin()->first;
     std::vector<int> loop;
     loop.push_back(start);
@@ -3078,6 +3105,9 @@ int EditModeController::fillSelection()
     if (m_bevelSession.active) cancelBevel();
     if (m_knifeSession.active) cancelKnife();
 
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+
     std::vector<int> targetVerts;
     if (m_selectionMode == VertexMode) {
         if (m_selectedVertices.size() < 3) return 0;
@@ -3087,14 +3117,11 @@ int EditModeController::fillSelection()
         // the std::set order. (The test suite documents this.)
         targetVerts.assign(m_selectedVertices.begin(), m_selectedVertices.end());
     } else if (m_selectionMode == EdgeMode) {
-        targetVerts = buildClosedEdgeLoop(m_selectedEdges);
+        targetVerts = buildClosedEdgeLoop(m_selectedEdges, hm);
         if (targetVerts.size() < 3) return 0;
     } else {
         return 0; // FaceMode: nothing to fill
     }
-
-    HalfEdgeMesh hm;
-    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
 
     auto originalSubMeshes = m_editableMesh->subMeshes();
     const auto preSelectedVerts = m_selectedVertices;
