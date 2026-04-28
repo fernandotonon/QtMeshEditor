@@ -288,6 +288,17 @@ public:
     size_t subMeshCount() const { return m_subMeshes.size(); }
     size_t totalVertexCount() const;
     size_t totalTriangleCount() const;
+    /// Total polygonal-face count across all submeshes. Returns the
+    /// n-gon face count (`faces.size()`) when a submesh has been
+    /// promoted to the quad-aware representation; falls back to
+    /// `triangles.size()` for legacy triangle-only submeshes.
+    size_t totalFaceCount() const;
+
+    /// Synchronise every submesh's `triangles` with its `faces` array.
+    /// Call after mutating `faces` so downstream consumers (GPU upload,
+    /// normal recalculation, legacy topology ops) see the up-to-date
+    /// fan-triangulation. No-op for legacy triangle-only submeshes.
+    void syncTriangulation();
     /// @}
 
     /// @name Vertex manipulation

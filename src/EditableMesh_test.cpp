@@ -804,3 +804,111 @@ TEST_F(EditModeControllerTest, SoftSelectionWeightsInEditMode) {
     ctrl->exitEditMode(false);
     Manager::getSingleton()->destroySceneNode("EditMode_soft_weights_node");
 }
+
+// ===========================================================================
+// EditableFace + n-gon helpers (chunk 1) and triangulation sync (chunk 2)
+// ===========================================================================
+
+TEST(EditableMeshStandalone, SyncTriangulationFanTriangulatesQuadFaces) {
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    // triangles deliberately stale (empty); syncTriangulation must
+    // populate it from faces.
+    mesh.subMeshes().push_back(std::move(sub));
+
+    mesh.syncTriangulation();
+    ASSERT_EQ(mesh.subMeshes()[0].triangles.size(), 2u)
+        << "quad must yield 2 fan triangles after syncTriangulation";
+}
+
+TEST(EditableMeshStandalone, SyncTriangulationLeavesTriOnlySubmeshAlone) {
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v};
+    EditableTriangle t;
+    t.indices[0] = 0; t.indices[1] = 1; t.indices[2] = 2;
+    sub.triangles.push_back(t);
+    // faces intentionally empty — triangle-only legacy submesh.
+    mesh.subMeshes().push_back(std::move(sub));
+
+    mesh.syncTriangulation();
+    EXPECT_EQ(mesh.subMeshes()[0].triangles.size(), 1u);
+    EXPECT_TRUE(mesh.subMeshes()[0].faces.empty());
+}
+
+TEST(EditableMeshStandalone, TotalFaceCountFallsBackToTriangleCountForLegacy) {
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v, v};
+    EditableTriangle t;
+    t.indices[0] = 0; t.indices[1] = 1; t.indices[2] = 2;
+    sub.triangles.push_back(t);
+    t.indices[0] = 0; t.indices[1] = 2; t.indices[2] = 3;
+    sub.triangles.push_back(t);
+    t.indices[0] = 0; t.indices[1] = 3; t.indices[2] = 4;
+    sub.triangles.push_back(t);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    EXPECT_EQ(mesh.totalFaceCount(), 3u)
+        << "legacy submesh: face count == triangle count";
+}
+
+TEST(EditableMeshStandalone, TotalFaceCountReportsNGonsWhenPresent) {
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v, v};
+    EditableFace pent;
+    pent.indices = {0, 1, 2, 3, 4};
+    sub.faces.push_back(std::move(pent));
+    triangulateFaces(sub); // produces 3 fan tris
+    mesh.subMeshes().push_back(std::move(sub));
+
+    EXPECT_EQ(mesh.totalFaceCount(), 1u)
+        << "pentagon: 1 face (n-gon canonical), not 3 (triangle mirror)";
+    EXPECT_EQ(mesh.totalTriangleCount(), 3u);
+}
+
+TEST(EditableMeshStandalone, RecalculateNormalsResyncsTrianglesFromFaces) {
+    // Build a quad mesh where `triangles` is intentionally stale —
+    // recalculateNormals should triangulate from `faces` first so the
+    // resulting normals reflect the live geometry, not the stale tris.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.hasNormal = true;
+        v.normal = Ogre::Vector3::UNIT_Z;
+        return v;
+    };
+    // Quad in the XY plane with normal +Z.
+    sub.vertices = {
+        mkV(0, 0, 0), mkV(1, 0, 0), mkV(1, 1, 0), mkV(0, 1, 0),
+    };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    // triangles starts empty; recalculateNormals must sync it before
+    // accumulating normals.
+    mesh.subMeshes().push_back(std::move(sub));
+
+    mesh.recalculateNormals();
+
+    // After recalc, triangles must be the fan triangulation (2 tris).
+    EXPECT_EQ(mesh.subMeshes()[0].triangles.size(), 2u);
+
+    // Every vertex should end up with normal == +Z (within tolerance).
+    for (const auto& v : mesh.subMeshes()[0].vertices) {
+        EXPECT_NEAR(v.normal.z, 1.0f, 1e-4f);
+        EXPECT_NEAR(v.normal.x, 0.0f, 1e-4f);
+        EXPECT_NEAR(v.normal.y, 0.0f, 1e-4f);
+    }
+}
