@@ -352,7 +352,7 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
     if (subMesh->vertexData) delete subMesh->vertexData;
     subMesh->useSharedVertices = false;
     subMesh->vertexData = new Ogre::VertexData();
-    subMesh->vertexData->vertexCount = editSub->vertices.size();
+    subMesh->vertexData->vertexCount = static_cast<uint32_t>(editSub->vertices.size());
 
     auto* decl = subMesh->vertexData->vertexDeclaration;
     auto* binding = subMesh->vertexData->vertexBufferBinding;
@@ -430,7 +430,7 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
     ibuf->unlock();
 
     subMesh->indexData->indexBuffer = ibuf;
-    subMesh->indexData->indexCount = editSub->triangles.size() * 3;
+    subMesh->indexData->indexCount = static_cast<uint32_t>(editSub->triangles.size() * 3);
     subMesh->indexData->indexStart = 0;
 }
 
@@ -563,18 +563,18 @@ size_t EditableMesh::totalTriangleCount() const
     return total;
 }
 
-size_t EditableMesh::totalFaceCount() const
+size_t totalFaceCount(const std::vector<EditableSubMesh>& subMeshes)
 {
     size_t total = 0;
-    for (const auto& sub : m_subMeshes) {
+    for (const auto& sub : subMeshes) {
         total += sub.faces.empty() ? sub.triangles.size() : sub.faces.size();
     }
     return total;
 }
 
-void EditableMesh::syncTriangulation()
+void syncTriangulation(std::vector<EditableSubMesh>& subMeshes)
 {
-    for (auto& sub : m_subMeshes) {
+    for (auto& sub : subMeshes) {
         if (!sub.faces.empty()) triangulateFaces(sub);
     }
 }

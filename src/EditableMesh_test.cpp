@@ -821,7 +821,7 @@ TEST(EditableMeshStandalone, SyncTriangulationFanTriangulatesQuadFaces) {
     // populate it from faces.
     mesh.subMeshes().push_back(std::move(sub));
 
-    mesh.syncTriangulation();
+    syncTriangulation(mesh.subMeshes());
     ASSERT_EQ(mesh.subMeshes()[0].triangles.size(), 2u)
         << "quad must yield 2 fan triangles after syncTriangulation";
 }
@@ -837,7 +837,7 @@ TEST(EditableMeshStandalone, SyncTriangulationLeavesTriOnlySubmeshAlone) {
     // faces intentionally empty — triangle-only legacy submesh.
     mesh.subMeshes().push_back(std::move(sub));
 
-    mesh.syncTriangulation();
+    syncTriangulation(mesh.subMeshes());
     EXPECT_EQ(mesh.subMeshes()[0].triangles.size(), 1u);
     EXPECT_TRUE(mesh.subMeshes()[0].faces.empty());
 }
@@ -856,7 +856,7 @@ TEST(EditableMeshStandalone, TotalFaceCountFallsBackToTriangleCountForLegacy) {
     sub.triangles.push_back(t);
     mesh.subMeshes().push_back(std::move(sub));
 
-    EXPECT_EQ(mesh.totalFaceCount(), 3u)
+    EXPECT_EQ(totalFaceCount(mesh.subMeshes()), 3u)
         << "legacy submesh: face count == triangle count";
 }
 
@@ -871,7 +871,7 @@ TEST(EditableMeshStandalone, TotalFaceCountReportsNGonsWhenPresent) {
     triangulateFaces(sub); // produces 3 fan tris
     mesh.subMeshes().push_back(std::move(sub));
 
-    EXPECT_EQ(mesh.totalFaceCount(), 1u)
+    EXPECT_EQ(totalFaceCount(mesh.subMeshes()), 1u)
         << "pentagon: 1 face (n-gon canonical), not 3 (triangle mirror)";
     EXPECT_EQ(mesh.totalTriangleCount(), 3u);
 }
