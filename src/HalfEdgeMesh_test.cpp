@@ -3836,6 +3836,136 @@ TEST(HalfEdgeMeshStandalone, CutPathRollsBackWhenSecondEdgeDuplicatesFirst) {
 }
 
 // ===========================================================================
+// loopCut — perpendicular ring cut through quads
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, LoopCutOnQuadStripCutsEachQuadOnce) {
+    // 3-quad strip: q1=(0,1,5,4), q2=(1,2,6,5), q3=(2,3,7,6).
+    //
+    //   v0─v1─v2─v3
+    //   │ q1│q2│q3│
+    //   v4─v5─v6─v7
+    //
+    // Loop-cutting the (1,5) interior edge starts from q1, the
+    // opposite-edge walk crosses (1,5) into q2 then (2,6) into q3,
+    // terminates at the q3 boundary (3,7). 3 quads × 1 cut each =
+    // 3 new midpoints, 6 quads total after the cut.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 1), mkV(1, 1), mkV(2, 1), mkV(3, 1),
+        mkV(0, 0), mkV(1, 0), mkV(2, 0), mkV(3, 0),
+    };
+    EditableFace q1, q2, q3;
+    q1.indices = {0, 1, 5, 4};
+    q2.indices = {1, 2, 6, 5};
+    q3.indices = {2, 3, 7, 6};
+    sub.faces = { q1, q2, q3 };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    const int startEdge = findEdge(he, 1, 5);
+    ASSERT_GE(startEdge, 0);
+
+    auto newVerts = he.loopCut(startEdge);
+    // 4 rails get midpoints: (1,5) start, (0,4) on q1's other side,
+    // (2,6) interior, (3,7) on q3's other side. So 4 new vertices.
+    EXPECT_EQ(newVerts.size(), 4u)
+        << "open-ended loop cut: 4 rail midpoints across 3 quads";
+    EXPECT_TRUE(he.validate());
+
+    int active = 0, quads = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quads;
+    }
+    EXPECT_EQ(active, 6) << "each of the 3 original quads bisected → 6 quads";
+    EXPECT_EQ(quads, 6) << "loop cut preserves quad topology";
+}
+
+TEST(HalfEdgeMeshStandalone, LoopCutFailsOnNonQuadAdjacency) {
+    // Triangles can't loop-cut: there's no opposite-edge correspondence.
+    // Starting from any edge of a triangle pair returns empty.
+    auto em = makeQuadMesh(); // two triangles, NOT quads
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const int diag = findEdge(he, 1, 2);
+    ASSERT_GE(diag, 0);
+    auto newVerts = he.loopCut(diag);
+    EXPECT_TRUE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, LoopCutClosedRingOnQuadCubeReturnsToStart) {
+    // Quad cube: 6 quad faces forming a closed manifold. Loop-cutting
+    // any edge produces a closed ring of cuts (4 rails total since
+    // the walk returns to the starting edge after traversing 4 faces).
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3::UNIT_Y; v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(-1,-1,-1), mkV(1,-1,-1), mkV(-1,1,-1), mkV(1,1,-1),
+        mkV(-1,-1, 1), mkV(1,-1, 1), mkV(-1,1, 1), mkV(1,1, 1),
+    };
+    EditableFace fBack, fFront, fTop, fBottom, fLeft, fRight;
+    fBack.indices   = {0, 2, 3, 1};
+    fFront.indices  = {5, 7, 6, 4};
+    fBottom.indices = {0, 1, 5, 4};
+    fTop.indices    = {2, 6, 7, 3};
+    fLeft.indices   = {0, 4, 6, 2};
+    fRight.indices  = {1, 3, 7, 5};
+    sub.faces = { fBack, fFront, fBottom, fTop, fLeft, fRight };
+    triangulateFaces(sub);
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    // Pick the front-bottom edge (4,5). Its perpendicular ring runs
+    // around the cube via Bottom → Right → Top → Left and closes.
+    const int startEdge = findEdge(he, 4, 5);
+    ASSERT_GE(startEdge, 0);
+
+    auto newVerts = he.loopCut(startEdge);
+    EXPECT_EQ(newVerts.size(), 4u)
+        << "closed cube ring: 4 rails (one per traversed face), shared midpoints";
+    EXPECT_TRUE(he.validate());
+
+    // 6 original faces + 4 cuts (one per cube face crossed) → 10 quads.
+    int active = 0, quads = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quads;
+    }
+    EXPECT_EQ(active, 10);
+    EXPECT_EQ(quads, 10) << "loop cut preserves quad topology on closed manifolds";
+}
+
+TEST(HalfEdgeMeshStandalone, LoopCutFailsOnInvalidEdgeIndex) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_TRUE(he.loopCut(-1).empty());
+    EXPECT_TRUE(he.loopCut(999).empty());
+}
+
+// ===========================================================================
 // Merge vertices
 // ===========================================================================
 

@@ -442,6 +442,25 @@ public:
     Q_INVOKABLE int subdivideSelection();
 
     /**
+     * @brief Insert a loop cut starting from the first selected edge.
+     *
+     * Walks the chain of quads adjacent to the start edge via the
+     * "opposite edge" relation. Each quad in the ring is bisected by
+     * splitting two parallel edges at their midpoints and connecting
+     * the new midpoints with a new edge. The walk terminates at
+     * boundaries, non-quad faces, or when it loops back to the start.
+     *
+     * Requires Edge selection mode and at least one selected edge.
+     * Uses the FIRST selected edge as the start; multi-edge loop cuts
+     * are out of scope for the MVP (each cut is independent).
+     *
+     * Pushes one undo command labeled "Loop Cut".
+     *
+     * @return Number of new vertices inserted (0 on no-op / failure).
+     */
+    Q_INVOKABLE int loopCutSelection();
+
+    /**
      * @brief Subdivide the entire mesh by one Catmull-Clark step.
      *
      * Unlike `subdivideSelection` (which does a 1-to-4 triangle split

@@ -3398,6 +3398,79 @@ int EditModeController::subdivideSelection()
     return static_cast<int>(targetFaces.size());
 }
 
+int EditModeController::loopCutSelection()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+    if (m_selectionMode != EdgeMode) return 0;
+    if (m_selectedEdges.empty()) return 0;
+
+    // Cancel any active interactive preview before mutating topology.
+    if (m_bevelSession.active) cancelBevel();
+    if (m_knifeSession.active) cancelKnife();
+
+    // Loop cut takes a SINGLE start edge — the first one in the
+    // selection if multiple are selected. Convert (min, max) global
+    // vertex pair to an HE edge index against the live mesh.
+    const auto firstEdge = *m_selectedEdges.begin();
+    const int targetMinV = firstEdge.first;
+    const int targetMaxV = firstEdge.second;
+
+    HalfEdgeMesh hm;
+    if (!hm.buildFromEditableMesh(*m_editableMesh)) return 0;
+    int startEdge = -1;
+    for (size_t e = 0; e < hm.edgeCount(); ++e) {
+        const auto [a, b] = hm.edgeVertices(static_cast<int>(e));
+        if (std::min(a, b) == targetMinV && std::max(a, b) == targetMaxV) {
+            startEdge = static_cast<int>(e);
+            break;
+        }
+    }
+    if (startEdge < 0) return 0;
+
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const auto preSelectedVerts = m_selectedVertices;
+    const auto preSelectedEdges = m_selectedEdges;
+    const auto preSelectedFaces = m_selectedFaces;
+
+    const auto newHE = hm.loopCut(startEdge);
+    if (newHE.empty()) return 0;
+
+    EditableMesh updated;
+    if (!hm.toEditableMesh(updated)) return 0;
+    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+
+    if (m_normalsMode == 0) m_editableMesh->recalculateNormals();
+    else                     m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    // Clear selection — pre-op edge IDs are stale after the topology
+    // mutation. The user can hit-test the new loop directly if they
+    // want to chain operations.
+    m_selectedVertices.clear();
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        preSelectedVerts, preSelectedEdges, preSelectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        QStringLiteral("Loop Cut"));
+    UndoManager::getSingleton()->push(cmd);
+
+    validateMesh();
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Loop Cut (midpoints=%1)").arg(newHE.size()));
+
+    updateSelectionOverlay();
+    refreshNormalVisualizer();
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return static_cast<int>(newHE.size());
+}
+
 int EditModeController::subdivideCatmullClarkAll()
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
