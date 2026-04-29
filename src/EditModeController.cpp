@@ -2523,24 +2523,44 @@ bool EditModeController::commitKnife()
         return false;
     }
 
-    // Refuse the commit if any confirmed point isn't snapped to an edge.
-    // OnFace and OnVertex captures exist for the preview, but the MVP
-    // commit pipeline only knows how to cut along edges; silently
-    // dropping a face click would produce a mesh that doesn't match the
-    // line the user just drew, which is worse than failing the commit.
-    for (const auto& p : m_knifeSession.points) {
-        if (p.kind != KnifePoint::OnEdge) {
-            SentryReporter::addBreadcrumb("edit_mode",
-                "Knife: commit rejected (non-edge point — only edge cuts supported)");
-            cancelKnife();
-            return false;
-        }
-    }
-
+    // Build the CutPoint list, translating OnVertex clicks into edge
+    // clicks: pick any incident edge to the vertex and use t=0 or t=1
+    // depending on which endpoint the vertex sits at. `cutPath` only
+    // accepts edge inputs (its `splitEdge` primitive is edge-keyed),
+    // and `splitEdge` clamps t away from 0/1 by 1e-4 to avoid sliver
+    // faces — so the resulting vertex sits a hair off the user's click
+    // but topology stays clean. OnFace clicks are still rejected: the
+    // commit can't represent them with the current edge-walk algorithm.
     std::vector<HalfEdgeMesh::CutPoint> cpts;
     cpts.reserve(m_knifeSession.points.size());
     for (const auto& p : m_knifeSession.points) {
-        cpts.push_back({p.edgeIndex, p.edgeT});
+        if (p.kind == KnifePoint::OnEdge) {
+            cpts.push_back({p.edgeIndex, p.edgeT});
+            continue;
+        }
+        if (p.kind != KnifePoint::OnVertex) {
+            SentryReporter::addBreadcrumb("edit_mode",
+                "Knife: commit rejected (OnFace point — only edge / vertex supported)");
+            cancelKnife();
+            return false;
+        }
+        // OnVertex → find any incident edge in the triangle-mode HE
+        // and pick the t that puts the new split-vertex closest to the
+        // clicked vertex.
+        int incidentEdge = -1;
+        float incidentT = 0.0f;
+        for (size_t e = 0; e < hm.edgeCount(); ++e) {
+            const auto [ev0, ev1] = hm.edgeVertices(static_cast<int>(e));
+            if (ev0 == p.vertexIndex) { incidentEdge = static_cast<int>(e); incidentT = 0.0f; break; }
+            if (ev1 == p.vertexIndex) { incidentEdge = static_cast<int>(e); incidentT = 1.0f; break; }
+        }
+        if (incidentEdge < 0) {
+            SentryReporter::addBreadcrumb("edit_mode",
+                "Knife: commit rejected (OnVertex point — no incident edge)");
+            cancelKnife();
+            return false;
+        }
+        cpts.push_back({incidentEdge, incidentT});
     }
     if (cpts.size() < 2) {
         SentryReporter::addBreadcrumb("edit_mode",
