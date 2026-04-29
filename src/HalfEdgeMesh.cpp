@@ -3090,27 +3090,44 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
         // to the edge (v, otherEndpoint), in the face's plane, pointing
         // INTO the face's interior.
         //
-        // Use the face centroid as the "inside" anchor: the centroid is
-        // always inside the face (for convex faces), so (centroid - v)
-        // points from v into the face. This is winding-orientation-
-        // independent — works correctly whether the face is CCW or CW
-        // (which matters on imported FBX assets where winding may not
-        // match Ogre's expected convention).
+        // Use v's "non-edge neighbor" in the face loop as the inside
+        // anchor: in any simple polygon (convex OR concave), the third
+        // vertex of the corner at v sits in the face's interior half-
+        // plane relative to the (v, otherEndpoint) edge. The vector
+        // (nonEdgeNeighbor - v), projected perpendicular to the edge,
+        // points reliably into the face.
         //
-        // Then project that vector perpendicular to the edge so the
-        // inward offset stays purely in the cross-section direction.
+        // Robust on:
+        //   - CW-wound faces (no Newell-normal sign dependency).
+        //   - Concave faces (centroid-based formulas can place the
+        //     anchor outside the local edge half-plane; the loop
+        //     neighbor is always topologically adjacent).
+        //
+        // (Codex P2 review: replaced an earlier centroid-based
+        // formula that mis-fired on concave n-gons.)
         const auto loop = faceVertices(faceIdx);
         if (loop.size() < 3) return Ogre::Vector3::ZERO;
-        Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
-        for (int x : loop) centroid += m_vertices[x].position;
-        centroid /= static_cast<float>(loop.size());
+        const int n = static_cast<int>(loop.size());
+        int posV = -1;
+        for (int i = 0; i < n; ++i) {
+            if (loop[i] == v) { posV = i; break; }
+        }
+        if (posV < 0) return Ogre::Vector3::ZERO;
+        const int prev = loop[(posV + n - 1) % n];
+        const int next = loop[(posV + 1) % n];
+        // The loop neighbor that ISN'T otherEndpoint is the corner
+        // anchor; it sits in the face's interior.
+        const int nonEdgeNeighbor = (prev == otherEndpoint) ? next : prev;
+        if (nonEdgeNeighbor == otherEndpoint) return Ogre::Vector3::ZERO;
 
-        Ogre::Vector3 toCentroid = centroid - m_vertices[v].position;
-        Ogre::Vector3 edge = m_vertices[otherEndpoint].position - m_vertices[v].position;
+        Ogre::Vector3 toAnchor = m_vertices[nonEdgeNeighbor].position
+                                 - m_vertices[v].position;
+        Ogre::Vector3 edge = m_vertices[otherEndpoint].position
+                             - m_vertices[v].position;
         if (edge.length() < 1e-8f) return Ogre::Vector3::ZERO;
         edge.normalise();
-        // Project toCentroid perpendicular to edge.
-        Ogre::Vector3 inward = toCentroid - edge * toCentroid.dotProduct(edge);
+        // Project toAnchor perpendicular to edge.
+        Ogre::Vector3 inward = toAnchor - edge * toAnchor.dotProduct(edge);
         if (inward.length() < 1e-8f) return Ogre::Vector3::ZERO;
         inward.normalise();
         return inward;
