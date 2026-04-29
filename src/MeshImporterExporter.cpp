@@ -904,7 +904,19 @@ void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
         auto mat = subEnt->getMaterial();
         if (!mat) continue;
         // Ensure the material is fully loaded so TUS names are populated.
-        if (!mat->isLoaded()) mat->load();
+        // `load()` can throw on broken/unresolvable resources; this hook
+        // runs on every topology mutation AND undo/redo, so a single
+        // bad material shouldn't abort the edit op. Skip the offending
+        // sub-entity and let the rest of the entity refresh.
+        if (!mat->isLoaded()) {
+            try {
+                mat->load();
+            } catch (const Ogre::Exception& e) {
+                log.logMessage("applyNormalMapsToEntity: skipping mat '"
+                    + mat->getName() + "' — load failed: " + e.getDescription());
+                continue;
+            }
+        }
         if (mat->getNumTechniques() == 0) continue;
         auto* pass = mat->getTechnique(0)->getPass(0);
         if (!pass) continue;
