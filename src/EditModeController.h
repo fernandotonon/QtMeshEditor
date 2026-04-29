@@ -885,6 +885,19 @@ private:
     void applyWireframeMaterials();
     void removeWireframeMaterials();
 
+public:
+    /// Refresh an entity after a topology mutation: rebuild tangents
+    /// (when any material is bump-mapped), `_deinitialise/_initialise`
+    /// the entity, restore per-subentity material overrides, re-attach
+    /// RTSS SRS_NORMALMAP, and invalidate cached shader programs. Used
+    /// by every Edit-Mode topology op (subdivide, extrude, bevel, …)
+    /// AND by `EditMeshTopologyCommand::applyMeshState` so undo/redo
+    /// preserves bump map / per-pixel lighting state. Static so
+    /// command code can invoke it without a controller instance.
+    static void rewriteEntityAfterTopologyChange(Ogre::Entity* ent);
+
+private:
+
     // Wireframe mode
     bool m_wireframeEnabled = false;
     std::map<unsigned int, Ogre::String> m_savedMaterials; ///< SubEntity index → original material name

@@ -318,8 +318,38 @@ bool EditModeController::enterEditMode()
                             convertLH = Ogre::any_cast<bool>(lhAny);
                         } catch (const Ogre::Exception&) {}
                     }
+                    // The original importer also caches the source up-
+                    // axis (1 = Y-up, 2 = Z-up). MeshProcessor bakes a
+                    // +90°-around-X rotation into the rendered buffers
+                    // for Z-up assets; we pass `isZup` so the editable
+                    // representation stays in the same basis. Without
+                    // this, FBX/glTF assets that declare Z-up would
+                    // surface vertex overlays rotated 90° relative to
+                    // the on-screen geometry, and a commit would write
+                    // the rotated positions back, silently rotating
+                    // the entity.
+                    bool isZup = false;
+                    const Ogre::Any& upAny =
+                        bindings.getUserAny("qtme.source_up_axis");
+                    if (upAny.has_value()) {
+                        try {
+                            isZup = (Ogre::any_cast<int>(upAny) == 2);
+                        } catch (const Ogre::Exception&) {}
+                    }
+                    // Resolve aiBone names against the live skeleton so
+                    // the n-gon path emits Ogre bone HANDLES (matching
+                    // MeshProcessor) instead of mesh-local aiBone
+                    // indices. Without this, a topology op on a skinned
+                    // mesh re-emits VertexBoneAssignments with wild
+                    // handles and skinning rebinds vertices to wrong
+                    // bones.
+                    const Ogre::Skeleton* skel = nullptr;
+                    if (meshPtr->hasSkeleton()) {
+                        skel = meshPtr->getSkeleton().get();
+                    }
                     if (!sourcePath.empty()
-                        && m_editableMesh->loadFromAssimpFile(sourcePath, convertLH)) {
+                        && m_editableMesh->loadFromAssimpFile(
+                               sourcePath, convertLH, isZup, skel)) {
                         loaded = true;
                         SentryReporter::addBreadcrumb("edit_mode",
                             "Edit Mode entered via n-gon import path");
@@ -1703,24 +1733,9 @@ bool EditModeController::extrudeSelection()
     if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
         return false;
 
-    // Force Entity to rebuild its SubEntity list from the updated Mesh.
-    // Without this, Ogre's skeletal skinning pipeline may use stale
-    // animation blend buffers that still reference the old vertex layout.
-    m_editEntity->_deinitialise();
-    m_editEntity->_initialise(true);
-
-    // Invalidate RTSS shaders for the entity's materials so they regenerate
-    // against the new vertex declaration (with possibly new tangent / blend
-    // indices elements). Without this, bump maps / skinning may render wrong.
-    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
-    if (shaderGen) {
-        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
-            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
-            if (!matName.empty())
-                shaderGen->invalidateMaterial(
-                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
-        }
-    }
+    // Refresh Entity caches + RTSS state (incl. tangent rebuild for
+    // bump-mapped materials). See `rewriteEntityAfterTopologyChange`.
+    rewriteEntityAfterTopologyChange(m_editEntity);
 
     // Select the new (offset) vertices by position — offset ensures uniqueness
     m_selectedVertices.clear();
@@ -1844,34 +1859,10 @@ bool EditModeController::applyBevelTopology(
     if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
         return false;
 
-    // _deinitialise/_initialise rebuilds SubEntities and resets their
-    // material to the SubMesh default. In edit mode the SubEntity holds
-    // the wireframe variant and MaterialEditor writes go to the SubEntity
-    // (not the SubMesh), so both must be preserved across the rebuild.
-    std::vector<std::string> preMats;
-    preMats.reserve(m_editEntity->getNumSubEntities());
-    for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
-        preMats.push_back(m_editEntity->getSubEntity(i)->getMaterialName());
-    }
-
-    m_editEntity->_deinitialise();
-    m_editEntity->_initialise(true);
-
-    for (unsigned int i = 0;
-         i < m_editEntity->getNumSubEntities() && i < preMats.size(); ++i) {
-        if (!preMats[i].empty())
-            m_editEntity->getSubEntity(i)->setMaterialName(preMats[i]);
-    }
-
-    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
-    if (shaderGen) {
-        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
-            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
-            if (!matName.empty())
-                shaderGen->invalidateMaterial(
-                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
-        }
-    }
+    // Refresh Entity caches + RTSS state (incl. tangent rebuild for
+    // bump-mapped materials), preserving per-subentity material
+    // overrides (wireframe variant, MaterialEditor writes).
+    rewriteEntityAfterTopologyChange(m_editEntity);
 
     m_selectedVertices.clear();
     m_selectedEdges.clear();
@@ -1969,29 +1960,7 @@ bool EditModeController::applyBevelVertexTopology(
     if (!m_editableMesh->resizeEntityBuffers(m_editEntity))
         return false;
 
-    std::vector<std::string> preMats;
-    preMats.reserve(m_editEntity->getNumSubEntities());
-    for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i)
-        preMats.push_back(m_editEntity->getSubEntity(i)->getMaterialName());
-
-    m_editEntity->_deinitialise();
-    m_editEntity->_initialise(true);
-
-    for (unsigned int i = 0;
-         i < m_editEntity->getNumSubEntities() && i < preMats.size(); ++i) {
-        if (!preMats[i].empty())
-            m_editEntity->getSubEntity(i)->setMaterialName(preMats[i]);
-    }
-
-    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
-    if (shaderGen) {
-        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
-            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
-            if (!matName.empty())
-                shaderGen->invalidateMaterial(
-                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
-        }
-    }
+    rewriteEntityAfterTopologyChange(m_editEntity);
 
     m_selectedVertices.clear();
     m_selectedEdges.clear();
@@ -2401,35 +2370,10 @@ void EditModeController::cancelBevel()
     m_selectedEdges = std::move(m_bevelSession.origSelectedEdges);
     m_selectedFaces = std::move(m_bevelSession.origSelectedFaces);
 
-    // Re-sync the entity with the restored mesh. Snapshot SubEntity
-    // materials before _deinitialise/_initialise (Ogre resets them to
-    // the SubMesh default) so wireframe / material-editor overrides
-    // survive the Esc path, matching the commit path.
+    // Re-sync the entity with the restored mesh — preserves wireframe /
+    // material-editor SubEntity overrides through the Esc path.
     m_editableMesh->resizeEntityBuffers(m_editEntity);
-    if (m_editEntity) {
-        std::vector<std::string> preMats;
-        preMats.reserve(m_editEntity->getNumSubEntities());
-        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i)
-            preMats.push_back(m_editEntity->getSubEntity(i)->getMaterialName());
-
-        m_editEntity->_deinitialise();
-        m_editEntity->_initialise(true);
-
-        for (unsigned int i = 0;
-             i < m_editEntity->getNumSubEntities() && i < preMats.size(); ++i) {
-            if (!preMats[i].empty())
-                m_editEntity->getSubEntity(i)->setMaterialName(preMats[i]);
-        }
-    }
-    auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
-    if (shaderGen && m_editEntity) {
-        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
-            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
-            if (!matName.empty())
-                shaderGen->invalidateMaterial(
-                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
-        }
-    }
+    rewriteEntityAfterTopologyChange(m_editEntity);
 
     m_bevelSession = {};
     if (m_bevelGizmo) m_bevelGizmo->setVisible(false);
@@ -2628,29 +2572,7 @@ bool EditModeController::commitKnife()
     m_editableMesh->subMeshes() = std::move(updated.subMeshes());
     m_editableMesh->resizeEntityBuffers(m_editEntity);
 
-    std::vector<std::string> preMats;
-    preMats.reserve(m_editEntity->getNumSubEntities());
-    for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
-        preMats.push_back(m_editEntity->getSubEntity(i)->getMaterialName());
-    }
-
-    m_editEntity->_deinitialise();
-    m_editEntity->_initialise(true);
-
-    for (unsigned int i = 0;
-         i < m_editEntity->getNumSubEntities() && i < preMats.size(); ++i) {
-        if (!preMats[i].empty())
-            m_editEntity->getSubEntity(i)->setMaterialName(preMats[i]);
-    }
-
-    if (auto* shaderGen = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
-        for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
-            const std::string& matName = m_editEntity->getSubEntity(i)->getMaterialName();
-            if (!matName.empty())
-                shaderGen->invalidateMaterial(
-                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, matName);
-        }
-    }
+    rewriteEntityAfterTopologyChange(m_editEntity);
 
     // Clear edge/face selection — pre-cut IDs refer to retired topology
     // slots and the walk added new vertices that aren't in any existing
@@ -2687,16 +2609,87 @@ bool EditModeController::commitKnife()
 // the HE primitive (centroid / first / last / per-cluster centroid for
 // by-distance). `applyMergeOp` factors that boilerplate.
 // ---------------------------------------------------------------------------
-namespace {
-// Shared post-mesh-mutation hook used by knife + merge: rewrite the entity's
-// Ogre buffers, save / restore per-subentity material overrides, and tell
-// RTSS to re-link shaders against the new vertex layout. Captures locally
-// to avoid a public helper just for this.
-inline void rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
+// Shared post-mesh-mutation hook: rewrite the entity's Ogre buffers,
+// save / restore per-subentity material overrides, and tell RTSS to
+// re-link shaders against the new vertex layout. Used by every Edit-
+// Mode topology op AND by EditMeshTopologyCommand::applyMeshState so
+// undo/redo preserves bump map / per-pixel lighting state.
+//
+// Bump-map / per-pixel lighting handling: after a topology op the new
+// vertices written by EditableMesh::buildSubMeshBuffers have zero-valued
+// tangents (EditableVertex defaults), and the declaration may even drop
+// the VES_TANGENT slot entirely if `vertices[0].hasTangent == false`
+// (which is the case on the n-gon import path that omits
+// aiProcess_CalcTangentSpace). Either way RTSS's SRS_NORMALMAP TBN math
+// collapses, dropping bump mapping and (depending on the shader path)
+// basic per-pixel lighting. Fix: force `Mesh::buildTangentVectors`
+// BEFORE `_deinitialise/_initialise` so the SubEntity vertex-decl cache
+// reads the corrected layout, then re-run `applyNormalMapsToEntity` so
+// RTSS re-attaches SRS_NORMALMAP against the fresh tangents.
+void EditModeController::rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
+    if (!ent) return;
     std::vector<std::string> preMats;
     preMats.reserve(ent->getNumSubEntities());
     for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i)
         preMats.push_back(ent->getSubEntity(i)->getMaterialName());
+
+    // Rebuild tangents BEFORE `_deinitialise/_initialise` so the
+    // SubEntity vertex-decl cache captured during `_initialise` already
+    // sees the VES_TANGENT element. Calling `buildTangentVectors` AFTER
+    // `_initialise` is too late: the SubEntity has already linked
+    // against the old (no-tangent) declaration and the next render
+    // compiles RTSS shaders against that stale layout, so the
+    // SRS_NORMALMAP code path collapses to a no-op even though the
+    // tangents physically exist in the buffer.
+    //
+    // We need tangents whenever any subentity is bump-mapped (has a
+    // `normal_map`/`NormalMap` TUS). Two cases trigger that:
+    //   1. The mesh declaration ALREADY has VES_TANGENT but the new
+    //      vertices written by `EditableMesh::buildSubMeshBuffers` are
+    //      zero-valued (default-constructed `EditableVertex::tangent`).
+    //   2. The declaration LOST VES_TANGENT during the buffer rewrite —
+    //      this happens when the n-gon import path (which doesn't
+    //      request `aiProcess_CalcTangentSpace` because it forces
+    //      triangulation) didn't have tangents in the source file, so
+    //      `EditableVertex::hasTangent == false` for every vertex and
+    //      the rebuilt declaration drops the slot entirely.
+    // Either way `Mesh::buildTangentVectors` is the fix: it adds the
+    // VES_TANGENT element if missing and (re)computes values from
+    // positions/normals/UVs.
+    if (auto mesh = ent->getMesh()) {
+        bool wantsTangents = false;
+        for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+            auto mat = ent->getSubEntity(i)->getMaterial();
+            if (!mat) continue;
+            if (!mat->isLoaded()) {
+                try { mat->load(); } catch (...) {}
+            }
+            if (mat->getNumTechniques() == 0) continue;
+            auto* pass = mat->getTechnique(0)->getPass(0);
+            if (!pass) continue;
+            for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {
+                const auto& tusName =
+                    pass->getTextureUnitState(t)->getName();
+                if (tusName == "normal_map" || tusName == "NormalMap") {
+                    wantsTangents = true;
+                    break;
+                }
+            }
+            if (wantsTangents) break;
+        }
+        if (wantsTangents) {
+            try {
+                // storeParityInW=true → VET_FLOAT4, matching what
+                // RTShaderHelper::applyNormalMap and the import path use.
+                mesh->buildTangentVectors(
+                    Ogre::VES_TANGENT, 0, 0, false, false, true);
+            } catch (const Ogre::Exception& e) {
+                Ogre::LogManager::getSingleton().logMessage(
+                    "rewriteEntityAfterTopologyChange: buildTangentVectors "
+                    "failed for '" + mesh->getName() + "': " + e.getDescription());
+            }
+        }
+    }
 
     // Re-init the entity so its SubEntity caches (vertex / index
     // counts, skeleton anim buffers) sync to the resized mesh.
@@ -2711,24 +2704,23 @@ inline void rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
             ent->getSubEntity(i)->setMaterialName(preMats[i]);
     }
 
-    // Invalidate the cached RTSS technique so the next render
-    // regenerates it against the new vertex declaration. Lazy regen
-    // via SchemeResolverListener::handleSchemeNotFound runs on the
-    // next render. (Same pattern every other topology op uses.)
-    //
-    // KNOWN ISSUE post-chunk-4: bump-mapped meshes loaded through
-    // the n-gon import path lose their bump map (and sometimes basic
-    // per-pixel lighting) after a topology op. The cause is that
-    // `EditableMesh::loadFromAssimpFile` deliberately skips
-    // aiProcess_CalcTangentSpace (it forces triangulation) and the
-    // post-edit GPU upload path doesn't always reliably trigger an
-    // Ogre `buildTangentVectors` rebuild. Various RTSS
-    // re-attach permutations (sync / deferred / via
-    // applyNormalMapsToEntity / invalidate-only) all reproduce the
-    // failure on the same model. Tracked for a follow-up fix-PR
-    // with proper shader-pipeline instrumentation rather than
-    // continued blind permutation. Triangle-only assets and
-    // procedural primitives are unaffected.
+    // Re-attach the RTSS SRS_NORMALMAP sub-render-state per material that
+    // has a normal-map TUS. `invalidateMaterial` alone only drops the
+    // cached shader programs; the renderState's template list is
+    // preserved so the regenerated shader would normally inherit
+    // SRS_NORMALMAP — except `applyNormalMap` uses
+    // `removeShaderBasedTechnique + createShaderBasedTechnique` to start
+    // from a clean slate (some tangent-related state in the render state
+    // doesn't survive a buffer-format change), so we must run it again
+    // to guarantee the SRS_NORMALMAP is re-bound against the new
+    // tangents. Materials without a normal-map TUS are no-ops here.
+    MeshImporterExporter::applyNormalMapsToEntity(ent);
+
+    // Final invalidate so any per-material cache that survived the
+    // applyNormalMap path drops too. validateMaterial inside
+    // applyNormalMap already kicks shader regen, but explicit
+    // invalidate keeps behaviour identical to other topology ops for
+    // materials that aren't bump-mapped.
     if (auto* sg = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
         for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
             const std::string& m = ent->getSubEntity(i)->getMaterialName();
@@ -2738,7 +2730,6 @@ inline void rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
         }
     }
 }
-} // namespace
 
 // Find global vertex indices of the survivor positions after toEditableMesh
 // re-packed the per-submesh arrays. Each survivor is the unique vertex at
@@ -3015,7 +3006,7 @@ int applyTopologyMutationNoSurvivor(
         editableMesh->recalculateNormalsFlat();
 
     editableMesh->resizeEntityBuffers(editEntity);
-    rewriteEntityAfterTopologyChange(editEntity);
+    EditModeController::rewriteEntityAfterTopologyChange(editEntity);
 
     selVerts.clear();
     selEdges.clear();

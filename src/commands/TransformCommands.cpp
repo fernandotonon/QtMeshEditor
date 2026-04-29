@@ -664,9 +664,10 @@ void EditMeshTopologyCommand::applyMeshState(
     // and skeletal skinning are preserved through undo/redo.
     ctrl->currentMesh()->resizeEntityBuffers(ctrl->editEntity());
 
-    // Refresh Entity's SubEntity caches for the new vertex layout
-    ctrl->editEntity()->_deinitialise();
-    ctrl->editEntity()->_initialise(true);
+    // Refresh Entity caches + RTSS state — same hook every topology op
+    // uses, so undo/redo preserves bump map / per-pixel lighting on
+    // bump-mapped assets through the n-gon import path.
+    EditModeController::rewriteEntityAfterTopologyChange(ctrl->editEntity());
 
     // Restore full selection state (vertices, edges, and faces)
     ctrl->deselectAll();
