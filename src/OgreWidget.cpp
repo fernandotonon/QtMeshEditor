@@ -54,18 +54,19 @@ QCursor vertexPaintBrushCursor()
     static QCursor cached;
     static bool inited = false;
     if (!inited) {
-        QPixmap pm(28, 28);
+        const int sizePx = 28;
+        QPixmap pm(sizePx, sizePx);
         pm.fill(Qt::transparent);
         QPainter p(&pm);
         p.setRenderHint(QPainter::Antialiasing);
         p.setPen(QPen(QColor(40, 40, 40), 2));
         p.setBrush(QColor(120, 170, 255, 210));
-        p.drawEllipse(6, 6, 16, 16);
+        p.drawEllipse(2, 2, sizePx - 4, sizePx - 4);
         p.setBrush(Qt::NoBrush);
         p.setPen(QPen(Qt::white, 1));
-        p.drawEllipse(6, 6, 16, 16);
+        p.drawEllipse(2, 2, sizePx - 4, sizePx - 4);
         p.end();
-        cached = QCursor(pm, 14, 14);
+        cached = QCursor(pm, sizePx / 2, sizePx / 2);
         inited = true;
     }
     return cached;

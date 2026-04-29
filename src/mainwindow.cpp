@@ -876,6 +876,8 @@ void MainWindow::initToolBar()
         strLabel->setText(tr("Strength: %1").arg(emPaint->vertexPaintStrength(), 0, 'f', 2));
     });
     connect(emPaint, &EditModeController::vertexPaintChanged, this, syncStr);
+    paintLay->addWidget(strLabel);
+    paintLay->addWidget(strSlider);
 
     auto* paintWa = new QWidgetAction(vertexPaintMenu);
     paintWa->setDefaultWidget(paintSettings);
