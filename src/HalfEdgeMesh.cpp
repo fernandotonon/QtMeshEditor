@@ -3404,50 +3404,33 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
             appendFace(seg, info.subMeshIndex);
         }
 
-        // Corner fans at v1 and v2: ONLY needed when the endpoint has
-        // no other incident faces (so neighbor splicing didn't close
-        // the manifold around it). For higher-valence vertices, the
-        // neighbor-rebuild step above already inserted innerVF1 /
-        // innerVF2 into each neighbor face's loop, so the chamfer's
-        // sides connect cleanly to the surrounding mesh.
-        bool v1Isolated = true;
-        bool v2Isolated = true;
-        for (const auto& nr : neighborRebuilds) {
-            // The original neighbor face's loop contained either v1
-            // or v2 (or both). Re-fetch from the original loops we
-            // captured in `neighborFaces` collection — but we don't
-            // have them anymore. Easier proxy: if any neighbor's
-            // newLoop contains both v1 (still there) and innerV1F1
-            // or innerV1F2, that neighbor closes around v1.
-            const auto& loop = nr.newLoop;
-            const bool containsV1 =
-                std::find(loop.begin(), loop.end(), info.v1) != loop.end();
-            const bool containsV2 =
-                std::find(loop.begin(), loop.end(), info.v2) != loop.end();
-            if (containsV1) v1Isolated = false;
-            if (containsV2) v2Isolated = false;
-        }
-
-        if (v1Isolated) {
-            for (int i = 0; i < segments; ++i) {
-                const int aV1 = chainV1[i];
-                const int bV1 = chainV1[i + 1];
-                if (f1WalksV1ToV2) {
-                    appendFace({bV1, info.v1, aV1}, info.subMeshIndex);
-                } else {
-                    appendFace({aV1, info.v1, bV1}, info.subMeshIndex);
-                }
-            }
-        }
-        if (v2Isolated) {
-            for (int i = 0; i < segments; ++i) {
-                const int aV2 = chainV2[i];
-                const int bV2 = chainV2[i + 1];
-                if (f1WalksV1ToV2) {
-                    appendFace({aV2, info.v2, bV2}, info.subMeshIndex);
-                } else {
-                    appendFace({bV2, info.v2, aV2}, info.subMeshIndex);
-                }
+        // Corner fans at v1 and v2 — ALWAYS emitted (Codex P1: previous
+        // "skip caps when v has neighbors" optimization left chamfer
+        // side-edges as boundaries since the spliced neighbor faces
+        // don't include the (innerVF1, innerVF2) edge).
+        //
+        // Winding: cap is the *outward* face of the corner. Walking
+        // a CCW neighbor splice produces edges (innerVF2, v) and
+        // (v, innerVF1) on the f1WalksV1ToV2 case. The cap must
+        // traverse those edges in the opposite direction to match as
+        // twins, so the cap walks (v, innerVF2, innerVF1) — same
+        // information as the previous winding but the v vertex sits
+        // FIRST so the edges walk away from v in the cap.
+        for (int i = 0; i < segments; ++i) {
+            const int aV1 = chainV1[i];      // f1-side
+            const int bV1 = chainV1[i + 1];  // f2-side
+            const int aV2 = chainV2[i];
+            const int bV2 = chainV2[i + 1];
+            if (f1WalksV1ToV2) {
+                // v1 cap: walk v1 → bV1(f2-side) → aV1(f1-side). The
+                // splice into Left contains edges (v1 → aV1) and
+                // (bV1 → v1), so the cap's reversed (v1 → bV1) and
+                // (aV1 → v1) match as twins.
+                appendFace({info.v1, bV1, aV1}, info.subMeshIndex);
+                appendFace({info.v2, aV2, bV2}, info.subMeshIndex);
+            } else {
+                appendFace({info.v1, aV1, bV1}, info.subMeshIndex);
+                appendFace({info.v2, bV2, aV2}, info.subMeshIndex);
             }
         }
 
@@ -3539,11 +3522,15 @@ std::vector<int> HalfEdgeMesh::bevelVerticesNgon(
         if (shortestIncident < 1e-6f) continue;
         const float w = std::min(width, shortestIncident * 0.49f);
 
-        // Compute one inner vertex per incident face. Direction:
-        // (centroid_of_f - v), normalised. Cap face walks these inner
-        // vertices in the same order as `incident` (which is ring order).
-        std::vector<int> innerVerts;
-        innerVerts.reserve(incident.size());
+        // Validate every incident face FIRST (compute and stash each
+        // inner-vertex position), only commit the new vertices after
+        // the whole vertex passes validation. Without this two-phase
+        // approach, a partial failure mid-loop would leave orphan
+        // vertices in m_vertices and report them in `newVertices`,
+        // making callers think the bevel succeeded while topology
+        // is unchanged. (Codex P2 review.)
+        std::vector<Ogre::Vector3> innerPositions;
+        innerPositions.reserve(incident.size());
         bool ok = true;
         for (int f : incident) {
             const auto loop = faceVertices(f);
@@ -3554,15 +3541,22 @@ std::vector<int> HalfEdgeMesh::bevelVerticesNgon(
             Ogre::Vector3 dir = centroid - m_vertices[v].position;
             if (dir.length() < 1e-6f) { ok = false; break; }
             dir.normalise();
+            innerPositions.push_back(m_vertices[v].position + dir * w);
+        }
+        if (!ok || innerPositions.size() != incident.size()) continue;
+
+        // All faces validated — now actually create the inner vertices.
+        std::vector<int> innerVerts;
+        innerVerts.reserve(incident.size());
+        for (const auto& pos : innerPositions) {
             HEVertex nv = m_vertices[v];
-            nv.position = m_vertices[v].position + dir * w;
+            nv.position = pos;
             nv.halfEdge = -1;
             const int idx = static_cast<int>(m_vertices.size());
             m_vertices.push_back(std::move(nv));
             newVertices.push_back(idx);
             innerVerts.push_back(idx);
         }
-        if (!ok || innerVerts.size() != incident.size()) continue;
 
         // Build a face → innerVert mapping for the substitution step.
         std::map<int, int> faceToInner;
