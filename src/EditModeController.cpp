@@ -1220,6 +1220,13 @@ bool EditModeController::beginVertexPaintStroke(OgreWidget* widget, const QPoint
     m_vertexPaintStrokeDirty = false;
     m_vertexPaintHaveLastLocal = false;
 
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint stroke begin (radius=%1 strength=%2 color=%3)")
+            .arg(m_vertexPaintRadius, 0, 'f', 3)
+            .arg(m_vertexPaintStrength, 0, 'f', 3)
+            .arg(m_vertexPaintColor.name(QColor::HexRgb)));
+
     updateVertexPaintStroke(widget, screenPos);
     return true;
 }
@@ -1352,11 +1359,13 @@ void EditModeController::endVertexPaintStroke(bool commitUndo)
 
     if (!commitUndo || !m_editModeActive || !m_editableMesh || !m_editEntity) {
         m_vertexPaintStrokeOriginalSubMeshes.clear();
+        SentryReporter::addBreadcrumb("ui.action", "Vertex paint stroke end (discarded)");
         return;
     }
 
     if (!m_vertexPaintStrokeDirty) {
         m_vertexPaintStrokeOriginalSubMeshes.clear();
+        SentryReporter::addBreadcrumb("ui.action", "Vertex paint stroke end (no changes)");
         return;
     }
 
@@ -1366,6 +1375,10 @@ void EditModeController::endVertexPaintStroke(bool commitUndo)
         m_editableMesh->commitVertexColorsToEntity(m_editEntity);
         emit meshDataChanged();
     }
+
+    SentryReporter::addBreadcrumb("ui.action",
+        QStringLiteral("Vertex paint stroke end (%1)")
+            .arg(commitUndo ? QStringLiteral("committed") : QStringLiteral("discarded")));
 
     const auto newSubMeshes = m_editableMesh->subMeshes();
     auto* cmd = new EditMeshTopologyCommand(
