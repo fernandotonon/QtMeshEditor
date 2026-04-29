@@ -3536,10 +3536,70 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
     const int vw = widget->width();
     const int vh = widget->height();
 
+    // Build the front-facing vertex / edge sets once (mirrors the
+    // chunk-4b behaviour of regular hitTestEdge / face selection): on
+    // a dense mesh, snapping to back-face geometry that's hidden behind
+    // the visible surface is impossible to control. Front-facing means
+    // the polygon's Newell normal points toward the camera. A vertex is
+    // front-facing if at least one incident polygon faces the camera;
+    // an edge is front-facing if at least one of its two adjacent
+    // polygons does. Edge keys use (min,max) global vertex indices so
+    // they line up with the triangle-mode HE used below.
+    Ogre::SceneNode* node = m_editEntity->getParentSceneNode();
+    const Ogre::Vector3 camPos = camera->getDerivedPosition();
+    auto isPolygonFrontFacing = [&](const EditableSubMesh& sub,
+                                    const std::vector<unsigned int>& corners) -> bool {
+        if (corners.size() < 3 || !node) return false;
+        Ogre::Vector3 nrm = Ogre::Vector3::ZERO;
+        for (size_t i = 0; i < corners.size(); ++i) {
+            if (corners[i] >= sub.vertices.size()) return false;
+            const auto& a = sub.vertices[corners[i]].position;
+            const auto& b = sub.vertices[corners[(i + 1) % corners.size()]].position;
+            nrm.x += (a.y - b.y) * (a.z + b.z);
+            nrm.y += (a.z - b.z) * (a.x + b.x);
+            nrm.z += (a.x - b.x) * (a.y + b.y);
+        }
+        const Ogre::Vector3 worldNrm = node->_getDerivedOrientation() * nrm;
+        const Ogre::Vector3 anyCornerWorld =
+            node->convertLocalToWorldPosition(sub.vertices[corners[0]].position);
+        return worldNrm.dotProduct(camPos - anyCornerWorld) > 0.0f;
+    };
+
+    std::set<int> frontVerts;
+    std::set<std::pair<int,int>> frontEdges;
+    for (size_t si = 0; si < m_editableMesh->subMeshes().size(); ++si) {
+        const auto& sub = m_editableMesh->subMeshes()[si];
+        const int vertOffset = localToGlobal(static_cast<unsigned int>(si), 0);
+        auto recordFrontPoly = [&](const std::vector<unsigned int>& corners) {
+            for (size_t i = 0; i < corners.size(); ++i) {
+                const int g0 = vertOffset + static_cast<int>(corners[i]);
+                const int g1 = vertOffset + static_cast<int>(corners[(i + 1) % corners.size()]);
+                frontVerts.insert(g0);
+                frontEdges.emplace(std::min(g0, g1), std::max(g0, g1));
+            }
+        };
+        if (!sub.faces.empty()) {
+            for (const auto& face : sub.faces) {
+                if (face.indices.size() < 3) continue;
+                if (!isPolygonFrontFacing(sub, face.indices)) continue;
+                recordFrontPoly(face.indices);
+            }
+        } else {
+            for (const auto& tri : sub.triangles) {
+                std::vector<unsigned int> corners = {
+                    tri.indices[0], tri.indices[1], tri.indices[2] };
+                if (!isPolygonFrontFacing(sub, corners)) continue;
+                recordFrontPoly(corners);
+            }
+        }
+    }
+
     // Priority 1: vertex snap. Uses the same radius as regular edit-mode
-    // vertex picking so the user's eye can predict the snap.
+    // vertex picking so the user's eye can predict the snap. Skip
+    // back-face vertices (not in `frontVerts`) so dense meshes don't
+    // pull clicks to vertices the user can't see.
     const int snapVert = hitTestVertex(screenPos, camera, vw, vh, 10.0f);
-    if (snapVert >= 0) {
+    if (snapVert >= 0 && frontVerts.count(snapVert)) {
         auto [subIdx, localIdx] = globalToLocal(snapVert);
         if (subIdx < m_editableMesh->subMeshes().size()
          && localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size()) {
@@ -3563,7 +3623,6 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
         const Ogre::Real nx = static_cast<Ogre::Real>(screenPos.x()) / vw;
         const Ogre::Real ny = static_cast<Ogre::Real>(screenPos.y()) / vh;
         const Ogre::Ray ray = camera->getCameraToViewportRay(nx, ny);
-        Ogre::SceneNode* node = m_editEntity->getParentSceneNode();
 
         Ogre::Vector3 rO = ray.getOrigin();
         Ogre::Vector3 rD = ray.getDirection();
@@ -3585,7 +3644,6 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
         for (auto& sub : triOnly.subMeshes()) sub.faces.clear();
         HalfEdgeMesh tmp;
         if (tmp.buildFromEditableMesh(triOnly)) {
-            const Ogre::Vector3 camPosWorld = camera->getDerivedPosition();
             constexpr float kPixelRadius = 10.0f;
             float bestDepth = std::numeric_limits<float>::infinity();
             int bestEdgeIdx = -1;
@@ -3595,6 +3653,18 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
             for (size_t e = 0; e < tmp.edgeCount(); ++e) {
                 auto [gv0, gv1] = tmp.edgeVertices(static_cast<int>(e));
                 if (gv0 < 0 || gv1 < 0) continue;
+                // Skip back-face edges. `frontEdges` was computed from
+                // the n-gon `m_editableMesh`, keyed by global vertex
+                // pair; the triangle-mode `tmp` indices use the same
+                // global numbering, so the lookup is direct. Note that
+                // `frontEdges` only contains polygon-perimeter edges:
+                // a fan-triangulation diagonal between two front-facing
+                // verts is rejected here, which is correct — the user
+                // shouldn't be able to click on a fake interior edge.
+                {
+                    const std::pair<int,int> key{std::min(gv0, gv1), std::max(gv0, gv1)};
+                    if (!frontEdges.count(key)) continue;
+                }
                 auto [sub0, loc0] = globalToLocal(gv0);
                 auto [sub1, loc1] = globalToLocal(gv1);
                 if (sub0 >= m_editableMesh->subMeshes().size()) continue;
@@ -3633,7 +3703,7 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
                 }
                 const Ogre::Vector3 local = p0 + d * t;
                 const Ogre::Vector3 world = node->convertLocalToWorldPosition(local);
-                const float depth = (world - camPosWorld).dotProduct(camera->getDerivedDirection());
+                const float depth = (world - camPos).dotProduct(camera->getDerivedDirection());
                 if (depth <= 0.0f) continue; // behind camera
                 if (depth < bestDepth) {
                     bestDepth = depth;
