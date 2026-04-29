@@ -3553,8 +3553,18 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
             rD = worldToLocal.linear() * rD;
         }
 
+        // Build the HE from a triangle-mode COPY of the editable mesh,
+        // mirroring what the knife commit path does. Otherwise the HE
+        // edge indices we record on the click here (n-gon HE: one edge
+        // per polygon side) wouldn't match the indices `commitKnife`
+        // resolves against (triangle HE: one edge per fan side), and
+        // every cut would land on the wrong edge — manifesting as a
+        // knife that "does nothing" on quad-imported assets.
+        EditableMesh triOnly;
+        triOnly.subMeshes() = m_editableMesh->subMeshes();
+        for (auto& sub : triOnly.subMeshes()) sub.faces.clear();
         HalfEdgeMesh tmp;
-        if (tmp.buildFromEditableMesh(*m_editableMesh)) {
+        if (tmp.buildFromEditableMesh(triOnly)) {
             const Ogre::Vector3 camPosWorld = camera->getDerivedPosition();
             constexpr float kPixelRadius = 10.0f;
             float bestDepth = std::numeric_limits<float>::infinity();

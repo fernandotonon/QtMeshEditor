@@ -5325,7 +5325,46 @@ int HalfEdgeMesh::fillSelection(const std::vector<int>& vertexIndices)
             return 0;
     }
 
-    // 3. Build the new face. For n=3 emit a single triangle (matches
+    // 3. Pick a winding that faces the same way as the surrounding mesh.
+    //    Without this, a fill on a hole's boundary loop produces a face
+    //    whose normal points INTO the volume (the user's selection order
+    //    is whatever std::set / the loop walker produced; nothing
+    //    guarantees it matches the existing topology).
+    //    Heuristic: compare the candidate face's Newell normal to the
+    //    average normal of every existing face that shares at least one
+    //    of the selected vertices. If the dot product is negative the
+    //    winding is inverted; reverse it.
+    auto computeNewellNormal =
+        [this](const std::vector<int>& verts) -> Ogre::Vector3 {
+        Ogre::Vector3 normal = Ogre::Vector3::ZERO;
+        const size_t N = verts.size();
+        for (size_t i = 0; i < N; ++i) {
+            const auto& a = m_vertices[verts[i]].position;
+            const auto& b = m_vertices[verts[(i + 1) % N]].position;
+            normal.x += (a.y - b.y) * (a.z + b.z);
+            normal.y += (a.z - b.z) * (a.x + b.x);
+            normal.z += (a.x - b.x) * (a.y + b.y);
+        }
+        return normal;
+    };
+
+    Ogre::Vector3 candidateNormal = computeNewellNormal(vertexIndices);
+    Ogre::Vector3 referenceNormal = Ogre::Vector3::ZERO;
+    for (int v : vertexIndices) {
+        for (int f : facesAroundVertex(v)) {
+            const auto fv = faceVertices(f);
+            if (fv.size() < 3) continue;
+            referenceNormal += computeNewellNormal(fv);
+        }
+    }
+    std::vector<int> winding = vertexIndices;
+    if (referenceNormal.squaredLength() > 1e-12f
+        && candidateNormal.squaredLength() > 1e-12f
+        && candidateNormal.dotProduct(referenceNormal) < 0.0f) {
+        std::reverse(winding.begin(), winding.end());
+    }
+
+    // 4. Build the new face. For n=3 emit a single triangle (matches
     //    the existing fan output); for n>=4 emit a single n-gon HEFace
     //    so the result round-trips back through toEditableMesh as one
     //    EditableFace with N indices, not N-2 fan triangles. Without
@@ -5338,11 +5377,10 @@ int HalfEdgeMesh::fillSelection(const std::vector<int>& vertexIndices)
     //    success/fail flag).
     int created;
     if (n == 3) {
-        appendTriangle(vertexIndices[0], vertexIndices[1],
-                       vertexIndices[2], subIdx);
+        appendTriangle(winding[0], winding[1], winding[2], subIdx);
         created = 1;
     } else {
-        const int fIdx = appendFace(vertexIndices, subIdx);
+        const int fIdx = appendFace(winding, subIdx);
         if (fIdx < 0) return 0;
         created = 1;
     }
