@@ -1489,6 +1489,35 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
             }
         }
 
+        // Vertex colors live on bind-pose buffers (unchanged by skinning), like UVs.
+        if (bindData)
+        {
+            const auto* colElem = bindData->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+            if (colElem)
+            {
+                const unsigned int n = std::min(
+                    aiM->mNumVertices,
+                    static_cast<unsigned int>(bindData->vertexCount));
+                aiM->mColors[0] = new aiColor4D[aiM->mNumVertices];
+                for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+                    aiM->mColors[0][j] = aiColor4D(1, 1, 1, 1);
+                auto vbuf = bindData->vertexBufferBinding->getBuffer(colElem->getSource());
+                auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                for (unsigned int j = 0; j < n; ++j)
+                {
+                    const Ogre::RGBA* p;
+                    colElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+                    Ogre::ColourValue cv;
+                    if (colElem->getType() == Ogre::VET_COLOUR_ABGR)
+                        cv.setAsABGR(*p);
+                    else
+                        cv.setAsARGB(*p);
+                    aiM->mColors[0][j] = aiColor4D(cv.r, cv.g, cv.b, cv.a);
+                }
+                vbuf->unlock();
+            }
+        }
+
         // Read indices from the original submesh
         const Ogre::IndexData* iData = subMesh->indexData;
         if (iData && iData->indexCount > 0)

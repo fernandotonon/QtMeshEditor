@@ -366,6 +366,17 @@ TEST_F(MeshImporterExporterTest, Importer_MeshLoadsSidecarMaterialScript) {
     matFile.close();
     ASSERT_TRUE(QFileInfo::exists(sidecarMat));
 
+    // Tear down the export entity and drop our material handle so reimport cannot
+    // succeed from an in-memory material alone — it must parse the sidecar script.
+    manager->destroySceneNode(sn);
+    mat.reset();
+    if (Ogre::MaterialManager::getSingleton().getByName(
+            "SidecarMaterial", Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME))
+    {
+        Ogre::MaterialManager::getSingleton().remove(
+            "SidecarMaterial", Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+    }
+
     // Reimport from disk.
     MeshImporterExporter::importer({outMesh});
     ASSERT_FALSE(manager->getSceneNodes().isEmpty());

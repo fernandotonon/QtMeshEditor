@@ -1285,7 +1285,33 @@ TEST_F(FBXExporterCoverageTest, VertexColors_WritesLayerElementColor) {
     auto geomNodes = objects->findAll("Geometry");
     ASSERT_EQ(geomNodes.size(), 1u);
 
-    EXPECT_NE(geomNodes[0]->find("LayerElementColor"), nullptr);
+    auto* colorLayer = geomNodes[0]->find("LayerElementColor");
+    ASSERT_NE(colorLayer, nullptr);
+    auto* mapType = colorLayer->find("MappingInformationType");
+    ASSERT_NE(mapType, nullptr);
+    EXPECT_EQ(mapType->properties[0].stringVal, "ByPolygonVertex");
+    auto* refType = colorLayer->find("ReferenceInformationType");
+    ASSERT_NE(refType, nullptr);
+    EXPECT_EQ(refType->properties[0].stringVal, "Direct");
+
+    auto* colors = colorLayer->find("Colors");
+    ASSERT_NE(colors, nullptr);
+    // One tri × 3 polygon-vertices × 4 components (exporter reverses winding: v0, v2, v1).
+    ASSERT_EQ(colors->properties[0].doubleArray.size(), 12u);
+    const auto& c = colors->properties[0].doubleArray;
+    EXPECT_NEAR(c[0], 1.0, 1e-4);
+    EXPECT_NEAR(c[1], 0.0, 1e-4);
+    EXPECT_NEAR(c[2], 0.0, 1e-4);
+    EXPECT_NEAR(c[3], 1.0, 1e-4); // red corner (vi0)
+    EXPECT_NEAR(c[4], 0.0, 1e-4);
+    EXPECT_NEAR(c[5], 0.0, 1e-4);
+    EXPECT_NEAR(c[6], 1.0, 1e-4);
+    EXPECT_NEAR(c[7], 1.0, 1e-4); // blue corner (vi2)
+    EXPECT_NEAR(c[8], 0.0, 1e-4);
+    EXPECT_NEAR(c[9], 1.0, 1e-4);
+    EXPECT_NEAR(c[10], 0.0, 1e-4);
+    EXPECT_NEAR(c[11], 1.0, 1e-4); // green corner (vi1)
+
     auto* layer = geomNodes[0]->find("Layer");
     ASSERT_NE(layer, nullptr);
     bool hasColor = false;

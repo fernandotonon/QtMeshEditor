@@ -209,8 +209,7 @@ public:
     double vertexPaintStrength() const { return m_vertexPaintStrength; }
     void setVertexPaintStrength(double s);
 
-    /// Push vertex colors from EditableMesh to the Ogre mesh immediately (used before file export;
-    /// paint coalescing otherwise defers GPU upload until the next event-loop tick).
+    /// Writes pending vertex paint from EditableMesh into the entity's GPU buffers (call before export).
     void flushPendingVertexPaintForEntity(Ogre::Entity* entity);
     /// @}
 
