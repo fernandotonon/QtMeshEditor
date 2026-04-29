@@ -39,6 +39,7 @@ THE SOFTWARE.
 #include "mainwindow.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
+#include <QTimer>
 #include <Ogre.h>
 #include <OgreRTShaderSystem.h>
 #include <ProceduralSphereGenerator.h>
@@ -426,6 +427,8 @@ void EditModeController::exitEditMode(bool commitChanges)
         if (m_vertexPaintStrokeActive)
             endVertexPaintStroke(/*commitUndo=*/commitChanges);
         m_vertexPaintEnabled = false;
+        m_vertexPaintFlushPending = false;
+        m_vertexPaintFlushScheduled = false;
         clearVertexPaintPreview();
         emit vertexPaintChanged();
     }
@@ -1258,8 +1261,20 @@ void EditModeController::updateVertexPaintStroke(OgreWidget* widget, const QPoin
 
     if (changed) {
         m_vertexPaintStrokeDirty = true;
-        m_editableMesh->commitVertexColorsToEntity(m_editEntity);
-        emit meshDataChanged();
+        m_vertexPaintFlushPending = true;
+        if (!m_vertexPaintFlushScheduled) {
+            m_vertexPaintFlushScheduled = true;
+            QTimer::singleShot(0, this, [this]() {
+                m_vertexPaintFlushScheduled = false;
+                if (!m_vertexPaintFlushPending)
+                    return;
+                if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+                    return;
+                m_vertexPaintFlushPending = false;
+                m_editableMesh->commitVertexColorsToEntity(m_editEntity);
+                emit meshDataChanged();
+            });
+        }
     }
 }
 
@@ -1343,6 +1358,13 @@ void EditModeController::endVertexPaintStroke(bool commitUndo)
     if (!m_vertexPaintStrokeDirty) {
         m_vertexPaintStrokeOriginalSubMeshes.clear();
         return;
+    }
+
+    // Ensure the final sample is visible before we snapshot undo state.
+    if (m_vertexPaintFlushPending && m_editModeActive && m_editableMesh && m_editEntity) {
+        m_vertexPaintFlushPending = false;
+        m_editableMesh->commitVertexColorsToEntity(m_editEntity);
+        emit meshDataChanged();
     }
 
     const auto newSubMeshes = m_editableMesh->subMeshes();
