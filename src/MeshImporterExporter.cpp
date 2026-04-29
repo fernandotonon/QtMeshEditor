@@ -904,7 +904,19 @@ void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
         auto mat = subEnt->getMaterial();
         if (!mat) continue;
         // Ensure the material is fully loaded so TUS names are populated.
-        if (!mat->isLoaded()) mat->load();
+        // `load()` can throw on broken/unresolvable resources; this hook
+        // runs on every topology mutation AND undo/redo, so a single
+        // bad material shouldn't abort the edit op. Skip the offending
+        // sub-entity and let the rest of the entity refresh.
+        if (!mat->isLoaded()) {
+            try {
+                mat->load();
+            } catch (const Ogre::Exception& e) {
+                log.logMessage("applyNormalMapsToEntity: skipping mat '"
+                    + mat->getName() + "' — load failed: " + e.getDescription());
+                continue;
+            }
+        }
         if (mat->getNumTechniques() == 0) continue;
         auto* pass = mat->getTechnique(0)->getPass(0);
         if (!pass) continue;
@@ -1023,6 +1035,18 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     // every non-.x asset. (Chunk 4.)
                     mesh->getUserObjectBindings().setUserAny(
                         "qtme.source_convert_lh", Ogre::Any(convertLH));
+                    // Cache the source up-axis (1 = Y-up, 2 = Z-up) so
+                    // EditModeController can apply MeshProcessor's
+                    // +90°-around-X bake when re-importing the asset
+                    // through the n-gon-aware path. Without this the
+                    // editable representation lives in pre-bake space
+                    // while the rendered buffers are post-bake — the
+                    // overlays appear rotated 90° on FBX/glTF Z-up
+                    // assets, and a commit would write the rotated
+                    // positions back. (Quad migration follow-up.)
+                    mesh->getUserObjectBindings().setUserAny(
+                        "qtme.source_up_axis",
+                        Ogre::Any(importer.getSceneUpAxis()));
                 }
                 if (!mesh) {
                     // Animation-only file: skeleton/animations were loaded, but there is no mesh.

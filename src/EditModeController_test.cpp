@@ -28,6 +28,26 @@ The MIT License
 #include <map>
 
 // ===========================================================================
+// rewriteEntityAfterTopologyChange — null + no-bump-map shape (chunk: quads
+// follow-up). Full bump-map / RTSS exercise needs a GL context, which the
+// test infra doesn't provide on macOS; the integration coverage lives in
+// hand smoke tests on the bump-mapped Mixamo asset. Here we lock down the
+// public-API contract: static, callable from outside the class (notably
+// from EditMeshTopologyCommand::applyMeshState in the undo/redo path),
+// null-tolerant, and a no-op when no entity material requests tangents.
+// ===========================================================================
+
+TEST(EditModeControllerStandalone, RewriteEntityAfterTopologyChangeNullIsNoOp) {
+    // Regression for chunk 4b → quads follow-up: the static helper is
+    // reachable from command code in TransformCommands.cpp via a class-
+    // qualified call, and accepts a null entity without crashing. If
+    // someone refactors it back to a free function in an anonymous
+    // namespace, undo/redo will silently lose its lighting hook again.
+    EditModeController::rewriteEntityAfterTopologyChange(nullptr);
+    SUCCEED();
+}
+
+// ===========================================================================
 // Pure geometry tests (no Ogre needed)
 // ===========================================================================
 

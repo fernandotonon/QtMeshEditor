@@ -147,7 +147,9 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
 }
 
 bool EditableMesh::loadFromAssimpFile(const std::string& path,
-                                      bool convertToLeftHanded)
+                                      bool convertToLeftHanded,
+                                      bool isZup,
+                                      const Ogre::Skeleton* skeletonForBoneHandles)
 {
     if (path.empty()) return false;
 
@@ -189,6 +191,18 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
     m_subMeshes.clear();
     m_subMeshes.reserve(scene->mNumMeshes);
 
+    // Mirror MeshProcessor's Z-up bake: when the source asset declares
+    // Z-up (FBX UpAxis = 2), the GUI importer rotates every position /
+    // normal / tangent +90° around X so the Ogre scene-graph stays Y-up
+    // without needing a node rotation. We must apply the SAME rotation
+    // here so the editable representation lives in the same basis as
+    // the rendered Ogre buffers; otherwise the vertex/edge/face overlays
+    // appear rotated 90° (and on commit, the mismatched positions get
+    // written back, silently rotating the geometry).
+    const Ogre::Quaternion zUpBake = isZup
+        ? Ogre::Quaternion(Ogre::Degree(90), Ogre::Vector3::UNIT_X)
+        : Ogre::Quaternion::IDENTITY;
+
     for (unsigned m = 0; m < scene->mNumMeshes; ++m) {
         const aiMesh* aim = scene->mMeshes[m];
         if (!aim || aim->mNumVertices == 0) continue;
@@ -210,10 +224,10 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
         for (unsigned i = 0; i < aim->mNumVertices; ++i) {
             EditableVertex& ev = sub.vertices[i];
             const aiVector3D& p = aim->mVertices[i];
-            ev.position = Ogre::Vector3(p.x, p.y, p.z);
+            ev.position = zUpBake * Ogre::Vector3(p.x, p.y, p.z);
             if (hasNormals) {
                 const aiVector3D& n = aim->mNormals[i];
-                ev.normal = Ogre::Vector3(n.x, n.y, n.z);
+                ev.normal = zUpBake * Ogre::Vector3(n.x, n.y, n.z);
                 ev.hasNormal = true;
             }
             if (hasUVs) {
@@ -227,33 +241,48 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
                 ev.hasColor = true;
             }
             if (hasTangents) {
-                const aiVector3D& t = aim->mTangents[i];
                 // RTSS expects FLOAT4 tangents with handedness in w.
-                // Compute parity from the input bitangent: if cross
-                // (normal × tangent) aligns with bitangent, parity =
-                // +1, else -1. Same convention MeshProcessor /
-                // applyNormalMapsToEntity use.
-                const aiVector3D& bt = aim->mBitangents[i];
-                Ogre::Vector3 normalV = ev.hasNormal ? ev.normal : Ogre::Vector3::UNIT_Z;
-                Ogre::Vector3 tangentV(t.x, t.y, t.z);
-                Ogre::Vector3 expectedBT = normalV.crossProduct(tangentV);
-                float parity = expectedBT.dotProduct(
-                    Ogre::Vector3(bt.x, bt.y, bt.z)) >= 0.0f ? 1.0f : -1.0f;
-                ev.tangent = Ogre::Vector4(t.x, t.y, t.z, parity);
+                // Apply the same Z-up bake to T/B/N before computing
+                // parity so the convention matches MeshProcessor.
+                Ogre::Vector3 T = zUpBake * Ogre::Vector3(
+                    aim->mTangents[i].x, aim->mTangents[i].y, aim->mTangents[i].z);
+                Ogre::Vector3 B = zUpBake * Ogre::Vector3(
+                    aim->mBitangents[i].x, aim->mBitangents[i].y, aim->mBitangents[i].z);
+                Ogre::Vector3 N = ev.hasNormal ? ev.normal : Ogre::Vector3::UNIT_Z;
+                float parity = N.crossProduct(T).dotProduct(B) >= 0.0f ? 1.0f : -1.0f;
+                ev.tangent = Ogre::Vector4(T.x, T.y, T.z, parity);
                 ev.hasTangent = true;
             }
         }
 
         // Bone weights, if any.
+        //
+        // CRITICAL: assignments must use the same bone-handle convention
+        // the rendered Ogre mesh uses. MeshProcessor (the GUI import
+        // path) resolves `aiBone->mName` against the loaded skeleton and
+        // stores `Ogre::Bone::getHandle()`. If we instead stored aiBone
+        // mesh-local indices here, then on the next topology op (which
+        // re-emits VertexBoneAssignments through resizeEntityBuffers)
+        // those indices would be interpreted as handles — vertices would
+        // bind to whichever bone happens to live at that handle slot,
+        // not the bone the source file actually weighted them to.
+        // Skip bones that don't resolve so we never emit wild handles.
         if (aim->mNumBones > 0) {
             for (unsigned b = 0; b < aim->mNumBones; ++b) {
                 const aiBone* bone = aim->mBones[b];
                 if (!bone) continue;
+                unsigned short handle = static_cast<unsigned short>(b);
+                if (skeletonForBoneHandles) {
+                    const std::string boneName = bone->mName.C_Str();
+                    if (!skeletonForBoneHandles->hasBone(boneName)) continue;
+                    handle = static_cast<unsigned short>(
+                        skeletonForBoneHandles->getBone(boneName)->getHandle());
+                }
                 for (unsigned w = 0; w < bone->mNumWeights; ++w) {
                     const aiVertexWeight& vw = bone->mWeights[w];
                     if (vw.mVertexId >= sub.vertices.size()) continue;
                     EditableBoneAssignment eba;
-                    eba.boneIndex = static_cast<unsigned short>(b);
+                    eba.boneIndex = handle;
                     eba.weight = vw.mWeight;
                     sub.vertices[vw.mVertexId].boneAssignments.push_back(eba);
                 }
@@ -487,6 +516,7 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     // discarded by an n-gon re-import. (Quad migration #326, chunk 4.)
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_path");
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_convert_lh");
+    mesh->getUserObjectBindings().eraseUserAny("qtme.source_up_axis");
 
     return true;
 }
@@ -682,6 +712,7 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
     // Topology has changed — same rationale as commitToEntity above.
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_path");
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_convert_lh");
+    mesh->getUserObjectBindings().eraseUserAny("qtme.source_up_axis");
 
     return true;
 }

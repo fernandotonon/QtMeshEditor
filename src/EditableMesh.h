@@ -304,8 +304,31 @@ public:
      * @return true on success; false if the file is missing, can't be
      *         parsed, or contains no mesh data.
      */
+    /**
+     * @param isZup If true, applies the same +90°-around-X rotation that
+     *             `MeshProcessor` bakes into the rendered Ogre buffers
+     *             when the source asset declares a Z-up coordinate
+     *             system (FBX `UpAxis = 2`). Without this, the editable
+     *             vertices live in the source's pre-bake basis while the
+     *             rendered buffers are post-bake, and selection overlays
+     *             appear rotated 90° relative to the rendered geometry.
+     *             The original importer caches its choice at
+     *             `getUserAny("qtme.source_up_axis")` (an int — 1 = Y-up,
+     *             2 = Z-up).
+     * @param skeletonForBoneHandles If non-null, `aiBone->mName` is
+     *             resolved against this skeleton via `getBone(name)` and
+     *             the resulting `Ogre::Bone::getHandle()` is stored as
+     *             `EditableBoneAssignment::boneIndex`. This matches the
+     *             handle convention `MeshProcessor` writes into the live
+     *             Ogre mesh; without it, this path emits mesh-local
+     *             aiBone indices that re-bind vertices to the wrong
+     *             bones after a topology op. Pass nullptr only for
+     *             unskinned meshes.
+     */
     bool loadFromAssimpFile(const std::string& path,
-                            bool convertToLeftHanded = true);
+                            bool convertToLeftHanded = true,
+                            bool isZup = false,
+                            const Ogre::Skeleton* skeletonForBoneHandles = nullptr);
 
     /**
      * @brief Merge vertices at (approximately) coincident positions within
