@@ -2971,12 +2971,37 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
     const std::vector<int>& edgeIndices,
     float width,
     int segments,
-    float /*profile*/,
-    const std::vector<float>& /*profilePoints*/)
+    float profile,
+    const std::vector<float>& profilePointsIn)
 {
     std::vector<int> newVertices;
     if (edgeIndices.empty() || width <= 0.0f) return newVertices;
     segments = std::clamp(segments, 1, 16);
+    profile = std::clamp(profile, 0.0f, 1.0f);
+
+    // Build per-intermediate profile point vector. For segments=N there are
+    // N-1 intermediate vertices between innerA (f1-side) and innerB (f2-side)
+    // at each endpoint. profilePoints[i] in [0,1] controls the bulge along
+    // the "outward" axis (toward the original endpoint v) for intermediate
+    // i: 0.5 = flat (no bulge), > 0.5 = convex toward v, < 0.5 = concave.
+    // When the caller supplies profilePointsIn of the right size we use it
+    // directly; otherwise synthesize from `profile` with a sin envelope.
+    std::vector<float> profilePoints;
+    if (segments > 1) {
+        profilePoints.resize(segments - 1, 0.5f);
+        if (profilePointsIn.size() == static_cast<size_t>(segments - 1)) {
+            for (size_t i = 0; i < profilePoints.size(); ++i)
+                profilePoints[i] = std::clamp(profilePointsIn[i], 0.0f, 1.0f);
+        } else {
+            constexpr float kPi = 3.14159265358979323846f;
+            const float amp = profile - 0.5f;
+            for (int i = 1; i < segments; ++i) {
+                const float t = static_cast<float>(i)
+                              / static_cast<float>(segments);
+                profilePoints[i - 1] = 0.5f + amp * std::sin(kPi * t);
+            }
+        }
+    }
 
     // ---- 1. Gather per-edge info, filter to interior manifold edges ----
     struct EdgeInfo {
@@ -3172,41 +3197,248 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
             }
         }
 
-        // Chamfer face: a single quad joining the two pairs of inner
-        // vertices. f2's twin has the opposite winding by construction,
-        // so the chamfer's "f1 side" walks innerV1F1 → innerV2F1 (if
-        // f1WalksV1ToV2) and the "f2 side" walks innerV2F2 → innerV1F2.
-        // Glue them with the right CCW order:
-        std::vector<int> chamferLoop;
-        if (f1WalksV1ToV2) {
-            // f1 walks v1 → v2, so f1's "outer" edge of the new chamfer
-            // is innerV1F1 → innerV2F1 (in f1's CCW). The chamfer face
-            // sits between f1 and f2 with f1 to its "left" — its CCW
-            // (looking from outside) goes innerV2F1 → innerV1F1 →
-            // innerV1F2 → innerV2F2.
-            chamferLoop = { innerV2F1, innerV1F1, innerV1F2, innerV2F2 };
-        } else {
-            chamferLoop = { innerV1F1, innerV2F1, innerV2F2, innerV1F2 };
-        }
-        appendFace(chamferLoop, info.subMeshIndex);
+        // Build the per-endpoint chain of intermediate vertices. At each
+        // endpoint v, the chain runs from f1-side innerVF1 to f2-side
+        // innerVF2 via segments-1 intermediates. For segments=1 the
+        // chain is just [innerVF1, innerVF2].
+        //
+        // Intermediate i (i ∈ [1, segments-1]): linear blend along the
+        // chord innerVF1→innerVF2, plus a bulge along the "outward"
+        // axis (toward v's original position, projected perpendicular
+        // to the chord) controlled by profilePoints[i-1].
+        auto buildChain = [&](int v, int innerVF1, int innerVF2) {
+            std::vector<int> chain;
+            chain.reserve(segments + 1);
+            chain.push_back(innerVF1);
+            if (segments > 1) {
+                const auto& pA = m_vertices[innerVF1].position;
+                const auto& pB = m_vertices[innerVF2].position;
+                const auto& pV = m_vertices[v].position;
+                const Ogre::Vector3 chord = pB - pA;
+                Ogre::Vector3 outward = pV - (pA + pB) * 0.5f;
+                if (const float c2 = chord.squaredLength(); c2 > 1e-12f)
+                    outward -= chord * (outward.dotProduct(chord) / c2);
+                if (outward.length() > 1e-6f) outward.normalise();
+                else                          outward = Ogre::Vector3::ZERO;
+                for (int i = 1; i < segments; ++i) {
+                    const float t = static_cast<float>(i)
+                                  / static_cast<float>(segments);
+                    const float bulge = (profilePoints[i - 1] - 0.5f) * w;
+                    const Ogre::Vector3 pos = pA + chord * t + outward * bulge;
+                    HEVertex nv = m_vertices[v];
+                    nv.position = pos;
+                    nv.halfEdge = -1;
+                    const int idx = static_cast<int>(m_vertices.size());
+                    m_vertices.push_back(std::move(nv));
+                    newVertices.push_back(idx);
+                    chain.push_back(idx);
+                }
+            }
+            chain.push_back(innerVF2);
+            return chain;
+        };
+        const std::vector<int> chainV1 = buildChain(info.v1, innerV1F1, innerV1F2);
+        const std::vector<int> chainV2 = buildChain(info.v2, innerV2F1, innerV2F2);
 
-        // Corner caps at v1 and v2. Triangles bridging the inner
-        // vertices via the original endpoint, so v1 and v2 stay
-        // connected to neighbor (non-beveled) faces.
-        if (f1WalksV1ToV2) {
-            // Cap at v1: (innerV1F2, info.v1, innerV1F1) — winding
-            // matches the chamfer's f1WalksV1ToV2 case.
-            appendFace({innerV1F2, info.v1, innerV1F1}, info.subMeshIndex);
-            // Cap at v2: (innerV2F1, info.v2, innerV2F2).
-            appendFace({innerV2F1, info.v2, innerV2F2}, info.subMeshIndex);
-        } else {
-            appendFace({innerV1F1, info.v1, innerV1F2}, info.subMeshIndex);
-            appendFace({innerV2F2, info.v2, innerV2F1}, info.subMeshIndex);
+        // Chamfer strip: N quads bridging v1's chain to v2's chain.
+        // Winding matches the chamfer single-quad case extended per
+        // segment. f2's twin orientation already gives the right CCW
+        // — we just walk consecutive pairs along both chains.
+        for (int i = 0; i < segments; ++i) {
+            const int aV1 = chainV1[i];
+            const int bV1 = chainV1[i + 1];
+            const int aV2 = chainV2[i];
+            const int bV2 = chainV2[i + 1];
+            // f1WalksV1ToV2 selects the segment quad's CCW orientation.
+            std::vector<int> seg;
+            if (f1WalksV1ToV2) {
+                // f1 walks v1 → v2, so this segment's "f1-side" edge runs
+                // v1 → v2 (in chain coords: aV1 → aV2). Outer-CCW: aV2 →
+                // aV1 → bV1 → bV2.
+                seg = { aV2, aV1, bV1, bV2 };
+            } else {
+                seg = { aV1, aV2, bV2, bV1 };
+            }
+            appendFace(seg, info.subMeshIndex);
+        }
+
+        // Corner fans at v1 and v2: a triangle fan from the original
+        // endpoint v through every consecutive chain pair. For
+        // segments=1 this is one triangle; for N segments it's N
+        // triangles per endpoint.
+        for (int i = 0; i < segments; ++i) {
+            const int aV1 = chainV1[i];
+            const int bV1 = chainV1[i + 1];
+            const int aV2 = chainV2[i];
+            const int bV2 = chainV2[i + 1];
+            if (f1WalksV1ToV2) {
+                // Cap at v1: (bV1 [f2-side end], info.v1, aV1 [f1-side end]).
+                // For segments > 1, the fan has aV1 at one end and bV1 at the
+                // other — winding matches the chamfer segment.
+                appendFace({bV1, info.v1, aV1}, info.subMeshIndex);
+                // Cap at v2: (aV2, info.v2, bV2).
+                appendFace({aV2, info.v2, bV2}, info.subMeshIndex);
+            } else {
+                appendFace({aV1, info.v1, bV1}, info.subMeshIndex);
+                appendFace({bV2, info.v2, aV2}, info.subMeshIndex);
+            }
         }
 
         // Rebuild incrementally per edge so subsequent iterations see a
         // consistent topology. This is O(|HE|) per bevel — fine for
         // interactive selections (tens of edges).
+        rebuildEdgesAndTwins();
+        compactBoundaryHalfEdges();
+        buildBoundaryHalfEdges();
+        fixVertexHalfEdges();
+    }
+
+    return newVertices;
+}
+
+// ===========================================================================
+// bevelVerticesNgon — n-gon-aware corner cut at each selected vertex.
+// ===========================================================================
+//
+// Simpler counterpart to `bevelVertices` for meshes whose incident faces are
+// arbitrary n-gons. The original `bevelVertices` is a 700+-line function
+// with deep triangle assumptions (`fv.size() != 3` checks throughout). This
+// implementation:
+//
+//   1. For each vertex v of valence ≥ 3, walks v's face ring (using the
+//      same `facesAroundVertex` accessor every other op uses).
+//   2. For each incident face f, creates an "inner" vertex o_f at distance
+//      `width` from v along the direction (centroid_of_f - v). This works
+//      for any face arity and avoids the triangle-only "two edge offsets
+//      per face" trick.
+//   3. Replaces each incident face f's loop: substitute v → o_f. Triangles
+//      stay triangles, quads stay quads — the only change is one corner
+//      moves inward.
+//   4. Caps with a single n-gon face (one cap vertex per incident face)
+//      walking the o_f sequence in ring order.
+//
+// MVP scope: flat single-segment cap, isolated bevels, valence ≥ 3,
+// non-boundary vertices only. Same shape limits as bevelEdgesNgon.
+std::vector<int> HalfEdgeMesh::bevelVerticesNgon(
+    const std::vector<int>& vertexIndices,
+    float width,
+    int /*segments*/,
+    float /*profile*/,
+    const std::vector<float>& /*profilePoints*/)
+{
+    std::vector<int> newVertices;
+    if (vertexIndices.empty() || width <= 0.0f) return newVertices;
+
+    // Process vertices sequentially, rebuilding the HE between each.
+    // Same pattern as the triangle bevel + the n-gon edge bevel above.
+    std::set<int> processed;
+    for (int v : vertexIndices) {
+        if (!processed.insert(v).second) continue;
+        if (v < 0 || v >= static_cast<int>(m_vertices.size())) continue;
+        if (m_vertices[v].halfEdge < 0) continue;
+        if (isVertexBoundary(v)) continue;
+
+        const auto incident = facesAroundVertex(v);
+        if (incident.size() < 3) continue;
+
+        // All incident faces must share a submesh — otherwise the new
+        // cap would silently fuse material groups.
+        const int subIdx = m_faces[incident.front()].subMeshIndex;
+        bool sameSub = true;
+        for (int f : incident) {
+            if (m_faces[f].subMeshIndex != subIdx) { sameSub = false; break; }
+        }
+        if (!sameSub) continue;
+
+        // Per-vertex effective width: clamp to half the shortest edge
+        // incident to v. Walking each incident face's perimeter and
+        // finding edges adjacent to v.
+        float shortestIncident = std::numeric_limits<float>::max();
+        for (int f : incident) {
+            const auto loop = faceVertices(f);
+            for (size_t i = 0; i < loop.size(); ++i) {
+                if (loop[i] == v) {
+                    const int prev = loop[(i + loop.size() - 1) % loop.size()];
+                    const int next = loop[(i + 1) % loop.size()];
+                    const float lp = (m_vertices[prev].position
+                                      - m_vertices[v].position).length();
+                    const float ln = (m_vertices[next].position
+                                      - m_vertices[v].position).length();
+                    shortestIncident = std::min(shortestIncident, lp);
+                    shortestIncident = std::min(shortestIncident, ln);
+                }
+            }
+        }
+        if (shortestIncident < 1e-6f) continue;
+        const float w = std::min(width, shortestIncident * 0.49f);
+
+        // Compute one inner vertex per incident face. Direction:
+        // (centroid_of_f - v), normalised. Cap face walks these inner
+        // vertices in the same order as `incident` (which is ring order).
+        std::vector<int> innerVerts;
+        innerVerts.reserve(incident.size());
+        bool ok = true;
+        for (int f : incident) {
+            const auto loop = faceVertices(f);
+            if (loop.size() < 3) { ok = false; break; }
+            Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+            for (int x : loop) centroid += m_vertices[x].position;
+            centroid /= static_cast<float>(loop.size());
+            Ogre::Vector3 dir = centroid - m_vertices[v].position;
+            if (dir.length() < 1e-6f) { ok = false; break; }
+            dir.normalise();
+            HEVertex nv = m_vertices[v];
+            nv.position = m_vertices[v].position + dir * w;
+            nv.halfEdge = -1;
+            const int idx = static_cast<int>(m_vertices.size());
+            m_vertices.push_back(std::move(nv));
+            newVertices.push_back(idx);
+            innerVerts.push_back(idx);
+        }
+        if (!ok || innerVerts.size() != incident.size()) continue;
+
+        // Build a face → innerVert mapping for the substitution step.
+        std::map<int, int> faceToInner;
+        for (size_t k = 0; k < incident.size(); ++k) {
+            faceToInner[incident[k]] = innerVerts[k];
+        }
+
+        // Replace each incident face's loop: substitute v → o_f.
+        std::vector<std::pair<int, std::vector<int>>> replacements;
+        replacements.reserve(incident.size());
+        for (int f : incident) {
+            const auto loop = faceVertices(f);
+            std::vector<int> newLoop;
+            newLoop.reserve(loop.size());
+            for (int x : loop) {
+                if (x == v) newLoop.push_back(faceToInner[f]);
+                else newLoop.push_back(x);
+            }
+            replacements.push_back({f, std::move(newLoop)});
+        }
+
+        // Retire old faces, append replacements + cap.
+        auto retireFaceLocal = [this](int fIdx) {
+            const int startHE = m_faces[fIdx].halfEdge;
+            if (startHE < 0) return;
+            int he = startHE;
+            do {
+                const int next = m_halfEdges[he].next;
+                m_halfEdges[he].face = -1;
+                he = next;
+            } while (he != startHE && he >= 0);
+            m_faces[fIdx].halfEdge = -1;
+        };
+        for (int f : incident) retireFaceLocal(f);
+        for (const auto& [_, loop] : replacements) {
+            appendFace(loop, subIdx);
+        }
+        // Cap face: innerVerts in ring order.
+        appendFace(innerVerts, subIdx);
+
+        // Retire the original vertex slot.
+        m_vertices[v].halfEdge = -1;
+
         rebuildEdgesAndTwins();
         compactBoundaryHalfEdges();
         buildBoundaryHalfEdges();

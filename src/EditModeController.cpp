@@ -1979,19 +1979,18 @@ bool EditModeController::applyBevelVertexTopology(
     if (vertexIndices.empty() || width <= 0.0f)
         return false;
 
-    // Same triangle-mode workaround as applyBevelTopology — bevelVertices
-    // shares the triangle-only retriangulation path with bevelEdges.
-    EditableMesh triOnly;
-    triOnly.subMeshes() = m_editableMesh->subMeshes();
-    std::vector<bool> wasNGonSub;
-    wasNGonSub.reserve(triOnly.subMeshes().size());
-    auto originalSubMeshes = m_editableMesh->subMeshes();
-    for (auto& sub : triOnly.subMeshes()) {
-        wasNGonSub.push_back(!sub.faces.empty());
-        sub.faces.clear();
+    // Same dispatch as applyBevelTopology: pick the n-gon path when the
+    // editable mesh has n-gon canonical faces, the triangle-only path
+    // otherwise. The n-gon variant is single-segment flat MVP; the
+    // triangle path keeps its segments / profile features.
+    bool meshHasNGons = false;
+    for (const auto& sub : m_editableMesh->subMeshes()) {
+        if (!sub.faces.empty()) { meshHasNGons = true; break; }
     }
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+
     HalfEdgeMesh heMesh;
-    if (!heMesh.buildFromEditableMesh(triOnly))
+    if (!heMesh.buildFromEditableMesh(*m_editableMesh))
         return false;
 
     // Map global selection indices to HE indices by position match.
@@ -2019,8 +2018,9 @@ bool EditModeController::applyBevelVertexTopology(
     }
     if (heIndices.empty()) return false;
 
-    std::vector<int> newHEVertices =
-        heMesh.bevelVertices(heIndices, width, segments, 0.5f, profilePoints);
+    std::vector<int> newHEVertices = meshHasNGons
+        ? heMesh.bevelVerticesNgon(heIndices, width, segments, 0.5f, profilePoints)
+        : heMesh.bevelVertices(heIndices, width, segments, 0.5f, profilePoints);
     if (newHEVertices.empty())
         return false;
 
@@ -2032,25 +2032,9 @@ bool EditModeController::applyBevelVertexTopology(
     EditableMesh newMesh;
     if (!heMesh.toEditableMesh(newMesh))
         return false;
+    (void)originalSubMeshes; // n-gon path preserves quads natively
 
-    // Submesh-level restore (see applyBevelTopology for the rationale
-    // and trade-off).
-    std::set<int> touchedSubs;
-    for (int v : newHEVertices) {
-        for (int f : heMesh.facesAroundVertex(v)) {
-            touchedSubs.insert(heMesh.face(f).subMeshIndex);
-        }
-    }
-    auto& outSubs = newMesh.subMeshes();
-    for (size_t s = 0;
-         s < outSubs.size() && s < originalSubMeshes.size() && s < wasNGonSub.size();
-         ++s) {
-        if (touchedSubs.count(static_cast<int>(s))) continue;
-        if (!wasNGonSub[s]) continue;
-        outSubs[s] = originalSubMeshes[s];
-    }
-
-    m_editableMesh->subMeshes() = std::move(outSubs);
+    m_editableMesh->subMeshes() = std::move(newMesh.subMeshes());
 
     if (m_normalsMode == 0)
         m_editableMesh->recalculateNormals();

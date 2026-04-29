@@ -3193,6 +3193,112 @@ TEST(HalfEdgeMeshStandalone, BevelEdgesNgonRejectsBoundaryEdge) {
     EXPECT_TRUE(he.validate());
 }
 
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonSegments3ProducesRoundedChamfer) {
+    // segments > 1 builds a profile-driven chain at each endpoint:
+    // 4 chain vertices per endpoint (innerVF1, mid_1, mid_2, innerVF2),
+    // 3 chamfer-strip quads per beveled edge, 6 corner-cap triangles
+    // (3 per endpoint).
+    //
+    // Topology: 2 modified quads (the original f1, f2) + 3 chamfer
+    // segment quads + 6 corner caps = 11 active faces.
+    // New vertices: 4 inner (segments=1 baseline) + 2 × 2 intermediates
+    // (segments-1 = 2 per endpoint) = 8.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1),
+                     mkV(2, 0), mkV(2, 1) };
+    EditableFace q1, q2;
+    q1.indices = {0, 1, 2, 3};
+    q2.indices = {1, 4, 5, 2};
+    sub.faces = { q1, q2 };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    auto newVerts = he.bevelEdgesNgon({sharedEdge}, 0.1f, /*segments=*/3, /*profile=*/0.5f);
+    EXPECT_EQ(newVerts.size(), 8u)
+        << "4 inner + 2*(segments-1) intermediates = 8 new verts";
+    EXPECT_TRUE(he.validate());
+
+    int active = 0;
+    int quads = 0;
+    int tris = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        const auto fv = he.faceVertices(static_cast<int>(f));
+        if (fv.size() == 4) ++quads;
+        if (fv.size() == 3) ++tris;
+    }
+    EXPECT_EQ(active, 11)
+        << "2 modified quads + 3 chamfer segment quads + 6 corner caps";
+    EXPECT_EQ(quads, 5);
+    EXPECT_EQ(tris, 6);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVerticesNgonOnQuadCornerKeepsQuads) {
+    // 4 quads in a + arrangement around a central vertex v4 of valence 4.
+    // Bevel v4. Expected:
+    //   - 4 inner vertices (one per incident face), each placed toward
+    //     that face's centroid.
+    //   - 4 modified quads (each loses v4, gains its inner vertex —
+    //     still a 4-vertex face).
+    //   - 1 cap n-gon (4-vertex) walking the four inner vertices.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),
+        mkV(0, 2), mkV(1, 2), mkV(2, 2),
+    };
+    EditableFace qA, qB, qC, qD;
+    qA.indices = {0, 1, 4, 3};
+    qB.indices = {1, 2, 5, 4};
+    qC.indices = {3, 4, 7, 6};
+    qD.indices = {4, 5, 8, 7};
+    sub.faces = { qA, qB, qC, qD };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    ASSERT_EQ(he.faceCount(), 4u);
+
+    auto newVerts = he.bevelVerticesNgon({4}, 0.1f);
+    EXPECT_EQ(newVerts.size(), 4u)
+        << "one inner vertex per incident face";
+    EXPECT_TRUE(he.validate());
+
+    int active = 0;
+    int quads = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quads;
+    }
+    EXPECT_EQ(active, 5)
+        << "4 modified quads + 1 cap quad";
+    EXPECT_EQ(quads, 5);
+}
+
 TEST(HalfEdgeMeshStandalone, BevelEdgesNgonRejectsChainedSelection) {
     // 4 quads in a + arrangement around a central vertex, so every
     // selected edge is INTERIOR (not a boundary). Two edges chained
