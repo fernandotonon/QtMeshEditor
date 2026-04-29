@@ -790,7 +790,8 @@ void MainWindow::initToolBar()
     // Vertex paint: toggle on main click; arrow opens brush settings (color, radius, strength).
     auto* vertexPaintButton = new QToolButton(ui->objectsToolbar);
     vertexPaintButton->setCheckable(true);
-    vertexPaintButton->setText(QString::fromUtf8("\xF0\x9F\x96\x8C")); // U+1F58C paintbrush
+    vertexPaintButton->setIcon(QIcon(":/icones/paintbrush.svg"));
+    vertexPaintButton->setIconSize(QSize(16, 16));
     vertexPaintButton->setToolTip(tr("Vertex paint — paint on mesh (Select tool). Arrow: brush settings."));
     vertexPaintButton->setFont(topoFont);
     vertexPaintButton->setStyleSheet(topoBtnStyle);
