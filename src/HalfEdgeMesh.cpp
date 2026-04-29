@@ -3086,25 +3086,31 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
     // ---- 4. Helper: perpendicular-in-face inward direction at v, in
     //         face's plane, perpendicular to edge (v, otherEndpoint). ----
     auto faceInwardDir = [this](int faceIdx, int v, int otherEndpoint) -> Ogre::Vector3 {
-        // Newell normal of the face.
+        // Inward direction at vertex v on face `faceIdx`, perpendicular
+        // to the edge (v, otherEndpoint), in the face's plane, pointing
+        // INTO the face's interior.
+        //
+        // Use the face centroid as the "inside" anchor: the centroid is
+        // always inside the face (for convex faces), so (centroid - v)
+        // points from v into the face. This is winding-orientation-
+        // independent — works correctly whether the face is CCW or CW
+        // (which matters on imported FBX assets where winding may not
+        // match Ogre's expected convention).
+        //
+        // Then project that vector perpendicular to the edge so the
+        // inward offset stays purely in the cross-section direction.
         const auto loop = faceVertices(faceIdx);
-        Ogre::Vector3 nrm = Ogre::Vector3::ZERO;
-        for (size_t i = 0; i < loop.size(); ++i) {
-            const auto& a = m_vertices[loop[i]].position;
-            const auto& b = m_vertices[loop[(i + 1) % loop.size()]].position;
-            nrm.x += (a.y - b.y) * (a.z + b.z);
-            nrm.y += (a.z - b.z) * (a.x + b.x);
-            nrm.z += (a.x - b.x) * (a.y + b.y);
-        }
-        if (nrm.length() < 1e-8f) return Ogre::Vector3::ZERO;
-        nrm.normalise();
-        // Edge direction (v → otherEndpoint).
+        if (loop.size() < 3) return Ogre::Vector3::ZERO;
+        Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+        for (int x : loop) centroid += m_vertices[x].position;
+        centroid /= static_cast<float>(loop.size());
+
+        Ogre::Vector3 toCentroid = centroid - m_vertices[v].position;
         Ogre::Vector3 edge = m_vertices[otherEndpoint].position - m_vertices[v].position;
         if (edge.length() < 1e-8f) return Ogre::Vector3::ZERO;
         edge.normalise();
-        // Inward = normal × edge (perpendicular to edge, in face plane,
-        // pointing into the face's interior assuming CCW winding).
-        Ogre::Vector3 inward = nrm.crossProduct(edge);
+        // Project toCentroid perpendicular to edge.
+        Ogre::Vector3 inward = toCentroid - edge * toCentroid.dotProduct(edge);
         if (inward.length() < 1e-8f) return Ogre::Vector3::ZERO;
         inward.normalise();
         return inward;
@@ -3348,6 +3354,22 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
         // chord innerVF1→innerVF2, plus a bulge along the "outward"
         // axis (toward v's original position, projected perpendicular
         // to the chord) controlled by profilePoints[i-1].
+        // Profile bulge axis. Compute the per-endpoint outward
+        // direction (in each endpoint's chamfer cross-section
+        // plane), then enforce sign-consistency between v1 and v2
+        // using a global anchor: the average of the four inner
+        // vertices is the chamfer's centroid, which sits "inside"
+        // the original corner. The OUTWARD direction at each
+        // endpoint must point AWAY from that centroid — pV is
+        // outside the corner, the chamfer centroid is inside it,
+        // so `(pV - centroid)` is the world-space outward sense.
+        // We use it as the alignment reference.
+        const Ogre::Vector3 chamferCentroid =
+            (m_vertices[innerV1F1].position
+             + m_vertices[innerV1F2].position
+             + m_vertices[innerV2F1].position
+             + m_vertices[innerV2F2].position) * 0.25f;
+
         auto buildChain = [&](int v, int innerVF1, int innerVF2) {
             std::vector<int> chain;
             chain.reserve(segments + 1);
@@ -3362,6 +3384,15 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
                     outward -= chord * (outward.dotProduct(chord) / c2);
                 if (outward.length() > 1e-6f) outward.normalise();
                 else                          outward = Ogre::Vector3::ZERO;
+                // Anchor against the global outward sense: the chamfer
+                // centroid is inside the corner; the correct outward
+                // direction has positive dot with (pV - centroid).
+                // Both endpoints agree on this anchor so both chains
+                // bulge the same way in world space.
+                const Ogre::Vector3 globalOutward = pV - chamferCentroid;
+                if (outward.dotProduct(globalOutward) < 0.0f) {
+                    outward = -outward;
+                }
                 for (int i = 1; i < segments; ++i) {
                     const float t = static_cast<float>(i)
                                   / static_cast<float>(segments);
