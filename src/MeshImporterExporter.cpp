@@ -52,6 +52,7 @@ THE SOFTWARE.
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
 #include "CLIPipeline.h"
+#include "EditModeController.h"
 #include <OgreMaterialManager.h>
 #include <OgreDataStream.h>
 
@@ -1156,6 +1157,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
     const Ogre::Entity *e = Manager::getSingleton()->getSceneMgr()->getEntity(_sn->getName());
     if(!e) return -1;
 
+    // Vertex paint defers GPU upload; export reads Ogre buffers — sync first.
+    EditModeController::instance()->flushPendingVertexPaintForEntity(
+        const_cast<Ogre::Entity*>(e));
+
     if(_format=="Ogre XML (*.mesh.xml)")
     {
         Ogre::XMLMeshSerializer xmlMS;
@@ -1344,6 +1349,8 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
 {
     if (!entity) return -1;
     if (outputPath.isEmpty()) return -1;
+
+    EditModeController::instance()->flushPendingVertexPaintForEntity(entity);
 
     SentryReporter::addBreadcrumb("file.export", QString("Export pose: %1").arg(outputPath));
 
@@ -1662,6 +1669,7 @@ static aiScene* buildSceneAiScene()
     {
         auto* sn = nodeEntities[ni].sceneNode;
         auto* entity = nodeEntities[ni].entity;
+        EditModeController::instance()->flushPendingVertexPaintForEntity(entity);
         const Ogre::MeshPtr mesh = entity->getMesh();
         const unsigned int numSub = mesh->getNumSubMeshes();
         const bool hasSkeleton = entity->hasSkeleton();

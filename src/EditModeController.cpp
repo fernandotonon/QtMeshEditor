@@ -1197,6 +1197,14 @@ void EditModeController::handleBoxSelect(const QPoint& startPos, const QPoint& e
 }
 // LCOV_EXCL_STOP
 
+void EditModeController::flushPendingVertexPaintForEntity(Ogre::Entity* entity)
+{
+    if (!entity || !m_editModeActive || m_editEntity != entity || !m_editableMesh)
+        return;
+    m_vertexPaintFlushPending = false;
+    m_editableMesh->commitVertexColorsToEntity(m_editEntity);
+}
+
 bool EditModeController::beginVertexPaintStroke(OgreWidget* widget, const QPoint& screenPos)
 {
     if (!m_vertexPaintEnabled || m_vertexPaintStrokeActive)

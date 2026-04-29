@@ -208,6 +208,10 @@ public:
     void setVertexPaintRadius(double r);
     double vertexPaintStrength() const { return m_vertexPaintStrength; }
     void setVertexPaintStrength(double s);
+
+    /// Push vertex colors from EditableMesh to the Ogre mesh immediately (used before file export;
+    /// paint coalescing otherwise defers GPU upload until the next event-loop tick).
+    void flushPendingVertexPaintForEntity(Ogre::Entity* entity);
     /// @}
 
     /// @name Topology operations
