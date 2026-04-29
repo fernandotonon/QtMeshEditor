@@ -4876,6 +4876,158 @@ std::vector<int> HalfEdgeMesh::cutPath(const std::vector<CutPoint>& points)
     return newVertices;
 }
 
+// ===========================================================================
+// loopCut — insert a perpendicular cut through a ring of quads.
+// ===========================================================================
+//
+// Given a starting edge, walk the chain of quads adjacent to it via the
+// "opposite edge" relation. In each quad [v0, v1, v2, v3] (where the
+// shared edge with the previous step is one of its four edges, e.g.
+// (v0, v1)), the OPPOSITE edge is (v2, v3). The loop cut splits both
+// edges at their midpoints and connects the new midpoint vertices,
+// bisecting the quad.
+//
+// The walk continues across each opposite edge into the NEXT quad in
+// the ring (the second face adjacent to that edge). It stops when:
+//   - the walk returns to the starting edge (closed loop), OR
+//   - it encounters a non-quad face (loop cut needs the opposite-edge
+//     correspondence, only well-defined on quads), OR
+//   - it encounters a boundary edge (no second face to walk into).
+//
+// MVP: cuts at midpoint (t = 0.5) on each rail edge. A future
+// extension can take a `t` parameter so the cut shifts along the
+// loop. Profile / multi-cuts are out of scope.
+//
+// Returns the indices of every newly created vertex (in walk order).
+// Empty on failure (bad start edge, immediate non-quad neighbor, etc).
+std::vector<int> HalfEdgeMesh::loopCut(int startEdgeIdx)
+{
+    std::vector<int> newVertices;
+    if (startEdgeIdx < 0
+        || startEdgeIdx >= static_cast<int>(m_edges.size()))
+        return newVertices;
+    if (m_edges[startEdgeIdx].halfEdge < 0) return newVertices;
+
+    auto oppositeEdgeInQuad = [this](int faceIdx, int va, int vb)
+        -> std::pair<int, int> {
+        // For a quad face [w0, w1, w2, w3], the edge (va, vb) is one
+        // of its four sides. The opposite edge is two positions away
+        // in the loop. Return its endpoints in winding order.
+        const auto loop = faceVertices(faceIdx);
+        if (loop.size() != 4) return {-1, -1};
+        for (int i = 0; i < 4; ++i) {
+            const int a = loop[i];
+            const int b = loop[(i + 1) % 4];
+            if ((a == va && b == vb) || (a == vb && b == va)) {
+                return { loop[(i + 2) % 4], loop[(i + 3) % 4] };
+            }
+        }
+        return {-1, -1};
+    };
+
+    auto findEdgeByVerts = [this](int va, int vb) -> int {
+        for (size_t e = 0; e < m_edges.size(); ++e) {
+            if (m_edges[e].halfEdge < 0) continue;
+            const auto [ea, eb] = edgeVertices(static_cast<int>(e));
+            if ((ea == va && eb == vb) || (ea == vb && eb == va))
+                return static_cast<int>(e);
+        }
+        return -1;
+    };
+
+    // Walk the ring up-front (vertex-pair-keyed, no edge-index
+    // dependence) and collect each quad's rail pair (entry edge +
+    // opposite edge). Two passes: across f1 from the starting edge,
+    // then across f2. visitedFaces handles closed loops.
+    struct WalkStep {
+        int face;
+        std::pair<int, int> railA;
+        std::pair<int, int> railB;
+    };
+    std::vector<WalkStep> walk;
+    std::set<int> visitedFaces;
+
+    const auto [startA, startB] = edgeVertices(startEdgeIdx);
+    if (startA < 0 || startB < 0) return newVertices;
+
+    auto walkDirection = [&](int firstFace, int entryA, int entryB) {
+        if (firstFace < 0) return;
+        int curFace = firstFace;
+        int curA = entryA, curB = entryB;
+        for (int guard = 0; guard < 4096; ++guard) {
+            if (curFace < 0) return;
+            if (m_faces[curFace].halfEdge < 0) return;
+            if (!visitedFaces.insert(curFace).second) return;
+            const auto opp = oppositeEdgeInQuad(curFace, curA, curB);
+            if (opp.first < 0) return; // non-quad / not found
+            WalkStep step;
+            step.face = curFace;
+            step.railA = { curA, curB };
+            step.railB = opp;
+            walk.push_back(step);
+            const int oppEdge = findEdgeByVerts(opp.first, opp.second);
+            if (oppEdge < 0) return;
+            const auto [fa, fb] = edgeFaces(oppEdge);
+            int nextFace = -1;
+            if (fa == curFace) nextFace = fb;
+            else if (fb == curFace) nextFace = fa;
+            if (nextFace < 0) return; // boundary
+            curFace = nextFace;
+            curA = opp.first;
+            curB = opp.second;
+            if ((curA == startA && curB == startB)
+                || (curA == startB && curB == startA)) {
+                return;
+            }
+        }
+    };
+
+    const auto [f1, f2] = edgeFaces(startEdgeIdx);
+    walkDirection(f1, startA, startB);
+    walkDirection(f2, startA, startB);
+
+    if (walk.empty()) return newVertices;
+
+    // Materialise the cut. Rails shared between consecutive steps must
+    // produce the SAME midpoint, so cache by vertex-pair.
+    auto pairKey = [](int a, int b) {
+        return std::make_pair(std::min(a, b), std::max(a, b));
+    };
+    std::map<std::pair<int, int>, int> railMidpoints;
+
+    auto ensureMidpoint = [&](const std::pair<int, int>& rail) -> int {
+        const auto k = pairKey(rail.first, rail.second);
+        auto it = railMidpoints.find(k);
+        if (it != railMidpoints.end()) return it->second;
+        const int eIdx = findEdgeByVerts(rail.first, rail.second);
+        if (eIdx < 0) return -1;
+        const int vMid = splitEdge(eIdx, 0.5f);
+        if (vMid < 0) return -1;
+        railMidpoints[k] = vMid;
+        newVertices.push_back(vMid);
+        return vMid;
+    };
+
+    for (const auto& step : walk) {
+        const int vMidA = ensureMidpoint(step.railA);
+        const int vMidB = ensureMidpoint(step.railB);
+        if (vMidA < 0 || vMidB < 0) continue;
+        // Re-resolve the face: splitEdge may have created replacement
+        // face slots. Find the live face that contains both midpoints.
+        int liveFace = -1;
+        for (int f : facesAroundVertex(vMidA)) {
+            const auto fv = faceVertices(f);
+            if (std::find(fv.begin(), fv.end(), vMidB) != fv.end()) {
+                liveFace = f; break;
+            }
+        }
+        if (liveFace < 0) continue;
+        splitFace(liveFace, vMidA, vMidB);
+    }
+
+    return newVertices;
+}
+
 int HalfEdgeMesh::mergeVertices(const std::vector<int>& vertexIndices,
                                 const Ogre::Vector3& targetPos)
 {

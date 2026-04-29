@@ -501,6 +501,34 @@ public:
     std::vector<int> cutPath(const std::vector<CutPoint>& points);
 
     /**
+     * @brief Loop cut: insert a perpendicular cut through a ring of quads.
+     *
+     * Given a starting edge, walks the chain of quads adjacent to it
+     * via the "opposite edge" relation. In each quad [v0, v1, v2, v3]
+     * (where the entry edge is one of its sides, e.g. (v0, v1)), the
+     * OPPOSITE edge is (v2, v3). The loop cut splits both edges at
+     * their midpoints and bisects the quad along the new diagonal.
+     *
+     * The walk continues across each opposite edge into the next
+     * quad in the ring. It terminates when:
+     *   - the walk returns to the starting edge (closed loop),
+     *   - it encounters a non-quad face (loop cut requires the
+     *     opposite-edge correspondence, only well-defined on quads),
+     *   - it encounters a boundary edge (no second face to cross).
+     *
+     * MVP scope: cuts at midpoint (t = 0.5) on each rail. A future
+     * extension can take a `t` parameter to slide the cut along
+     * the loop. Profile / multi-cuts are out of scope.
+     *
+     * @param startEdgeIdx The HE edge index to start from. Must be
+     *                     an interior edge whose adjacent faces are
+     *                     both quads; otherwise returns empty.
+     * @return Indices of every newly created vertex (in walk order).
+     *         Empty on failure.
+     */
+    std::vector<int> loopCut(int startEdgeIdx);
+
+    /**
      * @brief Merge a set of vertices into a single survivor at `targetPos`.
      *
      * Picks `vertexIndices[0]` as the survivor, copies `targetPos` into its

@@ -786,15 +786,28 @@ void MainWindow::initToolBar()
     });
     QAction* fillAction = ui->objectsToolbar->addWidget(fillButton);
 
+    // Loop cut: edge mode only — pick one edge, the op walks the
+    // perpendicular ring of quads and bisects each one.
+    auto loopCutButton = new QToolButton(ui->objectsToolbar);
+    loopCutButton->setText(QStringLiteral("\u2551"));  // ‖ double vertical line — "loop"
+    loopCutButton->setToolTip(tr("Loop Cut (Ctrl+R) — bisect quads perpendicular to the selected edge"));
+    loopCutButton->setFont(topoFont);
+    loopCutButton->setStyleSheet(topoBtnStyle);
+    connect(loopCutButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Loop Cut");
+        EditModeController::instance()->loopCutSelection();
+    });
+    QAction* loopCutAction = ui->objectsToolbar->addWidget(loopCutButton);
+
     // Context-aware visibility + enabled:
     //  - Hidden entirely when NOT in edit mode.
     //  - In edit mode: stay visible but only enable when the current
     //    mode matches AND the relevant element type actually has a
     //    non-empty selection.
     auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton, deleteButton,
-                               subdivideButton, fillButton,
+                               subdivideButton, fillButton, loopCutButton,
                                extrudeAction, bevelAction, knifeAction, mergeAction, deleteAction,
-                               subdivideAction, fillAction]() {
+                               subdivideAction, fillAction, loopCutAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
@@ -804,6 +817,7 @@ void MainWindow::initToolBar()
         deleteAction->setVisible(active);
         subdivideAction->setVisible(active);
         fillAction->setVisible(active);
+        loopCutAction->setVisible(active);
         if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
         const bool hasFaces = c->selectedFaceCount() > 0;
@@ -832,6 +846,10 @@ void MainWindow::initToolBar()
         // closed loop (edge mode — degree check happens at apply time).
         fillButton->setEnabled((mode == 0 && c->selectedVertexCount() >= 3)
                             || (mode == 1 && c->selectedEdgeCount() >= 3));
+        // Loop cut: edge mode with at least one selected edge. The op
+        // uses the first selected edge as the start; multi-edge loop
+        // cuts aren't in scope for the MVP.
+        loopCutButton->setEnabled(mode == 1 && hasEdges);
     };
     refreshTopoButtons();
     connect(editCtrlForTopo, &EditModeController::editModeChanged,
@@ -1343,6 +1361,21 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         setTransformState(TransformOperator::TS_ROTATE);
        break;
     case Qt::Key_R:
+        // Ctrl+R in edit-mode + edge-selection: loop cut. Otherwise R
+        // is Scale mode (Unity convention). The Ctrl modifier
+        // disambiguates without disturbing the existing shortcut.
+        if (event->modifiers() & Qt::ControlModifier) {
+            auto* editCtrl = EditModeController::instance();
+            if (editCtrl->isEditModeActive()
+                && editCtrl->selectionMode() == EditModeController::EdgeMode
+                && editCtrl->selectedEdgeCount() > 0) {
+                if (editCtrl->loopCutSelection() > 0) {
+                    SentryReporter::addBreadcrumb("ui.shortcut", "Ctrl+R — Loop Cut");
+                    event->accept();
+                    return;
+                }
+            }
+        }
         SentryReporter::addBreadcrumb("ui.shortcut", "R — Scale mode");
         setTransformState(TransformOperator::TS_SCALE);
        break;
