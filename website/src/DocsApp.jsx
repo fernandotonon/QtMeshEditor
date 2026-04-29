@@ -871,7 +871,7 @@ jobs:
 
 asset_scan:
   stage: lint
-  image: ghcr.io/fernandotonon/qtmesh:2.23.0
+  image: ghcr.io/fernandotonon/qtmesh:2.32.0
   entrypoint: [""]
   script:
     - qtmesheditor --cli scan \${CI_PROJECT_DIR}/assets \\

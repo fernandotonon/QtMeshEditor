@@ -34,6 +34,7 @@ THE SOFTWARE.
 #include <QPoint>
 #include <QRect>
 #include <QVariantList>
+#include <QColor>
 #include <limits>
 #include <memory>
 #include <functional>
@@ -99,6 +100,12 @@ class EditModeController : public QObject
     // Mesh validation after edits
     Q_PROPERTY(int degenerateTriangleCount READ degenerateTriangleCount NOTIFY validationChanged)
     Q_PROPERTY(bool hasValidationWarnings READ hasValidationWarnings NOTIFY validationChanged)
+
+    // Vertex color paint (MVP)
+    Q_PROPERTY(bool vertexPaintEnabled READ vertexPaintEnabled WRITE setVertexPaintEnabled NOTIFY vertexPaintChanged)
+    Q_PROPERTY(QColor vertexPaintColor READ vertexPaintColor WRITE setVertexPaintColor NOTIFY vertexPaintChanged)
+    Q_PROPERTY(double vertexPaintRadius READ vertexPaintRadius WRITE setVertexPaintRadius NOTIFY vertexPaintChanged)
+    Q_PROPERTY(double vertexPaintStrength READ vertexPaintStrength WRITE setVertexPaintStrength NOTIFY vertexPaintChanged)
 
 public:
     /// Selection component mode for edit mode.
@@ -187,6 +194,20 @@ public:
     bool hasValidationWarnings() const { return m_degenerateTriangleCount > 0; }
     Q_INVOKABLE void validateMesh();
     Q_INVOKABLE void removeDegenerateTriangles();
+    /// @}
+
+    /// @name Vertex paint settings
+    /// @{
+    bool vertexPaintEnabled() const { return m_vertexPaintEnabled; }
+    void setVertexPaintEnabled(bool enabled);
+    QColor vertexPaintColor() const { return m_vertexPaintColor; }
+    void setVertexPaintColor(const QColor& c);
+    /// Preferred from QML: parses "#RRGGBB" / CSS names reliably (avoids QVariant QColor edge cases).
+    Q_INVOKABLE void setVertexPaintBrushColor(const QString& cssColor);
+    double vertexPaintRadius() const { return m_vertexPaintRadius; }
+    void setVertexPaintRadius(double r);
+    double vertexPaintStrength() const { return m_vertexPaintStrength; }
+    void setVertexPaintStrength(double s);
     /// @}
 
     /// @name Topology operations
@@ -603,6 +624,16 @@ public:
                          OgreWidget* widget, bool shiftHeld);
     /// @}
 
+    /// @name Vertex paint stroke (called from TransformOperator)
+    /// @{
+    bool beginVertexPaintStroke(OgreWidget* widget, const QPoint& screenPos);
+    void updateVertexPaintStroke(OgreWidget* widget, const QPoint& screenPos);
+    void updateVertexPaintPreview(OgreWidget* widget, const QPoint& screenPos);
+    void endVertexPaintStroke(bool commitUndo = true);
+    void clearVertexPaintPreview();
+    bool vertexPaintStrokeActive() const { return m_vertexPaintStrokeActive; }
+    /// @}
+
     /// Access the current editable mesh (nullptr if not in edit mode).
     EditableMesh* currentMesh() const { return m_editableMesh.get(); }
 
@@ -631,6 +662,13 @@ public:
     /// Map a soft selection weight (0.0–1.0) to a heat map colour.
     /// Red (1.0) → orange → yellow → green → cyan → blue (0.0).
     static Ogre::ColourValue weightToColor(float weight);
+
+    /// Apply a vertex color brush in local space. Returns true if any vertex changed.
+    static bool applyVertexColorBrush(EditableMesh& mesh,
+                                      const Ogre::Vector3& localCenter,
+                                      float radius,
+                                      const Ogre::ColourValue& color,
+                                      float strength);
 
     /// Convert a global vertex index to (subMeshIndex, localVertexIndex) pair.
     std::pair<size_t, size_t> globalToLocal(int globalIndex) const;
@@ -669,6 +707,7 @@ signals:
     /// Emitted whenever the knife session starts, gains a point, or ends —
     /// so QML toolbar state and preview overlay refresh together.
     void knifeSessionChanged();
+    void vertexPaintChanged();
 
 private slots:
     void onSelectionChanged();
@@ -775,12 +814,28 @@ private:
     };
     KnifeSession m_knifeSession;
 
+    // Vertex paint state
+    bool m_vertexPaintEnabled = false;
+    QColor m_vertexPaintColor = QColor(255, 0, 0);
+    double m_vertexPaintRadius = 0.25;   // local units
+    double m_vertexPaintStrength = 0.5;  // 0..1
+    bool m_vertexPaintStrokeActive = false;
+    OgreWidget* m_vertexPaintWidget = nullptr;
+    Ogre::Vector3 m_vertexPaintLastLocal = Ogre::Vector3::ZERO;
+    bool m_vertexPaintHaveLastLocal = false;
+    bool m_vertexPaintStrokeDirty = false;
+    std::vector<EditableSubMesh> m_vertexPaintStrokeOriginalSubMeshes;
+
     /// Hit-test a screen-space point for knife placement. Priority:
     /// snap to existing vertex within pixelRadius, else snap to edge
     /// within pixelRadius, else ray-cast to a face. Writes the result
     /// into `out` and returns true on a successful hit.
     bool knifeHitTest(const QPoint& screenPos, OgreWidget* widget,
                       KnifePoint& out) const;
+
+    bool hitTestLocalPointOnMesh(const QPoint& screenPos, OgreWidget* widget,
+                                 Ogre::Vector3& outLocal,
+                                 Ogre::Vector3* outNormal = nullptr) const;
 
     /// Rebuild the knife preview overlay from the current session
     /// (confirmed points + hover), creating it on first use.
@@ -794,6 +849,8 @@ private:
     // transform doesn't fight with selection overlays, which expect
     // m_overlayNode parked at the origin with local-space geometry.
     Ogre::SceneNode* m_overlayKnifeNode = nullptr;
+    Ogre::ManualObject* m_overlayPaint = nullptr;
+    Ogre::SceneNode* m_overlayPaintNode = nullptr;
 
     /// Apply a bevel at `width` to `edges` assuming the mesh is at its
     /// pre-bevel snapshot state. Updates selection to the new chamfer verts.

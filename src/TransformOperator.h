@@ -206,6 +206,9 @@ private:
     bool                                    mBevelDragActive = false;
     Ogre::Ray                               mBevelDragStartRay{Ogre::Vector3::ZERO, Ogre::Vector3::UNIT_Z};
     float                                   mBevelDragStartWidth = 0.0f;
+
+    // Vertex paint drag state (edit mode only).
+    bool                                    mVertexPaintDragActive = false;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;
 #else

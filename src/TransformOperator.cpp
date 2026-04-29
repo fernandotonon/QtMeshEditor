@@ -90,6 +90,8 @@ TransformOperator::TransformOperator() : QObject(nullptr)
             this, &TransformOperator::onSelectionChanged);
     connect(EditModeController::instance(), &EditModeController::editModeChanged,
             this, &TransformOperator::onSelectionChanged);
+    connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
+            this, &TransformOperator::onSelectionChanged);
 
     QtInputManager::getInstance().AddMouseListener(this);
 
@@ -545,6 +547,8 @@ void TransformOperator::updateGizmo()
                 m_pRotationGizmo->setVisible(false);
                 m_pTranslationGizmo->setVisible(false);
                 m_pScaleGizmo->setVisible(false);
+                mTrackingEnable = EditModeController::instance()->isEditModeActive()
+                               && EditModeController::instance()->vertexPaintEnabled();
           break;
         case TransformOperator::TS_TRANSLATE:
                 m_pTransformNode->setOrientation(gizmoOrientation);
@@ -928,6 +932,16 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
         // In edit mode, delegate selection to EditModeController
         if (EditModeController::instance()->isEditModeActive() && mTransformState == TS_SELECT)
         {
+            auto* editCtrl = EditModeController::instance();
+            if (editCtrl->vertexPaintEnabled()) {
+                if (editCtrl->beginVertexPaintStroke(m_pActiveWidget, e->pos())) {
+                    mVertexPaintDragActive = true;
+                    SentryReporter::addBreadcrumb("ui.action", "Vertex paint: stroke begin");
+                    return;
+                }
+                // Paint mode on: do not start box / component selection on miss.
+                return;
+            }
             mScreenStart = e->pos();
             m_pSelectionBox->clear();
             m_pSelectionBox->setVisible(true);
@@ -1051,12 +1065,25 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
 void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 {
+    // Vertex paint drag: update on every move while LMB is held.
+    auto* editCtrl = EditModeController::instance();
+    if (mVertexPaintDragActive && editCtrl->isEditModeActive()
+        && (e->buttons() & Qt::LeftButton) && m_pActiveWidget)
+    {
+        editCtrl->updateVertexPaintStroke(m_pActiveWidget, e->pos());
+        // Don't consume: allow camera hover, etc., to still run.
+    } else if (editCtrl->isEditModeActive()
+               && editCtrl->vertexPaintEnabled()
+               && m_pActiveWidget)
+    {
+        editCtrl->updateVertexPaintPreview(m_pActiveWidget, e->pos());
+    }
+
     // Knife hover preview: cheap to update on every move while the session
     // is active, and draws the ghost segment from the last confirmed
     // point to the cursor. Does not consume the event — other handlers
     // (camera, gizmo drag) still run below.
-    if (auto* editCtrl = EditModeController::instance();
-        editCtrl->knifeSessionActive() && m_pActiveWidget)
+    if (editCtrl->knifeSessionActive() && m_pActiveWidget)
     {
         editCtrl->updateKnifeHover(m_pActiveWidget, e->pos().x(), e->pos().y());
     }
@@ -1190,7 +1217,9 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
         return;
     }
 
-    if(mTransformState == TS_SELECT)
+    if(mTransformState == TS_SELECT
+       && !(EditModeController::instance()->isEditModeActive()
+            && EditModeController::instance()->vertexPaintEnabled()))
     {
         if(m_pSelectionBox->isVisible() && m_pActiveWidget)
         {
@@ -1430,6 +1459,13 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
 void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
 {
+    if (mVertexPaintDragActive && e->button() == Qt::LeftButton) {
+        EditModeController::instance()->endVertexPaintStroke(/*commitUndo=*/true);
+        mVertexPaintDragActive = false;
+        SentryReporter::addBreadcrumb("ui.action", "Vertex paint: stroke end");
+        return;
+    }
+
     // End bevel drag but keep the session open (user can re-grab or click
     // elsewhere to commit).
     if (mBevelDragActive && e->button() == Qt::LeftButton) {

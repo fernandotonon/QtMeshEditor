@@ -170,6 +170,22 @@ public:
     bool commitToEntity(Ogre::Entity* entity);
 
     /**
+     * @brief Write only vertex colors back to the Ogre::Entity's buffers.
+     *
+     * Does not recalculate normals or resize buffers. Intended for interactive
+     * paint workflows where only `VES_DIFFUSE` changes frequently.
+     */
+    bool commitVertexColorsToEntity(Ogre::Entity* entity);
+
+    /**
+     * @brief Ensure diffuse vertex colors exist in memory and on the GPU.
+     *
+     * Vertices without `hasColor` become white. Rebuilds mesh buffers when the
+     * layout has no `VES_DIFFUSE` (typical for meshes that never had vertex colors).
+     */
+    bool ensureVertexColorBuffers(Ogre::Entity* entity);
+
+    /**
      * @brief Create a new Ogre::Mesh from the current editable data.
      *
      * Creates a fresh Mesh resource with a unique name. Use this when you
@@ -220,6 +236,9 @@ public:
 
     void setVertexUV(size_t subMeshIndex, size_t vertexIndex, const Ogre::Vector2& uv);
     Ogre::Vector2 getVertexUV(size_t subMeshIndex, size_t vertexIndex) const;
+
+    void setVertexColor(size_t subMeshIndex, size_t vertexIndex, const Ogre::ColourValue& color);
+    Ogre::ColourValue getVertexColor(size_t subMeshIndex, size_t vertexIndex) const;
     /// @}
 
     /**
@@ -287,6 +306,7 @@ private:
      * @return true on success.
      */
     bool writeVertexData(Ogre::VertexData* vertexData, const std::vector<EditableVertex>& vertices);
+    bool writeVertexColors(Ogre::VertexData* vertexData, const std::vector<EditableVertex>& vertices);
 
     /**
      * @brief Build vertex/index hardware buffers for a single submesh.

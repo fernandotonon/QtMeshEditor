@@ -235,6 +235,50 @@ TEST_F(EditableMeshTest, VertexManipulation) {
     Manager::getSingleton()->destroySceneNode("EditableMesh_manip_node");
 }
 
+TEST_F(EditableMeshTest, VertexColorsRoundTripThroughCommitAndResize)
+{
+    auto meshPtr = createInMemoryTriangleMeshWithVertexColors("EditableMesh_colors");
+    auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_colors_node");
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
+
+    EditableMesh editMesh;
+    ASSERT_TRUE(editMesh.loadFromEntity(entity));
+
+    // Verify initial colors were read.
+    const Ogre::ColourValue c0 = editMesh.getVertexColor(0, 0);
+    const Ogre::ColourValue c1 = editMesh.getVertexColor(0, 1);
+    const Ogre::ColourValue c2 = editMesh.getVertexColor(0, 2);
+    EXPECT_NEAR(c0.r, 1.0f, 1e-6f);
+    EXPECT_NEAR(c1.g, 1.0f, 1e-6f);
+    EXPECT_NEAR(c2.b, 1.0f, 1e-6f);
+
+    // Paint vertex 1 to purple and commit.
+    editMesh.setVertexColor(0, 1, Ogre::ColourValue(0.5f, 0.0f, 0.5f, 1.0f));
+    ASSERT_TRUE(editMesh.commitToEntity(entity));
+
+    // Resize path should preserve colors too.
+    ASSERT_TRUE(editMesh.resizeEntityBuffers(entity));
+
+    EditableMesh reloaded;
+    ASSERT_TRUE(reloaded.loadFromEntity(entity));
+    const Ogre::ColourValue c0b = reloaded.getVertexColor(0, 0);
+    const Ogre::ColourValue c1b = reloaded.getVertexColor(0, 1);
+    const Ogre::ColourValue c2b = reloaded.getVertexColor(0, 2);
+    // Diffuse is stored as 8-bit per channel on the GPU; mid-tones (e.g. 0.5) round-trip as 127/255.
+    constexpr float kByteTol = (1.0f / 255.0f) + 1e-5f;
+    EXPECT_NEAR(c0b.r, 1.0f, 1e-4f);
+    EXPECT_NEAR(c0b.g, 0.0f, 1e-4f);
+    EXPECT_NEAR(c0b.b, 0.0f, 1e-4f);
+    EXPECT_NEAR(c1b.r, 0.5f, kByteTol);
+    EXPECT_NEAR(c1b.g, 0.0f, 1e-4f);
+    EXPECT_NEAR(c1b.b, 0.5f, kByteTol);
+    EXPECT_NEAR(c2b.r, 0.0f, 1e-4f);
+    EXPECT_NEAR(c2b.g, 0.0f, 1e-4f);
+    EXPECT_NEAR(c2b.b, 1.0f, 1e-4f);
+
+    Manager::getSingleton()->destroySceneNode("EditableMesh_colors_node");
+}
+
 TEST_F(EditableMeshTest, RecalculateNormals) {
     auto meshPtr = createInMemoryTriangleMesh("EditableMesh_normals");
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_normals_node");

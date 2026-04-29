@@ -59,6 +59,10 @@ class OgreWidget : public QWidget, public Ogre::FrameListener
   /// MSAA sample count reported by the render target (0 if off / no window).
   unsigned int fsaaSamples() const;
 
+  /// Pixel width/height to use with Camera::getCameraToViewportRay and edit-mode
+  /// picking (matches viewport backing size; macOS uses a device-pixel factor).
+  void pixelSizeForCameraPicking(int& outW, int& outH) const;
+
   /// Recreate the Ogre render window (e.g. after MSAA / FSAA settings change).
   void rebuildRenderWindow();
 

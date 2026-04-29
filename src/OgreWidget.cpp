@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include <QTimer>
 #include <QNativeGestureEvent>
 #include <QSettings>
+#include <QPainter>
 
 #include <Ogre.h>
 
@@ -47,6 +48,30 @@ THE SOFTWARE.
 #include "TransformOperator.h"
 
 namespace {
+
+QCursor vertexPaintBrushCursor()
+{
+    static QCursor cached;
+    static bool inited = false;
+    if (!inited) {
+        const int sizePx = 28;
+        QPixmap pm(sizePx, sizePx);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(QColor(40, 40, 40), 2));
+        p.setBrush(QColor(120, 170, 255, 210));
+        p.drawEllipse(2, 2, sizePx - 4, sizePx - 4);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(Qt::white, 1));
+        p.drawEllipse(2, 2, sizePx - 4, sizePx - 4);
+        p.end();
+        cached = QCursor(pm, sizePx / 2, sizePx / 2);
+        inited = true;
+    }
+    return cached;
+}
+
 void applyViewportCameraFromSettings(SpaceCamera* cam)
 {
     if (!cam || !cam->getCamera())
@@ -68,8 +93,19 @@ OgreWidget::OgreWidget( QWidget *parent ):
     setAttribute( Qt::WA_PaintOnScreen );
     setAttribute( Qt::WA_OpaquePaintEvent );
     setMinimumSize(100,100);
+    setMouseTracking(true);
 
     setFocusPolicy(Qt::ClickFocus); //one click to get focus
+
+    connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
+            this, [this]() {
+        const bool paintOn = EditModeController::instance()->isEditModeActive()
+                          && EditModeController::instance()->vertexPaintEnabled();
+        if (paintOn)
+            QWidget::setCursor(vertexPaintBrushCursor());
+        else
+            QWidget::setCursor(Qt::ArrowCursor);
+    });
 
     initOgreWindow();
 }
@@ -155,6 +191,22 @@ const Ogre::Viewport* OgreWidget::getViewport() const
 unsigned int OgreWidget::fsaaSamples() const
 {
     return mOgreWindow ? mOgreWindow->getFSAA() : 0u;
+}
+
+void OgreWidget::pixelSizeForCameraPicking(int& outW, int& outH) const
+{
+    if (!mViewport) {
+        outW = width();
+        outH = height();
+        return;
+    }
+#ifdef Q_OS_MACOS
+    const int widthMod = 2;
+#else
+    const int widthMod = 1;
+#endif
+    outW = static_cast<int>(mViewport->getActualWidth()) / widthMod;
+    outH = static_cast<int>(mViewport->getActualHeight()) / widthMod;
 }
 
 void OgreWidget::setBackgroundColor(const QColor& c)
@@ -432,12 +484,14 @@ void OgreWidget::mousePressEvent(QMouseEvent *e)
     }
     else if(e->buttons().testFlag(Qt::LeftButton))
     {
-
-        QCursor cursor = this->cursor();
-        cursor.setShape(Qt::ClosedHandCursor);
-        QWidget::setCursor(cursor);
-
-
+        if (EditModeController::instance()->isEditModeActive()
+            && EditModeController::instance()->vertexPaintEnabled()) {
+            QWidget::setCursor(vertexPaintBrushCursor());
+        } else {
+            QCursor cursor = this->cursor();
+            cursor.setShape(Qt::ClosedHandCursor);
+            QWidget::setCursor(cursor);
+        }
         e->accept();
     }
     else
@@ -451,6 +505,16 @@ void OgreWidget::mouseMoveEvent(QMouseEvent *e)
     QtInputManager::getInstance().mouseMoveEvent(e);
 
     mCamera->mouseMoveEvent(e);
+
+    if (e->buttons() == Qt::NoButton) {
+        if (EditModeController::instance()->isEditModeActive()
+            && EditModeController::instance()->vertexPaintEnabled()) {
+            EditModeController::instance()->updateVertexPaintPreview(this, e->pos());
+            QWidget::setCursor(vertexPaintBrushCursor());
+        } else {
+            QWidget::unsetCursor();
+        }
+    }
 }
 
 void OgreWidget::mouseReleaseEvent(QMouseEvent *e)
@@ -458,10 +522,14 @@ void OgreWidget::mouseReleaseEvent(QMouseEvent *e)
     QtInputManager::getInstance().mouseReleaseEvent(e);
     mCamera->mouseReleaseEvent(e);
 
-    QCursor cursor = this->cursor();
-    cursor.setShape(Qt::ArrowCursor);
-    QWidget::setCursor(cursor);
-
+    if (EditModeController::instance()->isEditModeActive()
+        && EditModeController::instance()->vertexPaintEnabled()) {
+        QWidget::setCursor(vertexPaintBrushCursor());
+    } else {
+        QCursor cursor = this->cursor();
+        cursor.setShape(Qt::ArrowCursor);
+        QWidget::setCursor(cursor);
+    }
 }
 
 void OgreWidget::focusInEvent(QFocusEvent* e)
