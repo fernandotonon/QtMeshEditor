@@ -2475,30 +2475,73 @@ bool EditModeController::commitKnife()
     // consecutive endpoints, so the visible preview becomes a real chain
     // of mesh edges. OnFace/OnVertex clicks aren't yet in scope — the
     // commit skips them and proceeds on the OnEdge subset.
+    //
+    // splitEdge — the primitive cutPath uses — is a triangle-only MVP
+    // (n-gon support requires ear-clip-aware rewiring). On a quad-
+    // imported mesh, every face is an n-gon and splitEdge bails
+    // immediately, so knife silently fails. Workaround until a proper
+    // n-gon splitEdge lands: build the HE from a triangle-mode COPY
+    // (clear `.faces` so buildFromEditableMesh falls back to the
+    // fan-triangulated `.triangles` mirror). The user gets a working
+    // knife at the cost of materialising the fan diagonals on every
+    // submesh the cut touches. Tracked as a follow-up.
+    EditableMesh triOnly;
+    triOnly.subMeshes() = m_editableMesh->subMeshes();
+    // Remember which submeshes were originally n-gon-canonical
+    // (`!faces.empty()`) so we can restore them post-write-back. Without
+    // this, a knife on submesh 0 would convert every untouched submesh
+    // to fan triangles globally (since toEditableMesh writes back from
+    // the all-triangulated HE).
+    std::vector<bool> wasNGonSub;
+    wasNGonSub.reserve(triOnly.subMeshes().size());
+    for (auto& sub : triOnly.subMeshes()) {
+        wasNGonSub.push_back(!sub.faces.empty());
+        sub.faces.clear();
+    }
     HalfEdgeMesh hm;
-    if (!hm.buildFromEditableMesh(*m_editableMesh)) {
+    if (!hm.buildFromEditableMesh(triOnly)) {
         cancelKnife();
         return false;
     }
 
-    // Refuse the commit if any confirmed point isn't snapped to an edge.
-    // OnFace and OnVertex captures exist for the preview, but the MVP
-    // commit pipeline only knows how to cut along edges; silently
-    // dropping a face click would produce a mesh that doesn't match the
-    // line the user just drew, which is worse than failing the commit.
-    for (const auto& p : m_knifeSession.points) {
-        if (p.kind != KnifePoint::OnEdge) {
-            SentryReporter::addBreadcrumb("edit_mode",
-                "Knife: commit rejected (non-edge point — only edge cuts supported)");
-            cancelKnife();
-            return false;
-        }
-    }
-
+    // Build the CutPoint list, translating OnVertex clicks into edge
+    // clicks: pick any incident edge to the vertex and use t=0 or t=1
+    // depending on which endpoint the vertex sits at. `cutPath` only
+    // accepts edge inputs (its `splitEdge` primitive is edge-keyed),
+    // and `splitEdge` clamps t away from 0/1 by 1e-4 to avoid sliver
+    // faces — so the resulting vertex sits a hair off the user's click
+    // but topology stays clean. OnFace clicks are still rejected: the
+    // commit can't represent them with the current edge-walk algorithm.
     std::vector<HalfEdgeMesh::CutPoint> cpts;
     cpts.reserve(m_knifeSession.points.size());
     for (const auto& p : m_knifeSession.points) {
-        cpts.push_back({p.edgeIndex, p.edgeT});
+        if (p.kind == KnifePoint::OnEdge) {
+            cpts.push_back({p.edgeIndex, p.edgeT});
+            continue;
+        }
+        if (p.kind != KnifePoint::OnVertex) {
+            SentryReporter::addBreadcrumb("edit_mode",
+                "Knife: commit rejected (OnFace point — only edge / vertex supported)");
+            cancelKnife();
+            return false;
+        }
+        // OnVertex → find any incident edge in the triangle-mode HE
+        // and pick the t that puts the new split-vertex closest to the
+        // clicked vertex.
+        int incidentEdge = -1;
+        float incidentT = 0.0f;
+        for (size_t e = 0; e < hm.edgeCount(); ++e) {
+            const auto [ev0, ev1] = hm.edgeVertices(static_cast<int>(e));
+            if (ev0 == p.vertexIndex) { incidentEdge = static_cast<int>(e); incidentT = 0.0f; break; }
+            if (ev1 == p.vertexIndex) { incidentEdge = static_cast<int>(e); incidentT = 1.0f; break; }
+        }
+        if (incidentEdge < 0) {
+            SentryReporter::addBreadcrumb("edit_mode",
+                "Knife: commit rejected (OnVertex point — no incident edge)");
+            cancelKnife();
+            return false;
+        }
+        cpts.push_back({incidentEdge, incidentT});
     }
     if (cpts.size() < 2) {
         SentryReporter::addBreadcrumb("edit_mode",
@@ -2527,7 +2570,34 @@ bool EditModeController::commitKnife()
         cancelKnife();
         return false;
     }
-    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+
+    // Determine which submeshes the cut actually touched. A cut creates
+    // new vertices either at edge clicks or at interior crossings; each
+    // new vertex lives on faces in the submesh(es) it pierced.
+    // toEditableMesh writes EVERY submesh as triangle-only (since the
+    // HE was triangulated up-front), so without restoring untouched
+    // n-gon submeshes back from the original snapshot, a single knife
+    // op would silently convert unrelated submeshes to fan triangles.
+    // (Codex P1 review on this PR.)
+    std::set<int> touchedSubs;
+    for (int v : cutVerts) {
+        for (int f : hm.facesAroundVertex(v)) {
+            touchedSubs.insert(hm.face(f).subMeshIndex);
+        }
+    }
+    auto& outSubs = updated.subMeshes();
+    for (size_t s = 0;
+         s < outSubs.size() && s < originalSubMeshes.size() && s < wasNGonSub.size();
+         ++s) {
+        if (touchedSubs.count(static_cast<int>(s))) continue;
+        if (!wasNGonSub[s]) continue; // already triangle-only — nothing to restore
+        // Untouched + originally n-gon → restore the original submesh
+        // verbatim. resizeEntityBuffers consumes both `triangles` and
+        // bone assignments, so we want the full pre-cut state.
+        outSubs[s] = originalSubMeshes[s];
+    }
+
+    m_editableMesh->subMeshes() = std::move(outSubs);
     m_editableMesh->resizeEntityBuffers(m_editEntity);
 
     rewriteEntityAfterTopologyChange(m_editEntity);
@@ -3451,7 +3521,7 @@ int EditModeController::fillSelection()
 
     validateMesh();
     SentryReporter::addBreadcrumb("edit_mode",
-        QString("Fill (verts=%1, tris=%2)")
+        QString("Fill (verts=%1, faces=%2)")
             .arg(targetVerts.size()).arg(created));
 
     updateSelectionOverlay();
@@ -3481,10 +3551,70 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
     const int vw = widget->width();
     const int vh = widget->height();
 
+    // Build the front-facing vertex / edge sets once (mirrors the
+    // chunk-4b behaviour of regular hitTestEdge / face selection): on
+    // a dense mesh, snapping to back-face geometry that's hidden behind
+    // the visible surface is impossible to control. Front-facing means
+    // the polygon's Newell normal points toward the camera. A vertex is
+    // front-facing if at least one incident polygon faces the camera;
+    // an edge is front-facing if at least one of its two adjacent
+    // polygons does. Edge keys use (min,max) global vertex indices so
+    // they line up with the triangle-mode HE used below.
+    Ogre::SceneNode* node = m_editEntity->getParentSceneNode();
+    const Ogre::Vector3 camPos = camera->getDerivedPosition();
+    auto isPolygonFrontFacing = [&](const EditableSubMesh& sub,
+                                    const std::vector<unsigned int>& corners) -> bool {
+        if (corners.size() < 3 || !node) return false;
+        Ogre::Vector3 nrm = Ogre::Vector3::ZERO;
+        for (size_t i = 0; i < corners.size(); ++i) {
+            if (corners[i] >= sub.vertices.size()) return false;
+            const auto& a = sub.vertices[corners[i]].position;
+            const auto& b = sub.vertices[corners[(i + 1) % corners.size()]].position;
+            nrm.x += (a.y - b.y) * (a.z + b.z);
+            nrm.y += (a.z - b.z) * (a.x + b.x);
+            nrm.z += (a.x - b.x) * (a.y + b.y);
+        }
+        const Ogre::Vector3 worldNrm = node->_getDerivedOrientation() * nrm;
+        const Ogre::Vector3 anyCornerWorld =
+            node->convertLocalToWorldPosition(sub.vertices[corners[0]].position);
+        return worldNrm.dotProduct(camPos - anyCornerWorld) > 0.0f;
+    };
+
+    std::set<int> frontVerts;
+    std::set<std::pair<int,int>> frontEdges;
+    for (size_t si = 0; si < m_editableMesh->subMeshes().size(); ++si) {
+        const auto& sub = m_editableMesh->subMeshes()[si];
+        const int vertOffset = localToGlobal(static_cast<unsigned int>(si), 0);
+        auto recordFrontPoly = [&](const std::vector<unsigned int>& corners) {
+            for (size_t i = 0; i < corners.size(); ++i) {
+                const int g0 = vertOffset + static_cast<int>(corners[i]);
+                const int g1 = vertOffset + static_cast<int>(corners[(i + 1) % corners.size()]);
+                frontVerts.insert(g0);
+                frontEdges.emplace(std::min(g0, g1), std::max(g0, g1));
+            }
+        };
+        if (!sub.faces.empty()) {
+            for (const auto& face : sub.faces) {
+                if (face.indices.size() < 3) continue;
+                if (!isPolygonFrontFacing(sub, face.indices)) continue;
+                recordFrontPoly(face.indices);
+            }
+        } else {
+            for (const auto& tri : sub.triangles) {
+                std::vector<unsigned int> corners = {
+                    tri.indices[0], tri.indices[1], tri.indices[2] };
+                if (!isPolygonFrontFacing(sub, corners)) continue;
+                recordFrontPoly(corners);
+            }
+        }
+    }
+
     // Priority 1: vertex snap. Uses the same radius as regular edit-mode
-    // vertex picking so the user's eye can predict the snap.
+    // vertex picking so the user's eye can predict the snap. Skip
+    // back-face vertices (not in `frontVerts`) so dense meshes don't
+    // pull clicks to vertices the user can't see.
     const int snapVert = hitTestVertex(screenPos, camera, vw, vh, 10.0f);
-    if (snapVert >= 0) {
+    if (snapVert >= 0 && frontVerts.count(snapVert)) {
         auto [subIdx, localIdx] = globalToLocal(snapVert);
         if (subIdx < m_editableMesh->subMeshes().size()
          && localIdx < m_editableMesh->subMeshes()[subIdx].vertices.size()) {
@@ -3508,7 +3638,6 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
         const Ogre::Real nx = static_cast<Ogre::Real>(screenPos.x()) / vw;
         const Ogre::Real ny = static_cast<Ogre::Real>(screenPos.y()) / vh;
         const Ogre::Ray ray = camera->getCameraToViewportRay(nx, ny);
-        Ogre::SceneNode* node = m_editEntity->getParentSceneNode();
 
         Ogre::Vector3 rO = ray.getOrigin();
         Ogre::Vector3 rD = ray.getDirection();
@@ -3518,9 +3647,18 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
             rD = worldToLocal.linear() * rD;
         }
 
+        // Build the HE from a triangle-mode COPY of the editable mesh,
+        // mirroring what the knife commit path does. Otherwise the HE
+        // edge indices we record on the click here (n-gon HE: one edge
+        // per polygon side) wouldn't match the indices `commitKnife`
+        // resolves against (triangle HE: one edge per fan side), and
+        // every cut would land on the wrong edge — manifesting as a
+        // knife that "does nothing" on quad-imported assets.
+        EditableMesh triOnly;
+        triOnly.subMeshes() = m_editableMesh->subMeshes();
+        for (auto& sub : triOnly.subMeshes()) sub.faces.clear();
         HalfEdgeMesh tmp;
-        if (tmp.buildFromEditableMesh(*m_editableMesh)) {
-            const Ogre::Vector3 camPosWorld = camera->getDerivedPosition();
+        if (tmp.buildFromEditableMesh(triOnly)) {
             constexpr float kPixelRadius = 10.0f;
             float bestDepth = std::numeric_limits<float>::infinity();
             int bestEdgeIdx = -1;
@@ -3530,6 +3668,18 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
             for (size_t e = 0; e < tmp.edgeCount(); ++e) {
                 auto [gv0, gv1] = tmp.edgeVertices(static_cast<int>(e));
                 if (gv0 < 0 || gv1 < 0) continue;
+                // Skip back-face edges. `frontEdges` was computed from
+                // the n-gon `m_editableMesh`, keyed by global vertex
+                // pair; the triangle-mode `tmp` indices use the same
+                // global numbering, so the lookup is direct. Note that
+                // `frontEdges` only contains polygon-perimeter edges:
+                // a fan-triangulation diagonal between two front-facing
+                // verts is rejected here, which is correct — the user
+                // shouldn't be able to click on a fake interior edge.
+                {
+                    const std::pair<int,int> key{std::min(gv0, gv1), std::max(gv0, gv1)};
+                    if (!frontEdges.count(key)) continue;
+                }
                 auto [sub0, loc0] = globalToLocal(gv0);
                 auto [sub1, loc1] = globalToLocal(gv1);
                 if (sub0 >= m_editableMesh->subMeshes().size()) continue;
@@ -3568,7 +3718,7 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
                 }
                 const Ogre::Vector3 local = p0 + d * t;
                 const Ogre::Vector3 world = node->convertLocalToWorldPosition(local);
-                const float depth = (world - camPosWorld).dotProduct(camera->getDerivedDirection());
+                const float depth = (world - camPos).dotProduct(camera->getDerivedDirection());
                 if (depth <= 0.0f) continue; // behind camera
                 if (depth < bestDepth) {
                     bestDepth = depth;

@@ -5325,22 +5325,72 @@ int HalfEdgeMesh::fillSelection(const std::vector<int>& vertexIndices)
             return 0;
     }
 
-    // 3. Fan-triangulate from vertexIndices[0]. For n=3 emits one triangle;
-    //    for n=4 emits two; for general N emits N-2.
-    int triCount = 0;
-    for (int i = 1; i + 1 < n; ++i) {
-        appendTriangle(vertexIndices[0], vertexIndices[i],
-                       vertexIndices[i + 1], subIdx);
-        ++triCount;
+    // 3. Pick a winding that faces the same way as the surrounding mesh.
+    //    Without this, a fill on a hole's boundary loop produces a face
+    //    whose normal points INTO the volume (the user's selection order
+    //    is whatever std::set / the loop walker produced; nothing
+    //    guarantees it matches the existing topology).
+    //    Heuristic: compare the candidate face's Newell normal to the
+    //    average normal of every existing face that shares at least one
+    //    of the selected vertices. If the dot product is negative the
+    //    winding is inverted; reverse it.
+    auto computeNewellNormal =
+        [this](const std::vector<int>& verts) -> Ogre::Vector3 {
+        Ogre::Vector3 normal = Ogre::Vector3::ZERO;
+        const size_t N = verts.size();
+        for (size_t i = 0; i < N; ++i) {
+            const auto& a = m_vertices[verts[i]].position;
+            const auto& b = m_vertices[verts[(i + 1) % N]].position;
+            normal.x += (a.y - b.y) * (a.z + b.z);
+            normal.y += (a.z - b.z) * (a.x + b.x);
+            normal.z += (a.x - b.x) * (a.y + b.y);
+        }
+        return normal;
+    };
+
+    Ogre::Vector3 candidateNormal = computeNewellNormal(vertexIndices);
+    Ogre::Vector3 referenceNormal = Ogre::Vector3::ZERO;
+    for (int v : vertexIndices) {
+        for (int f : facesAroundVertex(v)) {
+            const auto fv = faceVertices(f);
+            if (fv.size() < 3) continue;
+            referenceNormal += computeNewellNormal(fv);
+        }
     }
-    if (triCount == 0) return 0;
+    std::vector<int> winding = vertexIndices;
+    if (referenceNormal.squaredLength() > 1e-12f
+        && candidateNormal.squaredLength() > 1e-12f
+        && candidateNormal.dotProduct(referenceNormal) < 0.0f) {
+        std::reverse(winding.begin(), winding.end());
+    }
+
+    // 4. Build the new face. For n=3 emit a single triangle (matches
+    //    the existing fan output); for n>=4 emit a single n-gon HEFace
+    //    so the result round-trips back through toEditableMesh as one
+    //    EditableFace with N indices, not N-2 fan triangles. Without
+    //    this branch, filling a 4-vertex selection would create two
+    //    triangles whose shared diagonal then surfaces as a fan-edge
+    //    in Edit Mode (and Standard Subdivide treats them as
+    //    triangles, not as a quad). Returns the number of polygons
+    //    created (always 1 here — kept as `int` to preserve the
+    //    function signature; callers use the return only as a
+    //    success/fail flag).
+    int created;
+    if (n == 3) {
+        appendTriangle(winding[0], winding[1], winding[2], subIdx);
+        created = 1;
+    } else {
+        const int fIdx = appendFace(winding, subIdx);
+        if (fIdx < 0) return 0;
+        created = 1;
+    }
 
     rebuildEdgesAndTwins();
     compactBoundaryHalfEdges();
     buildBoundaryHalfEdges();
     fixVertexHalfEdges();
 
-    return triCount;
+    return created;
 }
 
 bool HalfEdgeMesh::validate() const
