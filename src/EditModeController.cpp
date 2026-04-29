@@ -40,6 +40,7 @@ THE SOFTWARE.
 #include "mainwindow.h"
 #include "OgreWidget.h"
 #include "SpaceCamera.h"
+#include <QTimer>
 #include <Ogre.h>
 #include <OgreRTShaderSystem.h>
 #include <ProceduralSphereGenerator.h>
@@ -220,6 +221,81 @@ QString EditModeController::modeLabel() const
     case FaceMode:   return QStringLiteral("Edit Mode (Face)");
     }
     return QStringLiteral("Edit Mode");
+}
+
+void EditModeController::setVertexPaintEnabled(bool enabled)
+{
+    if (m_vertexPaintEnabled == enabled)
+        return;
+    m_vertexPaintEnabled = enabled;
+    if (!enabled) {
+        // Best-effort terminate an in-flight stroke to avoid a stuck state.
+        endVertexPaintStroke(/*commitUndo=*/true);
+        clearVertexPaintPreview();
+    }
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Vertex paint %1").arg(enabled ? "enabled" : "disabled"));
+    emit vertexPaintChanged();
+}
+
+void EditModeController::setVertexPaintColor(const QColor& c)
+{
+    if (!c.isValid())
+        return;
+
+    QColor rgb = c.toRgb();
+    if (!rgb.isValid())
+        return;
+
+    // Brush should be fully opaque unless the user explicitly chose transparency.
+    if (rgb.alpha() == 0)
+        rgb.setAlpha(255);
+
+    if (m_vertexPaintColor.rgba() == rgb.rgba())
+        return;
+    m_vertexPaintColor = rgb;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint color: %1").arg(rgb.name(QColor::HexRgb)));
+    emit vertexPaintChanged();
+}
+
+void EditModeController::setVertexPaintBrushColor(const QString& cssColor)
+{
+    const QString s = cssColor.trimmed();
+    if (s.isEmpty())
+        return;
+
+    QColor c = QColor::fromString(s);
+    if (!c.isValid())
+        c = QColor(s);
+    if (!c.isValid())
+        return;
+
+    setVertexPaintColor(c);
+}
+
+void EditModeController::setVertexPaintRadius(double r)
+{
+    if (r <= 0.0 || m_vertexPaintRadius == r)
+        return;
+    m_vertexPaintRadius = r;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint radius: %1").arg(m_vertexPaintRadius, 0, 'f', 3));
+    emit vertexPaintChanged();
+}
+
+void EditModeController::setVertexPaintStrength(double s)
+{
+    const double clamped = std::max(0.0, std::min(1.0, s));
+    if (m_vertexPaintStrength == clamped)
+        return;
+    m_vertexPaintStrength = clamped;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint strength: %1").arg(m_vertexPaintStrength, 0, 'f', 3));
+    emit vertexPaintChanged();
 }
 
 bool EditModeController::canEnterEditMode() const
@@ -409,6 +485,16 @@ void EditModeController::exitEditMode(bool commitChanges)
     m_selectedVertices.clear();
     m_selectedEdges.clear();
     m_selectedFaces.clear();
+
+    if (m_vertexPaintEnabled) {
+        if (m_vertexPaintStrokeActive)
+            endVertexPaintStroke(/*commitUndo=*/commitChanges);
+        m_vertexPaintEnabled = false;
+        m_vertexPaintFlushPending = false;
+        m_vertexPaintFlushScheduled = false;
+        clearVertexPaintPreview();
+        emit vertexPaintChanged();
+    }
 
     m_editableMesh.reset();
     m_editEntity = nullptr;
@@ -927,6 +1013,62 @@ float EditModeController::rayTriangleIntersect(const Ogre::Vector3& rayOrigin,
     return -1.0f;
 }
 
+bool EditModeController::applyVertexColorBrush(EditableMesh& mesh,
+                                               const Ogre::Vector3& localCenter,
+                                               float radius,
+                                               const Ogre::ColourValue& color,
+                                               float strength)
+{
+    if (radius <= 0.0f)
+        return false;
+
+    strength = std::clamp(strength, 0.0f, 1.0f);
+    if (strength <= 0.0f)
+        return false;
+
+    bool changed = false;
+    const float invR = 1.0f / radius;
+
+    for (size_t si = 0; si < mesh.subMeshes().size(); ++si) {
+        auto& sub = mesh.subMeshes()[si];
+        for (size_t vi = 0; vi < sub.vertices.size(); ++vi) {
+            auto& v = sub.vertices[vi];
+            const float d = v.position.distance(localCenter);
+            if (d > radius)
+                continue;
+
+            // Smooth falloff: w = (1 - d/r)^2
+            const float t = 1.0f - (d * invR);
+            const float w = t * t;
+            const float a = strength * w;
+            if (a <= 0.0f)
+                continue;
+
+            const Ogre::ColourValue src = v.hasColor ? v.color : Ogre::ColourValue::White;
+            Ogre::ColourValue dst;
+            dst.r = src.r + (color.r - src.r) * a;
+            dst.g = src.g + (color.g - src.g) * a;
+            dst.b = src.b + (color.b - src.b) * a;
+            dst.a = src.a + (color.a - src.a) * a;
+
+            // Small epsilon to avoid dirtying on no-op blends.
+            const float eps = 1e-6f;
+            if (!v.hasColor ||
+                std::abs(dst.r - src.r) > eps ||
+                std::abs(dst.g - src.g) > eps ||
+                std::abs(dst.b - src.b) > eps ||
+                std::abs(dst.a - src.a) > eps)
+            {
+                v.hasColor = true;
+                v.color = dst;
+                changed = true;
+            }
+        }
+    }
+
+    return changed;
+}
+
 // ===========================================================================
 // Hit testing
 // ===========================================================================
@@ -1337,6 +1479,203 @@ void EditModeController::handleBoxSelect(const QPoint& startPos, const QPoint& e
     boxSelectVertices(rect, camera, vpWidth, vpHeight, shiftHeld);
 }
 // LCOV_EXCL_STOP
+
+bool EditModeController::beginVertexPaintStroke(OgreWidget* widget, const QPoint& screenPos)
+{
+    if (!m_vertexPaintEnabled || m_vertexPaintStrokeActive)
+        return false;
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity || !widget)
+        return false;
+
+    Ogre::Vector3 localHit;
+    if (!hitTestLocalPointOnMesh(screenPos, widget, localHit))
+        return false;
+
+    m_vertexPaintStrokeOriginalSubMeshes = m_editableMesh->subMeshes();
+
+    if (!m_editableMesh->ensureVertexColorBuffers(m_editEntity)) {
+        m_vertexPaintStrokeOriginalSubMeshes.clear();
+        return false;
+    }
+
+    m_vertexPaintStrokeActive = true;
+    m_vertexPaintWidget = widget;
+    m_vertexPaintStrokeDirty = false;
+    m_vertexPaintHaveLastLocal = false;
+
+    updateVertexPaintStroke(widget, screenPos);
+    return true;
+}
+
+void EditModeController::updateVertexPaintStroke(OgreWidget* widget, const QPoint& screenPos)
+{
+    if (!m_vertexPaintStrokeActive || !m_vertexPaintEnabled)
+        return;
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity || !widget)
+        return;
+
+    Ogre::Vector3 localHit;
+    Ogre::Vector3 localNormal;
+    if (!hitTestLocalPointOnMesh(screenPos, widget, localHit, &localNormal)) {
+        clearVertexPaintPreview();
+        return;
+    }
+    updateVertexPaintPreview(widget, screenPos);
+
+    // Skip tiny repeats to reduce buffer churn (but always paint the first sample).
+    if (m_vertexPaintHaveLastLocal &&
+        localHit.distance(m_vertexPaintLastLocal) < 1e-5f)
+        return;
+    m_vertexPaintHaveLastLocal = true;
+    m_vertexPaintLastLocal = localHit;
+
+    const Ogre::ColourValue paint(
+        static_cast<float>(m_vertexPaintColor.redF()),
+        static_cast<float>(m_vertexPaintColor.greenF()),
+        static_cast<float>(m_vertexPaintColor.blueF()),
+        static_cast<float>(m_vertexPaintColor.alphaF()));
+
+    const bool changed = applyVertexColorBrush(
+        *m_editableMesh,
+        localHit,
+        static_cast<float>(m_vertexPaintRadius),
+        paint,
+        static_cast<float>(m_vertexPaintStrength));
+
+    if (changed) {
+        m_vertexPaintStrokeDirty = true;
+        m_vertexPaintFlushPending = true;
+        if (!m_vertexPaintFlushScheduled) {
+            m_vertexPaintFlushScheduled = true;
+            QTimer::singleShot(0, this, [this]() {
+                m_vertexPaintFlushScheduled = false;
+                if (!m_vertexPaintFlushPending)
+                    return;
+                if (!m_editModeActive || !m_editableMesh || !m_editEntity)
+                    return;
+                m_vertexPaintFlushPending = false;
+                m_editableMesh->commitVertexColorsToEntity(m_editEntity);
+                emit meshDataChanged();
+            });
+        }
+    }
+}
+
+void EditModeController::updateVertexPaintPreview(OgreWidget* widget, const QPoint& screenPos)
+{
+    if (!m_vertexPaintEnabled || !m_editModeActive || !m_editEntity || !widget)
+        return;
+
+    Ogre::Vector3 localHit;
+    Ogre::Vector3 localNormal;
+    if (!hitTestLocalPointOnMesh(screenPos, widget, localHit, &localNormal)) {
+        clearVertexPaintPreview();
+        return;
+    }
+
+    auto* sceneMgr = m_editEntity->_getManager();
+    if (!sceneMgr)
+        return;
+
+    if (!m_overlayPaintNode)
+        m_overlayPaintNode = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    if (!m_overlayPaint) {
+        m_overlayPaint = sceneMgr->createManualObject("EditMode_PaintOverlay");
+        m_overlayPaint->setDynamic(true);
+        m_overlayPaint->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
+        m_overlayPaintNode->attachObject(m_overlayPaint);
+    }
+
+    if (auto* entNode = m_editEntity->getParentSceneNode()) {
+        m_overlayPaintNode->setPosition(entNode->_getDerivedPosition());
+        m_overlayPaintNode->setOrientation(entNode->_getDerivedOrientation());
+        m_overlayPaintNode->setScale(entNode->_getDerivedScale());
+    }
+
+    m_overlayPaint->clear();
+    localNormal.normalise();
+    if (localNormal.squaredLength() < 1e-6f)
+        localNormal = Ogre::Vector3::UNIT_Y;
+
+    Ogre::Vector3 tangent = localNormal.perpendicular();
+    tangent.normalise();
+    Ogre::Vector3 bitangent = localNormal.crossProduct(tangent);
+    bitangent.normalise();
+
+    const Ogre::ColourValue ringColor(
+        static_cast<float>(m_vertexPaintColor.redF()),
+        static_cast<float>(m_vertexPaintColor.greenF()),
+        static_cast<float>(m_vertexPaintColor.blueF()),
+        0.95f);
+    constexpr int kSegments = 64;
+    // Contract preview to match the practical painted area seen on
+    // discretized mesh vertices.
+    const float radius = static_cast<float>(m_vertexPaintRadius) * 0.8f;
+    const Ogre::Vector3 center = localHit + localNormal * 0.001f; // prevent z-fight
+
+    m_overlayPaint->begin("EditMode/EdgeSelection", Ogre::RenderOperation::OT_LINE_STRIP);
+    for (int i = 0; i <= kSegments; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(kSegments);
+        const float a = Ogre::Math::TWO_PI * t;
+        const Ogre::Vector3 p = center + (tangent * Ogre::Math::Cos(a) + bitangent * Ogre::Math::Sin(a)) * radius;
+        m_overlayPaint->position(p);
+        m_overlayPaint->colour(ringColor);
+    }
+    m_overlayPaint->end();
+}
+
+void EditModeController::endVertexPaintStroke(bool commitUndo)
+{
+    if (!m_vertexPaintStrokeActive)
+        return;
+
+    m_vertexPaintStrokeActive = false;
+    m_vertexPaintWidget = nullptr;
+    m_vertexPaintHaveLastLocal = false;
+
+    if (!commitUndo || !m_editModeActive || !m_editableMesh || !m_editEntity) {
+        m_vertexPaintStrokeOriginalSubMeshes.clear();
+        return;
+    }
+
+    if (!m_vertexPaintStrokeDirty) {
+        m_vertexPaintStrokeOriginalSubMeshes.clear();
+        return;
+    }
+
+    // Ensure the final sample is visible before we snapshot undo state.
+    if (m_vertexPaintFlushPending && m_editModeActive && m_editableMesh && m_editEntity) {
+        m_vertexPaintFlushPending = false;
+        m_editableMesh->commitVertexColorsToEntity(m_editEntity);
+        emit meshDataChanged();
+    }
+
+    const auto newSubMeshes = m_editableMesh->subMeshes();
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(m_vertexPaintStrokeOriginalSubMeshes),
+        newSubMeshes,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        "Vertex Paint");
+    UndoManager::getSingleton()->push(cmd);
+}
+
+void EditModeController::clearVertexPaintPreview()
+{
+    auto* sceneMgr = m_editEntity ? m_editEntity->_getManager() : nullptr;
+    if (m_overlayPaint) {
+        if (m_overlayPaintNode)
+            m_overlayPaintNode->detachObject(m_overlayPaint);
+        if (sceneMgr)
+            sceneMgr->destroyManualObject(m_overlayPaint);
+        m_overlayPaint = nullptr;
+    }
+    if (m_overlayPaintNode) {
+        if (sceneMgr)
+            sceneMgr->destroySceneNode(m_overlayPaintNode);
+        m_overlayPaintNode = nullptr;
+    }
+}
 
 // ===========================================================================
 // Soft selection
@@ -4004,6 +4343,65 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
             globalTriOffset += static_cast<int>(sub.triangles.size());
         }
         return true;
+    }
+
+    return false;
+}
+
+bool EditModeController::hitTestLocalPointOnMesh(const QPoint& screenPos, OgreWidget* widget,
+                                                 Ogre::Vector3& outLocal,
+                                                 Ogre::Vector3* outNormal) const
+{
+    if (!m_editableMesh || !m_editEntity || !widget)
+        return false;
+    auto* spaceCam = widget->getSpaceCamera();
+    auto* camera = spaceCam ? spaceCam->getCamera() : nullptr;
+    if (!camera)
+        return false;
+
+    int vw = 0;
+    int vh = 0;
+    widget->pixelSizeForCameraPicking(vw, vh);
+    if (vw <= 0 || vh <= 0)
+        return false;
+
+    const int triHit = hitTestFace(screenPos, camera, vw, vh);
+    if (triHit < 0)
+        return false;
+
+    const Ogre::Real nx = static_cast<Ogre::Real>(screenPos.x()) / vw;
+    const Ogre::Real ny = static_cast<Ogre::Real>(screenPos.y()) / vh;
+    const Ogre::Ray ray = camera->getCameraToViewportRay(nx, ny);
+    Ogre::SceneNode* node = m_editEntity->getParentSceneNode();
+    Ogre::Affine3 worldToLocal = node ? node->_getFullTransform().inverse() : Ogre::Affine3::IDENTITY;
+    Ogre::Vector3 localOrigin = worldToLocal * ray.getOrigin();
+    Ogre::Vector3 localDir = worldToLocal.linear() * ray.getDirection();
+    localDir.normalise();
+
+    int globalTriOffset = 0;
+    for (const auto& sub : m_editableMesh->subMeshes()) {
+        for (size_t ti = 0; ti < sub.triangles.size(); ++ti) {
+            if (globalTriOffset + static_cast<int>(ti) != triHit)
+                continue;
+            const auto& tri = sub.triangles[ti];
+            const auto& v0 = sub.vertices[tri.indices[0]].position;
+            const auto& v1 = sub.vertices[tri.indices[1]].position;
+            const auto& v2 = sub.vertices[tri.indices[2]].position;
+            const float t = rayTriangleIntersect(localOrigin, localDir, v0, v1, v2);
+            if (t < 0.0f)
+                return false;
+            outLocal = localOrigin + localDir * t;
+            if (outNormal) {
+                Ogre::Vector3 n = (v1 - v0).crossProduct(v2 - v0);
+                if (!n.isZeroLength())
+                    n.normalise();
+                else
+                    n = Ogre::Vector3::UNIT_Y;
+                *outNormal = n;
+            }
+            return true;
+        }
+        globalTriOffset += static_cast<int>(sub.triangles.size());
     }
 
     return false;

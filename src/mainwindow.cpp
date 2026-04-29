@@ -11,6 +11,9 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QJsonArray>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
 #include <QQmlApplicationEngine>
 #include <QQmlEngine>
 #include <QJSEngine>
@@ -65,6 +68,13 @@
 #include <QDockWidget>
 #include <QQuickWidget>
 #include <QQmlContext>
+#include <QToolButton>
+#include <QMenu>
+#include <QWidgetAction>
+#include <QSlider>
+#include <QColorDialog>
+#include <QSignalBlocker>
+#include <QGridLayout>
 
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent), ui(new Ui::MainWindow),
@@ -606,6 +616,12 @@ void MainWindow::initToolBar()
             border: none;
             padding: 2px 4px;
         }
+        QToolButton:checked {
+            color: #9adc4a;
+            background-color: rgba(122, 189, 42, 0.18);
+            border: 1px solid rgba(122, 189, 42, 0.45);
+            border-radius: 3px;
+        }
         QToolButton:hover:enabled {
             color: #9adc4a;
         }
@@ -820,6 +836,168 @@ void MainWindow::initToolBar()
     });
     QAction* convertToQuadsAction = ui->objectsToolbar->addWidget(convertToQuadsButton);
 
+    // Vertex paint: toggle on main click; arrow opens brush settings (color, radius, strength).
+    auto makeVertexPaintBrushIcon = []() -> QIcon {
+        // Do not rely on SVG icon plugins being present in packaged builds.
+        // Paint a small green brush icon that matches the topology tool theme.
+        constexpr int kSize = 18;
+        QPixmap pm(kSize, kSize);
+        pm.fill(Qt::transparent);
+
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+
+        const QColor accent(0x7A, 0xBD, 0x2A);      // matches topo selected state
+        const QColor accentDark(0x58, 0x8F, 0x1E);
+        const QColor metal(0xC8, 0xCF, 0xDB);
+        const QColor metalDark(0x8B, 0x93, 0xA1);
+
+        // Handle
+        p.setPen(QPen(accentDark, 2.4, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(13.8, 3.3), QPointF(7.1, 10.0));
+
+        // Ferrule
+        p.setPen(QPen(metalDark, 2.2, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(6.7, 10.4), QPointF(5.1, 12.0));
+
+        // Bristles (filled)
+        QPainterPath tip;
+        tip.moveTo(3.4, 12.1);
+        tip.lineTo(5.7, 13.3);
+        tip.lineTo(4.1, 16.1);
+        tip.lineTo(1.9, 14.9);
+        tip.closeSubpath();
+        p.fillPath(tip, metal);
+        p.setPen(QPen(accent, 1.0));
+        p.drawPath(tip);
+
+        return QIcon(pm);
+    };
+
+    auto* vertexPaintButton = new QToolButton(ui->objectsToolbar);
+    vertexPaintButton->setCheckable(true);
+    vertexPaintButton->setIcon(makeVertexPaintBrushIcon());
+    vertexPaintButton->setIconSize(QSize(18, 18));
+    vertexPaintButton->setToolTip(tr("Vertex paint — paint on mesh (Select tool). Arrow: brush settings."));
+    vertexPaintButton->setFont(topoFont);
+    vertexPaintButton->setStyleSheet(topoBtnStyle);
+    vertexPaintButton->setPopupMode(QToolButton::MenuButtonPopup);
+
+    auto* vertexPaintMenu = new QMenu(vertexPaintButton);
+    auto* paintSettings = new QWidget(vertexPaintMenu);
+    auto* paintLay = new QVBoxLayout(paintSettings);
+    paintLay->setContentsMargins(10, 8, 10, 8);
+    paintLay->setSpacing(8);
+
+    auto* emPaint = EditModeController::instance();
+
+    auto* colorRow = new QHBoxLayout();
+    colorRow->addWidget(new QLabel(tr("Color:"), paintSettings));
+    auto* colorBtn = new QPushButton(paintSettings);
+    colorBtn->setFixedSize(52, 24);
+    auto syncPaintColorBtn = [colorBtn, emPaint]() {
+        const QColor c = emPaint->vertexPaintColor();
+        colorBtn->setStyleSheet(
+            QStringLiteral("background-color: %1; border: 1px solid #888; border-radius: 3px;")
+                .arg(c.name(QColor::HexRgb)));
+    };
+    syncPaintColorBtn();
+    connect(colorBtn, &QPushButton::clicked, this, [this, emPaint, syncPaintColorBtn]() {
+        SentryReporter::addBreadcrumb("ui.action", "Vertex paint color picker opened");
+        QColor c = QColorDialog::getColor(emPaint->vertexPaintColor(), this, tr("Brush color"));
+        if (c.isValid())
+            emPaint->setVertexPaintColor(c);
+        syncPaintColorBtn();
+    });
+    connect(emPaint, &EditModeController::vertexPaintChanged, this, syncPaintColorBtn);
+    colorRow->addWidget(colorBtn);
+    colorRow->addStretch();
+    paintLay->addLayout(colorRow);
+
+    static const char* kPaintSwatches[] = {
+        "#ffffff", "#cccccc", "#888888", "#444444", "#000000",
+        "#ff0000", "#ff8800", "#ffff00", "#88ff00", "#00ff00",
+        "#00ff88", "#00ffff", "#0088ff", "#0000ff", "#8800ff",
+        "#ff00ff", "#ff0088", "#8b4513", "#ffd700", "#90ee90",
+        "#ff6347", "#00ced1", "#dda0dd", "#f0e68c"
+    };
+    auto* swatchGrid = new QGridLayout();
+    swatchGrid->setSpacing(3);
+    for (size_t i = 0; i < sizeof(kPaintSwatches) / sizeof(kPaintSwatches[0]); ++i) {
+        const int r = static_cast<int>(i) / 8;
+        const int col = static_cast<int>(i) % 8;
+        auto* sw = new QPushButton(paintSettings);
+        sw->setFixedSize(22, 22);
+        const QString hex = QString::fromUtf8(kPaintSwatches[i]);
+        sw->setStyleSheet(QStringLiteral("background-color: %1; border: 1px solid #666; border-radius: 2px;").arg(hex));
+        connect(sw, &QPushButton::clicked, this, [emPaint, hex, syncPaintColorBtn]() {
+            emPaint->setVertexPaintBrushColor(hex);
+            syncPaintColorBtn();
+        });
+        swatchGrid->addWidget(sw, r, col);
+    }
+    paintLay->addLayout(swatchGrid);
+
+    auto* radLabel = new QLabel(paintSettings);
+    auto* radSlider = new QSlider(Qt::Horizontal, paintSettings);
+    radSlider->setRange(2, 200);
+    auto syncRad = [radLabel, radSlider, emPaint]() {
+        QSignalBlocker b(radSlider);
+        const int v = qBound(2, static_cast<int>(qRound(emPaint->vertexPaintRadius() * 100.0)), 200);
+        radSlider->setValue(v);
+        radLabel->setText(tr("Radius (local): %1").arg(emPaint->vertexPaintRadius(), 0, 'f', 2));
+    };
+    syncRad();
+    connect(radSlider, &QSlider::valueChanged, this, [this, emPaint, radLabel](int v) {
+        emPaint->setVertexPaintRadius(v / 100.0);
+        radLabel->setText(tr("Radius (local): %1").arg(emPaint->vertexPaintRadius(), 0, 'f', 2));
+    });
+    connect(emPaint, &EditModeController::vertexPaintChanged, this, syncRad);
+    paintLay->addWidget(radLabel);
+    paintLay->addWidget(radSlider);
+
+    auto* strLabel = new QLabel(paintSettings);
+    auto* strSlider = new QSlider(Qt::Horizontal, paintSettings);
+    strSlider->setRange(0, 100);
+    auto syncStr = [strLabel, strSlider, emPaint]() {
+        QSignalBlocker b(strSlider);
+        strSlider->setValue(qBound(0, static_cast<int>(qRound(emPaint->vertexPaintStrength() * 100.0)), 100));
+        strLabel->setText(tr("Strength: %1").arg(emPaint->vertexPaintStrength(), 0, 'f', 2));
+    };
+    syncStr();
+    connect(strSlider, &QSlider::valueChanged, this, [this, emPaint, strLabel](int v) {
+        emPaint->setVertexPaintStrength(v / 100.0);
+        strLabel->setText(tr("Strength: %1").arg(emPaint->vertexPaintStrength(), 0, 'f', 2));
+    });
+    connect(emPaint, &EditModeController::vertexPaintChanged, this, syncStr);
+    paintLay->addWidget(strLabel);
+    paintLay->addWidget(strSlider);
+
+    auto* paintWa = new QWidgetAction(vertexPaintMenu);
+    paintWa->setDefaultWidget(paintSettings);
+    vertexPaintMenu->addAction(paintWa);
+    vertexPaintButton->setMenu(vertexPaintMenu);
+
+    connect(vertexPaintMenu, &QMenu::aboutToShow, this, [syncPaintColorBtn, syncRad, syncStr]() {
+        syncPaintColorBtn();
+        syncRad();
+        syncStr();
+    });
+
+    connect(vertexPaintButton, &QToolButton::toggled, this, [this](bool on) {
+        SentryReporter::addBreadcrumb("ui.action",
+            QStringLiteral("Toolbar: Vertex paint %1").arg(on ? QStringLiteral("on") : QStringLiteral("off")));
+        EditModeController::instance()->setVertexPaintEnabled(on);
+        if (on)
+            setTransformState(TransformOperator::TS_SELECT);
+    });
+    connect(EditModeController::instance(), &EditModeController::vertexPaintChanged, this, [vertexPaintButton]() {
+        QSignalBlocker b(vertexPaintButton);
+        vertexPaintButton->setChecked(EditModeController::instance()->vertexPaintEnabled());
+    });
+
+    QAction* vertexPaintAction = ui->objectsToolbar->addWidget(vertexPaintButton);
+
     // Context-aware visibility + enabled:
     //  - Hidden entirely when NOT in edit mode.
     //  - In edit mode: stay visible but only enable when the current
@@ -827,8 +1005,10 @@ void MainWindow::initToolBar()
     //    non-empty selection.
     auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton, deleteButton,
                                subdivideButton, fillButton, loopCutButton, convertToQuadsButton,
+                               vertexPaintButton,
                                extrudeAction, bevelAction, knifeAction, mergeAction, deleteAction,
-                               subdivideAction, fillAction, loopCutAction, convertToQuadsAction]() {
+                               subdivideAction, fillAction, loopCutAction, convertToQuadsAction,
+                               vertexPaintAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
@@ -840,6 +1020,7 @@ void MainWindow::initToolBar()
         fillAction->setVisible(active);
         loopCutAction->setVisible(active);
         convertToQuadsAction->setVisible(active);
+        vertexPaintAction->setVisible(active);
         if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
         const bool hasFaces = c->selectedFaceCount() > 0;
@@ -875,6 +1056,7 @@ void MainWindow::initToolBar()
         // Convert to Quads: whole-mesh; disable once the mesh already
         // has n-gon canonical faces (no work to do).
         convertToQuadsButton->setEnabled(!c->isMeshQuadBased());
+        vertexPaintButton->setEnabled(true);
     };
     refreshTopoButtons();
     connect(editCtrlForTopo, &EditModeController::editModeChanged,
@@ -1944,6 +2126,11 @@ void MainWindow::setTransformState(TransformOperator::TransformState newState)
     ui->actionTranslate_Object->setChecked(newState == TransformOperator::TS_TRANSLATE);
     ui->actionRotate_Object->setChecked(newState == TransformOperator::TS_ROTATE);
     ui->actionScale_Object->setChecked(newState == TransformOperator::TS_SCALE);
+
+    if (newState != TransformOperator::TS_SELECT
+        && EditModeController::instance()->vertexPaintEnabled()) {
+        EditModeController::instance()->setVertexPaintEnabled(false);
+    }
 
     TransformOperator::getSingleton()->onTransformStateChange(newState);
 }

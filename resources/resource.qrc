@@ -16,6 +16,7 @@
         <file>capsule.png</file>
         <file>roundedbox.png</file>
         <file>addVertice.png</file>
+        <file>paintbrush.svg</file>
         <file>spring.png</file>
         <file>scale.png</file>
     </qresource>

@@ -250,6 +250,65 @@ static inline Ogre::MeshPtr createInMemoryTriangleMesh(const std::string& name)
 }
 
 /**
+ * Creates an in-memory triangle mesh with positions, normals, UVs, and vertex colors.
+ *
+ * Uses a second vertex buffer source for `VES_DIFFUSE` (`VET_COLOUR`) to keep packing simple.
+ */
+static inline Ogre::MeshPtr createInMemoryTriangleMeshWithVertexColors(const std::string& name)
+{
+    auto mesh = Ogre::MeshManager::getSingleton().createManual(
+        name, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+
+    auto* sub = mesh->createSubMesh();
+    mesh->sharedVertexData = new Ogre::VertexData();
+    auto* decl = mesh->sharedVertexData->vertexDeclaration;
+
+    size_t offset = 0;
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_POSITION);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, offset, Ogre::VET_FLOAT3, Ogre::VES_NORMAL);
+    offset += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT3);
+    decl->addElement(0, offset, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
+    decl->addElement(1, 0, Ogre::VET_COLOUR, Ogre::VES_DIFFUSE);
+
+    auto vbuf0 = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl->getVertexSize(0), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    float verts[] = {
+        0,0,0,   0,0,1,  0.0f,0.0f,
+        1,0,0,   0,0,1,  1.0f,0.0f,
+        0,1,0,   0,0,1,  0.0f,1.0f,
+    };
+    vbuf0->writeData(0, sizeof(verts), verts);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(0, vbuf0);
+
+    auto vbuf1 = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+        decl->getVertexSize(1), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    Ogre::RGBA cols[3];
+    cols[0] = Ogre::ColourValue(1, 0, 0, 1).getAsBYTE();
+    cols[1] = Ogre::ColourValue(0, 1, 0, 1).getAsBYTE();
+    cols[2] = Ogre::ColourValue(0, 0, 1, 1).getAsBYTE();
+    vbuf1->writeData(0, sizeof(cols), cols);
+    mesh->sharedVertexData->vertexBufferBinding->setBinding(1, vbuf1);
+
+    mesh->sharedVertexData->vertexCount = 3;
+
+    auto ibuf = Ogre::HardwareBufferManager::getSingleton().createIndexBuffer(
+        Ogre::HardwareIndexBuffer::IT_16BIT, 3,
+        Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
+    uint16_t idx[] = {0, 1, 2};
+    ibuf->writeData(0, sizeof(idx), idx);
+    sub->useSharedVertices = true;
+    sub->indexData->indexBuffer = ibuf;
+    sub->indexData->indexCount = 3;
+
+    mesh->_setBounds(Ogre::AxisAlignedBox(-1,-1,-1,1,1,1));
+    mesh->_setBoundingSphereRadius(2.0);
+    mesh->load();
+
+    return mesh;
+}
+
+/**
  * Creates an in-memory welded cube mesh (8 verts, 12 tris). Matches the
  * topology the primitive-cube post-process produces at runtime — useful
  * for end-to-end bevel tests that go through the full editor pipeline.

@@ -46,7 +46,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Run QtMesh scan
-        uses: fernandotonon/QtMeshEditor@2.28.0
+        uses: fernandotonon/QtMeshEditor@2.32.0
         with:
           command: scan
         env:
@@ -64,20 +64,20 @@ Use the latest action release tag from the [releases page](https://github.com/fe
 
 ```yaml
 # Validate a specific mesh
-- uses: fernandotonon/QtMeshEditor@2.28.0
+- uses: fernandotonon/QtMeshEditor@2.32.0
   with:
     command: validate
     input-file: ./models/character.fbx
 
 # Convert FBX → glTF
-- uses: fernandotonon/QtMeshEditor@2.28.0
+- uses: fernandotonon/QtMeshEditor@2.32.0
   with:
     command: convert
     input-file: ./models/character.fbx
     output-file: ./output/character.gltf2
 
 # Resample Mixamo animations (200+ keyframes → 30)
-- uses: fernandotonon/QtMeshEditor@2.28.0
+- uses: fernandotonon/QtMeshEditor@2.32.0
   with:
     command: anim
     input-file: ./animations/dance.fbx
@@ -85,7 +85,7 @@ Use the latest action release tag from the [releases page](https://github.com/fe
     options: --resample 30
 
 # Get mesh info as JSON
-- uses: fernandotonon/QtMeshEditor@2.28.0
+- uses: fernandotonon/QtMeshEditor@2.32.0
   id: info
   with:
     command: info
