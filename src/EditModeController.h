@@ -824,6 +824,8 @@ private:
     Ogre::Vector3 m_vertexPaintLastLocal = Ogre::Vector3::ZERO;
     bool m_vertexPaintHaveLastLocal = false;
     bool m_vertexPaintStrokeDirty = false;
+    bool m_vertexPaintFlushScheduled = false;
+    bool m_vertexPaintFlushPending = false;
     std::vector<EditableSubMesh> m_vertexPaintStrokeOriginalSubMeshes;
 
     /// Hit-test a screen-space point for knife placement. Priority:
