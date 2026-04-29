@@ -122,6 +122,11 @@ public:
     Q_PROPERTY(bool wireframeEnabled READ wireframeEnabled WRITE setWireframeEnabled NOTIFY wireframeChanged)
     bool wireframeEnabled() const { return m_wireframeEnabled; }
     void setWireframeEnabled(bool enabled);
+
+    /// True if any submesh of the current edit mesh has non-empty
+    /// n-gon `.faces` — i.e. quad-based already. Drives the
+    /// "Convert to Quads" toolbar button enable state.
+    Q_INVOKABLE bool isMeshQuadBased() const;
     /// @}
 
     /// @name Mesh info (only valid when in edit mode)
@@ -501,6 +506,28 @@ public:
      * @return Number of triangles created (0 on no-op or rejection).
      */
     Q_INVOKABLE int fillSelection();
+
+    /**
+     * @brief Merge coplanar adjacent triangle pairs into quads.
+     *
+     * Whole-mesh operation: walks every submesh, looks for triangle pairs
+     * that share an edge and are within `angleThresholdDeg` of coplanar
+     * (default 1°), and merges each qualifying pair into a single quad
+     * face. Promotes the legacy triangle-only representation into the
+     * n-gon canonical form. After the operation, downstream features
+     * that branch on n-gon `.faces` (loop cut, n-gon-aware bevel,
+     * quad-aware wireframe) start working.
+     *
+     * No-op when nothing qualifies (all tris are non-coplanar, or the
+     * mesh is already quad-dominant). Pushes one undo command labeled
+     * "Convert to Quads" iff merges happened.
+     *
+     * @param angleThresholdDeg Maximum dihedral angle (deg) to treat as
+     *        coplanar. 0 = strict, ~5 = forgiving for float-quantised
+     *        imports. Defaults to 1°.
+     * @return Number of triangle pairs merged across all submeshes.
+     */
+    Q_INVOKABLE int convertToQuads(float angleThresholdDeg = 1.0f);
     /// @}
 
     /// @name Vertex transform support
@@ -723,6 +750,12 @@ signals:
     /// so QML toolbar state and preview overlay refresh together.
     void knifeSessionChanged();
 
+    /// Emitted when an edit-mode op short-circuits and wants to surface
+    /// a one-line explanation to the user (e.g. "Loop cut requires a
+    /// quad mesh — try Mesh → Convert to Quads"). QML overlays /
+    /// status-bar widgets can subscribe.
+    void editHintMessage(const QString& message);
+
 private slots:
     void onSelectionChanged();
 
@@ -765,6 +798,12 @@ private:
     Ogre::ManualObject* m_overlayVertices = nullptr;
     Ogre::ManualObject* m_overlayEdges = nullptr;
     Ogre::ManualObject* m_overlayFaces = nullptr;
+    /// Quad-aware wireframe: lines along n-gon face boundaries only,
+    /// hiding the diagonals introduced by `triangulateFaces()`. Active
+    /// when `m_wireframeEnabled` AND any submesh has non-empty `.faces`.
+    /// On legacy triangle-only meshes this stays empty and the
+    /// PM_WIREFRAME material override does the work instead.
+    Ogre::ManualObject* m_overlayBoundaryEdges = nullptr;
     Ogre::SceneNode* m_overlayNode = nullptr;
 
     // Bevel session state — populated on beginBevel, consumed on commit/cancel.
@@ -903,6 +942,14 @@ private:
     // Wireframe helpers
     void applyWireframeMaterials();
     void removeWireframeMaterials();
+    /// True if any submesh has non-empty `.faces` (n-gon canonical).
+    /// Drives the choice between PM_WIREFRAME (all submeshes pure tris)
+    /// and the boundary-edge overlay (any n-gon faces present).
+    bool meshHasNgonFaces() const;
+    /// (Re)build the n-gon boundary-edge overlay from `m_editableMesh`.
+    /// Active when `m_wireframeEnabled` AND `meshHasNgonFaces()` —
+    /// otherwise clears the overlay so it draws nothing.
+    void updateBoundaryEdgeOverlay();
 
 public:
     /// Refresh an entity after a topology mutation: rebuild tangents

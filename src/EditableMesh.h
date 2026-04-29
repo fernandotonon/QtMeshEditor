@@ -162,6 +162,34 @@ void triangulateFaces(EditableSubMesh& sub);
 void promoteTrianglesToFaces(EditableSubMesh& sub);
 
 /**
+ * @brief Merge coplanar adjacent triangle pairs into quads in `faces`.
+ *
+ * Walks the submesh's triangles, builds an edge→triangle adjacency map,
+ * and for each interior edge between two unmerged triangles checks whether
+ * the pair is coplanar (face normals' dot product ≥ cos(angleThresholdDeg))
+ * and forms a convex quad. Matching pairs are written to `sub.faces` as
+ * 4-vertex EditableFace entries; unmerged triangles are written as 3-vertex
+ * faces. After the call, `sub.faces` is canonical and `sub.triangles` is
+ * resynced via `triangulateFaces(sub)`.
+ *
+ * Each triangle is merged at most once. A greedy first-fit scan is used:
+ * when multiple neighbours qualify, the first one walked wins. This is
+ * good enough for axis-aligned tessellated quads and tri-pair-strip
+ * imports — the typical "I exported a quad mesh as triangles" case.
+ *
+ * @param sub Submesh to convert. Read-write — `sub.faces` is overwritten,
+ *            `sub.triangles` is rebuilt.
+ * @param angleThresholdDeg Maximum dihedral angle (degrees) between the
+ *            two triangle normals for them to be considered coplanar.
+ *            Defaults to 1° (very strict). Pass 0 to require perfect
+ *            coplanarity, or e.g. 5° to merge near-coplanar imports
+ *            from float-quantised exporters.
+ * @return Number of triangle pairs merged into quads.
+ */
+int mergeCoplanarTrianglesToQuads(EditableSubMesh& sub,
+                                  float angleThresholdDeg = 1.0f);
+
+/**
  * @brief Re-triangulate every submesh whose `faces` is non-empty.
  *
  * Convenience over `triangulateFaces(sub)` for a whole mesh: walks the

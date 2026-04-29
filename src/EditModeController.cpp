@@ -3433,7 +3433,23 @@ int EditModeController::loopCutSelection()
     const auto preSelectedFaces = m_selectedFaces;
 
     const auto newHE = hm.loopCut(startEdge);
-    if (newHE.empty()) return 0;
+    if (newHE.empty()) {
+        // The walk failed — most often because both faces adjacent to
+        // the start edge are triangles (loop cut needs the opposite-edge
+        // correspondence, well-defined only on quads/n-gons). Surface a
+        // hint to the user pointing at the converter.
+        const auto [fa, fb] = hm.edgeFaces(startEdge);
+        const bool faTri = fa >= 0 && hm.faceVertices(fa).size() == 3;
+        const bool fbTri = fb >= 0 && hm.faceVertices(fb).size() == 3;
+        if (faTri || fbTri) {
+            const QString hint = QStringLiteral(
+                "Loop cut needs a quad mesh — try Mesh → Convert to Quads.");
+            emit editHintMessage(hint);
+            SentryReporter::addBreadcrumb("edit_mode",
+                "Loop Cut no-op (tri adjacency)");
+        }
+        return 0;
+    }
 
     EditableMesh updated;
     if (!hm.toEditableMesh(updated)) return 0;
@@ -3469,6 +3485,89 @@ int EditModeController::loopCutSelection()
     emit editSelectionChanged();
     emit meshDataChanged();
     return static_cast<int>(newHE.size());
+}
+
+int EditModeController::convertToQuads(float angleThresholdDeg)
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return 0;
+
+    if (m_bevelSession.active) cancelBevel();
+    if (m_knifeSession.active) cancelKnife();
+
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    const auto preSelectedVerts = m_selectedVertices;
+    const auto preSelectedEdges = m_selectedEdges;
+    const auto preSelectedFaces = m_selectedFaces;
+
+    int totalMerges = 0;
+    for (auto& sub : m_editableMesh->subMeshes()) {
+        // Promote first if the submesh is in legacy triangle-only mode
+        // so the n-gon path takes over even when no merges happen — the
+        // wireframe overlay etc. branch on .faces being non-empty.
+        if (sub.faces.empty()) promoteTrianglesToFaces(sub);
+        totalMerges += mergeCoplanarTrianglesToQuads(sub, angleThresholdDeg);
+    }
+
+    if (totalMerges == 0) {
+        // Promotion alone counts as a meaningful change (downstream
+        // n-gon-aware features start working) — but if every submesh
+        // already had .faces and no merges happened, this is a true
+        // no-op. Detect by comparing face counts pre/post.
+        bool topologyChanged = false;
+        const auto& cur = m_editableMesh->subMeshes();
+        if (cur.size() != originalSubMeshes.size()) {
+            topologyChanged = true;
+        } else {
+            for (size_t i = 0; i < cur.size(); ++i) {
+                if (cur[i].faces.size() != originalSubMeshes[i].faces.size()) {
+                    topologyChanged = true;
+                    break;
+                }
+            }
+        }
+        if (!topologyChanged) {
+            // Restore — promote was a no-op too.
+            m_editableMesh->subMeshes() = std::move(originalSubMeshes);
+            return 0;
+        }
+    }
+
+    if (m_normalsMode == 0) m_editableMesh->recalculateNormals();
+    else                     m_editableMesh->recalculateNormalsFlat();
+
+    m_editableMesh->resizeEntityBuffers(m_editEntity);
+    rewriteEntityAfterTopologyChange(m_editEntity);
+
+    // Vertex IDs are unchanged by the merge (we only restructured face
+    // groupings), so per-vertex selection survives. Edge/face IDs are
+    // not stable across the rebuild — clear them.
+    m_selectedEdges.clear();
+    m_selectedFaces.clear();
+
+    auto* cmd = new EditMeshTopologyCommand(
+        std::move(originalSubMeshes),
+        m_editableMesh->subMeshes(),
+        preSelectedVerts, preSelectedEdges, preSelectedFaces,
+        m_selectedVertices, m_selectedEdges, m_selectedFaces,
+        QStringLiteral("Convert to Quads"));
+    UndoManager::getSingleton()->push(cmd);
+
+    validateMesh();
+    SentryReporter::addBreadcrumb("edit_mode",
+        QString("Convert to Quads (merges=%1)").arg(totalMerges));
+
+    // Wireframe path may have flipped from PM_WIREFRAME to the n-gon
+    // boundary overlay (or back, if undo is invoked) — re-apply.
+    if (m_wireframeEnabled) {
+        removeWireframeMaterials();
+        applyWireframeMaterials();
+    }
+
+    updateSelectionOverlay();
+    refreshNormalVisualizer();
+    emit editSelectionChanged();
+    emit meshDataChanged();
+    return totalMerges;
 }
 
 int EditModeController::subdivideCatmullClarkAll()
@@ -4221,6 +4320,9 @@ void EditModeController::createOverlayMaterials()
         pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
         pass->setDepthCheckEnabled(false);
         pass->setDepthWriteEnabled(false);
+        // Thicker than the boundary-wireframe overlay (2px) so the
+        // selection still reads clearly when the two overlays overlap.
+        pass->setLineWidth(3.0f);
     }
 
     // Face selection material (semi-transparent overlay, no lighting)
@@ -4235,6 +4337,26 @@ void EditModeController::createOverlayMaterials()
         pass->setDepthCheckEnabled(true);
         pass->setDepthWriteEnabled(false);
         pass->setCullingMode(Ogre::CULL_NONE);
+    }
+
+    // Quad-aware wireframe overlay material — same render-mode profile
+    // as EditMode/EdgeSelection but kept distinct so its colour can
+    // diverge later (e.g. theme support, hover highlight).
+    if (!matMgr.getByName("EditMode/BoundaryWireframe"))
+    {
+        auto mat = matMgr.create("EditMode/BoundaryWireframe",
+                                 Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        auto* pass = mat->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(false);
+        pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+        pass->setDepthCheckEnabled(true);
+        pass->setDepthWriteEnabled(false);
+        // Thicker boundary lines so the overlay reads cleanly against
+        // the underlying mesh shading. Note: many modern GL drivers
+        // cap line width to 1 in core profile — if this still looks
+        // hairline, the fallback is to extrude lines into camera-
+        // facing triangle strips (TODO if 2px is unreliable).
+        pass->setLineWidth(2.0f);
     }
 }
 
@@ -4262,7 +4384,8 @@ void EditModeController::updateSelectionOverlay()
     {
         m_overlayVertices = sceneMgr->createManualObject("EditMode_VertexOverlay");
         m_overlayVertices->setDynamic(true);
-        m_overlayVertices->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
+        // Above the boundary wireframe so selected vertices read on top.
+        m_overlayVertices->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY + 1);
         m_overlayNode->attachObject(m_overlayVertices);
     }
 
@@ -4307,7 +4430,9 @@ void EditModeController::updateSelectionOverlay()
     {
         m_overlayEdges = sceneMgr->createManualObject("EditMode_EdgeOverlay");
         m_overlayEdges->setDynamic(true);
-        m_overlayEdges->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
+        // Draw selected edges AFTER the n-gon boundary wireframe overlay
+        // so the selection reads on top when the two coincide.
+        m_overlayEdges->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY + 1);
         m_overlayNode->attachObject(m_overlayEdges);
     }
 
@@ -4389,6 +4514,9 @@ void EditModeController::updateSelectionOverlay()
         m_overlayFaces->end();
     }
 
+    // -- Quad-aware wireframe overlay (n-gon meshes only) --
+    updateBoundaryEdgeOverlay();
+
     // -- Soft selection radius sphere --
     if (m_softSelectionEnabled && !m_selectedVertices.empty()) {
         Ogre::Vector3 centroid = getSelectedVerticesCentroid();
@@ -4460,6 +4588,10 @@ void EditModeController::destroySelectionOverlay()
             sceneMgr->destroyManualObject(m_overlayFaces);
             m_overlayFaces = nullptr;
         }
+        if (m_overlayBoundaryEdges) {
+            sceneMgr->destroyManualObject(m_overlayBoundaryEdges);
+            m_overlayBoundaryEdges = nullptr;
+        }
         if (m_softSelSphere) {
             if (m_softSelSphereNode)
                 m_softSelSphereNode->detachAllObjects();
@@ -4481,10 +4613,33 @@ void EditModeController::destroySelectionOverlay()
 // Wireframe toggle
 // ===========================================================================
 
+bool EditModeController::meshHasNgonFaces() const
+{
+    return isMeshQuadBased();
+}
+
+bool EditModeController::isMeshQuadBased() const
+{
+    if (!m_editableMesh) return false;
+    for (const auto& sub : m_editableMesh->subMeshes()) {
+        if (!sub.faces.empty()) return true;
+    }
+    return false;
+}
+
 void EditModeController::applyWireframeMaterials()
 {
     if (!m_editEntity)
         return;
+
+    // n-gon mesh: keep solid material, use the boundary-edge overlay
+    // (drawn from updateSelectionOverlay) to show face boundaries
+    // without the fan-triangulation diagonals.
+    if (meshHasNgonFaces()) {
+        m_savedMaterials.clear();
+        updateBoundaryEdgeOverlay();
+        return;
+    }
 
     m_savedMaterials.clear();
     for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
@@ -4521,6 +4676,61 @@ void EditModeController::removeWireframeMaterials()
         }
     }
     m_savedMaterials.clear();
+
+    // Clear the n-gon boundary overlay too — the user toggled wireframe
+    // off, no PM_WIREFRAME or boundary lines should remain visible.
+    if (m_overlayBoundaryEdges)
+        m_overlayBoundaryEdges->clear();
+}
+
+void EditModeController::updateBoundaryEdgeOverlay()
+{
+    if (!m_editModeActive || !m_editableMesh || !m_editEntity) return;
+    auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
+    if (!sceneMgr) return;
+    if (!m_overlayNode) return; // overlay setup hasn't run yet
+
+    if (!m_overlayBoundaryEdges) {
+        m_overlayBoundaryEdges = sceneMgr->createManualObject(
+            "EditMode_BoundaryEdgeOverlay");
+        m_overlayBoundaryEdges->setDynamic(true);
+        m_overlayBoundaryEdges->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
+        m_overlayNode->attachObject(m_overlayBoundaryEdges);
+    }
+
+    m_overlayBoundaryEdges->clear();
+    if (!m_wireframeEnabled || !meshHasNgonFaces()) return;
+
+    m_overlayBoundaryEdges->begin("EditMode/BoundaryWireframe",
+                                  Ogre::RenderOperation::OT_LINE_LIST);
+    const Ogre::ColourValue lineColor(0.85f, 0.85f, 0.85f, 1.0f);
+
+    // Build a deduped set of (min,max) vertex-pair edges from each
+    // submesh's n-gon faces. Submesh-local indexing — different
+    // submeshes don't share vertices.
+    for (const auto& sub : m_editableMesh->subMeshes()) {
+        if (sub.faces.empty()) continue;
+        std::set<std::pair<unsigned int, unsigned int>> emitted;
+        for (const auto& face : sub.faces) {
+            if (!face.isValid()) continue;
+            const auto& idx = face.indices;
+            const size_t n = idx.size();
+            for (size_t i = 0; i < n; ++i) {
+                const unsigned int a = idx[i];
+                const unsigned int b = idx[(i + 1) % n];
+                const auto key = std::make_pair(std::min(a, b), std::max(a, b));
+                if (!emitted.insert(key).second) continue;
+                if (a >= sub.vertices.size() || b >= sub.vertices.size())
+                    continue;
+                m_overlayBoundaryEdges->position(sub.vertices[a].position);
+                m_overlayBoundaryEdges->colour(lineColor);
+                m_overlayBoundaryEdges->position(sub.vertices[b].position);
+                m_overlayBoundaryEdges->colour(lineColor);
+            }
+        }
+    }
+
+    m_overlayBoundaryEdges->end();
 }
 
 void EditModeController::setWireframeEnabled(bool enabled)

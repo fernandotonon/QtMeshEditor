@@ -1309,3 +1309,119 @@ TEST(EditableMeshStandalone, FaceIndexForTriangleSkipsInvalidFaces) {
     EXPECT_EQ(firstTri, 0u);
     EXPECT_EQ(count, 2u);
 }
+
+// ============================================================================
+// mergeCoplanarTrianglesToQuads
+// ============================================================================
+
+namespace {
+EditableVertex mkPosV(float x, float y, float z) {
+    EditableVertex v;
+    v.position = Ogre::Vector3(x, y, z);
+    v.normal = Ogre::Vector3::UNIT_Z;
+    v.hasNormal = true;
+    return v;
+}
+} // namespace
+
+TEST(EditableMeshStandalone, MergeCoplanarTrianglesProducesQuad) {
+    // Two triangles forming a planar unit quad on the XY plane.
+    EditableSubMesh sub;
+    sub.vertices = {
+        mkPosV(0, 0, 0), mkPosV(1, 0, 0), mkPosV(1, 1, 0), mkPosV(0, 1, 0),
+    };
+    EditableTriangle t1{}, t2{};
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    t2.indices[0] = 0; t2.indices[1] = 2; t2.indices[2] = 3;
+    sub.triangles = {t1, t2};
+
+    const int merged = mergeCoplanarTrianglesToQuads(sub);
+    EXPECT_EQ(merged, 1);
+    ASSERT_EQ(sub.faces.size(), 1u);
+    EXPECT_EQ(sub.faces[0].indices.size(), 4u);
+    // triangulation mirror is rebuilt
+    EXPECT_EQ(sub.triangles.size(), 2u);
+}
+
+TEST(EditableMeshStandalone, MergeCoplanarLeavesNonCoplanarAsTris) {
+    // Two triangles sharing edge (0,1) but bent at 90°.
+    EditableSubMesh sub;
+    sub.vertices = {
+        mkPosV(0, 0, 0), mkPosV(1, 0, 0), mkPosV(0, 1, 0), mkPosV(0, 0, 1),
+    };
+    EditableTriangle t1{}, t2{};
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    // Second tri lifted off the XY plane along Z — 90° dihedral.
+    t2.indices[0] = 1; t2.indices[1] = 0; t2.indices[2] = 3;
+    sub.triangles = {t1, t2};
+
+    const int merged = mergeCoplanarTrianglesToQuads(sub, 1.0f);
+    EXPECT_EQ(merged, 0);
+    ASSERT_EQ(sub.faces.size(), 2u);
+    EXPECT_EQ(sub.faces[0].indices.size(), 3u);
+    EXPECT_EQ(sub.faces[1].indices.size(), 3u);
+}
+
+TEST(EditableMeshStandalone, MergeCoplanarHandlesTriangulatedCube) {
+    // Standard 8-vert cube triangulated as 12 tris (2 per face).
+    // mergeCoplanarTrianglesToQuads should reconstruct 6 quads.
+    EditableSubMesh sub;
+    sub.vertices = {
+        mkPosV(-1,-1,-1), mkPosV( 1,-1,-1), mkPosV( 1, 1,-1), mkPosV(-1, 1,-1),
+        mkPosV(-1,-1, 1), mkPosV( 1,-1, 1), mkPosV( 1, 1, 1), mkPosV(-1, 1, 1),
+    };
+    auto T = [](unsigned a, unsigned b, unsigned c) {
+        EditableTriangle t{}; t.indices[0]=a; t.indices[1]=b; t.indices[2]=c;
+        return t;
+    };
+    // Each face split along a single diagonal — winding outward.
+    sub.triangles = {
+        T(0,2,1), T(0,3,2),    // back  (-Z)
+        T(4,5,6), T(4,6,7),    // front (+Z)
+        T(0,1,5), T(0,5,4),    // bottom (-Y)
+        T(2,3,7), T(2,7,6),    // top    (+Y)
+        T(0,4,7), T(0,7,3),    // left   (-X)
+        T(1,2,6), T(1,6,5),    // right  (+X)
+    };
+
+    const int merged = mergeCoplanarTrianglesToQuads(sub, 1.0f);
+    EXPECT_EQ(merged, 6);
+    EXPECT_EQ(sub.faces.size(), 6u);
+    for (const auto& f : sub.faces) {
+        EXPECT_EQ(f.indices.size(), 4u);
+    }
+    // 6 quads × 2 fan tris = 12 — same as input.
+    EXPECT_EQ(sub.triangles.size(), 12u);
+}
+
+TEST(EditableMeshStandalone, MergeCoplanarRespectsAngleThreshold) {
+    // Two triangles bent by ~5° dihedral. With strict threshold (1°),
+    // they don't merge; with loose threshold (10°), they do.
+    EditableSubMesh sub;
+    sub.vertices = {
+        mkPosV(0, 0, 0),
+        mkPosV(1, 0, 0),
+        mkPosV(1, 1, 0),
+        // 4th vertex tilted up in z by tan(5°) ≈ 0.0875
+        mkPosV(0, 1, 0.0875f),
+    };
+    EditableTriangle t1{}, t2{};
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    t2.indices[0] = 0; t2.indices[1] = 2; t2.indices[2] = 3;
+    sub.triangles = {t1, t2};
+
+    EditableSubMesh strict = sub;
+    EXPECT_EQ(mergeCoplanarTrianglesToQuads(strict, 1.0f), 0);
+    EXPECT_EQ(strict.faces.size(), 2u);
+
+    EditableSubMesh loose = sub;
+    EXPECT_EQ(mergeCoplanarTrianglesToQuads(loose, 10.0f), 1);
+    EXPECT_EQ(loose.faces.size(), 1u);
+}
+
+TEST(EditableMeshStandalone, MergeCoplanarEmptySubMesh) {
+    EditableSubMesh sub;
+    EXPECT_EQ(mergeCoplanarTrianglesToQuads(sub), 0);
+    EXPECT_TRUE(sub.faces.empty());
+    EXPECT_TRUE(sub.triangles.empty());
+}

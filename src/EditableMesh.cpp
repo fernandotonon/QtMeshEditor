@@ -30,10 +30,12 @@ THE SOFTWARE.
 #include "SubMeshTransform.h"
 #include <OgreSubEntity.h>
 #include <algorithm>
+#include <climits>
 #include <iterator>
 #include <limits>
 #include <cmath>
 #include <cstring>
+#include <map>
 
 // Assimp re-import path (loadFromAssimpFile) — drops aiProcess_Triangulate
 // so source n-gons survive into EditableSubMesh::faces. Quad migration #326,
@@ -79,6 +81,158 @@ void promoteTrianglesToFaces(EditableSubMesh& sub)
     // existing `triangles` already mirrors what `faces` would generate
     // (each face is a single triangle), so the canonical-faces invariant
     // already holds.
+}
+
+namespace {
+
+Ogre::Vector3 triangleNormal(const EditableSubMesh& sub,
+                             const EditableTriangle& tri)
+{
+    if (tri.indices[0] >= sub.vertices.size()
+        || tri.indices[1] >= sub.vertices.size()
+        || tri.indices[2] >= sub.vertices.size())
+        return Ogre::Vector3::ZERO;
+    const auto& a = sub.vertices[tri.indices[0]].position;
+    const auto& b = sub.vertices[tri.indices[1]].position;
+    const auto& c = sub.vertices[tri.indices[2]].position;
+    Ogre::Vector3 n = (b - a).crossProduct(c - a);
+    if (n.squaredLength() < 1e-12f) return Ogre::Vector3::ZERO;
+    n.normalise();
+    return n;
+}
+
+// Build the merged quad winding from two adjacent triangles sharing
+// edge (sharedA, sharedB). Returns the 4-vertex loop in the winding of
+// the first triangle, or empty if the merge would produce a degenerate
+// or non-convex result.
+std::vector<unsigned int> buildQuadLoop(const EditableSubMesh& sub,
+                                        const EditableTriangle& t1,
+                                        const EditableTriangle& t2,
+                                        unsigned int sharedA,
+                                        unsigned int sharedB)
+{
+    // Find the apex (non-shared vertex) of each triangle.
+    auto apexOf = [&](const EditableTriangle& t) -> unsigned int {
+        for (int i = 0; i < 3; ++i) {
+            if (t.indices[i] != sharedA && t.indices[i] != sharedB)
+                return t.indices[i];
+        }
+        return UINT_MAX;
+    };
+    const unsigned int apex1 = apexOf(t1);
+    const unsigned int apex2 = apexOf(t2);
+    if (apex1 == UINT_MAX || apex2 == UINT_MAX) return {};
+    if (apex1 == apex2) return {}; // degenerate
+
+    // Walk t1's winding to figure out the order: starting from apex1,
+    // is the next vertex sharedA or sharedB? That determines whether
+    // the quad is [apex1, sharedA, apex2, sharedB] or [apex1, sharedB,
+    // apex2, sharedA]. The diagonal we drop is (sharedA, sharedB).
+    int apexPos = -1;
+    for (int i = 0; i < 3; ++i) {
+        if (t1.indices[i] == apex1) { apexPos = i; break; }
+    }
+    if (apexPos < 0) return {};
+    const unsigned int after = t1.indices[(apexPos + 1) % 3];
+
+    std::vector<unsigned int> loop;
+    loop.reserve(4);
+    loop.push_back(apex1);
+    loop.push_back(after);                  // sharedA or sharedB
+    loop.push_back(apex2);
+    loop.push_back(after == sharedA ? sharedB : sharedA);
+
+    // Convexity check: for each consecutive triple in the loop, the
+    // cross product (next - cur) × (prev - cur) must point in the same
+    // direction as the triangle normal. If any flips, the quad is
+    // non-convex (or self-intersecting) — reject the merge.
+    const Ogre::Vector3 nRef = triangleNormal(sub, t1);
+    if (nRef == Ogre::Vector3::ZERO) return {};
+    for (int i = 0; i < 4; ++i) {
+        const auto& a = sub.vertices[loop[(i + 3) % 4]].position;
+        const auto& b = sub.vertices[loop[i]].position;
+        const auto& c = sub.vertices[loop[(i + 1) % 4]].position;
+        const Ogre::Vector3 cross = (c - b).crossProduct(a - b);
+        if (cross.dotProduct(nRef) <= 0.0f) return {};
+    }
+
+    return loop;
+}
+
+} // namespace
+
+int mergeCoplanarTrianglesToQuads(EditableSubMesh& sub,
+                                  float angleThresholdDeg)
+{
+    if (sub.triangles.empty()) return 0;
+
+    // Edge → list of triangle indices. An interior edge between two
+    // triangles has exactly two entries.
+    using EdgeKey = std::pair<unsigned int, unsigned int>;
+    auto makeKey = [](unsigned int a, unsigned int b) {
+        return EdgeKey{ std::min(a, b), std::max(a, b) };
+    };
+    std::map<EdgeKey, std::vector<size_t>> edgeToTris;
+    for (size_t ti = 0; ti < sub.triangles.size(); ++ti) {
+        const auto& t = sub.triangles[ti];
+        for (int e = 0; e < 3; ++e) {
+            edgeToTris[makeKey(t.indices[e], t.indices[(e + 1) % 3])]
+                .push_back(ti);
+        }
+    }
+
+    const float cosThreshold = std::cos(
+        Ogre::Math::DegreesToRadians(std::max(0.0f, angleThresholdDeg)));
+
+    std::vector<bool> consumed(sub.triangles.size(), false);
+    std::vector<EditableFace> outFaces;
+    outFaces.reserve(sub.triangles.size());
+    int merges = 0;
+
+    for (size_t ti = 0; ti < sub.triangles.size(); ++ti) {
+        if (consumed[ti]) continue;
+        const auto& t = sub.triangles[ti];
+
+        bool merged = false;
+        for (int e = 0; e < 3 && !merged; ++e) {
+            const unsigned int a = t.indices[e];
+            const unsigned int b = t.indices[(e + 1) % 3];
+            const auto& neighbours = edgeToTris[makeKey(a, b)];
+            if (neighbours.size() != 2) continue; // boundary or non-manifold
+
+            const size_t other = (neighbours[0] == ti) ? neighbours[1]
+                                                       : neighbours[0];
+            if (other == ti || consumed[other]) continue;
+
+            const Ogre::Vector3 n1 = triangleNormal(sub, t);
+            const Ogre::Vector3 n2 = triangleNormal(sub, sub.triangles[other]);
+            if (n1 == Ogre::Vector3::ZERO || n2 == Ogre::Vector3::ZERO)
+                continue;
+            if (n1.dotProduct(n2) < cosThreshold) continue;
+
+            const auto loop = buildQuadLoop(sub, t, sub.triangles[other], a, b);
+            if (loop.size() != 4) continue;
+
+            EditableFace face;
+            face.indices.assign(loop.begin(), loop.end());
+            outFaces.push_back(std::move(face));
+            consumed[ti] = true;
+            consumed[other] = true;
+            ++merges;
+            merged = true;
+        }
+
+        if (!merged) {
+            EditableFace face;
+            face.indices = {t.indices[0], t.indices[1], t.indices[2]};
+            outFaces.push_back(std::move(face));
+            consumed[ti] = true;
+        }
+    }
+
+    sub.faces = std::move(outFaces);
+    triangulateFaces(sub);
+    return merges;
 }
 
 bool EditableMesh::loadFromEntity(Ogre::Entity* entity)
