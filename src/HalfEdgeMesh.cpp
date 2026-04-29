@@ -1026,10 +1026,24 @@ std::vector<int> HalfEdgeMesh::extrudeEdges(const std::vector<int>& edgeIndices)
 // safe even if a caller bypasses the UI.
 static constexpr int kMaxBevelSegments = 16;
 
+// IMPORTANT: this is the TRIANGLE-ONLY edge bevel. It assumes every face
+// adjacent to a beveled edge is a triangle and uses that assumption
+// throughout (effectiveWidth's "third vertex" clamp, retriangulateBeveled-
+// Face's fan emission, the coplanar-sibling crease detection, etc.). On
+// quad-imported meshes those assumptions silently produce wrong widths
+// or invisible chamfers — controllers should dispatch to `bevelEdgesNgon`
+// (below) instead when the input mesh has n-gon canonical faces.
+//
+// This function is preserved as-is because the triangle-bevel features
+// it carries (crease detection, chained selections, coplanar-sibling
+// merging, full segments + profile support) are deeper than the simple
+// n-gon variant. See `EditModeController::applyBevelTopology` for the
+// actual dispatch logic.
+//
 // The Phase 1-7 bevel topology below has high cognitive complexity that
-// predates this PR; splitting it into phase-sized helpers is tracked as
-// a separate refactor. This PR only adds the optional profilePoints
-// parameter and uses it inside buildSegmentVerts.
+// predates the n-gon work; splitting it into phase-sized helpers is
+// tracked as a separate refactor (low priority now that `bevelEdgesNgon`
+// covers the common quad-mesh case).
 std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, // NOSONAR(cpp:S3776)
                                            float width,
                                            int segments,
@@ -3605,7 +3619,15 @@ std::vector<int> HalfEdgeMesh::bevelVerticesNgon(
 // bevelVertices — corner cut at each selected vertex.
 // ===========================================================================
 //
-// For each vertex v of valence N >= 3:
+// IMPORTANT: this is the TRIANGLE-ONLY vertex bevel. Like the triangle-
+// only edge bevel above, it assumes incident faces are triangles and
+// uses the "two edge offsets per face" trick to retriangulate. On
+// quad-imported meshes its assumptions break — controllers should
+// dispatch to `bevelVerticesNgon` (above) when the input mesh has
+// n-gon canonical faces. See `EditModeController::applyBevelVertexTopology`
+// for the actual dispatch.
+//
+// Algorithm (kept here for reference):
 //   1. Walk v's face ring, collecting the ring-ordered sequence of incident
 //      faces and their half-edges. Skip boundary verts for the MVP.
 //   2. For each outgoing edge v->x_i (i = 0..N-1), create a new vertex o_i
@@ -3618,9 +3640,9 @@ std::vector<int> HalfEdgeMesh::bevelVerticesNgon(
 //   4. Emit a new "cap" face using all o_i in ring order. Valence 3 gives
 //      a single triangle, higher valence an N-gon fanned from o_0.
 //
-// This MVP emits a flat cap (segments=1). Shaped profiles and segments>1
-// are TODO (rounded dome). Unused params are accepted for forward
-// compatibility with the edge-bevel API.
+// Triangle-only bevel features kept here: shaped profiles, segments > 1
+// (rounded dome), crease detection. The n-gon variant is currently a
+// flat single-segment MVP.
 std::vector<int> HalfEdgeMesh::bevelVertices(
     const std::vector<int>& vertexIndices,
     float width,
