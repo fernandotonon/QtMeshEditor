@@ -11,6 +11,9 @@
 #include <QJsonObject>
 #include <QJsonValue>
 #include <QJsonArray>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPixmap>
 #include <QQmlApplicationEngine>
 #include <QQmlEngine>
 #include <QJSEngine>
@@ -788,10 +791,47 @@ void MainWindow::initToolBar()
     QAction* fillAction = ui->objectsToolbar->addWidget(fillButton);
 
     // Vertex paint: toggle on main click; arrow opens brush settings (color, radius, strength).
+    auto makeVertexPaintBrushIcon = []() -> QIcon {
+        // Do not rely on SVG icon plugins being present in packaged builds.
+        // Paint a small green brush icon that matches the topology tool theme.
+        constexpr int kSize = 18;
+        QPixmap pm(kSize, kSize);
+        pm.fill(Qt::transparent);
+
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing, true);
+
+        const QColor accent(0x7A, 0xBD, 0x2A);      // matches topo selected state
+        const QColor accentDark(0x58, 0x8F, 0x1E);
+        const QColor metal(0xC8, 0xCF, 0xDB);
+        const QColor metalDark(0x8B, 0x93, 0xA1);
+
+        // Handle
+        p.setPen(QPen(accentDark, 2.4, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(13.8, 3.3), QPointF(7.1, 10.0));
+
+        // Ferrule
+        p.setPen(QPen(metalDark, 2.2, Qt::SolidLine, Qt::RoundCap));
+        p.drawLine(QPointF(6.7, 10.4), QPointF(5.1, 12.0));
+
+        // Bristles (filled)
+        QPainterPath tip;
+        tip.moveTo(3.4, 12.1);
+        tip.lineTo(5.7, 13.3);
+        tip.lineTo(4.1, 16.1);
+        tip.lineTo(1.9, 14.9);
+        tip.closeSubpath();
+        p.fillPath(tip, metal);
+        p.setPen(QPen(accent, 1.0));
+        p.drawPath(tip);
+
+        return QIcon(pm);
+    };
+
     auto* vertexPaintButton = new QToolButton(ui->objectsToolbar);
     vertexPaintButton->setCheckable(true);
-    vertexPaintButton->setIcon(QIcon(":/icones/paintbrush.svg"));
-    vertexPaintButton->setIconSize(QSize(16, 16));
+    vertexPaintButton->setIcon(makeVertexPaintBrushIcon());
+    vertexPaintButton->setIconSize(QSize(18, 18));
     vertexPaintButton->setToolTip(tr("Vertex paint — paint on mesh (Select tool). Arrow: brush settings."));
     vertexPaintButton->setFont(topoFont);
     vertexPaintButton->setStyleSheet(topoBtnStyle);
