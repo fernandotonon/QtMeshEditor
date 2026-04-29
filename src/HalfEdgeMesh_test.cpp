@@ -3123,10 +3123,14 @@ static int activeFaceCount(const HalfEdgeMesh& he)
     return n;
 }
 
-TEST(HalfEdgeMeshStandalone, SplitEdgeMidpointOfInteriorEdgeDoublesTriangles) {
-    // The quad mesh has two triangles sharing the v1↔v2 diagonal. Splitting
-    // that edge at t=0.5 should insert one new vertex, replace both triangles
-    // with two each (four tris total), and keep the mesh manifold.
+TEST(HalfEdgeMeshStandalone, SplitEdgeMidpointOfInteriorEdgeInsertsVertexInBothFaces) {
+    // n-gon-aware splitEdge inserts vMid into each adjacent face's vertex
+    // loop without introducing a fan diagonal: a triangle adjacent to the
+    // split edge becomes a 4-vertex face (NOT two triangles). The quad
+    // mesh's two triangles each gain vMid, resulting in 2 active 4-vertex
+    // faces. (Pre-quads-followup this returned 4 triangles via fan
+    // diagonals on `vMid → vOpp`; the new behaviour preserves more
+    // topology and produces no artificial diagonals.)
     auto em = makeQuadMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -3139,7 +3143,17 @@ TEST(HalfEdgeMeshStandalone, SplitEdgeMidpointOfInteriorEdgeDoublesTriangles) {
     EXPECT_TRUE(he.validate());
 
     EXPECT_EQ(he.vertexCount(), 5u);
-    EXPECT_EQ(activeFaceCount(he), 4);
+    EXPECT_EQ(activeFaceCount(he), 2);
+    // Each surviving face should have 4 vertices now (the original
+    // triangle plus vMid inserted on the shared edge).
+    int quadCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        auto fv = he.faceVertices(static_cast<int>(f));
+        if (fv.size() == 4) ++quadCount;
+    }
+    EXPECT_EQ(quadCount, 2)
+        << "n-gon-aware splitEdge: each adjacent triangle gains vMid → quad";
 
     // Midpoint position should be the average of the endpoints.
     const auto mid = he.vertex(vMid).position;
@@ -3195,10 +3209,11 @@ TEST(HalfEdgeMeshStandalone, SplitEdgeInterpolatesNormalAndUV) {
     EXPECT_NEAR(std::min(uvDist1, uvDist2) / uvSeg, 0.25f, 1e-3f);
 }
 
-TEST(HalfEdgeMeshStandalone, SplitEdgeBoundaryEdgeProducesOneExtraTriangle) {
-    // A triangle's perimeter edge is a boundary edge (only one adjacent face).
-    // Splitting it should turn the single triangle into two triangles without
-    // creating any phantom face on the outside.
+TEST(HalfEdgeMeshStandalone, SplitEdgeBoundaryEdgeInsertsVertexInTheTriangle) {
+    // A triangle's perimeter edge is a boundary edge (only one adjacent
+    // face). n-gon-aware splitEdge: the triangle gains vMid on its
+    // perimeter, becoming a 4-vertex face. No phantom face on the outside.
+    // (Pre-quads-followup this returned two triangles via a fan diagonal.)
     auto em = makeTriangleMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -3212,7 +3227,14 @@ TEST(HalfEdgeMeshStandalone, SplitEdgeBoundaryEdgeProducesOneExtraTriangle) {
     EXPECT_TRUE(he.validate());
 
     EXPECT_EQ(he.vertexCount(), 4u);
-    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_EQ(activeFaceCount(he), 1);
+    // The single surviving face must be a quad (3 original verts + vMid).
+    int quadCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quadCount;
+    }
+    EXPECT_EQ(quadCount, 1);
 }
 
 TEST(HalfEdgeMeshStandalone, SplitEdgeClampsExtremeT) {
@@ -3243,12 +3265,15 @@ TEST(HalfEdgeMeshStandalone, SplitEdgeInvalidIndexReturnsMinusOne) {
     EXPECT_EQ(he.splitEdge(999, 0.5f), -1);
 }
 
-TEST(HalfEdgeMeshStandalone, TwoSplitEdgesOnOneTriangleProduceMidpointEdge) {
-    // Real knife-tool scenario: the user cuts a triangle by clicking two of
-    // its edges. Two splitEdge calls on the same triangle should leave the
-    // M1↔M2 segment as a real edge of the resulting mesh — no follow-up
-    // splitFace needed. This is the invariant the knife commit pipeline
-    // relies on for the common "cut one face" case.
+TEST(HalfEdgeMeshStandalone, TwoSplitEdgesOnOneTriangleNeedFollowupSplitFace) {
+    // n-gon-aware splitEdge: two splitEdge calls on the same triangle
+    // insert m1 and m2 into its loop, producing a pentagon
+    // [v0, m1, v1, m2, v2] — but they are NOT automatically connected.
+    // (The triangle-only splitEdge MVP previously cut the triangle into
+    // sub-triangles via fan diagonals, which incidentally produced the
+    // m1-m2 edge as a side-effect.) Call splitFace explicitly to
+    // materialise the cut. This is exactly what `cutPath` now does in
+    // its walk loop.
     auto em = makeTriangleMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -3266,13 +3291,81 @@ TEST(HalfEdgeMeshStandalone, TwoSplitEdgesOnOneTriangleProduceMidpointEdge) {
     ASSERT_GE(m2, 0);
     EXPECT_TRUE(he.validate());
 
-    // The knife cut ran from M1 to M2; that segment must now be an edge.
+    // After two splitEdges the triangle is now a pentagon; m1 and m2
+    // are NOT yet connected — that's the new contract.
+    EXPECT_LT(findEdge(he, m1, m2), 0)
+        << "n-gon splitEdge does not auto-cut: explicit splitFace required";
+    EXPECT_EQ(activeFaceCount(he), 1);
+
+    // Find the pentagon and call splitFace to materialise the cut.
+    int pentagonIdx = -1;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        const auto fv = he.faceVertices(static_cast<int>(f));
+        if (fv.size() == 5
+            && std::find(fv.begin(), fv.end(), m1) != fv.end()
+            && std::find(fv.begin(), fv.end(), m2) != fv.end()) {
+            pentagonIdx = static_cast<int>(f);
+            break;
+        }
+    }
+    ASSERT_GE(pentagonIdx, 0);
+    EXPECT_TRUE(he.splitFace(pentagonIdx, m1, m2));
     EXPECT_GE(findEdge(he, m1, m2), 0)
-        << "M1-M2 should be a real edge after two splitEdges on the same triangle";
+        << "splitFace must materialise the m1-m2 cut on the pentagon";
 
     EditableMesh back;
     ASSERT_TRUE(he.toEditableMesh(back));
     EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeOnQuadMeshKeepsQuads) {
+    // Regression for the n-gon-aware splitEdge: split a quad-imported
+    // mesh's edge and confirm both adjacent quads become pentagons
+    // (NOT four triangles via fan diagonals as the old MVP would have
+    // produced). This is the topology guarantee knife / loop cut
+    // depend on for producing real quad outputs on quad-imported
+    // assets.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    // Two adjacent quads sharing the v1-v2 edge.
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1),
+                     mkV(2, 0), mkV(2, 1) };
+    EditableFace q1, q2;
+    q1.indices = {0, 1, 2, 3};
+    q2.indices = {1, 4, 5, 2};
+    sub.faces = { q1, q2 };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    ASSERT_EQ(activeFaceCount(he), 2);
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    const int vMid = he.splitEdge(sharedEdge, 0.5f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+
+    // Both quads should now be pentagons (5-vertex faces). NOT four
+    // triangles — that would mean fan diagonals slipped in.
+    EXPECT_EQ(activeFaceCount(he), 2);
+    int pentagonCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        if (he.faceVertices(static_cast<int>(f)).size() == 5) ++pentagonCount;
+    }
+    EXPECT_EQ(pentagonCount, 2)
+        << "n-gon-aware splitEdge: quad + new vertex on shared edge → pentagon";
 }
 
 TEST(HalfEdgeMeshStandalone, SplitFaceRejectsAdjacentBoundaryVertices) {

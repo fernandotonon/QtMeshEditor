@@ -3714,56 +3714,55 @@ int HalfEdgeMesh::splitEdge(int edgeIdx, float t)
     constexpr float kEps = 1e-4f;
     t = std::clamp(t, kEps, 1.0f - kEps);
 
-    // Collect the two adjacent triangle descriptions while the old
-    // topology is still intact. Both faces must be triangles for this
-    // MVP; n-gon splitting needs ear-clip-aware rewiring.
-    struct TriFace {
-        int face;           // face index (for submesh lookup)
-        int subMeshIndex;
-        int vFrom;          // edge endpoint (start)
-        int vTo;            // edge endpoint (end)
-        int vOpp;           // third triangle vertex
-        int heFrom, heTo, heOpp; // the three half-edges of the triangle
+    // Describe one adjacent face: capture its vertex loop, the index
+    // of the shared edge's start vertex within that loop, and the
+    // submesh. The shared edge runs (loop[shareIdx] → loop[shareIdx+1])
+    // in this face's winding direction. n-gon-aware: any face arity
+    // ≥ 3 is supported. (The previous triangle-only MVP introduced fan
+    // diagonals on quads — see commit history.)
+    struct LoopFace {
+        int face = -1;
+        int subMeshIndex = 0;
+        std::vector<int> verts; // face loop in winding order
+        int shareIdx = -1;      // verts[shareIdx] == vFrom of shared edge
     };
 
-    auto describeFace = [&](int he, TriFace& out) -> bool {
+    auto describeFace = [&](int he, LoopFace& out) -> bool {
         if (he < 0 || he >= static_cast<int>(m_halfEdges.size())) return false;
         if (m_halfEdges[he].face < 0) return false;
         const int fIdx = m_halfEdges[he].face;
-        const auto verts = faceVertices(fIdx);
-        if (verts.size() != 3) return false;
-
-        // Identify which HE of the triangle is the one carrying `edgeIdx`.
-        // Traverse the face loop starting at the face's HE; the HE pointing
-        // "to" heVertex of `he` is the one sharing edgeIdx. Fill TriFace
-        // in face-loop order so we keep winding.
+        if (fIdx >= static_cast<int>(m_faces.size())) return false;
         const int startHE = m_faces[fIdx].halfEdge;
-        int he0 = startHE;
-        int he1 = m_halfEdges[he0].next;
-        int he2 = m_halfEdges[he1].next;
-        int heIndices[3] = {he0, he1, he2};
+        if (startHE < 0) return false;
 
-        int shareIdx = -1;
-        for (int i = 0; i < 3; ++i) {
-            if (heIndices[i] == he) { shareIdx = i; break; }
-        }
-        if (shareIdx < 0) return false;
+        // Walk the face HE ring; `loop[i]` = the "to" vertex of the i-th
+        // HE in face winding order. The HE found at position `pos` points
+        // TO `loop[pos]`, so the shared edge runs from `loop[pos-1]` to
+        // `loop[pos]` in this face's winding. We record the loop and the
+        // "from" position (pos-1) so insertions can place vMid right
+        // after that vertex.
+        std::vector<int> loop;
+        int pos = -1;
+        int cursor = startHE;
+        int i = 0;
+        do {
+            if (cursor == he) pos = i;
+            loop.push_back(m_halfEdges[cursor].vertex);
+            cursor = m_halfEdges[cursor].next;
+            ++i;
+            if (i > 1024) return false; // runaway guard
+        } while (cursor != startHE);
+        if (pos < 0 || loop.size() < 3) return false;
 
+        const int n = static_cast<int>(loop.size());
         out.face = fIdx;
         out.subMeshIndex = m_faces[fIdx].subMeshIndex;
-        out.heFrom = heIndices[shareIdx];
-        out.heTo   = heIndices[(shareIdx + 1) % 3];
-        out.heOpp  = heIndices[(shareIdx + 2) % 3];
-
-        // Vertex layout: heFrom.prev.vertex -> heFrom.vertex -> heTo.vertex.
-        // The shared edge goes vFrom -> vTo. The third vertex is heTo.vertex.
-        out.vFrom = m_halfEdges[out.heOpp].vertex;
-        out.vTo   = m_halfEdges[out.heFrom].vertex;
-        out.vOpp  = m_halfEdges[out.heTo].vertex;
+        out.verts = std::move(loop);
+        out.shareIdx = (pos - 1 + n) % n; // position of edge's "from" vertex
         return true;
     };
 
-    TriFace fA{}, fB{};
+    LoopFace fA{}, fB{};
     const bool hasA = describeFace(heA, fA);
     const int heB = m_halfEdges[heA].twin;
     const bool hasValidB = (heB >= 0);
@@ -3771,50 +3770,71 @@ int HalfEdgeMesh::splitEdge(int edgeIdx, float t)
 
     if (!hasA && !hasB) return -1;
 
-    // splitEdge is a triangle-only MVP: if either adjacent face exists
-    // and isn't a triangle, bail before we mutate. Partially splitting
-    // would desync the other side's half-edge pointers against a face
-    // that's still an n-gon, producing silent topology corruption.
-    // (A face "exists" here means its twin is non-boundary. Boundary
-    // half-edges — face == -1 — are fine.)
-    if (!hasA && m_halfEdges[heA].face >= 0) return -1;
-    if (!hasB && hasValidB && m_halfEdges[heB].face >= 0) return -1;
+    // Edge direction is fA.verts[shareIdx] → fA.verts[shareIdx+1] (with t
+    // measured from vFrom in this direction). If only fB exists (the edge
+    // sits on the boundary on the A side), fB winds the opposite way, so
+    // we read vFrom from its loop directly without flipping t.
+    auto edgeStart = [](const LoopFace& f) {
+        return f.verts[f.shareIdx];
+    };
+    auto edgeEnd = [](const LoopFace& f) {
+        return f.verts[(f.shareIdx + 1) % f.verts.size()];
+    };
+    int vFrom, vTo;
+    if (hasA) {
+        vFrom = edgeStart(fA);
+        vTo   = edgeEnd(fA);
+    } else {
+        // fB winds opposite, so its "start of shared edge" is our vTo.
+        vFrom = edgeEnd(fB);
+        vTo   = edgeStart(fB);
+    }
 
-    // Edge direction is fA.vFrom -> fA.vTo (with t measured from vFrom).
-    // If only fB exists (the edge sits on the boundary on the A side),
-    // fB.vFrom / fB.vTo run in the opposite direction, so re-measure t.
-    int vFrom = hasA ? fA.vFrom : fB.vTo;
-    int vTo   = hasA ? fA.vTo   : fB.vFrom;
-
-    // Create the midpoint vertex.
+    // Create the midpoint vertex from the linearly-interpolated endpoint
+    // attributes (positions, normals, UVs, bone weights, tangents).
     HEVertex mid = interpolateVertex(m_vertices[vFrom], m_vertices[vTo], t);
     mid.halfEdge = -1;
     const int vMid = static_cast<int>(m_vertices.size());
     m_vertices.push_back(std::move(mid));
 
-    // Retire a face: set each of its half-edges' face to -1 and clear the
-    // face slot's halfEdge pointer so the four-call cleanup drops them.
-    auto retireFace = [&](const TriFace& tf) {
-        m_halfEdges[tf.heFrom].face = -1;
-        m_halfEdges[tf.heTo].face = -1;
-        m_halfEdges[tf.heOpp].face = -1;
-        m_faces[tf.face].halfEdge = -1;
+    // Retire a face: walk its HE loop and clear face pointers so the
+    // four-call cleanup drops them. Generic over face arity.
+    auto retireFace = [&](int fIdx) {
+        if (fIdx < 0 || fIdx >= static_cast<int>(m_faces.size())) return;
+        const int startHE = m_faces[fIdx].halfEdge;
+        if (startHE < 0) return;
+        int he = startHE;
+        do {
+            const int next = m_halfEdges[he].next;
+            m_halfEdges[he].face = -1;
+            he = next;
+        } while (he != startHE && he >= 0);
+        m_faces[fIdx].halfEdge = -1;
+    };
+
+    // Replace each adjacent face with ONE new face that has vMid
+    // inserted between the shared edge's endpoints. A triangle becomes
+    // a quad, a quad becomes a pentagon, etc. — no artificial fan
+    // diagonal. This is the change that lets knife / loop cut produce
+    // real quads instead of fan-triangulating the affected faces.
+    auto rebuildWithMid = [&](const LoopFace& f) {
+        std::vector<int> loop;
+        loop.reserve(f.verts.size() + 1);
+        const int n = static_cast<int>(f.verts.size());
+        for (int i = 0; i < n; ++i) {
+            loop.push_back(f.verts[i]);
+            if (i == f.shareIdx) loop.push_back(vMid);
+        }
+        appendFace(loop, f.subMeshIndex);
     };
 
     if (hasA) {
-        retireFace(fA);
-        // Old triangle [vFrom, vTo, vOpp] wound as
-        // heOpp: vOpp -> vFrom, heFrom: vFrom -> vTo, heTo: vTo -> vOpp.
-        // New triangles share the vMid → vOpp diagonal and keep the same winding.
-        appendFace({fA.vFrom, vMid, fA.vOpp}, fA.subMeshIndex);
-        appendFace({vMid, fA.vTo, fA.vOpp}, fA.subMeshIndex);
+        retireFace(fA.face);
+        rebuildWithMid(fA);
     }
     if (hasB) {
-        retireFace(fB);
-        // fB's winding is reversed relative to fA (opposite twin). Using
-        // fB's own vFrom/vTo keeps its orientation intact.
-        appendFace({fB.vFrom, vMid, fB.vOpp}, fB.subMeshIndex);
-        appendFace({vMid, fB.vTo, fB.vOpp}, fB.subMeshIndex);
+        retireFace(fB.face);
+        rebuildWithMid(fB);
     }
 
     rebuildEdgesAndTwins();
@@ -3834,7 +3854,7 @@ bool HalfEdgeMesh::splitFace(int faceIdx, int vA, int vB)
     if (m_faces[faceIdx].halfEdge < 0) return false;
 
     const auto verts = faceVertices(faceIdx);
-    if (verts.size() < 3 || verts.size() > 4) return false;
+    if (verts.size() < 3) return false; // n-gon-aware: any arity ≥ 3
 
     // Require both vA and vB to be on the boundary loop.
     int posA = -1;
@@ -4013,19 +4033,26 @@ std::vector<int> HalfEdgeMesh::cutPath(const std::vector<CutPoint>& points)
         for (int step = 0; step < kMaxWalkSteps; ++step) {
             if (vA == vTarget) break;
 
-            // Does vA already share a triangle with vTarget? Then the
-            // existing splitEdge semantics (two click splits on one tri
-            // produce the connecting edge automatically) already created
-            // the final cut edge — nothing more to do for this pair.
+            // Does vA already share a face with vTarget? In the n-gon-
+            // aware splitEdge era, each splitEdge inserts vMid into the
+            // adjacent face WITHOUT cutting it — so when two consecutive
+            // click vertices land on the same face, the connecting edge
+            // doesn't exist yet. Call splitFace explicitly to cut the
+            // shared face along the vA→vTarget diagonal. (Previously
+            // the triangle-only splitEdge produced the cut as a side-
+            // effect, but that introduced fan diagonals everywhere.)
             const auto facesAtA = facesAroundVertex(vA);
-            bool shareFace = false;
+            int sharedFace = -1;
             for (int f : facesAtA) {
                 const auto fv = faceVertices(f);
                 if (std::find(fv.begin(), fv.end(), vTarget) != fv.end()) {
-                    shareFace = true; break;
+                    sharedFace = f; break;
                 }
             }
-            if (shareFace) break;
+            if (sharedFace >= 0) {
+                splitFace(sharedFace, vA, vTarget);
+                break;
+            }
 
             const Ogre::Vector3 pA = m_vertices[vA].position;
             const Ogre::Vector3 pT = m_vertices[vTarget].position;
@@ -4075,13 +4102,28 @@ std::vector<int> HalfEdgeMesh::cutPath(const std::vector<CutPoint>& points)
             (void)bestFace;
 
             // Split the exit edge; the new vertex becomes the entry point
-            // for the next triangle. Because the previous iteration's vA
-            // and the new vertex now both live on the same triangle, the
-            // splitEdge pass already leaves the segment between them as a
-            // real mesh edge.
+            // for the next face. n-gon-aware splitEdge inserts vMid into
+            // each adjacent face's loop WITHOUT cutting it (no fan
+            // diagonals), so we explicitly call splitFace to materialise
+            // the cut on the face we just walked through. The face that
+            // contains BOTH vA and vMid post-splitEdge is the one that
+            // needs cutting; there will be exactly one such face since
+            // vMid was just inserted into the two faces adjacent to
+            // `bestEdge`, and only one of those (the one we walked
+            // through) contains vA.
             const int vMid = splitEdge(bestEdge, bestT);
             if (vMid < 0) break;
             newVertices.push_back(vMid);
+
+            int faceToCut = -1;
+            for (int f : facesAroundVertex(vA)) {
+                const auto fv = faceVertices(f);
+                if (std::find(fv.begin(), fv.end(), vMid) != fv.end()) {
+                    faceToCut = f; break;
+                }
+            }
+            if (faceToCut >= 0) splitFace(faceToCut, vA, vMid);
+
             vA = vMid;
         }
     }
