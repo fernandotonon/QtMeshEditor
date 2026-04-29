@@ -327,6 +327,28 @@ public:
                                 const std::vector<float>& profilePoints = {});
 
     /**
+     * @brief n-gon-aware edge bevel for meshes whose adjacent faces are
+     *        arbitrary polygons.
+     *
+     * Simpler counterpart to `bevelEdges` — handles any face arity ≥ 3
+     * by treating each beveled face's vertex loop as opaque. Use this
+     * when at least one face adjacent to a beveled edge is a quad or
+     * higher-arity n-gon; the triangle-only `bevelEdges` makes
+     * incorrect assumptions about "third vertex" in that case.
+     *
+     * MVP scope: isolated bevels only (input edges sharing endpoints
+     * are rejected); flat single-segment chamfer; `profile` and
+     * `profilePoints` are reserved for a future extension.
+     *
+     * @return Indices of the newly created vertices. Empty on failure.
+     */
+    std::vector<int> bevelEdgesNgon(const std::vector<int>& edgeIndices,
+                                    float width,
+                                    int segments = 1,
+                                    float profile = 0.5f,
+                                    const std::vector<float>& profilePoints = {});
+
+    /**
      * @brief Bevel selected vertices (corner cut).
      *
      * For each selected vertex v of valence N >= 3, replaces v with an
@@ -366,6 +388,28 @@ public:
                                    int segments = 1,
                                    float profile = 0.5f,
                                    const std::vector<float>& profilePoints = {});
+
+    /**
+     * @brief n-gon-aware vertex bevel for meshes whose incident faces are
+     *        arbitrary polygons.
+     *
+     * Simpler counterpart to `bevelVertices`. Replaces v with one inner
+     * vertex per incident face (placed at distance `width` along the
+     * direction toward each face's centroid) plus a single n-gon cap
+     * face walking those inner vertices in ring order. Each incident
+     * face keeps its original arity — only its v-corner moves inward.
+     *
+     * MVP scope: flat single-segment cap, valence ≥ 3, non-boundary
+     * vertices only. `segments` and `profilePoints` are reserved for a
+     * future rounded-cap extension.
+     *
+     * @return Indices of the newly created vertices. Empty on failure.
+     */
+    std::vector<int> bevelVerticesNgon(const std::vector<int>& vertexIndices,
+                                       float width,
+                                       int segments = 1,
+                                       float profile = 0.5f,
+                                       const std::vector<float>& profilePoints = {});
 
     /**
      * @brief Insert a new vertex on an edge at parametric position t, then

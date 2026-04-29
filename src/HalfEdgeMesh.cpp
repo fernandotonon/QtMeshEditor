@@ -1026,10 +1026,24 @@ std::vector<int> HalfEdgeMesh::extrudeEdges(const std::vector<int>& edgeIndices)
 // safe even if a caller bypasses the UI.
 static constexpr int kMaxBevelSegments = 16;
 
+// IMPORTANT: this is the TRIANGLE-ONLY edge bevel. It assumes every face
+// adjacent to a beveled edge is a triangle and uses that assumption
+// throughout (effectiveWidth's "third vertex" clamp, retriangulateBeveled-
+// Face's fan emission, the coplanar-sibling crease detection, etc.). On
+// quad-imported meshes those assumptions silently produce wrong widths
+// or invisible chamfers — controllers should dispatch to `bevelEdgesNgon`
+// (below) instead when the input mesh has n-gon canonical faces.
+//
+// This function is preserved as-is because the triangle-bevel features
+// it carries (crease detection, chained selections, coplanar-sibling
+// merging, full segments + profile support) are deeper than the simple
+// n-gon variant. See `EditModeController::applyBevelTopology` for the
+// actual dispatch logic.
+//
 // The Phase 1-7 bevel topology below has high cognitive complexity that
-// predates this PR; splitting it into phase-sized helpers is tracked as
-// a separate refactor. This PR only adds the optional profilePoints
-// parameter and uses it inside buildSegmentVerts.
+// predates the n-gon work; splitting it into phase-sized helpers is
+// tracked as a separate refactor (low priority now that `bevelEdgesNgon`
+// covers the common quad-mesh case).
 std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, // NOSONAR(cpp:S3776)
                                            float width,
                                            int segments,
@@ -2921,10 +2935,693 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
 }
 
 // ===========================================================================
+// bevelEdgesNgon — n-gon-aware edge bevel.
+// ===========================================================================
+//
+// Simpler counterpart to `bevelEdges` for meshes whose faces incident to the
+// beveled edges are arbitrary n-gons. The original `bevelEdges` was designed
+// for triangle topology (it relies on each face having a single "third"
+// vertex, fan-retriangulates the beveled face, and special-cases coplanar
+// triangle siblings). On quad-imported assets those assumptions break:
+// effectiveWidth picks the diagonal as the "third vertex" so the per-edge
+// width clamp is wrong, retriangulateBeveledFace emits fan triangles instead
+// of preserving the quad.
+//
+// This implementation handles ANY face arity ≥ 3 by treating each beveled
+// face's vertex loop as opaque. The algorithm per beveled edge (v1, v2):
+//
+//   1. Compute four "inner" vertices, each a perpendicular-in-face offset
+//      from one endpoint at distance w:
+//        innerV1_f1, innerV1_f2  (from v1 into f1, into f2)
+//        innerV2_f1, innerV2_f2  (from v2 into f1, into f2)
+//      The width w is clamped per-edge to 0.4 × (shortest perimeter edge
+//      of f1 or f2). Same clamp shape as the triangle bevel, just walking
+//      the actual face perimeter instead of guessing a "third vertex".
+//
+//   2. Replace f1's loop: substitute v1 → innerV1_f1, v2 → innerV2_f1,
+//      keep all other vertices in their original order. A triangle
+//      [v1, v2, x] becomes [innerV1_f1, innerV2_f1, x] (still a triangle);
+//      a quad [v1, v2, x, y] becomes [innerV1_f1, innerV2_f1, x, y]
+//      (still a quad). Same for f2.
+//
+//   3. For each NEIGHBOR face g (other than f1, f2) that contains v1:
+//      v1 stays in place — neighbor faces aren't displaced. The chamfer
+//      strip below joins innerV1_f1 to innerV1_f2 across g's region.
+//
+//   4. Emit the chamfer strip:
+//        - One central quad per segment along the long edge:
+//          For segments=1: (innerV1_f1, innerV2_f1, innerV2_f2, innerV1_f2).
+//          For segments=N: subdivide along the cross-section using
+//          `profilePoints`.
+//        - Two corner triangles, one at each endpoint:
+//          (innerV1_f1, v1, innerV1_f2) and (innerV2_f2, v2, innerV2_f1).
+//          Winding chosen so the chamfer faces outward.
+//
+// MVP scope: isolated bevels only — input edges that share an endpoint with
+// another selected edge are rejected (matches existing bevel's "second
+// pass"). Profile / segments > 1 is also reserved for a future extension;
+// MVP emits a flat single-segment chamfer.
+std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
+    const std::vector<int>& edgeIndices,
+    float width,
+    int segments,
+    float profile,
+    const std::vector<float>& profilePointsIn)
+{
+    std::vector<int> newVertices;
+    if (edgeIndices.empty() || width <= 0.0f) return newVertices;
+    segments = std::clamp(segments, 1, 16);
+    profile = std::clamp(profile, 0.0f, 1.0f);
+
+    // Build per-intermediate profile point vector. For segments=N there are
+    // N-1 intermediate vertices between innerA (f1-side) and innerB (f2-side)
+    // at each endpoint. profilePoints[i] in [0,1] controls the bulge along
+    // the "outward" axis (toward the original endpoint v) for intermediate
+    // i: 0.5 = flat (no bulge), > 0.5 = convex toward v, < 0.5 = concave.
+    // When the caller supplies profilePointsIn of the right size we use it
+    // directly; otherwise synthesize from `profile` with a sin envelope.
+    std::vector<float> profilePoints;
+    if (segments > 1) {
+        profilePoints.resize(segments - 1, 0.5f);
+        if (profilePointsIn.size() == static_cast<size_t>(segments - 1)) {
+            for (size_t i = 0; i < profilePoints.size(); ++i)
+                profilePoints[i] = std::clamp(profilePointsIn[i], 0.0f, 1.0f);
+        } else {
+            constexpr float kPi = 3.14159265358979323846f;
+            const float amp = profile - 0.5f;
+            for (int i = 1; i < segments; ++i) {
+                const float t = static_cast<float>(i)
+                              / static_cast<float>(segments);
+                profilePoints[i - 1] = 0.5f + amp * std::sin(kPi * t);
+            }
+        }
+    }
+
+    // ---- 1. Gather per-edge info, filter to interior manifold edges ----
+    struct EdgeInfo {
+        int edgeIdx;
+        int v1, v2;
+        int f1, f2;
+        int subMeshIndex;
+        std::vector<int> loopF1; // f1's vertex loop in winding order
+        std::vector<int> loopF2; // f2's vertex loop
+    };
+    std::vector<EdgeInfo> infos;
+    infos.reserve(edgeIndices.size());
+    std::unordered_set<int> seenEdges;
+    for (int ei : edgeIndices) {
+        if (ei < 0 || ei >= static_cast<int>(m_edges.size())) continue;
+        if (!seenEdges.insert(ei).second) continue;
+        if (m_edges[ei].halfEdge < 0) continue;
+        const auto [v1, v2] = edgeVertices(ei);
+        if (v1 < 0 || v2 < 0) continue;
+        const auto [f1, f2] = edgeFaces(ei);
+        if (f1 < 0 || f2 < 0) continue; // boundary
+        const auto loopF1 = faceVertices(f1);
+        const auto loopF2 = faceVertices(f2);
+        if (loopF1.size() < 3 || loopF2.size() < 3) continue;
+        EdgeInfo info;
+        info.edgeIdx = ei;
+        info.v1 = v1; info.v2 = v2;
+        info.f1 = f1; info.f2 = f2;
+        info.subMeshIndex = m_faces[f1].subMeshIndex;
+        info.loopF1 = loopF1;
+        info.loopF2 = loopF2;
+        infos.push_back(std::move(info));
+    }
+    if (infos.empty()) return newVertices;
+
+    // ---- 2. Reject chained selections (sharing endpoints) ----
+    std::map<int, int> vertexUseCount;
+    for (const auto& info : infos) {
+        vertexUseCount[info.v1]++;
+        vertexUseCount[info.v2]++;
+    }
+    std::vector<EdgeInfo> clean;
+    clean.reserve(infos.size());
+    for (const auto& info : infos) {
+        if (vertexUseCount[info.v1] == 1 && vertexUseCount[info.v2] == 1)
+            clean.push_back(info);
+    }
+    if (clean.empty()) return newVertices;
+
+    // ---- 3. Per-edge effective width: clamp to 0.4× shortest face edge ----
+    auto edgeLen = [this](int va, int vb) {
+        return (m_vertices[vb].position - m_vertices[va].position).length();
+    };
+    auto effectiveWidth = [&](const EdgeInfo& info) {
+        float shortest = edgeLen(info.v1, info.v2);
+        auto walkLoop = [&](const std::vector<int>& loop) {
+            const int n = static_cast<int>(loop.size());
+            for (int i = 0; i < n; ++i) {
+                shortest = std::min(shortest, edgeLen(loop[i], loop[(i + 1) % n]));
+            }
+        };
+        walkLoop(info.loopF1);
+        walkLoop(info.loopF2);
+        const float cap = shortest * 0.4f;
+        return std::min(width, cap);
+    };
+
+    // ---- 4. Helper: perpendicular-in-face inward direction at v, in
+    //         face's plane, perpendicular to edge (v, otherEndpoint). ----
+    auto faceInwardDir = [this](int faceIdx, int v, int otherEndpoint) -> Ogre::Vector3 {
+        // Newell normal of the face.
+        const auto loop = faceVertices(faceIdx);
+        Ogre::Vector3 nrm = Ogre::Vector3::ZERO;
+        for (size_t i = 0; i < loop.size(); ++i) {
+            const auto& a = m_vertices[loop[i]].position;
+            const auto& b = m_vertices[loop[(i + 1) % loop.size()]].position;
+            nrm.x += (a.y - b.y) * (a.z + b.z);
+            nrm.y += (a.z - b.z) * (a.x + b.x);
+            nrm.z += (a.x - b.x) * (a.y + b.y);
+        }
+        if (nrm.length() < 1e-8f) return Ogre::Vector3::ZERO;
+        nrm.normalise();
+        // Edge direction (v → otherEndpoint).
+        Ogre::Vector3 edge = m_vertices[otherEndpoint].position - m_vertices[v].position;
+        if (edge.length() < 1e-8f) return Ogre::Vector3::ZERO;
+        edge.normalise();
+        // Inward = normal × edge (perpendicular to edge, in face plane,
+        // pointing into the face's interior assuming CCW winding).
+        Ogre::Vector3 inward = nrm.crossProduct(edge);
+        if (inward.length() < 1e-8f) return Ogre::Vector3::ZERO;
+        inward.normalise();
+        return inward;
+    };
+
+    // ---- 5. Per-edge: create inner vertices, replace adjacent faces,
+    //         emit chamfer + corners. Process one edge at a time and rebuild
+    //         the HE between iterations so subsequent edges see consistent
+    //         topology. (O(|HE|) per edge — fine for typical interactive
+    //         selections.)
+    auto retireFace = [this](int fIdx) {
+        if (fIdx < 0 || fIdx >= static_cast<int>(m_faces.size())) return;
+        const int startHE = m_faces[fIdx].halfEdge;
+        if (startHE < 0) return;
+        int he = startHE;
+        do {
+            const int next = m_halfEdges[he].next;
+            m_halfEdges[he].face = -1;
+            he = next;
+        } while (he != startHE && he >= 0);
+        m_faces[fIdx].halfEdge = -1;
+    };
+
+    auto appendInnerVertex = [&](int sourceVert, const Ogre::Vector3& pos) {
+        HEVertex nv = m_vertices[sourceVert];
+        nv.position = pos;
+        nv.halfEdge = -1;
+        const int idx = static_cast<int>(m_vertices.size());
+        m_vertices.push_back(std::move(nv));
+        newVertices.push_back(idx);
+        return idx;
+    };
+
+    for (auto info : clean) {
+        // Re-resolve the edge by vertex pair against the LIVE mesh.
+        // Previous iterations may have:
+        //   - retired the captured edge index (face replacement adds
+        //     new edges, rebuildEdgesAndTwins reorders),
+        //   - retired the captured face indices (appendFace's slot
+        //     allocation may now hold a different face).
+        // Vertex indices are append-only and stable, so look up the
+        // edge by (v1, v2) every time.
+        int liveEdge = -1;
+        for (size_t e = 0; e < m_edges.size(); ++e) {
+            if (m_edges[e].halfEdge < 0) continue;
+            const auto [a, b] = edgeVertices(static_cast<int>(e));
+            if ((a == info.v1 && b == info.v2)
+                || (a == info.v2 && b == info.v1)) {
+                liveEdge = static_cast<int>(e);
+                break;
+            }
+        }
+        if (liveEdge < 0) continue;
+        info.edgeIdx = liveEdge;
+        const auto [liveF1, liveF2] = edgeFaces(liveEdge);
+        if (liveF1 < 0 || liveF2 < 0) continue; // boundary now
+        info.f1 = liveF1;
+        info.f2 = liveF2;
+        info.subMeshIndex = m_faces[info.f1].subMeshIndex;
+
+        // Re-fetch loops in case prior iterations changed them.
+        auto loopF1 = faceVertices(info.f1);
+        auto loopF2 = faceVertices(info.f2);
+        if (loopF1.size() < 3 || loopF2.size() < 3) continue;
+        info.loopF1 = loopF1;
+        info.loopF2 = loopF2;
+
+        const float w = effectiveWidth(info);
+        if (w < 1e-6f) continue;
+
+        // Compute inner positions.
+        const Ogre::Vector3 dirV1F1 = faceInwardDir(info.f1, info.v1, info.v2);
+        const Ogre::Vector3 dirV2F1 = faceInwardDir(info.f1, info.v2, info.v1);
+        const Ogre::Vector3 dirV1F2 = faceInwardDir(info.f2, info.v1, info.v2);
+        const Ogre::Vector3 dirV2F2 = faceInwardDir(info.f2, info.v2, info.v1);
+        if (dirV1F1.length() < 0.5f || dirV2F1.length() < 0.5f ||
+            dirV1F2.length() < 0.5f || dirV2F2.length() < 0.5f) continue;
+
+        const int innerV1F1 = appendInnerVertex(info.v1,
+            m_vertices[info.v1].position + dirV1F1 * w);
+        const int innerV2F1 = appendInnerVertex(info.v2,
+            m_vertices[info.v2].position + dirV2F1 * w);
+        const int innerV1F2 = appendInnerVertex(info.v1,
+            m_vertices[info.v1].position + dirV1F2 * w);
+        const int innerV2F2 = appendInnerVertex(info.v2,
+            m_vertices[info.v2].position + dirV2F2 * w);
+
+        // Replace f1's loop: substitute v1 → innerV1F1, v2 → innerV2F1.
+        std::vector<int> newLoopF1;
+        newLoopF1.reserve(loopF1.size());
+        for (int v : loopF1) {
+            if (v == info.v1) newLoopF1.push_back(innerV1F1);
+            else if (v == info.v2) newLoopF1.push_back(innerV2F1);
+            else newLoopF1.push_back(v);
+        }
+
+        // Replace f2's loop similarly.
+        std::vector<int> newLoopF2;
+        newLoopF2.reserve(loopF2.size());
+        for (int v : loopF2) {
+            if (v == info.v1) newLoopF2.push_back(innerV1F2);
+            else if (v == info.v2) newLoopF2.push_back(innerV2F2);
+            else newLoopF2.push_back(v);
+        }
+
+        // Find the f1-side and f2-side neighbors of v1 and v2 BEFORE we
+        // retire the original f1/f2. These tell us how to splice the
+        // chain into each neighbor face.
+        auto findAdjacentInLoop = [](const std::vector<int>& loop,
+                                     int target) -> std::pair<int,int> {
+            // Returns (prev, next) vertex of `target` in the loop's
+            // winding order, or {-1, -1} if not found.
+            const int n = static_cast<int>(loop.size());
+            for (int i = 0; i < n; ++i) {
+                if (loop[i] == target) {
+                    return { loop[(i + n - 1) % n], loop[(i + 1) % n] };
+                }
+            }
+            return { -1, -1 };
+        };
+        const auto [prevV1F1, nextV1F1] = findAdjacentInLoop(loopF1, info.v1);
+        const auto [prevV1F2, nextV1F2] = findAdjacentInLoop(loopF2, info.v1);
+        const auto [prevV2F1, nextV2F1] = findAdjacentInLoop(loopF1, info.v2);
+        const auto [prevV2F2, nextV2F2] = findAdjacentInLoop(loopF2, info.v2);
+        // The "non-edge neighbor" of v1 in f1 is whichever of prev/next
+        // ISN'T v2 (since the v1-v2 edge is the beveled one).
+        auto nonEdgeNeighbor = [](int prev, int next, int otherEnd) {
+            return (prev == otherEnd) ? next : prev;
+        };
+        const int v1F1NonEdge = nonEdgeNeighbor(prevV1F1, nextV1F1, info.v2);
+        const int v1F2NonEdge = nonEdgeNeighbor(prevV1F2, nextV1F2, info.v2);
+        const int v2F1NonEdge = nonEdgeNeighbor(prevV2F1, nextV2F1, info.v1);
+        const int v2F2NonEdge = nonEdgeNeighbor(prevV2F2, nextV2F2, info.v1);
+
+        // Collect ALL neighbor faces of v1 and v2 (those that contain
+        // v1 or v2 but aren't f1 or f2). We splice the bevel chain into
+        // each so the manifold stays closed at higher-valence vertices.
+        std::set<int> neighborFaces;
+        for (int f : facesAroundVertex(info.v1)) {
+            if (f != info.f1 && f != info.f2) neighborFaces.insert(f);
+        }
+        for (int f : facesAroundVertex(info.v2)) {
+            if (f != info.f1 && f != info.f2) neighborFaces.insert(f);
+        }
+
+        // Snapshot each neighbor's loop now (before retire), and
+        // compute the spliced loop.
+        struct NeighborRebuild {
+            int oldFace;
+            int subIdx;
+            std::vector<int> newLoop;
+        };
+        std::vector<NeighborRebuild> neighborRebuilds;
+        for (int g : neighborFaces) {
+            const auto loopG = faceVertices(g);
+            std::vector<int> spliced;
+            spliced.reserve(loopG.size() + 2);
+            for (size_t i = 0; i < loopG.size(); ++i) {
+                const int cur = loopG[i];
+                const int next = loopG[(i + 1) % loopG.size()];
+                spliced.push_back(cur);
+
+                // Splice points: when an outgoing edge (cur, next) is
+                // a v-edge of v1 or v2 that's shared with f1 or f2,
+                // insert the corresponding inner vertex between cur
+                // and next.
+                //
+                // For v1: if (cur, next) == (v1, v1F1NonEdge) or
+                // (v1F1NonEdge, v1) — i.e., the edge between v1 and
+                // its f1-side non-edge neighbor — insert innerV1F1
+                // adjacent to v1 on the v1F1NonEdge side.
+                auto check = [&](int v, int innerSide, int sideNeighbor) {
+                    // Edge (cur, next) is the (v, sideNeighbor) edge.
+                    // Splice direction: if cur == v, then innerSide goes
+                    // BETWEEN cur and next (after cur). If next == v,
+                    // innerSide goes BEFORE next (after cur, before
+                    // next when we get to the next iteration). For
+                    // simplicity always insert on cur's side: if cur
+                    // is v and next is sideNeighbor, push innerSide
+                    // right now. If cur is sideNeighbor and next is v,
+                    // also push innerSide right now (so the order is
+                    // sideNeighbor, innerSide, v).
+                    if (sideNeighbor < 0) return false;
+                    if ((cur == v && next == sideNeighbor)
+                        || (cur == sideNeighbor && next == v)) {
+                        spliced.push_back(innerSide);
+                        return true;
+                    }
+                    return false;
+                };
+                if (check(info.v1, innerV1F1, v1F1NonEdge)) {}
+                else if (check(info.v1, innerV1F2, v1F2NonEdge)) {}
+                else if (check(info.v2, innerV2F1, v2F1NonEdge)) {}
+                else if (check(info.v2, innerV2F2, v2F2NonEdge)) {}
+            }
+            // Drop consecutive duplicates if any (defensive).
+            std::vector<int> dedup;
+            dedup.reserve(spliced.size());
+            for (int x : spliced) {
+                if (!dedup.empty() && dedup.back() == x) continue;
+                dedup.push_back(x);
+            }
+            if (!dedup.empty() && dedup.front() == dedup.back())
+                dedup.pop_back();
+            if (dedup.size() < 3) continue;
+            neighborRebuilds.push_back({g, m_faces[g].subMeshIndex, std::move(dedup)});
+        }
+
+        retireFace(info.f1);
+        retireFace(info.f2);
+        appendFace(newLoopF1, info.subMeshIndex);
+        appendFace(newLoopF2, info.subMeshIndex);
+        for (const auto& nr : neighborRebuilds) {
+            retireFace(nr.oldFace);
+            appendFace(nr.newLoop, nr.subIdx);
+        }
+
+        // Chamfer strip + corner caps. Winding: pick whichever order
+        // matches f1's winding direction across the beveled edge so the
+        // chamfer faces outward consistently. f1 has v1→v2 in some
+        // direction; the chamfer should bridge from f1's side
+        // (innerV2F1, innerV1F1) outward to f2's side (innerV1F2,
+        // innerV2F2).
+        //
+        // Determine direction: walk f1's loop and check whether v1
+        // immediately precedes v2 (CCW-from-f1) or v2 precedes v1.
+        bool f1WalksV1ToV2 = false;
+        for (size_t i = 0; i < loopF1.size(); ++i) {
+            if (loopF1[i] == info.v1
+                && loopF1[(i + 1) % loopF1.size()] == info.v2) {
+                f1WalksV1ToV2 = true; break;
+            }
+        }
+
+        // Build the per-endpoint chain of intermediate vertices. At each
+        // endpoint v, the chain runs from f1-side innerVF1 to f2-side
+        // innerVF2 via segments-1 intermediates. For segments=1 the
+        // chain is just [innerVF1, innerVF2].
+        //
+        // Intermediate i (i ∈ [1, segments-1]): linear blend along the
+        // chord innerVF1→innerVF2, plus a bulge along the "outward"
+        // axis (toward v's original position, projected perpendicular
+        // to the chord) controlled by profilePoints[i-1].
+        auto buildChain = [&](int v, int innerVF1, int innerVF2) {
+            std::vector<int> chain;
+            chain.reserve(segments + 1);
+            chain.push_back(innerVF1);
+            if (segments > 1) {
+                const auto& pA = m_vertices[innerVF1].position;
+                const auto& pB = m_vertices[innerVF2].position;
+                const auto& pV = m_vertices[v].position;
+                const Ogre::Vector3 chord = pB - pA;
+                Ogre::Vector3 outward = pV - (pA + pB) * 0.5f;
+                if (const float c2 = chord.squaredLength(); c2 > 1e-12f)
+                    outward -= chord * (outward.dotProduct(chord) / c2);
+                if (outward.length() > 1e-6f) outward.normalise();
+                else                          outward = Ogre::Vector3::ZERO;
+                for (int i = 1; i < segments; ++i) {
+                    const float t = static_cast<float>(i)
+                                  / static_cast<float>(segments);
+                    const float bulge = (profilePoints[i - 1] - 0.5f) * w;
+                    const Ogre::Vector3 pos = pA + chord * t + outward * bulge;
+                    HEVertex nv = m_vertices[v];
+                    nv.position = pos;
+                    nv.halfEdge = -1;
+                    const int idx = static_cast<int>(m_vertices.size());
+                    m_vertices.push_back(std::move(nv));
+                    newVertices.push_back(idx);
+                    chain.push_back(idx);
+                }
+            }
+            chain.push_back(innerVF2);
+            return chain;
+        };
+        const std::vector<int> chainV1 = buildChain(info.v1, innerV1F1, innerV1F2);
+        const std::vector<int> chainV2 = buildChain(info.v2, innerV2F1, innerV2F2);
+
+        // Chamfer strip: N quads bridging v1's chain to v2's chain.
+        // Winding matches the chamfer single-quad case extended per
+        // segment. f2's twin orientation already gives the right CCW
+        // — we just walk consecutive pairs along both chains.
+        for (int i = 0; i < segments; ++i) {
+            const int aV1 = chainV1[i];
+            const int bV1 = chainV1[i + 1];
+            const int aV2 = chainV2[i];
+            const int bV2 = chainV2[i + 1];
+            // f1WalksV1ToV2 selects the segment quad's CCW orientation.
+            std::vector<int> seg;
+            if (f1WalksV1ToV2) {
+                // f1 walks v1 → v2, so this segment's "f1-side" edge runs
+                // v1 → v2 (in chain coords: aV1 → aV2). Outer-CCW: aV2 →
+                // aV1 → bV1 → bV2.
+                seg = { aV2, aV1, bV1, bV2 };
+            } else {
+                seg = { aV1, aV2, bV2, bV1 };
+            }
+            appendFace(seg, info.subMeshIndex);
+        }
+
+        // Corner fans at v1 and v2 — ALWAYS emitted (Codex P1: previous
+        // "skip caps when v has neighbors" optimization left chamfer
+        // side-edges as boundaries since the spliced neighbor faces
+        // don't include the (innerVF1, innerVF2) edge).
+        //
+        // Winding: cap is the *outward* face of the corner. Walking
+        // a CCW neighbor splice produces edges (innerVF2, v) and
+        // (v, innerVF1) on the f1WalksV1ToV2 case. The cap must
+        // traverse those edges in the opposite direction to match as
+        // twins, so the cap walks (v, innerVF2, innerVF1) — same
+        // information as the previous winding but the v vertex sits
+        // FIRST so the edges walk away from v in the cap.
+        for (int i = 0; i < segments; ++i) {
+            const int aV1 = chainV1[i];      // f1-side
+            const int bV1 = chainV1[i + 1];  // f2-side
+            const int aV2 = chainV2[i];
+            const int bV2 = chainV2[i + 1];
+            if (f1WalksV1ToV2) {
+                // v1 cap: walk v1 → bV1(f2-side) → aV1(f1-side). The
+                // splice into Left contains edges (v1 → aV1) and
+                // (bV1 → v1), so the cap's reversed (v1 → bV1) and
+                // (aV1 → v1) match as twins.
+                appendFace({info.v1, bV1, aV1}, info.subMeshIndex);
+                appendFace({info.v2, aV2, bV2}, info.subMeshIndex);
+            } else {
+                appendFace({info.v1, aV1, bV1}, info.subMeshIndex);
+                appendFace({info.v2, bV2, aV2}, info.subMeshIndex);
+            }
+        }
+
+        // Rebuild incrementally per edge so subsequent iterations see a
+        // consistent topology. This is O(|HE|) per bevel — fine for
+        // interactive selections (tens of edges).
+        rebuildEdgesAndTwins();
+        compactBoundaryHalfEdges();
+        buildBoundaryHalfEdges();
+        fixVertexHalfEdges();
+    }
+
+    return newVertices;
+}
+
+// ===========================================================================
+// bevelVerticesNgon — n-gon-aware corner cut at each selected vertex.
+// ===========================================================================
+//
+// Simpler counterpart to `bevelVertices` for meshes whose incident faces are
+// arbitrary n-gons. The original `bevelVertices` is a 700+-line function
+// with deep triangle assumptions (`fv.size() != 3` checks throughout). This
+// implementation:
+//
+//   1. For each vertex v of valence ≥ 3, walks v's face ring (using the
+//      same `facesAroundVertex` accessor every other op uses).
+//   2. For each incident face f, creates an "inner" vertex o_f at distance
+//      `width` from v along the direction (centroid_of_f - v). This works
+//      for any face arity and avoids the triangle-only "two edge offsets
+//      per face" trick.
+//   3. Replaces each incident face f's loop: substitute v → o_f. Triangles
+//      stay triangles, quads stay quads — the only change is one corner
+//      moves inward.
+//   4. Caps with a single n-gon face (one cap vertex per incident face)
+//      walking the o_f sequence in ring order.
+//
+// MVP scope: flat single-segment cap, isolated bevels, valence ≥ 3,
+// non-boundary vertices only. Same shape limits as bevelEdgesNgon.
+std::vector<int> HalfEdgeMesh::bevelVerticesNgon(
+    const std::vector<int>& vertexIndices,
+    float width,
+    int /*segments*/,
+    float /*profile*/,
+    const std::vector<float>& /*profilePoints*/)
+{
+    std::vector<int> newVertices;
+    if (vertexIndices.empty() || width <= 0.0f) return newVertices;
+
+    // Process vertices sequentially, rebuilding the HE between each.
+    // Same pattern as the triangle bevel + the n-gon edge bevel above.
+    std::set<int> processed;
+    for (int v : vertexIndices) {
+        if (!processed.insert(v).second) continue;
+        if (v < 0 || v >= static_cast<int>(m_vertices.size())) continue;
+        if (m_vertices[v].halfEdge < 0) continue;
+        if (isVertexBoundary(v)) continue;
+
+        const auto incident = facesAroundVertex(v);
+        if (incident.size() < 3) continue;
+
+        // All incident faces must share a submesh — otherwise the new
+        // cap would silently fuse material groups.
+        const int subIdx = m_faces[incident.front()].subMeshIndex;
+        bool sameSub = true;
+        for (int f : incident) {
+            if (m_faces[f].subMeshIndex != subIdx) { sameSub = false; break; }
+        }
+        if (!sameSub) continue;
+
+        // Per-vertex effective width: clamp to half the shortest edge
+        // incident to v. Walking each incident face's perimeter and
+        // finding edges adjacent to v.
+        float shortestIncident = std::numeric_limits<float>::max();
+        for (int f : incident) {
+            const auto loop = faceVertices(f);
+            for (size_t i = 0; i < loop.size(); ++i) {
+                if (loop[i] == v) {
+                    const int prev = loop[(i + loop.size() - 1) % loop.size()];
+                    const int next = loop[(i + 1) % loop.size()];
+                    const float lp = (m_vertices[prev].position
+                                      - m_vertices[v].position).length();
+                    const float ln = (m_vertices[next].position
+                                      - m_vertices[v].position).length();
+                    shortestIncident = std::min(shortestIncident, lp);
+                    shortestIncident = std::min(shortestIncident, ln);
+                }
+            }
+        }
+        if (shortestIncident < 1e-6f) continue;
+        const float w = std::min(width, shortestIncident * 0.49f);
+
+        // Validate every incident face FIRST (compute and stash each
+        // inner-vertex position), only commit the new vertices after
+        // the whole vertex passes validation. Without this two-phase
+        // approach, a partial failure mid-loop would leave orphan
+        // vertices in m_vertices and report them in `newVertices`,
+        // making callers think the bevel succeeded while topology
+        // is unchanged. (Codex P2 review.)
+        std::vector<Ogre::Vector3> innerPositions;
+        innerPositions.reserve(incident.size());
+        bool ok = true;
+        for (int f : incident) {
+            const auto loop = faceVertices(f);
+            if (loop.size() < 3) { ok = false; break; }
+            Ogre::Vector3 centroid = Ogre::Vector3::ZERO;
+            for (int x : loop) centroid += m_vertices[x].position;
+            centroid /= static_cast<float>(loop.size());
+            Ogre::Vector3 dir = centroid - m_vertices[v].position;
+            if (dir.length() < 1e-6f) { ok = false; break; }
+            dir.normalise();
+            innerPositions.push_back(m_vertices[v].position + dir * w);
+        }
+        if (!ok || innerPositions.size() != incident.size()) continue;
+
+        // All faces validated — now actually create the inner vertices.
+        std::vector<int> innerVerts;
+        innerVerts.reserve(incident.size());
+        for (const auto& pos : innerPositions) {
+            HEVertex nv = m_vertices[v];
+            nv.position = pos;
+            nv.halfEdge = -1;
+            const int idx = static_cast<int>(m_vertices.size());
+            m_vertices.push_back(std::move(nv));
+            newVertices.push_back(idx);
+            innerVerts.push_back(idx);
+        }
+
+        // Build a face → innerVert mapping for the substitution step.
+        std::map<int, int> faceToInner;
+        for (size_t k = 0; k < incident.size(); ++k) {
+            faceToInner[incident[k]] = innerVerts[k];
+        }
+
+        // Replace each incident face's loop: substitute v → o_f.
+        std::vector<std::pair<int, std::vector<int>>> replacements;
+        replacements.reserve(incident.size());
+        for (int f : incident) {
+            const auto loop = faceVertices(f);
+            std::vector<int> newLoop;
+            newLoop.reserve(loop.size());
+            for (int x : loop) {
+                if (x == v) newLoop.push_back(faceToInner[f]);
+                else newLoop.push_back(x);
+            }
+            replacements.push_back({f, std::move(newLoop)});
+        }
+
+        // Retire old faces, append replacements + cap.
+        auto retireFaceLocal = [this](int fIdx) {
+            const int startHE = m_faces[fIdx].halfEdge;
+            if (startHE < 0) return;
+            int he = startHE;
+            do {
+                const int next = m_halfEdges[he].next;
+                m_halfEdges[he].face = -1;
+                he = next;
+            } while (he != startHE && he >= 0);
+            m_faces[fIdx].halfEdge = -1;
+        };
+        for (int f : incident) retireFaceLocal(f);
+        for (const auto& [_, loop] : replacements) {
+            appendFace(loop, subIdx);
+        }
+        // Cap face: innerVerts in ring order.
+        appendFace(innerVerts, subIdx);
+
+        // Retire the original vertex slot.
+        m_vertices[v].halfEdge = -1;
+
+        rebuildEdgesAndTwins();
+        compactBoundaryHalfEdges();
+        buildBoundaryHalfEdges();
+        fixVertexHalfEdges();
+    }
+
+    return newVertices;
+}
+
+// ===========================================================================
 // bevelVertices — corner cut at each selected vertex.
 // ===========================================================================
 //
-// For each vertex v of valence N >= 3:
+// IMPORTANT: this is the TRIANGLE-ONLY vertex bevel. Like the triangle-
+// only edge bevel above, it assumes incident faces are triangles and
+// uses the "two edge offsets per face" trick to retriangulate. On
+// quad-imported meshes its assumptions break — controllers should
+// dispatch to `bevelVerticesNgon` (above) when the input mesh has
+// n-gon canonical faces. See `EditModeController::applyBevelVertexTopology`
+// for the actual dispatch.
+//
+// Algorithm (kept here for reference):
 //   1. Walk v's face ring, collecting the ring-ordered sequence of incident
 //      faces and their half-edges. Skip boundary verts for the MVP.
 //   2. For each outgoing edge v->x_i (i = 0..N-1), create a new vertex o_i
@@ -2937,9 +3634,9 @@ std::vector<int> HalfEdgeMesh::bevelEdges(const std::vector<int>& edgeIndices, /
 //   4. Emit a new "cap" face using all o_i in ring order. Valence 3 gives
 //      a single triangle, higher valence an N-gon fanned from o_0.
 //
-// This MVP emits a flat cap (segments=1). Shaped profiles and segments>1
-// are TODO (rounded dome). Unused params are accepted for forward
-// compatibility with the edge-bevel API.
+// Triangle-only bevel features kept here: shaped profiles, segments > 1
+// (rounded dome), crease detection. The n-gon variant is currently a
+// flat single-segment MVP.
 std::vector<int> HalfEdgeMesh::bevelVertices(
     const std::vector<int>& vertexIndices,
     float width,
