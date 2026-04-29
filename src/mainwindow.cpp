@@ -172,11 +172,21 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::updateEditModeIndicator);
     updateEditModeIndicator();
 
-    // Surface edit-mode hint messages (e.g. "Loop cut needs a quad mesh") in
-    // the status bar for ~5s.
+    // Surface edit-mode hint messages (e.g. "Loop cut needs a quad mesh")
+    // via a dedicated permanent label. The status bar's main message slot
+    // is rewritten every frame by frameEnded(), so showMessage() lasted
+    // ~16ms in practice. This label persists for 5s via QTimer::singleShot.
+    m_editHintLabel = new QLabel(this);
+    m_editHintLabel->setStyleSheet(
+        "QLabel { color: #ffaa33; font-style: italic; padding: 2px 8px; }");
+    m_editHintLabel->setVisible(false);
+    statusBar()->addPermanentWidget(m_editHintLabel);
     connect(EditModeController::instance(), &EditModeController::editHintMessage,
             this, [this](const QString& msg) {
-                statusBar()->showMessage(msg, 5000);
+                m_editHintLabel->setText(msg);
+                m_editHintLabel->setVisible(true);
+                QTimer::singleShot(5000, m_editHintLabel,
+                    [this]() { m_editHintLabel->setVisible(false); });
             });
 
     // Auto-start MCP HTTP server if enabled in settings
@@ -1581,11 +1591,15 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
             if (editCtrl->isEditModeActive()
                 && editCtrl->selectionMode() == EditModeController::EdgeMode
                 && editCtrl->selectedEdgeCount() > 0) {
-                if (editCtrl->loopCutSelection() > 0) {
-                    SentryReporter::addBreadcrumb("ui.shortcut", "Ctrl+R — Loop Cut");
-                    event->accept();
-                    return;
-                }
+                // Always consume Ctrl+R when loop cut is the active
+                // shortcut — even when the op short-circuits (e.g. tri
+                // mesh). Falling through to Scale would silently switch
+                // tools mid-loop-cut, which is what the user actually
+                // pressed but isn't what they meant.
+                editCtrl->loopCutSelection();
+                SentryReporter::addBreadcrumb("ui.shortcut", "Ctrl+R — Loop Cut");
+                event->accept();
+                return;
             }
         }
         SentryReporter::addBreadcrumb("ui.shortcut", "R — Scale mode");
