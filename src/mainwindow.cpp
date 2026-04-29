@@ -162,6 +162,13 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::updateEditModeIndicator);
     updateEditModeIndicator();
 
+    // Surface edit-mode hint messages (e.g. "Loop cut needs a quad mesh") in
+    // the status bar for ~5s.
+    connect(EditModeController::instance(), &EditModeController::editHintMessage,
+            this, [this](const QString& msg) {
+                statusBar()->showMessage(msg, 5000);
+            });
+
     // Auto-start MCP HTTP server if enabled in settings
     QSettings mcpSettings;
     bool mcpEnabled = mcpSettings.value("MCP/enabled", false).toBool();
@@ -799,15 +806,29 @@ void MainWindow::initToolBar()
     });
     QAction* loopCutAction = ui->objectsToolbar->addWidget(loopCutButton);
 
+    // Convert to Quads: walks the mesh and merges coplanar adjacent
+    // triangle pairs into n-gon quads. Useful when an imported tri
+    // mesh blocks loop cut / n-gon-aware bevel.
+    auto convertToQuadsButton = new QToolButton(ui->objectsToolbar);
+    convertToQuadsButton->setText(QStringLiteral("\u25A6"));  // ▦ — "tessellated/quad grid"
+    convertToQuadsButton->setToolTip(tr("Convert to Quads — merge coplanar triangle pairs into quads"));
+    convertToQuadsButton->setFont(topoFont);
+    convertToQuadsButton->setStyleSheet(topoBtnStyle);
+    connect(convertToQuadsButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Convert to Quads");
+        EditModeController::instance()->convertToQuads();
+    });
+    QAction* convertToQuadsAction = ui->objectsToolbar->addWidget(convertToQuadsButton);
+
     // Context-aware visibility + enabled:
     //  - Hidden entirely when NOT in edit mode.
     //  - In edit mode: stay visible but only enable when the current
     //    mode matches AND the relevant element type actually has a
     //    non-empty selection.
     auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton, deleteButton,
-                               subdivideButton, fillButton, loopCutButton,
+                               subdivideButton, fillButton, loopCutButton, convertToQuadsButton,
                                extrudeAction, bevelAction, knifeAction, mergeAction, deleteAction,
-                               subdivideAction, fillAction, loopCutAction]() {
+                               subdivideAction, fillAction, loopCutAction, convertToQuadsAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
@@ -818,6 +839,7 @@ void MainWindow::initToolBar()
         subdivideAction->setVisible(active);
         fillAction->setVisible(active);
         loopCutAction->setVisible(active);
+        convertToQuadsAction->setVisible(active);
         if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
         const bool hasFaces = c->selectedFaceCount() > 0;
@@ -850,6 +872,9 @@ void MainWindow::initToolBar()
         // uses the first selected edge as the start; multi-edge loop
         // cuts aren't in scope for the MVP.
         loopCutButton->setEnabled(mode == 1 && hasEdges);
+        // Convert to Quads: whole-mesh; disable once the mesh already
+        // has n-gon canonical faces (no work to do).
+        convertToQuadsButton->setEnabled(!c->isMeshQuadBased());
     };
     refreshTopoButtons();
     connect(editCtrlForTopo, &EditModeController::editModeChanged,
@@ -857,6 +882,11 @@ void MainWindow::initToolBar()
     connect(editCtrlForTopo, &EditModeController::selectionModeChanged,
             this, refreshTopoButtons);
     connect(editCtrlForTopo, &EditModeController::editSelectionChanged,
+            this, refreshTopoButtons);
+    // Mesh-data changes (extrude/bevel/convertToQuads/undo) flip the
+    // n-gon-vs-tri state — refresh so "Convert to Quads" disables once
+    // the mesh has been promoted.
+    connect(editCtrlForTopo, &EditModeController::meshDataChanged,
             this, refreshTopoButtons);
 
     connect(pAddCube,       SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createCube()));
