@@ -34,6 +34,7 @@ THE SOFTWARE.
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDebug>
+#include <QFile>
 #include <set>
 
 #include "OgreXML/OgreXMLMeshSerializer.h"
@@ -51,6 +52,8 @@ THE SOFTWARE.
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
 #include "CLIPipeline.h"
+#include <OgreMaterialManager.h>
+#include <OgreDataStream.h>
 
 #ifndef WIN32
     #include <unistd.h>
@@ -304,6 +307,28 @@ static void readSubmeshGeometry(
             const Ogre::Real* p;
             tcElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
             aiM->mTextureCoords[0][j] = aiVector3D(p[0], p[1], 0.0f);
+        }
+        vbuf->unlock();
+    }
+
+    // Read vertex colors (diffuse) into Assimp color set 0
+    const auto* colElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+    if (colElem)
+    {
+        aiM->mColors[0] = new aiColor4D[aiM->mNumVertices];
+        auto vbuf = vData->vertexBufferBinding->getBuffer(colElem->getSource());
+        auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+        {
+            const Ogre::RGBA* p;
+            colElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+            Ogre::ColourValue cv;
+            // Ogre's VET_COLOUR backing varies by render system; respect the declared element type.
+            if (colElem->getType() == Ogre::VET_COLOUR_ABGR)
+                cv.setAsABGR(*p);
+            else
+                cv.setAsARGB(*p);
+            aiM->mColors[0][j] = aiColor4D(cv.r, cv.g, cv.b, cv.a);
         }
         vbuf->unlock();
     }
@@ -949,6 +974,35 @@ static void ensureResourceGroup(const QString &path)
     }
 }
 
+static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
+{
+    // `.mesh` stores material names, but not the script definitions. If the
+    // corresponding `.material` isn't loaded, Ogre falls back to BaseWhite.
+    const QString sidecar = meshFile.path() + "/" + meshFile.baseName() + ".material";
+    QFile f(sidecar);
+    if (!f.exists() || !f.open(QIODevice::ReadOnly))
+        return;
+
+    const QByteArray bytes = f.readAll();
+    if (bytes.isEmpty())
+        return;
+
+    try {
+        Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+            (void*)bytes.constData(),
+            static_cast<size_t>(bytes.size()),
+            false));
+        const Ogre::String group = meshFile.path().toStdString();
+        Ogre::MaterialManager::getSingleton().parseScript(ds, group);
+        Ogre::ResourceGroupManager::getSingleton().initialiseResourceGroup(group);
+        SentryReporter::addBreadcrumb("file.import",
+            QStringLiteral("Loaded sidecar material: %1").arg(sidecar));
+    } catch (const Ogre::Exception& e) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "Warning: failed to parse sidecar .material: " + e.getFullDescription());
+    }
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
                                      QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
                                      int* outUpAxis)
@@ -967,6 +1021,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 
             if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
             {
+                tryLoadSidecarMaterialScript(file);
                 Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().load(
                     file.fileName().toStdString().data(),
                     file.path().toStdString().data());

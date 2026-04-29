@@ -1020,6 +1020,88 @@ private:
                 m_w.endNode(); // LayerElementUV
             }
 
+            // ── LayerElementColor (vertex colors) ──
+            const auto* colElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+            if (colElem)
+            {
+                std::vector<double> colors(vData->vertexCount * 4);
+                auto vbuf = vData->vertexBufferBinding->getBuffer(colElem->getSource());
+                auto* base = static_cast<const unsigned char*>(
+                    vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                for (size_t j = 0; j < vData->vertexCount; ++j)
+                {
+                    const Ogre::RGBA* p;
+                    colElem->baseVertexPointerToElement(
+                        const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+                    Ogre::ColourValue cv;
+                    if (colElem->getType() == Ogre::VET_COLOUR_ABGR)
+                        cv.setAsABGR(*p);
+                    else
+                        cv.setAsARGB(*p);
+                    colors[j * 4 + 0] = cv.r;
+                    colors[j * 4 + 1] = cv.g;
+                    colors[j * 4 + 2] = cv.b;
+                    colors[j * 4 + 3] = cv.a;
+                }
+                vbuf->unlock();
+
+                // Expand to per-polygon-vertex with reversed winding to match PolygonVertexIndex
+                std::vector<double> expandedColors;
+                if (iData && iData->indexCount > 0)
+                {
+                    expandedColors.resize(iData->indexCount * 4);
+                    auto ibuf = iData->indexBuffer;
+                    auto* ibase2 = static_cast<const unsigned char*>(
+                        ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                    bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
+                    for (size_t f = 0; f < iData->indexCount / 3; ++f)
+                    {
+                        uint32_t vi0 = use32
+                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 0]
+                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 0];
+                        uint32_t vi1 = use32
+                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 1]
+                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 1];
+                        uint32_t vi2 = use32
+                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 2]
+                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 2];
+
+                        // Reversed winding: (v0, v2, v1)
+                        size_t base = f * 12;
+                        auto copy = [&](size_t outVertex, uint32_t vi) {
+                            expandedColors[outVertex + 0] = colors[vi * 4 + 0];
+                            expandedColors[outVertex + 1] = colors[vi * 4 + 1];
+                            expandedColors[outVertex + 2] = colors[vi * 4 + 2];
+                            expandedColors[outVertex + 3] = colors[vi * 4 + 3];
+                        };
+                        copy(base + 0, vi0);
+                        copy(base + 4, vi2);
+                        copy(base + 8, vi1);
+                    }
+                    ibuf->unlock();
+                }
+                else
+                {
+                    expandedColors = colors;
+                }
+
+                m_w.beginNode("LayerElementColor");
+                m_w.writePropertyI(0);
+                m_w.endProperties();
+
+                m_w.beginNode("Version"); m_w.writePropertyI(101); m_w.endProperties(); m_w.endNodeLeaf();
+                m_w.beginNode("Name"); m_w.writePropertyS(""); m_w.endProperties(); m_w.endNodeLeaf();
+                m_w.beginNode("MappingInformationType"); m_w.writePropertyS("ByPolygonVertex"); m_w.endProperties(); m_w.endNodeLeaf();
+                m_w.beginNode("ReferenceInformationType"); m_w.writePropertyS("Direct"); m_w.endProperties(); m_w.endNodeLeaf();
+
+                m_w.beginNode("Colors");
+                m_w.writePropertyArrayD(expandedColors);
+                m_w.endProperties();
+                m_w.endNodeLeaf();
+
+                m_w.endNode(); // LayerElementColor
+            }
+
             // ── LayerElementMaterial ──
             {
                 // Each Model has exactly one material connected, so index is always 0
@@ -1062,6 +1144,14 @@ private:
                 m_w.beginNode("LayerElement");
                 m_w.endProperties();
                 m_w.beginNode("Type"); m_w.writePropertyS("LayerElementUV"); m_w.endProperties(); m_w.endNodeLeaf();
+                m_w.beginNode("TypedIndex"); m_w.writePropertyI(0); m_w.endProperties(); m_w.endNodeLeaf();
+                m_w.endNode();
+            }
+            if (colElem)
+            {
+                m_w.beginNode("LayerElement");
+                m_w.endProperties();
+                m_w.beginNode("Type"); m_w.writePropertyS("LayerElementColor"); m_w.endProperties(); m_w.endNodeLeaf();
                 m_w.beginNode("TypedIndex"); m_w.writePropertyI(0); m_w.endProperties(); m_w.endNodeLeaf();
                 m_w.endNode();
             }

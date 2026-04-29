@@ -1271,6 +1271,37 @@ TEST_F(FBXExporterCoverageTest, UVs_VFlipped) {
     cleanup(r);
 }
 
+TEST_F(FBXExporterCoverageTest, VertexColors_WritesLayerElementColor) {
+    auto meshPtr = createInMemoryTriangleMeshWithVertexColors("fbx_colors");
+    ASSERT_TRUE(!!meshPtr);
+    auto* node = Manager::getSingleton()->addSceneNode("fbx_colors_node");
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
+    ASSERT_NE(entity, nullptr);
+
+    auto r = exportAndParse(entity);
+    ASSERT_TRUE(r.success);
+
+    auto* objects = findTopLevel(r.nodes, "Objects");
+    auto geomNodes = objects->findAll("Geometry");
+    ASSERT_EQ(geomNodes.size(), 1u);
+
+    EXPECT_NE(geomNodes[0]->find("LayerElementColor"), nullptr);
+    auto* layer = geomNodes[0]->find("Layer");
+    ASSERT_NE(layer, nullptr);
+    bool hasColor = false;
+    for (const auto* le : layer->findAll("LayerElement")) {
+        auto* typeNode = le->find("Type");
+        if (typeNode && !typeNode->properties.empty()
+            && typeNode->properties[0].stringVal == "LayerElementColor") {
+            hasColor = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasColor);
+
+    cleanup(r);
+}
+
 TEST_F(FBXExporterCoverageTest, NoNormals_SkipsNormalLayer) {
     auto name = uniqueName("nonorm");
     auto* entity = createMeshNoNormalsNoUVs(name);
