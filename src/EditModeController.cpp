@@ -2487,8 +2487,17 @@ bool EditModeController::commitKnife()
     // submesh the cut touches. Tracked as a follow-up.
     EditableMesh triOnly;
     triOnly.subMeshes() = m_editableMesh->subMeshes();
-    for (auto& sub : triOnly.subMeshes())
+    // Remember which submeshes were originally n-gon-canonical
+    // (`!faces.empty()`) so we can restore them post-write-back. Without
+    // this, a knife on submesh 0 would convert every untouched submesh
+    // to fan triangles globally (since toEditableMesh writes back from
+    // the all-triangulated HE).
+    std::vector<bool> wasNGonSub;
+    wasNGonSub.reserve(triOnly.subMeshes().size());
+    for (auto& sub : triOnly.subMeshes()) {
+        wasNGonSub.push_back(!sub.faces.empty());
         sub.faces.clear();
+    }
     HalfEdgeMesh hm;
     if (!hm.buildFromEditableMesh(triOnly)) {
         cancelKnife();
@@ -2561,7 +2570,34 @@ bool EditModeController::commitKnife()
         cancelKnife();
         return false;
     }
-    m_editableMesh->subMeshes() = std::move(updated.subMeshes());
+
+    // Determine which submeshes the cut actually touched. A cut creates
+    // new vertices either at edge clicks or at interior crossings; each
+    // new vertex lives on faces in the submesh(es) it pierced.
+    // toEditableMesh writes EVERY submesh as triangle-only (since the
+    // HE was triangulated up-front), so without restoring untouched
+    // n-gon submeshes back from the original snapshot, a single knife
+    // op would silently convert unrelated submeshes to fan triangles.
+    // (Codex P1 review on this PR.)
+    std::set<int> touchedSubs;
+    for (int v : cutVerts) {
+        for (int f : hm.facesAroundVertex(v)) {
+            touchedSubs.insert(hm.face(f).subMeshIndex);
+        }
+    }
+    auto& outSubs = updated.subMeshes();
+    for (size_t s = 0;
+         s < outSubs.size() && s < originalSubMeshes.size() && s < wasNGonSub.size();
+         ++s) {
+        if (touchedSubs.count(static_cast<int>(s))) continue;
+        if (!wasNGonSub[s]) continue; // already triangle-only — nothing to restore
+        // Untouched + originally n-gon → restore the original submesh
+        // verbatim. resizeEntityBuffers consumes both `triangles` and
+        // bone assignments, so we want the full pre-cut state.
+        outSubs[s] = originalSubMeshes[s];
+    }
+
+    m_editableMesh->subMeshes() = std::move(outSubs);
     m_editableMesh->resizeEntityBuffers(m_editEntity);
 
     rewriteEntityAfterTopologyChange(m_editEntity);
