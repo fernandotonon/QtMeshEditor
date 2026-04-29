@@ -327,6 +327,28 @@ public:
                                 const std::vector<float>& profilePoints = {});
 
     /**
+     * @brief n-gon-aware edge bevel for meshes whose adjacent faces are
+     *        arbitrary polygons.
+     *
+     * Simpler counterpart to `bevelEdges` — handles any face arity ≥ 3
+     * by treating each beveled face's vertex loop as opaque. Use this
+     * when at least one face adjacent to a beveled edge is a quad or
+     * higher-arity n-gon; the triangle-only `bevelEdges` makes
+     * incorrect assumptions about "third vertex" in that case.
+     *
+     * MVP scope: isolated bevels only (input edges sharing endpoints
+     * are rejected); flat single-segment chamfer; `profile` and
+     * `profilePoints` are reserved for a future extension.
+     *
+     * @return Indices of the newly created vertices. Empty on failure.
+     */
+    std::vector<int> bevelEdgesNgon(const std::vector<int>& edgeIndices,
+                                    float width,
+                                    int segments = 1,
+                                    float profile = 0.5f,
+                                    const std::vector<float>& profilePoints = {});
+
+    /**
      * @brief Bevel selected vertices (corner cut).
      *
      * For each selected vertex v of valence N >= 3, replaces v with an

@@ -3107,6 +3107,142 @@ TEST(HalfEdgeMeshStandalone, BevelVertexSegmentsClampsOverUpperLimit) {
 }
 
 // ===========================================================================
+// bevelEdgesNgon — n-gon-aware edge bevel
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonOnQuadEdgeKeepsQuads) {
+    // Two adjacent quads sharing edge v1-v2. Bevel that shared edge.
+    // Expected output:
+    //   - 4 new "inner" vertices (innerV1F1, innerV2F1, innerV1F2, innerV2F2).
+    //   - The two original quads become quads with vMid replacements
+    //     (4-vertex faces still — same arity, just two corners moved).
+    //   - 1 new chamfer quad bridging f1 to f2.
+    //   - 2 corner-cap triangles, one at v1 and one at v2.
+    // Total active face count: 2 (modified quads) + 1 (chamfer) + 2 (caps) = 5.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1),
+                     mkV(2, 0), mkV(2, 1) };
+    EditableFace q1, q2;
+    q1.indices = {0, 1, 2, 3};
+    q2.indices = {1, 4, 5, 2};
+    sub.faces = { q1, q2 };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    ASSERT_EQ(he.faceCount(), 2u);
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    auto newVerts = he.bevelEdgesNgon({sharedEdge}, 0.1f);
+    EXPECT_EQ(newVerts.size(), 4u)
+        << "expected 4 inner vertices (2 per face × 2 endpoints)";
+    EXPECT_TRUE(he.validate());
+
+    // Active face count: 2 modified quads + 1 chamfer quad + 2 corner caps = 5.
+    int active = 0;
+    int quadCount = 0;
+    int triCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        const auto fv = he.faceVertices(static_cast<int>(f));
+        if (fv.size() == 4) ++quadCount;
+        if (fv.size() == 3) ++triCount;
+    }
+    EXPECT_EQ(active, 5);
+    EXPECT_EQ(quadCount, 3) << "2 modified original quads + 1 chamfer = 3";
+    EXPECT_EQ(triCount, 2) << "2 corner caps at v1 and v2";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonRejectsBoundaryEdge) {
+    // Boundary edges (single adjacent face) are skipped — same as the
+    // triangle-bevel MVP. No crash, no new vertices.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace q;
+    q.indices = {0, 1, 2, 3};
+    sub.faces = { q };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    const int boundary = findEdge(he, 0, 1);
+    ASSERT_GE(boundary, 0);
+    auto newVerts = he.bevelEdgesNgon({boundary}, 0.1f);
+    EXPECT_TRUE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonRejectsChainedSelection) {
+    // 4 quads in a + arrangement around a central vertex, so every
+    // selected edge is INTERIOR (not a boundary). Two edges chained
+    // through that center vertex must be skipped — chained bevels
+    // need ring-aware logic the MVP doesn't have.
+    //
+    //    v6 - v7 - v8
+    //    |    |    |
+    //    v3 - v4 - v5
+    //    |    |    |
+    //    v0 - v1 - v2
+    //
+    // Quads: (0,1,4,3), (1,2,5,4), (3,4,7,6), (4,5,8,7).
+    // The edges (1,4) and (4,5) share v4 (the center) and are both
+    // interior between quad pairs.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),
+        mkV(0, 2), mkV(1, 2), mkV(2, 2),
+    };
+    EditableFace qA, qB, qC, qD;
+    qA.indices = {0, 1, 4, 3};
+    qB.indices = {1, 2, 5, 4};
+    qC.indices = {3, 4, 7, 6};
+    qD.indices = {4, 5, 8, 7};
+    sub.faces = { qA, qB, qC, qD };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    const int eA = findEdge(he, 1, 4);  // interior between qA, qB
+    const int eB = findEdge(he, 4, 5);  // interior between qB, qD; shares v4
+    ASSERT_GE(eA, 0); ASSERT_GE(eB, 0);
+    auto newVerts = he.bevelEdgesNgon({eA, eB}, 0.05f);
+    EXPECT_TRUE(newVerts.empty())
+        << "chained selections (sharing an endpoint) are skipped in the MVP";
+    EXPECT_TRUE(he.validate());
+}
+
+// ===========================================================================
 // splitEdge / splitFace — knife-tool topology primitives
 // ===========================================================================
 
