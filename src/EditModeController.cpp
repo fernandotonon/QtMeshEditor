@@ -943,6 +943,57 @@ int EditModeController::hitTestVertex(const QPoint& screenPos,
     if (!node)
         return -1;
 
+    // Build the front-facing vertex set so we never snap to a vertex
+    // hidden behind a visible front-facing face. Mirrors the chunk-4b
+    // edge / face hit-test behaviour. A polygon is front-facing when
+    // its Newell normal (rotated into world space) points toward the
+    // camera; a vertex is front-facing iff at least one incident
+    // polygon does.
+    const Ogre::Vector3 camPos = camera->getDerivedPosition();
+    auto isPolygonFrontFacing = [&](const EditableSubMesh& sub,
+                                    const std::vector<unsigned int>& corners) -> bool {
+        if (corners.size() < 3) return false;
+        Ogre::Vector3 nrm = Ogre::Vector3::ZERO;
+        for (size_t i = 0; i < corners.size(); ++i) {
+            if (corners[i] >= sub.vertices.size()) return false;
+            const auto& a = sub.vertices[corners[i]].position;
+            const auto& b = sub.vertices[corners[(i + 1) % corners.size()]].position;
+            nrm.x += (a.y - b.y) * (a.z + b.z);
+            nrm.y += (a.z - b.z) * (a.x + b.x);
+            nrm.z += (a.x - b.x) * (a.y + b.y);
+        }
+        const Ogre::Vector3 worldNrm = node->_getDerivedOrientation() * nrm;
+        const Ogre::Vector3 anyCornerWorld =
+            node->convertLocalToWorldPosition(sub.vertices[corners[0]].position);
+        return worldNrm.dotProduct(camPos - anyCornerWorld) > 0.0f;
+    };
+    std::set<int> frontVerts;
+    {
+        int vertOffset = 0;
+        for (size_t si = 0; si < m_editableMesh->subMeshes().size(); ++si) {
+            const auto& sub = m_editableMesh->subMeshes()[si];
+            auto recordFrontPoly = [&](const std::vector<unsigned int>& corners) {
+                for (unsigned int c : corners)
+                    frontVerts.insert(vertOffset + static_cast<int>(c));
+            };
+            if (!sub.faces.empty()) {
+                for (const auto& face : sub.faces) {
+                    if (face.indices.size() < 3) continue;
+                    if (!isPolygonFrontFacing(sub, face.indices)) continue;
+                    recordFrontPoly(face.indices);
+                }
+            } else {
+                for (const auto& tri : sub.triangles) {
+                    std::vector<unsigned int> corners = {
+                        tri.indices[0], tri.indices[1], tri.indices[2] };
+                    if (!isPolygonFrontFacing(sub, corners)) continue;
+                    recordFrontPoly(corners);
+                }
+            }
+            vertOffset += static_cast<int>(sub.vertices.size());
+        }
+    }
+
     float bestDistSq = pixelRadius * pixelRadius;
     int bestIndex = -1;
     int globalOffset = 0;
@@ -951,6 +1002,9 @@ int EditModeController::hitTestVertex(const QPoint& screenPos,
         const auto& sub = m_editableMesh->subMeshes()[si];
         for (size_t vi = 0; vi < sub.vertices.size(); ++vi) {
             int globalIdx = globalOffset + static_cast<int>(vi);
+
+            // Skip back-face vertices: not in any front-facing polygon.
+            if (!frontVerts.count(globalIdx)) continue;
 
             // Transform from local space to world space
             Ogre::Vector3 worldPos = node->convertLocalToWorldPosition(sub.vertices[vi].position);
@@ -1807,8 +1861,27 @@ bool EditModeController::applyBevelTopology(
     if (edges.empty() || width <= 0.0f)
         return false;
 
+    // bevelEdges still carries triangle-only assumptions internally
+    // (effectiveWidth uses face "third vertex", retriangulateBeveledFace
+    // assumes a 3-vertex source face). On quad-imported meshes the
+    // result is a no-op or invisible chamfer — the bevel runs but the
+    // topology never produces visible new geometry. Workaround until a
+    // proper n-gon-aware bevel lands: build the HE from a triangle-mode
+    // copy (clear `.faces` so buildFromEditableMesh falls back to the
+    // fan-triangulated `.triangles` mirror), and restore untouched
+    // n-gon submeshes verbatim after `toEditableMesh` writes back.
+    // Same shape as the pre-#41 knife workaround.
+    EditableMesh triOnly;
+    triOnly.subMeshes() = m_editableMesh->subMeshes();
+    std::vector<bool> wasNGonSub;
+    wasNGonSub.reserve(triOnly.subMeshes().size());
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    for (auto& sub : triOnly.subMeshes()) {
+        wasNGonSub.push_back(!sub.faces.empty());
+        sub.faces.clear();
+    }
     HalfEdgeMesh heMesh;
-    if (!heMesh.buildFromEditableMesh(*m_editableMesh))
+    if (!heMesh.buildFromEditableMesh(triOnly))
         return false;
 
     // Convert (min,max) vertex-pair edges to HE edge indices.
@@ -1840,7 +1913,30 @@ bool EditModeController::applyBevelTopology(
     if (!heMesh.toEditableMesh(newMesh))
         return false;
 
-    m_editableMesh->subMeshes() = std::move(newMesh.subMeshes());
+    // Submesh-level restore: bring back any submesh that was originally
+    // n-gon-canonical and the bevel didn't actually touch. This avoids
+    // multi-submesh assets losing their quads on submeshes the bevel
+    // never reached. On a single-submesh asset the touched-set covers
+    // everything, so the touched submesh is fully triangulated — that's
+    // an accepted trade-off until a properly n-gon-aware bevel lands
+    // (the bevel HE algorithm itself still has triangle-only retri-
+    // angulation paths).
+    std::set<int> touchedSubs;
+    for (int v : newHEVertices) {
+        for (int f : heMesh.facesAroundVertex(v)) {
+            touchedSubs.insert(heMesh.face(f).subMeshIndex);
+        }
+    }
+    auto& outSubs = newMesh.subMeshes();
+    for (size_t s = 0;
+         s < outSubs.size() && s < originalSubMeshes.size() && s < wasNGonSub.size();
+         ++s) {
+        if (touchedSubs.count(static_cast<int>(s))) continue;
+        if (!wasNGonSub[s]) continue;
+        outSubs[s] = originalSubMeshes[s];
+    }
+
+    m_editableMesh->subMeshes() = std::move(outSubs);
 
     // Full normal recompute — cheaper options (selective by proximity) turned
     // out to leave seams around the beveled region where the neighbor faces
@@ -1903,8 +1999,19 @@ bool EditModeController::applyBevelVertexTopology(
     if (vertexIndices.empty() || width <= 0.0f)
         return false;
 
+    // Same triangle-mode workaround as applyBevelTopology — bevelVertices
+    // shares the triangle-only retriangulation path with bevelEdges.
+    EditableMesh triOnly;
+    triOnly.subMeshes() = m_editableMesh->subMeshes();
+    std::vector<bool> wasNGonSub;
+    wasNGonSub.reserve(triOnly.subMeshes().size());
+    auto originalSubMeshes = m_editableMesh->subMeshes();
+    for (auto& sub : triOnly.subMeshes()) {
+        wasNGonSub.push_back(!sub.faces.empty());
+        sub.faces.clear();
+    }
     HalfEdgeMesh heMesh;
-    if (!heMesh.buildFromEditableMesh(*m_editableMesh))
+    if (!heMesh.buildFromEditableMesh(triOnly))
         return false;
 
     // Map global selection indices to HE indices by position match.
@@ -1946,7 +2053,24 @@ bool EditModeController::applyBevelVertexTopology(
     if (!heMesh.toEditableMesh(newMesh))
         return false;
 
-    m_editableMesh->subMeshes() = std::move(newMesh.subMeshes());
+    // Submesh-level restore (see applyBevelTopology for the rationale
+    // and trade-off).
+    std::set<int> touchedSubs;
+    for (int v : newHEVertices) {
+        for (int f : heMesh.facesAroundVertex(v)) {
+            touchedSubs.insert(heMesh.face(f).subMeshIndex);
+        }
+    }
+    auto& outSubs = newMesh.subMeshes();
+    for (size_t s = 0;
+         s < outSubs.size() && s < originalSubMeshes.size() && s < wasNGonSub.size();
+         ++s) {
+        if (touchedSubs.count(static_cast<int>(s))) continue;
+        if (!wasNGonSub[s]) continue;
+        outSubs[s] = originalSubMeshes[s];
+    }
+
+    m_editableMesh->subMeshes() = std::move(outSubs);
 
     if (m_normalsMode == 0)
         m_editableMesh->recalculateNormals();

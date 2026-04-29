@@ -3988,10 +3988,11 @@ TEST(HalfEdgeMeshStandalone, DissolveEdgesEmptyIsNoOp) {
     EXPECT_TRUE(he.validate());
 }
 
-TEST(HalfEdgeMeshStandalone, DissolveEdgesQuadDiagonalRetriangulatesOtherDiagonal) {
-    // Quad: tris (0,1,2) and (1,3,2) share diagonal v1↔v2. Dissolving the
-    // diagonal should keep face count at 2 (still triangulated as a quad)
-    // but with the OTHER diagonal active (0↔3).
+TEST(HalfEdgeMeshStandalone, DissolveEdgesQuadDiagonalMergesIntoSingleQuad) {
+    // n-gon-aware dissolve: dissolving the shared edge between two
+    // triangles merges them into a SINGLE quad face — no diagonal at
+    // all. (The previous triangle-only impl just swapped to the OTHER
+    // diagonal, which left a fan diagonal in place.)
     auto em = makeQuadMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -3999,13 +4000,20 @@ TEST(HalfEdgeMeshStandalone, DissolveEdgesQuadDiagonalRetriangulatesOtherDiagona
     ASSERT_GE(diag, 0);
 
     EXPECT_EQ(he.dissolveEdges({diag}), 1);
-    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_EQ(activeFaceCount(he), 1);
     EXPECT_TRUE(he.validate());
 
-    // The new diagonal must connect v0 and v3.
-    EXPECT_GE(findEdge(he, 0, 3), 0);
-    // Old diagonal should be gone (or no longer exist as an edge).
+    // The shared diagonal is gone; neither (1,2) nor (0,3) is an edge,
+    // because the merged face is a quad with only its perimeter edges.
     EXPECT_EQ(findEdge(he, 1, 2), -1);
+    EXPECT_EQ(findEdge(he, 0, 3), -1);
+    // The single surviving face has 4 vertices.
+    int quadCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quadCount;
+    }
+    EXPECT_EQ(quadCount, 1);
 }
 
 TEST(HalfEdgeMeshStandalone, DissolveEdgesBoundaryEdgeIsSkipped) {
@@ -4021,18 +4029,28 @@ TEST(HalfEdgeMeshStandalone, DissolveEdgesBoundaryEdgeIsSkipped) {
 }
 
 TEST(HalfEdgeMeshStandalone, DissolveVerticesHexFanCenterCollapsesToHexagon) {
-    // The hex fan's v0 has valence 6, all triangles. Dissolving v0 should
-    // produce 4 triangles (n-gon with n=6 fan-triangulated from one vertex).
+    // n-gon-aware dissolve: dissolving v0 (the hex fan's center)
+    // replaces the 6 incident triangles with a SINGLE hexagon face —
+    // no fan diagonals introduced. (Previous triangle-only impl
+    // fan-triangulated the resulting boundary loop into 4 triangles.)
     auto em = makeHexFan();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
     ASSERT_EQ(activeFaceCount(he), 6);
 
     EXPECT_EQ(he.dissolveVertices({0}), 1);
-    EXPECT_EQ(activeFaceCount(he), 4)
-        << "hexagon fan-triangulated from one corner has n-2 = 4 triangles";
+    EXPECT_EQ(activeFaceCount(he), 1)
+        << "hexagon merged from the umbrella, no fan diagonals";
     EXPECT_LT(he.vertex(0).halfEdge, 0);
     EXPECT_TRUE(he.validate());
+
+    // The single surviving face has 6 vertices.
+    int hexCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        if (he.faceVertices(static_cast<int>(f)).size() == 6) ++hexCount;
+    }
+    EXPECT_EQ(hexCount, 1);
 }
 
 TEST(HalfEdgeMeshStandalone, DissolveVerticesBoundaryVertexIsSkipped) {
@@ -4105,8 +4123,10 @@ TEST(HalfEdgeMeshStandalone, DissolveEdgesMultipleDisjointEdgesAllProcessed) {
 
     EXPECT_EQ(he.dissolveEdges({diagL, diagR}), 2)
         << "both interior diagonals must dissolve regardless of edge-slot reordering";
-    EXPECT_EQ(activeFaceCount(he), 4)
-        << "two quads, fan-triangulated, still 4 triangles";
+    // n-gon-aware dissolve merges each pair of triangles into ONE quad —
+    // 2 active quads total, NOT 4 fan-triangulated triangles.
+    EXPECT_EQ(activeFaceCount(he), 2)
+        << "two merged quads, no fan diagonals";
     EXPECT_TRUE(he.validate());
 
     // Both old diagonals should be gone.
