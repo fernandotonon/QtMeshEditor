@@ -790,7 +790,8 @@ void MainWindow::initToolBar()
     // Vertex paint: toggle on main click; arrow opens brush settings (color, radius, strength).
     auto* vertexPaintButton = new QToolButton(ui->objectsToolbar);
     vertexPaintButton->setCheckable(true);
-    vertexPaintButton->setText(QString::fromUtf8("\xf0\x9f\x96\x8c")); // U+1F58C paintbrush
+    vertexPaintButton->setIcon(QIcon(":/icones/addVertice.png"));
+    vertexPaintButton->setIconSize(QSize(16, 16));
     vertexPaintButton->setToolTip(tr("Vertex paint — paint on mesh (Select tool). Arrow: brush settings."));
     vertexPaintButton->setFont(topoFont);
     vertexPaintButton->setStyleSheet(topoBtnStyle);
@@ -816,9 +817,13 @@ void MainWindow::initToolBar()
     };
     syncPaintColorBtn();
     connect(colorBtn, &QPushButton::clicked, this, [this, emPaint, syncPaintColorBtn]() {
+        SentryReporter::addBreadcrumb("ui.action", "Vertex paint color picker opened");
         QColor c = QColorDialog::getColor(emPaint->vertexPaintColor(), this, tr("Brush color"));
-        if (c.isValid())
+        if (c.isValid()) {
             emPaint->setVertexPaintColor(c);
+            SentryReporter::addBreadcrumb("ui.action",
+                QString("Vertex paint color changed: %1").arg(c.name(QColor::HexRgb)));
+        }
         syncPaintColorBtn();
     });
     connect(emPaint, &EditModeController::vertexPaintChanged, this, syncPaintColorBtn);
@@ -844,6 +849,8 @@ void MainWindow::initToolBar()
         sw->setStyleSheet(QStringLiteral("background-color: %1; border: 1px solid #666; border-radius: 2px;").arg(hex));
         connect(sw, &QPushButton::clicked, this, [emPaint, hex, syncPaintColorBtn]() {
             emPaint->setVertexPaintBrushColor(hex);
+            SentryReporter::addBreadcrumb("ui.action",
+                QString("Vertex paint swatch selected: %1").arg(hex));
             syncPaintColorBtn();
         });
         swatchGrid->addWidget(sw, r, col);
@@ -862,6 +869,8 @@ void MainWindow::initToolBar()
     syncRad();
     connect(radSlider, &QSlider::valueChanged, this, [this, emPaint, radLabel](int v) {
         emPaint->setVertexPaintRadius(v / 100.0);
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Vertex paint radius changed: %1").arg(emPaint->vertexPaintRadius(), 0, 'f', 3));
         radLabel->setText(tr("Radius (local): %1").arg(emPaint->vertexPaintRadius(), 0, 'f', 2));
     });
     connect(emPaint, &EditModeController::vertexPaintChanged, this, syncRad);
@@ -879,6 +888,8 @@ void MainWindow::initToolBar()
     syncStr();
     connect(strSlider, &QSlider::valueChanged, this, [this, emPaint, strLabel](int v) {
         emPaint->setVertexPaintStrength(v / 100.0);
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Vertex paint strength changed: %1").arg(emPaint->vertexPaintStrength(), 0, 'f', 3));
         strLabel->setText(tr("Strength: %1").arg(emPaint->vertexPaintStrength(), 0, 'f', 2));
     });
     connect(emPaint, &EditModeController::vertexPaintChanged, this, syncStr);
@@ -2006,6 +2017,11 @@ void MainWindow::setTransformState(TransformOperator::TransformState newState)
     ui->actionTranslate_Object->setChecked(newState == TransformOperator::TS_TRANSLATE);
     ui->actionRotate_Object->setChecked(newState == TransformOperator::TS_ROTATE);
     ui->actionScale_Object->setChecked(newState == TransformOperator::TS_SCALE);
+
+    if (newState != TransformOperator::TS_SELECT
+        && EditModeController::instance()->vertexPaintEnabled()) {
+        EditModeController::instance()->setVertexPaintEnabled(false);
+    }
 
     TransformOperator::getSingleton()->onTransformStateChange(newState);
 }

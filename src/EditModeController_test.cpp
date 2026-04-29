@@ -162,10 +162,12 @@ TEST(EditModeControllerGeometry, ApplyVertexColorBrushAffectsVerticesWithinRadiu
 
 TEST(EditModeControllerGeometry, VertexPaintBrushColorFromHexString) {
     auto* ctrl = EditModeController::instance();
+    const QColor original = ctrl->vertexPaintColor();
     ctrl->setVertexPaintBrushColor(QStringLiteral("#00ff00"));
     EXPECT_EQ(ctrl->vertexPaintColor(), QColor(0, 255, 0));
     ctrl->setVertexPaintBrushColor(QStringLiteral("#0000ff"));
     EXPECT_EQ(ctrl->vertexPaintColor(), QColor(0, 0, 255));
+    ctrl->setVertexPaintColor(original);
 }
 
 // ===========================================================================

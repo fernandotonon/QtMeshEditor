@@ -261,10 +261,18 @@ TEST_F(EditableMeshTest, VertexColorsRoundTripThroughCommitAndResize)
 
     EditableMesh reloaded;
     ASSERT_TRUE(reloaded.loadFromEntity(entity));
+    const Ogre::ColourValue c0b = reloaded.getVertexColor(0, 0);
     const Ogre::ColourValue c1b = reloaded.getVertexColor(0, 1);
+    const Ogre::ColourValue c2b = reloaded.getVertexColor(0, 2);
+    EXPECT_NEAR(c0b.r, 1.0f, 1e-4f);
+    EXPECT_NEAR(c0b.g, 0.0f, 1e-4f);
+    EXPECT_NEAR(c0b.b, 0.0f, 1e-4f);
     EXPECT_NEAR(c1b.r, 0.5f, 1e-4f);
     EXPECT_NEAR(c1b.g, 0.0f, 1e-4f);
     EXPECT_NEAR(c1b.b, 0.5f, 1e-4f);
+    EXPECT_NEAR(c2b.r, 0.0f, 1e-4f);
+    EXPECT_NEAR(c2b.g, 0.0f, 1e-4f);
+    EXPECT_NEAR(c2b.b, 1.0f, 1e-4f);
 
     Manager::getSingleton()->destroySceneNode("EditableMesh_colors_node");
 }

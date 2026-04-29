@@ -506,11 +506,14 @@ void OgreWidget::mouseMoveEvent(QMouseEvent *e)
 
     mCamera->mouseMoveEvent(e);
 
-    if (e->buttons() == Qt::NoButton
-        && EditModeController::instance()->isEditModeActive()
-        && EditModeController::instance()->vertexPaintEnabled()) {
-        EditModeController::instance()->updateVertexPaintPreview(this, e->pos());
-        QWidget::setCursor(vertexPaintBrushCursor());
+    if (e->buttons() == Qt::NoButton) {
+        if (EditModeController::instance()->isEditModeActive()
+            && EditModeController::instance()->vertexPaintEnabled()) {
+            EditModeController::instance()->updateVertexPaintPreview(this, e->pos());
+            QWidget::setCursor(vertexPaintBrushCursor());
+        } else {
+            QWidget::unsetCursor();
+        }
     }
 }
 

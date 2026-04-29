@@ -413,8 +413,13 @@ void EditModeController::exitEditMode(bool commitChanges)
     m_selectedEdges.clear();
     m_selectedFaces.clear();
 
-    if (m_vertexPaintEnabled)
-        setVertexPaintEnabled(false);
+    if (m_vertexPaintEnabled) {
+        if (m_vertexPaintStrokeActive)
+            endVertexPaintStroke(/*commitUndo=*/commitChanges);
+        m_vertexPaintEnabled = false;
+        clearVertexPaintPreview();
+        emit vertexPaintChanged();
+    }
 
     m_editableMesh.reset();
     m_editEntity = nullptr;
