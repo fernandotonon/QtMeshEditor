@@ -128,6 +128,46 @@ TEST(EditModeControllerGeometry, RayTriangleIntersectOutsideTriangle) {
     EXPECT_LT(t, 0.0f);
 }
 
+TEST(EditModeControllerGeometry, ApplyVertexColorBrushAffectsVerticesWithinRadius) {
+    EditableMesh mesh;
+    mesh.subMeshes().resize(1);
+    auto& sub = mesh.subMeshes()[0];
+    sub.vertices.resize(3);
+    sub.vertices[0].position = Ogre::Vector3(0, 0, 0);
+    sub.vertices[1].position = Ogre::Vector3(1, 0, 0);
+    sub.vertices[2].position = Ogre::Vector3(2, 0, 0);
+    for (auto& v : sub.vertices) {
+        v.hasColor = true;
+        v.color = Ogre::ColourValue::White;
+    }
+
+    const Ogre::ColourValue paint(1.0f, 0.0f, 0.0f, 1.0f); // red
+    const bool changed = EditModeController::applyVertexColorBrush(
+        mesh, Ogre::Vector3(0.0f, 0.0f, 0.0f), /*radius=*/1.1f, paint, /*strength=*/1.0f);
+    EXPECT_TRUE(changed);
+
+    // v0 should become red-ish (exact red because distance 0 => w=1).
+    EXPECT_NEAR(sub.vertices[0].color.r, 1.0f, 1e-6f);
+    EXPECT_NEAR(sub.vertices[0].color.g, 0.0f, 1e-6f);
+
+    // v1 is within radius but falloff should keep it not fully red.
+    EXPECT_LT(sub.vertices[1].color.g, 1.0f);
+    EXPECT_GT(sub.vertices[1].color.g, 0.0f);
+
+    // v2 is outside radius, should stay white.
+    EXPECT_NEAR(sub.vertices[2].color.r, 1.0f, 1e-6f);
+    EXPECT_NEAR(sub.vertices[2].color.g, 1.0f, 1e-6f);
+    EXPECT_NEAR(sub.vertices[2].color.b, 1.0f, 1e-6f);
+}
+
+TEST(EditModeControllerGeometry, VertexPaintBrushColorFromHexString) {
+    auto* ctrl = EditModeController::instance();
+    ctrl->setVertexPaintBrushColor(QStringLiteral("#00ff00"));
+    EXPECT_EQ(ctrl->vertexPaintColor(), QColor(0, 255, 0));
+    ctrl->setVertexPaintBrushColor(QStringLiteral("#0000ff"));
+    EXPECT_EQ(ctrl->vertexPaintColor(), QColor(0, 0, 255));
+}
+
 // ===========================================================================
 // Weight-to-color heat map tests
 // ===========================================================================

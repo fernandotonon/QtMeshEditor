@@ -284,9 +284,9 @@ static inline Ogre::MeshPtr createInMemoryTriangleMeshWithVertexColors(const std
     auto vbuf1 = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
         decl->getVertexSize(1), 3, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
     Ogre::RGBA cols[3];
-    cols[0] = Ogre::ColourValue(1, 0, 0, 1).getAsRGBA();
-    cols[1] = Ogre::ColourValue(0, 1, 0, 1).getAsRGBA();
-    cols[2] = Ogre::ColourValue(0, 0, 1, 1).getAsRGBA();
+    cols[0] = Ogre::ColourValue(1, 0, 0, 1).getAsBYTE();
+    cols[1] = Ogre::ColourValue(0, 1, 0, 1).getAsBYTE();
+    cols[2] = Ogre::ColourValue(0, 0, 1, 1).getAsBYTE();
     vbuf1->writeData(0, sizeof(cols), cols);
     mesh->sharedVertexData->vertexBufferBinding->setBinding(1, vbuf1);
 

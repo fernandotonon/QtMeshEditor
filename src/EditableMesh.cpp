@@ -29,11 +29,30 @@ THE SOFTWARE.
 #include "EditableMesh.h"
 #include "SubMeshTransform.h"
 #include <OgreSubEntity.h>
+#include <OgrePlatform.h>
 #include <algorithm>
 #include <iterator>
 #include <limits>
 #include <cmath>
 #include <cstring>
+
+namespace {
+
+/// Packed diffuse for VET_COLOUR / VES_DIFFUSE: use Ogre's native BYTE layout (see
+/// ColourValue::getAsBYTE — ABGR on little-endian, RGBA on big-endian) so OpenGL
+/// and D3D vertex attributes match what the active RenderSystem expects.
+inline Ogre::RGBA packDiffuseColour(const Ogre::ColourValue& cv) { return cv.getAsBYTE(); }
+
+inline void unpackDiffuseColour(Ogre::RGBA packed, Ogre::ColourValue& cv)
+{
+#if OGRE_ENDIAN == OGRE_ENDIAN_BIG
+    cv.setAsRGBA(packed);
+#else
+    cv.setAsABGR(packed);
+#endif
+}
+
+} // namespace
 
 bool EditableMesh::loadFromEntity(Ogre::Entity* entity)
 {
@@ -283,6 +302,90 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     return true;
 }
 
+bool EditableMesh::commitVertexColorsToEntity(Ogre::Entity* entity)
+{
+    if (!entity)
+        return false;
+
+    Ogre::MeshPtr meshPtr = entity->getMesh();
+    if (!meshPtr)
+        return false;
+
+    Ogre::Mesh* mesh = meshPtr.get();
+
+    if (m_subMeshes.size() != static_cast<size_t>(mesh->getNumSubMeshes()))
+        return false;
+
+    bool wroteShared = false;
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* subMesh = mesh->getSubMesh(i);
+        const EditableSubMesh& editSub = m_subMeshes[i];
+        if (editSub.vertices.empty())
+            continue;
+
+        if (subMesh->useSharedVertices) {
+            if (!wroteShared && mesh->sharedVertexData) {
+                writeVertexColors(mesh->sharedVertexData, editSub.vertices);
+                wroteShared = true;
+            }
+        } else {
+            if (subMesh->vertexData) {
+                writeVertexColors(subMesh->vertexData, editSub.vertices);
+            }
+        }
+    }
+
+    return true;
+}
+
+bool EditableMesh::ensureVertexColorBuffers(Ogre::Entity* entity)
+{
+    if (!entity)
+        return false;
+
+    Ogre::MeshPtr meshPtr = entity->getMesh();
+    if (!meshPtr)
+        return false;
+
+    Ogre::Mesh* mesh = meshPtr.get();
+
+    if (m_subMeshes.size() != static_cast<size_t>(mesh->getNumSubMeshes()))
+        return false;
+
+    bool primed = false;
+    for (auto& sub : m_subMeshes) {
+        for (auto& v : sub.vertices) {
+            if (!v.hasColor) {
+                v.hasColor = true;
+                v.color = Ogre::ColourValue::White;
+                primed = true;
+            }
+        }
+    }
+
+    bool layoutMissing = false;
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* subMesh = mesh->getSubMesh(i);
+        Ogre::VertexData* vd = nullptr;
+        if (subMesh->useSharedVertices)
+            vd = mesh->sharedVertexData;
+        else
+            vd = subMesh->vertexData;
+        if (!vd || !vd->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE))
+            layoutMissing = true;
+    }
+
+    if (!primed && !layoutMissing)
+        return true;
+
+    if (!resizeEntityBuffers(entity))
+        return false;
+
+    entity->_deinitialise();
+    entity->_initialise(true);
+    return true;
+}
+
 void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
                                        const EditableSubMesh& editSub)
 {
@@ -390,7 +493,7 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
             if (const auto* e = decl->findElementBySemantic(Ogre::VES_DIFFUSE)) {
                 Ogre::RGBA* p; e->baseVertexPointerToElement(base, &p);
                 Ogre::ColourValue cv = v.hasColor ? v.color : Ogre::ColourValue::White;
-                *p = cv.getAsRGBA();
+                *p = packDiffuseColour(cv);
             }
         }
         vbuf1->writeData(0, buf1.size(), buf1.data(), true);
@@ -804,7 +907,7 @@ bool EditableMesh::readVertexData(Ogre::VertexData* vertexData, std::vector<Edit
         [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
             Ogre::RGBA* p; e->baseVertexPointerToElement(base, &p);
             Ogre::ColourValue cv;
-            cv.setAsRGBA(*p);
+            unpackDiffuseColour(*p, cv);
             vertices[j].color = cv;
             vertices[j].hasColor = true;
         });
@@ -936,8 +1039,55 @@ bool EditableMesh::writeVertexData(Ogre::VertexData* vertexData, const std::vect
         [&vertices](const Ogre::VertexElement* e, unsigned char* base, size_t j) {
             if (!vertices[j].hasColor) return;
             Ogre::RGBA* p; e->baseVertexPointerToElement(base, &p);
-            *p = vertices[j].color.getAsRGBA();
+            *p = packDiffuseColour(vertices[j].color);
         });
 
+    return true;
+}
+
+bool EditableMesh::writeVertexColors(Ogre::VertexData* vertexData, const std::vector<EditableVertex>& vertices)
+{
+    if (!vertexData || vertices.empty())
+        return false;
+
+    auto* decl = vertexData->vertexDeclaration;
+    auto* binding = vertexData->vertexBufferBinding;
+    const auto* elem = decl->findElementBySemantic(Ogre::VES_DIFFUSE);
+    if (!elem)
+        return true; // no color buffer to write to
+
+    unsigned short source = elem->getSource();
+    auto vbuf = binding->getBuffer(source);
+    const size_t bufSize = vbuf->getSizeInBytes();
+    const size_t vertexSize = vbuf->getVertexSize();
+    const size_t count = std::min(vertices.size(), static_cast<size_t>(vertexData->vertexCount));
+
+    // Upgrade static → dynamic for immediate GPU visibility.
+    if (vbuf->getUsage() & Ogre::HardwareBuffer::HBU_STATIC) {
+        std::vector<unsigned char> oldData(bufSize);
+        vbuf->readData(0, bufSize, oldData.data());
+
+        auto newBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
+            vertexSize, vertexData->vertexCount,
+            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
+        newBuf->writeData(0, bufSize, oldData.data(), true);
+        binding->setBinding(source, newBuf);
+        vbuf = newBuf;
+    }
+
+    std::vector<unsigned char> bufCopy(bufSize);
+    vbuf->readData(0, bufSize, bufCopy.data());
+
+    for (size_t j = 0; j < count; ++j) {
+        if (!vertices[j].hasColor)
+            continue;
+        Ogre::RGBA* p;
+        elem->baseVertexPointerToElement(bufCopy.data() + j * vertexSize, &p);
+        *p = packDiffuseColour(vertices[j].color);
+    }
+
+    auto* dest = static_cast<unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
+    memcpy(dest, bufCopy.data(), bufSize);
+    vbuf->unlock();
     return true;
 }

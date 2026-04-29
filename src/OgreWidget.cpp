@@ -32,6 +32,7 @@ THE SOFTWARE.
 #include <QTimer>
 #include <QNativeGestureEvent>
 #include <QSettings>
+#include <QPainter>
 
 #include <Ogre.h>
 
@@ -47,6 +48,29 @@ THE SOFTWARE.
 #include "TransformOperator.h"
 
 namespace {
+
+QCursor vertexPaintBrushCursor()
+{
+    static QCursor cached;
+    static bool inited = false;
+    if (!inited) {
+        QPixmap pm(28, 28);
+        pm.fill(Qt::transparent);
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        p.setPen(QPen(QColor(40, 40, 40), 2));
+        p.setBrush(QColor(120, 170, 255, 210));
+        p.drawEllipse(6, 6, 16, 16);
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(Qt::white, 1));
+        p.drawEllipse(6, 6, 16, 16);
+        p.end();
+        cached = QCursor(pm, 14, 14);
+        inited = true;
+    }
+    return cached;
+}
+
 void applyViewportCameraFromSettings(SpaceCamera* cam)
 {
     if (!cam || !cam->getCamera())
@@ -155,6 +179,22 @@ const Ogre::Viewport* OgreWidget::getViewport() const
 unsigned int OgreWidget::fsaaSamples() const
 {
     return mOgreWindow ? mOgreWindow->getFSAA() : 0u;
+}
+
+void OgreWidget::pixelSizeForCameraPicking(int& outW, int& outH) const
+{
+    if (!mViewport) {
+        outW = width();
+        outH = height();
+        return;
+    }
+#ifdef Q_OS_MACOS
+    const int widthMod = 2;
+#else
+    const int widthMod = 1;
+#endif
+    outW = static_cast<int>(mViewport->getActualWidth()) / widthMod;
+    outH = static_cast<int>(mViewport->getActualHeight()) / widthMod;
 }
 
 void OgreWidget::setBackgroundColor(const QColor& c)
@@ -432,12 +472,14 @@ void OgreWidget::mousePressEvent(QMouseEvent *e)
     }
     else if(e->buttons().testFlag(Qt::LeftButton))
     {
-
-        QCursor cursor = this->cursor();
-        cursor.setShape(Qt::ClosedHandCursor);
-        QWidget::setCursor(cursor);
-
-
+        if (EditModeController::instance()->isEditModeActive()
+            && EditModeController::instance()->vertexPaintEnabled()) {
+            QWidget::setCursor(vertexPaintBrushCursor());
+        } else {
+            QCursor cursor = this->cursor();
+            cursor.setShape(Qt::ClosedHandCursor);
+            QWidget::setCursor(cursor);
+        }
         e->accept();
     }
     else
@@ -451,6 +493,12 @@ void OgreWidget::mouseMoveEvent(QMouseEvent *e)
     QtInputManager::getInstance().mouseMoveEvent(e);
 
     mCamera->mouseMoveEvent(e);
+
+    if (e->buttons() == Qt::NoButton
+        && EditModeController::instance()->isEditModeActive()
+        && EditModeController::instance()->vertexPaintEnabled()) {
+        QWidget::setCursor(vertexPaintBrushCursor());
+    }
 }
 
 void OgreWidget::mouseReleaseEvent(QMouseEvent *e)
@@ -458,10 +506,14 @@ void OgreWidget::mouseReleaseEvent(QMouseEvent *e)
     QtInputManager::getInstance().mouseReleaseEvent(e);
     mCamera->mouseReleaseEvent(e);
 
-    QCursor cursor = this->cursor();
-    cursor.setShape(Qt::ArrowCursor);
-    QWidget::setCursor(cursor);
-
+    if (EditModeController::instance()->isEditModeActive()
+        && EditModeController::instance()->vertexPaintEnabled()) {
+        QWidget::setCursor(vertexPaintBrushCursor());
+    } else {
+        QCursor cursor = this->cursor();
+        cursor.setShape(Qt::ArrowCursor);
+        QWidget::setCursor(cursor);
+    }
 }
 
 void OgreWidget::focusInEvent(QFocusEvent* e)

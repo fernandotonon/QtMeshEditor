@@ -194,7 +194,7 @@ Ogre::MeshPtr MeshProcessor::createMesh(const Ogre::String& name, const Ogre::St
                 vertexData->vertexCount, Ogre::HardwareBuffer::HBU_STATIC_WRITE_ONLY);
             auto* pColor = static_cast<Ogre::RGBA*>(colorBuf->lock(Ogre::HardwareBuffer::HBL_DISCARD));
             for (const auto& color : subMeshData->colors)
-                *pColor++ = color.getAsARGB();
+                *pColor++ = color.getAsBYTE();
             colorBuf->unlock();
             vertexData->vertexBufferBinding->setBinding(nextSource, colorBuf);
         }
