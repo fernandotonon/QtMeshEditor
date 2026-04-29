@@ -229,6 +229,7 @@ void EditModeController::setVertexPaintEnabled(bool enabled)
     if (!enabled) {
         // Best-effort terminate an in-flight stroke to avoid a stuck state.
         endVertexPaintStroke(/*commitUndo=*/true);
+        clearVertexPaintPreview();
     }
     SentryReporter::addBreadcrumb("edit_mode",
         QString("Vertex paint %1").arg(enabled ? "enabled" : "disabled"));
@@ -1214,8 +1215,10 @@ void EditModeController::updateVertexPaintStroke(OgreWidget* widget, const QPoin
         return;
 
     Ogre::Vector3 localHit;
-    if (!hitTestLocalPointOnMesh(screenPos, widget, localHit))
+    Ogre::Vector3 localNormal;
+    if (!hitTestLocalPointOnMesh(screenPos, widget, localHit, &localNormal))
         return;
+    updateVertexPaintPreview(widget, screenPos);
 
     // Skip tiny repeats to reduce buffer churn (but always paint the first sample).
     if (m_vertexPaintHaveLastLocal &&
@@ -1242,6 +1245,69 @@ void EditModeController::updateVertexPaintStroke(OgreWidget* widget, const QPoin
         m_editableMesh->commitVertexColorsToEntity(m_editEntity);
         emit meshDataChanged();
     }
+}
+
+void EditModeController::updateVertexPaintPreview(OgreWidget* widget, const QPoint& screenPos)
+{
+    if (!m_vertexPaintEnabled || !m_editModeActive || !m_editEntity || !widget)
+        return;
+
+    Ogre::Vector3 localHit;
+    Ogre::Vector3 localNormal;
+    if (!hitTestLocalPointOnMesh(screenPos, widget, localHit, &localNormal)) {
+        clearVertexPaintPreview();
+        return;
+    }
+
+    auto* sceneMgr = m_editEntity->_getManager();
+    if (!sceneMgr)
+        return;
+
+    if (!m_overlayPaintNode)
+        m_overlayPaintNode = sceneMgr->getRootSceneNode()->createChildSceneNode();
+    if (!m_overlayPaint) {
+        m_overlayPaint = sceneMgr->createManualObject("EditMode_PaintOverlay");
+        m_overlayPaint->setDynamic(true);
+        m_overlayPaint->setRenderQueueGroup(Ogre::RENDER_QUEUE_OVERLAY);
+        m_overlayPaintNode->attachObject(m_overlayPaint);
+    }
+
+    if (auto* entNode = m_editEntity->getParentSceneNode()) {
+        m_overlayPaintNode->setPosition(entNode->_getDerivedPosition());
+        m_overlayPaintNode->setOrientation(entNode->_getDerivedOrientation());
+        m_overlayPaintNode->setScale(entNode->_getDerivedScale());
+    }
+
+    m_overlayPaint->clear();
+    localNormal.normalise();
+    if (localNormal.squaredLength() < 1e-6f)
+        localNormal = Ogre::Vector3::UNIT_Y;
+
+    Ogre::Vector3 tangent = localNormal.perpendicular();
+    tangent.normalise();
+    Ogre::Vector3 bitangent = localNormal.crossProduct(tangent);
+    bitangent.normalise();
+
+    const Ogre::ColourValue ringColor(
+        static_cast<float>(m_vertexPaintColor.redF()),
+        static_cast<float>(m_vertexPaintColor.greenF()),
+        static_cast<float>(m_vertexPaintColor.blueF()),
+        0.95f);
+    constexpr int kSegments = 64;
+    // Contract preview to match the practical painted area seen on
+    // discretized mesh vertices.
+    const float radius = static_cast<float>(m_vertexPaintRadius) * 0.8f;
+    const Ogre::Vector3 center = localHit + localNormal * 0.001f; // prevent z-fight
+
+    m_overlayPaint->begin("EditMode/EdgeSelection", Ogre::RenderOperation::OT_LINE_STRIP);
+    for (int i = 0; i <= kSegments; ++i) {
+        const float t = static_cast<float>(i) / static_cast<float>(kSegments);
+        const float a = Ogre::Math::TWO_PI * t;
+        const Ogre::Vector3 p = center + (tangent * Ogre::Math::Cos(a) + bitangent * Ogre::Math::Sin(a)) * radius;
+        m_overlayPaint->position(p);
+        m_overlayPaint->colour(ringColor);
+    }
+    m_overlayPaint->end();
 }
 
 void EditModeController::endVertexPaintStroke(bool commitUndo)
@@ -1271,6 +1337,23 @@ void EditModeController::endVertexPaintStroke(bool commitUndo)
         m_selectedVertices, m_selectedEdges, m_selectedFaces,
         "Vertex Paint");
     UndoManager::getSingleton()->push(cmd);
+}
+
+void EditModeController::clearVertexPaintPreview()
+{
+    auto* sceneMgr = m_editEntity ? m_editEntity->_getManager() : nullptr;
+    if (m_overlayPaint) {
+        if (m_overlayPaintNode)
+            m_overlayPaintNode->detachObject(m_overlayPaint);
+        if (sceneMgr)
+            sceneMgr->destroyManualObject(m_overlayPaint);
+        m_overlayPaint = nullptr;
+    }
+    if (m_overlayPaintNode) {
+        if (sceneMgr)
+            sceneMgr->destroySceneNode(m_overlayPaintNode);
+        m_overlayPaintNode = nullptr;
+    }
 }
 
 // ===========================================================================
@@ -3551,7 +3634,8 @@ bool EditModeController::knifeHitTest(const QPoint& screenPos, OgreWidget* widge
 }
 
 bool EditModeController::hitTestLocalPointOnMesh(const QPoint& screenPos, OgreWidget* widget,
-                                                 Ogre::Vector3& outLocal) const
+                                                 Ogre::Vector3& outLocal,
+                                                 Ogre::Vector3* outNormal) const
 {
     if (!m_editableMesh || !m_editEntity || !widget)
         return false;
@@ -3592,6 +3676,14 @@ bool EditModeController::hitTestLocalPointOnMesh(const QPoint& screenPos, OgreWi
             if (t < 0.0f)
                 return false;
             outLocal = localOrigin + localDir * t;
+            if (outNormal) {
+                Ogre::Vector3 n = (v1 - v0).crossProduct(v2 - v0);
+                if (!n.isZeroLength())
+                    n.normalise();
+                else
+                    n = Ogre::Vector3::UNIT_Y;
+                *outNormal = n;
+            }
             return true;
         }
         globalTriOffset += static_cast<int>(sub.triangles.size());

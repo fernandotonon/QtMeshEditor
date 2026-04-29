@@ -90,6 +90,8 @@ TransformOperator::TransformOperator() : QObject(nullptr)
             this, &TransformOperator::onSelectionChanged);
     connect(EditModeController::instance(), &EditModeController::editModeChanged,
             this, &TransformOperator::onSelectionChanged);
+    connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
+            this, &TransformOperator::onSelectionChanged);
 
     QtInputManager::getInstance().AddMouseListener(this);
 
@@ -545,6 +547,8 @@ void TransformOperator::updateGizmo()
                 m_pRotationGizmo->setVisible(false);
                 m_pTranslationGizmo->setVisible(false);
                 m_pScaleGizmo->setVisible(false);
+                mTrackingEnable = EditModeController::instance()->isEditModeActive()
+                               && EditModeController::instance()->vertexPaintEnabled();
           break;
         case TransformOperator::TS_TRANSLATE:
                 m_pTransformNode->setOrientation(gizmoOrientation);
@@ -1062,19 +1066,24 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 {
     // Vertex paint drag: update on every move while LMB is held.
-    if (mVertexPaintDragActive && EditModeController::instance()->isEditModeActive()
+    auto* editCtrl = EditModeController::instance();
+    if (mVertexPaintDragActive && editCtrl->isEditModeActive()
         && (e->buttons() & Qt::LeftButton) && m_pActiveWidget)
     {
-        EditModeController::instance()->updateVertexPaintStroke(m_pActiveWidget, e->pos());
+        editCtrl->updateVertexPaintStroke(m_pActiveWidget, e->pos());
         // Don't consume: allow camera hover, etc., to still run.
+    } else if (editCtrl->isEditModeActive()
+               && editCtrl->vertexPaintEnabled()
+               && m_pActiveWidget)
+    {
+        editCtrl->updateVertexPaintPreview(m_pActiveWidget, e->pos());
     }
 
     // Knife hover preview: cheap to update on every move while the session
     // is active, and draws the ghost segment from the last confirmed
     // point to the cursor. Does not consume the event — other handlers
     // (camera, gizmo drag) still run below.
-    if (auto* editCtrl = EditModeController::instance();
-        editCtrl->knifeSessionActive() && m_pActiveWidget)
+    if (editCtrl->knifeSessionActive() && m_pActiveWidget)
     {
         editCtrl->updateKnifeHover(m_pActiveWidget, e->pos().x(), e->pos().y());
     }

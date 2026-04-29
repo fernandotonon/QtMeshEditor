@@ -606,6 +606,12 @@ void MainWindow::initToolBar()
             border: none;
             padding: 2px 4px;
         }
+        QToolButton:checked {
+            color: #9adc4a;
+            background-color: rgba(122, 189, 42, 0.18);
+            border: 1px solid rgba(122, 189, 42, 0.45);
+            border-radius: 3px;
+        }
         QToolButton:hover:enabled {
             color: #9adc4a;
         }

@@ -93,8 +93,19 @@ OgreWidget::OgreWidget( QWidget *parent ):
     setAttribute( Qt::WA_PaintOnScreen );
     setAttribute( Qt::WA_OpaquePaintEvent );
     setMinimumSize(100,100);
+    setMouseTracking(true);
 
     setFocusPolicy(Qt::ClickFocus); //one click to get focus
+
+    connect(EditModeController::instance(), &EditModeController::vertexPaintChanged,
+            this, [this]() {
+        const bool paintOn = EditModeController::instance()->isEditModeActive()
+                          && EditModeController::instance()->vertexPaintEnabled();
+        if (paintOn)
+            QWidget::setCursor(vertexPaintBrushCursor());
+        else
+            QWidget::setCursor(Qt::ArrowCursor);
+    });
 
     initOgreWindow();
 }
@@ -498,6 +509,7 @@ void OgreWidget::mouseMoveEvent(QMouseEvent *e)
     if (e->buttons() == Qt::NoButton
         && EditModeController::instance()->isEditModeActive()
         && EditModeController::instance()->vertexPaintEnabled()) {
+        EditModeController::instance()->updateVertexPaintPreview(this, e->pos());
         QWidget::setCursor(vertexPaintBrushCursor());
     }
 }

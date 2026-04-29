@@ -628,7 +628,9 @@ public:
     /// @{
     bool beginVertexPaintStroke(OgreWidget* widget, const QPoint& screenPos);
     void updateVertexPaintStroke(OgreWidget* widget, const QPoint& screenPos);
+    void updateVertexPaintPreview(OgreWidget* widget, const QPoint& screenPos);
     void endVertexPaintStroke(bool commitUndo = true);
+    void clearVertexPaintPreview();
     bool vertexPaintStrokeActive() const { return m_vertexPaintStrokeActive; }
     /// @}
 
@@ -832,7 +834,8 @@ private:
                       KnifePoint& out) const;
 
     bool hitTestLocalPointOnMesh(const QPoint& screenPos, OgreWidget* widget,
-                                 Ogre::Vector3& outLocal) const;
+                                 Ogre::Vector3& outLocal,
+                                 Ogre::Vector3* outNormal = nullptr) const;
 
     /// Rebuild the knife preview overlay from the current session
     /// (confirmed points + hover), creating it on first use.
@@ -846,6 +849,8 @@ private:
     // transform doesn't fight with selection overlays, which expect
     // m_overlayNode parked at the origin with local-space geometry.
     Ogre::SceneNode* m_overlayKnifeNode = nullptr;
+    Ogre::ManualObject* m_overlayPaint = nullptr;
+    Ogre::SceneNode* m_overlayPaintNode = nullptr;
 
     /// Apply a bevel at `width` to `edges` assuming the mesh is at its
     /// pre-bevel snapshot state. Updates selection to the new chamfer verts.
