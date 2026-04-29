@@ -2559,8 +2559,22 @@ bool EditModeController::commitKnife()
     // consecutive endpoints, so the visible preview becomes a real chain
     // of mesh edges. OnFace/OnVertex clicks aren't yet in scope — the
     // commit skips them and proceeds on the OnEdge subset.
+    //
+    // splitEdge — the primitive cutPath uses — is a triangle-only MVP
+    // (n-gon support requires ear-clip-aware rewiring). On a quad-
+    // imported mesh, every face is an n-gon and splitEdge bails
+    // immediately, so knife silently fails. Workaround until a proper
+    // n-gon splitEdge lands: build the HE from a triangle-mode COPY
+    // (clear `.faces` so buildFromEditableMesh falls back to the
+    // fan-triangulated `.triangles` mirror). The user gets a working
+    // knife at the cost of materialising the fan diagonals on every
+    // submesh the cut touches. Tracked as a follow-up.
+    EditableMesh triOnly;
+    triOnly.subMeshes() = m_editableMesh->subMeshes();
+    for (auto& sub : triOnly.subMeshes())
+        sub.faces.clear();
     HalfEdgeMesh hm;
-    if (!hm.buildFromEditableMesh(*m_editableMesh)) {
+    if (!hm.buildFromEditableMesh(triOnly)) {
         cancelKnife();
         return false;
     }
@@ -3481,7 +3495,7 @@ int EditModeController::fillSelection()
 
     validateMesh();
     SentryReporter::addBreadcrumb("edit_mode",
-        QString("Fill (verts=%1, tris=%2)")
+        QString("Fill (verts=%1, faces=%2)")
             .arg(targetVerts.size()).arg(created));
 
     updateSelectionOverlay();

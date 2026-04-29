@@ -5325,22 +5325,34 @@ int HalfEdgeMesh::fillSelection(const std::vector<int>& vertexIndices)
             return 0;
     }
 
-    // 3. Fan-triangulate from vertexIndices[0]. For n=3 emits one triangle;
-    //    for n=4 emits two; for general N emits N-2.
-    int triCount = 0;
-    for (int i = 1; i + 1 < n; ++i) {
-        appendTriangle(vertexIndices[0], vertexIndices[i],
-                       vertexIndices[i + 1], subIdx);
-        ++triCount;
+    // 3. Build the new face. For n=3 emit a single triangle (matches
+    //    the existing fan output); for n>=4 emit a single n-gon HEFace
+    //    so the result round-trips back through toEditableMesh as one
+    //    EditableFace with N indices, not N-2 fan triangles. Without
+    //    this branch, filling a 4-vertex selection would create two
+    //    triangles whose shared diagonal then surfaces as a fan-edge
+    //    in Edit Mode (and Standard Subdivide treats them as
+    //    triangles, not as a quad). Returns the number of polygons
+    //    created (always 1 here — kept as `int` to preserve the
+    //    function signature; callers use the return only as a
+    //    success/fail flag).
+    int created;
+    if (n == 3) {
+        appendTriangle(vertexIndices[0], vertexIndices[1],
+                       vertexIndices[2], subIdx);
+        created = 1;
+    } else {
+        const int fIdx = appendFace(vertexIndices, subIdx);
+        if (fIdx < 0) return 0;
+        created = 1;
     }
-    if (triCount == 0) return 0;
 
     rebuildEdgesAndTwins();
     compactBoundaryHalfEdges();
     buildBoundaryHalfEdges();
     fixVertexHalfEdges();
 
-    return triCount;
+    return created;
 }
 
 bool HalfEdgeMesh::validate() const

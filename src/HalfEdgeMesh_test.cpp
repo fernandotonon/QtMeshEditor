@@ -4293,19 +4293,35 @@ TEST(HalfEdgeMeshStandalone, FillSelectionFourVerticesEmitsTwoTriangles) {
     ASSERT_TRUE(he.buildFromEditableMesh(mesh));
     ASSERT_EQ(activeFaceCount(he), 1);
 
-    // Fan-triangulate the (3, 4, 5, 6) quad from vertex 3. Produces
-    // (3, 4, 5) and (3, 5, 6) — a watertight 4-vertex fill.
-    EXPECT_EQ(he.fillSelection({3, 4, 5, 6}), 2);
-    EXPECT_EQ(activeFaceCount(he), 3);
+    // Fill (3, 4, 5, 6) as a single quad face — NOT a fan-triangulation.
+    // Pre-quads-followup this returned 2 (triangle count); now it
+    // returns 1 (face count) and the result round-trips back through
+    // toEditableMesh as one 4-index EditableFace.
+    EXPECT_EQ(he.fillSelection({3, 4, 5, 6}), 1);
+    EXPECT_EQ(activeFaceCount(he), 2);
     EXPECT_TRUE(he.validate());
 
     EditableMesh back;
     ASSERT_TRUE(he.toEditableMesh(back));
     EXPECT_TRUE(isManifold(back));
+
+    // The new face must round-trip as a quad EditableFace, not 2 tris.
+    ASSERT_EQ(back.subMeshes().size(), 1u);
+    const auto& subBack = back.subMeshes()[0];
+    ASSERT_FALSE(subBack.faces.empty())
+        << "n>=4 fill must populate EditableSubMesh::faces";
+    bool sawQuad = false;
+    for (const auto& f : subBack.faces) {
+        if (f.indices.size() == 4) { sawQuad = true; break; }
+    }
+    EXPECT_TRUE(sawQuad)
+        << "fillSelection of 4 verts must produce a single quad face";
 }
 
-TEST(HalfEdgeMeshStandalone, FillSelectionFiveVerticesFanTriangulatesIntoThree) {
-    // Pentagon fan-triangulated from vertexIndices[0]: 5 vertices → 3 tris.
+TEST(HalfEdgeMeshStandalone, FillSelectionFiveVerticesProducesSinglePentagon) {
+    // Pentagon fill: 5 vertices → ONE 5-vertex EditableFace, not 3 fan
+    // triangles. (Quads-followup: a single n-gon HEFace round-trips as
+    // a single n-gon EditableFace through toEditableMesh.)
     EditableMesh mesh;
     EditableSubMesh sub;
     sub.materialName = "FillMat";
@@ -4325,8 +4341,19 @@ TEST(HalfEdgeMeshStandalone, FillSelectionFiveVerticesFanTriangulatesIntoThree) 
     ASSERT_TRUE(he.buildFromEditableMesh(mesh));
 
     // Vertices 0..4 form a convex pentagon. Fill its loop in order.
-    EXPECT_EQ(he.fillSelection({0, 1, 2, 3, 4}), 3);
+    EXPECT_EQ(he.fillSelection({0, 1, 2, 3, 4}), 1);
     EXPECT_TRUE(he.validate());
+
+    // Confirm round-trip preserves the 5-gon.
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    ASSERT_EQ(back.subMeshes().size(), 1u);
+    bool sawPentagon = false;
+    for (const auto& f : back.subMeshes()[0].faces) {
+        if (f.indices.size() == 5) { sawPentagon = true; break; }
+    }
+    EXPECT_TRUE(sawPentagon)
+        << "fillSelection of 5 verts must produce a single pentagon face";
 }
 
 // ===========================================================================
@@ -4537,8 +4564,8 @@ TEST(HalfEdgeMeshStandalone, FillSelectionAcceptsOrphanedVertices) {
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(mesh));
 
-    // Fill with all 4 orphans → 2 new triangles (fan from vert 0).
-    EXPECT_EQ(he.fillSelection({0, 1, 3, 2}), 2);
+    // Fill with all 4 orphans → ONE new quad face (quads-followup).
+    EXPECT_EQ(he.fillSelection({0, 1, 3, 2}), 1);
     EXPECT_TRUE(he.validate());
 }
 
