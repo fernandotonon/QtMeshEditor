@@ -256,6 +256,55 @@ void EditModeController::toggleEditMode()
         enterEditMode();
 }
 
+// Try the n-gon-aware re-import path: when the entity's mesh has the
+// `qtme.source_path` user-binding (cached by MeshImporterExporter at
+// import time AND not yet wiped by a topology mutation), re-read the
+// source asset through Assimp with aiProcess_Triangulate disabled so
+// source quads survive into EditableSubMesh::faces. The cached
+// `qtme.source_convert_lh` and `qtme.source_up_axis` keys make the
+// editable mesh share basis with the rendered buffers; passing the
+// live skeleton makes bone handles match MeshProcessor's convention.
+// Returns true on success (caller uses the editable mesh as-is),
+// false to signal that the legacy `loadFromEntity` path should run.
+static bool tryLoadEditableMeshNGonPath(
+    Ogre::Entity* entity, EditableMesh* editableMesh)
+{
+    if (!entity || !editableMesh) return false;
+    const Ogre::MeshPtr meshPtr = entity->getMesh();
+    if (!meshPtr) return false;
+
+    const auto& bindings = meshPtr->getUserObjectBindings();
+    const Ogre::Any& any = bindings.getUserAny("qtme.source_path");
+    if (!any.has_value()) return false;
+
+    std::string sourcePath;
+    try {
+        sourcePath = Ogre::any_cast<std::string>(any);
+    } catch (const Ogre::Exception&) {
+        return false; // Any held the wrong type — fall back defensively.
+    }
+    if (sourcePath.empty()) return false;
+
+    // Default: convert-LH=true matches AssimpToOgreImporter's behaviour
+    // for unknown origins; up-axis=Y-up is the safe default if the
+    // import didn't cache one.
+    bool convertLH = true;
+    const Ogre::Any& lhAny = bindings.getUserAny("qtme.source_convert_lh");
+    if (lhAny.has_value()) {
+        try { convertLH = Ogre::any_cast<bool>(lhAny); }
+        catch (const Ogre::Exception&) {}
+    }
+    bool isZup = false;
+    const Ogre::Any& upAny = bindings.getUserAny("qtme.source_up_axis");
+    if (upAny.has_value()) {
+        try { isZup = (Ogre::any_cast<int>(upAny) == 2); }
+        catch (const Ogre::Exception&) {}
+    }
+    const Ogre::Skeleton* skel =
+        meshPtr->hasSkeleton() ? meshPtr->getSkeleton().get() : nullptr;
+    return editableMesh->loadFromAssimpFile(sourcePath, convertLH, isZup, skel);
+}
+
 bool EditModeController::enterEditMode()
 {
     if (m_editModeActive)
@@ -270,97 +319,20 @@ bool EditModeController::enterEditMode()
     QList<Ogre::Entity*> entities = sel->getResolvedEntities();
     m_editEntity = entities.first();
 
-    // Decompose mesh into editable data. Two paths:
-    //
-    //  - n-gon path: when MeshImporterExporter has cached the source
-    //    file path (qtme.source_path) on the Ogre::Mesh AND no edit
-    //    has been committed since import (commitToEntity / resize-
-    //    EntityBuffers wipe the cache on mutation), re-import the
-    //    asset through Assimp with aiProcess_Triangulate disabled so
-    //    source quads survive into EditableSubMesh::faces.
-    //
-    //  - legacy path: read the live Ogre buffers via loadFromEntity.
-    //    This is what every prior chunk used, and what every code
-    //    path that doesn't have a source path (procedural primitives,
-    //    .scene.glb sub-entities, post-edit re-entries) falls back to.
-    //
-    // The n-gon path enables Catmull-Clark subdivision, loop cut, and
-    // any future quad-aware op to act on real source quads instead of
-    // the diagonal triangulation Assimp emits by default.
-    // (Quad migration #326, chunk 4.)
+    // Decompose mesh into editable data. Prefer the n-gon path (re-
+    // import via Assimp with aiProcess_Triangulate off) when the mesh
+    // still carries qtme.source_path. Fall back to the legacy
+    // loadFromEntity path for procedural primitives, .scene.glb sub-
+    // entities, and post-edit re-entries (where commitToEntity /
+    // resizeEntityBuffers wipe the cache on mutation). The n-gon path
+    // is what enables Catmull-Clark subdivide / loop cut / future
+    // quad-aware ops to act on real source quads. (Quad migration
+    // #326, chunk 4.)
     m_editableMesh = std::make_unique<EditableMesh>();
-
-    bool loaded = false;
-    {
-        const Ogre::MeshPtr meshPtr = m_editEntity->getMesh();
-        if (meshPtr) {
-            const auto& bindings = meshPtr->getUserObjectBindings();
-            const Ogre::Any& any = bindings.getUserAny("qtme.source_path");
-            if (any.has_value()) {
-                try {
-                    const std::string sourcePath =
-                        Ogre::any_cast<std::string>(any);
-                    // The original importer cached its
-                    // convert-to-left-handed choice alongside the path.
-                    // Apply the SAME flag here so the editable mesh
-                    // stays in the same coordinate system as the
-                    // rendered Ogre buffers — without this, on every
-                    // non-.x asset the vertex / edge / face overlays
-                    // would draw mirrored (X flipped) relative to the
-                    // on-screen geometry. Defaults to true to match
-                    // AssimpToOgreImporter's behaviour for unknown
-                    // origins.
-                    bool convertLH = true;
-                    const Ogre::Any& lhAny =
-                        bindings.getUserAny("qtme.source_convert_lh");
-                    if (lhAny.has_value()) {
-                        try {
-                            convertLH = Ogre::any_cast<bool>(lhAny);
-                        } catch (const Ogre::Exception&) {}
-                    }
-                    // The original importer also caches the source up-
-                    // axis (1 = Y-up, 2 = Z-up). MeshProcessor bakes a
-                    // +90°-around-X rotation into the rendered buffers
-                    // for Z-up assets; we pass `isZup` so the editable
-                    // representation stays in the same basis. Without
-                    // this, FBX/glTF assets that declare Z-up would
-                    // surface vertex overlays rotated 90° relative to
-                    // the on-screen geometry, and a commit would write
-                    // the rotated positions back, silently rotating
-                    // the entity.
-                    bool isZup = false;
-                    const Ogre::Any& upAny =
-                        bindings.getUserAny("qtme.source_up_axis");
-                    if (upAny.has_value()) {
-                        try {
-                            isZup = (Ogre::any_cast<int>(upAny) == 2);
-                        } catch (const Ogre::Exception&) {}
-                    }
-                    // Resolve aiBone names against the live skeleton so
-                    // the n-gon path emits Ogre bone HANDLES (matching
-                    // MeshProcessor) instead of mesh-local aiBone
-                    // indices. Without this, a topology op on a skinned
-                    // mesh re-emits VertexBoneAssignments with wild
-                    // handles and skinning rebinds vertices to wrong
-                    // bones.
-                    const Ogre::Skeleton* skel = nullptr;
-                    if (meshPtr->hasSkeleton()) {
-                        skel = meshPtr->getSkeleton().get();
-                    }
-                    if (!sourcePath.empty()
-                        && m_editableMesh->loadFromAssimpFile(
-                               sourcePath, convertLH, isZup, skel)) {
-                        loaded = true;
-                        SentryReporter::addBreadcrumb("edit_mode",
-                            "Edit Mode entered via n-gon import path");
-                    }
-                } catch (const Ogre::Exception&) {
-                    // The Any contained something other than a string —
-                    // shouldn't happen but fall through to the legacy
-                    // path defensively.
-                }
-            }
-        }
+    bool loaded = tryLoadEditableMeshNGonPath(m_editEntity, m_editableMesh.get());
+    if (loaded) {
+        SentryReporter::addBreadcrumb("edit_mode",
+            "Edit Mode entered via n-gon import path");
     }
     if (!loaded && !m_editableMesh->loadFromEntity(m_editEntity)) {
         SentryReporter::addBreadcrumb("edit_mode", "Failed to load mesh data for Edit Mode");
@@ -2612,8 +2584,70 @@ bool EditModeController::commitKnife()
 // BEFORE `_deinitialise/_initialise` so the SubEntity vertex-decl cache
 // reads the corrected layout, then re-run `applyNormalMapsToEntity` so
 // RTSS re-attaches SRS_NORMALMAP against the fresh tangents.
+namespace {
+// Returns true if any sub-entity of `ent` has a normal-map TUS — the
+// signal we use to decide whether RTSS will need tangents on the next
+// render. Materials that fail to load are skipped so a single broken
+// resource doesn't abort the topology op.
+bool entityWantsTangents(Ogre::Entity* ent) {
+    for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+        auto mat = ent->getSubEntity(i)->getMaterial();
+        if (!mat) continue;
+        if (!mat->isLoaded()) {
+            try { mat->load(); }
+            catch (const Ogre::Exception&) { continue; }
+        }
+        if (mat->getNumTechniques() == 0) continue;
+        auto* pass = mat->getTechnique(0)->getPass(0);
+        if (!pass) continue;
+        for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {
+            const auto& tusName = pass->getTextureUnitState(t)->getName();
+            if (tusName == "normal_map" || tusName == "NormalMap") return true;
+        }
+    }
+    return false;
+}
+
+// Force-rebuild tangent vectors on `mesh`. Logs (rather than throws) on
+// failure since the caller runs from inside an entity-refresh hook.
+void rebuildMeshTangents(const Ogre::MeshPtr& mesh) {
+    if (!mesh) return;
+    try {
+        // storeParityInW=true → VET_FLOAT4, matching what
+        // RTShaderHelper::applyNormalMap and the import path use.
+        mesh->buildTangentVectors(/*sourceTexCoordSet=*/0,
+                                  /*splitMirrored=*/false,
+                                  /*splitRotated=*/false,
+                                  /*storeParityInW=*/true);
+    } catch (const Ogre::Exception& e) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "rewriteEntityAfterTopologyChange: buildTangentVectors "
+            "failed for '" + mesh->getName() + "': " + e.getDescription());
+    }
+}
+
+// Drop the cached RTSS shader programs for every sub-entity material
+// so the next render regenerates them against the post-topology-op
+// vertex declaration. No-op when the ShaderGenerator is absent.
+void invalidateEntityRtssMaterials(Ogre::Entity* ent) {
+    auto* sg = Ogre::RTShader::ShaderGenerator::getSingletonPtr();
+    if (!sg) return;
+    for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
+        const std::string& m = ent->getSubEntity(i)->getMaterialName();
+        if (!m.empty())
+            sg->invalidateMaterial(
+                Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, m);
+    }
+}
+} // namespace
+
 void EditModeController::rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
     if (!ent) return;
+
+    // Snapshot per-subentity material overrides — _deinitialise/_initialise
+    // resets them to the SubMesh default, but the wireframe overlay and
+    // MaterialEditor write to the SubEntity, not the SubMesh, so both
+    // must survive the rebuild.
     std::vector<std::string> preMats;
     preMats.reserve(ent->getNumSubEntities());
     for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i)
@@ -2628,54 +2662,15 @@ void EditModeController::rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
     // SRS_NORMALMAP code path collapses to a no-op even though the
     // tangents physically exist in the buffer.
     //
-    // We need tangents whenever any subentity is bump-mapped (has a
-    // `normal_map`/`NormalMap` TUS). Two cases trigger that:
-    //   1. The mesh declaration ALREADY has VES_TANGENT but the new
-    //      vertices written by `EditableMesh::buildSubMeshBuffers` are
-    //      zero-valued (default-constructed `EditableVertex::tangent`).
-    //   2. The declaration LOST VES_TANGENT during the buffer rewrite —
-    //      this happens when the n-gon import path (which doesn't
-    //      request `aiProcess_CalcTangentSpace` because it forces
-    //      triangulation) didn't have tangents in the source file, so
-    //      `EditableVertex::hasTangent == false` for every vertex and
-    //      the rebuilt declaration drops the slot entirely.
-    // Either way `Mesh::buildTangentVectors` is the fix: it adds the
-    // VES_TANGENT element if missing and (re)computes values from
-    // positions/normals/UVs.
-    if (auto mesh = ent->getMesh()) {
-        bool wantsTangents = false;
-        for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
-            auto mat = ent->getSubEntity(i)->getMaterial();
-            if (!mat) continue;
-            if (!mat->isLoaded()) {
-                try { mat->load(); } catch (...) {}
-            }
-            if (mat->getNumTechniques() == 0) continue;
-            auto* pass = mat->getTechnique(0)->getPass(0);
-            if (!pass) continue;
-            for (unsigned short t = 0; t < pass->getNumTextureUnitStates(); ++t) {
-                const auto& tusName =
-                    pass->getTextureUnitState(t)->getName();
-                if (tusName == "normal_map" || tusName == "NormalMap") {
-                    wantsTangents = true;
-                    break;
-                }
-            }
-            if (wantsTangents) break;
-        }
-        if (wantsTangents) {
-            try {
-                // storeParityInW=true → VET_FLOAT4, matching what
-                // RTShaderHelper::applyNormalMap and the import path use.
-                mesh->buildTangentVectors(
-                    Ogre::VES_TANGENT, 0, 0, false, false, true);
-            } catch (const Ogre::Exception& e) {
-                Ogre::LogManager::getSingleton().logMessage(
-                    "rewriteEntityAfterTopologyChange: buildTangentVectors "
-                    "failed for '" + mesh->getName() + "': " + e.getDescription());
-            }
-        }
-    }
+    // We rebuild whenever any subentity is bump-mapped: new vertices
+    // written by `EditableMesh::buildSubMeshBuffers` start with zero-
+    // valued tangents (EditableVertex defaults), and on the n-gon
+    // import path — which omits `aiProcess_CalcTangentSpace` because
+    // that flag forces triangulation — the declaration drops VES_TANGENT
+    // entirely. `Mesh::buildTangentVectors` re-adds the element if
+    // missing and recomputes values from positions/normals/UVs.
+    if (entityWantsTangents(ent))
+        rebuildMeshTangents(ent->getMesh());
 
     // Re-init the entity so its SubEntity caches (vertex / index
     // counts, skeleton anim buffers) sync to the resized mesh.
@@ -2690,31 +2685,15 @@ void EditModeController::rewriteEntityAfterTopologyChange(Ogre::Entity* ent) {
             ent->getSubEntity(i)->setMaterialName(preMats[i]);
     }
 
-    // Re-attach the RTSS SRS_NORMALMAP sub-render-state per material that
-    // has a normal-map TUS. `invalidateMaterial` alone only drops the
-    // cached shader programs; the renderState's template list is
-    // preserved so the regenerated shader would normally inherit
-    // SRS_NORMALMAP — except `applyNormalMap` uses
-    // `removeShaderBasedTechnique + createShaderBasedTechnique` to start
-    // from a clean slate (some tangent-related state in the render state
-    // doesn't survive a buffer-format change), so we must run it again
-    // to guarantee the SRS_NORMALMAP is re-bound against the new
-    // tangents. Materials without a normal-map TUS are no-ops here.
+    // Re-attach the RTSS SRS_NORMALMAP sub-render-state per material
+    // that has a normal-map TUS, then drop any cached shader programs
+    // so the next render regenerates against the new vertex layout.
+    // `applyNormalMapsToEntity` uses `removeShaderBasedTechnique +
+    // createShaderBasedTechnique` to start from a clean slate (some
+    // tangent-related state doesn't survive a buffer-format change),
+    // so it must run AFTER the tangent rebuild + _initialise.
     MeshImporterExporter::applyNormalMapsToEntity(ent);
-
-    // Final invalidate so any per-material cache that survived the
-    // applyNormalMap path drops too. validateMaterial inside
-    // applyNormalMap already kicks shader regen, but explicit
-    // invalidate keeps behaviour identical to other topology ops for
-    // materials that aren't bump-mapped.
-    if (auto* sg = Ogre::RTShader::ShaderGenerator::getSingletonPtr()) {
-        for (unsigned int i = 0; i < ent->getNumSubEntities(); ++i) {
-            const std::string& m = ent->getSubEntity(i)->getMaterialName();
-            if (!m.empty())
-                sg->invalidateMaterial(
-                    Ogre::RTShader::ShaderGenerator::DEFAULT_SCHEME_NAME, m);
-        }
-    }
+    invalidateEntityRtssMaterials(ent);
 }
 
 // Find global vertex indices of the survivor positions after toEditableMesh
