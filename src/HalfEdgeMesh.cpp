@@ -3124,18 +3124,39 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
         return idx;
     };
 
-    for (const auto& info : clean) {
-        // Re-validate against the live mesh (previous iterations may have
-        // mutated submeshes, though the chained-edge check above prevents
-        // most interference).
-        if (info.f1 >= static_cast<int>(m_faces.size())) continue;
-        if (info.f2 >= static_cast<int>(m_faces.size())) continue;
-        if (m_faces[info.f1].halfEdge < 0) continue;
-        if (m_faces[info.f2].halfEdge < 0) continue;
-        // Re-fetch loops in case prior iterations changed orientation.
+    for (auto info : clean) {
+        // Re-resolve the edge by vertex pair against the LIVE mesh.
+        // Previous iterations may have:
+        //   - retired the captured edge index (face replacement adds
+        //     new edges, rebuildEdgesAndTwins reorders),
+        //   - retired the captured face indices (appendFace's slot
+        //     allocation may now hold a different face).
+        // Vertex indices are append-only and stable, so look up the
+        // edge by (v1, v2) every time.
+        int liveEdge = -1;
+        for (size_t e = 0; e < m_edges.size(); ++e) {
+            if (m_edges[e].halfEdge < 0) continue;
+            const auto [a, b] = edgeVertices(static_cast<int>(e));
+            if ((a == info.v1 && b == info.v2)
+                || (a == info.v2 && b == info.v1)) {
+                liveEdge = static_cast<int>(e);
+                break;
+            }
+        }
+        if (liveEdge < 0) continue;
+        info.edgeIdx = liveEdge;
+        const auto [liveF1, liveF2] = edgeFaces(liveEdge);
+        if (liveF1 < 0 || liveF2 < 0) continue; // boundary now
+        info.f1 = liveF1;
+        info.f2 = liveF2;
+        info.subMeshIndex = m_faces[info.f1].subMeshIndex;
+
+        // Re-fetch loops in case prior iterations changed them.
         auto loopF1 = faceVertices(info.f1);
         auto loopF2 = faceVertices(info.f2);
         if (loopF1.size() < 3 || loopF2.size() < 3) continue;
+        info.loopF1 = loopF1;
+        info.loopF2 = loopF2;
 
         const float w = effectiveWidth(info);
         if (w < 1e-6f) continue;
