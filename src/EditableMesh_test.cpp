@@ -264,12 +264,14 @@ TEST_F(EditableMeshTest, VertexColorsRoundTripThroughCommitAndResize)
     const Ogre::ColourValue c0b = reloaded.getVertexColor(0, 0);
     const Ogre::ColourValue c1b = reloaded.getVertexColor(0, 1);
     const Ogre::ColourValue c2b = reloaded.getVertexColor(0, 2);
+    // Diffuse is stored as 8-bit per channel on the GPU; mid-tones (e.g. 0.5) round-trip as 127/255.
+    constexpr float kByteTol = (1.0f / 255.0f) + 1e-5f;
     EXPECT_NEAR(c0b.r, 1.0f, 1e-4f);
     EXPECT_NEAR(c0b.g, 0.0f, 1e-4f);
     EXPECT_NEAR(c0b.b, 0.0f, 1e-4f);
-    EXPECT_NEAR(c1b.r, 0.5f, 1e-4f);
+    EXPECT_NEAR(c1b.r, 0.5f, kByteTol);
     EXPECT_NEAR(c1b.g, 0.0f, 1e-4f);
-    EXPECT_NEAR(c1b.b, 0.5f, 1e-4f);
+    EXPECT_NEAR(c1b.b, 0.5f, kByteTol);
     EXPECT_NEAR(c2b.r, 0.0f, 1e-4f);
     EXPECT_NEAR(c2b.g, 0.0f, 1e-4f);
     EXPECT_NEAR(c2b.b, 1.0f, 1e-4f);

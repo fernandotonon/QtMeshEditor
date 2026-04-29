@@ -167,7 +167,26 @@ TEST(EditModeControllerGeometry, VertexPaintBrushColorFromHexString) {
     EXPECT_EQ(ctrl->vertexPaintColor(), QColor(0, 255, 0));
     ctrl->setVertexPaintBrushColor(QStringLiteral("#0000ff"));
     EXPECT_EQ(ctrl->vertexPaintColor(), QColor(0, 0, 255));
-    ctrl->setVertexPaintColor(original);
+    if (original.isValid())
+        ctrl->setVertexPaintBrushColor(original.name(QColor::HexRgb));
+    else
+        ctrl->setVertexPaintBrushColor(QStringLiteral("#ffffff"));
+}
+
+TEST(EditModeControllerGeometry, VertexPaintBrushColorEmptyOrInvalidNoOp) {
+    auto* ctrl = EditModeController::instance();
+    const QColor original = ctrl->vertexPaintColor();
+    ctrl->setVertexPaintBrushColor(QStringLiteral("#123456"));
+    const QColor afterSet = ctrl->vertexPaintColor();
+    ctrl->setVertexPaintBrushColor(QString());
+    ctrl->setVertexPaintBrushColor(QStringLiteral("   "));
+    EXPECT_EQ(ctrl->vertexPaintColor(), afterSet);
+    ctrl->setVertexPaintBrushColor(QStringLiteral("___not_a_color___"));
+    EXPECT_EQ(ctrl->vertexPaintColor(), afterSet);
+    if (original.isValid())
+        ctrl->setVertexPaintBrushColor(original.name(QColor::HexRgb));
+    else
+        ctrl->setVertexPaintBrushColor(QStringLiteral("#ffffff"));
 }
 
 // ===========================================================================

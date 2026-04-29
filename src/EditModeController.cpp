@@ -252,6 +252,9 @@ void EditModeController::setVertexPaintColor(const QColor& c)
     if (m_vertexPaintColor.rgba() == rgb.rgba())
         return;
     m_vertexPaintColor = rgb;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint color: %1").arg(rgb.name(QColor::HexRgb)));
     emit vertexPaintChanged();
 }
 
@@ -275,6 +278,9 @@ void EditModeController::setVertexPaintRadius(double r)
     if (r <= 0.0 || m_vertexPaintRadius == r)
         return;
     m_vertexPaintRadius = r;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint radius: %1").arg(m_vertexPaintRadius, 0, 'f', 3));
     emit vertexPaintChanged();
 }
 
@@ -284,6 +290,9 @@ void EditModeController::setVertexPaintStrength(double s)
     if (m_vertexPaintStrength == clamped)
         return;
     m_vertexPaintStrength = clamped;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint strength: %1").arg(m_vertexPaintStrength, 0, 'f', 3));
     emit vertexPaintChanged();
 }
 
@@ -1221,8 +1230,10 @@ void EditModeController::updateVertexPaintStroke(OgreWidget* widget, const QPoin
 
     Ogre::Vector3 localHit;
     Ogre::Vector3 localNormal;
-    if (!hitTestLocalPointOnMesh(screenPos, widget, localHit, &localNormal))
+    if (!hitTestLocalPointOnMesh(screenPos, widget, localHit, &localNormal)) {
+        clearVertexPaintPreview();
         return;
+    }
     updateVertexPaintPreview(widget, screenPos);
 
     // Skip tiny repeats to reduce buffer churn (but always paint the first sample).
