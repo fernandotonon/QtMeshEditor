@@ -3196,10 +3196,117 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
             else newLoopF2.push_back(v);
         }
 
+        // Find the f1-side and f2-side neighbors of v1 and v2 BEFORE we
+        // retire the original f1/f2. These tell us how to splice the
+        // chain into each neighbor face.
+        auto findAdjacentInLoop = [](const std::vector<int>& loop,
+                                     int target) -> std::pair<int,int> {
+            // Returns (prev, next) vertex of `target` in the loop's
+            // winding order, or {-1, -1} if not found.
+            const int n = static_cast<int>(loop.size());
+            for (int i = 0; i < n; ++i) {
+                if (loop[i] == target) {
+                    return { loop[(i + n - 1) % n], loop[(i + 1) % n] };
+                }
+            }
+            return { -1, -1 };
+        };
+        const auto [prevV1F1, nextV1F1] = findAdjacentInLoop(loopF1, info.v1);
+        const auto [prevV1F2, nextV1F2] = findAdjacentInLoop(loopF2, info.v1);
+        const auto [prevV2F1, nextV2F1] = findAdjacentInLoop(loopF1, info.v2);
+        const auto [prevV2F2, nextV2F2] = findAdjacentInLoop(loopF2, info.v2);
+        // The "non-edge neighbor" of v1 in f1 is whichever of prev/next
+        // ISN'T v2 (since the v1-v2 edge is the beveled one).
+        auto nonEdgeNeighbor = [](int prev, int next, int otherEnd) {
+            return (prev == otherEnd) ? next : prev;
+        };
+        const int v1F1NonEdge = nonEdgeNeighbor(prevV1F1, nextV1F1, info.v2);
+        const int v1F2NonEdge = nonEdgeNeighbor(prevV1F2, nextV1F2, info.v2);
+        const int v2F1NonEdge = nonEdgeNeighbor(prevV2F1, nextV2F1, info.v1);
+        const int v2F2NonEdge = nonEdgeNeighbor(prevV2F2, nextV2F2, info.v1);
+
+        // Collect ALL neighbor faces of v1 and v2 (those that contain
+        // v1 or v2 but aren't f1 or f2). We splice the bevel chain into
+        // each so the manifold stays closed at higher-valence vertices.
+        std::set<int> neighborFaces;
+        for (int f : facesAroundVertex(info.v1)) {
+            if (f != info.f1 && f != info.f2) neighborFaces.insert(f);
+        }
+        for (int f : facesAroundVertex(info.v2)) {
+            if (f != info.f1 && f != info.f2) neighborFaces.insert(f);
+        }
+
+        // Snapshot each neighbor's loop now (before retire), and
+        // compute the spliced loop.
+        struct NeighborRebuild {
+            int oldFace;
+            int subIdx;
+            std::vector<int> newLoop;
+        };
+        std::vector<NeighborRebuild> neighborRebuilds;
+        for (int g : neighborFaces) {
+            const auto loopG = faceVertices(g);
+            std::vector<int> spliced;
+            spliced.reserve(loopG.size() + 2);
+            for (size_t i = 0; i < loopG.size(); ++i) {
+                const int cur = loopG[i];
+                const int next = loopG[(i + 1) % loopG.size()];
+                spliced.push_back(cur);
+
+                // Splice points: when an outgoing edge (cur, next) is
+                // a v-edge of v1 or v2 that's shared with f1 or f2,
+                // insert the corresponding inner vertex between cur
+                // and next.
+                //
+                // For v1: if (cur, next) == (v1, v1F1NonEdge) or
+                // (v1F1NonEdge, v1) — i.e., the edge between v1 and
+                // its f1-side non-edge neighbor — insert innerV1F1
+                // adjacent to v1 on the v1F1NonEdge side.
+                auto check = [&](int v, int innerSide, int sideNeighbor) {
+                    // Edge (cur, next) is the (v, sideNeighbor) edge.
+                    // Splice direction: if cur == v, then innerSide goes
+                    // BETWEEN cur and next (after cur). If next == v,
+                    // innerSide goes BEFORE next (after cur, before
+                    // next when we get to the next iteration). For
+                    // simplicity always insert on cur's side: if cur
+                    // is v and next is sideNeighbor, push innerSide
+                    // right now. If cur is sideNeighbor and next is v,
+                    // also push innerSide right now (so the order is
+                    // sideNeighbor, innerSide, v).
+                    if (sideNeighbor < 0) return false;
+                    if ((cur == v && next == sideNeighbor)
+                        || (cur == sideNeighbor && next == v)) {
+                        spliced.push_back(innerSide);
+                        return true;
+                    }
+                    return false;
+                };
+                if (check(info.v1, innerV1F1, v1F1NonEdge)) {}
+                else if (check(info.v1, innerV1F2, v1F2NonEdge)) {}
+                else if (check(info.v2, innerV2F1, v2F1NonEdge)) {}
+                else if (check(info.v2, innerV2F2, v2F2NonEdge)) {}
+            }
+            // Drop consecutive duplicates if any (defensive).
+            std::vector<int> dedup;
+            dedup.reserve(spliced.size());
+            for (int x : spliced) {
+                if (!dedup.empty() && dedup.back() == x) continue;
+                dedup.push_back(x);
+            }
+            if (!dedup.empty() && dedup.front() == dedup.back())
+                dedup.pop_back();
+            if (dedup.size() < 3) continue;
+            neighborRebuilds.push_back({g, m_faces[g].subMeshIndex, std::move(dedup)});
+        }
+
         retireFace(info.f1);
         retireFace(info.f2);
         appendFace(newLoopF1, info.subMeshIndex);
         appendFace(newLoopF2, info.subMeshIndex);
+        for (const auto& nr : neighborRebuilds) {
+            retireFace(nr.oldFace);
+            appendFace(nr.newLoop, nr.subIdx);
+        }
 
         // Chamfer strip + corner caps. Winding: pick whichever order
         // matches f1's winding direction across the beveled edge so the
@@ -3283,25 +3390,50 @@ std::vector<int> HalfEdgeMesh::bevelEdgesNgon(
             appendFace(seg, info.subMeshIndex);
         }
 
-        // Corner fans at v1 and v2: a triangle fan from the original
-        // endpoint v through every consecutive chain pair. For
-        // segments=1 this is one triangle; for N segments it's N
-        // triangles per endpoint.
-        for (int i = 0; i < segments; ++i) {
-            const int aV1 = chainV1[i];
-            const int bV1 = chainV1[i + 1];
-            const int aV2 = chainV2[i];
-            const int bV2 = chainV2[i + 1];
-            if (f1WalksV1ToV2) {
-                // Cap at v1: (bV1 [f2-side end], info.v1, aV1 [f1-side end]).
-                // For segments > 1, the fan has aV1 at one end and bV1 at the
-                // other — winding matches the chamfer segment.
-                appendFace({bV1, info.v1, aV1}, info.subMeshIndex);
-                // Cap at v2: (aV2, info.v2, bV2).
-                appendFace({aV2, info.v2, bV2}, info.subMeshIndex);
-            } else {
-                appendFace({aV1, info.v1, bV1}, info.subMeshIndex);
-                appendFace({bV2, info.v2, aV2}, info.subMeshIndex);
+        // Corner fans at v1 and v2: ONLY needed when the endpoint has
+        // no other incident faces (so neighbor splicing didn't close
+        // the manifold around it). For higher-valence vertices, the
+        // neighbor-rebuild step above already inserted innerVF1 /
+        // innerVF2 into each neighbor face's loop, so the chamfer's
+        // sides connect cleanly to the surrounding mesh.
+        bool v1Isolated = true;
+        bool v2Isolated = true;
+        for (const auto& nr : neighborRebuilds) {
+            // The original neighbor face's loop contained either v1
+            // or v2 (or both). Re-fetch from the original loops we
+            // captured in `neighborFaces` collection — but we don't
+            // have them anymore. Easier proxy: if any neighbor's
+            // newLoop contains both v1 (still there) and innerV1F1
+            // or innerV1F2, that neighbor closes around v1.
+            const auto& loop = nr.newLoop;
+            const bool containsV1 =
+                std::find(loop.begin(), loop.end(), info.v1) != loop.end();
+            const bool containsV2 =
+                std::find(loop.begin(), loop.end(), info.v2) != loop.end();
+            if (containsV1) v1Isolated = false;
+            if (containsV2) v2Isolated = false;
+        }
+
+        if (v1Isolated) {
+            for (int i = 0; i < segments; ++i) {
+                const int aV1 = chainV1[i];
+                const int bV1 = chainV1[i + 1];
+                if (f1WalksV1ToV2) {
+                    appendFace({bV1, info.v1, aV1}, info.subMeshIndex);
+                } else {
+                    appendFace({aV1, info.v1, bV1}, info.subMeshIndex);
+                }
+            }
+        }
+        if (v2Isolated) {
+            for (int i = 0; i < segments; ++i) {
+                const int aV2 = chainV2[i];
+                const int bV2 = chainV2[i + 1];
+                if (f1WalksV1ToV2) {
+                    appendFace({aV2, info.v2, bV2}, info.subMeshIndex);
+                } else {
+                    appendFace({bV2, info.v2, aV2}, info.subMeshIndex);
+                }
             }
         }
 

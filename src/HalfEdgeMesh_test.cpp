@@ -3247,6 +3247,53 @@ TEST(HalfEdgeMeshStandalone, BevelEdgesNgonSegments3ProducesRoundedChamfer) {
     EXPECT_EQ(tris, 6);
 }
 
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonOnQuadCubeProducesManifoldOutput) {
+    // Quad cube: 8 verts, 6 quad faces. Bevel one of the cube's edges
+    // (top-back, between v2 and v3). The endpoints have valence 3 — so
+    // the test exercises neighbor-face splicing: each non-beveled face
+    // adjacent to v2 / v3 must absorb the corresponding inner vertex
+    // into its loop, otherwise the chamfer leaves a non-manifold gap.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3::UNIT_Y; v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(-1,-1,-1), mkV(1,-1,-1), mkV(-1,1,-1), mkV(1,1,-1), // 0..3
+        mkV(-1,-1, 1), mkV(1,-1, 1), mkV(-1,1, 1), mkV(1,1, 1), // 4..7
+    };
+    EditableFace fBack, fFront, fTop, fBottom, fLeft, fRight;
+    fBack.indices   = {0, 2, 3, 1};   // -Z (CCW from outside)
+    fFront.indices  = {5, 7, 6, 4};   // +Z
+    fBottom.indices = {0, 1, 5, 4};   // -Y
+    fTop.indices    = {2, 6, 7, 3};   // +Y
+    fLeft.indices   = {0, 4, 6, 2};   // -X
+    fRight.indices  = {1, 3, 7, 5};   // +X
+    sub.faces = { fBack, fFront, fBottom, fTop, fLeft, fRight };
+    triangulateFaces(sub);
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(he.faceCount(), 6u);
+    const int topBackEdge = findEdge(he, 2, 3);
+    ASSERT_GE(topBackEdge, 0);
+
+    auto newVerts = he.bevelEdgesNgon({topBackEdge}, 0.1f);
+    EXPECT_EQ(newVerts.size(), 4u);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back))
+        << "neighbor-face splicing must close the chamfer around the cube's "
+        << "valence-3 endpoints";
+}
+
 TEST(HalfEdgeMeshStandalone, BevelVerticesNgonOnQuadCornerKeepsQuads) {
     // 4 quads in a + arrangement around a central vertex v4 of valence 4.
     // Bevel v4. Expected:
