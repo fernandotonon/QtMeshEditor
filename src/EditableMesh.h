@@ -203,6 +203,20 @@ int mergeCoplanarTrianglesToQuads(EditableSubMesh& sub,
  * Quad migration #326, chunk 6: importer (chunk 3) populates the
  * binding so exporters can recover n-gons later. Edit-mode commit
  * paths refresh it whenever the user mutates topology.
+ *
+ * Format support matrix (export):
+ *  - **FBX**: preserved (custom binary writer emits PolygonVertexIndex
+ *    with the FBX last-index-bitwise-NOT polygon-end convention).
+ *  - **OBJ**: preserved (Assimp's OBJ writer accepts n-gon `aiFace`).
+ *  - **glTF / GLB**: triangulated. The glTF 2.0 spec only allows
+ *    TRIANGLES/POINTS/LINES — no native polygon primitive — so
+ *    Assimp's glTF writer fan-triangulates regardless of the `aiFace`
+ *    arity we feed it. Preserving quads through glTF requires the
+ *    vendor `FB_ngon_encoding` extension, which Assimp doesn't
+ *    support. Out of scope for chunk 6.
+ *  - **Ogre `.mesh`**: triangulated (Ogre's serializer only stores
+ *    triangle index buffers).
+ *  - **Collada / 3DS / STL / PLY / X**: triangulated (Assimp writers).
  */
 void writeNgonFacesToMesh(Ogre::Mesh* mesh,
                           const std::vector<EditableSubMesh>& subMeshes);
