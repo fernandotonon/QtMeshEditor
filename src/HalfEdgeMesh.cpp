@@ -4983,6 +4983,21 @@ std::vector<int> HalfEdgeMesh::loopCut(int startEdgeIdx)
     };
 
     const auto [f1, f2] = edgeFaces(startEdgeIdx);
+
+    // Loop cut is well-defined only when BOTH faces adjacent to the
+    // start edge are quads — the algorithm crosses each face via its
+    // opposite edge and triangles have no such correspondence. The
+    // EditModeController surfaces a "needs a quad mesh" hint to the
+    // user when this rejects, so silently producing a half-loop on
+    // mixed adjacency would be worse than the no-op. Boundary edges
+    // (one face = -1) are also rejected for the same reason.
+    // (Codex P1 follow-up on PR #347.)
+    auto isQuad = [&](int faceIdx) {
+        if (faceIdx < 0) return false;
+        return faceVertices(faceIdx).size() == 4;
+    };
+    if (!isQuad(f1) || !isQuad(f2)) return newVertices;
+
     walkDirection(f1, startA, startB);
     walkDirection(f2, startA, startB);
 

@@ -1063,9 +1063,11 @@ void MainWindow::initToolBar()
         // uses the first selected edge as the start; multi-edge loop
         // cuts aren't in scope for the MVP.
         loopCutButton->setEnabled(mode == 1 && hasEdges);
-        // Convert to Quads: whole-mesh; disable once the mesh already
-        // has n-gon canonical faces (no work to do).
-        convertToQuadsButton->setEnabled(!c->isMeshQuadBased());
+        // Convert to Quads: whole-mesh; disable only when EVERY submesh
+        // is already n-gon canonical. Mixed meshes (some submeshes tri,
+        // some quad) still qualify — the tri-only submeshes can still
+        // be merged. (CodeRabbit follow-up on PR #347.)
+        convertToQuadsButton->setEnabled(c->canConvertToQuads());
         vertexPaintButton->setEnabled(true);
     };
     refreshTopoButtons();

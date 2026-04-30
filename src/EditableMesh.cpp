@@ -883,7 +883,31 @@ bool EditableMesh::ensureVertexColorBuffers(Ogre::Entity* entity)
 void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
                                        const EditableSubMesh& editSubIn)
 {
-    if (!subMesh || editSubIn.vertices.empty()) return;
+    if (!subMesh) return;
+
+    // Empty-submesh safety net: when an edit deletes the last face in
+    // a submesh (or the submesh enters with no vertices), explicitly
+    // tear down any prior vertex/index data on the SubMesh so the GPU
+    // doesn't keep rendering stale geometry. The previous early-return
+    // path silently left the old buffers attached. (CodeRabbit Major
+    // follow-up on PR #347.)
+    auto clearSubMeshGeometry = [&]() {
+        if (subMesh->vertexData) {
+            delete subMesh->vertexData;
+            subMesh->vertexData = nullptr;
+        }
+        subMesh->useSharedVertices = false;
+        if (subMesh->indexData) {
+            subMesh->indexData->indexBuffer.reset();
+            subMesh->indexData->indexCount = 0;
+            subMesh->indexData->indexStart = 0;
+        }
+    };
+
+    if (editSubIn.vertices.empty()) {
+        clearSubMeshGeometry();
+        return;
+    }
 
     // n-gon synchronisation: if the caller populated `faces`, that's
     // canonical and `triangles` is meant to be a fan-triangulation
@@ -904,7 +928,10 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
         triangulateFaces(local);
         editSub = &local;
     }
-    if (editSub->triangles.empty()) return;
+    if (editSub->triangles.empty()) {
+        clearSubMeshGeometry();
+        return;
+    }
 
     // Replace any existing vertex data with a fresh one.
     if (subMesh->vertexData) delete subMesh->vertexData;

@@ -2046,11 +2046,12 @@ TEST_F(EditModeControllerBevelE2ETest, EnterEditModeAfterEditDoesNotReimport) {
     ASSERT_FALSE(ctrl->currentMesh()->subMeshes()[0].faces.empty())
         << "first entry must take the n-gon path";
 
-    // Commit any change (translate one vertex by zero — still triggers
-    // the commitToEntity path that wipes the source path).
+    // Commit a real change so the test exercises the commit path even
+    // if the controller ever short-circuits zero-delta transforms in
+    // the future. (CodeRabbit follow-up on PR #347.)
     ctrl->setSelectionMode(EditModeController::VertexMode);
     ctrl->selectVertex(0);
-    ctrl->translateSelectedVertices(Ogre::Vector3::ZERO);
+    ctrl->translateSelectedVertices(Ogre::Vector3(0.001f, 0.0f, 0.0f));
     ctrl->exitEditMode(/*commitChanges*/ true);
 
     EXPECT_FALSE(mesh->getUserObjectBindings().getUserAny(
