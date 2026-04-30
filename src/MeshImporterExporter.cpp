@@ -52,6 +52,7 @@ THE SOFTWARE.
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
 #include "CLIPipeline.h"
+#include "EditableMesh.h"
 #include "EditModeController.h"
 #include <OgreMaterialManager.h>
 #include <OgreDataStream.h>
@@ -334,30 +335,68 @@ static void readSubmeshGeometry(
         vbuf->unlock();
     }
 
-    // Read indices
-    const Ogre::IndexData* iData = subMesh->indexData;
-    if (iData && iData->indexCount > 0)
+    // Read indices.
+    //
+    // Prefer the cached n-gon face list (qtme.faces.<i> on the source
+    // mesh — written at import time by chunk 3 and refreshed by every
+    // commit; chunk 6 of #326). When present, the exporter emits one
+    // aiFace per polygon with the original vertex count, so quads /
+    // n-gons survive into formats that support them (FBX, glTF, OBJ,
+    // Collada all do). When absent — legacy .mesh imports, or assets
+    // that have never carried n-gon data — fall back to reading the
+    // triangle index buffer directly.
+    std::vector<std::vector<unsigned int>> ngonFaces;
+    const bool hasNgon = readNgonFacesFromMesh(
+        entity->getMesh().get(), subIndex, ngonFaces);
+    if (hasNgon)
     {
-        aiM->mNumFaces = static_cast<unsigned int>(iData->indexCount / 3);
+        // Assimp's mPrimitiveTypes is a bitmask of all primitive kinds
+        // present. A submesh with mixed quads + triangles must declare
+        // both bits — Assimp's exporters check the bitmask to gate
+        // format-specific emission (e.g. STL emits TRIANGLE only).
+        // (CodeRabbit follow-up on PR #349.)
+        aiM->mPrimitiveTypes = 0;
+        aiM->mNumFaces = static_cast<unsigned int>(ngonFaces.size());
         aiM->mFaces = new aiFace[aiM->mNumFaces];
-        auto ibuf = iData->indexBuffer;
-        auto* ibase = static_cast<const unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-        bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
-
-        const unsigned int indexStart = static_cast<unsigned int>(iData->indexStart);
         for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
         {
-            aiM->mFaces[f].mNumIndices = 3;
-            aiM->mFaces[f].mIndices = new unsigned int[3];
-            for (unsigned int v = 0; v < 3; ++v)
-            {
-                unsigned int idx = use32
-                    ? reinterpret_cast<const uint32_t*>(ibase)[indexStart + f * 3 + v]
-                    : reinterpret_cast<const uint16_t*>(ibase)[indexStart + f * 3 + v];
-                aiM->mFaces[f].mIndices[v] = idx;
+            const auto& poly = ngonFaces[f];
+            aiM->mPrimitiveTypes |= (poly.size() == 3)
+                ? aiPrimitiveType_TRIANGLE
+                : aiPrimitiveType_POLYGON;
+            aiM->mFaces[f].mNumIndices = static_cast<unsigned int>(poly.size());
+            aiM->mFaces[f].mIndices = new unsigned int[poly.size()];
+            for (size_t v = 0; v < poly.size(); ++v) {
+                aiM->mFaces[f].mIndices[v] = poly[v];
             }
         }
-        ibuf->unlock();
+    }
+    else
+    {
+        const Ogre::IndexData* iData = subMesh->indexData;
+        if (iData && iData->indexCount > 0)
+        {
+            aiM->mNumFaces = static_cast<unsigned int>(iData->indexCount / 3);
+            aiM->mFaces = new aiFace[aiM->mNumFaces];
+            auto ibuf = iData->indexBuffer;
+            auto* ibase = static_cast<const unsigned char*>(ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+            bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
+
+            const unsigned int indexStart = static_cast<unsigned int>(iData->indexStart);
+            for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
+            {
+                aiM->mFaces[f].mNumIndices = 3;
+                aiM->mFaces[f].mIndices = new unsigned int[3];
+                for (unsigned int v = 0; v < 3; ++v)
+                {
+                    unsigned int idx = use32
+                        ? reinterpret_cast<const uint32_t*>(ibase)[indexStart + f * 3 + v]
+                        : reinterpret_cast<const uint16_t*>(ibase)[indexStart + f * 3 + v];
+                    aiM->mFaces[f].mIndices[v] = idx;
+                }
+            }
+            ibuf->unlock();
+        }
     }
 }
 
@@ -1186,6 +1225,21 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     mesh->getUserObjectBindings().setUserAny(
                         "qtme.source_up_axis",
                         Ogre::Any(importer.getSceneUpAxis()));
+
+                    // Cache the per-submesh n-gon faces directly on the
+                    // Ogre::Mesh so exporters can recover the source
+                    // polygon structure without re-reading the file —
+                    // even after the user edits the mesh and the
+                    // qtme.source_path binding gets cleared. (Quad
+                    // migration #326, chunk 6.)
+                    EditableMesh ngonProbe;
+                    if (ngonProbe.loadFromAssimpFile(
+                            sourcePath, convertLH,
+                            importer.getSceneUpAxis() == 2,
+                            /*skeletonForBoneHandles*/ nullptr,
+                            additionalFlags)) {
+                        writeNgonFacesToMesh(mesh.get(), ngonProbe.subMeshes());
+                    }
                 }
                 if (!mesh) {
                     // Animation-only file: skeleton/animations were loaded, but there is no mesh.
