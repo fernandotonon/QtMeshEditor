@@ -4839,8 +4839,10 @@ void EditModeController::createOverlayMaterials()
         pass->setLightingEnabled(false);
         pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
         pass->setDepthCheckEnabled(true);
-        pass->setDepthWriteEnabled(false);
-        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        // Keep correct Z order so backfaces don't wash out frontfaces.
+        // (This is a preview override, not a translucent overlay.)
+        pass->setDepthWriteEnabled(true);
+        pass->setSceneBlending(Ogre::SBT_REPLACE);
         pass->setCullingMode(Ogre::CULL_NONE);
     }
 }
