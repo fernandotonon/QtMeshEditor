@@ -2057,10 +2057,17 @@ TEST_F(EditModeControllerBevelE2ETest, EnterEditModeAfterEditDoesNotReimport) {
         "qtme.source_path").has_value())
         << "exitEditMode commit must have wiped the source path";
 
-    // Re-enter: should fall back to legacy path now.
+    // Chunk 6 of #326: although `qtme.source_path` is gone, the
+    // n-gon faces survive in the `qtme.faces.<i>` binding written by
+    // the commit. Re-entering Edit Mode now rehydrates them via
+    // loadFromMesh -> readNgonFacesFromMesh so n-gon-aware ops keep
+    // working post-edit. (Pre-chunk-6 this test asserted the
+    // OPPOSITE — that the second entry would fall back to legacy
+    // triangle-only — which is no longer the right contract.)
     ASSERT_TRUE(ctrl->enterEditMode());
-    EXPECT_TRUE(ctrl->currentMesh()->subMeshes()[0].faces.empty())
-        << "second entry (post-edit) must use legacy loadFromEntity path";
+    EXPECT_FALSE(ctrl->currentMesh()->subMeshes()[0].faces.empty())
+        << "second entry (post-edit) should rehydrate n-gons from "
+           "the qtme.faces.<i> binding";
 
     QFile::remove(objPath);
 }
