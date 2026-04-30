@@ -282,6 +282,42 @@ TEST_F(EditableMeshTest, VertexColorsRoundTripThroughCommitAndResize)
     Manager::getSingleton()->destroySceneNode("EditableMesh_colors_node");
 }
 
+TEST_F(EditableMeshTest, VertexColorsCommitDoesNotSwapDiffuseVertexBuffer)
+{
+    // Regression test: freshly imported meshes may not show paint until a full buffer
+    // rebuild if we replace the VES_DIFFUSE vertex buffer binding (VAO caching).
+    auto meshPtr = createInMemoryTriangleMesh("EditableMesh_colors_no_swap");
+    auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_colors_no_swap_node");
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
+
+    EditableMesh editMesh;
+    ASSERT_TRUE(editMesh.loadFromEntity(entity));
+    ASSERT_TRUE(editMesh.ensureVertexColorBuffers(entity));
+
+    Ogre::Mesh* mesh = entity->getMesh().get();
+    ASSERT_NE(mesh, nullptr);
+    ASSERT_GE(mesh->getNumSubMeshes(), 1u);
+    Ogre::SubMesh* sm = mesh->getSubMesh(0);
+    ASSERT_NE(sm, nullptr);
+    ASSERT_TRUE(!sm->useSharedVertices);
+    ASSERT_NE(sm->vertexData, nullptr);
+    const auto* elem = sm->vertexData->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+    ASSERT_NE(elem, nullptr);
+    const unsigned short src = elem->getSource();
+    const auto before = sm->vertexData->vertexBufferBinding->getBuffer(src);
+    ASSERT_TRUE(!!before);
+
+    // Change one vertex color and commit.
+    editMesh.setVertexColor(0, 0, Ogre::ColourValue(0.2f, 0.8f, 0.1f, 1.0f));
+    ASSERT_TRUE(editMesh.commitVertexColorsToEntity(entity));
+
+    const auto after = sm->vertexData->vertexBufferBinding->getBuffer(src);
+    ASSERT_TRUE(!!after);
+    EXPECT_EQ(before.get(), after.get());
+
+    Manager::getSingleton()->destroySceneNode("EditableMesh_colors_no_swap_node");
+}
+
 TEST_F(EditableMeshTest, RecalculateNormals) {
     auto meshPtr = createInMemoryTriangleMesh("EditableMesh_normals");
     auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_normals_node");

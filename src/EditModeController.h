@@ -106,6 +106,8 @@ class EditModeController : public QObject
     Q_PROPERTY(QColor vertexPaintColor READ vertexPaintColor WRITE setVertexPaintColor NOTIFY vertexPaintChanged)
     Q_PROPERTY(double vertexPaintRadius READ vertexPaintRadius WRITE setVertexPaintRadius NOTIFY vertexPaintChanged)
     Q_PROPERTY(double vertexPaintStrength READ vertexPaintStrength WRITE setVertexPaintStrength NOTIFY vertexPaintChanged)
+    Q_PROPERTY(double vertexPaintFalloff READ vertexPaintFalloff WRITE setVertexPaintFalloff NOTIFY vertexPaintChanged)
+    Q_PROPERTY(bool vertexColorPreviewEnabled READ vertexColorPreviewEnabled WRITE setVertexColorPreviewEnabled NOTIFY vertexColorPreviewChanged)
 
 public:
     /// Selection component mode for edit mode.
@@ -221,6 +223,13 @@ public:
     void setVertexPaintRadius(double r);
     double vertexPaintStrength() const { return m_vertexPaintStrength; }
     void setVertexPaintStrength(double s);
+    /// Brush falloff [0..1]. Internally mapped to an exponent curve.
+    double vertexPaintFalloff() const { return m_vertexPaintFalloff; }
+    void setVertexPaintFalloff(double f);
+
+    /// Render-time material override to preview vertex colors (Edit Mode only).
+    bool vertexColorPreviewEnabled() const { return m_vertexColorPreviewEnabled; }
+    void setVertexColorPreviewEnabled(bool enabled);
 
     /**
      * @brief Commits deferred vertex paint from EditableMesh into GPU vertex buffers.
@@ -751,7 +760,8 @@ public:
                                       const Ogre::Vector3& localCenter,
                                       float radius,
                                       const Ogre::ColourValue& color,
-                                      float strength);
+                                      float strength,
+                                      float falloff);
 
     /// Convert a global vertex index to (subMeshIndex, localVertexIndex) pair.
     std::pair<size_t, size_t> globalToLocal(int globalIndex) const;
@@ -803,6 +813,7 @@ signals:
     /// so QML toolbar state and preview overlay refresh together.
     void knifeSessionChanged();
     void vertexPaintChanged();
+    void vertexColorPreviewChanged();
 
     /// Emitted when an edit-mode op short-circuits and wants to surface
     /// a one-line explanation to the user (e.g. "Loop cut requires a
@@ -926,6 +937,7 @@ private:
     QColor m_vertexPaintColor = QColor(255, 0, 0);
     double m_vertexPaintRadius = 0.25;   // local units
     double m_vertexPaintStrength = 0.5;  // 0..1
+    double m_vertexPaintFalloff = 0.5;   // 0..1
     bool m_vertexPaintStrokeActive = false;
     OgreWidget* m_vertexPaintWidget = nullptr;
     Ogre::Vector3 m_vertexPaintLastLocal = Ogre::Vector3::ZERO;
@@ -934,6 +946,12 @@ private:
     bool m_vertexPaintFlushScheduled = false;
     bool m_vertexPaintFlushPending = false;
     std::vector<EditableSubMesh> m_vertexPaintStrokeOriginalSubMeshes;
+
+    // Vertex color preview material override (Edit Mode only)
+    bool m_vertexColorPreviewEnabled = false;
+    std::map<unsigned int, Ogre::String> m_vertexColorPreviewSavedMaterials;
+    void applyVertexColorPreviewMaterials();
+    void removeVertexColorPreviewMaterials();
 
     /// Hit-test a screen-space point for knife placement. Priority:
     /// snap to existing vertex within pixelRadius, else snap to edge

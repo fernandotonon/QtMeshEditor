@@ -246,6 +246,7 @@ Rectangle {
             property int activeNormals: EditModeController.normalsMode
             property bool softSelOn: EditModeController.softSelectionEnabled
             property bool wireframeOn: EditModeController.wireframeEnabled
+            property bool vertexPreviewOn: EditModeController.vertexColorPreviewEnabled
 
             Connections {
                 target: EditModeController
@@ -254,6 +255,7 @@ Rectangle {
                 function onNormalsModeChanged() { editToolsCol.activeNormals = EditModeController.normalsMode }
                 function onSoftSelectionEnabledChanged() { editToolsCol.softSelOn = EditModeController.softSelectionEnabled }
                 function onWireframeChanged() { editToolsCol.wireframeOn = EditModeController.wireframeEnabled }
+                function onVertexColorPreviewChanged() { editToolsCol.vertexPreviewOn = EditModeController.vertexColorPreviewEnabled }
             }
 
             // Selection mode buttons
@@ -424,6 +426,24 @@ Rectangle {
                     }
                 }
                 Text { text: "Wireframe"; font.pixelSize: 11; color: PropertiesPanelController.textColor; anchors.verticalCenter: parent.verticalCenter }
+            }
+
+            // Vertex color preview toggle (keep in Inspector; brush settings live on the toolbar button).
+            Row {
+                spacing: 6
+                width: parent.width - 16
+
+                Rectangle {
+                    width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                    border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                    color: editToolsCol.vertexPreviewOn ? PropertiesPanelController.highlightColor : "transparent"
+                    Behavior on color { ColorAnimation { duration: 50 } }
+                    Text { anchors.centerIn: parent; text: editToolsCol.vertexPreviewOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: { editToolsCol.vertexPreviewOn = !editToolsCol.vertexPreviewOn; EditModeController.vertexColorPreviewEnabled = editToolsCol.vertexPreviewOn }
+                    }
+                }
+                Text { text: "Vertex Color Preview"; font.pixelSize: 11; color: PropertiesPanelController.textColor; anchors.verticalCenter: parent.verticalCenter }
             }
 
             // Separator

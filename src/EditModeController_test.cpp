@@ -166,7 +166,7 @@ TEST(EditModeControllerGeometry, ApplyVertexColorBrushAffectsVerticesWithinRadiu
 
     const Ogre::ColourValue paint(1.0f, 0.0f, 0.0f, 1.0f); // red
     const bool changed = EditModeController::applyVertexColorBrush(
-        mesh, Ogre::Vector3(0.0f, 0.0f, 0.0f), /*radius=*/1.1f, paint, /*strength=*/1.0f);
+        mesh, Ogre::Vector3(0.0f, 0.0f, 0.0f), /*radius=*/1.1f, paint, /*strength=*/1.0f, /*falloff=*/0.5f);
     EXPECT_TRUE(changed);
 
     // v0 should become red-ish (exact red because distance 0 => w=1).

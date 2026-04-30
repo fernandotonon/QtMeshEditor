@@ -983,15 +983,34 @@ void MainWindow::initToolBar()
     paintLay->addWidget(strLabel);
     paintLay->addWidget(strSlider);
 
+    // Falloff slider (0..1)
+    auto* falloffLabel = new QLabel(paintSettings);
+    auto* falloffSlider = new QSlider(Qt::Horizontal, paintSettings);
+    falloffSlider->setRange(0, 100);
+    auto syncFalloff = [falloffLabel, falloffSlider, emPaint]() {
+        QSignalBlocker b(falloffSlider);
+        falloffSlider->setValue(qBound(0, static_cast<int>(qRound(emPaint->vertexPaintFalloff() * 100.0)), 100));
+        falloffLabel->setText(tr("Falloff: %1").arg(emPaint->vertexPaintFalloff(), 0, 'f', 2));
+    };
+    syncFalloff();
+    connect(falloffSlider, &QSlider::valueChanged, this, [this, emPaint, falloffLabel](int v) {
+        emPaint->setVertexPaintFalloff(v / 100.0);
+        falloffLabel->setText(tr("Falloff: %1").arg(emPaint->vertexPaintFalloff(), 0, 'f', 2));
+    });
+    connect(emPaint, &EditModeController::vertexPaintChanged, this, syncFalloff);
+    paintLay->addWidget(falloffLabel);
+    paintLay->addWidget(falloffSlider);
+
     auto* paintWa = new QWidgetAction(vertexPaintMenu);
     paintWa->setDefaultWidget(paintSettings);
     vertexPaintMenu->addAction(paintWa);
     vertexPaintButton->setMenu(vertexPaintMenu);
 
-    connect(vertexPaintMenu, &QMenu::aboutToShow, this, [syncPaintColorBtn, syncRad, syncStr]() {
+    connect(vertexPaintMenu, &QMenu::aboutToShow, this, [syncPaintColorBtn, syncRad, syncStr, syncFalloff]() {
         syncPaintColorBtn();
         syncRad();
         syncStr();
+        syncFalloff();
     });
 
     connect(vertexPaintButton, &QToolButton::toggled, this, [this](bool on) {
