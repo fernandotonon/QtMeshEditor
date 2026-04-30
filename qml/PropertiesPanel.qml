@@ -246,7 +246,6 @@ Rectangle {
             property int activeNormals: EditModeController.normalsMode
             property bool softSelOn: EditModeController.softSelectionEnabled
             property bool wireframeOn: EditModeController.wireframeEnabled
-            property bool vertexPaintOn: EditModeController.vertexPaintEnabled
             property bool vertexPreviewOn: EditModeController.vertexColorPreviewEnabled
 
             Connections {
@@ -256,7 +255,6 @@ Rectangle {
                 function onNormalsModeChanged() { editToolsCol.activeNormals = EditModeController.normalsMode }
                 function onSoftSelectionEnabledChanged() { editToolsCol.softSelOn = EditModeController.softSelectionEnabled }
                 function onWireframeChanged() { editToolsCol.wireframeOn = EditModeController.wireframeEnabled }
-                function onVertexPaintChanged() { editToolsCol.vertexPaintOn = EditModeController.vertexPaintEnabled }
                 function onVertexColorPreviewChanged() { editToolsCol.vertexPreviewOn = EditModeController.vertexColorPreviewEnabled }
             }
 
@@ -430,116 +428,22 @@ Rectangle {
                 Text { text: "Wireframe"; font.pixelSize: 11; color: PropertiesPanelController.textColor; anchors.verticalCenter: parent.verticalCenter }
             }
 
-            // Vertex paint controls (MVP)
-            Column {
-                width: parent.width - 16
+            // Vertex color preview toggle (keep in Inspector; brush settings live on the toolbar button).
+            Row {
                 spacing: 6
+                width: parent.width - 16
 
-                Row {
-                    spacing: 6
-                    width: parent.width
-
-                    // Enable paint
-                    Rectangle {
-                        width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
-                        border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                        color: editToolsCol.vertexPaintOn ? PropertiesPanelController.highlightColor : "transparent"
-                        Behavior on color { ColorAnimation { duration: 50 } }
-                        Text { anchors.centerIn: parent; text: editToolsCol.vertexPaintOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: { editToolsCol.vertexPaintOn = !editToolsCol.vertexPaintOn; EditModeController.vertexPaintEnabled = editToolsCol.vertexPaintOn }
-                        }
-                    }
-                    Text { text: "Vertex Paint"; font.pixelSize: 11; color: PropertiesPanelController.textColor; anchors.verticalCenter: parent.verticalCenter }
-
-                    // Preview toggle
-                    Rectangle {
-                        width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
-                        border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                        color: editToolsCol.vertexPreviewOn ? PropertiesPanelController.highlightColor : "transparent"
-                        Behavior on color { ColorAnimation { duration: 50 } }
-                        Text { anchors.centerIn: parent; text: editToolsCol.vertexPreviewOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                        MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
-                            onClicked: { editToolsCol.vertexPreviewOn = !editToolsCol.vertexPreviewOn; EditModeController.vertexColorPreviewEnabled = editToolsCol.vertexPreviewOn }
-                        }
-                    }
-                    Text { text: "Preview"; font.pixelSize: 11; color: PropertiesPanelController.textColor; anchors.verticalCenter: parent.verticalCenter; opacity: 0.9 }
-                }
-
-                // Color swatches
-                Row {
-                    spacing: 6
-                    width: parent.width
-                    visible: editToolsCol.vertexPaintOn
-
-                    Text { text: "Color"; font.pixelSize: 10; color: PropertiesPanelController.textColor; width: 36; anchors.verticalCenter: parent.verticalCenter }
-
-                    Repeater {
-                        model: ["#ff0000", "#00ff00", "#0000ff", "#ffff00", "#00ffff", "#ff00ff", "#ffffff", "#000000"]
-                        Rectangle {
-                            width: 16; height: 16; radius: 3
-                            color: modelData
-                            border.width: 1
-                            border.color: PropertiesPanelController.borderColor
-                            MouseArea {
-                                anchors.fill: parent
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: EditModeController.setVertexPaintBrushColor(modelData)
-                            }
-                        }
+                Rectangle {
+                    width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
+                    border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                    color: editToolsCol.vertexPreviewOn ? PropertiesPanelController.highlightColor : "transparent"
+                    Behavior on color { ColorAnimation { duration: 50 } }
+                    Text { anchors.centerIn: parent; text: editToolsCol.vertexPreviewOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
+                    MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                        onClicked: { editToolsCol.vertexPreviewOn = !editToolsCol.vertexPreviewOn; EditModeController.vertexColorPreviewEnabled = editToolsCol.vertexPreviewOn }
                     }
                 }
-
-                // Radius slider
-                Column {
-                    width: parent.width
-                    visible: editToolsCol.vertexPaintOn
-                    spacing: 2
-                    Text {
-                        text: "Radius: " + EditModeController.vertexPaintRadius.toFixed(3)
-                        color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    }
-                    Slider {
-                        width: parent.width
-                        from: 0.01; to: 2.0; stepSize: 0.005
-                        value: EditModeController.vertexPaintRadius
-                        onValueChanged: EditModeController.vertexPaintRadius = value
-                    }
-                }
-
-                // Strength slider
-                Column {
-                    width: parent.width
-                    visible: editToolsCol.vertexPaintOn
-                    spacing: 2
-                    Text {
-                        text: "Strength: " + EditModeController.vertexPaintStrength.toFixed(2)
-                        color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    }
-                    Slider {
-                        width: parent.width
-                        from: 0.0; to: 1.0; stepSize: 0.01
-                        value: EditModeController.vertexPaintStrength
-                        onValueChanged: EditModeController.vertexPaintStrength = value
-                    }
-                }
-
-                // Falloff slider (requested for issue #315)
-                Column {
-                    width: parent.width
-                    visible: editToolsCol.vertexPaintOn
-                    spacing: 2
-                    Text {
-                        text: "Falloff: " + EditModeController.vertexPaintFalloff.toFixed(2)
-                        color: PropertiesPanelController.textColor; font.pixelSize: 10
-                    }
-                    Slider {
-                        width: parent.width
-                        from: 0.0; to: 1.0; stepSize: 0.01
-                        value: EditModeController.vertexPaintFalloff
-                        onValueChanged: EditModeController.vertexPaintFalloff = value
-                    }
-                }
+                Text { text: "Vertex Color Preview"; font.pixelSize: 11; color: PropertiesPanelController.textColor; anchors.verticalCenter: parent.verticalCenter }
             }
 
             // Separator
