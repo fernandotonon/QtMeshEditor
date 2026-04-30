@@ -327,6 +327,28 @@ public:
                                 const std::vector<float>& profilePoints = {});
 
     /**
+     * @brief n-gon-aware edge bevel for meshes whose adjacent faces are
+     *        arbitrary polygons.
+     *
+     * Simpler counterpart to `bevelEdges` — handles any face arity ≥ 3
+     * by treating each beveled face's vertex loop as opaque. Use this
+     * when at least one face adjacent to a beveled edge is a quad or
+     * higher-arity n-gon; the triangle-only `bevelEdges` makes
+     * incorrect assumptions about "third vertex" in that case.
+     *
+     * MVP scope: isolated bevels only (input edges sharing endpoints
+     * are rejected); flat single-segment chamfer; `profile` and
+     * `profilePoints` are reserved for a future extension.
+     *
+     * @return Indices of the newly created vertices. Empty on failure.
+     */
+    std::vector<int> bevelEdgesNgon(const std::vector<int>& edgeIndices,
+                                    float width,
+                                    int segments = 1,
+                                    float profile = 0.5f,
+                                    const std::vector<float>& profilePoints = {});
+
+    /**
      * @brief Bevel selected vertices (corner cut).
      *
      * For each selected vertex v of valence N >= 3, replaces v with an
@@ -366,6 +388,28 @@ public:
                                    int segments = 1,
                                    float profile = 0.5f,
                                    const std::vector<float>& profilePoints = {});
+
+    /**
+     * @brief n-gon-aware vertex bevel for meshes whose incident faces are
+     *        arbitrary polygons.
+     *
+     * Simpler counterpart to `bevelVertices`. Replaces v with one inner
+     * vertex per incident face (placed at distance `width` along the
+     * direction toward each face's centroid) plus a single n-gon cap
+     * face walking those inner vertices in ring order. Each incident
+     * face keeps its original arity — only its v-corner moves inward.
+     *
+     * MVP scope: flat single-segment cap, valence ≥ 3, non-boundary
+     * vertices only. `segments` and `profilePoints` are reserved for a
+     * future rounded-cap extension.
+     *
+     * @return Indices of the newly created vertices. Empty on failure.
+     */
+    std::vector<int> bevelVerticesNgon(const std::vector<int>& vertexIndices,
+                                       float width,
+                                       int segments = 1,
+                                       float profile = 0.5f,
+                                       const std::vector<float>& profilePoints = {});
 
     /**
      * @brief Insert a new vertex on an edge at parametric position t, then
@@ -455,6 +499,34 @@ public:
      *         crossings), in creation order. Empty on failure.
      */
     std::vector<int> cutPath(const std::vector<CutPoint>& points);
+
+    /**
+     * @brief Loop cut: insert a perpendicular cut through a ring of quads.
+     *
+     * Given a starting edge, walks the chain of quads adjacent to it
+     * via the "opposite edge" relation. In each quad [v0, v1, v2, v3]
+     * (where the entry edge is one of its sides, e.g. (v0, v1)), the
+     * OPPOSITE edge is (v2, v3). The loop cut splits both edges at
+     * their midpoints and bisects the quad along the new diagonal.
+     *
+     * The walk continues across each opposite edge into the next
+     * quad in the ring. It terminates when:
+     *   - the walk returns to the starting edge (closed loop),
+     *   - it encounters a non-quad face (loop cut requires the
+     *     opposite-edge correspondence, only well-defined on quads),
+     *   - it encounters a boundary edge (no second face to cross).
+     *
+     * MVP scope: cuts at midpoint (t = 0.5) on each rail. A future
+     * extension can take a `t` parameter to slide the cut along
+     * the loop. Profile / multi-cuts are out of scope.
+     *
+     * @param startEdgeIdx The HE edge index to start from. Must be
+     *                     an interior edge whose adjacent faces are
+     *                     both quads; otherwise returns empty.
+     * @return Indices of every newly created vertex (in walk order).
+     *         Empty on failure.
+     */
+    std::vector<int> loopCut(int startEdgeIdx);
 
     /**
      * @brief Merge a set of vertices into a single survivor at `targetPos`.
@@ -602,6 +674,84 @@ public:
      *         order). Empty on no-op.
      */
     std::vector<int> subdivideFaces(const std::vector<int>& faceIndices);
+
+    /**
+     * @brief Subdivide each selected n-gon face into N sub-quads, linearly.
+     *
+     * Geometrically equivalent to one Catmull-Clark step ON THE
+     * SELECTED FACES ONLY, minus the smoothing rules — face points and
+     * edge points land at the arithmetic mean of their inputs (linear
+     * subdivide, no chord/face-point blending into surrounding
+     * vertices). Output is always quads regardless of input N.
+     *
+     * Use this when you want to preserve quad structure on a partial
+     * selection without smoothing the corners. For triangle inputs the
+     * existing `subdivideFaces` 1-to-4 split is usually a better fit;
+     * for quad inputs `subdivideFaces` skips them as non-triangles, so
+     * this method fills that gap.
+     *
+     * Adjacent NON-selected faces sharing an edge with a subdivided
+     * face are NOT retriangulated — this means you'll get T-junctions
+     * along the boundary between selected and unselected regions on
+     * the same submesh. Most users will want to either (a) select
+     * full neighbour rings, or (b) use the whole-mesh
+     * `subdivideCatmullClark` instead. T-junction prevention is a
+     * follow-up.
+     *
+     * MVP scope:
+     *  - Faces must have 3+ corners. (3 → 3 quads, 4 → 4, N → N.)
+     *  - Cross-submesh boundary handling: edge midpoints are shared
+     *    only between selected faces in the same submesh. Cross-
+     *    submesh edges fall back to per-face edge points (no
+     *    sharing), which still produces a valid mesh — just slightly
+     *    duplicated vertices at material seams.
+     *
+     * @param faceIndices The HE face indices to subdivide.
+     * @return Indices of every newly created vertex (face points
+     *         followed by edge points). Empty on no-op.
+     */
+    std::vector<int> subdivideFacesToQuads(const std::vector<int>& faceIndices);
+
+    /**
+     * @brief Subdivide every face by one Catmull-Clark step.
+     *
+     * The classic Catmull-Clark scheme. For each face F:
+     *  - Compute a face point Fp = average of its corner positions.
+     *  - For each edge E with endpoints (a, b) and adjacent face points
+     *    (Fp1, Fp2), compute the edge point Ep = (a + b + Fp1 + Fp2) / 4
+     *    on interior edges, or Ep = (a + b) / 2 on boundary edges.
+     *  - For each original vertex V of valence n with adjacent face
+     *    points Fi (mean F) and edge midpoints Ri (mean R, taken on
+     *    PRE-update positions), update V to (F + 2R + (n-3) V) / n on
+     *    interior vertices, or (V + Em1 + Em2) / 4 on boundary
+     *    vertices using its two boundary edge midpoints.
+     *  - Replace each face F (with n corners) by n quads, each formed
+     *    from (corner, neighbouring-edge-point, face-point,
+     *    other-neighbouring-edge-point).
+     *
+     * Output is ALWAYS quads, regardless of input — a triangle becomes
+     * 3 quads, a quad becomes 4 quads, an N-gon becomes N quads.
+     * Submesh assignments are preserved (each output quad inherits its
+     * source face's submesh).
+     *
+     * UVs / normals / colors / bone weights / tangents are blended
+     * with the same weights as positions (face point: avg of corners;
+     * edge point: avg of endpoints+adjacent face points; updated
+     * vertex: weighted blend per the rule above). For boundary
+     * vertices the chord rule keeps UV seams reasonable; geometry on
+     * a closed manifold is C¹ continuous in the limit.
+     *
+     * Skips faces that span multiple submeshes (would silently weld
+     * material groups). Cross-submesh edges are treated as boundaries
+     * for the smoothing rule, so submesh boundaries stay sharp.
+     *
+     * @return Indices of every newly created vertex (face points,
+     *         edge points, in creation order). The original vertex
+     *         slots are reused for the smoothed positions; their
+     *         indices are unchanged. Empty on no-op (all submeshes
+     *         empty / all faces invalid).
+     */
+    std::vector<int> subdivideCatmullClark();
 
     /**
      * @brief Fill a face from selected vertices or a closed edge loop.

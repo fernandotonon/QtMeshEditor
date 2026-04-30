@@ -3107,6 +3107,295 @@ TEST(HalfEdgeMeshStandalone, BevelVertexSegmentsClampsOverUpperLimit) {
 }
 
 // ===========================================================================
+// bevelEdgesNgon — n-gon-aware edge bevel
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonOnQuadEdgeKeepsQuads) {
+    // Two adjacent quads sharing edge v1-v2. Bevel that shared edge.
+    // Expected output:
+    //   - 4 new "inner" vertices (innerV1F1, innerV2F1, innerV1F2, innerV2F2).
+    //   - The two original quads become quads with vMid replacements
+    //     (4-vertex faces still — same arity, just two corners moved).
+    //   - 1 new chamfer quad bridging f1 to f2.
+    //   - 2 corner-cap triangles, one at v1 and one at v2.
+    // Total active face count: 2 (modified quads) + 1 (chamfer) + 2 (caps) = 5.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1),
+                     mkV(2, 0), mkV(2, 1) };
+    EditableFace q1, q2;
+    q1.indices = {0, 1, 2, 3};
+    q2.indices = {1, 4, 5, 2};
+    sub.faces = { q1, q2 };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    ASSERT_EQ(he.faceCount(), 2u);
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    auto newVerts = he.bevelEdgesNgon({sharedEdge}, 0.1f);
+    EXPECT_EQ(newVerts.size(), 4u)
+        << "expected 4 inner vertices (2 per face × 2 endpoints)";
+    EXPECT_TRUE(he.validate());
+
+    // Active face count: 2 modified quads + 1 chamfer quad + 2 corner caps = 5.
+    int active = 0;
+    int quadCount = 0;
+    int triCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        const auto fv = he.faceVertices(static_cast<int>(f));
+        if (fv.size() == 4) ++quadCount;
+        if (fv.size() == 3) ++triCount;
+    }
+    EXPECT_EQ(active, 5);
+    EXPECT_EQ(quadCount, 3) << "2 modified original quads + 1 chamfer = 3";
+    EXPECT_EQ(triCount, 2) << "2 corner caps at v1 and v2";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonRejectsBoundaryEdge) {
+    // Boundary edges (single adjacent face) are skipped — same as the
+    // triangle-bevel MVP. No crash, no new vertices.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace q;
+    q.indices = {0, 1, 2, 3};
+    sub.faces = { q };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    const int boundary = findEdge(he, 0, 1);
+    ASSERT_GE(boundary, 0);
+    auto newVerts = he.bevelEdgesNgon({boundary}, 0.1f);
+    EXPECT_TRUE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonSegments3ProducesRoundedChamfer) {
+    // segments > 1 builds a profile-driven chain at each endpoint:
+    // 4 chain vertices per endpoint (innerVF1, mid_1, mid_2, innerVF2),
+    // 3 chamfer-strip quads per beveled edge, 6 corner-cap triangles
+    // (3 per endpoint).
+    //
+    // Topology: 2 modified quads (the original f1, f2) + 3 chamfer
+    // segment quads + 6 corner caps = 11 active faces.
+    // New vertices: 4 inner (segments=1 baseline) + 2 × 2 intermediates
+    // (segments-1 = 2 per endpoint) = 8.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1),
+                     mkV(2, 0), mkV(2, 1) };
+    EditableFace q1, q2;
+    q1.indices = {0, 1, 2, 3};
+    q2.indices = {1, 4, 5, 2};
+    sub.faces = { q1, q2 };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    auto newVerts = he.bevelEdgesNgon({sharedEdge}, 0.1f, /*segments=*/3, /*profile=*/0.5f);
+    EXPECT_EQ(newVerts.size(), 8u)
+        << "4 inner + 2*(segments-1) intermediates = 8 new verts";
+    EXPECT_TRUE(he.validate());
+
+    int active = 0;
+    int quads = 0;
+    int tris = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        const auto fv = he.faceVertices(static_cast<int>(f));
+        if (fv.size() == 4) ++quads;
+        if (fv.size() == 3) ++tris;
+    }
+    EXPECT_EQ(active, 11)
+        << "2 modified quads + 3 chamfer segment quads + 6 corner caps";
+    EXPECT_EQ(quads, 5);
+    EXPECT_EQ(tris, 6);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonOnQuadCubeProducesManifoldOutput) {
+    // Quad cube: 8 verts, 6 quad faces. Bevel one of the cube's edges
+    // (top-back, between v2 and v3). The endpoints have valence 3 — so
+    // the test exercises neighbor-face splicing: each non-beveled face
+    // adjacent to v2 / v3 must absorb the corresponding inner vertex
+    // into its loop, otherwise the chamfer leaves a non-manifold gap.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3::UNIT_Y; v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(-1,-1,-1), mkV(1,-1,-1), mkV(-1,1,-1), mkV(1,1,-1), // 0..3
+        mkV(-1,-1, 1), mkV(1,-1, 1), mkV(-1,1, 1), mkV(1,1, 1), // 4..7
+    };
+    EditableFace fBack, fFront, fTop, fBottom, fLeft, fRight;
+    fBack.indices   = {0, 2, 3, 1};   // -Z (CCW from outside)
+    fFront.indices  = {5, 7, 6, 4};   // +Z
+    fBottom.indices = {0, 1, 5, 4};   // -Y
+    fTop.indices    = {2, 6, 7, 3};   // +Y
+    fLeft.indices   = {0, 4, 6, 2};   // -X
+    fRight.indices  = {1, 3, 7, 5};   // +X
+    sub.faces = { fBack, fFront, fBottom, fTop, fLeft, fRight };
+    triangulateFaces(sub);
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(he.faceCount(), 6u);
+    const int topBackEdge = findEdge(he, 2, 3);
+    ASSERT_GE(topBackEdge, 0);
+
+    auto newVerts = he.bevelEdgesNgon({topBackEdge}, 0.1f);
+    EXPECT_EQ(newVerts.size(), 4u);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back))
+        << "neighbor-face splicing must close the chamfer around the cube's "
+        << "valence-3 endpoints";
+}
+
+TEST(HalfEdgeMeshStandalone, BevelVerticesNgonOnQuadCornerKeepsQuads) {
+    // 4 quads in a + arrangement around a central vertex v4 of valence 4.
+    // Bevel v4. Expected:
+    //   - 4 inner vertices (one per incident face), each placed toward
+    //     that face's centroid.
+    //   - 4 modified quads (each loses v4, gains its inner vertex —
+    //     still a 4-vertex face).
+    //   - 1 cap n-gon (4-vertex) walking the four inner vertices.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),
+        mkV(0, 2), mkV(1, 2), mkV(2, 2),
+    };
+    EditableFace qA, qB, qC, qD;
+    qA.indices = {0, 1, 4, 3};
+    qB.indices = {1, 2, 5, 4};
+    qC.indices = {3, 4, 7, 6};
+    qD.indices = {4, 5, 8, 7};
+    sub.faces = { qA, qB, qC, qD };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    ASSERT_EQ(he.faceCount(), 4u);
+
+    auto newVerts = he.bevelVerticesNgon({4}, 0.1f);
+    EXPECT_EQ(newVerts.size(), 4u)
+        << "one inner vertex per incident face";
+    EXPECT_TRUE(he.validate());
+
+    int active = 0;
+    int quads = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quads;
+    }
+    EXPECT_EQ(active, 5)
+        << "4 modified quads + 1 cap quad";
+    EXPECT_EQ(quads, 5);
+}
+
+TEST(HalfEdgeMeshStandalone, BevelEdgesNgonRejectsChainedSelection) {
+    // 4 quads in a + arrangement around a central vertex, so every
+    // selected edge is INTERIOR (not a boundary). Two edges chained
+    // through that center vertex must be skipped — chained bevels
+    // need ring-aware logic the MVP doesn't have.
+    //
+    //    v6 - v7 - v8
+    //    |    |    |
+    //    v3 - v4 - v5
+    //    |    |    |
+    //    v0 - v1 - v2
+    //
+    // Quads: (0,1,4,3), (1,2,5,4), (3,4,7,6), (4,5,8,7).
+    // The edges (1,4) and (4,5) share v4 (the center) and are both
+    // interior between quad pairs.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),
+        mkV(0, 2), mkV(1, 2), mkV(2, 2),
+    };
+    EditableFace qA, qB, qC, qD;
+    qA.indices = {0, 1, 4, 3};
+    qB.indices = {1, 2, 5, 4};
+    qC.indices = {3, 4, 7, 6};
+    qD.indices = {4, 5, 8, 7};
+    sub.faces = { qA, qB, qC, qD };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    const int eA = findEdge(he, 1, 4);  // interior between qA, qB
+    const int eB = findEdge(he, 4, 5);  // interior between qB, qD; shares v4
+    ASSERT_GE(eA, 0); ASSERT_GE(eB, 0);
+    auto newVerts = he.bevelEdgesNgon({eA, eB}, 0.05f);
+    EXPECT_TRUE(newVerts.empty())
+        << "chained selections (sharing an endpoint) are skipped in the MVP";
+    EXPECT_TRUE(he.validate());
+}
+
+// ===========================================================================
 // splitEdge / splitFace — knife-tool topology primitives
 // ===========================================================================
 
@@ -3123,10 +3412,14 @@ static int activeFaceCount(const HalfEdgeMesh& he)
     return n;
 }
 
-TEST(HalfEdgeMeshStandalone, SplitEdgeMidpointOfInteriorEdgeDoublesTriangles) {
-    // The quad mesh has two triangles sharing the v1↔v2 diagonal. Splitting
-    // that edge at t=0.5 should insert one new vertex, replace both triangles
-    // with two each (four tris total), and keep the mesh manifold.
+TEST(HalfEdgeMeshStandalone, SplitEdgeMidpointOfInteriorEdgeInsertsVertexInBothFaces) {
+    // n-gon-aware splitEdge inserts vMid into each adjacent face's vertex
+    // loop without introducing a fan diagonal: a triangle adjacent to the
+    // split edge becomes a 4-vertex face (NOT two triangles). The quad
+    // mesh's two triangles each gain vMid, resulting in 2 active 4-vertex
+    // faces. (Pre-quads-followup this returned 4 triangles via fan
+    // diagonals on `vMid → vOpp`; the new behaviour preserves more
+    // topology and produces no artificial diagonals.)
     auto em = makeQuadMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -3139,7 +3432,17 @@ TEST(HalfEdgeMeshStandalone, SplitEdgeMidpointOfInteriorEdgeDoublesTriangles) {
     EXPECT_TRUE(he.validate());
 
     EXPECT_EQ(he.vertexCount(), 5u);
-    EXPECT_EQ(activeFaceCount(he), 4);
+    EXPECT_EQ(activeFaceCount(he), 2);
+    // Each surviving face should have 4 vertices now (the original
+    // triangle plus vMid inserted on the shared edge).
+    int quadCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        auto fv = he.faceVertices(static_cast<int>(f));
+        if (fv.size() == 4) ++quadCount;
+    }
+    EXPECT_EQ(quadCount, 2)
+        << "n-gon-aware splitEdge: each adjacent triangle gains vMid → quad";
 
     // Midpoint position should be the average of the endpoints.
     const auto mid = he.vertex(vMid).position;
@@ -3195,10 +3498,11 @@ TEST(HalfEdgeMeshStandalone, SplitEdgeInterpolatesNormalAndUV) {
     EXPECT_NEAR(std::min(uvDist1, uvDist2) / uvSeg, 0.25f, 1e-3f);
 }
 
-TEST(HalfEdgeMeshStandalone, SplitEdgeBoundaryEdgeProducesOneExtraTriangle) {
-    // A triangle's perimeter edge is a boundary edge (only one adjacent face).
-    // Splitting it should turn the single triangle into two triangles without
-    // creating any phantom face on the outside.
+TEST(HalfEdgeMeshStandalone, SplitEdgeBoundaryEdgeInsertsVertexInTheTriangle) {
+    // A triangle's perimeter edge is a boundary edge (only one adjacent
+    // face). n-gon-aware splitEdge: the triangle gains vMid on its
+    // perimeter, becoming a 4-vertex face. No phantom face on the outside.
+    // (Pre-quads-followup this returned two triangles via a fan diagonal.)
     auto em = makeTriangleMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -3212,7 +3516,14 @@ TEST(HalfEdgeMeshStandalone, SplitEdgeBoundaryEdgeProducesOneExtraTriangle) {
     EXPECT_TRUE(he.validate());
 
     EXPECT_EQ(he.vertexCount(), 4u);
-    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_EQ(activeFaceCount(he), 1);
+    // The single surviving face must be a quad (3 original verts + vMid).
+    int quadCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quadCount;
+    }
+    EXPECT_EQ(quadCount, 1);
 }
 
 TEST(HalfEdgeMeshStandalone, SplitEdgeClampsExtremeT) {
@@ -3243,12 +3554,15 @@ TEST(HalfEdgeMeshStandalone, SplitEdgeInvalidIndexReturnsMinusOne) {
     EXPECT_EQ(he.splitEdge(999, 0.5f), -1);
 }
 
-TEST(HalfEdgeMeshStandalone, TwoSplitEdgesOnOneTriangleProduceMidpointEdge) {
-    // Real knife-tool scenario: the user cuts a triangle by clicking two of
-    // its edges. Two splitEdge calls on the same triangle should leave the
-    // M1↔M2 segment as a real edge of the resulting mesh — no follow-up
-    // splitFace needed. This is the invariant the knife commit pipeline
-    // relies on for the common "cut one face" case.
+TEST(HalfEdgeMeshStandalone, TwoSplitEdgesOnOneTriangleNeedFollowupSplitFace) {
+    // n-gon-aware splitEdge: two splitEdge calls on the same triangle
+    // insert m1 and m2 into its loop, producing a pentagon
+    // [v0, m1, v1, m2, v2] — but they are NOT automatically connected.
+    // (The triangle-only splitEdge MVP previously cut the triangle into
+    // sub-triangles via fan diagonals, which incidentally produced the
+    // m1-m2 edge as a side-effect.) Call splitFace explicitly to
+    // materialise the cut. This is exactly what `cutPath` now does in
+    // its walk loop.
     auto em = makeTriangleMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -3266,13 +3580,81 @@ TEST(HalfEdgeMeshStandalone, TwoSplitEdgesOnOneTriangleProduceMidpointEdge) {
     ASSERT_GE(m2, 0);
     EXPECT_TRUE(he.validate());
 
-    // The knife cut ran from M1 to M2; that segment must now be an edge.
+    // After two splitEdges the triangle is now a pentagon; m1 and m2
+    // are NOT yet connected — that's the new contract.
+    EXPECT_LT(findEdge(he, m1, m2), 0)
+        << "n-gon splitEdge does not auto-cut: explicit splitFace required";
+    EXPECT_EQ(activeFaceCount(he), 1);
+
+    // Find the pentagon and call splitFace to materialise the cut.
+    int pentagonIdx = -1;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        const auto fv = he.faceVertices(static_cast<int>(f));
+        if (fv.size() == 5
+            && std::find(fv.begin(), fv.end(), m1) != fv.end()
+            && std::find(fv.begin(), fv.end(), m2) != fv.end()) {
+            pentagonIdx = static_cast<int>(f);
+            break;
+        }
+    }
+    ASSERT_GE(pentagonIdx, 0);
+    EXPECT_TRUE(he.splitFace(pentagonIdx, m1, m2));
     EXPECT_GE(findEdge(he, m1, m2), 0)
-        << "M1-M2 should be a real edge after two splitEdges on the same triangle";
+        << "splitFace must materialise the m1-m2 cut on the pentagon";
 
     EditableMesh back;
     ASSERT_TRUE(he.toEditableMesh(back));
     EXPECT_TRUE(isManifold(back));
+}
+
+TEST(HalfEdgeMeshStandalone, SplitEdgeOnQuadMeshKeepsQuads) {
+    // Regression for the n-gon-aware splitEdge: split a quad-imported
+    // mesh's edge and confirm both adjacent quads become pentagons
+    // (NOT four triangles via fan diagonals as the old MVP would have
+    // produced). This is the topology guarantee knife / loop cut
+    // depend on for producing real quad outputs on quad-imported
+    // assets.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    // Two adjacent quads sharing the v1-v2 edge.
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1),
+                     mkV(2, 0), mkV(2, 1) };
+    EditableFace q1, q2;
+    q1.indices = {0, 1, 2, 3};
+    q2.indices = {1, 4, 5, 2};
+    sub.faces = { q1, q2 };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    ASSERT_EQ(activeFaceCount(he), 2);
+
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    const int vMid = he.splitEdge(sharedEdge, 0.5f);
+    ASSERT_GE(vMid, 0);
+    EXPECT_TRUE(he.validate());
+
+    // Both quads should now be pentagons (5-vertex faces). NOT four
+    // triangles — that would mean fan diagonals slipped in.
+    EXPECT_EQ(activeFaceCount(he), 2);
+    int pentagonCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        if (he.faceVertices(static_cast<int>(f)).size() == 5) ++pentagonCount;
+    }
+    EXPECT_EQ(pentagonCount, 2)
+        << "n-gon-aware splitEdge: quad + new vertex on shared edge → pentagon";
 }
 
 TEST(HalfEdgeMeshStandalone, SplitFaceRejectsAdjacentBoundaryVertices) {
@@ -3451,6 +3833,136 @@ TEST(HalfEdgeMeshStandalone, CutPathRollsBackWhenSecondEdgeDuplicatesFirst) {
     EXPECT_EQ(he.faceCount(), facesBefore);
     EXPECT_EQ(he.edgeCount(), edgesBefore);
     EXPECT_TRUE(he.validate());
+}
+
+// ===========================================================================
+// loopCut — perpendicular ring cut through quads
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, LoopCutOnQuadStripCutsEachQuadOnce) {
+    // 3-quad strip: q1=(0,1,5,4), q2=(1,2,6,5), q3=(2,3,7,6).
+    //
+    //   v0─v1─v2─v3
+    //   │ q1│q2│q3│
+    //   v4─v5─v6─v7
+    //
+    // Loop-cutting the (1,5) interior edge starts from q1, the
+    // opposite-edge walk crosses (1,5) into q2 then (2,6) into q3,
+    // terminates at the q3 boundary (3,7). 3 quads × 1 cut each =
+    // 3 new midpoints, 6 quads total after the cut.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 1), mkV(1, 1), mkV(2, 1), mkV(3, 1),
+        mkV(0, 0), mkV(1, 0), mkV(2, 0), mkV(3, 0),
+    };
+    EditableFace q1, q2, q3;
+    q1.indices = {0, 1, 5, 4};
+    q2.indices = {1, 2, 6, 5};
+    q3.indices = {2, 3, 7, 6};
+    sub.faces = { q1, q2, q3 };
+    triangulateFaces(sub);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    const int startEdge = findEdge(he, 1, 5);
+    ASSERT_GE(startEdge, 0);
+
+    auto newVerts = he.loopCut(startEdge);
+    // 4 rails get midpoints: (1,5) start, (0,4) on q1's other side,
+    // (2,6) interior, (3,7) on q3's other side. So 4 new vertices.
+    EXPECT_EQ(newVerts.size(), 4u)
+        << "open-ended loop cut: 4 rail midpoints across 3 quads";
+    EXPECT_TRUE(he.validate());
+
+    int active = 0, quads = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quads;
+    }
+    EXPECT_EQ(active, 6) << "each of the 3 original quads bisected → 6 quads";
+    EXPECT_EQ(quads, 6) << "loop cut preserves quad topology";
+}
+
+TEST(HalfEdgeMeshStandalone, LoopCutFailsOnNonQuadAdjacency) {
+    // Triangles can't loop-cut: there's no opposite-edge correspondence.
+    // Starting from any edge of a triangle pair returns empty.
+    auto em = makeQuadMesh(); // two triangles, NOT quads
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const int diag = findEdge(he, 1, 2);
+    ASSERT_GE(diag, 0);
+    auto newVerts = he.loopCut(diag);
+    EXPECT_TRUE(newVerts.empty());
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, LoopCutClosedRingOnQuadCubeReturnsToStart) {
+    // Quad cube: 6 quad faces forming a closed manifold. Loop-cutting
+    // any edge produces a closed ring of cuts (4 rails total since
+    // the walk returns to the starting edge after traversing 4 faces).
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3::UNIT_Y; v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(-1,-1,-1), mkV(1,-1,-1), mkV(-1,1,-1), mkV(1,1,-1),
+        mkV(-1,-1, 1), mkV(1,-1, 1), mkV(-1,1, 1), mkV(1,1, 1),
+    };
+    EditableFace fBack, fFront, fTop, fBottom, fLeft, fRight;
+    fBack.indices   = {0, 2, 3, 1};
+    fFront.indices  = {5, 7, 6, 4};
+    fBottom.indices = {0, 1, 5, 4};
+    fTop.indices    = {2, 6, 7, 3};
+    fLeft.indices   = {0, 4, 6, 2};
+    fRight.indices  = {1, 3, 7, 5};
+    sub.faces = { fBack, fFront, fBottom, fTop, fLeft, fRight };
+    triangulateFaces(sub);
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    // Pick the front-bottom edge (4,5). Its perpendicular ring runs
+    // around the cube via Bottom → Right → Top → Left and closes.
+    const int startEdge = findEdge(he, 4, 5);
+    ASSERT_GE(startEdge, 0);
+
+    auto newVerts = he.loopCut(startEdge);
+    EXPECT_EQ(newVerts.size(), 4u)
+        << "closed cube ring: 4 rails (one per traversed face), shared midpoints";
+    EXPECT_TRUE(he.validate());
+
+    // 6 original faces + 4 cuts (one per cube face crossed) → 10 quads.
+    int active = 0, quads = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        ++active;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quads;
+    }
+    EXPECT_EQ(active, 10);
+    EXPECT_EQ(quads, 10) << "loop cut preserves quad topology on closed manifolds";
+}
+
+TEST(HalfEdgeMeshStandalone, LoopCutFailsOnInvalidEdgeIndex) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_TRUE(he.loopCut(-1).empty());
+    EXPECT_TRUE(he.loopCut(999).empty());
 }
 
 // ===========================================================================
@@ -3895,10 +4407,11 @@ TEST(HalfEdgeMeshStandalone, DissolveEdgesEmptyIsNoOp) {
     EXPECT_TRUE(he.validate());
 }
 
-TEST(HalfEdgeMeshStandalone, DissolveEdgesQuadDiagonalRetriangulatesOtherDiagonal) {
-    // Quad: tris (0,1,2) and (1,3,2) share diagonal v1↔v2. Dissolving the
-    // diagonal should keep face count at 2 (still triangulated as a quad)
-    // but with the OTHER diagonal active (0↔3).
+TEST(HalfEdgeMeshStandalone, DissolveEdgesQuadDiagonalMergesIntoSingleQuad) {
+    // n-gon-aware dissolve: dissolving the shared edge between two
+    // triangles merges them into a SINGLE quad face — no diagonal at
+    // all. (The previous triangle-only impl just swapped to the OTHER
+    // diagonal, which left a fan diagonal in place.)
     auto em = makeQuadMesh();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
@@ -3906,13 +4419,20 @@ TEST(HalfEdgeMeshStandalone, DissolveEdgesQuadDiagonalRetriangulatesOtherDiagona
     ASSERT_GE(diag, 0);
 
     EXPECT_EQ(he.dissolveEdges({diag}), 1);
-    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_EQ(activeFaceCount(he), 1);
     EXPECT_TRUE(he.validate());
 
-    // The new diagonal must connect v0 and v3.
-    EXPECT_GE(findEdge(he, 0, 3), 0);
-    // Old diagonal should be gone (or no longer exist as an edge).
+    // The shared diagonal is gone; neither (1,2) nor (0,3) is an edge,
+    // because the merged face is a quad with only its perimeter edges.
     EXPECT_EQ(findEdge(he, 1, 2), -1);
+    EXPECT_EQ(findEdge(he, 0, 3), -1);
+    // The single surviving face has 4 vertices.
+    int quadCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        if (he.faceVertices(static_cast<int>(f)).size() == 4) ++quadCount;
+    }
+    EXPECT_EQ(quadCount, 1);
 }
 
 TEST(HalfEdgeMeshStandalone, DissolveEdgesBoundaryEdgeIsSkipped) {
@@ -3928,18 +4448,28 @@ TEST(HalfEdgeMeshStandalone, DissolveEdgesBoundaryEdgeIsSkipped) {
 }
 
 TEST(HalfEdgeMeshStandalone, DissolveVerticesHexFanCenterCollapsesToHexagon) {
-    // The hex fan's v0 has valence 6, all triangles. Dissolving v0 should
-    // produce 4 triangles (n-gon with n=6 fan-triangulated from one vertex).
+    // n-gon-aware dissolve: dissolving v0 (the hex fan's center)
+    // replaces the 6 incident triangles with a SINGLE hexagon face —
+    // no fan diagonals introduced. (Previous triangle-only impl
+    // fan-triangulated the resulting boundary loop into 4 triangles.)
     auto em = makeHexFan();
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(em));
     ASSERT_EQ(activeFaceCount(he), 6);
 
     EXPECT_EQ(he.dissolveVertices({0}), 1);
-    EXPECT_EQ(activeFaceCount(he), 4)
-        << "hexagon fan-triangulated from one corner has n-2 = 4 triangles";
+    EXPECT_EQ(activeFaceCount(he), 1)
+        << "hexagon merged from the umbrella, no fan diagonals";
     EXPECT_LT(he.vertex(0).halfEdge, 0);
     EXPECT_TRUE(he.validate());
+
+    // The single surviving face has 6 vertices.
+    int hexCount = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        if (he.faceVertices(static_cast<int>(f)).size() == 6) ++hexCount;
+    }
+    EXPECT_EQ(hexCount, 1);
 }
 
 TEST(HalfEdgeMeshStandalone, DissolveVerticesBoundaryVertexIsSkipped) {
@@ -4012,8 +4542,10 @@ TEST(HalfEdgeMeshStandalone, DissolveEdgesMultipleDisjointEdgesAllProcessed) {
 
     EXPECT_EQ(he.dissolveEdges({diagL, diagR}), 2)
         << "both interior diagonals must dissolve regardless of edge-slot reordering";
-    EXPECT_EQ(activeFaceCount(he), 4)
-        << "two quads, fan-triangulated, still 4 triangles";
+    // n-gon-aware dissolve merges each pair of triangles into ONE quad —
+    // 2 active quads total, NOT 4 fan-triangulated triangles.
+    EXPECT_EQ(activeFaceCount(he), 2)
+        << "two merged quads, no fan diagonals";
     EXPECT_TRUE(he.validate());
 
     // Both old diagonals should be gone.
@@ -4293,19 +4825,35 @@ TEST(HalfEdgeMeshStandalone, FillSelectionFourVerticesEmitsTwoTriangles) {
     ASSERT_TRUE(he.buildFromEditableMesh(mesh));
     ASSERT_EQ(activeFaceCount(he), 1);
 
-    // Fan-triangulate the (3, 4, 5, 6) quad from vertex 3. Produces
-    // (3, 4, 5) and (3, 5, 6) — a watertight 4-vertex fill.
-    EXPECT_EQ(he.fillSelection({3, 4, 5, 6}), 2);
-    EXPECT_EQ(activeFaceCount(he), 3);
+    // Fill (3, 4, 5, 6) as a single quad face — NOT a fan-triangulation.
+    // Pre-quads-followup this returned 2 (triangle count); now it
+    // returns 1 (face count) and the result round-trips back through
+    // toEditableMesh as one 4-index EditableFace.
+    EXPECT_EQ(he.fillSelection({3, 4, 5, 6}), 1);
+    EXPECT_EQ(activeFaceCount(he), 2);
     EXPECT_TRUE(he.validate());
 
     EditableMesh back;
     ASSERT_TRUE(he.toEditableMesh(back));
     EXPECT_TRUE(isManifold(back));
+
+    // The new face must round-trip as a quad EditableFace, not 2 tris.
+    ASSERT_EQ(back.subMeshes().size(), 1u);
+    const auto& subBack = back.subMeshes()[0];
+    ASSERT_FALSE(subBack.faces.empty())
+        << "n>=4 fill must populate EditableSubMesh::faces";
+    bool sawQuad = false;
+    for (const auto& f : subBack.faces) {
+        if (f.indices.size() == 4) { sawQuad = true; break; }
+    }
+    EXPECT_TRUE(sawQuad)
+        << "fillSelection of 4 verts must produce a single quad face";
 }
 
-TEST(HalfEdgeMeshStandalone, FillSelectionFiveVerticesFanTriangulatesIntoThree) {
-    // Pentagon fan-triangulated from vertexIndices[0]: 5 vertices → 3 tris.
+TEST(HalfEdgeMeshStandalone, FillSelectionFiveVerticesProducesSinglePentagon) {
+    // Pentagon fill: 5 vertices → ONE 5-vertex EditableFace, not 3 fan
+    // triangles. (Quads-followup: a single n-gon HEFace round-trips as
+    // a single n-gon EditableFace through toEditableMesh.)
     EditableMesh mesh;
     EditableSubMesh sub;
     sub.materialName = "FillMat";
@@ -4325,8 +4873,19 @@ TEST(HalfEdgeMeshStandalone, FillSelectionFiveVerticesFanTriangulatesIntoThree) 
     ASSERT_TRUE(he.buildFromEditableMesh(mesh));
 
     // Vertices 0..4 form a convex pentagon. Fill its loop in order.
-    EXPECT_EQ(he.fillSelection({0, 1, 2, 3, 4}), 3);
+    EXPECT_EQ(he.fillSelection({0, 1, 2, 3, 4}), 1);
     EXPECT_TRUE(he.validate());
+
+    // Confirm round-trip preserves the 5-gon.
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    ASSERT_EQ(back.subMeshes().size(), 1u);
+    bool sawPentagon = false;
+    for (const auto& f : back.subMeshes()[0].faces) {
+        if (f.indices.size() == 5) { sawPentagon = true; break; }
+    }
+    EXPECT_TRUE(sawPentagon)
+        << "fillSelection of 5 verts must produce a single pentagon face";
 }
 
 // ===========================================================================
@@ -4537,8 +5096,8 @@ TEST(HalfEdgeMeshStandalone, FillSelectionAcceptsOrphanedVertices) {
     HalfEdgeMesh he;
     ASSERT_TRUE(he.buildFromEditableMesh(mesh));
 
-    // Fill with all 4 orphans → 2 new triangles (fan from vert 0).
-    EXPECT_EQ(he.fillSelection({0, 1, 3, 2}), 2);
+    // Fill with all 4 orphans → ONE new quad face (quads-followup).
+    EXPECT_EQ(he.fillSelection({0, 1, 3, 2}), 1);
     EXPECT_TRUE(he.validate());
 }
 
@@ -4573,4 +5132,517 @@ TEST(HalfEdgeMeshStandalone, FillSelectionUndoRoundTrip) {
     ASSERT_TRUE(he2.buildFromEditableMesh(back));
     EXPECT_TRUE(he2.validate());
     EXPECT_EQ(activeFaceCount(he2), 2);
+}
+
+// ===========================================================================
+// EditableFace (n-gon) round-trip — chunk 1 of the quad migration
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, BuildFromQuadFacePopulatesSingleHEFace) {
+    // A submesh with a single 4-vertex EditableFace (no triangles)
+    // should produce ONE HalfEdgeMesh face of valence 4.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "QuadMat";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        v.uv = Ogre::Vector2(x, y); v.hasUV = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    // Note: triangles intentionally left empty — when faces is non-empty
+    // it's canonical, and HE should read faces directly.
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    EXPECT_EQ(activeFaceCount(he), 1);
+    EXPECT_EQ(he.faceVertices(0).size(), 4u)
+        << "quad EditableFace must produce a 4-valence HE face, not 2 triangles";
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, ToEditableMeshPreservesQuadInFaces) {
+    // Round-trip: build HE from a quad face, write back, verify the
+    // EditableSubMesh has a 4-vertex face (and triangles is the fan
+    // triangulation).
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "QuadMat";
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    ASSERT_EQ(back.subMeshes().size(), 1u);
+    const auto& outSub = back.subMeshes()[0];
+
+    // n-gon faces preserved
+    ASSERT_EQ(outSub.faces.size(), 1u)
+        << "quad must round-trip as a single 4-vertex face";
+    EXPECT_EQ(outSub.faces[0].indices.size(), 4u);
+
+    // triangles is the fan triangulation (2 tris from a quad)
+    EXPECT_EQ(outSub.triangles.size(), 2u)
+        << "fan-triangulation: a quad emits N-2 = 2 triangles";
+
+    // Vertex count preserved
+    EXPECT_EQ(outSub.vertices.size(), 4u);
+}
+
+TEST(HalfEdgeMeshStandalone, ToEditableMeshLeavesFacesEmptyWhenAllTris) {
+    // The legacy invariant: if every face in the HE mesh is a triangle,
+    // `EditableSubMesh::faces` should be left empty so existing
+    // triangle-only consumers don't have to learn the new representation.
+    auto em = makeQuadMesh(); // two triangles
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    ASSERT_EQ(back.subMeshes().size(), 1u);
+    EXPECT_TRUE(back.subMeshes()[0].faces.empty())
+        << "all-triangle submeshes must NOT populate faces (legacy invariant)";
+    EXPECT_EQ(back.subMeshes()[0].triangles.size(), 2u);
+}
+
+TEST(HalfEdgeMeshStandalone, BuildFromMixedTriAndQuadSubMeshes) {
+    // Two submeshes: one triangle-only (legacy path), one quad-only
+    // (n-gon path). buildFromEditableMesh should produce 3 HE faces
+    // total (1 tri + 1 quad ... wait, 1 tri + 1 quad = 2 faces).
+    EditableMesh mesh;
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+
+    {
+        EditableSubMesh sub;
+        sub.materialName = "TriMat";
+        sub.vertices = { mkV(0, 0, 0), mkV(1, 0, 0), mkV(0, 1, 0) };
+        EditableTriangle t;
+        t.indices[0] = 0; t.indices[1] = 1; t.indices[2] = 2;
+        sub.triangles.push_back(t);
+        mesh.subMeshes().push_back(std::move(sub));
+    }
+    {
+        EditableSubMesh sub;
+        sub.materialName = "QuadMat";
+        sub.vertices = { mkV(0, 0, 1), mkV(1, 0, 1), mkV(1, 1, 1), mkV(0, 1, 1) };
+        EditableFace f;
+        f.indices = {0, 1, 2, 3};
+        sub.faces.push_back(std::move(f));
+        mesh.subMeshes().push_back(std::move(sub));
+    }
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(mesh));
+    EXPECT_EQ(activeFaceCount(he), 2);
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    ASSERT_EQ(back.subMeshes().size(), 2u);
+    EXPECT_TRUE(back.subMeshes()[0].faces.empty())  // triangle submesh stays legacy
+        << "triangle submesh must not populate faces";
+    EXPECT_EQ(back.subMeshes()[1].faces.size(), 1u) // quad submesh has 1 face
+        << "quad submesh must populate faces with the polygon";
+    EXPECT_EQ(back.subMeshes()[1].faces[0].indices.size(), 4u);
+}
+
+TEST(HalfEdgeMeshStandalone, EditableFaceIsValidGuardsBadInputs) {
+    EditableFace empty;
+    EXPECT_FALSE(empty.isValid());
+
+    EditableFace pair;
+    pair.indices = {0, 1};
+    EXPECT_FALSE(pair.isValid());
+
+    EditableFace dup;
+    dup.indices = {0, 1, 1, 2};
+    EXPECT_FALSE(dup.isValid()) << "consecutive duplicate index pair must fail";
+
+    EditableFace okQuad;
+    okQuad.indices = {0, 1, 2, 3};
+    EXPECT_TRUE(okQuad.isValid());
+
+    EditableFace okTri;
+    okTri.indices = {0, 1, 2};
+    EXPECT_TRUE(okTri.isValid());
+}
+
+TEST(HalfEdgeMeshStandalone, BuildFromQuadFaceRejectsInvalidIndex) {
+    // An out-of-range index in EditableFace::indices must not crash —
+    // the face is silently skipped.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    sub.materialName = "Bad";
+    EditableVertex v;
+    v.position = Ogre::Vector3::ZERO;
+    sub.vertices = {v, v, v}; // 3 verts available
+    EditableFace f;
+    f.indices = {0, 1, 99}; // 99 is out of range
+    sub.faces.push_back(std::move(f));
+    mesh.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    EXPECT_TRUE(he.buildFromEditableMesh(mesh));
+    EXPECT_EQ(activeFaceCount(he), 0)
+        << "out-of-range face must be skipped, not crash";
+}
+
+// ===========================================================================
+// triangulateFaces / promoteTrianglesToFaces helpers
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, TriangulateFacesQuadProducesTwoTriangles) {
+    EditableSubMesh sub;
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+
+    triangulateFaces(sub);
+    ASSERT_EQ(sub.triangles.size(), 2u);
+    // Fan from vertex 0: (0, 1, 2) and (0, 2, 3).
+    EXPECT_EQ(sub.triangles[0].indices[0], 0u);
+    EXPECT_EQ(sub.triangles[0].indices[1], 1u);
+    EXPECT_EQ(sub.triangles[0].indices[2], 2u);
+    EXPECT_EQ(sub.triangles[1].indices[0], 0u);
+    EXPECT_EQ(sub.triangles[1].indices[1], 2u);
+    EXPECT_EQ(sub.triangles[1].indices[2], 3u);
+}
+
+TEST(HalfEdgeMeshStandalone, TriangulateFacesPentagonProducesThreeTriangles) {
+    EditableSubMesh sub;
+    EditableFace f;
+    f.indices = {10, 20, 30, 40, 50}; // arbitrary indices
+    sub.faces.push_back(std::move(f));
+
+    triangulateFaces(sub);
+    EXPECT_EQ(sub.triangles.size(), 3u) << "N=5 fan emits N-2 = 3 triangles";
+}
+
+TEST(HalfEdgeMeshStandalone, TriangulateFacesSkipsInvalidFaces) {
+    EditableSubMesh sub;
+    {
+        EditableFace bad; // <3 indices, isValid() false
+        bad.indices = {0, 1};
+        sub.faces.push_back(std::move(bad));
+    }
+    {
+        EditableFace good;
+        good.indices = {0, 1, 2};
+        sub.faces.push_back(std::move(good));
+    }
+    triangulateFaces(sub);
+    EXPECT_EQ(sub.triangles.size(), 1u) << "invalid face skipped";
+}
+
+TEST(HalfEdgeMeshStandalone, PromoteTrianglesToFacesProducesMatchingFaces) {
+    EditableSubMesh sub;
+    EditableTriangle t1, t2;
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    t2.indices[0] = 1; t2.indices[1] = 3; t2.indices[2] = 2;
+    sub.triangles = {t1, t2};
+
+    promoteTrianglesToFaces(sub);
+    ASSERT_EQ(sub.faces.size(), 2u);
+    EXPECT_EQ(sub.faces[0].indices.size(), 3u);
+    EXPECT_EQ(sub.faces[0].indices[0], 0u);
+    EXPECT_EQ(sub.faces[0].indices[1], 1u);
+    EXPECT_EQ(sub.faces[0].indices[2], 2u);
+    // triangles should still match the canonical faces invariant
+    // (every face is a triangle, so triangulateFaces would produce
+    // identical content)
+    EXPECT_EQ(sub.triangles.size(), 2u);
+}
+
+// ===========================================================================
+// subdivideCatmullClark — chunk 5a quad-aware subdivision
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkOnSingleQuadProducesFourQuads) {
+    // A single quad → 1 face point + 4 edge points + 4 corners (the 4
+    // corners get smoothed in place — for a flat planar quad on a
+    // boundary, the boundary-vertex chord rule will have moved them).
+    // After CC: 4 output faces, each a quad.
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 0, 0), mkV(1, 0, 0), mkV(1, 1, 0), mkV(0, 1, 0),
+    };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    const auto newVerts = he.subdivideCatmullClark();
+    EXPECT_FALSE(newVerts.empty());
+    EXPECT_EQ(activeFaceCount(he), 4) << "1 quad → 4 sub-quads";
+
+    // Every output face should be a quad.
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        EXPECT_EQ(he.faceVertices(static_cast<int>(f)).size(), 4u)
+            << "Catmull-Clark always produces quads";
+    }
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkOnTriangleProducesThreeQuads) {
+    // A single triangle → 3 sub-quads (one per corner).
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    he.subdivideCatmullClark();
+    EXPECT_EQ(activeFaceCount(he), 3);
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        EXPECT_EQ(he.faceVertices(static_cast<int>(f)).size(), 4u);
+    }
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkOnCubeStaysClosed) {
+    // 12-tri cube → 36 sub-quads. Output is a closed manifold (no
+    // boundary edges), and toEditableMesh round-trips through the
+    // n-gon path so all 36 faces appear in EditableSubMesh::faces.
+    auto em = makeCubeMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 12);
+
+    he.subdivideCatmullClark();
+    EXPECT_EQ(activeFaceCount(he), 36) << "12 tris × 3 sub-quads = 36";
+    EXPECT_TRUE(he.validate());
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    auto s = statsOf(back);
+    EXPECT_EQ(s.boundaryEdges, 0u)
+        << "Catmull-Clark on a closed cube must stay closed";
+    EXPECT_TRUE(isManifold(back));
+    // n-gon path: faces non-empty since output is all quads.
+    ASSERT_FALSE(back.subMeshes().empty());
+    EXPECT_FALSE(back.subMeshes()[0].faces.empty())
+        << "all-quad output should populate EditableSubMesh::faces";
+    EXPECT_EQ(back.subMeshes()[0].faces.size(), 36u);
+    for (const auto& f : back.subMeshes()[0].faces) {
+        EXPECT_EQ(f.indices.size(), 4u) << "every output face is a quad";
+    }
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkOnQuadGridProducesFourTimesAsManyQuads) {
+    // 2x2 grid of 4 quads → 16 sub-quads (one per corner of each face).
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = {
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),
+        mkV(0, 2), mkV(1, 2), mkV(2, 2),
+    };
+    auto mkF = [](unsigned a, unsigned b, unsigned c, unsigned d) {
+        EditableFace f;
+        f.indices = {a, b, c, d};
+        return f;
+    };
+    sub.faces = {
+        mkF(0, 1, 4, 3), mkF(1, 2, 5, 4),
+        mkF(3, 4, 7, 6), mkF(4, 5, 8, 7),
+    };
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 4);
+
+    he.subdivideCatmullClark();
+    EXPECT_EQ(activeFaceCount(he), 16) << "4 quads × 4 sub-quads = 16";
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkPreservesPlanarFaceCenter) {
+    // For a planar regular quad on a closed manifold (e.g. the centre
+    // of a 3x3 quad grid), the face point should land exactly at the
+    // arithmetic centre of the four corners.
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const auto newVerts = he.subdivideCatmullClark();
+
+    // Find the face point (the only vertex with all 4 corners as 1-ring
+    // neighbours — exactly the face point on a single-quad mesh).
+    bool foundFacePoint = false;
+    for (int v : newVerts) {
+        const auto neighbours = he.verticesAroundVertex(v);
+        if (neighbours.size() == 4) {
+            const auto& p = he.vertex(v).position;
+            EXPECT_NEAR(p.x, 0.5f, 1e-4f);
+            EXPECT_NEAR(p.y, 0.5f, 1e-4f);
+            EXPECT_NEAR(p.z, 0.0f, 1e-4f);
+            foundFacePoint = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(foundFacePoint);
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkEmptyMeshIsNoOp) {
+    HalfEdgeMesh he;
+    EXPECT_TRUE(he.subdivideCatmullClark().empty());
+}
+
+// ===========================================================================
+// subdivideFacesToQuads — chunk 4b: subdivide n-gons into quads on selection
+// ===========================================================================
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesToQuadsEmptyIsNoOp) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    EXPECT_TRUE(he.subdivideFacesToQuads({}).empty());
+    EXPECT_EQ(activeFaceCount(he), 2);
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesToQuadsOnQuadProducesFourQuads) {
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    sub.vertices = { mkV(0, 0), mkV(1, 0), mkV(1, 1), mkV(0, 1) };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    ASSERT_EQ(activeFaceCount(he), 1);
+
+    he.subdivideFacesToQuads({0});
+    EXPECT_EQ(activeFaceCount(he), 4) << "1 quad → 4 sub-quads";
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge < 0) continue;
+        EXPECT_EQ(he.faceVertices(static_cast<int>(f)).size(), 4u)
+            << "every output face is a quad";
+    }
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesToQuadsOnTriangleProducesThreeQuads) {
+    auto em = makeTriangleMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    he.subdivideFacesToQuads({0});
+    EXPECT_EQ(activeFaceCount(he), 3);
+    EXPECT_TRUE(he.validate());
+}
+
+TEST(HalfEdgeMeshStandalone, SubdivideFacesToQuadsSharesEdgeMidpointsBetweenSelectedFaces) {
+    // Two adjacent quads in the same submesh sharing one edge.
+    // Selecting both should re-use the shared edge's midpoint so the
+    // boundary stays manifold (no T-junction, no duplicated vertex).
+    EditableMesh em;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        return v;
+    };
+    // 6 verts arranged as two side-by-side quads sharing edge (1,4).
+    sub.vertices = {
+        mkV(0, 0), mkV(1, 0), mkV(2, 0),  // 0 1 2 (bottom)
+        mkV(0, 1), mkV(1, 1), mkV(2, 1),  // 3 4 5 (top)
+    };
+    auto mkF = [](unsigned a, unsigned b, unsigned c, unsigned d) {
+        EditableFace f;
+        f.indices = {a, b, c, d};
+        return f;
+    };
+    sub.faces = { mkF(0, 1, 4, 3), mkF(1, 2, 5, 4) };
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+
+    he.subdivideFacesToQuads({0, 1});
+    EXPECT_EQ(activeFaceCount(he), 8) << "2 quads × 4 sub-quads = 8";
+    EXPECT_TRUE(he.validate());
+
+    // Manifold check on round-trip.
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    EXPECT_TRUE(isManifold(back))
+        << "shared midpoint between the two quads must keep mesh manifold";
+}
+
+TEST(HalfEdgeMeshStandalone, CatmullClarkRoundTripsThroughEditableMesh) {
+    auto em = makeQuadMesh();
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    he.subdivideCatmullClark();
+
+    EditableMesh back;
+    ASSERT_TRUE(he.toEditableMesh(back));
+    HalfEdgeMesh he2;
+    ASSERT_TRUE(he2.buildFromEditableMesh(back));
+    EXPECT_TRUE(he2.validate());
+    // 2 input tris × 3 quads each = 6 output quads.
+    EXPECT_EQ(activeFaceCount(he2), 6);
 }

@@ -69,17 +69,183 @@ struct EditableTriangle {
 };
 
 /**
+ * @brief A polygonal face referencing N >= 3 vertices by index.
+ *
+ * Used for the n-gon (quad-aware) representation that complements the
+ * legacy triangle-only path. While the editor is being migrated to
+ * quads, both `EditableSubMesh::faces` and `EditableSubMesh::triangles`
+ * coexist:
+ *
+ *  - When `faces` is empty, the submesh is in legacy triangle-only mode
+ *    and `triangles` is the canonical storage.
+ *  - When `faces` is non-empty, `faces` is canonical and `triangles` is
+ *    a fan-triangulated mirror that downstream code (GPU upload, render,
+ *    legacy topology ops) consumes. Helper utilities keep the two
+ *    representations in sync.
+ *
+ * The fan-triangulation rule is `[v0, vi, vi+1]` for `i in [1, N-1)`,
+ * matching what `HalfEdgeMesh::appendFace` and `fillSelection` already
+ * produce. Convex polygons (the only case the importer is expected to
+ * produce) survive that rule cleanly; concave n-gons need a future
+ * ear-clip pass.
+ */
+struct EditableFace {
+    std::vector<unsigned int> indices;
+
+    /// @return true if this face has at least 3 vertices and no
+    ///         consecutive duplicate index pair (naive sanity check).
+    bool isValid() const
+    {
+        if (indices.size() < 3) return false;
+        for (size_t i = 0; i < indices.size(); ++i) {
+            if (indices[i] == indices[(i + 1) % indices.size()]) return false;
+        }
+        return true;
+    }
+
+    /// @return Number of vertices on this face (>= 3 when valid).
+    size_t vertexCount() const { return indices.size(); }
+};
+
+/**
  * @brief An editable copy of a single Ogre SubMesh.
  *
- * Contains all vertices, triangles, and the material name. Tracks whether
- * the original SubMesh used shared vertex data.
+ * Contains all vertices, triangles, faces, and the material name. Tracks
+ * whether the original SubMesh used shared vertex data.
+ *
+ * The `faces` (n-gon) array is the canonical face storage when it is
+ * non-empty; `triangles` then mirrors it as a fan-triangulation kept in
+ * sync by `triangulateFaces()`. When `faces` is empty, `triangles` is
+ * canonical and the submesh is in legacy triangle-only mode.
  */
 struct EditableSubMesh {
     std::vector<EditableVertex> vertices;
     std::vector<EditableTriangle> triangles;
+    std::vector<EditableFace> faces;
     std::string materialName;
     bool usesSharedVertices = false;
 };
+
+/**
+ * @brief Fan-triangulate every face in `faces` into `triangles`.
+ *
+ * Triangulation rule: each face emits `n - 2` triangles fanned from
+ * `indices[0]`, i.e. `(v0, v_i, v_{i+1})` for `i in [1, n-1)`. This
+ * matches `HalfEdgeMesh::appendFace` and `fillSelection` so a face that
+ * survives an HE round-trip recovers the same triangulation it started
+ * with.
+ *
+ * Caller's responsibility: call this whenever `faces` is mutated to
+ * keep `triangles` in sync. Code paths that don't yet understand n-gons
+ * (GPU upload, legacy topology ops) consume `triangles`.
+ *
+ * Skips invalid faces (`vertexCount < 3`) silently. Replaces any
+ * existing contents of `triangles`.
+ *
+ * @param sub The submesh whose `faces` will be triangulated. After
+ *            return, `sub.triangles` contains the fan-triangulation.
+ */
+void triangulateFaces(EditableSubMesh& sub);
+
+/**
+ * @brief Build trivial single-triangle faces from existing `triangles`.
+ *
+ * Inverse of `triangulateFaces` — used when a legacy triangle-only
+ * submesh needs to be promoted into the n-gon representation. After the
+ * call, every triangle has a corresponding 3-index `EditableFace`. The
+ * existing `triangles` array is preserved (the result still satisfies
+ * the canonical-faces invariant: `triangles[i] == fan(faces[i])`).
+ *
+ * @param sub The submesh to promote. Existing contents of `sub.faces`
+ *            are replaced.
+ */
+void promoteTrianglesToFaces(EditableSubMesh& sub);
+
+/**
+ * @brief Merge coplanar adjacent triangle pairs into quads in `faces`.
+ *
+ * Walks the submesh's triangles, builds an edge→triangle adjacency map,
+ * and for each interior edge between two unmerged triangles checks whether
+ * the pair is coplanar (face normals' dot product ≥ cos(angleThresholdDeg))
+ * and forms a convex quad. Matching pairs are written to `sub.faces` as
+ * 4-vertex EditableFace entries; unmerged triangles are written as 3-vertex
+ * faces. After the call, `sub.faces` is canonical and `sub.triangles` is
+ * resynced via `triangulateFaces(sub)`.
+ *
+ * Each triangle is merged at most once. A greedy first-fit scan is used:
+ * when multiple neighbours qualify, the first one walked wins. This is
+ * good enough for axis-aligned tessellated quads and tri-pair-strip
+ * imports — the typical "I exported a quad mesh as triangles" case.
+ *
+ * @param sub Submesh to convert. Read-write — `sub.faces` is overwritten,
+ *            `sub.triangles` is rebuilt.
+ * @param angleThresholdDeg Maximum dihedral angle (degrees) between the
+ *            two triangle normals for them to be considered coplanar.
+ *            Defaults to 1° (very strict). Pass 0 to require perfect
+ *            coplanarity, or e.g. 5° to merge near-coplanar imports
+ *            from float-quantised exporters.
+ * @return Number of triangle pairs merged into quads.
+ */
+int mergeCoplanarTrianglesToQuads(EditableSubMesh& sub,
+                                  float angleThresholdDeg = 1.0f);
+
+/**
+ * @brief Re-triangulate every submesh whose `faces` is non-empty.
+ *
+ * Convenience over `triangulateFaces(sub)` for a whole mesh: walks the
+ * submesh array and resyncs each one whose canonical face storage has
+ * changed. No-op for legacy triangle-only submeshes.
+ *
+ * Free function rather than a method on `EditableMesh` to keep the
+ * class size below SonarQube's 35-method ceiling.
+ *
+ * @param subMeshes The submesh vector to sync (typically `mesh.subMeshes()`).
+ */
+void syncTriangulation(std::vector<EditableSubMesh>& subMeshes);
+
+/**
+ * @brief Total polygonal-face count across a submesh vector.
+ *
+ * For each submesh, returns `faces.size()` when n-gons are canonical,
+ * else `triangles.size()`. The `EditableMesh::totalTriangleCount()`
+ * counterpart still reports the fan-triangulation count regardless of
+ * representation.
+ *
+ * Free function for the same reason as `syncTriangulation` — keeps
+ * `EditableMesh` below the class-method limit.
+ */
+size_t totalFaceCount(const std::vector<EditableSubMesh>& subMeshes);
+
+/**
+ * @brief Map a fan-triangulation triangle index to its source face index.
+ *
+ * Given a triangle index `localTri` in a submesh's `triangles` array,
+ * returns the index of the `EditableFace` in `sub.faces` that owns
+ * that triangle (the result of fan-triangulating that face), or -1 if
+ * `sub.faces` is empty (legacy triangle-only submesh — every triangle
+ * IS its own face). Output `outFirstTri` and `outTriCount` describe
+ * the contiguous range of triangles belonging to that face, so a
+ * caller can dilate a single-triangle selection back to the whole
+ * face it came from.
+ *
+ * Assumes the chunk-1 invariant holds: when `sub.faces` is non-empty,
+ * `sub.triangles` is its fan-triangulation produced by
+ * `triangulateFaces(sub)`. Calling this on a desynced submesh
+ * returns garbage; resync via `triangulateFaces(sub)` if in doubt.
+ *
+ * @param sub The submesh.
+ * @param localTri Index into `sub.triangles`.
+ * @param[out] outFirstTri First triangle index of the owning face's
+ *             range. (= localTri for legacy submeshes.)
+ * @param[out] outTriCount Number of triangles in the owning face's
+ *             range (1 for triangles, 2 for quads, N-2 for N-gons).
+ * @return Face index in `sub.faces`, or -1 if the submesh is in
+ *         legacy triangle-only mode.
+ */
+int faceIndexForTriangle(const EditableSubMesh& sub,
+                         size_t localTri,
+                         size_t* outFirstTri,
+                         size_t* outTriCount);
 
 /**
  * @brief Indexed mesh representation for topology queries and editing.
@@ -126,6 +292,71 @@ public:
      * @return true on success.
      */
     bool loadFromMesh(const Ogre::MeshPtr& mesh);
+
+    /**
+     * @brief Re-import an asset directly via Assimp, preserving n-gons.
+     *
+     * Spins up a fresh `Assimp::Importer` and re-reads the source file
+     * with the triangulation post-process disabled, so source quads
+     * survive into `EditableSubMesh::faces` instead of being collapsed
+     * to triangles. The associated Ogre::Mesh in the live scene
+     * continues to use the triangulated index buffer for rendering;
+     * this path only feeds the editing-time representation.
+     *
+     * Skips skeleton, animation, material, and tangent processing —
+     * Edit Mode operates on positions, normals, UVs, vertex colors,
+     * and bone weights only. Materials are taken from the existing
+     * Ogre::Mesh by submesh order in `loadFromEntity` / similar paths.
+     *
+     * Vertices are read out of `aiMesh::mVertices` / `mNormals` /
+     * `mTextureCoords[0]` / `mColors[0]` / `mBones[].mWeights`. Faces
+     * are read from `aiMesh::mFaces` and stored in
+     * `EditableSubMesh::faces` (n-gon canonical), with `triangles`
+     * fan-triangulated to maintain the chunk-1 invariant.
+     *
+     * Cost: a second Assimp parse of the same file. Order of magnitude
+     * 10–100ms for typical assets; acceptable as a one-time cost on
+     * entering Edit Mode. Big assets (50MB+ FBX) may be noticeable.
+     *
+     * @param path The path the asset was originally imported from.
+     *             Should be the value cached on `Ogre::Mesh` via
+     *             `getUserObjectBindings().getUserAny("qtme.source_path")`.
+     * @param convertToLeftHanded If true, applies `aiProcess_ConvertToLeftHanded`
+     *             so the resulting positions / UVs match Ogre's left-handed
+     *             coordinate system. MUST match the flag the original
+     *             import used; otherwise the editable representation
+     *             will be mirrored (X flipped) relative to the rendered
+     *             mesh and the vertex/edge/face overlays will draw
+     *             on the wrong side. The original importer caches its
+     *             choice at `getUserAny("qtme.source_convert_lh")`.
+     * @return true on success; false if the file is missing, can't be
+     *         parsed, or contains no mesh data.
+     */
+    /**
+     * @param isZup If true, applies the same +90°-around-X rotation that
+     *             `MeshProcessor` bakes into the rendered Ogre buffers
+     *             when the source asset declares a Z-up coordinate
+     *             system (FBX `UpAxis = 2`). Without this, the editable
+     *             vertices live in the source's pre-bake basis while the
+     *             rendered buffers are post-bake, and selection overlays
+     *             appear rotated 90° relative to the rendered geometry.
+     *             The original importer caches its choice at
+     *             `getUserAny("qtme.source_up_axis")` (an int — 1 = Y-up,
+     *             2 = Z-up).
+     * @param skeletonForBoneHandles If non-null, `aiBone->mName` is
+     *             resolved against this skeleton via `getBone(name)` and
+     *             the resulting `Ogre::Bone::getHandle()` is stored as
+     *             `EditableBoneAssignment::boneIndex`. This matches the
+     *             handle convention `MeshProcessor` writes into the live
+     *             Ogre mesh; without it, this path emits mesh-local
+     *             aiBone indices that re-bind vertices to the wrong
+     *             bones after a topology op. Pass nullptr only for
+     *             unskinned meshes.
+     */
+    bool loadFromAssimpFile(const std::string& path,
+                            bool convertToLeftHanded = true,
+                            bool isZup = false,
+                            const Ogre::Skeleton* skeletonForBoneHandles = nullptr);
 
     /**
      * @brief Merge vertices at (approximately) coincident positions within
