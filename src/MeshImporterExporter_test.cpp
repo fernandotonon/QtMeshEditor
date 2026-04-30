@@ -329,6 +329,69 @@ TEST_F(MeshImporterExporterTest, Importer_MissingMeshFile_IsIgnored) {
     EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());
 }
 
+TEST_F(MeshImporterExporterTest, Importer_MeshLoadsSidecarMaterialScript) {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
+    }
+    // Create a mesh with a custom material, export both .mesh and .material,
+    // then reimport and ensure the material isn't falling back to BaseWhite.
+    auto* manager = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("sidecar_mat_mesh");
+    ASSERT_NE(mesh, nullptr);
+
+    Ogre::MaterialPtr mat = Ogre::MaterialManager::getSingleton().create(
+        "SidecarMaterial", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+    ASSERT_TRUE(!!mat);
+    mat->compile();
+
+    Ogre::SceneNode* sn = manager->addSceneNode("SidecarMatNode");
+    ASSERT_NE(sn, nullptr);
+    Ogre::Entity* e = manager->createEntity(sn, mesh);
+    ASSERT_NE(e, nullptr);
+    e->getSubEntity(0)->setMaterial(mat);
+    // MeshSerializer exports SubMesh::getMaterialName(), not the SubEntity override.
+    e->getMesh()->getSubMesh(0)->setMaterialName("SidecarMaterial");
+
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+    const QString outMesh = tmpDir.path() + "/sidecar_roundtrip.mesh";
+
+    // Export the Ogre mesh.
+    Ogre::MeshSerializer ser;
+    ser.exportMesh(e->getMesh().get(), outMesh.toStdString());
+
+    // Write a minimal sidecar material script using the exporter's naming convention.
+    const QString sidecarMat = tmpDir.path() + "/sidecar_roundtrip.material";
+    QFile matFile(sidecarMat);
+    ASSERT_TRUE(matFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    matFile.write("material SidecarMaterial\n{\n  technique\n  {\n    pass\n    {\n    }\n  }\n}\n");
+    matFile.close();
+    ASSERT_TRUE(QFileInfo::exists(sidecarMat));
+
+    // Tear down the export entity and drop our material handle so reimport cannot
+    // succeed from an in-memory material alone — it must parse the sidecar script.
+    manager->destroySceneNode(sn);
+    mat.reset();
+    if (Ogre::MaterialManager::getSingleton().getByName(
+            "SidecarMaterial", Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME))
+    {
+        Ogre::MaterialManager::getSingleton().remove(
+            "SidecarMaterial", Ogre::ResourceGroupManager::AUTODETECT_RESOURCE_GROUP_NAME);
+    }
+
+    // Reimport from disk.
+    MeshImporterExporter::importer({outMesh});
+    ASSERT_FALSE(manager->getSceneNodes().isEmpty());
+    auto* importedNode = manager->getSceneNodes().last();
+    ASSERT_TRUE(manager->getSceneMgr()->hasEntity(importedNode->getName()));
+    auto* importedEntity = manager->getSceneMgr()->getEntity(importedNode->getName());
+    ASSERT_GE(importedEntity->getNumSubEntities(), 1u);
+
+    const Ogre::String importedMat = importedEntity->getSubEntity(0)->getMaterialName();
+    EXPECT_NE(importedMat, "BaseWhite");
+    EXPECT_EQ(importedMat, "SidecarMaterial");
+}
+
 TEST_F(MeshImporterExporterTest, Importer_MissingMeshXmlFile_IsIgnored) {
     MeshImporterExporter::importer(QStringList{"/tmp/nonexistent_mesh_importer_12345.mesh.xml"});
     EXPECT_TRUE(Manager::getSingleton()->getSceneNodes().isEmpty());

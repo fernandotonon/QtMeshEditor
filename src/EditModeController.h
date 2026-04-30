@@ -213,6 +213,13 @@ public:
     void setVertexPaintRadius(double r);
     double vertexPaintStrength() const { return m_vertexPaintStrength; }
     void setVertexPaintStrength(double s);
+
+    /**
+     * @brief Commits deferred vertex paint from EditableMesh into GPU vertex buffers.
+     * @param entity Must be the active edit target; otherwise this is a no-op.
+     * @note Call before mesh/FBX/glTF export so coalesced paint is not still pending on the event loop.
+     */
+    void flushPendingVertexPaintForEntity(Ogre::Entity* entity);
     /// @}
 
     /// @name Topology operations

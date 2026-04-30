@@ -34,6 +34,7 @@ THE SOFTWARE.
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QDebug>
+#include <QFile>
 #include <set>
 
 #include "OgreXML/OgreXMLMeshSerializer.h"
@@ -51,6 +52,9 @@ THE SOFTWARE.
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
 #include "CLIPipeline.h"
+#include "EditModeController.h"
+#include <OgreMaterialManager.h>
+#include <OgreDataStream.h>
 
 #ifndef WIN32
     #include <unistd.h>
@@ -304,6 +308,28 @@ static void readSubmeshGeometry(
             const Ogre::Real* p;
             tcElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
             aiM->mTextureCoords[0][j] = aiVector3D(p[0], p[1], 0.0f);
+        }
+        vbuf->unlock();
+    }
+
+    // Read vertex colors (diffuse) into Assimp color set 0
+    const auto* colElem = vData->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+    if (colElem)
+    {
+        aiM->mColors[0] = new aiColor4D[aiM->mNumVertices];
+        auto vbuf = vData->vertexBufferBinding->getBuffer(colElem->getSource());
+        auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+        {
+            const Ogre::RGBA* p;
+            colElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+            Ogre::ColourValue cv;
+            // Ogre's VET_COLOUR backing varies by render system; respect the declared element type.
+            if (colElem->getType() == Ogre::VET_COLOUR_ABGR)
+                cv.setAsABGR(*p);
+            else
+                cv.setAsARGB(*p);
+            aiM->mColors[0][j] = aiColor4D(cv.r, cv.g, cv.b, cv.a);
         }
         vbuf->unlock();
     }
@@ -964,6 +990,118 @@ static void ensureResourceGroup(const QString &path)
     }
 }
 
+/** @return true if at least one declared material exists in the manager for this group. */
+static bool loadMaterialsDeclaredInOgreMaterialScript(const QByteArray& script, const Ogre::String& group)
+{
+    bool anyFound = false;
+    const QList<QByteArray> lines = script.split('\n');
+    for (QByteArray raw : lines)
+    {
+        QByteArray line = raw.trimmed();
+        if (line.isEmpty() || line.startsWith("//"))
+            continue;
+        if (line.size() < 10)
+            continue;
+        if (line.left(8).compare(QByteArrayLiteral("material"), Qt::CaseInsensitive) != 0)
+            continue;
+        const char boundary = line[8];
+        if (boundary != ' ' && boundary != '\t')
+            continue; // e.g. "materials" must not match
+
+        QByteArray rest = line.mid(9).trimmed();
+        if (rest.isEmpty())
+            continue;
+
+        int end = 0;
+        while (end < rest.size())
+        {
+            const char c = rest[end];
+            if (c == ' ' || c == '\t' || c == ':' || c == '{')
+                break;
+            ++end;
+        }
+        if (end <= 0)
+            continue;
+
+        const QByteArray matName = rest.left(end).trimmed();
+        if (matName.isEmpty())
+            continue;
+        Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(
+            Ogre::String(matName.constData(), matName.size()), group);
+        if (m)
+        {
+            anyFound = true;
+            m->load();
+        }
+    }
+    return anyFound;
+}
+
+/** Parse `<mesh-complete-basename>.material` next to the `.mesh` file (uses completeBaseName so `a.v2.mesh` → `a.v2.material`). */
+static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
+{
+    // `.mesh` stores material names, but not the script definitions. If the
+    // corresponding `.material` isn't loaded, Ogre falls back to BaseWhite.
+    const QString sidecar =
+        meshFile.path() + "/" + meshFile.completeBaseName() + ".material";
+    QFile f(sidecar);
+    if (!f.exists() || !f.open(QIODevice::ReadOnly))
+        return;
+
+    QByteArray scriptBytes = f.readAll();
+    if (scriptBytes.isEmpty())
+        return;
+
+    const Ogre::String group = meshFile.path().toStdString();
+    try {
+        auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+        if (rgm.isResourceGroupInitialised(group))
+            rgm.loadResourceGroup(group);
+        else
+            rgm.initialiseResourceGroup(group);
+
+        auto sweepUnloadedInGroup = [&group]() {
+            Ogre::ResourceManager::ResourceMapIterator mit =
+                Ogre::MaterialManager::getSingleton().getResourceIterator();
+            while (mit.hasMoreElements())
+            {
+                Ogre::ResourcePtr res = mit.peekNextValue();
+                if (res->getGroup() == group
+                    && res->getLoadingState() == Ogre::Resource::LOADSTATE_UNLOADED)
+                    res->load();
+                mit.moveNext();
+            }
+        };
+
+        bool haveDeclared = loadMaterialsDeclaredInOgreMaterialScript(scriptBytes, group);
+        sweepUnloadedInGroup();
+
+        // If the folder was initialised before the .material existed, or the filesystem
+        // parser skipped it, inject the script once from memory (avoid when already declared
+        // — duplicate parse throws and would skip loadResourceGroup if caught too broadly).
+        if (!haveDeclared)
+        {
+            void* scriptMem = scriptBytes.data();
+            Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+                scriptMem,
+                static_cast<size_t>(scriptBytes.size()),
+                false,
+                true));
+            Ogre::MaterialManager::getSingleton().parseScript(ds, group);
+            if (rgm.isResourceGroupInitialised(group))
+                rgm.loadResourceGroup(group);
+            loadMaterialsDeclaredInOgreMaterialScript(scriptBytes, group);
+            sweepUnloadedInGroup();
+        }
+
+        SentryReporter::addBreadcrumb("file.import",
+            QStringLiteral("Loaded sidecar material: %1").arg(sidecar));
+    } catch (const Ogre::Exception& e) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "Warning: sidecar material load: " + e.getFullDescription());
+    }
+}
+
 void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int additionalFlags,
                                      QList<Ogre::SkeletonPtr>* outAnimOnlySkeletons,
                                      int* outUpAxis)
@@ -982,6 +1120,7 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
 
             if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
             {
+                tryLoadSidecarMaterialScript(file);
                 Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().load(
                     file.fileName().toStdString().data(),
                     file.path().toStdString().data());
@@ -1148,6 +1287,10 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
     if(!Manager::getSingleton()->getSceneMgr()->hasEntity(_sn->getName())) return -1;
     const Ogre::Entity *e = Manager::getSingleton()->getSceneMgr()->getEntity(_sn->getName());
     if(!e) return -1;
+
+    // Vertex paint defers GPU upload; export reads Ogre buffers — sync first.
+    EditModeController::instance()->flushPendingVertexPaintForEntity(
+        const_cast<Ogre::Entity*>(e));
 
     if(_format=="Ogre XML (*.mesh.xml)")
     {
@@ -1338,6 +1481,8 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
     if (!entity) return -1;
     if (outputPath.isEmpty()) return -1;
 
+    EditModeController::instance()->flushPendingVertexPaintForEntity(entity);
+
     SentryReporter::addBreadcrumb("file.export", QString("Export pose: %1").arg(outputPath));
 
     const bool hasSkel = entity->hasSkeleton();
@@ -1470,6 +1615,35 @@ int MeshImporterExporter::exportCurrentPose(Ogre::Entity* entity, const QString&
                     const Ogre::Real* p;
                     tcElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
                     aiM->mTextureCoords[0][j] = aiVector3D(p[0], p[1], 0.0f);
+                }
+                vbuf->unlock();
+            }
+        }
+
+        // Vertex colors live on bind-pose buffers (unchanged by skinning), like UVs.
+        if (bindData)
+        {
+            const auto* colElem = bindData->vertexDeclaration->findElementBySemantic(Ogre::VES_DIFFUSE);
+            if (colElem)
+            {
+                const unsigned int n = std::min(
+                    aiM->mNumVertices,
+                    static_cast<unsigned int>(bindData->vertexCount));
+                aiM->mColors[0] = new aiColor4D[aiM->mNumVertices];
+                for (unsigned int j = 0; j < aiM->mNumVertices; ++j)
+                    aiM->mColors[0][j] = aiColor4D(1, 1, 1, 1);
+                auto vbuf = bindData->vertexBufferBinding->getBuffer(colElem->getSource());
+                auto* base = static_cast<const unsigned char*>(vbuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+                for (unsigned int j = 0; j < n; ++j)
+                {
+                    const Ogre::RGBA* p;
+                    colElem->baseVertexPointerToElement(const_cast<unsigned char*>(base + j * vbuf->getVertexSize()), &p);
+                    Ogre::ColourValue cv;
+                    if (colElem->getType() == Ogre::VET_COLOUR_ABGR)
+                        cv.setAsABGR(*p);
+                    else
+                        cv.setAsARGB(*p);
+                    aiM->mColors[0][j] = aiColor4D(cv.r, cv.g, cv.b, cv.a);
                 }
                 vbuf->unlock();
             }
@@ -1655,6 +1829,7 @@ static aiScene* buildSceneAiScene()
     {
         auto* sn = nodeEntities[ni].sceneNode;
         auto* entity = nodeEntities[ni].entity;
+        EditModeController::instance()->flushPendingVertexPaintForEntity(entity);
         const Ogre::MeshPtr mesh = entity->getMesh();
         const unsigned int numSub = mesh->getNumSubMeshes();
         const bool hasSkeleton = entity->hasSkeleton();
