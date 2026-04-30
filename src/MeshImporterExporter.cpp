@@ -1018,18 +1018,22 @@ static void ensureResourceGroup(const QString &path)
     const QString absPath = QFileInfo(path).absoluteFilePath();
     auto group = absPath.toStdString();
     auto &rgm = Ogre::ResourceGroupManager::getSingleton();
-    const bool haveLocation = rgm.resourceLocationExists(group, group);
 
     // If the directory was already registered earlier in this process (common in tests and CLI),
     // Ogre's FileSystem archive may have been initialised before new files were written there.
     // Re-registering the same location forces Ogre to re-scan the directory so freshly exported
     // `.mesh` / `.material` sidecars are discoverable by name.
-    if (haveLocation && rgm.isResourceGroupInitialised(group))
+    if (const bool haveLocation = rgm.resourceLocationExists(group, group);
+        haveLocation && rgm.isResourceGroupInitialised(group))
     {
         try {
             rgm.removeResourceLocation(group, group);
-        } catch (...) {
-            // Ignore — location may be in use or already removed.
+        } catch (const Ogre::Exception& e) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "Note: removeResourceLocation: " + e.getFullDescription());
+        } catch (const std::exception& e) {
+            Ogre::LogManager::getSingleton().logMessage(
+                "Note: removeResourceLocation: " + Ogre::String(e.what()));
         }
     }
 
@@ -1038,11 +1042,12 @@ static void ensureResourceGroup(const QString &path)
         if (!rgm.resourceLocationExists(group, group))
             rgm.addResourceLocation(group, "FileSystem", group);
         rgm.initialiseResourceGroup(group);
-    } catch (Ogre::Exception &e) {
+    } catch (const Ogre::Exception& e) {
         Ogre::LogManager::getSingleton().logMessage(
             "Warning during resource group init: " + e.getFullDescription());
-    } catch (...) {
-        // Ignore exceptions during shutdown / missing plugins
+    } catch (const std::exception& e) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "Warning during resource group init: " + Ogre::String(e.what()));
     }
 }
 
