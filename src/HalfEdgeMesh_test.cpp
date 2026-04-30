@@ -5632,6 +5632,74 @@ TEST(HalfEdgeMeshStandalone, CatmullClarkEmptyMeshIsNoOp) {
     EXPECT_TRUE(he.subdivideCatmullClark().empty());
 }
 
+TEST(HalfEdgeMeshStandalone, CatmullClarkPreservesVertexColors) {
+    // Regression: averageHEVertices used to accumulate r.color += v.color * w
+    // on top of HEVertex's default-init White, which saturated every output
+    // colour to White and silently wiped any vertex paint after a CC pass.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkPaintedV = [](float x, float y, const Ogre::ColourValue& c) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, 0);
+        v.normal = Ogre::Vector3(0, 0, 1); v.hasNormal = true;
+        v.color = c; v.hasColor = true;
+        return v;
+    };
+    // Single quad with each corner painted a distinct, non-white colour.
+    const Ogre::ColourValue red  (0.8f, 0.1f, 0.1f, 1.0f);
+    const Ogre::ColourValue green(0.1f, 0.8f, 0.1f, 1.0f);
+    const Ogre::ColourValue blue (0.1f, 0.1f, 0.8f, 1.0f);
+    const Ogre::ColourValue gold (0.8f, 0.7f, 0.1f, 1.0f);
+    sub.vertices = { mkPaintedV(0, 0, red),
+                     mkPaintedV(1, 0, green),
+                     mkPaintedV(1, 1, blue),
+                     mkPaintedV(0, 1, gold) };
+    EditableFace q; q.indices = {0, 1, 2, 3};
+    sub.faces = { q };
+    triangulateFaces(sub);
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    he.subdivideCatmullClark();
+    EXPECT_TRUE(he.validate());
+
+    // The face point of the quad averages all 4 corners. After the fix
+    // its colour is the arithmetic mean:
+    //   r = (0.8+0.1+0.1+0.8)/4 = 0.45
+    //   g = (0.1+0.8+0.1+0.7)/4 = 0.425
+    //   b = (0.1+0.1+0.8+0.1)/4 = 0.275
+    //   a = (1+1+1+1)/4         = 1.0
+    //
+    // Before the fix, r.color started as White (1,1,1,1), so the sum
+    // was (1.45, 1.425, 1.275, 2.0) — every channel ≥ 1.0, which packs
+    // to White when written to GPU. We can detect either outcome: with
+    // the fix, ALL channels stay strictly below 1.0; with the bug, all
+    // channels are >= 1.0.
+    const Ogre::ColourValue expectedMean(0.45f, 0.425f, 0.275f, 1.0f);
+    bool foundFacePoint = false;
+    for (size_t i = 0; i < he.vertexCount(); ++i) {
+        const auto& v = he.vertex(static_cast<int>(i));
+        if (!v.hasColor) continue;
+        // Identify the face point by its position (centroid of quad).
+        if (std::abs(v.position.x - 0.5f) > 0.05f) continue;
+        if (std::abs(v.position.y - 0.5f) > 0.05f) continue;
+        foundFacePoint = true;
+
+        // RGB must match the arithmetic mean within float precision.
+        // (Not just "below 1.0" — the bug produced ≥ 1.0 in every
+        // channel, but a less-permissive averaging bug could produce
+        // values in [0,1] that are still wrong.)
+        EXPECT_NEAR(v.color.r, expectedMean.r, 1e-4f)
+            << "face-point red must be the arithmetic mean of corner colours";
+        EXPECT_NEAR(v.color.g, expectedMean.g, 1e-4f);
+        EXPECT_NEAR(v.color.b, expectedMean.b, 1e-4f);
+    }
+    EXPECT_TRUE(foundFacePoint)
+        << "Catmull-Clark must produce a face-point at the quad centroid";
+}
+
 // ===========================================================================
 // subdivideFacesToQuads — chunk 4b: subdivide n-gons into quads on selection
 // ===========================================================================
