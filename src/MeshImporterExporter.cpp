@@ -990,6 +990,20 @@ static void ensureResourceGroup(const QString &path)
     }
 }
 
+static void loadUnloadedOgreMaterialsInGroup(const Ogre::String& group)
+{
+    Ogre::ResourceManager::ResourceMapIterator mit =
+        Ogre::MaterialManager::getSingleton().getResourceIterator();
+    while (mit.hasMoreElements())
+    {
+        Ogre::ResourcePtr res = mit.peekNextValue();
+        if (res->getGroup() == group
+            && res->getLoadingState() == Ogre::Resource::LOADSTATE_UNLOADED)
+            res->load();
+        mit.moveNext();
+    }
+}
+
 static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
 {
     // `.mesh` stores material names, but not the script definitions. If the
@@ -999,15 +1013,18 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
     if (!f.exists() || !f.open(QIODevice::ReadOnly))
         return;
 
-    const QByteArray bytes = f.readAll();
-    if (bytes.isEmpty())
+    QByteArray scriptBytes = f.readAll();
+    if (scriptBytes.isEmpty())
         return;
 
     try {
+        // Mutable QByteArray buffer + read-only stream (no constData → void* cast).
+        void* scriptMem = scriptBytes.data();
         Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
-            (void*)bytes.constData(),
-            static_cast<size_t>(bytes.size()),
-            false));
+            scriptMem,
+            static_cast<size_t>(scriptBytes.size()),
+            false,
+            true));
         const Ogre::String group = meshFile.path().toStdString();
         Ogre::MaterialManager::getSingleton().parseScript(ds, group);
         // ensureResourceGroup() may have already initialised this group; a second
@@ -1017,6 +1034,9 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
             rgm.loadResourceGroup(group);
         else
             rgm.initialiseResourceGroup(group);
+        // Materials created only via parseScript can remain in LOADSTATE_UNLOADED
+        // until explicitly loaded (loadResourceGroup does not always pick them up).
+        loadUnloadedOgreMaterialsInGroup(group);
         SentryReporter::addBreadcrumb("file.import",
             QStringLiteral("Loaded sidecar material: %1").arg(sidecar));
     } catch (const Ogre::Exception& e) {
