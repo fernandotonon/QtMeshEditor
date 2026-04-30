@@ -506,6 +506,16 @@ void EditModeController::exitEditMode(bool commitChanges)
         SentryReporter::addBreadcrumb("edit_mode", "Exited Edit Mode: changes discarded");
     }
 
+    // Restore material overrides (preview first, then wireframe).
+    // If preview was enabled while wireframe was on, the preview baseline can contain
+    // wireframe clone names; restoring preview after deleting those would reapply
+    // stale names. Always remove preview before tearing down wireframe.
+    if (m_vertexColorPreviewEnabled) {
+        removeVertexColorPreviewMaterials();
+        m_vertexColorPreviewEnabled = false;
+        emit vertexColorPreviewChanged();
+    }
+
     // Restore original materials (keep m_wireframeEnabled so it persists)
     if (!m_savedMaterials.empty())
         removeWireframeMaterials();
@@ -526,12 +536,6 @@ void EditModeController::exitEditMode(bool commitChanges)
         m_vertexPaintFlushScheduled = false;
         clearVertexPaintPreview();
         emit vertexPaintChanged();
-    }
-
-    if (m_vertexColorPreviewEnabled) {
-        removeVertexColorPreviewMaterials();
-        m_vertexColorPreviewEnabled = false;
-        emit vertexColorPreviewChanged();
     }
 
     m_editableMesh.reset();
@@ -5255,14 +5259,20 @@ void EditModeController::setWireframeEnabled(bool enabled)
     m_wireframeEnabled = enabled;
 
     if (m_editModeActive && m_editEntity) {
+        const bool previewWasOn = m_vertexColorPreviewEnabled;
+        // If preview is active, temporarily restore underlying materials before
+        // toggling wireframe so we don't snapshot from the preview override.
+        if (previewWasOn)
+            removeVertexColorPreviewMaterials();
+
         if (enabled)
             applyWireframeMaterials();
         else
             removeWireframeMaterials();
 
-        // If preview is on, re-apply after toggling wireframe so we snapshot/restore
-        // the current (wireframe or solid) material state correctly.
-        if (m_vertexColorPreviewEnabled)
+        // Re-apply preview after wireframe toggle so preview remains visible and the
+        // baseline becomes the current wireframe/solid state.
+        if (previewWasOn)
             applyVertexColorPreviewMaterials();
     }
 
