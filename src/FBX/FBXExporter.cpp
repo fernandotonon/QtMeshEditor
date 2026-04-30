@@ -866,7 +866,24 @@ private:
             const Ogre::IndexData* iData = subMesh->indexData;
 
             std::vector<std::vector<unsigned int>> ngonFaces;
-            const bool useNgon = readNgonFacesFromMesh(m_mesh, si, ngonFaces);
+            bool useNgon = readNgonFacesFromMesh(m_mesh, si, ngonFaces);
+
+            // Defend against stale / out-of-range indices in the
+            // cached binding — those would translate into out-of-bounds
+            // reads on the per-PV layer expansions below. Drop to the
+            // triangle path on bad data rather than corrupting the
+            // export. (CodeRabbit P2 follow-up on PR #349.)
+            if (useNgon)
+            {
+                for (const auto& poly : ngonFaces) {
+                    if (poly.size() < 3) { useNgon = false; break; }
+                    for (unsigned int vi : poly) {
+                        if (vi >= vData->vertexCount) { useNgon = false; break; }
+                    }
+                    if (!useNgon) break;
+                }
+                if (!useNgon) ngonFaces.clear();
+            }
 
             if (useNgon)
             {

@@ -391,7 +391,8 @@ public:
     bool loadFromAssimpFile(const std::string& path,
                             bool convertToLeftHanded = true,
                             bool isZup = false,
-                            const Ogre::Skeleton* skeletonForBoneHandles = nullptr);
+                            const Ogre::Skeleton* skeletonForBoneHandles = nullptr,
+                            unsigned int additionalFlags = 0);
 
     /**
      * @brief Merge vertices at (approximately) coincident positions within

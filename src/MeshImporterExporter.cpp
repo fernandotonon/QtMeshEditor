@@ -350,12 +350,20 @@ static void readSubmeshGeometry(
         entity->getMesh().get(), subIndex, ngonFaces);
     if (hasNgon)
     {
-        aiM->mPrimitiveTypes = aiPrimitiveType_POLYGON;
+        // Assimp's mPrimitiveTypes is a bitmask of all primitive kinds
+        // present. A submesh with mixed quads + triangles must declare
+        // both bits — Assimp's exporters check the bitmask to gate
+        // format-specific emission (e.g. STL emits TRIANGLE only).
+        // (CodeRabbit follow-up on PR #349.)
+        aiM->mPrimitiveTypes = 0;
         aiM->mNumFaces = static_cast<unsigned int>(ngonFaces.size());
         aiM->mFaces = new aiFace[aiM->mNumFaces];
         for (unsigned int f = 0; f < aiM->mNumFaces; ++f)
         {
             const auto& poly = ngonFaces[f];
+            aiM->mPrimitiveTypes |= (poly.size() == 3)
+                ? aiPrimitiveType_TRIANGLE
+                : aiPrimitiveType_POLYGON;
             aiM->mFaces[f].mNumIndices = static_cast<unsigned int>(poly.size());
             aiM->mFaces[f].mIndices = new unsigned int[poly.size()];
             for (size_t v = 0; v < poly.size(); ++v) {
@@ -1227,7 +1235,9 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     EditableMesh ngonProbe;
                     if (ngonProbe.loadFromAssimpFile(
                             sourcePath, convertLH,
-                            importer.getSceneUpAxis() == 2)) {
+                            importer.getSceneUpAxis() == 2,
+                            /*skeletonForBoneHandles*/ nullptr,
+                            additionalFlags)) {
                         writeNgonFacesToMesh(mesh.get(), ngonProbe.subMeshes());
                     }
                 }

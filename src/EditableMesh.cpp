@@ -376,6 +376,30 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
             readIndexData(subMesh->indexData, editSub.triangles);
         }
 
+        // Rehydrate n-gon faces from the qtme.faces.<i> binding when
+        // present. Once `qtme.source_path` has been wiped (after the
+        // first commit), this binding is the only place the n-gon
+        // structure survives — without rehydration, every subsequent
+        // enterEditMode comes back triangle-only and the next commit
+        // would re-erase the cache. (Quad migration #326, chunk 6,
+        // CodeRabbit follow-up.)
+        std::vector<std::vector<unsigned int>> cachedFaces;
+        if (readNgonFacesFromMesh(mesh, i, cachedFaces)) {
+            editSub.faces.clear();
+            editSub.faces.reserve(cachedFaces.size());
+            for (auto& poly : cachedFaces) {
+                if (poly.size() < 3) continue;
+                EditableFace face;
+                face.indices = std::move(poly);
+                editSub.faces.push_back(std::move(face));
+            }
+            // Resync the triangle mirror to match the canonical faces
+            // (the GPU buffer was already produced from this same fan
+            // triangulation at upload time, so this is just internal
+            // bookkeeping).
+            triangulateFaces(editSub);
+        }
+
         m_subMeshes.push_back(std::move(editSub));
     }
 
@@ -385,7 +409,8 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
 bool EditableMesh::loadFromAssimpFile(const std::string& path,
                                       bool convertToLeftHanded,
                                       bool isZup,
-                                      const Ogre::Skeleton* skeletonForBoneHandles)
+                                      const Ogre::Skeleton* skeletonForBoneHandles,
+                                      unsigned int additionalFlags)
 {
     if (path.empty()) return false;
 
@@ -416,6 +441,14 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
         aiProcess_LimitBoneWeights |
         aiProcess_GlobalScale;
     if (convertToLeftHanded) flags |= aiProcess_ConvertToLeftHanded;
+    // Pass through any caller-supplied topology flags so the n-gon
+    // probe matches the rendered mesh's submesh layout (e.g.
+    // aiProcess_FindDegenerates / aiProcess_SortByPType — both can
+    // re-arrange or split submeshes). Without this, qtme.faces.<i>
+    // would attach to a different layout than the live Ogre mesh and
+    // exporter lookups by submesh index would silently mis-target.
+    // (CodeRabbit follow-up on PR #349.)
+    flags |= additionalFlags;
     const aiScene* scene = importer.ReadFile(path, flags);
     if (!scene || !scene->mRootNode || scene->mNumMeshes == 0) {
         Ogre::LogManager::getSingleton().logMessage(
