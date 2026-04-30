@@ -349,6 +349,8 @@ TEST_F(MeshImporterExporterTest, Importer_MeshLoadsSidecarMaterialScript) {
     Ogre::Entity* e = manager->createEntity(sn, mesh);
     ASSERT_NE(e, nullptr);
     e->getSubEntity(0)->setMaterial(mat);
+    // MeshSerializer exports SubMesh::getMaterialName(), not the SubEntity override.
+    e->getMesh()->getSubMesh(0)->setMaterialName("SidecarMaterial");
 
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
