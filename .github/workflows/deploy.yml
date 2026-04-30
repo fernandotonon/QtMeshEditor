@@ -882,6 +882,19 @@ jobs:
       run: |
         npm install -g sonar-scanner
 
+    - name: Setup ccache
+      # Cache compiler outputs across CI runs so the test build (the
+      # slowest step in this job, dominated by ~500 .cpp compiles)
+      # gets near-instant replays for files that haven't changed.
+      # The cache survives across PRs via the shared key prefix.
+      uses: hendrikmuhs/ccache-action@v1.2
+      with:
+        key: sonar-tests-${{ runner.os }}
+        max-size: 2G
+        # ccache wraps gcc/g++ so build-wrapper still sees every
+        # invocation it needs to record for SonarCloud.
+        create-symlink: true
+
     - name: Setup headless environment for Qt tests
       run: |
             sudo apt-get update
@@ -897,9 +910,20 @@ jobs:
             echo "MESA_GL_VERSION_OVERRIDE=3.3" >> $GITHUB_ENV
 
     - name: Configure CMake for Tests
+      env:
+        # ccache + coverage flags interact awkwardly: the default
+        # hash includes the absolute build directory and source mtimes,
+        # which guarantees a cache miss on every CI run since the runner
+        # is ephemeral. Loosening these makes the cache effective without
+        # affecting correctness — gcov still emits .gcda at runtime, so
+        # coverage data is regenerated per test run regardless.
+        CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
+        CCACHE_NOHASHDIR: "true"
       run: |
             mkdir build
             cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
             -DASSIMP_DIR=/usr/local/lib/cmake/assimp-${{ env.ASSIMP_DIR_VERSION }} \
             -DASSIMP_INCLUDE_DIR=/usr/local/include/assimp \
             -DQt6_DIR=/home/runner/work/QtMeshEditor/Qt/${{ env.QT_VERSION }}/gcc_64/lib/cmake/Qt6 \
@@ -910,16 +934,25 @@ jobs:
             -DCMAKE_EXE_LINKER_FLAGS="--coverage" \
             -DBUILD_QT_MESH_EDITOR=OFF \
             -DENABLE_SENTRY=OFF
-      
+
     - name: Run build-wrapper
+      env:
+        CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
+        CCACHE_NOHASHDIR: "true"
       run: |
           echo "=== Running build-wrapper for SonarCloud analysis ==="
 
-          # Clean any previous build artifacts to ensure fresh compilation
-          make -C build clean 2>/dev/null || echo "No previous build to clean"
+          # NB: no `make clean` — ccache handles correctness via its hash,
+          # and incremental builds let unchanged TUs replay as cached hits.
+          # build-wrapper still records every compile invocation it sees
+          # (ccache wraps the compiler, so build-wrapper's intercept is
+          # transparent to the cache layer).
 
           # Run build-wrapper to capture compilation into a named directory
           build-wrapper-linux-x86-64 --out-dir build-wrapper-output make -C build -j$(nproc)
+
+          echo "=== ccache statistics ==="
+          ccache -s || true
 
           echo "=== Build wrapper completed ==="
           ls -la build-wrapper-output/ || echo "Build wrapper output directory not created"
