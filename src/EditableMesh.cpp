@@ -1553,19 +1553,6 @@ bool EditableMesh::writeVertexColors(Ogre::VertexData* vertexData, const std::ve
     const size_t vertexSize = vbuf->getVertexSize();
     const size_t count = std::min(vertices.size(), static_cast<size_t>(vertexData->vertexCount));
 
-    // Upgrade static → dynamic for immediate GPU visibility.
-    if (vbuf->getUsage() & Ogre::HardwareBuffer::HBU_STATIC) {
-        std::vector<unsigned char> oldData(bufSize);
-        vbuf->readData(0, bufSize, oldData.data());
-
-        auto newBuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
-            vertexSize, vertexData->vertexCount,
-            Ogre::HardwareBuffer::HBU_DYNAMIC_WRITE_ONLY, true);
-        newBuf->writeData(0, bufSize, oldData.data(), true);
-        binding->setBinding(source, newBuf);
-        vbuf = newBuf;
-    }
-
     std::vector<unsigned char> bufCopy(bufSize);
     vbuf->readData(0, bufSize, bufCopy.data());
 
