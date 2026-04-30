@@ -995,7 +995,13 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
             false));
         const Ogre::String group = meshFile.path().toStdString();
         Ogre::MaterialManager::getSingleton().parseScript(ds, group);
-        Ogre::ResourceGroupManager::getSingleton().initialiseResourceGroup(group);
+        // ensureResourceGroup() may have already initialised this group; a second
+        // initialiseResourceGroup() is a no-op and leaves parseScript materials unloaded.
+        auto& rgm = Ogre::ResourceGroupManager::getSingleton();
+        if (rgm.isResourceGroupInitialised(group))
+            rgm.loadResourceGroup(group);
+        else
+            rgm.initialiseResourceGroup(group);
         SentryReporter::addBreadcrumb("file.import",
             QStringLiteral("Loaded sidecar material: %1").arg(sidecar));
     } catch (const Ogre::Exception& e) {
