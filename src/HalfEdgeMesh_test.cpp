@@ -3965,6 +3965,66 @@ TEST(HalfEdgeMeshStandalone, LoopCutFailsOnInvalidEdgeIndex) {
     EXPECT_TRUE(he.loopCut(999).empty());
 }
 
+TEST(HalfEdgeMeshStandalone, LoopCutRejectsMixedQuadTriAdjacency) {
+    // Regression test for Codex P1 follow-up: loopCut walked both
+    // sides of the start edge independently, so a quad+tri adjacency
+    // would produce a one-sided cut on the quad side and silently
+    // mutate topology when the user expected a "needs a quad mesh"
+    // failure. The op must reject upfront when EITHER face adjacent
+    // to the start edge is non-quad.
+    EditableMesh em;
+    EditableSubMesh sub;
+    sub.materialName = "M";
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.normal = Ogre::Vector3::UNIT_Z; v.hasNormal = true;
+        return v;
+    };
+    // 5 verts, planar in XY:
+    //   3 -- 2
+    //   |   /|
+    //   |  / |
+    //   | /  |
+    //   0 -- 1 -- 4 (4 lifted to make a triangle)
+    //
+    // Quad face: [0,1,2,3]  (winds CCW around +Z)
+    // Tri face:  [1,4,2]    (shares edge (1,2) with the quad)
+    // Edge (1,2) is the shared boundary — the loop-cut start edge.
+    sub.vertices = {
+        mkV(0, 0, 0),
+        mkV(1, 0, 0),
+        mkV(1, 1, 0),
+        mkV(0, 1, 0),
+        mkV(2, 0, 0),
+    };
+    EditableFace quad;  quad.indices = {0, 1, 2, 3};
+    EditableFace tri;   tri.indices  = {1, 4, 2};
+    sub.faces = {quad, tri};
+    triangulateFaces(sub);
+    em.subMeshes().push_back(std::move(sub));
+
+    HalfEdgeMesh he;
+    ASSERT_TRUE(he.buildFromEditableMesh(em));
+    const int sharedEdge = findEdge(he, 1, 2);
+    ASSERT_GE(sharedEdge, 0);
+
+    auto newVerts = he.loopCut(sharedEdge);
+    EXPECT_TRUE(newVerts.empty())
+        << "loop cut must reject mixed quad/tri adjacency upfront, "
+           "not produce a half-loop on the quad side";
+    EXPECT_TRUE(he.validate());
+
+    // No partial mutation: the HE mesh keeps the 2 input faces
+    // (1 quad + 1 triangle) — buildFromEditableMesh respects
+    // sub.faces directly when it's populated.
+    int active = 0;
+    for (size_t f = 0; f < he.faceCount(); ++f) {
+        if (he.face(static_cast<int>(f)).halfEdge >= 0) ++active;
+    }
+    EXPECT_EQ(active, 2);
+}
+
 // ===========================================================================
 // Merge vertices
 // ===========================================================================

@@ -50,6 +50,12 @@ THE SOFTWARE.
 #include <cmath>
 #include <cstdint>
 
+// readNgonFacesFromMesh — pulls quad migration's qtme.faces.<i> binding
+// off the live Ogre::Mesh so the FBX exporter emits source polygons
+// (quads / n-gons) instead of fan-triangulated triangles. (Quad
+// migration #326, chunk 6.)
+#include "../EditableMesh.h"
+
 // FBX time: 1 second = 46186158000 FBX ticks
 static constexpr int64_t FBX_TICKS_PER_SECOND = 46186158000LL;
 
@@ -840,33 +846,97 @@ private:
             m_w.endNodeLeaf();
 
             // ── PolygonVertexIndex (winding reversed for Z-mirror) ──
+            //
+            // Walk source polygons (quads/n-gons via the qtme.faces.<i>
+            // binding when present, else triangles from the GPU index
+            // buffer). For each polygon (v0, v1, .., vN-1):
+            //   * the FBX exporter emits the reverse winding to compensate
+            //     for the Z-mirror applied to positions/normals;
+            //   * the LAST index is bitwise-NOT-encoded (-(idx+1)) to mark
+            //     the polygon boundary, per FBX binary spec.
+            //
+            // `polyVertexOrder` records the buffer-index sequence in
+            // PolygonVertexIndex order so the per-polygon-vertex layers
+            // (Normal, UV, Color) below can expand consistently without
+            // re-reading the source indices.
+            //
+            // Quad migration #326, chunk 6.
             std::vector<int32_t> polyIndices;
+            std::vector<uint32_t> polyVertexOrder;
             const Ogre::IndexData* iData = subMesh->indexData;
-            if (iData && iData->indexCount > 0)
+
+            std::vector<std::vector<unsigned int>> ngonFaces;
+            bool useNgon = readNgonFacesFromMesh(m_mesh, si, ngonFaces);
+
+            // Defend against stale / out-of-range indices in the
+            // cached binding — those would translate into out-of-bounds
+            // reads on the per-PV layer expansions below. Drop to the
+            // triangle path on bad data rather than corrupting the
+            // export. (CodeRabbit P2 follow-up on PR #349.)
+            if (useNgon)
+            {
+                for (const auto& poly : ngonFaces) {
+                    if (poly.size() < 3) { useNgon = false; break; }
+                    for (unsigned int vi : poly) {
+                        if (vi >= vData->vertexCount) { useNgon = false; break; }
+                    }
+                    if (!useNgon) break;
+                }
+                if (!useNgon) ngonFaces.clear();
+            }
+
+            if (useNgon)
+            {
+                size_t totalIndices = 0;
+                for (const auto& poly : ngonFaces) totalIndices += poly.size();
+                polyIndices.reserve(totalIndices);
+                polyVertexOrder.reserve(totalIndices);
+                for (const auto& poly : ngonFaces) {
+                    if (poly.size() < 3) continue;
+                    // Reverse winding: (v0, v1, ..., vN-1)
+                    //              → (v0, vN-1, vN-2, ..., v1)
+                    polyVertexOrder.push_back(poly[0]);
+                    for (size_t k = poly.size(); k-- > 1; ) {
+                        polyVertexOrder.push_back(poly[k]);
+                    }
+                    // Encode for FBX: last entry is the polygon end marker.
+                    const size_t base = polyIndices.size();
+                    polyIndices.push_back(static_cast<int32_t>(poly[0]));
+                    for (size_t k = poly.size(); k-- > 1; ) {
+                        polyIndices.push_back(static_cast<int32_t>(poly[k]));
+                    }
+                    polyIndices.back() = -(polyIndices.back() + 1);
+                    (void)base;
+                }
+            }
+            else if (iData && iData->indexCount > 0)
             {
                 auto ibuf = iData->indexBuffer;
                 auto* ibase = static_cast<const unsigned char*>(
                     ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
                 bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
                 polyIndices.resize(iData->indexCount);
+                polyVertexOrder.resize(iData->indexCount);
                 for (size_t f = 0; f < iData->indexCount / 3; ++f)
                 {
                     // Read original triangle indices
-                    int32_t i0, i1, i2;
+                    uint32_t u0, u1, u2;
                     if (use32) {
-                        i0 = static_cast<int32_t>(reinterpret_cast<const uint32_t*>(ibase)[f * 3 + 0]);
-                        i1 = static_cast<int32_t>(reinterpret_cast<const uint32_t*>(ibase)[f * 3 + 1]);
-                        i2 = static_cast<int32_t>(reinterpret_cast<const uint32_t*>(ibase)[f * 3 + 2]);
+                        u0 = reinterpret_cast<const uint32_t*>(ibase)[f * 3 + 0];
+                        u1 = reinterpret_cast<const uint32_t*>(ibase)[f * 3 + 1];
+                        u2 = reinterpret_cast<const uint32_t*>(ibase)[f * 3 + 2];
                     } else {
-                        i0 = static_cast<int32_t>(reinterpret_cast<const uint16_t*>(ibase)[f * 3 + 0]);
-                        i1 = static_cast<int32_t>(reinterpret_cast<const uint16_t*>(ibase)[f * 3 + 1]);
-                        i2 = static_cast<int32_t>(reinterpret_cast<const uint16_t*>(ibase)[f * 3 + 2]);
+                        u0 = reinterpret_cast<const uint16_t*>(ibase)[f * 3 + 0];
+                        u1 = reinterpret_cast<const uint16_t*>(ibase)[f * 3 + 1];
+                        u2 = reinterpret_cast<const uint16_t*>(ibase)[f * 3 + 2];
                     }
                     // Reverse winding: (v0, v1, v2) → (v0, v2, v1)
-                    // FBX convention: last index is -(idx+1)
-                    polyIndices[f * 3 + 0] = i0;
-                    polyIndices[f * 3 + 1] = i2;
-                    polyIndices[f * 3 + 2] = -(i1 + 1);
+                    polyVertexOrder[f * 3 + 0] = u0;
+                    polyVertexOrder[f * 3 + 1] = u2;
+                    polyVertexOrder[f * 3 + 2] = u1;
+                    polyIndices[f * 3 + 0] = static_cast<int32_t>(u0);
+                    polyIndices[f * 3 + 1] = static_cast<int32_t>(u2);
+                    polyIndices[f * 3 + 2] = -(static_cast<int32_t>(u1) + 1);
                 }
                 ibuf->unlock();
             }
@@ -903,41 +973,20 @@ private:
                 m_w.beginNode("MappingInformationType"); m_w.writePropertyS("ByPolygonVertex"); m_w.endProperties(); m_w.endNodeLeaf();
                 m_w.beginNode("ReferenceInformationType"); m_w.writePropertyS("Direct"); m_w.endProperties(); m_w.endNodeLeaf();
 
-                // Expand normals to per-polygon-vertex with reversed winding
-                // PolygonVertexIndex stores (v0, v2, v1) per triangle, so
-                // normals must be expanded in the same order.
+                // Expand normals to per-polygon-vertex following the same
+                // traversal order as PolygonVertexIndex (driven by
+                // polyVertexOrder so n-gon and tri paths share one
+                // expansion). Quad migration #326, chunk 6.
                 std::vector<double> expandedNormals;
-                if (iData && iData->indexCount > 0)
+                if (!polyVertexOrder.empty())
                 {
-                    expandedNormals.resize(iData->indexCount * 3);
-                    auto ibuf = iData->indexBuffer;
-                    auto* ibase2 = static_cast<const unsigned char*>(
-                        ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-                    bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
-                    for (size_t f = 0; f < iData->indexCount / 3; ++f)
-                    {
-                        uint32_t vi0 = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 0]
-                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 0];
-                        uint32_t vi1 = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 1]
-                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 1];
-                        uint32_t vi2 = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 2]
-                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 2];
-                        // Reversed winding: (v0, v2, v1) to match PolygonVertexIndex
-                        size_t base = f * 9;
-                        expandedNormals[base + 0] = normals[vi0 * 3 + 0];
-                        expandedNormals[base + 1] = normals[vi0 * 3 + 1];
-                        expandedNormals[base + 2] = normals[vi0 * 3 + 2];
-                        expandedNormals[base + 3] = normals[vi2 * 3 + 0];
-                        expandedNormals[base + 4] = normals[vi2 * 3 + 1];
-                        expandedNormals[base + 5] = normals[vi2 * 3 + 2];
-                        expandedNormals[base + 6] = normals[vi1 * 3 + 0];
-                        expandedNormals[base + 7] = normals[vi1 * 3 + 1];
-                        expandedNormals[base + 8] = normals[vi1 * 3 + 2];
+                    expandedNormals.resize(polyVertexOrder.size() * 3);
+                    for (size_t k = 0; k < polyVertexOrder.size(); ++k) {
+                        const uint32_t vi = polyVertexOrder[k];
+                        expandedNormals[k * 3 + 0] = normals[vi * 3 + 0];
+                        expandedNormals[k * 3 + 1] = normals[vi * 3 + 1];
+                        expandedNormals[k * 3 + 2] = normals[vi * 3 + 2];
                     }
-                    ibuf->unlock();
                 }
                 else
                 {
@@ -984,32 +1033,12 @@ private:
                 m_w.endProperties();
                 m_w.endNodeLeaf();
 
-                // UV index with reversed winding to match PolygonVertexIndex
+                // UV index follows PolygonVertexIndex traversal (covers
+                // both n-gon and tri paths). Quad migration #326, chunk 6.
                 std::vector<int32_t> uvIndex;
-                if (iData && iData->indexCount > 0)
-                {
-                    auto ibuf = iData->indexBuffer;
-                    auto* ibase2 = static_cast<const unsigned char*>(
-                        ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-                    bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
-                    uvIndex.resize(iData->indexCount);
-                    for (size_t f = 0; f < iData->indexCount / 3; ++f)
-                    {
-                        uint32_t vi0 = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 0]
-                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 0];
-                        uint32_t vi1 = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 1]
-                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 1];
-                        uint32_t vi2 = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 2]
-                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 2];
-                        // Reversed winding: (v0, v2, v1)
-                        uvIndex[f * 3 + 0] = static_cast<int32_t>(vi0);
-                        uvIndex[f * 3 + 1] = static_cast<int32_t>(vi2);
-                        uvIndex[f * 3 + 2] = static_cast<int32_t>(vi1);
-                    }
-                    ibuf->unlock();
+                uvIndex.reserve(polyVertexOrder.size());
+                for (const uint32_t vi : polyVertexOrder) {
+                    uvIndex.push_back(static_cast<int32_t>(vi));
                 }
 
                 m_w.beginNode("UVIndex");
@@ -1045,40 +1074,19 @@ private:
                 }
                 vbuf->unlock();
 
-                // Expand to per-polygon-vertex with reversed winding to match PolygonVertexIndex
+                // Expand to per-polygon-vertex via the shared traversal.
+                // Quad migration #326, chunk 6.
                 std::vector<double> expandedColors;
-                if (iData && iData->indexCount > 0)
+                if (!polyVertexOrder.empty())
                 {
-                    expandedColors.resize(iData->indexCount * 4);
-                    auto ibuf = iData->indexBuffer;
-                    auto* ibase2 = static_cast<const unsigned char*>(
-                        ibuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
-                    bool use32 = ibuf->getType() == Ogre::HardwareIndexBuffer::IT_32BIT;
-                    for (size_t f = 0; f < iData->indexCount / 3; ++f)
-                    {
-                        uint32_t vi0 = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 0]
-                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 0];
-                        uint32_t vi1 = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 1]
-                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 1];
-                        uint32_t vi2 = use32
-                            ? reinterpret_cast<const uint32_t*>(ibase2)[f * 3 + 2]
-                            : reinterpret_cast<const uint16_t*>(ibase2)[f * 3 + 2];
-
-                        // Reversed winding: (v0, v2, v1)
-                        size_t base = f * 12;
-                        auto copy = [&](size_t outVertex, uint32_t vi) {
-                            expandedColors[outVertex + 0] = colors[vi * 4 + 0];
-                            expandedColors[outVertex + 1] = colors[vi * 4 + 1];
-                            expandedColors[outVertex + 2] = colors[vi * 4 + 2];
-                            expandedColors[outVertex + 3] = colors[vi * 4 + 3];
-                        };
-                        copy(base + 0, vi0);
-                        copy(base + 4, vi2);
-                        copy(base + 8, vi1);
+                    expandedColors.resize(polyVertexOrder.size() * 4);
+                    for (size_t k = 0; k < polyVertexOrder.size(); ++k) {
+                        const uint32_t vi = polyVertexOrder[k];
+                        expandedColors[k * 4 + 0] = colors[vi * 4 + 0];
+                        expandedColors[k * 4 + 1] = colors[vi * 4 + 1];
+                        expandedColors[k * 4 + 2] = colors[vi * 4 + 2];
+                        expandedColors[k * 4 + 3] = colors[vi * 4 + 3];
                     }
-                    ibuf->unlock();
                 }
                 else
                 {

@@ -254,6 +254,69 @@ inline void unpackDiffuseColour(Ogre::RGBA packed, Ogre::ColourValue& cv)
 
 } // namespace
 
+// ============================================================================
+// N-gon face cache on Ogre::Mesh — quad migration #326, chunk 6.
+// ============================================================================
+// Exporters need access to n-gon polygon data after the user has edited the
+// mesh, but commitToEntity / resizeEntityBuffers wipe the cached source-file
+// path (see chunk 4). Stash the post-commit `.faces` directly on the live
+// Ogre::Mesh via UserObjectBindings so Assimp / FBX export paths can read
+// them without re-importing. Per-submesh keys keep the binding payload
+// compact (a single `std::vector<std::vector<unsigned int>>` per submesh).
+
+namespace {
+constexpr const char* kNgonFacesKeyPrefix = "qtme.faces.";
+using NgonFaceList = std::vector<std::vector<unsigned int>>;
+
+std::string ngonFacesKey(size_t subMeshIndex)
+{
+    return std::string(kNgonFacesKeyPrefix) + std::to_string(subMeshIndex);
+}
+} // namespace
+
+void writeNgonFacesToMesh(Ogre::Mesh* mesh,
+                          const std::vector<EditableSubMesh>& subMeshes)
+{
+    if (!mesh) return;
+    auto& bindings = mesh->getUserObjectBindings();
+    for (size_t i = 0; i < subMeshes.size(); ++i) {
+        const auto& sub = subMeshes[i];
+        const std::string key = ngonFacesKey(i);
+        if (sub.faces.empty()) {
+            // Triangle-only submesh — drop any stale binding so a later
+            // export doesn't read pre-edit n-gon data.
+            bindings.eraseUserAny(key);
+            continue;
+        }
+        NgonFaceList payload;
+        payload.reserve(sub.faces.size());
+        for (const auto& face : sub.faces) {
+            if (!face.isValid()) continue;
+            payload.emplace_back(face.indices.begin(), face.indices.end());
+        }
+        bindings.setUserAny(key, Ogre::Any(std::move(payload)));
+    }
+}
+
+bool readNgonFacesFromMesh(const Ogre::Mesh* mesh,
+                           size_t subMeshIndex,
+                           std::vector<std::vector<unsigned int>>& outFaces)
+{
+    outFaces.clear();
+    if (!mesh) return false;
+    const auto any = mesh->getUserObjectBindings().getUserAny(
+        ngonFacesKey(subMeshIndex));
+    if (!any.has_value()) return false;
+    try {
+        outFaces = Ogre::any_cast<NgonFaceList>(any);
+    } catch (const Ogre::Exception&) {
+        // Wrong payload type stored under our key — bail out, exporter
+        // will fall back to the triangle index buffer.
+        return false;
+    }
+    return !outFaces.empty();
+}
+
 bool EditableMesh::loadFromEntity(Ogre::Entity* entity)
 {
     if (!entity)
@@ -313,6 +376,30 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
             readIndexData(subMesh->indexData, editSub.triangles);
         }
 
+        // Rehydrate n-gon faces from the qtme.faces.<i> binding when
+        // present. Once `qtme.source_path` has been wiped (after the
+        // first commit), this binding is the only place the n-gon
+        // structure survives — without rehydration, every subsequent
+        // enterEditMode comes back triangle-only and the next commit
+        // would re-erase the cache. (Quad migration #326, chunk 6,
+        // CodeRabbit follow-up.)
+        std::vector<std::vector<unsigned int>> cachedFaces;
+        if (readNgonFacesFromMesh(mesh, i, cachedFaces)) {
+            editSub.faces.clear();
+            editSub.faces.reserve(cachedFaces.size());
+            for (auto& poly : cachedFaces) {
+                if (poly.size() < 3) continue;
+                EditableFace face;
+                face.indices = std::move(poly);
+                editSub.faces.push_back(std::move(face));
+            }
+            // Resync the triangle mirror to match the canonical faces
+            // (the GPU buffer was already produced from this same fan
+            // triangulation at upload time, so this is just internal
+            // bookkeeping).
+            triangulateFaces(editSub);
+        }
+
         m_subMeshes.push_back(std::move(editSub));
     }
 
@@ -322,7 +409,8 @@ bool EditableMesh::loadFromMesh(const Ogre::MeshPtr& meshPtr)
 bool EditableMesh::loadFromAssimpFile(const std::string& path,
                                       bool convertToLeftHanded,
                                       bool isZup,
-                                      const Ogre::Skeleton* skeletonForBoneHandles)
+                                      const Ogre::Skeleton* skeletonForBoneHandles,
+                                      unsigned int additionalFlags)
 {
     if (path.empty()) return false;
 
@@ -353,6 +441,14 @@ bool EditableMesh::loadFromAssimpFile(const std::string& path,
         aiProcess_LimitBoneWeights |
         aiProcess_GlobalScale;
     if (convertToLeftHanded) flags |= aiProcess_ConvertToLeftHanded;
+    // Pass through any caller-supplied topology flags so the n-gon
+    // probe matches the rendered mesh's submesh layout (e.g.
+    // aiProcess_FindDegenerates / aiProcess_SortByPType — both can
+    // re-arrange or split submeshes). Without this, qtme.faces.<i>
+    // would attach to a different layout than the live Ogre mesh and
+    // exporter lookups by submesh index would silently mis-target.
+    // (CodeRabbit follow-up on PR #349.)
+    flags |= additionalFlags;
     const aiScene* scene = importer.ReadFile(path, flags);
     if (!scene || !scene->mRootNode || scene->mNumMeshes == 0) {
         Ogre::LogManager::getSingleton().logMessage(
@@ -691,6 +787,12 @@ bool EditableMesh::commitToEntity(Ogre::Entity* entity)
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_convert_lh");
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_up_axis");
 
+    // Refresh the per-submesh n-gon face cache so a later export can
+    // recover the post-edit polygon structure. (Quad migration #326,
+    // chunk 6.) The source-file path is gone, but the n-gon faces
+    // travel with the live mesh from now on.
+    writeNgonFacesToMesh(mesh, m_subMeshes);
+
     return true;
 }
 
@@ -781,7 +883,31 @@ bool EditableMesh::ensureVertexColorBuffers(Ogre::Entity* entity)
 void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
                                        const EditableSubMesh& editSubIn)
 {
-    if (!subMesh || editSubIn.vertices.empty()) return;
+    if (!subMesh) return;
+
+    // Empty-submesh safety net: when an edit deletes the last face in
+    // a submesh (or the submesh enters with no vertices), explicitly
+    // tear down any prior vertex/index data on the SubMesh so the GPU
+    // doesn't keep rendering stale geometry. The previous early-return
+    // path silently left the old buffers attached. (CodeRabbit Major
+    // follow-up on PR #347.)
+    auto clearSubMeshGeometry = [&]() {
+        if (subMesh->vertexData) {
+            delete subMesh->vertexData;
+            subMesh->vertexData = nullptr;
+        }
+        subMesh->useSharedVertices = false;
+        if (subMesh->indexData) {
+            subMesh->indexData->indexBuffer.reset();
+            subMesh->indexData->indexCount = 0;
+            subMesh->indexData->indexStart = 0;
+        }
+    };
+
+    if (editSubIn.vertices.empty()) {
+        clearSubMeshGeometry();
+        return;
+    }
 
     // n-gon synchronisation: if the caller populated `faces`, that's
     // canonical and `triangles` is meant to be a fan-triangulation
@@ -802,7 +928,10 @@ void EditableMesh::buildSubMeshBuffers(Ogre::SubMesh* subMesh,
         triangulateFaces(local);
         editSub = &local;
     }
-    if (editSub->triangles.empty()) return;
+    if (editSub->triangles.empty()) {
+        clearSubMeshGeometry();
+        return;
+    }
 
     // Replace any existing vertex data with a fresh one.
     if (subMesh->vertexData) delete subMesh->vertexData;
@@ -1028,6 +1157,10 @@ bool EditableMesh::resizeEntityBuffers(Ogre::Entity* entity)
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_path");
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_convert_lh");
     mesh->getUserObjectBindings().eraseUserAny("qtme.source_up_axis");
+
+    // Refresh the n-gon face cache so exporters can recover n-gons
+    // post-edit. (Quad migration #326, chunk 6.)
+    writeNgonFacesToMesh(mesh, m_subMeshes);
 
     return true;
 }

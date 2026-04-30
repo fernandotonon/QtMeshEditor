@@ -2046,21 +2046,29 @@ TEST_F(EditModeControllerBevelE2ETest, EnterEditModeAfterEditDoesNotReimport) {
     ASSERT_FALSE(ctrl->currentMesh()->subMeshes()[0].faces.empty())
         << "first entry must take the n-gon path";
 
-    // Commit any change (translate one vertex by zero — still triggers
-    // the commitToEntity path that wipes the source path).
+    // Commit a real change so the test exercises the commit path even
+    // if the controller ever short-circuits zero-delta transforms in
+    // the future. (CodeRabbit follow-up on PR #347.)
     ctrl->setSelectionMode(EditModeController::VertexMode);
     ctrl->selectVertex(0);
-    ctrl->translateSelectedVertices(Ogre::Vector3::ZERO);
+    ctrl->translateSelectedVertices(Ogre::Vector3(0.001f, 0.0f, 0.0f));
     ctrl->exitEditMode(/*commitChanges*/ true);
 
     EXPECT_FALSE(mesh->getUserObjectBindings().getUserAny(
         "qtme.source_path").has_value())
         << "exitEditMode commit must have wiped the source path";
 
-    // Re-enter: should fall back to legacy path now.
+    // Chunk 6 of #326: although `qtme.source_path` is gone, the
+    // n-gon faces survive in the `qtme.faces.<i>` binding written by
+    // the commit. Re-entering Edit Mode now rehydrates them via
+    // loadFromMesh -> readNgonFacesFromMesh so n-gon-aware ops keep
+    // working post-edit. (Pre-chunk-6 this test asserted the
+    // OPPOSITE — that the second entry would fall back to legacy
+    // triangle-only — which is no longer the right contract.)
     ASSERT_TRUE(ctrl->enterEditMode());
-    EXPECT_TRUE(ctrl->currentMesh()->subMeshes()[0].faces.empty())
-        << "second entry (post-edit) must use legacy loadFromEntity path";
+    EXPECT_FALSE(ctrl->currentMesh()->subMeshes()[0].faces.empty())
+        << "second entry (post-edit) should rehydrate n-gons from "
+           "the qtme.faces.<i> binding";
 
     QFile::remove(objPath);
 }
