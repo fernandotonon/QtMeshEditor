@@ -238,6 +238,23 @@ void EditModeController::setVertexPaintEnabled(bool enabled)
     emit vertexPaintChanged();
 }
 
+void EditModeController::setVertexColorPreviewEnabled(bool enabled)
+{
+    if (m_vertexColorPreviewEnabled == enabled)
+        return;
+
+    m_vertexColorPreviewEnabled = enabled;
+    if (enabled)
+        applyVertexColorPreviewMaterials();
+    else
+        removeVertexColorPreviewMaterials();
+
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex color preview %1").arg(enabled ? "enabled" : "disabled"));
+    emit vertexColorPreviewChanged();
+}
+
 void EditModeController::setVertexPaintColor(const QColor& c)
 {
     if (!c.isValid())
@@ -295,6 +312,18 @@ void EditModeController::setVertexPaintStrength(double s)
     SentryReporter::addBreadcrumb(
         "ui.action",
         QStringLiteral("Vertex paint strength: %1").arg(m_vertexPaintStrength, 0, 'f', 3));
+    emit vertexPaintChanged();
+}
+
+void EditModeController::setVertexPaintFalloff(double f)
+{
+    const double clamped = std::max(0.0, std::min(1.0, f));
+    if (m_vertexPaintFalloff == clamped)
+        return;
+    m_vertexPaintFalloff = clamped;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QStringLiteral("Vertex paint falloff: %1").arg(m_vertexPaintFalloff, 0, 'f', 3));
     emit vertexPaintChanged();
 }
 
@@ -432,6 +461,9 @@ bool EditModeController::enterEditMode()
     if (m_wireframeEnabled)
         applyWireframeMaterials();
 
+    if (m_vertexColorPreviewEnabled)
+        applyVertexColorPreviewMaterials();
+
     SentryReporter::addBreadcrumb("edit_mode",
         QString("Entered Edit Mode: %1 vertices, %2 triangles, %3 submeshes")
             .arg(m_editableMesh->totalVertexCount())
@@ -494,6 +526,12 @@ void EditModeController::exitEditMode(bool commitChanges)
         m_vertexPaintFlushScheduled = false;
         clearVertexPaintPreview();
         emit vertexPaintChanged();
+    }
+
+    if (m_vertexColorPreviewEnabled) {
+        removeVertexColorPreviewMaterials();
+        m_vertexColorPreviewEnabled = false;
+        emit vertexColorPreviewChanged();
     }
 
     m_editableMesh.reset();
@@ -1017,7 +1055,8 @@ bool EditModeController::applyVertexColorBrush(EditableMesh& mesh,
                                                const Ogre::Vector3& localCenter,
                                                float radius,
                                                const Ogre::ColourValue& color,
-                                               float strength)
+                                               float strength,
+                                               float falloff)
 {
     if (radius <= 0.0f)
         return false;
@@ -1025,6 +1064,10 @@ bool EditModeController::applyVertexColorBrush(EditableMesh& mesh,
     strength = std::clamp(strength, 0.0f, 1.0f);
     if (strength <= 0.0f)
         return false;
+
+    falloff = std::clamp(falloff, 0.0f, 1.0f);
+    // Map [0..1] to an exponent curve [1..6]. Larger exponent = harder center / faster edge drop.
+    const float exp = 1.0f + falloff * 5.0f;
 
     bool changed = false;
     const float invR = 1.0f / radius;
@@ -1037,9 +1080,9 @@ bool EditModeController::applyVertexColorBrush(EditableMesh& mesh,
             if (d > radius)
                 continue;
 
-            // Smooth falloff: w = (1 - d/r)^2
+            // Distance falloff: w = (1 - d/r)^exp
             const float t = 1.0f - (d * invR);
-            const float w = t * t;
+            const float w = std::pow(std::max(0.0f, t), exp);
             const float a = strength * w;
             if (a <= 0.0f)
                 continue;
@@ -1559,7 +1602,8 @@ void EditModeController::updateVertexPaintStroke(OgreWidget* widget, const QPoin
         localHit,
         static_cast<float>(m_vertexPaintRadius),
         paint,
-        static_cast<float>(m_vertexPaintStrength));
+        static_cast<float>(m_vertexPaintStrength),
+        static_cast<float>(m_vertexPaintFalloff));
 
     if (changed) {
         m_vertexPaintStrokeDirty = true;
@@ -4781,6 +4825,20 @@ void EditModeController::createOverlayMaterials()
         // facing triangle strips (TODO if 2px is unreliable).
         pass->setLineWidth(2.0f);
     }
+
+    // Vertex color preview material (unlit, uses diffuse vertex color).
+    if (!matMgr.getByName("EditMode/VertexColorPreview"))
+    {
+        auto mat = matMgr.create("EditMode/VertexColorPreview",
+                                 Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+        auto* pass = mat->getTechnique(0)->getPass(0);
+        pass->setLightingEnabled(false);
+        pass->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+        pass->setDepthCheckEnabled(true);
+        pass->setDepthWriteEnabled(false);
+        pass->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        pass->setCullingMode(Ogre::CULL_NONE);
+    }
 }
 
 void EditModeController::updateSelectionOverlay()
@@ -5106,6 +5164,39 @@ void EditModeController::removeWireframeMaterials()
         m_overlayBoundaryEdges->clear();
 }
 
+void EditModeController::applyVertexColorPreviewMaterials()
+{
+    if (!m_editModeActive || !m_editEntity || !m_editableMesh)
+        return;
+
+    // Ensure the mesh actually has vertex color buffers; default-initialize to white if missing.
+    m_editableMesh->ensureVertexColorBuffers(m_editEntity);
+
+    m_vertexColorPreviewSavedMaterials.clear();
+    for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+        auto* subEnt = m_editEntity->getSubEntity(i);
+        if (!subEnt)
+            continue;
+        m_vertexColorPreviewSavedMaterials[i] = subEnt->getMaterialName();
+        subEnt->setMaterialName(
+            "EditMode/VertexColorPreview",
+            Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME);
+    }
+}
+
+void EditModeController::removeVertexColorPreviewMaterials()
+{
+    if (!m_editEntity)
+        return;
+
+    for (const auto& [idx, matName] : m_vertexColorPreviewSavedMaterials) {
+        if (idx < m_editEntity->getNumSubEntities()) {
+            m_editEntity->getSubEntity(idx)->setMaterialName(matName);
+        }
+    }
+    m_vertexColorPreviewSavedMaterials.clear();
+}
+
 void EditModeController::updateBoundaryEdgeOverlay()
 {
     if (!m_editModeActive || !m_editableMesh || !m_editEntity) return;
@@ -5168,6 +5259,11 @@ void EditModeController::setWireframeEnabled(bool enabled)
             applyWireframeMaterials();
         else
             removeWireframeMaterials();
+
+        // If preview is on, re-apply after toggling wireframe so we snapshot/restore
+        // the current (wireframe or solid) material state correctly.
+        if (m_vertexColorPreviewEnabled)
+            applyVertexColorPreviewMaterials();
     }
 
     SentryReporter::addBreadcrumb("edit_mode",
