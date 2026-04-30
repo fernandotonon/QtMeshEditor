@@ -131,9 +131,17 @@ public:
     void setWireframeEnabled(bool enabled);
 
     /// True if any submesh of the current edit mesh has non-empty
-    /// n-gon `.faces` — i.e. quad-based already. Drives the
-    /// "Convert to Quads" toolbar button enable state.
+    /// n-gon `.faces` — i.e. quad-based already.
     Q_INVOKABLE bool isMeshQuadBased() const;
+
+    /// True when at least one submesh still has triangle-only
+    /// representation (`.faces` empty). Drives the "Convert to Quads"
+    /// toolbar button: a fully n-gon mesh has nothing to do, but a
+    /// MIXED mesh (some submeshes already n-gon, others tri-only)
+    /// still benefits — a less precise `isMeshQuadBased()` check
+    /// would wrongly disable the action on those. (CodeRabbit follow-
+    /// up on PR #347.)
+    Q_INVOKABLE bool canConvertToQuads() const;
     /// @}
 
     /// @name Mesh info (only valid when in edit mode)

@@ -776,6 +776,38 @@ void EditModeController::deselectFace(int triIndex)
         const int gi = localTriToGlobal(subIdx, tri);
         if (m_selectedFaces.erase(gi) > 0) anyErased = true;
     }
+
+    // Mirror selectFace's vertex/edge dilation on deselect too.
+    // Without this, ctrl-click-to-deselect leaves the perimeter
+    // vertices and edges from the previous selectFace call hanging
+    // around in the overlay, looking like a stuck partial selection.
+    // (CodeRabbit follow-up on PR #347.)
+    const int vertOffset = localToGlobal(subIdx, 0);
+    const int faceK = faceIndexForTriangle(sub, localTri,
+                                           &faceFirstTri, &faceTriCount);
+
+    if (faceK >= 0 && faceK < static_cast<int>(sub.faces.size())) {
+        const auto& f = sub.faces[faceK];
+        const size_t n = f.indices.size();
+        for (size_t i = 0; i < n; ++i) {
+            const int g0 = vertOffset + static_cast<int>(f.indices[i]);
+            const int g1 = vertOffset + static_cast<int>(f.indices[(i + 1) % n]);
+            m_selectedVertices.erase(g0);
+            m_selectedEdges.erase({std::min(g0, g1), std::max(g0, g1)});
+        }
+    } else if (faceFirstTri < sub.triangles.size()) {
+        const auto& triData = sub.triangles[faceFirstTri];
+        const int g0 = vertOffset + static_cast<int>(triData.indices[0]);
+        const int g1 = vertOffset + static_cast<int>(triData.indices[1]);
+        const int g2 = vertOffset + static_cast<int>(triData.indices[2]);
+        m_selectedVertices.erase(g0);
+        m_selectedVertices.erase(g1);
+        m_selectedVertices.erase(g2);
+        m_selectedEdges.erase({std::min(g0, g1), std::max(g0, g1)});
+        m_selectedEdges.erase({std::min(g1, g2), std::max(g1, g2)});
+        m_selectedEdges.erase({std::min(g0, g2), std::max(g0, g2)});
+    }
+
     if (anyErased) {
         updateSelectionOverlay();
         emit editSelectionChanged();
@@ -859,19 +891,27 @@ std::vector<int> EditModeController::selectedFacesAsHEFaceIndices() const
     // match this rule.
     const auto& subs = m_editableMesh->subMeshes();
     std::vector<int> heBaseBySub(subs.size(), 0);
+    // Per-submesh map: raw face index -> compacted HE face index
+    // (or -1 if the raw face was invalid and got skipped). Built only
+    // for n-gon submeshes; tri-only submeshes use the simple
+    // base + localTri formula. (CodeRabbit follow-up on PR #347:
+    // when a submesh has invalid faces earlier in the sequence,
+    // compacting only the BASE offset isn't enough — every selected
+    // face's faceK also needs to be remapped to the compacted index.)
+    std::vector<std::vector<int>> compactedFaceIdxBySub(subs.size());
     int running = 0;
     for (size_t s = 0; s < subs.size(); ++s) {
         heBaseBySub[s] = running;
         if (subs[s].faces.empty()) {
             running += static_cast<int>(subs[s].triangles.size());
         } else {
-            // Match HalfEdgeMesh::buildFromEditableMesh, which only
-            // appends faces that pass isValid(). Counting raw faces
-            // here would over-shoot the offset and shift later
-            // submeshes' HE face indices.
+            auto& map = compactedFaceIdxBySub[s];
+            map.resize(subs[s].faces.size(), -1);
             int valid = 0;
-            for (const auto& f : subs[s].faces) {
-                if (f.isValid()) ++valid;
+            for (size_t fi = 0; fi < subs[s].faces.size(); ++fi) {
+                if (subs[s].faces[fi].isValid()) {
+                    map[fi] = valid++;
+                }
             }
             running += valid;
         }
@@ -885,8 +925,12 @@ std::vector<int> EditModeController::selectedFacesAsHEFaceIndices() const
         const auto& sub = subs[subIdx];
         const int faceK = faceIndexForTriangle(sub, localTri, nullptr, nullptr);
         if (faceK >= 0) {
-            // n-gon submesh: HE face index = base + faceK.
-            uniq.insert(heBaseBySub[subIdx] + faceK);
+            // n-gon submesh: HE face index = base + COMPACTED faceK
+            // (skipping any invalid faces earlier in sub.faces).
+            const auto& map = compactedFaceIdxBySub[subIdx];
+            if (faceK < static_cast<int>(map.size()) && map[faceK] >= 0) {
+                uniq.insert(heBaseBySub[subIdx] + map[faceK]);
+            }
         } else {
             // Legacy triangle-only submesh: HE face index = base +
             // localTri (one HE face per triangle).
@@ -3864,36 +3908,24 @@ int EditModeController::convertToQuads(float angleThresholdDeg)
     const auto preSelectedFaces = m_selectedFaces;
 
     int totalMerges = 0;
+    int submeshesPromoted = 0;
     for (auto& sub : m_editableMesh->subMeshes()) {
         // Promote first if the submesh is in legacy triangle-only mode
         // so the n-gon path takes over even when no merges happen — the
         // wireframe overlay etc. branch on .faces being non-empty.
-        if (sub.faces.empty()) promoteTrianglesToFaces(sub);
+        if (sub.faces.empty() && !sub.triangles.empty()) {
+            promoteTrianglesToFaces(sub);
+            ++submeshesPromoted;
+        }
         totalMerges += mergeCoplanarTrianglesToQuads(sub, angleThresholdDeg);
     }
 
-    if (totalMerges == 0) {
-        // Promotion alone counts as a meaningful change (downstream
-        // n-gon-aware features start working) — but if every submesh
-        // already had .faces and no merges happened, this is a true
-        // no-op. Detect by comparing face counts pre/post.
-        bool topologyChanged = false;
-        const auto& cur = m_editableMesh->subMeshes();
-        if (cur.size() != originalSubMeshes.size()) {
-            topologyChanged = true;
-        } else {
-            for (size_t i = 0; i < cur.size(); ++i) {
-                if (cur[i].faces.size() != originalSubMeshes[i].faces.size()) {
-                    topologyChanged = true;
-                    break;
-                }
-            }
-        }
-        if (!topologyChanged) {
-            // Restore — promote was a no-op too.
-            m_editableMesh->subMeshes() = std::move(originalSubMeshes);
-            return 0;
-        }
+    // True no-op: every submesh was already n-gon canonical and no
+    // coplanar pairs got merged. Restore and bail without emitting an
+    // undo command.
+    if (totalMerges == 0 && submeshesPromoted == 0) {
+        m_editableMesh->subMeshes() = std::move(originalSubMeshes);
+        return 0;
     }
 
     if (m_normalsMode == 0) m_editableMesh->recalculateNormals();
@@ -3918,7 +3950,8 @@ int EditModeController::convertToQuads(float angleThresholdDeg)
 
     validateMesh();
     SentryReporter::addBreadcrumb("edit_mode",
-        QString("Convert to Quads (merges=%1)").arg(totalMerges));
+        QString("Convert to Quads (merges=%1, promoted=%2)")
+            .arg(totalMerges).arg(submeshesPromoted));
 
     // Wireframe path may have flipped from PM_WIREFRAME to the n-gon
     // boundary overlay (or back, if undo is invoked) — re-apply.
@@ -3931,7 +3964,11 @@ int EditModeController::convertToQuads(float angleThresholdDeg)
     refreshNormalVisualizer();
     emit editSelectionChanged();
     emit meshDataChanged();
-    return totalMerges;
+    // Return non-zero whenever the op actually changed something —
+    // including the promotion-only case where no triangle pairs got
+    // merged but legacy submeshes flipped to n-gon canonical form.
+    // (CodeRabbit follow-up on PR #347.)
+    return totalMerges + submeshesPromoted;
 }
 
 int EditModeController::subdivideCatmullClarkAll()
@@ -5050,22 +5087,42 @@ bool EditModeController::isMeshQuadBased() const
     return false;
 }
 
+bool EditModeController::canConvertToQuads() const
+{
+    if (!m_editableMesh) return false;
+    // True if any submesh is still triangle-only — that submesh is a
+    // candidate for promotion + coplanar-tri merging. Mixed meshes
+    // qualify even though `isMeshQuadBased()` is also true on them,
+    // because the tri-only submeshes still have work to do.
+    for (const auto& sub : m_editableMesh->subMeshes()) {
+        if (sub.faces.empty() && !sub.triangles.empty()) return true;
+    }
+    return false;
+}
+
 void EditModeController::applyWireframeMaterials()
 {
     if (!m_editEntity)
         return;
 
-    // n-gon mesh: keep solid material, use the boundary-edge overlay
-    // (drawn from updateSelectionOverlay) to show face boundaries
-    // without the fan-triangulation diagonals.
-    if (meshHasNgonFaces()) {
-        m_savedMaterials.clear();
-        updateBoundaryEdgeOverlay();
-        return;
-    }
-
     m_savedMaterials.clear();
+
+    // Mixed-mesh aware: each submesh gets the wireframe path that
+    // matches ITS canonical face representation.
+    //   - n-gon submesh (.faces non-empty): keep solid material; the
+    //     boundary-edge overlay below draws clean polygon outlines
+    //     without fan-triangulation diagonals.
+    //   - triangle-only submesh: clone the material with PM_WIREFRAME
+    //     so the GPU draws every triangle edge.
+    // The previous "any n-gon submesh in the mesh → all overlay" rule
+    // dropped wireframe entirely on tri-only submeshes inside a mixed
+    // mesh. (Codex P2 follow-up on PR #347.)
+    const auto& subs = m_editableMesh ? m_editableMesh->subMeshes()
+                                       : std::vector<EditableSubMesh>{};
     for (unsigned int i = 0; i < m_editEntity->getNumSubEntities(); ++i) {
+        const bool isNgon = (i < subs.size()) && !subs[i].faces.empty();
+        if (isNgon) continue; // boundary overlay handles this one.
+
         auto* subEnt = m_editEntity->getSubEntity(i);
         m_savedMaterials[i] = subEnt->getMaterialName();
 
@@ -5082,6 +5139,12 @@ void EditModeController::applyWireframeMaterials()
         }
         subEnt->setMaterialName(wireName);
     }
+
+    // Draw the n-gon boundary overlay if any submesh has .faces.
+    // Multi-submesh meshes with a mix of tri and n-gon submeshes get
+    // both paths active simultaneously.
+    if (meshHasNgonFaces())
+        updateBoundaryEdgeOverlay();
 }
 
 void EditModeController::removeWireframeMaterials()
