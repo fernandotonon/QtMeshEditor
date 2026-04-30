@@ -5821,6 +5821,17 @@ HEVertex averageHEVertices(const std::vector<const HEVertex*>& src)
 {
     HEVertex r;
     if (src.empty()) return r;
+
+    // Zero the colour accumulator. HEVertex's default-init sets
+    // `color = ColourValue::White` (1,1,1,1) so callers without a
+    // painted vertex still render correctly. But `r.color += v->color * w`
+    // below accumulates ON TOP of that White baseline — every averaged
+    // vertex ended up saturated past 1.0 in every channel and packed to
+    // White, wiping any vertex paint through Catmull-Clark / face / edge
+    // points. position/normal/uv/tangent default to ZERO so they
+    // accumulate correctly; only colour needs the explicit reset here.
+    r.color = Ogre::ColourValue(0, 0, 0, 0);
+
     const float w = 1.0f / static_cast<float>(src.size());
     bool anyNorm = true, anyUV = true, anyCol = true, anyTan = true;
     for (const auto* v : src) {
