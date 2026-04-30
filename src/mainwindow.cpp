@@ -172,6 +172,23 @@ MainWindow::MainWindow(QWidget *parent) :
             this, &MainWindow::updateEditModeIndicator);
     updateEditModeIndicator();
 
+    // Surface edit-mode hint messages (e.g. "Loop cut needs a quad mesh")
+    // via a dedicated permanent label. The status bar's main message slot
+    // is rewritten every frame by frameEnded(), so showMessage() lasted
+    // ~16ms in practice. This label persists for 5s via QTimer::singleShot.
+    m_editHintLabel = new QLabel(this);
+    m_editHintLabel->setStyleSheet(
+        "QLabel { color: #ffaa33; font-style: italic; padding: 2px 8px; }");
+    m_editHintLabel->setVisible(false);
+    statusBar()->addPermanentWidget(m_editHintLabel);
+    connect(EditModeController::instance(), &EditModeController::editHintMessage,
+            this, [this](const QString& msg) {
+                m_editHintLabel->setText(msg);
+                m_editHintLabel->setVisible(true);
+                QTimer::singleShot(5000, m_editHintLabel,
+                    [this]() { m_editHintLabel->setVisible(false); });
+            });
+
     // Auto-start MCP HTTP server if enabled in settings
     QSettings mcpSettings;
     bool mcpEnabled = mcpSettings.value("MCP/enabled", false).toBool();
@@ -763,17 +780,29 @@ void MainWindow::initToolBar()
     });
     QAction* deleteAction = ui->objectsToolbar->addWidget(deleteButton);
 
-    // Subdivide: face mode (subdivide selected triangles, retriangulate
-    // adjacent ones to avoid T-junctions) or edge mode (subdivide every
-    // triangle incident to a selected edge — Blender convention).
+    // Subdivide: dropdown with two modes.
+    //  - Standard: 1-to-4 triangle split on the selected faces/edges
+    //    (what was always there).
+    //  - Catmull-Clark: whole-mesh subdivide-surface step. Always
+    //    produces quads regardless of input topology.
     auto subdivideButton = new QToolButton(ui->objectsToolbar);
     subdivideButton->setText(QStringLiteral("\u229E"));  // ⊞ box-plus, evokes a 4-cell split
-    subdivideButton->setToolTip(tr("Subdivide selected faces / edges"));
+    subdivideButton->setToolTip(tr("Subdivide… (Standard / Catmull-Clark)"));
     subdivideButton->setFont(topoFont);
     subdivideButton->setStyleSheet(topoBtnStyle);
-    connect(subdivideButton, &QToolButton::clicked, this, []() {
-        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Subdivide");
+    subdivideButton->setPopupMode(QToolButton::InstantPopup);
+    auto subdivideMenu = new QMenu(subdivideButton);
+    auto* actSubStandard = subdivideMenu->addAction(tr("Standard (1-to-4 split, selected faces)"));
+    auto* actSubCC = subdivideMenu->addAction(tr("Catmull-Clark (whole mesh, smoothed quads)"));
+    subdivideButton->setMenu(subdivideMenu);
+
+    connect(actSubStandard, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Subdivide (standard)");
         EditModeController::instance()->subdivideSelection();
+    });
+    connect(actSubCC, &QAction::triggered, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Subdivide (Catmull-Clark)");
+        EditModeController::instance()->subdivideCatmullClarkAll();
     });
     QAction* subdivideAction = ui->objectsToolbar->addWidget(subdivideButton);
 
@@ -789,6 +818,33 @@ void MainWindow::initToolBar()
         EditModeController::instance()->fillSelection();
     });
     QAction* fillAction = ui->objectsToolbar->addWidget(fillButton);
+
+    // Loop cut: edge mode only — pick one edge, the op walks the
+    // perpendicular ring of quads and bisects each one.
+    auto loopCutButton = new QToolButton(ui->objectsToolbar);
+    loopCutButton->setText(QStringLiteral("\u2551"));  // ‖ double vertical line — "loop"
+    loopCutButton->setToolTip(tr("Loop Cut (Ctrl+R) — bisect quads perpendicular to the selected edge"));
+    loopCutButton->setFont(topoFont);
+    loopCutButton->setStyleSheet(topoBtnStyle);
+    connect(loopCutButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Loop Cut");
+        EditModeController::instance()->loopCutSelection();
+    });
+    QAction* loopCutAction = ui->objectsToolbar->addWidget(loopCutButton);
+
+    // Convert to Quads: walks the mesh and merges coplanar adjacent
+    // triangle pairs into n-gon quads. Useful when an imported tri
+    // mesh blocks loop cut / n-gon-aware bevel.
+    auto convertToQuadsButton = new QToolButton(ui->objectsToolbar);
+    convertToQuadsButton->setText(QStringLiteral("\u25A6"));  // ▦ — "tessellated/quad grid"
+    convertToQuadsButton->setToolTip(tr("Convert to Quads — merge coplanar triangle pairs into quads"));
+    convertToQuadsButton->setFont(topoFont);
+    convertToQuadsButton->setStyleSheet(topoBtnStyle);
+    connect(convertToQuadsButton, &QToolButton::clicked, this, []() {
+        SentryReporter::addBreadcrumb("ui.action", "Toolbar: Convert to Quads");
+        EditModeController::instance()->convertToQuads();
+    });
+    QAction* convertToQuadsAction = ui->objectsToolbar->addWidget(convertToQuadsButton);
 
     // Vertex paint: toggle on main click; arrow opens brush settings (color, radius, strength).
     auto makeVertexPaintBrushIcon = []() -> QIcon {
@@ -958,9 +1014,11 @@ void MainWindow::initToolBar()
     //    mode matches AND the relevant element type actually has a
     //    non-empty selection.
     auto refreshTopoButtons = [extrudeButton, bevelButton, knifeButton, mergeButton, deleteButton,
-                               subdivideButton, fillButton, vertexPaintButton,
+                               subdivideButton, fillButton, loopCutButton, convertToQuadsButton,
+                               vertexPaintButton,
                                extrudeAction, bevelAction, knifeAction, mergeAction, deleteAction,
-                               subdivideAction, fillAction, vertexPaintAction]() {
+                               subdivideAction, fillAction, loopCutAction, convertToQuadsAction,
+                               vertexPaintAction]() {
         auto* c = EditModeController::instance();
         const bool active = c->isEditModeActive();
         extrudeAction->setVisible(active);
@@ -970,9 +1028,10 @@ void MainWindow::initToolBar()
         deleteAction->setVisible(active);
         subdivideAction->setVisible(active);
         fillAction->setVisible(active);
+        loopCutAction->setVisible(active);
+        convertToQuadsAction->setVisible(active);
         vertexPaintAction->setVisible(active);
-        if (!active)
-            return;
+        if (!active) return;
         const int mode = c->selectionMode();  // 0 vertex, 1 edge, 2 face
         const bool hasFaces = c->selectedFaceCount() > 0;
         const bool hasEdges = c->selectedEdgeCount() > 0;
@@ -991,13 +1050,22 @@ void MainWindow::initToolBar()
         deleteButton->setEnabled((mode == 0 && hasVerts)
                               || (mode == 1 && hasEdges)
                               || (mode == 2 && hasFaces));
-        // Subdivide: needs faces (face mode) or edges (edge mode).
-        subdivideButton->setEnabled((mode == 2 && hasFaces)
-                                 || (mode == 1 && hasEdges));
+        // Subdivide: enabled whenever in edit mode. The Standard option
+        // self-gates on a face/edge selection (no-op otherwise);
+        // Catmull-Clark operates on the whole mesh and never needs a
+        // selection.
+        subdivideButton->setEnabled(true);
         // Fill: needs ≥3 verts (vertex mode) or ≥3 edges that form a
         // closed loop (edge mode — degree check happens at apply time).
         fillButton->setEnabled((mode == 0 && c->selectedVertexCount() >= 3)
                             || (mode == 1 && c->selectedEdgeCount() >= 3));
+        // Loop cut: edge mode with at least one selected edge. The op
+        // uses the first selected edge as the start; multi-edge loop
+        // cuts aren't in scope for the MVP.
+        loopCutButton->setEnabled(mode == 1 && hasEdges);
+        // Convert to Quads: whole-mesh; disable once the mesh already
+        // has n-gon canonical faces (no work to do).
+        convertToQuadsButton->setEnabled(!c->isMeshQuadBased());
         vertexPaintButton->setEnabled(true);
     };
     refreshTopoButtons();
@@ -1006,6 +1074,11 @@ void MainWindow::initToolBar()
     connect(editCtrlForTopo, &EditModeController::selectionModeChanged,
             this, refreshTopoButtons);
     connect(editCtrlForTopo, &EditModeController::editSelectionChanged,
+            this, refreshTopoButtons);
+    // Mesh-data changes (extrude/bevel/convertToQuads/undo) flip the
+    // n-gon-vs-tri state — refresh so "Convert to Quads" disables once
+    // the mesh has been promoted.
+    connect(editCtrlForTopo, &EditModeController::meshDataChanged,
             this, refreshTopoButtons);
 
     connect(pAddCube,       SIGNAL(triggered()),m_pPrimitivesWidget,SLOT(createCube()));
@@ -1510,6 +1583,25 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         setTransformState(TransformOperator::TS_ROTATE);
        break;
     case Qt::Key_R:
+        // Ctrl+R in edit-mode + edge-selection: loop cut. Otherwise R
+        // is Scale mode (Unity convention). The Ctrl modifier
+        // disambiguates without disturbing the existing shortcut.
+        if (event->modifiers() & Qt::ControlModifier) {
+            auto* editCtrl = EditModeController::instance();
+            if (editCtrl->isEditModeActive()
+                && editCtrl->selectionMode() == EditModeController::EdgeMode
+                && editCtrl->selectedEdgeCount() > 0) {
+                // Always consume Ctrl+R when loop cut is the active
+                // shortcut — even when the op short-circuits (e.g. tri
+                // mesh). Falling through to Scale would silently switch
+                // tools mid-loop-cut, which is what the user actually
+                // pressed but isn't what they meant.
+                editCtrl->loopCutSelection();
+                SentryReporter::addBreadcrumb("ui.shortcut", "Ctrl+R — Loop Cut");
+                event->accept();
+                return;
+            }
+        }
         SentryReporter::addBreadcrumb("ui.shortcut", "R — Scale mode");
         setTransformState(TransformOperator::TS_SCALE);
        break;

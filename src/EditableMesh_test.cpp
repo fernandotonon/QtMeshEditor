@@ -9,6 +9,9 @@ The MIT License
 */
 
 #include <gtest/gtest.h>
+#include <QDir>
+#include <QFile>
+#include <QTextStream>
 #include "EditableMesh.h"
 #include "EditModeController.h"
 #include "TestHelpers.h"
@@ -847,4 +850,622 @@ TEST_F(EditModeControllerTest, SoftSelectionWeightsInEditMode) {
     ctrl->setSoftSelectionEnabled(false);
     ctrl->exitEditMode(false);
     Manager::getSingleton()->destroySceneNode("EditMode_soft_weights_node");
+}
+
+// ===========================================================================
+// EditableFace + n-gon helpers (chunk 1) and triangulation sync (chunk 2)
+// ===========================================================================
+
+TEST(EditableMeshStandalone, SyncTriangulationFanTriangulatesQuadFaces) {
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    // triangles deliberately stale (empty); syncTriangulation must
+    // populate it from faces.
+    mesh.subMeshes().push_back(std::move(sub));
+
+    syncTriangulation(mesh.subMeshes());
+    ASSERT_EQ(mesh.subMeshes()[0].triangles.size(), 2u)
+        << "quad must yield 2 fan triangles after syncTriangulation";
+}
+
+TEST(EditableMeshStandalone, SyncTriangulationLeavesTriOnlySubmeshAlone) {
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v};
+    EditableTriangle t;
+    t.indices[0] = 0; t.indices[1] = 1; t.indices[2] = 2;
+    sub.triangles.push_back(t);
+    // faces intentionally empty — triangle-only legacy submesh.
+    mesh.subMeshes().push_back(std::move(sub));
+
+    syncTriangulation(mesh.subMeshes());
+    EXPECT_EQ(mesh.subMeshes()[0].triangles.size(), 1u);
+    EXPECT_TRUE(mesh.subMeshes()[0].faces.empty());
+}
+
+TEST(EditableMeshStandalone, TotalFaceCountFallsBackToTriangleCountForLegacy) {
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v, v};
+    EditableTriangle t;
+    t.indices[0] = 0; t.indices[1] = 1; t.indices[2] = 2;
+    sub.triangles.push_back(t);
+    t.indices[0] = 0; t.indices[1] = 2; t.indices[2] = 3;
+    sub.triangles.push_back(t);
+    t.indices[0] = 0; t.indices[1] = 3; t.indices[2] = 4;
+    sub.triangles.push_back(t);
+    mesh.subMeshes().push_back(std::move(sub));
+
+    EXPECT_EQ(totalFaceCount(mesh.subMeshes()), 3u)
+        << "legacy submesh: face count == triangle count";
+}
+
+TEST(EditableMeshStandalone, TotalFaceCountReportsNGonsWhenPresent) {
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v, v};
+    EditableFace pent;
+    pent.indices = {0, 1, 2, 3, 4};
+    sub.faces.push_back(std::move(pent));
+    triangulateFaces(sub); // produces 3 fan tris
+    mesh.subMeshes().push_back(std::move(sub));
+
+    EXPECT_EQ(totalFaceCount(mesh.subMeshes()), 1u)
+        << "pentagon: 1 face (n-gon canonical), not 3 (triangle mirror)";
+    EXPECT_EQ(mesh.totalTriangleCount(), 3u);
+}
+
+TEST(EditableMeshStandalone, RecalculateNormalsResyncsTrianglesFromFaces) {
+    // Build a quad mesh where `triangles` is intentionally stale —
+    // recalculateNormals should triangulate from `faces` first so the
+    // resulting normals reflect the live geometry, not the stale tris.
+    EditableMesh mesh;
+    EditableSubMesh sub;
+    auto mkV = [](float x, float y, float z) {
+        EditableVertex v;
+        v.position = Ogre::Vector3(x, y, z);
+        v.hasNormal = true;
+        v.normal = Ogre::Vector3::UNIT_Z;
+        return v;
+    };
+    // Quad in the XY plane with normal +Z.
+    sub.vertices = {
+        mkV(0, 0, 0), mkV(1, 0, 0), mkV(1, 1, 0), mkV(0, 1, 0),
+    };
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    // triangles starts empty; recalculateNormals must sync it before
+    // accumulating normals.
+    mesh.subMeshes().push_back(std::move(sub));
+
+    mesh.recalculateNormals();
+
+    // After recalc, triangles must be the fan triangulation (2 tris).
+    EXPECT_EQ(mesh.subMeshes()[0].triangles.size(), 2u);
+
+    // Every vertex should end up with normal == +Z (within tolerance).
+    for (const auto& v : mesh.subMeshes()[0].vertices) {
+        EXPECT_NEAR(v.normal.z, 1.0f, 1e-4f);
+        EXPECT_NEAR(v.normal.x, 0.0f, 1e-4f);
+        EXPECT_NEAR(v.normal.y, 0.0f, 1e-4f);
+    }
+}
+
+// ===========================================================================
+// loadFromAssimpFile (chunk 3) — n-gon-aware re-import
+// ===========================================================================
+
+namespace {
+// Write a minimal OBJ to a temp file with the given face line. Returns
+// the path on success, empty on failure. The OBJ format keeps quads
+// intact through Assimp's reader when aiProcess_Triangulate is off.
+QString writeObj(const QString& baseName,
+                 const QString& vertexLines,
+                 const QString& faceLines)
+{
+    const QString path = QDir::tempPath() + "/" + baseName + ".obj";
+    QFile f(path);
+    if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate)) return {};
+    QTextStream out(&f);
+    out << "# auto-generated by EditableMesh_test\n";
+    out << vertexLines;
+    out << faceLines;
+    f.close();
+    return path;
+}
+} // namespace
+
+TEST(EditableMeshStandalone, LoadFromAssimpFileEmptyPathFails) {
+    EditableMesh mesh;
+    EXPECT_FALSE(mesh.loadFromAssimpFile(""));
+    EXPECT_EQ(mesh.subMeshCount(), 0u);
+}
+
+TEST(EditableMeshStandalone, LoadFromAssimpFileMissingFileFails) {
+    EditableMesh mesh;
+    EXPECT_FALSE(mesh.loadFromAssimpFile(
+        "/this/path/does/not/exist.obj"));
+}
+
+TEST(EditableMeshStandalone, LoadFromAssimpFilePreservesQuadFromObj) {
+    // OBJ with a single quad face on 4 vertices. Without
+    // aiProcess_Triangulate, Assimp should yield aiMesh::mFaces[0]
+    // with mNumIndices == 4, which loadFromAssimpFile records as a
+    // single 4-vertex EditableFace.
+    const QString path = writeObj("editmesh_quad",
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n",
+        "f 1 2 3 4\n");
+    ASSERT_FALSE(path.isEmpty());
+
+    EditableMesh mesh;
+    ASSERT_TRUE(mesh.loadFromAssimpFile(path.toStdString()));
+    QFile::remove(path);
+
+    ASSERT_EQ(mesh.subMeshCount(), 1u);
+    const auto& sub = mesh.subMeshes()[0];
+    EXPECT_EQ(sub.vertices.size(), 4u);
+    ASSERT_EQ(sub.faces.size(), 1u)
+        << "OBJ quad must round-trip as a single 4-vertex EditableFace";
+    EXPECT_EQ(sub.faces[0].indices.size(), 4u);
+    // triangles is the fan-triangulation (chunk 1 invariant)
+    EXPECT_EQ(sub.triangles.size(), 2u);
+}
+
+TEST(EditableMeshStandalone, LoadFromAssimpFileTriangleOnlyLeavesFacesEmpty) {
+    // Triangle-only OBJ should follow the chunk-1 invariant: faces
+    // empty, triangles canonical.
+    const QString path = writeObj("editmesh_tri",
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\n",
+        "f 1 2 3\n");
+    ASSERT_FALSE(path.isEmpty());
+
+    EditableMesh mesh;
+    ASSERT_TRUE(mesh.loadFromAssimpFile(path.toStdString()));
+    QFile::remove(path);
+
+    ASSERT_EQ(mesh.subMeshCount(), 1u);
+    const auto& sub = mesh.subMeshes()[0];
+    EXPECT_EQ(sub.vertices.size(), 3u);
+    EXPECT_TRUE(sub.faces.empty())
+        << "triangle-only mesh keeps faces empty (legacy invariant)";
+    EXPECT_EQ(sub.triangles.size(), 1u);
+}
+
+TEST(EditableMeshStandalone, LoadFromAssimpFileMixedTriAndQuadKeepsBoth) {
+    // OBJ with one tri and one quad — the submesh should be quad-aware
+    // (faces non-empty) and triangles should mirror the fan.
+    const QString path = writeObj("editmesh_mix",
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 2 0 0\nv 2 1 0\nv 1 1 0\n",
+        "f 1 2 3\nf 2 4 5 6\n");
+    ASSERT_FALSE(path.isEmpty());
+
+    EditableMesh mesh;
+    ASSERT_TRUE(mesh.loadFromAssimpFile(path.toStdString()));
+    QFile::remove(path);
+
+    ASSERT_EQ(mesh.subMeshCount(), 1u);
+    const auto& sub = mesh.subMeshes()[0];
+    EXPECT_EQ(sub.vertices.size(), 6u);
+    ASSERT_EQ(sub.faces.size(), 2u);
+    // Tri = 3 vertices, quad = 4.
+    bool sawTri = false, sawQuad = false;
+    for (const auto& f : sub.faces) {
+        if (f.indices.size() == 3) sawTri = true;
+        if (f.indices.size() == 4) sawQuad = true;
+    }
+    EXPECT_TRUE(sawTri);
+    EXPECT_TRUE(sawQuad);
+    // 1 tri + 2 fan tris from the quad = 3 entries.
+    EXPECT_EQ(sub.triangles.size(), 3u);
+}
+
+TEST(EditableMeshStandalone, LoadFromAssimpFileAppliesZUpBakeWhenRequested) {
+    // Regression for the quads follow-up: when the source asset was
+    // declared Z-up (FBX UpAxis = 2), MeshProcessor bakes a +90° X
+    // rotation into the rendered Ogre buffers. loadFromAssimpFile must
+    // apply the SAME rotation when isZup=true so the editable mesh
+    // lives in the same basis. Without this, vertex overlays would
+    // appear rotated 90° on Z-up assets.
+    //
+    // OBJ ignores UpAxis metadata, so passing isZup=true here triggers
+    // the rotation deterministically regardless of file format.
+    const QString path = writeObj("editmesh_zup",
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\n",  // y=1 vertex at index 2
+        "f 1 2 3\n");
+    ASSERT_FALSE(path.isEmpty());
+
+    EditableMesh ymesh;
+    ASSERT_TRUE(ymesh.loadFromAssimpFile(
+        path.toStdString(), /*convertLH=*/false, /*isZup=*/false));
+    EditableMesh zmesh;
+    ASSERT_TRUE(zmesh.loadFromAssimpFile(
+        path.toStdString(), /*convertLH=*/false, /*isZup=*/true));
+    QFile::remove(path);
+
+    ASSERT_EQ(ymesh.subMeshes()[0].vertices.size(), 3u);
+    ASSERT_EQ(zmesh.subMeshes()[0].vertices.size(), 3u);
+
+    // The vertex at OBJ index 3 is (0,1,0) — Y-up. After +90° X bake
+    // (R_x90 * (0,1,0) = (0,0,1)) it should land on the Z axis.
+    const auto& y = ymesh.subMeshes()[0].vertices[2].position;
+    const auto& z = zmesh.subMeshes()[0].vertices[2].position;
+    EXPECT_NEAR(y.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(y.y, 1.0f, 1e-5f);
+    EXPECT_NEAR(y.z, 0.0f, 1e-5f);
+    EXPECT_NEAR(z.x, 0.0f, 1e-5f);
+    EXPECT_NEAR(z.y, 0.0f, 1e-5f);
+    EXPECT_NEAR(z.z, 1.0f, 1e-5f);
+}
+
+TEST(EditableMeshStandalone, LoadFromAssimpFileSkipsBonesNotInSkeleton) {
+    // Regression for the quads follow-up bone-handle bug. Without a
+    // skeleton lookup, this path emitted aiBone mesh-local indices as
+    // if they were Ogre bone handles. With skeletonForBoneHandles=null
+    // the legacy behaviour (mesh-local indices) is preserved for
+    // unskinned meshes; with a non-null skeleton, only resolvable
+    // bones contribute assignments. This standalone test exercises
+    // the unskinned-mesh path (OBJ has no bones), confirming the new
+    // signature compiles and behaves identically when there are no
+    // bones — the skinned-mesh skeleton-lookup case is exercised in
+    // the EditModeController integration tests where a real skeleton
+    // is available.
+    const QString path = writeObj("editmesh_nobone",
+        "v 0 0 0\nv 1 0 0\nv 0 1 0\n",
+        "f 1 2 3\n");
+    ASSERT_FALSE(path.isEmpty());
+
+    EditableMesh m1, m2;
+    ASSERT_TRUE(m1.loadFromAssimpFile(path.toStdString()));
+    ASSERT_TRUE(m2.loadFromAssimpFile(
+        path.toStdString(), /*convertLH=*/true, /*isZup=*/false,
+        /*skeletonForBoneHandles=*/nullptr));
+    QFile::remove(path);
+
+    // Both should produce identical output for an unskinned mesh.
+    ASSERT_EQ(m1.subMeshCount(), 1u);
+    ASSERT_EQ(m2.subMeshCount(), 1u);
+    EXPECT_EQ(m1.subMeshes()[0].vertices.size(),
+              m2.subMeshes()[0].vertices.size());
+    for (const auto& v : m1.subMeshes()[0].vertices) {
+        EXPECT_TRUE(v.boneAssignments.empty());
+    }
+}
+
+TEST(EditableMeshStandalone, LoadFromAssimpFileReplacesPreviousContents) {
+    // Loading into a non-empty EditableMesh should replace the
+    // existing submeshes — like buildFromEditableMesh does.
+    EditableMesh mesh;
+    EditableSubMesh stale;
+    EditableVertex v;
+    stale.vertices = {v, v, v};
+    EditableTriangle t;
+    t.indices[0] = 0; t.indices[1] = 1; t.indices[2] = 2;
+    stale.triangles.push_back(t);
+    mesh.subMeshes().push_back(std::move(stale));
+    ASSERT_EQ(mesh.subMeshCount(), 1u);
+
+    const QString path = writeObj("editmesh_replace",
+        "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n",
+        "f 1 2 3 4\n");
+    ASSERT_FALSE(path.isEmpty());
+    ASSERT_TRUE(mesh.loadFromAssimpFile(path.toStdString()));
+    QFile::remove(path);
+
+    ASSERT_EQ(mesh.subMeshCount(), 1u);
+    EXPECT_EQ(mesh.subMeshes()[0].vertices.size(), 4u);
+}
+
+// ===========================================================================
+// commitToEntity / resizeEntityBuffers wipe qtme.source_path (chunk 4)
+// ===========================================================================
+
+TEST_F(EditableMeshTest, CommitToEntityClearsCachedSourcePath) {
+    // Simulate: a freshly-imported asset has the source path tag
+    // attached. Commit-to-entity (a same-vertex-count edit) must clear
+    // the tag so the next enterEditMode falls back to the legacy
+    // loadFromEntity path instead of re-importing and discarding the
+    // user's edit.
+    auto meshPtr = createInMemoryTriangleMesh("EditableMesh_commit_clear_path");
+    auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_commit_clear_path_node");
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
+
+    meshPtr->getUserObjectBindings().setUserAny(
+        "qtme.source_path", Ogre::Any(std::string("/some/path.fbx")));
+    ASSERT_TRUE(meshPtr->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value());
+
+    EditableMesh editMesh;
+    ASSERT_TRUE(editMesh.loadFromEntity(entity));
+    EXPECT_TRUE(editMesh.commitToEntity(entity));
+
+    EXPECT_FALSE(meshPtr->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value())
+        << "commitToEntity must wipe the cached source path so subsequent "
+           "enterEditMode calls don't re-import and lose the edit";
+
+    Manager::getSingleton()->destroySceneNode(
+        "EditableMesh_commit_clear_path_node");
+}
+
+TEST_F(EditableMeshTest, ResizeEntityBuffersClearsCachedSourcePath) {
+    // Same rationale as above for the topology-edit path.
+    auto meshPtr = createInMemoryTriangleMesh("EditableMesh_resize_clear_path");
+    auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_resize_clear_path_node");
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
+
+    meshPtr->getUserObjectBindings().setUserAny(
+        "qtme.source_path", Ogre::Any(std::string("/some/path.fbx")));
+    ASSERT_TRUE(meshPtr->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value());
+
+    EditableMesh editMesh;
+    ASSERT_TRUE(editMesh.loadFromEntity(entity));
+    EXPECT_TRUE(editMesh.resizeEntityBuffers(entity));
+
+    EXPECT_FALSE(meshPtr->getUserObjectBindings().getUserAny(
+        "qtme.source_path").has_value())
+        << "resizeEntityBuffers must wipe the cached source path";
+
+    Manager::getSingleton()->destroySceneNode(
+        "EditableMesh_resize_clear_path_node");
+}
+
+// ===========================================================================
+// faceIndexForTriangle (chunk 4b) — n-gon-aware selection mapping
+// ===========================================================================
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleLegacyTriangleSubmeshIsIdentity) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableTriangle t1, t2;
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    t2.indices[0] = 0; t2.indices[1] = 2; t2.indices[2] = 3;
+    sub.triangles = {t1, t2};
+    // faces deliberately empty — legacy triangle-only mode.
+
+    size_t firstTri = 99, count = 99;
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, &firstTri, &count), -1);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 1u);
+
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, &firstTri, &count), -1);
+    EXPECT_EQ(firstTri, 1u);
+    EXPECT_EQ(count, 1u);
+}
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleQuadMapsBothTrianglesToSameFace) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    triangulateFaces(sub); // produces 2 fan triangles
+
+    ASSERT_EQ(sub.triangles.size(), 2u);
+
+    // Both fan triangles map to face 0.
+    size_t firstTri = 99, count = 99;
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, &firstTri, &count), 0);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 2u) << "quad's owning face spans 2 triangles";
+
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, &firstTri, &count), 0);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 2u);
+}
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleMixedTriQuadMapsCorrectly) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v, v, v, v};
+    EditableFace tri;
+    tri.indices = {0, 1, 2};
+    EditableFace quad;
+    quad.indices = {3, 4, 5, 6};
+    sub.faces.push_back(std::move(tri));
+    sub.faces.push_back(std::move(quad));
+    triangulateFaces(sub); // 1 + 2 = 3 fan triangles
+
+    ASSERT_EQ(sub.triangles.size(), 3u);
+
+    // Triangle 0 → face 0 (the lone triangle).
+    size_t firstTri = 99, count = 99;
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, &firstTri, &count), 0);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 1u);
+
+    // Triangles 1 + 2 → face 1 (the quad).
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, &firstTri, &count), 1);
+    EXPECT_EQ(firstTri, 1u);
+    EXPECT_EQ(count, 2u);
+    EXPECT_EQ(faceIndexForTriangle(sub, 2, &firstTri, &count), 1);
+    EXPECT_EQ(firstTri, 1u);
+    EXPECT_EQ(count, 2u);
+}
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleOutOfRangeIsBenign) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    triangulateFaces(sub);
+
+    // Out-of-range triangle index returns -1 with a defensive
+    // single-triangle fallback.
+    size_t firstTri = 0, count = 0;
+    EXPECT_EQ(faceIndexForTriangle(sub, 99, &firstTri, &count), -1);
+    EXPECT_EQ(firstTri, 99u);
+    EXPECT_EQ(count, 1u);
+}
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleAcceptsNullOutPointers) {
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v};
+    EditableFace f;
+    f.indices = {0, 1, 2, 3};
+    sub.faces.push_back(std::move(f));
+    triangulateFaces(sub);
+
+    // Caller can pass nullptr for either output if they don't care.
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, nullptr, nullptr), 0);
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, nullptr, nullptr), 0);
+}
+
+TEST(EditableMeshStandalone, FaceIndexForTriangleSkipsInvalidFaces) {
+    // Regression for chunk-4b drift bug: a face with consecutive
+    // duplicate indices passes `n >= 3` but fails isValid(), so it
+    // produces zero triangles in `triangles`. faceIndexForTriangle
+    // must skip it the same way triangulateFaces does — otherwise the
+    // mapping for triangles after it points to the wrong source face.
+    EditableSubMesh sub;
+    EditableVertex v;
+    sub.vertices = {v, v, v, v, v, v};
+    EditableFace bad;        // 4 indices but [0]==[1] — !isValid()
+    bad.indices = {0, 0, 1, 2};
+    EditableFace good;       // valid quad → 2 fan triangles
+    good.indices = {2, 3, 4, 5};
+    sub.faces.push_back(std::move(bad));
+    sub.faces.push_back(std::move(good));
+    triangulateFaces(sub);
+
+    ASSERT_EQ(sub.triangles.size(), 2u);
+    size_t firstTri = 0, count = 0;
+    // Both triangles must map to face index 1 (the good face),
+    // not face 0 (which contributed nothing to `triangles`).
+    EXPECT_EQ(faceIndexForTriangle(sub, 0, &firstTri, &count), 1);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 2u);
+    EXPECT_EQ(faceIndexForTriangle(sub, 1, &firstTri, &count), 1);
+    EXPECT_EQ(firstTri, 0u);
+    EXPECT_EQ(count, 2u);
+}
+
+// ============================================================================
+// mergeCoplanarTrianglesToQuads
+// ============================================================================
+
+namespace {
+EditableVertex mkPosV(float x, float y, float z) {
+    EditableVertex v;
+    v.position = Ogre::Vector3(x, y, z);
+    v.normal = Ogre::Vector3::UNIT_Z;
+    v.hasNormal = true;
+    return v;
+}
+} // namespace
+
+TEST(EditableMeshStandalone, MergeCoplanarTrianglesProducesQuad) {
+    // Two triangles forming a planar unit quad on the XY plane.
+    EditableSubMesh sub;
+    sub.vertices = {
+        mkPosV(0, 0, 0), mkPosV(1, 0, 0), mkPosV(1, 1, 0), mkPosV(0, 1, 0),
+    };
+    EditableTriangle t1{}, t2{};
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    t2.indices[0] = 0; t2.indices[1] = 2; t2.indices[2] = 3;
+    sub.triangles = {t1, t2};
+
+    const int merged = mergeCoplanarTrianglesToQuads(sub);
+    EXPECT_EQ(merged, 1);
+    ASSERT_EQ(sub.faces.size(), 1u);
+    EXPECT_EQ(sub.faces[0].indices.size(), 4u);
+    // triangulation mirror is rebuilt
+    EXPECT_EQ(sub.triangles.size(), 2u);
+}
+
+TEST(EditableMeshStandalone, MergeCoplanarLeavesNonCoplanarAsTris) {
+    // Two triangles sharing edge (0,1) but bent at 90°.
+    EditableSubMesh sub;
+    sub.vertices = {
+        mkPosV(0, 0, 0), mkPosV(1, 0, 0), mkPosV(0, 1, 0), mkPosV(0, 0, 1),
+    };
+    EditableTriangle t1{}, t2{};
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    // Second tri lifted off the XY plane along Z — 90° dihedral.
+    t2.indices[0] = 1; t2.indices[1] = 0; t2.indices[2] = 3;
+    sub.triangles = {t1, t2};
+
+    const int merged = mergeCoplanarTrianglesToQuads(sub, 1.0f);
+    EXPECT_EQ(merged, 0);
+    ASSERT_EQ(sub.faces.size(), 2u);
+    EXPECT_EQ(sub.faces[0].indices.size(), 3u);
+    EXPECT_EQ(sub.faces[1].indices.size(), 3u);
+}
+
+TEST(EditableMeshStandalone, MergeCoplanarHandlesTriangulatedCube) {
+    // Standard 8-vert cube triangulated as 12 tris (2 per face).
+    // mergeCoplanarTrianglesToQuads should reconstruct 6 quads.
+    EditableSubMesh sub;
+    sub.vertices = {
+        mkPosV(-1,-1,-1), mkPosV( 1,-1,-1), mkPosV( 1, 1,-1), mkPosV(-1, 1,-1),
+        mkPosV(-1,-1, 1), mkPosV( 1,-1, 1), mkPosV( 1, 1, 1), mkPosV(-1, 1, 1),
+    };
+    auto T = [](unsigned a, unsigned b, unsigned c) {
+        EditableTriangle t{}; t.indices[0]=a; t.indices[1]=b; t.indices[2]=c;
+        return t;
+    };
+    // Each face split along a single diagonal — winding outward.
+    sub.triangles = {
+        T(0,2,1), T(0,3,2),    // back  (-Z)
+        T(4,5,6), T(4,6,7),    // front (+Z)
+        T(0,1,5), T(0,5,4),    // bottom (-Y)
+        T(2,3,7), T(2,7,6),    // top    (+Y)
+        T(0,4,7), T(0,7,3),    // left   (-X)
+        T(1,2,6), T(1,6,5),    // right  (+X)
+    };
+
+    const int merged = mergeCoplanarTrianglesToQuads(sub, 1.0f);
+    EXPECT_EQ(merged, 6);
+    EXPECT_EQ(sub.faces.size(), 6u);
+    for (const auto& f : sub.faces) {
+        EXPECT_EQ(f.indices.size(), 4u);
+    }
+    // 6 quads × 2 fan tris = 12 — same as input.
+    EXPECT_EQ(sub.triangles.size(), 12u);
+}
+
+TEST(EditableMeshStandalone, MergeCoplanarRespectsAngleThreshold) {
+    // Two triangles bent by ~5° dihedral. With strict threshold (1°),
+    // they don't merge; with loose threshold (10°), they do.
+    EditableSubMesh sub;
+    sub.vertices = {
+        mkPosV(0, 0, 0),
+        mkPosV(1, 0, 0),
+        mkPosV(1, 1, 0),
+        // 4th vertex tilted up in z by tan(5°) ≈ 0.0875
+        mkPosV(0, 1, 0.0875f),
+    };
+    EditableTriangle t1{}, t2{};
+    t1.indices[0] = 0; t1.indices[1] = 1; t1.indices[2] = 2;
+    t2.indices[0] = 0; t2.indices[1] = 2; t2.indices[2] = 3;
+    sub.triangles = {t1, t2};
+
+    EditableSubMesh strict = sub;
+    EXPECT_EQ(mergeCoplanarTrianglesToQuads(strict, 1.0f), 0);
+    EXPECT_EQ(strict.faces.size(), 2u);
+
+    EditableSubMesh loose = sub;
+    EXPECT_EQ(mergeCoplanarTrianglesToQuads(loose, 10.0f), 1);
+    EXPECT_EQ(loose.faces.size(), 1u);
+}
+
+TEST(EditableMeshStandalone, MergeCoplanarEmptySubMesh) {
+    EditableSubMesh sub;
+    EXPECT_EQ(mergeCoplanarTrianglesToQuads(sub), 0);
+    EXPECT_TRUE(sub.faces.empty());
+    EXPECT_TRUE(sub.triangles.empty());
 }

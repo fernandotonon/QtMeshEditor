@@ -129,6 +129,11 @@ public:
     Q_PROPERTY(bool wireframeEnabled READ wireframeEnabled WRITE setWireframeEnabled NOTIFY wireframeChanged)
     bool wireframeEnabled() const { return m_wireframeEnabled; }
     void setWireframeEnabled(bool enabled);
+
+    /// True if any submesh of the current edit mesh has non-empty
+    /// n-gon `.faces` — i.e. quad-based already. Drives the
+    /// "Convert to Quads" toolbar button enable state.
+    Q_INVOKABLE bool isMeshQuadBased() const;
     /// @}
 
     /// @name Mesh info (only valid when in edit mode)
@@ -463,6 +468,47 @@ public:
     Q_INVOKABLE int subdivideSelection();
 
     /**
+     * @brief Insert a loop cut starting from the first selected edge.
+     *
+     * Walks the chain of quads adjacent to the start edge via the
+     * "opposite edge" relation. Each quad in the ring is bisected by
+     * splitting two parallel edges at their midpoints and connecting
+     * the new midpoints with a new edge. The walk terminates at
+     * boundaries, non-quad faces, or when it loops back to the start.
+     *
+     * Requires Edge selection mode and at least one selected edge.
+     * Uses the FIRST selected edge as the start; multi-edge loop cuts
+     * are out of scope for the MVP (each cut is independent).
+     *
+     * Pushes one undo command labeled "Loop Cut".
+     *
+     * @return Number of new vertices inserted (0 on no-op / failure).
+     */
+    Q_INVOKABLE int loopCutSelection();
+
+    /**
+     * @brief Subdivide the entire mesh by one Catmull-Clark step.
+     *
+     * Unlike `subdivideSelection` (which does a 1-to-4 triangle split
+     * on the selected faces only), this op operates on the whole mesh
+     * at once and produces an all-quad output regardless of input
+     * topology — a triangle becomes 3 quads, a quad becomes 4. Output
+     * geometry is smoothed via the classic Catmull-Clark rule (face
+     * points, edge points, smoothed vertex positions) so the surface
+     * approaches a C¹-continuous limit on closed manifolds.
+     *
+     * Selection is cleared after the op (the new face/edge points
+     * don't have stable analogues in the pre-op selection set, and
+     * partial-mesh CC needs a more sophisticated boundary blend that
+     * isn't in this MVP).
+     *
+     * Pushes one undo command labeled "Catmull-Clark Subdivide".
+     *
+     * @return Number of vertices added (0 on no-op).
+     */
+    Q_INVOKABLE int subdivideCatmullClarkAll();
+
+    /**
      * @brief Fill the current selection with new face(s).
      *
      * Vertex mode: 3 selected vertices → emit a triangle. 4 selected →
@@ -481,6 +527,28 @@ public:
      * @return Number of triangles created (0 on no-op or rejection).
      */
     Q_INVOKABLE int fillSelection();
+
+    /**
+     * @brief Merge coplanar adjacent triangle pairs into quads.
+     *
+     * Whole-mesh operation: walks every submesh, looks for triangle pairs
+     * that share an edge and are within `angleThresholdDeg` of coplanar
+     * (default 1°), and merges each qualifying pair into a single quad
+     * face. Promotes the legacy triangle-only representation into the
+     * n-gon canonical form. After the operation, downstream features
+     * that branch on n-gon `.faces` (loop cut, n-gon-aware bevel,
+     * quad-aware wireframe) start working.
+     *
+     * No-op when nothing qualifies (all tris are non-coplanar, or the
+     * mesh is already quad-dominant). Pushes one undo command labeled
+     * "Convert to Quads" iff merges happened.
+     *
+     * @param angleThresholdDeg Maximum dihedral angle (deg) to treat as
+     *        coplanar. 0 = strict, ~5 = forgiving for float-quantised
+     *        imports. Defaults to 1°.
+     * @return Number of triangle pairs merged across all submeshes.
+     */
+    Q_INVOKABLE int convertToQuads(float angleThresholdDeg = 1.0f);
     /// @}
 
     /// @name Vertex transform support
@@ -681,6 +749,18 @@ public:
 
     /// Convert (subMeshIndex, localTriangleIndex) to a global triangle index.
     int localTriToGlobal(size_t subMeshIndex, size_t localTriIndex) const;
+
+    /// @brief Convert the current `m_selectedFaces` set (global triangle
+    /// indices) into a deduplicated list of HE face indices that
+    /// HalfEdgeMesh ops accept. Each unique HE face is reported once
+    /// regardless of how many of its fan-triangulated children appear
+    /// in the selection — so a quad selected via either of its
+    /// triangles maps to a single HE face.
+    ///
+    /// HE face indexing matches `HalfEdgeMesh::buildFromEditableMesh`
+    /// order: submesh 0's faces first (or its triangles, in legacy
+    /// triangle-only submeshes), then submesh 1's, etc.
+    std::vector<int> selectedFacesAsHEFaceIndices() const;
     /// @}
 
 signals:
@@ -708,6 +788,12 @@ signals:
     /// so QML toolbar state and preview overlay refresh together.
     void knifeSessionChanged();
     void vertexPaintChanged();
+
+    /// Emitted when an edit-mode op short-circuits and wants to surface
+    /// a one-line explanation to the user (e.g. "Loop cut requires a
+    /// quad mesh — try Mesh → Convert to Quads"). QML overlays /
+    /// status-bar widgets can subscribe.
+    void editHintMessage(const QString& message);
 
 private slots:
     void onSelectionChanged();
@@ -751,6 +837,12 @@ private:
     Ogre::ManualObject* m_overlayVertices = nullptr;
     Ogre::ManualObject* m_overlayEdges = nullptr;
     Ogre::ManualObject* m_overlayFaces = nullptr;
+    /// Quad-aware wireframe: lines along n-gon face boundaries only,
+    /// hiding the diagonals introduced by `triangulateFaces()`. Active
+    /// when `m_wireframeEnabled` AND any submesh has non-empty `.faces`.
+    /// On legacy triangle-only meshes this stays empty and the
+    /// PM_WIREFRAME material override does the work instead.
+    Ogre::ManualObject* m_overlayBoundaryEdges = nullptr;
     Ogre::SceneNode* m_overlayNode = nullptr;
 
     // Bevel session state — populated on beginBevel, consumed on commit/cancel.
@@ -909,6 +1001,27 @@ private:
     // Wireframe helpers
     void applyWireframeMaterials();
     void removeWireframeMaterials();
+    /// True if any submesh has non-empty `.faces` (n-gon canonical).
+    /// Drives the choice between PM_WIREFRAME (all submeshes pure tris)
+    /// and the boundary-edge overlay (any n-gon faces present).
+    bool meshHasNgonFaces() const;
+    /// (Re)build the n-gon boundary-edge overlay from `m_editableMesh`.
+    /// Active when `m_wireframeEnabled` AND `meshHasNgonFaces()` —
+    /// otherwise clears the overlay so it draws nothing.
+    void updateBoundaryEdgeOverlay();
+
+public:
+    /// Refresh an entity after a topology mutation: rebuild tangents
+    /// (when any material is bump-mapped), `_deinitialise/_initialise`
+    /// the entity, restore per-subentity material overrides, re-attach
+    /// RTSS SRS_NORMALMAP, and invalidate cached shader programs. Used
+    /// by every Edit-Mode topology op (subdivide, extrude, bevel, …)
+    /// AND by `EditMeshTopologyCommand::applyMeshState` so undo/redo
+    /// preserves bump map / per-pixel lighting state. Static so
+    /// command code can invoke it without a controller instance.
+    static void rewriteEntityAfterTopologyChange(Ogre::Entity* ent);
+
+private:
 
     // Wireframe mode
     bool m_wireframeEnabled = false;

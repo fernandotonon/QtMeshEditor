@@ -160,6 +160,11 @@ private:
     void repositionWelcomeScreen();
 
     QLabel* m_editModeLabel = nullptr;
+    /// Permanent status-bar widget for transient edit-mode hint
+    /// messages (e.g. "Loop cut needs a quad mesh"). A dedicated
+    /// label avoids the every-frame `showMessage()` race that
+    /// `frameEnded()` causes on the status bar's main slot.
+    QLabel* m_editHintLabel = nullptr;
     void updateEditModeIndicator();
 };
 

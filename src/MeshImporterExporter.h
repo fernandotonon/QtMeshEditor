@@ -67,6 +67,14 @@ public:
 
     static int sceneExporter(const QString &_uri, const ProgressCallback& progress = nullptr);
     static bool sceneImporter(const QString &_uri);
+
+    /// @brief (Re-)attach RTSS normal-map sub-render-states to every
+    /// material referenced by `entity`, building tangent vectors first
+    /// if missing. Idempotent — safe to call after a topology change
+    /// when materials were invalidated and the bump-map state needs to
+    /// be re-applied. (Chunk 4b: Edit Mode topology ops use this to
+    /// preserve bump mapping after subdivide / extrude / etc.)
+    static void applyNormalMapsToEntity(const Ogre::Entity* entity);
 };
 
 #endif // MESHIMPORTEREXPORTER_H

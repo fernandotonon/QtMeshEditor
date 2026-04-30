@@ -870,7 +870,10 @@ static Ogre::MeshPtr importOgreXmlMesh(const QString& filePath, const std::strin
 
 // Apply RTSS normal map shaders to any materials that have a normal-map texture
 // unit. Called after loading .mesh/.xml files where MaterialProcessor doesn't run.
-static void applyNormalMapsToEntity(const Ogre::Entity* en)
+// Also reachable as MeshImporterExporter::applyNormalMapsToEntity for callers
+// that need to refresh bump-map RTSS state after a topology change wiped it
+// (chunk 4b: Edit Mode subdivide / extrude / etc.).
+void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
 {
     if (!en) return;
     auto& log = Ogre::LogManager::getSingleton();
@@ -901,7 +904,19 @@ static void applyNormalMapsToEntity(const Ogre::Entity* en)
         auto mat = subEnt->getMaterial();
         if (!mat) continue;
         // Ensure the material is fully loaded so TUS names are populated.
-        if (!mat->isLoaded()) mat->load();
+        // `load()` can throw on broken/unresolvable resources; this hook
+        // runs on every topology mutation AND undo/redo, so a single
+        // bad material shouldn't abort the edit op. Skip the offending
+        // sub-entity and let the rest of the entity refresh.
+        if (!mat->isLoaded()) {
+            try {
+                mat->load();
+            } catch (const Ogre::Exception& e) {
+                log.logMessage("applyNormalMapsToEntity: skipping mat '"
+                    + mat->getName() + "' — load failed: " + e.getDescription());
+                continue;
+            }
+        }
         if (mat->getNumTechniques() == 0) continue;
         auto* pass = mat->getTechnique(0)->getPass(0);
         if (!pass) continue;
@@ -997,9 +1012,42 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                 // DirectX .x is natively left-handed — skip ConvertToLeftHanded
                 // to avoid double-flipping geometry and UVs.
                 bool convertLH = (file.suffix().compare("x", Qt::CaseInsensitive) != 0);
-                Ogre::MeshPtr mesh = importer.loadModel(file.filePath().toStdString(), convertLH, additionalFlags);
+                const std::string sourcePath = file.filePath().toStdString();
+                Ogre::MeshPtr mesh = importer.loadModel(sourcePath, convertLH, additionalFlags);
                 // Read coordinate system from metadata immediately — valid for both mesh and animation-only files.
                 if (outUpAxis) *outUpAxis = importer.getSceneUpAxis();
+                if (mesh) {
+                    // Cache the source file path so EditModeController can
+                    // re-import the asset through the n-gon-aware
+                    // EditableMesh::loadFromAssimpFile path. Quad-bearing
+                    // assets keep their polygon structure when entering
+                    // Edit Mode; without this cache only the triangulated
+                    // Ogre buffer is available and quads are lost.
+                    // (Quad migration #326, chunk 3.)
+                    mesh->getUserObjectBindings().setUserAny(
+                        "qtme.source_path", Ogre::Any(sourcePath));
+                    // ALSO cache the convert-to-left-handed flag so the
+                    // n-gon re-import uses the SAME coordinate-system
+                    // transform AssimpToOgreImporter::loadModel applied
+                    // when building the rendered Ogre mesh. Without this
+                    // the Edit-Mode vertex overlay would appear mirrored
+                    // (X flipped) relative to the on-screen geometry on
+                    // every non-.x asset. (Chunk 4.)
+                    mesh->getUserObjectBindings().setUserAny(
+                        "qtme.source_convert_lh", Ogre::Any(convertLH));
+                    // Cache the source up-axis (1 = Y-up, 2 = Z-up) so
+                    // EditModeController can apply MeshProcessor's
+                    // +90°-around-X bake when re-importing the asset
+                    // through the n-gon-aware path. Without this the
+                    // editable representation lives in pre-bake space
+                    // while the rendered buffers are post-bake — the
+                    // overlays appear rotated 90° on FBX/glTF Z-up
+                    // assets, and a commit would write the rotated
+                    // positions back. (Quad migration follow-up.)
+                    mesh->getUserObjectBindings().setUserAny(
+                        "qtme.source_up_axis",
+                        Ogre::Any(importer.getSceneUpAxis()));
+                }
                 if (!mesh) {
                     // Animation-only file: skeleton/animations were loaded, but there is no mesh.
                     // Collect into the caller-provided list; callers that want UI notifications
