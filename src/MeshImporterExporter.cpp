@@ -1022,10 +1022,12 @@ static void loadMaterialsDeclaredInOgreMaterialScript(const QByteArray& script, 
         if (end <= 0)
             continue;
 
-        const QByteArray matName = rest.left(end);
+        const QByteArray matName = rest.left(end).trimmed();
+        if (matName.isEmpty())
+            continue;
         Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(
             Ogre::String(matName.constData(), matName.size()), group);
-        if (m && m->getLoadingState() == Ogre::Resource::LOADSTATE_UNLOADED)
+        if (m)
             m->load();
     }
 }
@@ -1058,11 +1060,25 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
         // ensureResourceGroup() may have already initialised this group; a second
         // initialiseResourceGroup() is a no-op and leaves parseScript materials unloaded.
         auto& rgm = Ogre::ResourceGroupManager::getSingleton();
-        if (!rgm.isResourceGroupInitialised(group))
+        if (rgm.isResourceGroupInitialised(group))
+            rgm.loadResourceGroup(group);
+        else
             rgm.initialiseResourceGroup(group);
-        // Do not call loadResourceGroup() here: it loads every resource in the directory.
-        // Only load materials declared in this sidecar script.
+        // Explicitly load materials named in this script (parseScript can leave them UNLOADED).
         loadMaterialsDeclaredInOgreMaterialScript(scriptBytes, group);
+        // Catch any other UNLOADED materials in this folder group (same as pre-review behavior).
+        {
+            Ogre::ResourceManager::ResourceMapIterator mit =
+                Ogre::MaterialManager::getSingleton().getResourceIterator();
+            while (mit.hasMoreElements())
+            {
+                Ogre::ResourcePtr res = mit.peekNextValue();
+                if (res->getGroup() == group
+                    && res->getLoadingState() == Ogre::Resource::LOADSTATE_UNLOADED)
+                    res->load();
+                mit.moveNext();
+            }
+        }
         SentryReporter::addBreadcrumb("file.import",
             QStringLiteral("Loaded sidecar material: %1").arg(sidecar));
     } catch (const Ogre::Exception& e) {
