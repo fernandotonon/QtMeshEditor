@@ -1220,6 +1220,93 @@ TEST_F(EditableMeshTest, ResizeEntityBuffersClearsCachedSourcePath) {
 }
 
 // ===========================================================================
+// qtme.faces.<i> — n-gon face cache for exporters (chunk 6)
+// ===========================================================================
+
+TEST_F(EditableMeshTest, WriteAndReadNgonFacesRoundTrip) {
+    // Pure helper round-trip: write per-submesh n-gon faces onto a
+    // live Ogre::Mesh's UserObjectBindings, read them back, verify
+    // payload survives unchanged.
+    auto meshPtr = createInMemoryTriangleMesh("EditableMesh_ngon_roundtrip");
+
+    std::vector<EditableSubMesh> subs(1);
+    EditableFace quad;
+    quad.indices = {0, 1, 2, 3};
+    EditableFace tri;
+    tri.indices = {2, 3, 4};
+    subs[0].faces = {quad, tri};
+    subs[0].vertices.resize(5); // 5 dummy verts
+
+    writeNgonFacesToMesh(meshPtr.get(), subs);
+
+    std::vector<std::vector<unsigned int>> readBack;
+    EXPECT_TRUE(readNgonFacesFromMesh(meshPtr.get(), 0, readBack));
+    ASSERT_EQ(readBack.size(), 2u);
+    EXPECT_EQ(readBack[0], (std::vector<unsigned int>{0, 1, 2, 3}));
+    EXPECT_EQ(readBack[1], (std::vector<unsigned int>{2, 3, 4}));
+}
+
+TEST_F(EditableMeshTest, WriteNgonFacesErasesBindingForTriOnlySubmesh) {
+    // When the canonical state flips back to triangle-only (sub.faces
+    // empty), any prior qtme.faces.<i> binding must be cleared so a
+    // later export doesn't read stale n-gon data.
+    auto meshPtr = createInMemoryTriangleMesh("EditableMesh_ngon_erase");
+
+    std::vector<EditableSubMesh> subs(1);
+    EditableFace quad;
+    quad.indices = {0, 1, 2, 3};
+    subs[0].faces = {quad};
+    subs[0].vertices.resize(4);
+    writeNgonFacesToMesh(meshPtr.get(), subs);
+
+    // Binding present.
+    std::vector<std::vector<unsigned int>> readBack;
+    EXPECT_TRUE(readNgonFacesFromMesh(meshPtr.get(), 0, readBack));
+
+    // Now flip the submesh to tri-only and write again.
+    subs[0].faces.clear();
+    writeNgonFacesToMesh(meshPtr.get(), subs);
+
+    EXPECT_FALSE(readNgonFacesFromMesh(meshPtr.get(), 0, readBack));
+    EXPECT_TRUE(readBack.empty());
+}
+
+TEST_F(EditableMeshTest, ReadNgonFacesReturnsFalseWhenAbsent) {
+    auto meshPtr = createInMemoryTriangleMesh("EditableMesh_ngon_absent");
+    std::vector<std::vector<unsigned int>> readBack;
+    EXPECT_FALSE(readNgonFacesFromMesh(meshPtr.get(), 0, readBack));
+    EXPECT_FALSE(readNgonFacesFromMesh(meshPtr.get(), 99, readBack));
+}
+
+TEST_F(EditableMeshTest, CommitToEntityRefreshesNgonFacesBinding) {
+    // After a non-topology edit (commitToEntity), the n-gon face cache
+    // must reflect the live EditableSubMesh::faces so a subsequent
+    // export still sees the n-gon structure even though the
+    // qtme.source_path tag is gone.
+    auto meshPtr = createInMemoryTriangleMesh("EditableMesh_ngon_commit");
+    auto* node = Manager::getSingleton()->addSceneNode("EditableMesh_ngon_commit_node");
+    auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
+
+    EditableMesh editMesh;
+    ASSERT_TRUE(editMesh.loadFromEntity(entity));
+
+    // Promote the legacy tri submesh into n-gon canonical form so
+    // commit has something to write.
+    auto& subs = editMesh.subMeshes();
+    ASSERT_EQ(subs.size(), 1u);
+    promoteTrianglesToFaces(subs[0]);
+    ASSERT_FALSE(subs[0].faces.empty());
+
+    EXPECT_TRUE(editMesh.commitToEntity(entity));
+
+    std::vector<std::vector<unsigned int>> readBack;
+    EXPECT_TRUE(readNgonFacesFromMesh(meshPtr.get(), 0, readBack));
+    EXPECT_EQ(readBack.size(), subs[0].faces.size());
+
+    Manager::getSingleton()->destroySceneNode("EditableMesh_ngon_commit_node");
+}
+
+// ===========================================================================
 // faceIndexForTriangle (chunk 4b) — n-gon-aware selection mapping
 // ===========================================================================
 

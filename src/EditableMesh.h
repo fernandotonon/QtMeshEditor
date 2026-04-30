@@ -190,6 +190,41 @@ int mergeCoplanarTrianglesToQuads(EditableSubMesh& sub,
                                   float angleThresholdDeg = 1.0f);
 
 /**
+ * @brief Stash per-submesh n-gon face data on the live Ogre::Mesh.
+ *
+ * Walks `subMeshes` and, for each submesh whose `faces` is non-empty,
+ * writes a `qtme.faces.<i>` binding holding the polygon vertex indices.
+ * Submeshes that are still triangle-only have any prior binding erased
+ * (the canonical state is "no n-gon data"). The binding payload is a
+ * `std::vector<std::vector<unsigned int>>` where the outer index is
+ * face-within-submesh and the inner vector holds N≥3 vertex indices in
+ * winding order.
+ *
+ * Quad migration #326, chunk 6: importer (chunk 3) populates the
+ * binding so exporters can recover n-gons later. Edit-mode commit
+ * paths refresh it whenever the user mutates topology.
+ */
+void writeNgonFacesToMesh(Ogre::Mesh* mesh,
+                          const std::vector<EditableSubMesh>& subMeshes);
+
+/**
+ * @brief Read per-submesh n-gon face data from an Ogre::Mesh binding.
+ *
+ * Counterpart to `writeNgonFacesToMesh`. Looks up `qtme.faces.<i>` and
+ * decodes the polygon vertex indices into `outFaces`. Returns false
+ * (and leaves `outFaces` empty) if no binding exists for this submesh —
+ * the caller should fall back to the triangle index buffer.
+ *
+ * @param mesh Source Ogre mesh (read-only).
+ * @param subMeshIndex Submesh index (0-based) to look up.
+ * @param outFaces Output vector of polygon vertex-index lists.
+ * @return true if the binding was found and decoded; false otherwise.
+ */
+bool readNgonFacesFromMesh(const Ogre::Mesh* mesh,
+                           size_t subMeshIndex,
+                           std::vector<std::vector<unsigned int>>& outFaces);
+
+/**
  * @brief Re-triangulate every submesh whose `faces` is non-empty.
  *
  * Convenience over `triangulateFaces(sub)` for a whole mesh: walks the
