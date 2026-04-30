@@ -990,9 +990,10 @@ static void ensureResourceGroup(const QString &path)
     }
 }
 
-/** Loads only materials declared in script text (`material <name>` lines), not every resource in the folder. */
-static void loadMaterialsDeclaredInOgreMaterialScript(const QByteArray& script, const Ogre::String& group)
+/** @return true if at least one declared material exists in the manager for this group. */
+static bool loadMaterialsDeclaredInOgreMaterialScript(const QByteArray& script, const Ogre::String& group)
 {
+    bool anyFound = false;
     const QList<QByteArray> lines = script.split('\n');
     for (QByteArray raw : lines)
     {
@@ -1028,8 +1029,12 @@ static void loadMaterialsDeclaredInOgreMaterialScript(const QByteArray& script, 
         Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(
             Ogre::String(matName.constData(), matName.size()), group);
         if (m)
+        {
+            anyFound = true;
             m->load();
+        }
     }
+    return anyFound;
 }
 
 /** Parse `<mesh-complete-basename>.material` next to the `.mesh` file (uses completeBaseName so `a.v2.mesh` → `a.v2.material`). */
@@ -1047,27 +1052,15 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
     if (scriptBytes.isEmpty())
         return;
 
+    const Ogre::String group = meshFile.path().toStdString();
     try {
-        // Mutable QByteArray buffer + read-only stream (no constData → void* cast).
-        void* scriptMem = scriptBytes.data();
-        Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
-            scriptMem,
-            static_cast<size_t>(scriptBytes.size()),
-            false,
-            true));
-        const Ogre::String group = meshFile.path().toStdString();
-        Ogre::MaterialManager::getSingleton().parseScript(ds, group);
-        // ensureResourceGroup() may have already initialised this group; a second
-        // initialiseResourceGroup() is a no-op and leaves parseScript materials unloaded.
         auto& rgm = Ogre::ResourceGroupManager::getSingleton();
         if (rgm.isResourceGroupInitialised(group))
             rgm.loadResourceGroup(group);
         else
             rgm.initialiseResourceGroup(group);
-        // Explicitly load materials named in this script (parseScript can leave them UNLOADED).
-        loadMaterialsDeclaredInOgreMaterialScript(scriptBytes, group);
-        // Catch any other UNLOADED materials in this folder group (same as pre-review behavior).
-        {
+
+        auto sweepUnloadedInGroup = [&group]() {
             Ogre::ResourceManager::ResourceMapIterator mit =
                 Ogre::MaterialManager::getSingleton().getResourceIterator();
             while (mit.hasMoreElements())
@@ -1078,12 +1071,34 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
                     res->load();
                 mit.moveNext();
             }
+        };
+
+        bool haveDeclared = loadMaterialsDeclaredInOgreMaterialScript(scriptBytes, group);
+        sweepUnloadedInGroup();
+
+        // If the folder was initialised before the .material existed, or the filesystem
+        // parser skipped it, inject the script once from memory (avoid when already declared
+        // — duplicate parse throws and would skip loadResourceGroup if caught too broadly).
+        if (!haveDeclared)
+        {
+            void* scriptMem = scriptBytes.data();
+            Ogre::DataStreamPtr ds(new Ogre::MemoryDataStream(
+                scriptMem,
+                static_cast<size_t>(scriptBytes.size()),
+                false,
+                true));
+            Ogre::MaterialManager::getSingleton().parseScript(ds, group);
+            if (rgm.isResourceGroupInitialised(group))
+                rgm.loadResourceGroup(group);
+            loadMaterialsDeclaredInOgreMaterialScript(scriptBytes, group);
+            sweepUnloadedInGroup();
         }
+
         SentryReporter::addBreadcrumb("file.import",
             QStringLiteral("Loaded sidecar material: %1").arg(sidecar));
     } catch (const Ogre::Exception& e) {
         Ogre::LogManager::getSingleton().logMessage(
-            "Warning: failed to parse sidecar .material: " + e.getFullDescription());
+            "Warning: sidecar material load: " + e.getFullDescription());
     }
 }
 
