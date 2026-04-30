@@ -136,6 +136,10 @@ TEST_F(AnimationMergerTest, NullSkeletons)
 
 TEST_F(AnimationMergerTest, MergeAnimationsBasic)
 {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
+    }
+
     // Create two meshes sharing compatible skeletons
     auto skelA = createTestSkeleton("merge_skel_a", {"root", "spine"}, {"idle"});
     auto skelB = createTestSkeleton("merge_skel_b", {"root", "spine"}, {"walk"});
@@ -178,6 +182,10 @@ TEST_F(AnimationMergerTest, MergeAnimationsBasic)
 
 TEST_F(AnimationMergerTest, MergeAnimationsNameCollision)
 {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
+    }
+
     // Both skeletons have an animation that would result in the same name
     auto skelA = createTestSkeleton("collision_skel_a", {"root"}, {"idle"});
     auto skelB = createTestSkeleton("collision_skel_b", {"root"}, {"idle"});
@@ -219,6 +227,10 @@ TEST_F(AnimationMergerTest, MergeAnimationsNameCollision)
 
 TEST_F(AnimationMergerTest, MergeAnimationsMixamoCleanup)
 {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
+    }
+
     // Animations with "mixamo.com" in their names should be cleaned
     auto skelA = createTestSkeleton("mixamo_skel_a", {"root", "spine"},
                                      {"Armature|mixamo.com|Layer0"});
@@ -265,6 +277,10 @@ TEST_F(AnimationMergerTest, MergeAnimationsMixamoCleanup)
 
 TEST_F(AnimationMergerTest, MergeAnimationsDeduplication)
 {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
+    }
+
     // When prefix == anim name, avoid "idle_idle" — just use "idle".
     // When two sources produce the same final name, append _2.
     auto skelA = createTestSkeleton("dedup_skel_a", {"root"}, {"idle"});
@@ -319,6 +335,10 @@ TEST_F(AnimationMergerTest, MergeAnimationsDeduplication)
 
 TEST_F(AnimationMergerTest, MergeAnimationsUnrealTakeCleanup)
 {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
+    }
+
     // Animation-only FBX from Unreal Engine retarget: animation is named "Unreal Take"
     // (with a space). After cleanup it should fall back to the skeleton/file name.
     auto skelBase = createTestSkeleton("ue_base_skel", {"root", "spine"}, {"idle"});
@@ -355,6 +375,10 @@ TEST_F(AnimationMergerTest, MergeAnimationsUnrealTakeCleanup)
 
 TEST_F(AnimationMergerTest, MergeAnimationsNumericSuffixPreserved)
 {
+    if (!canLoadMeshFiles()) {
+        GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
+    }
+
     // Intentional numeric suffix in file name must not be stripped by deduplication.
     // "mm_attack_03.skeleton" → animation should be "mm_attack_03", not "mm_attack".
     auto skelBase = createTestSkeleton("numsfx_base_skel", {"root"}, {"idle"});

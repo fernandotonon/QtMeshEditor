@@ -100,9 +100,9 @@ static inline bool createTestRenderWindow()
     if (!root || !root->getRenderSystem())
         return false;
 
-    // Already have a render window
+    // Already have a render window (tests use TestHidden; CLIPipeline::initOgreHeadless uses CLIHidden)
     try {
-        if (root->getRenderTarget("TestHidden"))
+        if (root->getRenderTarget("TestHidden") || root->getRenderTarget("CLIHidden"))
             return true;
     } catch (...) {
         // getRenderTarget throws if not found in some Ogre versions
@@ -179,9 +179,9 @@ static inline bool canLoadMeshFiles()
     auto* root = Ogre::Root::getSingletonPtr();
     if (!root || !root->getRenderSystem())
         return false;
-    // Check for our test render window
+    // Check for our test / CLI headless render window
     try {
-        if (root->getRenderTarget("TestHidden"))
+        if (root->getRenderTarget("TestHidden") || root->getRenderTarget("CLIHidden"))
             return true;
     } catch (...) {}
     // Check for auto-created window (legacy path)

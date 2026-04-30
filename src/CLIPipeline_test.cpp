@@ -1,11 +1,13 @@
 #include <gtest/gtest.h>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QUuid>
 #include <QCoreApplication>
 #include <vector>
 #include <OgreMeshManager.h>
@@ -743,6 +745,13 @@ static QString exportGeneratedTriangleMesh(const QString& baseName)
     if (!manager)
         return QString();
 
+    // Isolate each export under its own directory so the Ogre resource group (dir path)
+    // is never shared with stale FileSystem listings from other tests or earlier runs.
+    const QString exportRoot = QDir::tempPath() + "/qtmesh_cli_exp_" +
+        QUuid::createUuid().toString(QUuid::WithoutBraces);
+    if (!QDir().mkpath(exportRoot))
+        return QString();
+
     const std::string meshName = (baseName + "_mesh").toStdString();
     const QString nodeName = baseName + "_node";
 
@@ -751,6 +760,7 @@ static QString exportGeneratedTriangleMesh(const QString& baseName)
     if (!node) {
         if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
             Ogre::MeshManager::getSingleton().remove(old);
+        QDir(exportRoot).removeRecursively();
         return QString();
     }
 
@@ -759,12 +769,13 @@ static QString exportGeneratedTriangleMesh(const QString& baseName)
         manager->destroySceneNode(node);
         if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
             Ogre::MeshManager::getSingleton().remove(old);
+        QDir(exportRoot).removeRecursively();
         return QString();
     }
 
-    const QString outFile = QDir::tempPath() + "/" + baseName + ".mesh";
+    const QString outFile = QDir(exportRoot).filePath(baseName + ".mesh");
     QFile::remove(outFile);
-    QFile::remove(QDir::tempPath() + "/" + baseName + ".material");
+    QFile::remove(QDir(exportRoot).filePath(baseName + ".material"));
 
     const int exportRc = MeshImporterExporter::exporter(node, outFile, "Ogre Mesh (*.mesh)");
 
@@ -773,9 +784,20 @@ static QString exportGeneratedTriangleMesh(const QString& baseName)
     if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
         Ogre::MeshManager::getSingleton().remove(old);
 
-    if (exportRc != 0)
+    if (exportRc != 0) {
+        QDir(exportRoot).removeRecursively();
         return QString();
+    }
     return outFile;
+}
+
+/// Remove a mesh exported via exportGeneratedTriangleMesh (unique per-call temp directory).
+static void removeCliExportTree(const QString& meshFilePath)
+{
+    if (meshFilePath.isEmpty())
+        return;
+    QFileInfo fi(meshFilePath);
+    QDir(fi.absolutePath()).removeRecursively();
 }
 
 static QByteArray firstAnimationNameForFile(const QString& filePath)
@@ -1811,8 +1833,7 @@ TEST_F(CLIPipelineCmdValidateTest, CmdValidate_SucceedsForGeneratedMeshTextAndJs
     TestArgv jsonArgs({"qtmesh", "validate", sourceBa.constData(), "--json"});
     EXPECT_EQ(CLIPipeline::cmdValidate(jsonArgs.argc(), jsonArgs.argv()), 0);
 
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_validate_generated.material");
+    removeCliExportTree(sourceFile);
 }
 
 // ==========================================================================
@@ -1950,8 +1971,7 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_InfoAndRemoveFromGeneratedMesh)
     EXPECT_EQ(CLIPipeline::cmdLod(removeArgs.argc(), removeArgs.argv()), 0);
     EXPECT_TRUE(QFile::exists(removedOut));
 
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_lod_generated.material");
+    removeCliExportTree(sourceFile);
     QFile::remove(removedOut);
     QFile::remove(QDir::tempPath() + "/cli_lod_removed.material");
 }
@@ -2042,16 +2062,16 @@ TEST_F(CLIPipelineCmdLodTest, CmdLod_AutoModeOnTinyMeshReturnsNoGeneratedLevels)
     ASSERT_TRUE(QFile::exists(sourceFile));
     QByteArray sourceBa = sourceFile.toUtf8();
 
-    const QString unexpectedLod1 = QDir::tempPath() + "/cli_lod_auto_tiny_source_lod1.mesh";
+    const QString exportDir = QFileInfo(sourceFile).absolutePath();
+    const QString unexpectedLod1 = QDir(exportDir).filePath("cli_lod_auto_tiny_source_lod1.mesh");
     QFile::remove(unexpectedLod1);
 
     TestArgv args({"qtmesh", "lod", sourceBa.constData(), "--auto"});
     EXPECT_EQ(CLIPipeline::cmdLod(args.argc(), args.argv()), 1);
 
     QFile::remove(unexpectedLod1);
-    QFile::remove(QDir::tempPath() + "/cli_lod_auto_tiny_source_lod1.material");
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_lod_auto_tiny_source.material");
+    QFile::remove(QDir(exportDir).filePath("cli_lod_auto_tiny_source_lod1.material"));
+    removeCliExportTree(sourceFile);
 }
 
 // ==========================================================================
@@ -2204,8 +2224,7 @@ TEST_F(CLIPipelineCmdTest, CmdPose_NoSkeletonMeshReturnsError)
     EXPECT_EQ(CLIPipeline::cmdPose(args.argc(), args.argv()), 1);
 
     removeObjAndMtl(outputFile);
-    QFile::remove(sourceFile);
-    QFile::remove(QDir::tempPath() + "/cli_pose_noskeleton_source.material");
+    removeCliExportTree(sourceFile);
 }
 
 // ==========================================================================

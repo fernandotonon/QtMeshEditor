@@ -5,6 +5,7 @@
 #include <QThread>
 #include <QStyleFactory>
 #include <exception>
+#include <OgreException.h>
 #include "EditorViewport.h"
 #include "mainwindow.h"
 #include "Manager.h"
@@ -32,6 +33,13 @@ protected:
             QThread::msleep(75);
             try {
                 mainWindow = new MainWindow();
+            } catch (const Ogre::Exception& e) {
+                GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
+                                    << " failed: " << e.getFullDescription();
+                mainWindow = nullptr;
+                Manager::kill();
+                app->processEvents();
+                QThread::msleep(200 * attempt);
             } catch (const std::exception& e) {
                 GTEST_LOG_(WARNING) << "MainWindow init attempt " << attempt
                                     << " failed: " << e.what();
@@ -52,14 +60,18 @@ protected:
     }
 
     static void TearDownTestSuite() {
-        delete mainWindow;
-        mainWindow = nullptr;
-        if (app) {
-            app->processEvents();
+        // NOTE: We intentionally do NOT delete the MainWindow nor kill Manager here.
+        //
+        // The overall test suite has multiple fixtures that create/destroy Ogre-backed
+        // singletons in different orders. Deleting MainWindow during this suite teardown
+        // can crash inside Ogre-backed destructors (e.g. gizmos) if another fixture already
+        // tore down parts of Ogre. Leaking the window at process shutdown is acceptable for
+        // unit tests; gtest will exit immediately afterwards.
+        if (mainWindow) {
+            mainWindow->close();
         }
-        Manager::kill();
-        QThread::msleep(100);
-        app = nullptr;
+        if (app) app->processEvents();
+        mainWindow = nullptr;
     }
 
     void SetUp() override {
@@ -106,6 +118,10 @@ TEST_F(EditorViewportTest, WidgetAboutToCloseSignalEmitted) {
     QSignalSpy spy(viewport, &EditorViewport::widgetAboutToClose);
     ASSERT_TRUE(spy.isValid());
     viewport->close();
+    // Let Qt deliver close events / deferred deletes before we destroy the viewport.
+    if (app) {
+        app->processEvents();
+    }
     EXPECT_EQ(spy.count(), 1);
     delete viewport;
 }

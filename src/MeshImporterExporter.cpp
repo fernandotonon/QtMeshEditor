@@ -1015,17 +1015,34 @@ void MeshImporterExporter::applyNormalMapsToEntity(const Ogre::Entity* en)
 
 static void ensureResourceGroup(const QString &path)
 {
-    auto group = path.toStdString();
+    const QString absPath = QFileInfo(path).absoluteFilePath();
+    auto group = absPath.toStdString();
     auto &rgm = Ogre::ResourceGroupManager::getSingleton();
-    if (!rgm.resourceLocationExists(group, group))
+    const bool haveLocation = rgm.resourceLocationExists(group, group);
+
+    // If the directory was already registered earlier in this process (common in tests and CLI),
+    // Ogre's FileSystem archive may have been initialised before new files were written there.
+    // Re-registering the same location forces Ogre to re-scan the directory so freshly exported
+    // `.mesh` / `.material` sidecars are discoverable by name.
+    if (haveLocation && rgm.isResourceGroupInitialised(group))
     {
-        rgm.addResourceLocation(group, "FileSystem", group);
         try {
-            rgm.initialiseResourceGroup(group);
-        } catch (Ogre::Exception &e) {
-            Ogre::LogManager::getSingleton().logMessage(
-                "Warning during resource group init: " + e.getFullDescription());
+            rgm.removeResourceLocation(group, group);
+        } catch (...) {
+            // Ignore — location may be in use or already removed.
         }
+    }
+
+    // Ensure the location exists, then (re)initialise to refresh the file listing.
+    try {
+        if (!rgm.resourceLocationExists(group, group))
+            rgm.addResourceLocation(group, "FileSystem", group);
+        rgm.initialiseResourceGroup(group);
+    } catch (Ogre::Exception &e) {
+        Ogre::LogManager::getSingleton().logMessage(
+            "Warning during resource group init: " + e.getFullDescription());
+    } catch (...) {
+        // Ignore exceptions during shutdown / missing plugins
     }
 }
 
@@ -1150,9 +1167,8 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
         {
             if(!fileName.size()) continue;
 
-            QFileInfo file;
-            file.setFile(fileName);
-            ensureResourceGroup(file.path());
+            const QFileInfo file(QFileInfo(fileName).absoluteFilePath());
+            ensureResourceGroup(file.absolutePath());
 
             Ogre::SceneNode *sn;
             const Ogre::Entity *en;
@@ -1160,9 +1176,13 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
             if(!file.suffix().compare("mesh",Qt::CaseInsensitive))
             {
                 tryLoadSidecarMaterialScript(file);
+                const Ogre::String meshResName = file.fileName().toStdString();
+                const Ogre::String meshGroup = file.absolutePath().toStdString();
+                // Drop any cached mesh so a replaced file on disk is re-read (tests/CLI reuse paths).
+                if (auto existing = Ogre::MeshManager::getSingleton().getByName(meshResName, meshGroup))
+                    Ogre::MeshManager::getSingleton().remove(existing);
                 Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().load(
-                    file.fileName().toStdString().data(),
-                    file.path().toStdString().data());
+                    meshResName, meshGroup);
                 if (!mesh)
                     continue;
 

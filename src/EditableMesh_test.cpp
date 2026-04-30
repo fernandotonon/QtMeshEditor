@@ -86,6 +86,28 @@ namespace {
     }
 }
 
+TEST(EditableMeshStandalone, VertexColorBrushFalloffHigherExponentWeakerAtEdge)
+{
+    EditableMesh meshLo;
+    EditableMesh meshHi;
+    EditableSubMesh subLo;
+    EditableSubMesh subHi;
+    subLo.vertices.push_back(makeV(0, 0, 0));
+    subLo.vertices.push_back(makeV(0.9f, 0, 0));
+    subHi.vertices = subLo.vertices;
+    meshLo.subMeshes().push_back(std::move(subLo));
+    meshHi.subMeshes().push_back(std::move(subHi));
+
+    const Ogre::ColourValue red(1, 0, 0, 1);
+    const Ogre::Vector3 center(0, 0, 0);
+    ASSERT_TRUE(EditModeController::applyVertexColorBrush(meshLo, center, 1.0f, red, 1.0f, 0.0f));
+    ASSERT_TRUE(EditModeController::applyVertexColorBrush(meshHi, center, 1.0f, red, 1.0f, 1.0f));
+
+    const float gLo = meshLo.subMeshes()[0].vertices[1].color.g;
+    const float gHi = meshHi.subMeshes()[0].vertices[1].color.g;
+    EXPECT_GT(gHi, gLo);
+}
+
 TEST(EditableMeshStandalone, WeldByPositionMergesCoincidentVerts) {
     EditableMesh em;
     EditableSubMesh sub;
@@ -460,6 +482,12 @@ protected:
             return;
         }
         createStandardOgreMaterials();
+
+        // Make tests deterministic even if the user has persisted settings.
+        auto* ctrl = EditModeController::instance();
+        ctrl->setSoftSelectionEnabled(false);
+        ctrl->setSoftSelectionRadius(2.0);
+        ctrl->setSoftSelectionFalloff(0);
     }
 };
 
