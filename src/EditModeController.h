@@ -214,7 +214,11 @@ public:
     double vertexPaintStrength() const { return m_vertexPaintStrength; }
     void setVertexPaintStrength(double s);
 
-    /// Writes pending vertex paint from EditableMesh into the entity's GPU buffers (call before export).
+    /**
+     * @brief Commits deferred vertex paint from EditableMesh into GPU vertex buffers.
+     * @param entity Must be the active edit target; otherwise this is a no-op.
+     * @note Call before mesh/FBX/glTF export so coalesced paint is not still pending on the event loop.
+     */
     void flushPendingVertexPaintForEntity(Ogre::Entity* entity);
     /// @}
 

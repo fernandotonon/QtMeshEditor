@@ -1272,9 +1272,10 @@ TEST_F(FBXExporterCoverageTest, UVs_VFlipped) {
 }
 
 TEST_F(FBXExporterCoverageTest, VertexColors_WritesLayerElementColor) {
-    auto meshPtr = createInMemoryTriangleMeshWithVertexColors("fbx_colors");
+    const std::string name = uniqueName("fbx_colors");
+    auto meshPtr = createInMemoryTriangleMeshWithVertexColors(name);
     ASSERT_TRUE(!!meshPtr);
-    auto* node = Manager::getSingleton()->addSceneNode("fbx_colors_node");
+    auto* node = Manager::getSingleton()->addSceneNode(QString::fromStdString(name + "_node"));
     auto* entity = Manager::getSingleton()->createEntity(node, meshPtr);
     ASSERT_NE(entity, nullptr);
 
@@ -1282,6 +1283,7 @@ TEST_F(FBXExporterCoverageTest, VertexColors_WritesLayerElementColor) {
     ASSERT_TRUE(r.success);
 
     auto* objects = findTopLevel(r.nodes, "Objects");
+    ASSERT_NE(objects, nullptr);
     auto geomNodes = objects->findAll("Geometry");
     ASSERT_EQ(geomNodes.size(), 1u);
 

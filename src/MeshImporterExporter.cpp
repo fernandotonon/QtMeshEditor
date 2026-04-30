@@ -990,25 +990,53 @@ static void ensureResourceGroup(const QString &path)
     }
 }
 
-static void loadUnloadedOgreMaterialsInGroup(const Ogre::String& group)
+/** Loads only materials declared in script text (`material <name>` lines), not every resource in the folder. */
+static void loadMaterialsDeclaredInOgreMaterialScript(const QByteArray& script, const Ogre::String& group)
 {
-    Ogre::ResourceManager::ResourceMapIterator mit =
-        Ogre::MaterialManager::getSingleton().getResourceIterator();
-    while (mit.hasMoreElements())
+    const QList<QByteArray> lines = script.split('\n');
+    for (QByteArray raw : lines)
     {
-        Ogre::ResourcePtr res = mit.peekNextValue();
-        if (res->getGroup() == group
-            && res->getLoadingState() == Ogre::Resource::LOADSTATE_UNLOADED)
-            res->load();
-        mit.moveNext();
+        QByteArray line = raw.trimmed();
+        if (line.isEmpty() || line.startsWith("//"))
+            continue;
+        if (line.size() < 10)
+            continue;
+        if (line.left(8).compare(QByteArrayLiteral("material"), Qt::CaseInsensitive) != 0)
+            continue;
+        const char boundary = line[8];
+        if (boundary != ' ' && boundary != '\t')
+            continue; // e.g. "materials" must not match
+
+        QByteArray rest = line.mid(9).trimmed();
+        if (rest.isEmpty())
+            continue;
+
+        int end = 0;
+        while (end < rest.size())
+        {
+            const char c = rest[end];
+            if (c == ' ' || c == '\t' || c == ':' || c == '{')
+                break;
+            ++end;
+        }
+        if (end <= 0)
+            continue;
+
+        const QByteArray matName = rest.left(end);
+        Ogre::MaterialPtr m = Ogre::MaterialManager::getSingleton().getByName(
+            Ogre::String(matName.constData(), matName.size()), group);
+        if (m && m->getLoadingState() == Ogre::Resource::LOADSTATE_UNLOADED)
+            m->load();
     }
 }
 
+/** Parse `<mesh-complete-basename>.material` next to the `.mesh` file (uses completeBaseName so `a.v2.mesh` → `a.v2.material`). */
 static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
 {
     // `.mesh` stores material names, but not the script definitions. If the
     // corresponding `.material` isn't loaded, Ogre falls back to BaseWhite.
-    const QString sidecar = meshFile.path() + "/" + meshFile.baseName() + ".material";
+    const QString sidecar =
+        meshFile.path() + "/" + meshFile.completeBaseName() + ".material";
     QFile f(sidecar);
     if (!f.exists() || !f.open(QIODevice::ReadOnly))
         return;
@@ -1030,13 +1058,11 @@ static void tryLoadSidecarMaterialScript(const QFileInfo& meshFile)
         // ensureResourceGroup() may have already initialised this group; a second
         // initialiseResourceGroup() is a no-op and leaves parseScript materials unloaded.
         auto& rgm = Ogre::ResourceGroupManager::getSingleton();
-        if (rgm.isResourceGroupInitialised(group))
-            rgm.loadResourceGroup(group);
-        else
+        if (!rgm.isResourceGroupInitialised(group))
             rgm.initialiseResourceGroup(group);
-        // Materials created only via parseScript can remain in LOADSTATE_UNLOADED
-        // until explicitly loaded (loadResourceGroup does not always pick them up).
-        loadUnloadedOgreMaterialsInGroup(group);
+        // Do not call loadResourceGroup() here: it loads every resource in the directory.
+        // Only load materials declared in this sidecar script.
+        loadMaterialsDeclaredInOgreMaterialScript(scriptBytes, group);
         SentryReporter::addBreadcrumb("file.import",
             QStringLiteral("Loaded sidecar material: %1").arg(sidecar));
     } catch (const Ogre::Exception& e) {

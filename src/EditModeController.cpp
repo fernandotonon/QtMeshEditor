@@ -1484,6 +1484,10 @@ void EditModeController::flushPendingVertexPaintForEntity(Ogre::Entity* entity)
 {
     if (!entity || !m_editModeActive || m_editEntity != entity || !m_editableMesh)
         return;
+    SentryReporter::addBreadcrumb(
+        "file.export",
+        QStringLiteral("Flushed pending vertex paint before export for entity '%1'")
+            .arg(QString::fromStdString(entity->getName())));
     m_vertexPaintFlushPending = false;
     m_editableMesh->commitVertexColorsToEntity(m_editEntity);
 }
