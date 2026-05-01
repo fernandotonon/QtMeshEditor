@@ -1031,9 +1031,6 @@ static void ensureResourceGroup(const QString &path)
         } catch (const Ogre::Exception& e) {
             Ogre::LogManager::getSingleton().logMessage(
                 "Note: removeResourceLocation: " + e.getFullDescription());
-        } catch (const std::exception& e) {
-            Ogre::LogManager::getSingleton().logMessage(
-                "Note: removeResourceLocation: " + Ogre::String(e.what()));
         }
     }
 
@@ -1045,9 +1042,6 @@ static void ensureResourceGroup(const QString &path)
     } catch (const Ogre::Exception& e) {
         Ogre::LogManager::getSingleton().logMessage(
             "Warning during resource group init: " + e.getFullDescription());
-    } catch (const std::exception& e) {
-        Ogre::LogManager::getSingleton().logMessage(
-            "Warning during resource group init: " + Ogre::String(e.what()));
     }
 }
 
