@@ -18,7 +18,6 @@ The MIT License
 #include "HalfEdgeMesh.h"
 #include <Ogre.h>
 #include <QSignalSpy>
-#include <QThread>
 #include <QDir>
 #include <QFile>
 #include <QTextStream>
@@ -1060,12 +1059,8 @@ protected:
     std::string m_nodeName;
 
     void SetUp() override {
-        // EditModeController connects to SelectionSet in its ctor; Manager::kill()
-        // destroys SelectionSet — recycle the controller first so the next
-        // instance wires to the fresh SelectionSet after tryInitOgre().
-        EditModeController::kill();
-        Manager::kill();
-        QThread::msleep(50);
+        // One Ogre Root for the whole suite: tearing Manager down every test
+        // and re-initing GL was crashing the second bevel on Linux CI (SIGSEGV).
         ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
         ASSERT_TRUE(canLoadMeshFiles());
         createStandardOgreMaterials();
@@ -1086,6 +1081,7 @@ protected:
     void TearDown() override {
         auto* ctrl = EditModeController::instance();
         if (ctrl->isEditModeActive()) ctrl->exitEditMode(false);
+        SelectionSet::getSingleton()->clear();
         if (m_node) {
             Manager::getSingleton()->destroySceneNode(m_node);
             m_node = nullptr;
@@ -1096,6 +1092,9 @@ protected:
                 mm.remove(m_meshName);
             m_meshName.clear();
         }
+        // Fresh controller next test: BevelGizmo stays in unique_ptr; recycling
+        // avoids a stale gizmo tied to a removed entity while keeping one Root.
+        EditModeController::kill();
     }
 };
 
