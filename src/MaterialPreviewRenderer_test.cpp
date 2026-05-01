@@ -113,41 +113,28 @@ TEST_F(MaterialPreviewRendererTests, FirstMaterialNameFromNonexistentFile) {
 }
 
 TEST_F(MaterialPreviewRendererTests, RenderPreviewWithOgreBaseWhite) {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Ogre not available";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Cannot create meshes (no GL context)";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     createStandardOgreMaterials();
 
     auto* renderer = MaterialPreviewRenderer::instance();
     QImage img = renderer->renderPreview("BaseWhite");
-    // The preview should succeed when Ogre is fully initialized
-    if (!img.isNull()) {
-        EXPECT_EQ(img.width(), 64);
-        EXPECT_EQ(img.height(), 64);
-        EXPECT_EQ(img.format(), QImage::Format_RGBA8888);
-    }
-    // If null, the RTT may not be supported in this test environment (acceptable)
+    ASSERT_FALSE(img.isNull()) << "material preview RTT failed (headless GL required)";
+    EXPECT_EQ(img.width(), 64);
+    EXPECT_EQ(img.height(), 64);
+    EXPECT_EQ(img.format(), QImage::Format_RGBA8888);
 }
 
 TEST_F(MaterialPreviewRendererTests, DataUriCachesResults) {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Ogre not available";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Cannot create meshes (no GL context)";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     createStandardOgreMaterials();
 
     auto* renderer = MaterialPreviewRenderer::instance();
     QString uri1 = renderer->renderPreviewAsDataUri("BaseWhite");
-    if (uri1.isEmpty()) {
-        GTEST_SKIP() << "RTT preview not available in this environment";
-    }
+    ASSERT_FALSE(uri1.isEmpty()) << "material preview RTT failed (headless GL required)";
 
     QString uri2 = renderer->renderPreviewAsDataUri("BaseWhite");
     EXPECT_EQ(uri1, uri2); // Should be cached
@@ -158,22 +145,15 @@ TEST_F(MaterialPreviewRendererTests, DataUriCachesResults) {
 }
 
 TEST_F(MaterialPreviewRendererTests, ClearCacheInvalidatesPreviousResults) {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Ogre not available";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Cannot create meshes (no GL context)";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     createStandardOgreMaterials();
 
     auto* renderer = MaterialPreviewRenderer::instance();
 
-    // Generate a preview to populate the cache
     QString uri1 = renderer->renderPreviewAsDataUri("BaseWhite");
-    if (uri1.isEmpty()) {
-        GTEST_SKIP() << "RTT preview not available in this environment";
-    }
+    ASSERT_FALSE(uri1.isEmpty()) << "material preview RTT failed (headless GL required)";
 
     // Verify cache is populated (second call returns same result)
     QString uri2 = renderer->renderPreviewAsDataUri("BaseWhite");

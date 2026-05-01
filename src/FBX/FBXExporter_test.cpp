@@ -463,12 +463,8 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
         createStandardOgreMaterials();
 
         // Provide a real texture file so FBXExporter can embed Video.Content.

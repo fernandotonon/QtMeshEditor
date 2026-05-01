@@ -152,9 +152,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
         validator = MeshValidator::instance();
@@ -203,9 +201,7 @@ TEST_F(MeshValidatorTest, HasSelectionReflectsSelectionSet)
 {
     EXPECT_FALSE(validator->hasSelection());
 
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh creation requires GL context";
-    }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto mesh = createValidUvMesh("MeshValidatorHasSelectionMesh");
     auto* entity = createEntityFromMesh("MeshValidatorHasSelectionNode", mesh);
@@ -238,9 +234,7 @@ TEST_F(MeshValidatorTest, DoValidateWithoutSelectionKeepsStateUnvalidated)
 
 TEST_F(MeshValidatorTest, DoValidateValidMeshReturnsOkIssue)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh creation requires GL context";
-    }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto mesh = createValidUvMesh("MeshValidatorValidMesh");
     auto* entity = createEntityFromMesh("MeshValidatorValidNode", mesh);
@@ -265,9 +259,7 @@ TEST_F(MeshValidatorTest, DoValidateValidMeshReturnsOkIssue)
 
 TEST_F(MeshValidatorTest, DoValidateDetectsDegeneratesAndUvProblems)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh creation requires GL context";
-    }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto mesh = createDegenerateUvMesh("MeshValidatorBadMesh");
     auto* entity = createEntityFromMesh("MeshValidatorBadNode", mesh);
@@ -297,9 +289,7 @@ TEST_F(MeshValidatorTest, DoValidateDetectsDegeneratesAndUvProblems)
 
 TEST_F(MeshValidatorTest, ValidateDefersAndFrameStartedRunsValidation)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh creation requires GL context";
-    }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto mesh = createValidUvMesh("MeshValidatorFrameMesh");
     auto* entity = createEntityFromMesh("MeshValidatorFrameNode", mesh);
@@ -326,9 +316,7 @@ TEST_F(MeshValidatorTest, ValidateDefersAndFrameStartedRunsValidation)
 
 TEST_F(MeshValidatorTest, SelectionChangeClearsIssuesAndCancelsPendingValidation)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh creation requires GL context";
-    }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto mesh = createValidUvMesh("MeshValidatorSelectionClearMesh");
     auto* entity = createEntityFromMesh("MeshValidatorSelectionClearNode", mesh);

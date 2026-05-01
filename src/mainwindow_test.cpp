@@ -60,17 +60,15 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
         try {
             window = new MainWindow();
         } catch (const std::exception& e) {
-            GTEST_SKIP() << "Skipping: MainWindow construction failed in this environment: " << e.what();
+            FAIL() << "MainWindow construction failed: " << e.what();
         } catch (...) {
-            GTEST_SKIP() << "Skipping: MainWindow construction failed in this environment";
+            FAIL() << "MainWindow construction failed with unknown exception";
         }
 
         ASSERT_NE(window, nullptr);
@@ -529,9 +527,9 @@ TEST_F(MainWindowTest, ConstructorAutostartsMCPServerWhenEnabledInSettings)
     try {
         window = new MainWindow();
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "Skipping: MainWindow reconstruction failed in this environment: " << e.what();
+        FAIL() << "MainWindow reconstruction failed: " << e.what();
     } catch (...) {
-        GTEST_SKIP() << "Skipping: MainWindow reconstruction failed in this environment";
+        FAIL() << "MainWindow reconstruction failed with unknown exception";
     }
 
     ASSERT_NE(window, nullptr);
@@ -551,9 +549,7 @@ TEST_F(MainWindowTest, UpdateMergeAnimationsButtonDisablesActionWhenSelectionHas
 
 TEST_F(MainWindowTest, UpdateMergeAnimationsButtonDisablesActionForSingleSkeletonEntity) {
     Ogre::Entity* entity = createAnimatedEntity("SingleSkeletonEntity");
-    if (!entity) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entity, nullptr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->append(entity);
@@ -566,9 +562,8 @@ TEST_F(MainWindowTest, UpdateMergeAnimationsButtonDisablesActionForSingleSkeleto
 TEST_F(MainWindowTest, UpdateMergeAnimationsButtonEnablesActionForCompatibleSkeletonEntities) {
     Ogre::Entity* entityA = createAnimatedEntity("MergeSkeletonEntityA");
     Ogre::Entity* entityB = createAnimatedEntity("MergeSkeletonEntityB");
-    if (!entityA || !entityB) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entityA, nullptr);
+    ASSERT_NE(entityB, nullptr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->append(entityA);
@@ -582,9 +577,8 @@ TEST_F(MainWindowTest, UpdateMergeAnimationsButtonEnablesActionForCompatibleSkel
 TEST_F(MainWindowTest, UpdateMergeAnimationsButtonResolvesEntitiesFromSelectedNodes) {
     Ogre::Entity* entityA = createAnimatedEntity("MergeNodeEntityA");
     Ogre::Entity* entityB = createAnimatedEntity("MergeNodeEntityB");
-    if (!entityA || !entityB) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entityA, nullptr);
+    ASSERT_NE(entityB, nullptr);
 
     SelectionSet::getSingleton()->clear();
     SelectionSet::getSingleton()->append(entityA->getParentSceneNode());
@@ -682,9 +676,7 @@ TEST_F(MainWindowTest, UngroupSelectedIgnoresNonGroupNode) {
 }
 TEST_F(MainWindowTest, EditModeKeyboardShortcutsCoverModeAndTopologyPaths)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     const std::string meshName = "mainwindow_shortcuts_mesh";
     auto mesh = createInMemoryTriangleMesh(meshName);
@@ -775,9 +767,7 @@ TEST_F(MainWindowTest, TriggeringDynamicHelpAndPreferencesActionsCreatesDialogs)
 
 TEST_F(MainWindowTest, AiChatToolbarButtonAndMenuActionRevealDock)
 {
-    if (!window->m_chatDock) {
-        GTEST_SKIP() << "Skipping: chat dock not available in this build";
-    }
+    ASSERT_NE(window->m_chatDock, nullptr);
 
     window->show();
     app->processEvents();
@@ -805,9 +795,7 @@ TEST_F(MainWindowTest, AiChatToolbarButtonAndMenuActionRevealDock)
 
 TEST_F(MainWindowTest, AssetBrowserMenuActionTracksDockVisibility)
 {
-    if (!window->m_assetBrowserDock) {
-        GTEST_SKIP() << "Skipping: asset browser dock not available in this build";
-    }
+    ASSERT_NE(window->m_assetBrowserDock, nullptr);
 
     window->show();
     app->processEvents();
@@ -896,9 +884,7 @@ TEST_F(MainWindowTest, FrameEndedStatusMessageCoversSelectionKindsAndTransformSp
 TEST_F(MainWindowTest, FrameRenderingQueuedAdvancesEnabledAnimationWhenPlaying)
 {
     Ogre::Entity* entity = createAnimatedEntity("mainwindow_frame_anim_entity");
-    if (!entity) {
-        GTEST_SKIP() << "Skipping: animated entity creation not supported in this environment";
-    }
+    ASSERT_NE(entity, nullptr);
 
     Ogre::AnimationStateSet* states = entity->getAllAnimationStates();
     ASSERT_NE(states, nullptr);
@@ -965,9 +951,9 @@ TEST_F(MainWindowTest, ConstructorAppliesCustomPaletteFromSettings)
     try {
         window = new MainWindow();
     } catch (const std::exception& e) {
-        GTEST_SKIP() << "Skipping: MainWindow reconstruction failed in this environment: " << e.what();
+        FAIL() << "MainWindow reconstruction failed: " << e.what();
     } catch (...) {
-        GTEST_SKIP() << "Skipping: MainWindow reconstruction failed in this environment";
+        FAIL() << "MainWindow reconstruction failed with unknown exception";
     }
     ASSERT_NE(window, nullptr);
 

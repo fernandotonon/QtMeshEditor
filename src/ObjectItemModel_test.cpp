@@ -20,9 +20,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -64,7 +62,7 @@ TEST_F(ObjectItemModelTest, ConstructorCreatesRootSceneItem)
 // Test: reloadSceneNode builds tree from scene graph
 TEST_F(ObjectItemModelTest, ReloadSceneNodeBuildsTreeFromSceneGraph)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // Create a primitive to add a node to the scene
     PrimitiveObject::createCube("TestCube");
 
@@ -98,7 +96,7 @@ TEST_F(ObjectItemModelTest, ReloadSceneNodeBuildsTreeFromSceneGraph)
 // Test: reloadSceneNode rebuilds the tree (clears and repopulates)
 TEST_F(ObjectItemModelTest, ReloadSceneNodeRebuildsTree)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     ObjectItemModel model;
 
     QModelIndex rootIndex = model.getRootIndex();
@@ -123,7 +121,7 @@ TEST_F(ObjectItemModelTest, ReloadSceneNodeRebuildsTree)
 // Test: newObjectNode adds nodes to the model
 TEST_F(ObjectItemModelTest, NewObjectNodeAddsNodesToModel)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     ObjectItemModel model;
 
     QModelIndex rootIndex = model.getRootIndex();
@@ -159,7 +157,7 @@ TEST_F(ObjectItemModelTest, NewObjectNodeAddsNodesToModel)
 // Test: objectNodeRemoved removes nodes from the model
 TEST_F(ObjectItemModelTest, ObjectNodeRemovedRemovesNodes)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // Create a primitive first
     PrimitiveObject::createCube("RemoveTestCube");
 
@@ -234,7 +232,7 @@ TEST_F(ObjectItemModelTest, SetHeaderTextWithEmptyString)
 // Test: Model stores node data in user roles
 TEST_F(ObjectItemModelTest, ModelStoresNodeDataInUserRoles)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     PrimitiveObject::createCube("DataTestCube");
 
     ObjectItemModel model;
@@ -265,7 +263,7 @@ TEST_F(ObjectItemModelTest, ModelStoresNodeDataInUserRoles)
 // Test: Entities are added as children of their scene node
 TEST_F(ObjectItemModelTest, EntitiesAreChildrenOfSceneNode)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     PrimitiveObject::createCube("EntityTestCube");
 
     ObjectItemModel model;
@@ -308,7 +306,7 @@ TEST_F(ObjectItemModelTest, EntitiesAreChildrenOfSceneNode)
 // Test: Multiple nodes can be tracked in the model
 TEST_F(ObjectItemModelTest, MultipleNodesTracked)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     PrimitiveObject::createCube("MultiCube1");
     PrimitiveObject::createSphere("MultiSphere1");
 

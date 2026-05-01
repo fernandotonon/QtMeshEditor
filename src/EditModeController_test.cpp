@@ -292,14 +292,8 @@ protected:
     static int s_counter;
 
     void SetUp() override {
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Ogre not available";
-            return;
-        }
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Cannot create hardware buffers";
-            return;
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Cannot create hardware buffers (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
         // Create a triangle mesh entity and select it (required for enterEditMode)
@@ -1065,8 +1059,8 @@ protected:
     std::string m_nodeName;
 
     void SetUp() override {
-        if (!tryInitOgre()) { GTEST_SKIP() << "Ogre not available"; return; }
-        if (!canLoadMeshFiles()) { GTEST_SKIP() << "Cannot create HW buffers"; return; }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles());
         createStandardOgreMaterials();
 
         // Unique names per test so reruns don't collide with Ogre's

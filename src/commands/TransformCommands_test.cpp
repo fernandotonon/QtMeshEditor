@@ -19,9 +19,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
     }
 
     void TearDown() override {
@@ -438,7 +436,7 @@ TEST_F(TransformCommandsTests, DeleteCommand_FirstRedoIsNoop) {
 }
 
 TEST_F(TransformCommandsTests, DeleteCommand_UndoRestoresVisibility) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     Ogre::SceneNode* node = mgr->addSceneNode("DelCmdNode2");
@@ -489,7 +487,7 @@ TEST_F(TransformCommandsTests, DeleteCommand_SecondRedoHidesNode) {
 }
 
 TEST_F(TransformCommandsTests, DeleteCommand_SecondRedoHidesAttachedEntity) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     Ogre::SceneNode* node = mgr->addSceneNode("DelCmdNodeEntity");
@@ -603,7 +601,7 @@ TEST_F(TransformCommandsTests, DuplicateCommand_FirstRedoIsNoop) {
 }
 
 TEST_F(TransformCommandsTests, DuplicateCommand_UndoDestroysClones) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     Ogre::SceneNode* srcNode = mgr->addSceneNode("DupCmdHideSrc");
@@ -638,7 +636,7 @@ TEST_F(TransformCommandsTests, DuplicateCommand_UndoDestroysClones) {
 }
 
 TEST_F(TransformCommandsTests, DuplicateCommand_RedoRecreatesClones) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs entity"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     Ogre::SceneNode* srcNode = mgr->addSceneNode("DupCmdShowSrc");
@@ -1176,7 +1174,7 @@ TEST_F(TransformCommandsTests, ReparentCommand_RedoToRootWhenNewParentNameEmpty)
 // ---- SubMeshTransformCommand ----
 
 TEST_F(TransformCommandsTests, SubMeshTransformCommand_TranslateUndoRedo) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     auto mesh = createInMemoryTriangleMesh("SubMeshCmdTranslate");
@@ -1242,7 +1240,7 @@ TEST_F(TransformCommandsTests, SubMeshTransformCommand_NullSubEntity) {
 }
 
 TEST_F(TransformCommandsTests, SubMeshTransformCommand_NonZeroSubMeshIndexTargetsCorrectSubMesh) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     auto mesh = createInMemoryTwoSubMeshMesh("SubMeshCmdTwoSubMeshIndex");
@@ -1296,7 +1294,7 @@ TEST_F(TransformCommandsTests, SubMeshTransformCommand_NonZeroSubMeshIndexTarget
 }
 
 TEST_F(TransformCommandsTests, SubMeshTransform_GetCenter) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     auto mesh = createInMemoryTriangleMesh("SubMeshCenterTest");
@@ -1313,7 +1311,7 @@ TEST_F(TransformCommandsTests, SubMeshTransform_GetCenter) {
 }
 
 TEST_F(TransformCommandsTests, SubMeshTransform_ReadWritePositions) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     auto mesh = createInMemoryTriangleMesh("SubMeshRWTest");
@@ -1339,7 +1337,7 @@ TEST_F(TransformCommandsTests, SubMeshTransform_ReadWritePositions) {
 // ---- SubMeshTransform: scaleSubMesh ----
 
 TEST_F(TransformCommandsTests, SubMeshTransform_ScaleSubMesh) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     auto mesh = createInMemoryTriangleMesh("SubMeshScaleTest");
@@ -1373,7 +1371,7 @@ TEST_F(TransformCommandsTests, SubMeshTransform_ScaleSubMesh) {
 // ---- SubMeshTransform: rotateSubMesh ----
 
 TEST_F(TransformCommandsTests, SubMeshTransform_RotateSubMesh) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     auto mesh = createInMemoryTriangleMesh("SubMeshRotateTest");
@@ -1408,7 +1406,7 @@ TEST_F(TransformCommandsTests, SubMeshTransform_RotateSubMesh) {
 // ---- SubMeshTransform: rotateSubMesh preserves centroid ----
 
 TEST_F(TransformCommandsTests, SubMeshTransform_RotatePreservesCentroid) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     auto mesh = createInMemoryTriangleMesh("SubMeshRotCenterTest");
@@ -1432,7 +1430,7 @@ TEST_F(TransformCommandsTests, SubMeshTransform_RotatePreservesCentroid) {
 // ---- SubMeshTransform: scaleSubMesh preserves centroid ----
 
 TEST_F(TransformCommandsTests, SubMeshTransform_ScalePreservesCentroid) {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: needs GL context"; }
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Manager* mgr = Manager::getSingleton();
     auto mesh = createInMemoryTriangleMesh("SubMeshScaleCenterTest");

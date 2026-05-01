@@ -22,19 +22,23 @@ protected:
         rtssDir = appDir + "/media/RTShaderLib";
         mainDir = appDir + "/media/Main";
 
-        // On macOS dev builds the install puts media at bin/media/ while
-        // the test binary is directly in bin/, so appDir/media works.
-        // If neither candidate exists, skip (e.g. pre-install build).
         if (!QDir(rtssDir).exists()) {
-            // Try sibling path (Linux .deb layout)
             QString alt = appDir + "/../media/RTShaderLib";
             if (QDir(alt).exists()) {
                 rtssDir = QDir(alt).canonicalPath();
                 mainDir = QDir(appDir + "/../media/Main").canonicalPath();
-            } else {
-                GTEST_SKIP() << "RTSS media not installed (run cmake --install)";
             }
         }
+        if (!QDir(rtssDir).exists()) {
+            const QString srcRoot = QString::fromUtf8(QTMESH_UT_SOURCE_ROOT);
+            if (!srcRoot.isEmpty()) {
+                rtssDir = QDir(srcRoot).filePath(QStringLiteral("media/RTShaderLib"));
+                mainDir = QDir(srcRoot).filePath(QStringLiteral("media/Main"));
+            }
+        }
+        ASSERT_TRUE(QDir(rtssDir).exists())
+            << "RTShaderLib not found next to UnitTests or under source tree";
+        ASSERT_TRUE(QDir(mainDir).exists()) << mainDir.toStdString();
     }
 };
 

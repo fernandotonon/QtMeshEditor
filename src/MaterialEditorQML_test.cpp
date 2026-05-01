@@ -11,6 +11,9 @@
 #include "Manager.h"
 #include <OgreException.h>
 #include "TestHelpers.h"
+#ifdef ENABLE_LOCAL_LLM
+#include "LLMManager.h"
+#endif
 
 // Ensure a QApplication exists for the process lifetime.
 // gtest_main does not create one, so we lazily create it here.
@@ -62,9 +65,7 @@ protected:
         app = ensureQApplication();
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
         editor = std::make_unique<MaterialEditorQML>();
@@ -1951,9 +1952,15 @@ TEST_F(MaterialEditorQMLTest, GenerateMaterialFromPrompt_EmptyPromptEmitsError) 
 }
 
 TEST_F(MaterialEditorQMLTest, GenerateMaterialFromPrompt_NoModelLoadedEmitsError) {
-    if (editor->llmModelLoaded()) {
-        GTEST_SKIP() << "LLM model is already loaded in this environment";
+#ifdef ENABLE_LOCAL_LLM
+    LLMManager::getSingleton().unloadModel();
+    for (int i = 0; i < 100 && editor->llmModelLoaded(); ++i) {
+        QThread::msleep(20);
+        if (app) app->processEvents();
     }
+#endif
+    ASSERT_FALSE(editor->llmModelLoaded())
+        << "LLM model must be unloaded to test the no-model error path";
 
     QSignalSpy errorSpy(editor.get(), &MaterialEditorQML::aiGenerationError);
 

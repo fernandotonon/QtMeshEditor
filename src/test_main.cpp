@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <OgreLogManager.h>
 #include "Manager.h"
+#include "TestHelpers.h"
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -76,6 +77,15 @@ int main(int argc, char **argv)
 #endif
 
     testing::InitGoogleTest(&argc, argv);
+
+    // All GPU-backed tests require a headless GL context (Xvfb on Linux CI).
+    // Fail fast instead of silently skipping hundreds of tests.
+    if (!tryInitOgre()) {
+        fprintf(stderr,
+                "UnitTests FATAL: tryInitOgre() failed — need working DISPLAY / Xvfb for GL.\n");
+        return 1;
+    }
+
     int result = RUN_ALL_TESTS();
     g_testsCompleted = true;
 

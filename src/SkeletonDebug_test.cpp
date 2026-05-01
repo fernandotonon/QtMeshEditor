@@ -19,19 +19,13 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-        }
+        ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
         Ogre::Entity* entity = createAnimatedTestEntity("SkeletonDebugTestEntity");
-        if (!entity) {
-            GTEST_SKIP() << "Skipping SkeletonDebug tests: failed to create animated test entity";
-        }
+        ASSERT_NE(entity, nullptr);
 
         Ogre::SceneManager* sceneManager = Manager::getSingleton()->getSceneMgr();
         skeletonDebug = std::make_unique<SkeletonDebug>(entity, sceneManager);

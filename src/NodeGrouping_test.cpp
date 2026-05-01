@@ -15,9 +15,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -31,8 +29,7 @@ protected:
 
 TEST_F(NodeGroupingTest, GroupNodes_Basic)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "No GL context for mesh operations";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto* mgr = Manager::getSingleton();
 
@@ -74,8 +71,7 @@ TEST_F(NodeGroupingTest, GroupNodes_Basic)
 
 TEST_F(NodeGroupingTest, UngroupNode)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "No GL context for mesh operations";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto* mgr = Manager::getSingleton();
 
@@ -125,8 +121,7 @@ TEST_F(NodeGroupingTest, IsGroupNode)
 
 TEST_F(NodeGroupingTest, GroupTransformPropagation)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "No GL context for mesh operations";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto* mgr = Manager::getSingleton();
 
@@ -156,8 +151,7 @@ TEST_F(NodeGroupingTest, GroupTransformPropagation)
 
 TEST_F(NodeGroupingTest, NestedGroups)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "No GL context for mesh operations";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto* mgr = Manager::getSingleton();
 
@@ -199,8 +193,7 @@ TEST_F(NodeGroupingTest, NestedGroups)
 
 TEST_F(NodeGroupingTest, GetSceneNodesIncludesGroupChildren)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "No GL context for mesh operations";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto* mgr = Manager::getSingleton();
 
@@ -231,8 +224,7 @@ TEST_F(NodeGroupingTest, GetSceneNodesIncludesGroupChildren)
 
 TEST_F(NodeGroupingTest, GetEntitiesIncludesGroupedEntities)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "No GL context for mesh operations";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto* mgr = Manager::getSingleton();
 
@@ -260,8 +252,7 @@ TEST_F(NodeGroupingTest, GetEntitiesIncludesGroupedEntities)
 
 TEST_F(NodeGroupingTest, HasSceneNodeFindsNestedNodes)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "No GL context for mesh operations";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto* mgr = Manager::getSingleton();
 

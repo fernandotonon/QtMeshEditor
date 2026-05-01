@@ -48,9 +48,7 @@ TEST(GizmoAxisHelpersTest, ForEachAxisIndexedVisitsAllAxesWithIndices)
 
 TEST(GizmoAxisHelpersTest, AxisFromObjectIdentifiesMatchingAxis)
 {
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
 
     Manager* manager = Manager::getSingletonPtr();
     ASSERT_NE(manager, nullptr);

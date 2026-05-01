@@ -94,9 +94,7 @@ TEST_F(MaterialPresetLibraryTests, ApplyPresetWithoutSelection) {
     Manager::kill();
     QThread::msleep(50);
 
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
     createStandardOgreMaterials();
 
     auto* inst = MaterialPresetLibrary::instance();
@@ -110,12 +108,8 @@ TEST_F(MaterialPresetLibraryTests, ApplyPresetEmitsSignalWithEntity) {
     Manager::kill();
     QThread::msleep(50);
 
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     createStandardOgreMaterials();
 
     auto mesh = createInMemoryTriangleMesh("PresetTestMesh");
@@ -144,12 +138,8 @@ TEST_F(MaterialPresetLibraryTests, ApplyAllPresets) {
     Manager::kill();
     QThread::msleep(50);
 
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     createStandardOgreMaterials();
 
     auto mesh = createInMemoryTriangleMesh("PresetAllMesh");
@@ -181,12 +171,8 @@ TEST_F(MaterialPresetLibraryTests, PlasticPresetConfiguresExpectedMaterialProper
     Manager::kill();
     QThread::msleep(50);
 
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     createStandardOgreMaterials();
 
     Ogre::Entity* entity = createSelectedEntity("PlasticNode", "PlasticEntity", "PlasticMesh");
@@ -209,12 +195,8 @@ TEST_F(MaterialPresetLibraryTests, MetalPresetConfiguresExpectedMaterialProperti
     Manager::kill();
     QThread::msleep(50);
 
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     createStandardOgreMaterials();
 
     Ogre::Entity* entity = createSelectedEntity("MetalNode", "MetalEntity", "MetalMesh");
@@ -237,12 +219,8 @@ TEST_F(MaterialPresetLibraryTests, WoodPresetConfiguresExpectedMaterialPropertie
     Manager::kill();
     QThread::msleep(50);
 
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     createStandardOgreMaterials();
 
     Ogre::Entity* entity = createSelectedEntity("WoodNode", "WoodEntity", "WoodMesh");
@@ -265,12 +243,8 @@ TEST_F(MaterialPresetLibraryTests, GlassPresetConfiguresTransparentMaterialPrope
     Manager::kill();
     QThread::msleep(50);
 
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     createStandardOgreMaterials();
 
     Ogre::Entity* entity = createSelectedEntity("GlassNode", "GlassEntity", "GlassMesh");
@@ -292,12 +266,8 @@ TEST_F(MaterialPresetLibraryTests, UnlitAndWireframePresetsDisableLighting) {
     Manager::kill();
     QThread::msleep(50);
 
-    if (!tryInitOgre()) {
-        GTEST_SKIP() << "Skipping: Ogre initialization failed";
-    }
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     createStandardOgreMaterials();
 
     Ogre::Entity* entity = createSelectedEntity("SpecialNode", "SpecialEntity", "SpecialMesh");

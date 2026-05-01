@@ -6,6 +6,7 @@
 #include <OgreRoot.h>
 #include <OgreException.h>
 #include <OgreStringConverter.h>
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QWidget>
 #include <QFile>
@@ -115,6 +116,9 @@ static inline bool createTestRenderWindow()
         hiddenWidget->resize(1, 1);
         hiddenWidget->show();
     }
+    // Native window / valid WId for externalWindowHandle (needed on headless X11 / Xvfb).
+    if (QCoreApplication::instance())
+        QCoreApplication::processEvents();
     try {
         Ogre::NameValuePairList params;
         params["externalWindowHandle"] = Ogre::StringConverter::toString(
@@ -142,21 +146,17 @@ static inline bool createTestRenderWindow()
  * the crash is a SIGSEGV (not a C++ exception) and cannot be caught
  * here. On Linux CI with Xvfb, GL context creation succeeds.
  *
- * Returns true if Ogre initialized successfully, false otherwise.
- * Test fixtures should call this and GTEST_SKIP() on false.
+ * Returns true only if a render window exists or was created (GL context for HW buffers).
+ * Test fixtures should use ASSERT_TRUE(tryInitOgre()) in CI — never skip silently.
  */
 static inline bool tryInitOgre()
 {
-    // Already initialized — ensure render window exists
-    if (Manager::getSingletonPtr()) {
-        createTestRenderWindow();
-        return true;
-    }
+    if (Manager::getSingletonPtr())
+        return createTestRenderWindow();
 
     try {
         Manager::getSingleton();
-        createTestRenderWindow();
-        return true;
+        return createTestRenderWindow();
     } catch (const Ogre::Exception&) {
         return false;
     } catch (...) {
@@ -171,8 +171,7 @@ static inline bool tryInitOgre()
  * A GL context is available when either a RenderWindow has been created
  * (via createTestRenderWindow() or OgreWidget) or Ogre auto-created one.
  *
- * Tests that create entities or meshes should call this and GTEST_SKIP()
- * if false.
+ * Use ASSERT_TRUE(canLoadMeshFiles()) in tests — failures must fail the job, not skip.
  */
 static inline bool canLoadMeshFiles()
 {
@@ -194,7 +193,8 @@ static inline bool canLoadMeshFiles()
 #if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
-    return false;
+    // Ogre is up but no window yet — create TestHidden (Linux CI / Xvfb path).
+    return Manager::getSingletonPtr() && createTestRenderWindow();
 }
 
 /**

@@ -98,11 +98,9 @@ protected:
         QThread::msleep(50);
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
-        if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+        ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     }
     void TearDown() override {
         if (app) app->processEvents();
@@ -875,10 +873,7 @@ TEST_F(MeshTransformTest, RotateMeshAlsoRotatesNormals)
     Ogre::Mesh* mesh = entity->getMesh().get();
 
     std::vector<Ogre::Vector3> originalNormals = getVertexNormals(mesh);
-    if (originalNormals.empty()) {
-        Manager::getSingleton()->destroySceneNode("RotateNormCube");
-        GTEST_SKIP() << "Skipping: mesh has no normals";
-    }
+    ASSERT_FALSE(originalNormals.empty()) << "mesh has no normals";
 
     // Rotate 90 degrees around UNIT_Y (via _rotate.x)
     Ogre::Quaternion expectedQuat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
@@ -912,10 +907,7 @@ TEST_F(MeshTransformTest, RotateMeshNormalsPreserveLength)
     Ogre::Mesh* mesh = entity->getMesh().get();
 
     std::vector<Ogre::Vector3> originalNormals = getVertexNormals(mesh);
-    if (originalNormals.empty()) {
-        Manager::getSingleton()->destroySceneNode("RotateNormSphere");
-        GTEST_SKIP() << "Skipping: mesh has no normals";
-    }
+    ASSERT_FALSE(originalNormals.empty()) << "mesh has no normals";
 
     // Rotate 45 degrees
     MeshTransform::rotateMesh(entity, Ogre::Vector3(0.0f, 45.0f, 0.0f));
@@ -1013,10 +1005,7 @@ TEST_F(MeshTransformTest, RotateMeshQuaternionAlsoRotatesNormals)
 
     Ogre::Mesh* mesh = entity->getMesh().get();
     auto originalNormals = getVertexNormals(mesh);
-    if (originalNormals.empty()) {
-        Manager::getSingleton()->destroySceneNode("RotateQuatNormCube");
-        GTEST_SKIP() << "Skipping: mesh has no normals";
-    }
+    ASSERT_FALSE(originalNormals.empty()) << "mesh has no normals";
 
     Ogre::Quaternion quat(Ogre::Degree(90.0f), Ogre::Vector3::UNIT_Y);
     MeshTransform::rotateMesh(entity, quat);

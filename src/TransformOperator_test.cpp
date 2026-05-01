@@ -77,9 +77,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
 
         createStandardOgreMaterials();
         op = TransformOperator::getSingleton();
@@ -227,9 +225,7 @@ TEST_F(TransformOperatorTests, PivotPointForNodeSelectionSupportsCenterBottomAnd
 
 TEST_F(TransformOperatorTests, PivotPointForEntitySelectionSupportsCenterBottomAndOrigin)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entityA = createSelectedEntity("PivotEntityNodeA", "PivotEntityA", "PivotEntityMeshA");
     Ogre::Entity* entityB = createSelectedEntity("PivotEntityNodeB", "PivotEntityB", "PivotEntityMeshB");
@@ -264,9 +260,7 @@ TEST_F(TransformOperatorTests, PivotPointForEntitySelectionSupportsCenterBottomA
 
 TEST_F(TransformOperatorTests, PivotPointForSubEntitySelectionSupportsCenterBottomAndOrigin)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createSelectedEntity("PivotSubNode", "PivotSubEntity", "PivotSubMesh");
     ASSERT_NE(entity, nullptr);
@@ -420,9 +414,7 @@ TEST_F(TransformOperatorTests, UpdateGizmoUsesRootOrientationForMultipleLocalNod
 TEST_F(TransformOperatorTests, UpdateGizmoPositionForEntitySelectionUsesTrackedScaleAndOrientation)
 {
     Ogre::Entity* entity = createSelectedEntity("TrackedEntityNode", "TrackedEntity", "TrackedEntityMesh");
-    if (!entity) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entity, nullptr);
 
     SelectionSet::getSingleton()->setEntityScaleFactor(entity, Ogre::Vector3(1.4f, 1.5f, 1.6f));
     SelectionSet::getSingleton()->setEntityRotation(entity, Ogre::Vector3(10.0f, 20.0f, 30.0f));
@@ -522,9 +514,7 @@ TEST_F(TransformOperatorTests, OnSelectionChangedRestoresNodeInitialState)
 TEST_F(TransformOperatorTests, OnSelectionChangedNormalizesSelectedEntityParentNode)
 {
     Ogre::Entity* entity = createSelectedEntity("EntityStateNode", "EntityStateEntity", "EntityStateMesh");
-    if (!entity) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entity, nullptr);
 
     Ogre::SceneNode* parentNode = entity->getParentSceneNode();
     // onSelectionChanged() treats an Entity selection differently: it normalizes the parent SceneNode
@@ -541,9 +531,7 @@ TEST_F(TransformOperatorTests, OnSelectionChangedNormalizesSelectedEntityParentN
 TEST_F(TransformOperatorTests, OnSelectionChangedNormalizesSelectedSubEntityParentNode)
 {
     Ogre::Entity* entity = createSelectedEntity("SubEntityStateNode", "SubEntityStateEntity", "SubEntityStateMesh");
-    if (!entity) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entity, nullptr);
 
     Ogre::SubEntity* subEntity = entity->getSubEntity(0);
     ASSERT_NE(subEntity, nullptr);
@@ -564,9 +552,7 @@ TEST_F(TransformOperatorTests, OnSelectionChangedNormalizesSelectedSubEntityPare
 TEST_F(TransformOperatorTests, EntityRotationVectorSetterTracksAbsoluteRotation)
 {
     Ogre::Entity* entity = createSelectedEntity("EntityRotateNode", "EntityRotateEntity", "EntityRotateMesh");
-    if (!entity) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entity, nullptr);
 
     op->rotateSelected(Ogre::Vector3(10.0f, 20.0f, 30.0f));
     EXPECT_EQ(SelectionSet::getSingleton()->getEntityRotation(entity), Ogre::Vector3(10.0f, 20.0f, 30.0f));
@@ -578,9 +564,7 @@ TEST_F(TransformOperatorTests, EntityRotationVectorSetterTracksAbsoluteRotation)
 TEST_F(TransformOperatorTests, EntityScaleSetterTracksScaleFactor)
 {
     Ogre::Entity* entity = createSelectedEntity("EntityScaleNode", "EntityScaleEntity", "EntityScaleMesh");
-    if (!entity) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entity, nullptr);
 
     op->setSelectedScale(Ogre::Vector3(1.2f, 1.3f, 1.4f));
 
@@ -590,9 +574,7 @@ TEST_F(TransformOperatorTests, EntityScaleSetterTracksScaleFactor)
 TEST_F(TransformOperatorTests, EntityScaleSetterReplacesPreviousTrackedScale)
 {
     Ogre::Entity* entity = createSelectedEntity("EntityScaleNode2", "EntityScaleEntity2", "EntityScaleMesh2");
-    if (!entity) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entity, nullptr);
 
     op->setSelectedScale(Ogre::Vector3(1.2f, 1.3f, 1.4f));
     op->setSelectedScale(Ogre::Vector3(2.0f, 2.5f, 3.0f));
@@ -603,9 +585,7 @@ TEST_F(TransformOperatorTests, EntityScaleSetterReplacesPreviousTrackedScale)
 TEST_F(TransformOperatorTests, EntityQuaternionRotationAccumulatesTrackedEulerDelta)
 {
     Ogre::Entity* entity = createSelectedEntity("EntityQuatNode", "EntityQuatEntity", "EntityQuatMesh");
-    if (!entity) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_NE(entity, nullptr);
 
     SelectionSet::getSingleton()->setEntityRotation(entity, Ogre::Vector3(0.0f, 10.0f, 0.0f));
     op->rotateSelected(Ogre::Quaternion(Ogre::Degree(20), Ogre::Vector3::UNIT_Y));

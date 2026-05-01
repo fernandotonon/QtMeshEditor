@@ -40,9 +40,7 @@ protected:
         auto* app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -716,6 +714,8 @@ protected:
                 QThread::msleep(200 * attempt);
             }
         }
+        ASSERT_NE(mainWindow, nullptr)
+            << "MainWindow failed to initialize (Xvfb/GL required for integration tests)";
     }
 
     static void TearDownTestSuite()
@@ -733,16 +733,13 @@ protected:
 
     void SetUp() override
     {
-        if (!mainWindow) {
-            GTEST_SKIP() << "Failed to initialize MainWindow for SpaceCameraWidgetIntegrationTest";
-        }
-
+        ASSERT_NE(mainWindow, nullptr);
         try {
             viewport = new EditorViewport(mainWindow, 31);
         } catch (const std::exception& e) {
-            GTEST_SKIP() << "EditorViewport creation failed: " << e.what();
+            FAIL() << "EditorViewport creation failed: " << e.what();
         } catch (...) {
-            GTEST_SKIP() << "EditorViewport creation failed with unknown exception";
+            FAIL() << "EditorViewport creation failed with unknown exception";
         }
         ASSERT_NE(viewport, nullptr);
 

@@ -23,9 +23,7 @@ protected:
         QThread::msleep(50);
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
         // Start with a clean selection
         SelectionSet::getSingleton()->clear();
@@ -51,9 +49,7 @@ protected:
         if (::testing::Test::IsSkipped()) return;
 
         // Loading .mesh files can crash in headless/offscreen mode (no GPU context)
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-        }
+        ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
         entity = createAnimatedTestEntity("AnimationWidgetWithMeshEntity");
         ASSERT_NE(entity, nullptr);
@@ -160,9 +156,8 @@ TEST_F(AnimationWidgetWithMeshTest, AnimationTablePopulatedAfterSelection)
 
     // robot.mesh has animations so the table should have at least one row
     const Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
-    if (!set || set->getAnimationStates().empty()) {
-        GTEST_SKIP() << "Skipping: entity has no animation states";
-    }
+    ASSERT_NE(set, nullptr);
+    ASSERT_FALSE(set->getAnimationStates().empty());
 
     EXPECT_GT(animTable->rowCount(), 0);
 }
@@ -176,9 +171,7 @@ TEST_F(AnimationWidgetWithMeshTest, AnimationTableHasCorrectColumns)
     QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
     ASSERT_NE(animTable, nullptr);
 
-    if (animTable->rowCount() == 0) {
-        GTEST_SKIP() << "Skipping: no animation rows";
-    }
+    ASSERT_GT(animTable->rowCount(), 0);
 
     // Column 0: Entity name, Column 1: Animation name,
     // Column 2: Enabled checkbox, Column 3: Loop checkbox
@@ -224,9 +217,7 @@ TEST_F(AnimationWidgetWithMeshTest, SkeletonTableEntityName)
     QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
     ASSERT_NE(skeletonTable, nullptr);
 
-    if (skeletonTable->rowCount() == 0) {
-        GTEST_SKIP() << "Skipping: skeleton table empty";
-    }
+    ASSERT_GE(skeletonTable->rowCount(), 1);
 
     auto* entityItem = skeletonTable->item(0, 0);
     ASSERT_NE(entityItem, nullptr);
@@ -244,9 +235,7 @@ TEST_F(AnimationWidgetWithMeshTest, SkeletonTableCheckboxInitiallyUnchecked)
     QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
     ASSERT_NE(skeletonTable, nullptr);
 
-    if (skeletonTable->rowCount() == 0) {
-        GTEST_SKIP() << "Skipping: skeleton table empty";
-    }
+    ASSERT_GE(skeletonTable->rowCount(), 1);
 
     // Display Skeleton checkbox should default to unchecked
     auto* showSkeletonItem = skeletonTable->item(0, 1);
@@ -347,9 +336,7 @@ TEST_F(AnimationWidgetWithMeshTest, AnimationItemsAreNonEditable)
     QTableWidget* animTable = widget.findChild<QTableWidget*>("animTable");
     ASSERT_NE(animTable, nullptr);
 
-    if (animTable->rowCount() == 0) {
-        GTEST_SKIP() << "Skipping: no animation rows";
-    }
+    ASSERT_GT(animTable->rowCount(), 0);
 
     // All four columns should have the non-editable flag
     for (int col = 0; col < 4; ++col) {
@@ -369,9 +356,7 @@ TEST_F(AnimationWidgetWithMeshTest, SkeletonItemsAreNonEditable)
     QTableWidget* skeletonTable = widget.findChild<QTableWidget*>("skeletonTable");
     ASSERT_NE(skeletonTable, nullptr);
 
-    if (skeletonTable->rowCount() == 0) {
-        GTEST_SKIP() << "Skipping: no skeleton rows";
-    }
+    ASSERT_GE(skeletonTable->rowCount(), 1);
 
     for (int col = 0; col < 2; ++col) {
         auto* item = skeletonTable->item(0, col);
@@ -549,9 +534,7 @@ TEST_F(AnimationWidgetTest, MultipleWidgetDestructionOrder)
 TEST_F(AnimationWidgetTest, TriangleMeshEntityShowsNoAnimations)
 {
     // A simple triangle mesh with no skeleton should show 0 animation rows
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto mesh = createInMemoryTriangleMesh("animwidget_tri");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -581,9 +564,7 @@ TEST_F(AnimationWidgetTest, SkeletonMeshEntityWithoutAnimations)
 {
     // A mesh with a skeleton but no animations should show in skeleton table
     // but have 0 animation rows.
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto mesh = createInMemorySkeletonMesh("animwidget_skel_noanim");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -612,9 +593,7 @@ TEST_F(AnimationWidgetTest, SkeletonMeshEntityWithoutAnimations)
 TEST_F(AnimationWidgetTest, AnimatedEntityShowsAnimationRow)
 {
     // An entity created via createAnimatedTestEntity has "TestAnim" animation.
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_animated");
     ASSERT_NE(entity, nullptr);
@@ -649,9 +628,7 @@ TEST_F(AnimationWidgetTest, AnimatedEntityShowsAnimationRow)
 TEST_F(AnimationWidgetTest, PollAnimationStateUpdatesCheckbox)
 {
     // Verify that pollAnimationState picks up externally-changed animation state.
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_poll");
     ASSERT_NE(entity, nullptr);
@@ -703,9 +680,7 @@ TEST_F(AnimationWidgetTest, PollAnimationStateUpdatesCheckbox)
 TEST_F(AnimationWidgetTest, MultipleWidgetsSyncOnSelectionChange)
 {
     // Two AnimationWidget instances should both update when selection changes.
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_sync");
     ASSERT_NE(entity, nullptr);
@@ -746,9 +721,7 @@ TEST_F(AnimationWidgetTest, MultipleWidgetsSyncOnSelectionChange)
 TEST_F(AnimationWidgetTest, SkeletonTableWeightsColumnDisabledForNoSkeleton)
 {
     // For an entity without a skeleton, the "Show Weights" checkbox should be disabled.
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto mesh = createInMemoryTriangleMesh("animwidget_noskel_weights");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -789,9 +762,7 @@ TEST_F(AnimationWidgetTest, PlayPauseButtonInitiallyUnchecked)
 TEST_F(AnimationWidgetTest, AnimTableClicked_EnableColumn)
 {
     // Test clicking on the enable column (col 2) to toggle animation enabled state
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_enable_click");
     ASSERT_NE(entity, nullptr);
@@ -838,9 +809,7 @@ TEST_F(AnimationWidgetTest, AnimTableClicked_EnableColumn)
 TEST_F(AnimationWidgetTest, AnimTableClicked_LoopColumn)
 {
     // Test clicking on the loop column (col 3) to toggle animation loop state
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_loop_click");
     ASSERT_NE(entity, nullptr);
@@ -885,9 +854,7 @@ TEST_F(AnimationWidgetTest, AnimTableClicked_LoopColumn)
 TEST_F(AnimationWidgetTest, AnimTableClicked_Column0And1_NoEffect)
 {
     // Clicking on column 0 or 1 should NOT change animation state
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_col01_click");
     ASSERT_NE(entity, nullptr);
@@ -932,9 +899,7 @@ TEST_F(AnimationWidgetTest, AnimTableClicked_Column0And1_NoEffect)
 
 TEST_F(AnimationWidgetTest, SkeletonTableClicked_Column0_NoEffect)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_skel_col0");
     ASSERT_NE(entity, nullptr);
@@ -964,9 +929,7 @@ TEST_F(AnimationWidgetTest, SkeletonTableClicked_Column0_NoEffect)
 
 TEST_F(AnimationWidgetTest, AnimTableCellDoubleClicked_Column0_NoEffect)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_dblclick_col0");
     ASSERT_NE(entity, nullptr);
@@ -995,9 +958,7 @@ TEST_F(AnimationWidgetTest, AnimTableCellDoubleClicked_Column0_NoEffect)
 
 TEST_F(AnimationWidgetToggleBoneWeightsTest, ToggleBoneWeightsOnOffAndIdempotent)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_toggle_weights");
     ASSERT_NE(entity, nullptr);
@@ -1022,9 +983,7 @@ TEST_F(AnimationWidgetToggleBoneWeightsTest, ToggleBoneWeightsOnOffAndIdempotent
 
 TEST_F(AnimationWidgetSkeletonTableBoneWeightsClickTest, SkeletonTableClicked_Column2_TogglesBoneWeights)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_skel_click_col2");
     ASSERT_NE(entity, nullptr);
@@ -1058,9 +1017,7 @@ TEST_F(AnimationWidgetSkeletonTableBoneWeightsClickTest, SkeletonTableClicked_Co
 
 TEST_F(AnimationWidgetTest, SkeletonTableClicked_NoSkeletonEntityIsIgnored)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto mesh = createInMemoryTriangleMesh("animwidget_skel_click_noskel");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -1093,9 +1050,7 @@ TEST_F(AnimationWidgetTest, SkeletonTableClicked_NoSkeletonEntityIsIgnored)
 
 TEST_F(AnimationWidgetSceneNodeDestroyedCleanupTest, SceneNodeDestroyedSignalCleansEntityDebugOverlays)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_scene_node_destroyed");
     ASSERT_NE(entity, nullptr);
@@ -1117,9 +1072,7 @@ TEST_F(AnimationWidgetSceneNodeDestroyedCleanupTest, SceneNodeDestroyedSignalCle
 
 TEST_F(AnimationWidgetSceneClearingCleanupTest, SceneClearingSignalDisablesAllDebugOverlays)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_scene_clearing");
     ASSERT_NE(entity, nullptr);
@@ -1139,9 +1092,7 @@ TEST_F(AnimationWidgetSceneClearingCleanupTest, SceneClearingSignalDisablesAllDe
 
 TEST_F(AnimationWidgetTest, AnimTableClicked_NullEntityDataIsIgnored)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_click_null_entity");
     ASSERT_NE(entity, nullptr);
@@ -1169,9 +1120,7 @@ TEST_F(AnimationWidgetTest, AnimTableClicked_NullEntityDataIsIgnored)
 
 TEST_F(AnimationWidgetTest, PollAnimationStateSkipsRowsWithMissingCells)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
     auto* entity = createAnimatedTestEntity("animwidget_poll_missing_cells");
     ASSERT_NE(entity, nullptr);

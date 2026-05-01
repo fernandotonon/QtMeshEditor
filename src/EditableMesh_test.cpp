@@ -25,14 +25,8 @@ The MIT License
 class EditableMeshTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Ogre not available";
-            return;
-        }
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Cannot create hardware buffers";
-            return;
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Cannot create hardware buffers (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 };
@@ -473,14 +467,8 @@ TEST_F(EditableMeshTest, UVManipulation) {
 class EditModeControllerTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Ogre not available";
-            return;
-        }
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Cannot create hardware buffers";
-            return;
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Cannot create hardware buffers (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
         // Make tests deterministic even if the user has persisted settings.
