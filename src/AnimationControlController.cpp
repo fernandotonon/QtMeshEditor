@@ -175,6 +175,13 @@ void AnimationControlController::selectAnimation(const QString& entityName, cons
         m_sliderMaximum = static_cast<int>(anim->getLength() * 1000);
     }
 
+    // Reset loop region to span the whole animation whenever a new clip is
+    // selected — users typically want fresh in/out points per clip.
+    m_loopStart        = 0.0;
+    m_loopEnd          = m_sliderMaximum / 1000.0;
+    m_loopRegionActive = false;
+    emit loopRegionChanged();
+
     emit selectionChanged();
     emit animationLengthChanged();
     emit sliderValueChanged();
@@ -285,6 +292,79 @@ void AnimationControlController::setAnimationLength(double length)
 
     refreshSliderTicks();
     emit animationLengthChanged();
+}
+
+// ── Playback speed / loop region / auto-key ───────────────────────────────────
+
+void AnimationControlController::setPlaybackSpeed(double s)
+{
+    if (s < 0.0) s = 0.0;
+    if (qFuzzyCompare(s, m_playbackSpeed)) return;
+    m_playbackSpeed = s;
+    emit playbackSpeedChanged();
+}
+
+void AnimationControlController::setLoopStart(double s)
+{
+    if (s < 0.0) s = 0.0;
+    if (qFuzzyCompare(s, m_loopStart)) return;
+    m_loopStart = s;
+    if (m_loopEnd > 0.0 && m_loopStart > m_loopEnd) m_loopStart = m_loopEnd;
+    emit loopRegionChanged();
+}
+
+void AnimationControlController::setLoopEnd(double s)
+{
+    if (s < 0.0) s = 0.0;
+    if (qFuzzyCompare(s, m_loopEnd)) return;
+    m_loopEnd = s;
+    if (m_loopEnd > 0.0 && m_loopStart > m_loopEnd) m_loopStart = m_loopEnd;
+    emit loopRegionChanged();
+}
+
+void AnimationControlController::setLoopRegionActive(bool on)
+{
+    if (on == m_loopRegionActive) return;
+    m_loopRegionActive = on;
+    emit loopRegionChanged();
+}
+
+void AnimationControlController::setAutoKey(bool on)
+{
+    if (on == m_autoKey) return;
+    m_autoKey = on;
+    emit autoKeyChanged();
+}
+
+double AnimationControlController::advanceTime(double currentTime, double dt) const
+{
+    double next = currentTime + dt * m_playbackSpeed;
+
+    // Apply loop region only when active and the region is well-formed.
+    if (m_loopRegionActive && m_loopEnd > m_loopStart) {
+        if (next > m_loopEnd) {
+            const double span = m_loopEnd - m_loopStart;
+            double over = next - m_loopEnd;
+            // Wrap any number of full passes back into the region.
+            if (span > 0.0) over = std::fmod(over, span);
+            next = m_loopStart + over;
+        } else if (next < m_loopStart) {
+            // Reverse wrap (negative speed); not exposed via UI today but kept
+            // symmetrical so callers don't trip if they ever get here.
+            const double span = m_loopEnd - m_loopStart;
+            double under = m_loopStart - next;
+            if (span > 0.0) under = std::fmod(under, span);
+            next = m_loopEnd - under;
+        }
+    }
+    return next;
+}
+
+void AnimationControlController::autoKeyOnTransform()
+{
+    if (!m_autoKey) return;
+    if (!m_selectedTrack || !m_selectedEntity || m_selectedAnimation.empty()) return;
+    addKeyframe();
 }
 
 void AnimationControlController::setAnimationFrame(int ms)

@@ -424,6 +424,51 @@ Column {
         ToolBtn { label: "-KF"; enabled: AnimationControlController.canDeleteKeyframe; onClicked: AnimationControlController.deleteKeyframe() }
     }
 
+    // ── Playback toolbar: loop + auto-key (speed lives next to Play button) ───
+    RowLayout {
+        width: parent.width; spacing: 6
+
+        Rectangle {
+            Layout.preferredWidth: 80; height: 22; radius: 3
+            color: AnimationControlController.loopRegionActive
+                ? AnimationControlController.highlightColor
+                : (loopMa.containsMouse ? Qt.lighter(AnimationControlController.buttonColor, 1.15)
+                                        : AnimationControlController.buttonColor)
+            border.color: AnimationControlController.borderColor; border.width: 1
+            Text {
+                anchors.centerIn: parent
+                text: AnimationControlController.loopRegionActive ? "Loop ON" : "Loop OFF"
+                color: AnimationControlController.loopRegionActive ? "white" : AnimationControlController.buttonTextColor
+                font.pixelSize: 11
+            }
+            MouseArea {
+                id: loopMa; anchors.fill: parent; hoverEnabled: true
+                onClicked: AnimationControlController.loopRegionActive = !AnimationControlController.loopRegionActive
+            }
+        }
+
+        Item { Layout.fillWidth: true }
+
+        Rectangle {
+            Layout.preferredWidth: 84; height: 22; radius: 3
+            color: AnimationControlController.autoKey
+                ? "#c04040"
+                : (autoKeyMa.containsMouse ? Qt.lighter(AnimationControlController.buttonColor, 1.15)
+                                           : AnimationControlController.buttonColor)
+            border.color: AnimationControlController.borderColor; border.width: 1
+            Text {
+                anchors.centerIn: parent
+                text: AnimationControlController.autoKey ? "● Auto Key" : "Auto Key"
+                color: AnimationControlController.autoKey ? "white" : AnimationControlController.buttonTextColor
+                font.pixelSize: 11
+            }
+            MouseArea {
+                id: autoKeyMa; anchors.fill: parent; hoverEnabled: true
+                onClicked: AnimationControlController.autoKey = !AnimationControlController.autoKey
+            }
+        }
+    }
+
     // ── Timeline ──────────────────────────────────────────────────────────────
     RowLayout {
         width: parent.width; height: 28; spacing: 4
@@ -460,6 +505,23 @@ Column {
                     var ctx = getContext("2d"); ctx.clearRect(0, 0, width, height)
                     var maxMs = AnimationControlController.sliderMaximum; if (maxMs <= 0) return
                     var pad = 13; var avail = width - pad * 2
+
+                    // Loop region shading (drawn under keyframe ticks)
+                    if (AnimationControlController.loopRegionActive) {
+                        var ls = AnimationControlController.loopStart * 1000
+                        var le = AnimationControlController.loopEnd   * 1000
+                        var lx = pad + (ls / maxMs) * avail
+                        var rx = pad + (le / maxMs) * avail
+                        ctx.fillStyle = "rgba(64, 192, 255, 0.18)"
+                        ctx.fillRect(lx, 0, Math.max(0, rx - lx), height)
+                        ctx.strokeStyle = "#40c0ff"; ctx.lineWidth = 2
+                        ctx.beginPath(); ctx.moveTo(lx, 0); ctx.lineTo(lx, height); ctx.stroke()
+                        ctx.beginPath(); ctx.moveTo(rx, 0); ctx.lineTo(rx, height); ctx.stroke()
+                        ctx.fillStyle = "#40c0ff"
+                        ctx.beginPath(); ctx.moveTo(lx, 0); ctx.lineTo(lx + 6, 0); ctx.lineTo(lx, 6); ctx.closePath(); ctx.fill()
+                        ctx.beginPath(); ctx.moveTo(rx, 0); ctx.lineTo(rx - 6, 0); ctx.lineTo(rx, 6); ctx.closePath(); ctx.fill()
+                    }
+
                     var ticks = AnimationControlController.keyframeTicks; var selTk = AnimationControlController.selectedTick
                     for (var i = 0; i < ticks.length; i++) {
                         var x = pad + (ticks[i] / maxMs) * avail; var isSel = (ticks[i] === selTk)
@@ -480,6 +542,66 @@ Column {
                     function onAnimationLengthChanged() { tickCanvas.requestPaint() }
                     function onThemeChanged()           { tickCanvas.requestPaint() }
                     function onSliderValueChanged()     { tickCanvas.requestPaint() }
+                    function onLoopRegionChanged()      { tickCanvas.requestPaint() }
+                }
+            }
+
+            // Drag handles for loop in/out points — only visible when loop is active.
+            // Sits on top of the slider so drags on the handle areas don't move the playhead.
+            Item {
+                anchors.fill: parent
+                visible: AnimationControlController.loopRegionActive
+
+                property real pad: 13
+                property real avail: width - pad * 2
+                property real maxMs: Math.max(1, AnimationControlController.sliderMaximum)
+
+                Rectangle {
+                    id: loopStartHandle
+                    width: 10; height: parent.height
+                    x: parent.pad + (AnimationControlController.loopStart * 1000 / parent.maxMs) * parent.avail - width / 2
+                    color: "transparent"
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.SizeHorCursor
+                        drag.target: parent
+                        drag.axis: Drag.XAxis
+                        drag.minimumX: parent.parent.pad - parent.width / 2
+                        drag.maximumX: parent.parent.pad + parent.parent.avail - parent.width / 2
+                        onPositionChanged: {
+                            if (!drag.active) return
+                            var px = parent.x + parent.width / 2 - parent.parent.pad
+                            var t = (px / parent.parent.avail) * (parent.parent.maxMs / 1000.0)
+                            if (t < 0) t = 0
+                            if (t > AnimationControlController.loopEnd) t = AnimationControlController.loopEnd
+                            AnimationControlController.loopStart = t
+                        }
+                    }
+                }
+
+                Rectangle {
+                    id: loopEndHandle
+                    width: 10; height: parent.height
+                    x: parent.pad + (AnimationControlController.loopEnd * 1000 / parent.maxMs) * parent.avail - width / 2
+                    color: "transparent"
+                    MouseArea {
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.SizeHorCursor
+                        drag.target: parent
+                        drag.axis: Drag.XAxis
+                        drag.minimumX: parent.parent.pad - parent.width / 2
+                        drag.maximumX: parent.parent.pad + parent.parent.avail - parent.width / 2
+                        onPositionChanged: {
+                            if (!drag.active) return
+                            var px = parent.x + parent.width / 2 - parent.parent.pad
+                            var t = (px / parent.parent.avail) * (parent.parent.maxMs / 1000.0)
+                            if (t < AnimationControlController.loopStart) t = AnimationControlController.loopStart
+                            if (t > parent.parent.maxMs / 1000.0) t = parent.parent.maxMs / 1000.0
+                            AnimationControlController.loopEnd = t
+                        }
+                    }
                 }
             }
         }

@@ -43,6 +43,13 @@ class AnimationControlController : public QObject
     Q_PROPERTY(int    sliderMaximum   READ sliderMaximum   NOTIFY animationLengthChanged)
     Q_PROPERTY(double animationLength READ animationLength WRITE setAnimationLength NOTIFY animationLengthChanged)
 
+    // Playback controls (speed multiplier + loop in/out region)
+    Q_PROPERTY(double playbackSpeed   READ playbackSpeed   WRITE setPlaybackSpeed   NOTIFY playbackSpeedChanged)
+    Q_PROPERTY(double loopStart       READ loopStart       WRITE setLoopStart       NOTIFY loopRegionChanged)
+    Q_PROPERTY(double loopEnd         READ loopEnd         WRITE setLoopEnd         NOTIFY loopRegionChanged)
+    Q_PROPERTY(bool   loopRegionActive READ loopRegionActive WRITE setLoopRegionActive NOTIFY loopRegionChanged)
+    Q_PROPERTY(bool   autoKey         READ autoKey         WRITE setAutoKey         NOTIFY autoKeyChanged)
+
     // Keyframe tick marks on the timeline (list of ms positions)
     Q_PROPERTY(QVariantList keyframeTicks READ keyframeTicks NOTIFY keyframeTicksChanged)
     Q_PROPERTY(int selectedTick           READ selectedTick  NOTIFY keyframeTicksChanged)
@@ -98,6 +105,27 @@ public:
     void   setSliderValue(int ms);
     void   setAnimationLength(double length);
 
+    // Playback speed / loop region / auto-key
+    double playbackSpeed()    const { return m_playbackSpeed; }
+    double loopStart()        const { return m_loopStart; }
+    double loopEnd()          const { return m_loopEnd; }
+    bool   loopRegionActive() const { return m_loopRegionActive; }
+    bool   autoKey()          const { return m_autoKey; }
+    void   setPlaybackSpeed(double s);
+    void   setLoopStart(double s);
+    void   setLoopEnd(double s);
+    void   setLoopRegionActive(bool on);
+    void   setAutoKey(bool on);
+
+    // Compute the time after applying speed scaling and (optional) loop wrap.
+    // Used by MainWindow::frameRenderingQueued. `currentTime` and `dt` are
+    // in seconds; returns the new time position to assign back to the state.
+    double advanceTime(double currentTime, double dt) const;
+
+    // Push a keyframe at the current slider position for the active bone if
+    // auto-key is enabled. Called from TransformOperator end-of-drag.
+    void   autoKeyOnTransform();
+
     // Keyframe ticks
     QVariantList keyframeTicks() const { return m_keyframeTicks; }
     int          selectedTick()  const { return m_selectedTick; }
@@ -151,6 +179,9 @@ signals:
     void animationLengthChanged();
     void keyframeTicksChanged();
     void currentKeyframeChanged();
+    void playbackSpeedChanged();
+    void loopRegionChanged();
+    void autoKeyChanged();
 
 private:
     AnimationControlController();
@@ -186,6 +217,12 @@ private:
     double m_kfTransX = 0, m_kfTransY = 0, m_kfTransZ = 0;
     double m_kfScaleX = 1, m_kfScaleY = 1, m_kfScaleZ = 1;
     double m_kfRotW   = 1, m_kfRotX   = 0, m_kfRotY   = 0, m_kfRotZ = 0;
+
+    double m_playbackSpeed    = 1.0;
+    double m_loopStart        = 0.0;
+    double m_loopEnd          = 0.0;
+    bool   m_loopRegionActive = false;
+    bool   m_autoKey          = false;
 };
 
 #endif // ANIMATIONCONTROLCONTROLLER_H

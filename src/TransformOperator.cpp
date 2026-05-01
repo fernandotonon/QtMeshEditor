@@ -23,6 +23,7 @@
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
 #include "EditModeController.h"
+#include "AnimationControlController.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -1627,6 +1628,10 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         mUndoStartOrientations.clear();
         mUndoStartScales.clear();
         mStartPoint = Ogre::Vector3::ZERO;
+
+        // Auto-key: drop a keyframe on the active bone if enabled.
+        // The controller no-ops if auto-key is off or no bone is selected.
+        AnimationControlController::instance()->autoKeyOnTransform();
     }
 
     if(m_pSelectionBox->isVisible())

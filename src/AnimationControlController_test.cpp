@@ -483,6 +483,173 @@ TEST_F(AnimationControlControllerTest, SetKfTransXWithNoKeyframeDoesNotCrash) {
     EXPECT_NO_THROW(ctrl->setKfTransX(1.0));
 }
 
+// ── Playback / loop / auto-key (pure-data — no Ogre needed) ───────────────────
+//
+// These tests use a separate fixture that does NOT init Ogre, so they run on
+// macOS too (where Ogre plugins fail to load for the test binary).
+
+class AnimationControlControllerPlaybackTest : public ::testing::Test {
+protected:
+    void SetUp() override {
+        AnimationControlController::kill();
+        app = qobject_cast<QApplication*>(QCoreApplication::instance());
+        ASSERT_NE(app, nullptr);
+    }
+    void TearDown() override {
+        AnimationControlController::kill();
+    }
+    QApplication* app = nullptr;
+};
+
+TEST_F(AnimationControlControllerPlaybackTest, PlaybackSpeedDefaultsToOne) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_DOUBLE_EQ(ctrl->playbackSpeed(), 1.0);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, SetPlaybackSpeedClampsNegative) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setPlaybackSpeed(-1.5);
+    EXPECT_DOUBLE_EQ(ctrl->playbackSpeed(), 0.0);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, SetPlaybackSpeedEmitsSignalOnChange) {
+    auto* ctrl = AnimationControlController::instance();
+    QSignalSpy spy(ctrl, &AnimationControlController::playbackSpeedChanged);
+    ctrl->setPlaybackSpeed(2.0);
+    EXPECT_EQ(spy.count(), 1);
+    ctrl->setPlaybackSpeed(2.0); // unchanged — no re-emit
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AdvanceTimeScalesByPlaybackSpeed) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setPlaybackSpeed(2.0);
+    EXPECT_DOUBLE_EQ(ctrl->advanceTime(0.0, 0.5), 1.0);
+    ctrl->setPlaybackSpeed(0.5);
+    EXPECT_DOUBLE_EQ(ctrl->advanceTime(0.0, 0.5), 0.25);
+    ctrl->setPlaybackSpeed(0.0);
+    EXPECT_DOUBLE_EQ(ctrl->advanceTime(0.5, 0.5), 0.5);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, LoopRegionDefaultsInactive) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->loopRegionActive());
+    EXPECT_DOUBLE_EQ(ctrl->loopStart(), 0.0);
+    EXPECT_DOUBLE_EQ(ctrl->loopEnd(), 0.0);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, LoopRegionInactivePassthrough) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setLoopStart(0.2);
+    ctrl->setLoopEnd(0.8);
+    ctrl->setLoopRegionActive(false);
+    EXPECT_DOUBLE_EQ(ctrl->advanceTime(0.7, 0.5), 1.2);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, LoopRegionWrapsAtEnd) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setPlaybackSpeed(1.0);
+    ctrl->setLoopStart(0.2);
+    ctrl->setLoopEnd(0.8);
+    ctrl->setLoopRegionActive(true);
+    EXPECT_NEAR(ctrl->advanceTime(0.7, 0.2), 0.3, 1e-9);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, LoopRegionWrapsLargeOverShoot) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setPlaybackSpeed(1.0);
+    ctrl->setLoopStart(0.0);
+    ctrl->setLoopEnd(1.0);
+    ctrl->setLoopRegionActive(true);
+    EXPECT_NEAR(ctrl->advanceTime(0.9, 2.5), 0.4, 1e-9);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, LoopRegionDegenerateNoWrap) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setLoopStart(0.5);
+    ctrl->setLoopEnd(0.5);
+    ctrl->setLoopRegionActive(true);
+    EXPECT_DOUBLE_EQ(ctrl->advanceTime(0.6, 0.5), 1.1);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, LoopStartClampsToEnd) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setLoopEnd(0.5);
+    ctrl->setLoopStart(0.9);
+    EXPECT_LE(ctrl->loopStart(), ctrl->loopEnd());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyDefaultsOff) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->autoKey());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyOnTransformNoOpWhenDisabled) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setAutoKey(false);
+    EXPECT_NO_THROW(ctrl->autoKeyOnTransform());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyOnTransformNoOpWhenNoTrack) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setAutoKey(true);
+    // No track selected → safely no-ops
+    EXPECT_NO_THROW(ctrl->autoKeyOnTransform());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyToggleEmitsSignal) {
+    auto* ctrl = AnimationControlController::instance();
+    QSignalSpy spy(ctrl, &AnimationControlController::autoKeyChanged);
+    ctrl->setAutoKey(true);
+    EXPECT_EQ(spy.count(), 1);
+    ctrl->setAutoKey(true); // unchanged — no re-emit
+    EXPECT_EQ(spy.count(), 1);
+}
+
+// ── Auto-key with a real Ogre track (Ogre-fixture) ───────────────────────────
+
+TEST_F(AnimationControlControllerTest, AutoKeyOnTransformAddsKeyframeWhenEnabled) {
+    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_AutoKeyTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
+    ctrl->selectBone(ctrl->boneNames().first());
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    int before = track->getNumKeyFrames();
+
+    ctrl->setSliderValue(250); // between existing keyframes
+    ctrl->setAutoKey(true);
+    ctrl->autoKeyOnTransform();
+    app->processEvents();
+
+    EXPECT_EQ(track->getNumKeyFrames(), before + 1);
+}
+
+TEST_F(AnimationControlControllerTest, SelectAnimationResetsLoopRegion) {
+    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_LoopResetTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->setLoopRegionActive(true);
+    ctrl->setLoopStart(0.3);
+    ctrl->setLoopEnd(0.7);
+
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    EXPECT_DOUBLE_EQ(ctrl->loopStart(), 0.0);
+    EXPECT_DOUBLE_EQ(ctrl->loopEnd(), 1.0); // animation length is 1.0s
+    EXPECT_FALSE(ctrl->loopRegionActive());
+}
+
 // ── Poll timer ─────────────────────────────────────────────────────────────────
 
 TEST_F(AnimationControlControllerTest, PollTimerDoesNotCrashWithNoAnimation) {

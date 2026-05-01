@@ -1324,9 +1324,16 @@ bool MainWindow::frameStarted(const Ogre::FrameEvent &evt)
 
 bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
 {
-    // Advance time for every entity that has enabled animation states
+    // Advance time for every entity that has enabled animation states.
+    // Speed is global (scales dt for all states). The loop region applies only
+    // to the entity+animation selected in the Animation Control panel.
     if(isPlaying)
     {
+        auto* animCtrl = AnimationControlController::instance();
+        const std::string activeEntity = animCtrl->selectedEntityName().toStdString();
+        const std::string activeAnim   = animCtrl->selectedAnimation().toStdString();
+        const double dt = static_cast<double>(evt.timeSinceLastFrame);
+        const double scaledDt = dt * animCtrl->playbackSpeed();
         for(Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes())
         {
             if(!node) continue;
@@ -1336,12 +1343,21 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
                 if(!obj || obj->getMovableType() != "Entity") continue;
 
                 auto* ent = static_cast<Ogre::Entity*>(obj);
+                const bool isActiveEntity = (!activeEntity.empty() && ent->getName() == activeEntity);
                 Ogre::AnimationStateSet const* set = ent->getAllAnimationStates();
                 if(!set) continue;
                 for(const auto& [key, value] : set->getAnimationStates())
                 {
-                    if(value->getEnabled())
-                        value->addTime(evt.timeSinceLastFrame);
+                    if(!value->getEnabled()) continue;
+                    if (isActiveEntity && key == activeAnim) {
+                        // Selected animation: speed + loop region wrap.
+                        const double now  = static_cast<double>(value->getTimePosition());
+                        const double next = animCtrl->advanceTime(now, dt);
+                        value->setTimePosition(static_cast<float>(next));
+                    } else {
+                        // All other animations: speed only, no loop region.
+                        value->addTime(static_cast<float>(scaledDt));
+                    }
                 }
             }
         }
