@@ -1446,9 +1446,8 @@ TEST(ScanEngineTest, InspectAsset_ObjParsesGeometryAndTextureReferences)
 TEST(ScanEngineTest, InspectAsset_AnimatedFixtureCollectsAnimationMetadata)
 {
     const QString filePath = testDataDir() + "/Twist Dance.fbx";
-    if (!QFile::exists(filePath)) {
-        GTEST_SKIP() << "Animated fixture missing: " << filePath.toStdString();
-    }
+    ASSERT_TRUE(QFile::exists(filePath))
+        << "Animated fixture missing: " << filePath.toStdString();
 
     const AssetInfo info = ScanEngine::inspectAsset(filePath, QFileInfo(filePath).absolutePath());
     ASSERT_FALSE(info.loadError);
@@ -1505,9 +1504,8 @@ TEST(ScanEngineTest, AssimpReadPolicy_IncompleteFlagWithAnimIsNotLoadFailure)
 TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesOffWhenThresholdZero)
 {
     const QString filePath = testDataDir() + "/Twist Dance.fbx";
-    if (!QFile::exists(filePath)) {
-        GTEST_SKIP() << "Animated fixture missing: " << filePath.toStdString();
-    }
+    ASSERT_TRUE(QFile::exists(filePath))
+        << "Animated fixture missing: " << filePath.toStdString();
 
     const AssetInfo info = ScanEngine::inspectAsset(filePath, QFileInfo(filePath).absolutePath());
     ScanConfig config;
@@ -1522,9 +1520,8 @@ TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesFiresOnMixamoFixture)
     // Mixamo clips bake one key per frame per bone, so a low threshold should
     // light up the rule and the message must include the projected savings.
     const QString filePath = testDataDir() + "/Twist Dance.fbx";
-    if (!QFile::exists(filePath)) {
-        GTEST_SKIP() << "Animated fixture missing: " << filePath.toStdString();
-    }
+    ASSERT_TRUE(QFile::exists(filePath))
+        << "Animated fixture missing: " << filePath.toStdString();
 
     const AssetInfo info = ScanEngine::inspectAsset(filePath, QFileInfo(filePath).absolutePath());
     ScanConfig config;
@@ -1551,9 +1548,8 @@ TEST(ScanEngineTest, EvaluateRules_RedundantKeyframesRespectsHighThreshold)
     // Setting the threshold above 100% should disable the warning even when
     // the file has redundant keys.
     const QString filePath = testDataDir() + "/Twist Dance.fbx";
-    if (!QFile::exists(filePath)) {
-        GTEST_SKIP() << "Animated fixture missing: " << filePath.toStdString();
-    }
+    ASSERT_TRUE(QFile::exists(filePath))
+        << "Animated fixture missing: " << filePath.toStdString();
 
     const AssetInfo info = ScanEngine::inspectAsset(filePath, QFileInfo(filePath).absolutePath());
     ScanConfig config;

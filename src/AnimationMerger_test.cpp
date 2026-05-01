@@ -20,9 +20,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -136,6 +134,8 @@ TEST_F(AnimationMergerTest, NullSkeletons)
 
 TEST_F(AnimationMergerTest, MergeAnimationsBasic)
 {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+
     // Create two meshes sharing compatible skeletons
     auto skelA = createTestSkeleton("merge_skel_a", {"root", "spine"}, {"idle"});
     auto skelB = createTestSkeleton("merge_skel_b", {"root", "spine"}, {"walk"});
@@ -178,6 +178,8 @@ TEST_F(AnimationMergerTest, MergeAnimationsBasic)
 
 TEST_F(AnimationMergerTest, MergeAnimationsNameCollision)
 {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+
     // Both skeletons have an animation that would result in the same name
     auto skelA = createTestSkeleton("collision_skel_a", {"root"}, {"idle"});
     auto skelB = createTestSkeleton("collision_skel_b", {"root"}, {"idle"});
@@ -219,6 +221,8 @@ TEST_F(AnimationMergerTest, MergeAnimationsNameCollision)
 
 TEST_F(AnimationMergerTest, MergeAnimationsMixamoCleanup)
 {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+
     // Animations with "mixamo.com" in their names should be cleaned
     auto skelA = createTestSkeleton("mixamo_skel_a", {"root", "spine"},
                                      {"Armature|mixamo.com|Layer0"});
@@ -265,6 +269,8 @@ TEST_F(AnimationMergerTest, MergeAnimationsMixamoCleanup)
 
 TEST_F(AnimationMergerTest, MergeAnimationsDeduplication)
 {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+
     // When prefix == anim name, avoid "idle_idle" — just use "idle".
     // When two sources produce the same final name, append _2.
     auto skelA = createTestSkeleton("dedup_skel_a", {"root"}, {"idle"});
@@ -319,6 +325,8 @@ TEST_F(AnimationMergerTest, MergeAnimationsDeduplication)
 
 TEST_F(AnimationMergerTest, MergeAnimationsUnrealTakeCleanup)
 {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+
     // Animation-only FBX from Unreal Engine retarget: animation is named "Unreal Take"
     // (with a space). After cleanup it should fall back to the skeleton/file name.
     auto skelBase = createTestSkeleton("ue_base_skel", {"root", "spine"}, {"idle"});
@@ -355,6 +363,8 @@ TEST_F(AnimationMergerTest, MergeAnimationsUnrealTakeCleanup)
 
 TEST_F(AnimationMergerTest, MergeAnimationsNumericSuffixPreserved)
 {
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
+
     // Intentional numeric suffix in file name must not be stripped by deduplication.
     // "mm_attack_03.skeleton" → animation should be "mm_attack_03", not "mm_attack".
     auto skelBase = createTestSkeleton("numsfx_base_skel", {"root"}, {"idle"});

@@ -23,9 +23,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Ogre initialization failed — skipping";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -153,21 +151,21 @@ TEST_F(MeshLodControllerTest, ExportLodsEmitsErrorWithNoSelection) {
 // ===========================================================================
 
 TEST_F(MeshLodControllerTest, HasSelectionTrueWithEntitySelected) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("HasSel"), nullptr);
 
     EXPECT_TRUE(MeshLodController::instance()->hasSelection());
 }
 
 TEST_F(MeshLodControllerTest, CurrentLodLevelsZeroBeforeGeneration) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("LodLevelZero"), nullptr);
 
     EXPECT_EQ(MeshLodController::instance()->currentLodLevels(), 0);
 }
 
 TEST_F(MeshLodControllerTest, LodLevelInfoReturnsBaseEntryWithEntity) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("LodInfoBase"), nullptr);
 
     auto info = MeshLodController::instance()->lodLevelInfo();
@@ -180,7 +178,7 @@ TEST_F(MeshLodControllerTest, LodLevelInfoReturnsBaseEntryWithEntity) {
 }
 
 TEST_F(MeshLodControllerTest, ExportLodsEmitsErrorWhenNoLodsGenerated) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("ExportNoLods"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -195,7 +193,7 @@ TEST_F(MeshLodControllerTest, ExportLodsEmitsErrorWhenNoLodsGenerated) {
 }
 
 TEST_F(MeshLodControllerTest, SelectionChangePropagatesLodChangedSignal) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto* ctrl = MeshLodController::instance();
     QSignalSpy selSpy(ctrl, &MeshLodController::selectionChanged);
@@ -214,7 +212,7 @@ TEST_F(MeshLodControllerTest, SelectionChangePropagatesLodChangedSignal) {
 // ===========================================================================
 
 TEST_F(MeshLodControllerTest, GenerateLodsEmitsGenerationSucceeded) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("GenSucceed"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -232,7 +230,7 @@ TEST_F(MeshLodControllerTest, GenerateLodsEmitsGenerationSucceeded) {
 }
 
 TEST_F(MeshLodControllerTest, GenerateLodsUpdatesCurrentLodLevels) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("GenLevels"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -243,7 +241,7 @@ TEST_F(MeshLodControllerTest, GenerateLodsUpdatesCurrentLodLevels) {
 }
 
 TEST_F(MeshLodControllerTest, GenerateLodsCountClampedToMin1) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("ClampMin"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -258,7 +256,7 @@ TEST_F(MeshLodControllerTest, GenerateLodsCountClampedToMin1) {
 }
 
 TEST_F(MeshLodControllerTest, GenerateLodsCountClampedToMax4) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("ClampMax"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -273,7 +271,7 @@ TEST_F(MeshLodControllerTest, GenerateLodsCountClampedToMax4) {
 }
 
 TEST_F(MeshLodControllerTest, GenerateLodsReductionFallbackWhenListShort) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("FallbackReduction"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -289,7 +287,7 @@ TEST_F(MeshLodControllerTest, GenerateLodsReductionFallbackWhenListShort) {
 }
 
 TEST_F(MeshLodControllerTest, LodLevelInfoAfterGeneration) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("InfoAfterGen"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -309,7 +307,7 @@ TEST_F(MeshLodControllerTest, LodLevelInfoAfterGeneration) {
 }
 
 TEST_F(MeshLodControllerTest, GenerateAutoLodsEmitsGenerationSucceeded) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("AutoSucceed"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -328,7 +326,7 @@ TEST_F(MeshLodControllerTest, GenerateAutoLodsEmitsGenerationSucceeded) {
 // ===========================================================================
 
 TEST_F(MeshLodControllerTest, RemoveLodsClearsLodLevels) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("Remove"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -345,7 +343,7 @@ TEST_F(MeshLodControllerTest, RemoveLodsClearsLodLevels) {
 }
 
 TEST_F(MeshLodControllerTest, RemoveLodsLodLevelInfoReturnsSingleBaseAfterRemoval) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("RemoveInfo"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -365,7 +363,7 @@ TEST_F(MeshLodControllerTest, RemoveLodsLodLevelInfoReturnsSingleBaseAfterRemova
 // ===========================================================================
 
 TEST_F(MeshLodControllerTest, PreviewLodWithEntityDoesNotCrash) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("Preview"), nullptr);
 
     EXPECT_NO_FATAL_FAILURE(MeshLodController::instance()->previewLod(-1));
@@ -373,7 +371,7 @@ TEST_F(MeshLodControllerTest, PreviewLodWithEntityDoesNotCrash) {
 }
 
 TEST_F(MeshLodControllerTest, PreviewLodAfterGenerationDoesNotCrash) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("PreviewAfterGen"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -389,7 +387,7 @@ TEST_F(MeshLodControllerTest, PreviewLodAfterGenerationDoesNotCrash) {
 // ===========================================================================
 
 TEST_F(MeshLodControllerTest, ExportLodsEmitsExportLodsRequestedAfterGeneration) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("ExportReq"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -407,7 +405,7 @@ TEST_F(MeshLodControllerTest, ExportLodsEmitsExportLodsRequestedAfterGeneration)
 }
 
 TEST_F(MeshLodControllerTest, DoExportLodsNoopWithNoLods) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("DoExportNoLods"), nullptr);
 
     QTemporaryDir tmpDir;
@@ -426,7 +424,7 @@ TEST_F(MeshLodControllerTest, DoExportLodsNoopWithNoLods) {
 }
 
 TEST_F(MeshLodControllerTest, DoExportLodsEmitsExportSucceeded) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
     ASSERT_NE(createAndSelectMesh("DoExport"), nullptr);
 
     auto* ctrl = MeshLodController::instance();
@@ -463,7 +461,7 @@ TEST_F(MeshLodControllerTest, DoExportLodsNoopWithNoSelection) {
 }
 
 TEST_F(MeshLodControllerTest, DoExportLodsErrorWhenEntityHasNoSceneNode) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     // Can't easily detach a scene node without crashing Ogre,
     // so just verify doExportLods is guarded against null SelectionSet.

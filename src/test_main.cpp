@@ -8,10 +8,13 @@
  */
 #include <gtest/gtest.h>
 #include <QApplication>
+#include <QCoreApplication>
+#include <QThread>
 #include <csignal>
 #include <cstdlib>
 #include <OgreLogManager.h>
 #include "Manager.h"
+#include "TestHelpers.h"
 
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -76,6 +79,20 @@ int main(int argc, char **argv)
 #endif
 
     testing::InitGoogleTest(&argc, argv);
+
+    // Prove headless GL works on this runner, then tear down: many suites
+    // (Assimp processors, etc.) construct their own Ogre::Root and cannot
+    // coexist with a live Manager singleton from a prior init.
+    if (!tryInitOgre()) {
+        fprintf(stderr,
+                "UnitTests FATAL: tryInitOgre() failed — need working DISPLAY / Xvfb for GL.\n");
+        return 1;
+    }
+    Manager::kill();
+    if (QCoreApplication::instance())
+        QCoreApplication::processEvents();
+    QThread::msleep(50);
+
     int result = RUN_ALL_TESTS();
     g_testsCompleted = true;
 

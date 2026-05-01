@@ -40,9 +40,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -290,7 +288,7 @@ TEST_F(ManagerHeadlessTest, IsValidFileExtention)
 
 TEST_F(ManagerHeadlessTest, CreateEmptyScene)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -320,7 +318,7 @@ TEST_F(ManagerHeadlessTest, GetEntities)
 
 TEST_F(ManagerHeadlessTest, CreateEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -367,7 +365,7 @@ TEST_F(ManagerHeadlessTest, GetSceneNode_NonExistentNode)
 
 TEST_F(ManagerHeadlessTest, DestroyAllAttachedMovableObjects)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
     Ogre::SceneNode* cubeNode = PrimitiveObject::createCube("CubeForDestroy");
@@ -433,7 +431,7 @@ TEST_F(ManagerHeadlessTest, SceneNodeDestroyed_Signal_ByPointer)
 
 TEST_F(ManagerHeadlessTest, EntityCreated_Signal)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
     QSignalSpy spy(mgr, &Manager::entityCreated);
@@ -490,7 +488,7 @@ TEST_F(ManagerHeadlessTest, DestroySceneNodeForbiddenName)
 
 TEST_F(ManagerHeadlessTest, DestroySceneNodePrimitive)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -587,7 +585,7 @@ TEST_F(ManagerHeadlessTest, DestroySceneNodeByNameWithSignal)
 
 TEST_F(ManagerHeadlessTest, HasAnimationNameNoSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -613,7 +611,7 @@ TEST_F(ManagerHeadlessTest, HasAnimationNameNoSkeleton)
 
 TEST_F(ManagerHeadlessTest, CreateInMemoryEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -629,7 +627,7 @@ TEST_F(ManagerHeadlessTest, CreateInMemoryEntity)
 
 TEST_F(ManagerHeadlessTest, CreateInMemorySkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -645,7 +643,7 @@ TEST_F(ManagerHeadlessTest, CreateInMemorySkeletonEntity)
 
 TEST_F(ManagerHeadlessTest, CreateAnimatedEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -661,7 +659,7 @@ TEST_F(ManagerHeadlessTest, CreateAnimatedEntity)
 
 TEST_F(ManagerHeadlessTest, HasAnimationNameWithSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -674,7 +672,7 @@ TEST_F(ManagerHeadlessTest, HasAnimationNameWithSkeleton)
 
 TEST_F(ManagerHeadlessTest, DestroyInMemoryEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -715,7 +713,7 @@ TEST_F(ManagerHeadlessTest, SceneNodeParenting)
 // Test clearScene-like behavior: destroy all user nodes and verify cleanup
 TEST_F(ManagerHeadlessTest, DestroyAllUserNodes_ClearsScene)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -849,7 +847,7 @@ TEST_F(ManagerHeadlessTest, DuplicateSceneNode_NullSourceReturnsNull)
 
 TEST_F(ManagerHeadlessTest, DuplicateSceneNode_ClonesAnimatedEntityWithIndependentSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -915,7 +913,7 @@ TEST_F(ManagerHeadlessTest, DuplicateSceneNode_ClonesAnimatedEntityWithIndepende
 // Test hasAnimationName with createAnimatedTestEntity - multiple animation name checks
 TEST_F(ManagerHeadlessTest, HasAnimationName_MultipleChecks)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 
@@ -980,7 +978,7 @@ TEST_F(ManagerHeadlessTest, SceneNodeParentChain_MultipleDepth)
 // Test createEntity via Manager::createEntity helper (not manual attach)
 TEST_F(ManagerHeadlessTest, CreateEntityViaManagerHelper)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
 

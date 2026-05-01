@@ -59,9 +59,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -330,9 +328,7 @@ TEST_F(MeshImporterExporterTest, Importer_MissingMeshFile_IsIgnored) {
 }
 
 TEST_F(MeshImporterExporterTest, Importer_MeshLoadsSidecarMaterialScript) {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: no GL context / hardware buffers available";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "GL/hardware buffers required (Xvfb in CI)";
     // Create a mesh with a custom material, export both .mesh and .material,
     // then reimport and ensure the material isn't falling back to BaseWhite.
     auto* manager = Manager::getSingleton();
@@ -501,9 +497,7 @@ TEST_F(MeshImporterExporterTest, SceneImporter_NodeOnlyExportBehavesAsValidEmpty
 
 TEST_F(MeshImporterExporterTest, SceneExporter_InMemoryMeshEntity_WritesSceneFile)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     ASSERT_TRUE(tempDir.isValid());
     const QString scenePath = tempDir.filePath("mesh_entity.scene.glb");
     Ogre::SceneNode* node = createSceneNodeWithEntity("ExportNode", "ExportSceneMesh");
@@ -527,9 +521,7 @@ TEST_F(MeshImporterExporterTest, SceneExporter_InMemoryMeshEntity_WritesSceneFil
 
 TEST_F(MeshImporterExporterTest, SceneExporter_MixedEmptyAndEntityNodesOnlyCountsEntitiesInProgress)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     ASSERT_TRUE(tempDir.isValid());
     const QString scenePath = tempDir.filePath("mixed_nodes.scene.gltf");
 
@@ -650,12 +642,8 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Skipping: Cannot load mesh files (no GL context)";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Cannot load mesh files (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 

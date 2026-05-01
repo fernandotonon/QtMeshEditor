@@ -35,9 +35,7 @@ protected:
         Manager::kill();
         app->processEvents();
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
 
         createStandardOgreMaterials();
         controller = PropertiesPanelController::instance();
@@ -197,9 +195,7 @@ TEST_F(PropertiesPanelControllerTests, TransformSettersUpdateSelectedNodeAndEmit
 
 TEST_F(PropertiesPanelControllerTests, PrimitiveMetadataForCubeMatchesExpectedFields)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::SceneNode* cubeNode = PrimitiveObject::createCube("PanelCube");
     ASSERT_NE(cubeNode, nullptr);
@@ -231,9 +227,7 @@ TEST_F(PropertiesPanelControllerTests, PrimitiveMetadataForCubeMatchesExpectedFi
 
 TEST_F(PropertiesPanelControllerTests, PrimitiveMetadataForTorusUsesRadiusLabels)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::SceneNode* torusNode = PrimitiveObject::createTorus("PanelTorus");
     ASSERT_NE(torusNode, nullptr);
@@ -257,9 +251,7 @@ TEST_F(PropertiesPanelControllerTests, PrimitiveMetadataForTorusUsesRadiusLabels
 
 TEST_F(PropertiesPanelControllerTests, PrimitiveSettersMutateSelectedPrimitiveAndEmitSignal)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::SceneNode* cubeNode = PrimitiveObject::createCube("PanelPrimitiveMutation");
     ASSERT_NE(cubeNode, nullptr);
@@ -290,9 +282,7 @@ TEST_F(PropertiesPanelControllerTests, PrimitiveSettersMutateSelectedPrimitiveAn
 
 TEST_F(PropertiesPanelControllerTests, PrimitiveMetadataCoversAdditionalPrimitiveTypes)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     struct PrimitiveCase {
         Ogre::SceneNode* (*create)(const QString&);
@@ -416,9 +406,7 @@ TEST_F(PropertiesPanelControllerTests, AnimationQueriesAreSafeWithoutAnimatedSel
 
 TEST_F(PropertiesPanelControllerTests, AnimationDataAndControlsWorkForAnimatedEntity)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("PanelAnimData");
     ASSERT_NE(entity, nullptr);
@@ -481,9 +469,7 @@ TEST_F(PropertiesPanelControllerTests, AnimationDataAndControlsWorkForAnimatedEn
 
 TEST_F(PropertiesPanelControllerTests, SkeletonAndWeightTogglesEmitForMatchingEntity)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("PanelAnimToggleEntity");
     ASSERT_NE(entity, nullptr);
@@ -511,9 +497,7 @@ TEST_F(PropertiesPanelControllerTests, SkeletonAndWeightTogglesEmitForMatchingEn
 
 TEST_F(PropertiesPanelControllerTests, RenameAnimationRenamesStateAndStopsPlayback)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("PanelRenameAnim");
     ASSERT_NE(entity, nullptr);
@@ -547,9 +531,7 @@ TEST_F(PropertiesPanelControllerTests, RenameAnimationRenamesStateAndStopsPlayba
 
 TEST_F(PropertiesPanelControllerTests, ExportCurrentPoseRequiresAnimatedSelectionAndWritesFile)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto* mgr = Manager::getSingleton();
     ASSERT_NE(mgr, nullptr);
@@ -581,9 +563,7 @@ TEST_F(PropertiesPanelControllerTests, ExportCurrentPoseRequiresAnimatedSelectio
 
 TEST_F(PropertiesPanelControllerTests, SetSettingCoversViewportSentryAndThemeBranches)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto* mgr = Manager::getSingleton();
     ASSERT_NE(mgr, nullptr);

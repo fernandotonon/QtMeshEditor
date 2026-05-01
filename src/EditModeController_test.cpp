@@ -292,14 +292,8 @@ protected:
     static int s_counter;
 
     void SetUp() override {
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Ogre not available";
-            return;
-        }
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Cannot create hardware buffers";
-            return;
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Cannot create hardware buffers (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
         // Create a triangle mesh entity and select it (required for enterEditMode)
@@ -1065,8 +1059,10 @@ protected:
     std::string m_nodeName;
 
     void SetUp() override {
-        if (!tryInitOgre()) { GTEST_SKIP() << "Ogre not available"; return; }
-        if (!canLoadMeshFiles()) { GTEST_SKIP() << "Cannot create HW buffers"; return; }
+        // One Ogre Root for the whole suite: tearing Manager down every test
+        // and re-initing GL was crashing the second bevel on Linux CI (SIGSEGV).
+        ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles());
         createStandardOgreMaterials();
 
         // Unique names per test so reruns don't collide with Ogre's
@@ -1085,6 +1081,7 @@ protected:
     void TearDown() override {
         auto* ctrl = EditModeController::instance();
         if (ctrl->isEditModeActive()) ctrl->exitEditMode(false);
+        SelectionSet::getSingleton()->clear();
         if (m_node) {
             Manager::getSingleton()->destroySceneNode(m_node);
             m_node = nullptr;
@@ -1095,6 +1092,9 @@ protected:
                 mm.remove(m_meshName);
             m_meshName.clear();
         }
+        // Fresh controller next test: BevelGizmo stays in unique_ptr; recycling
+        // avoids a stale gizmo tied to a removed entity while keeping one Root.
+        EditModeController::kill();
     }
 };
 

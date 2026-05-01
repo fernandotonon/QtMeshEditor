@@ -42,9 +42,7 @@ protected:
         Manager::kill();
         SelectionSet::kill();
         QThread::msleep(50);
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
     }
     void TearDown() override {
         SelectionSet::kill();
@@ -196,7 +194,7 @@ TEST_F(SelectionSetTests, GetCount)
     EXPECT_EQ(selectionSet->getEntitiesCount(), 0);
     EXPECT_EQ(selectionSet->getSubEntitiesCount(), 0);
 
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     // Add an entity to verify count sums across types
     createStandardOgreMaterials();
@@ -234,7 +232,7 @@ TEST_F(SelectionSetTests, HasNodes)
 
 TEST_F(SelectionSetTests, EntitySelection)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -278,7 +276,7 @@ TEST_F(SelectionSetTests, EntitySelection)
 
 TEST_F(SelectionSetTests, EntityScaleRotationFactors)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -349,7 +347,7 @@ TEST_F(SelectionSetTests, GetSelectionScaleEmpty)
 
 TEST_F(SelectionSetTests, SubEntitySelection)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -396,7 +394,7 @@ TEST_F(SelectionSetTests, SubEntitySelection)
 
 TEST_F(SelectionSetTests, IndexedAccessors)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -429,7 +427,7 @@ TEST_F(SelectionSetTests, IndexedAccessors)
 
 TEST_F(SelectionSetTests, SelectionListGetters)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -476,7 +474,7 @@ TEST_F(SelectionSetTests, GetSelectionOrientationWithNode)
 
 TEST_F(SelectionSetTests, GetSelectionOrientationWithEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -518,7 +516,7 @@ TEST_F(SelectionSetTests, GetSelectionScaleWithNode)
 
 TEST_F(SelectionSetTests, GetSelectionScaleWithEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -542,7 +540,7 @@ TEST_F(SelectionSetTests, GetSelectionScaleWithEntity)
 
 TEST_F(SelectionSetTests, GetSelectionCenterWithEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -564,7 +562,7 @@ TEST_F(SelectionSetTests, GetSelectionCenterWithEntity)
 
 TEST_F(SelectionSetTests, GetSelectionNodesCenterWithEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
     createStandardOgreMaterials();
@@ -623,7 +621,7 @@ TEST_F(SelectionSetTests, RemoveNonExistent)
 
 TEST_F(SelectionSetTests, GetResolvedEntitiesReturnsDirectEntitySelection)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -644,7 +642,7 @@ TEST_F(SelectionSetTests, GetResolvedEntitiesReturnsDirectEntitySelection)
 
 TEST_F(SelectionSetTests, GetResolvedEntitiesResolvesSelectedNodesWithEntities)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -665,7 +663,7 @@ TEST_F(SelectionSetTests, GetResolvedEntitiesResolvesSelectedNodesWithEntities)
 
 TEST_F(SelectionSetTests, GetResolvedEntitiesSkipsNodesWithoutAttachedEntities)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -714,7 +712,7 @@ TEST_F(SelectionSetTests, GetSelectionScaleAveragesMultipleNodes)
 
 TEST_F(SelectionSetTests, GetSelectionScaleAveragesMultipleEntitiesUsingStoredFactors)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -743,7 +741,7 @@ TEST_F(SelectionSetTests, GetSelectionScaleAveragesMultipleEntitiesUsingStoredFa
 
 TEST_F(SelectionSetTests, GetSelectionOrientationAveragesMultipleEntitiesUsingStoredRotations)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -772,7 +770,7 @@ TEST_F(SelectionSetTests, GetSelectionOrientationAveragesMultipleEntitiesUsingSt
 
 TEST_F(SelectionSetTests, GetSelectionCenterWithSubEntityUsesParentBoundingBox)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 
@@ -802,7 +800,7 @@ TEST_F(SelectionSetTests, GetSelectionCenterWithSubEntityUsesParentBoundingBox)
 
 TEST_F(SelectionSetTests, RemoveNonExistentEntityAndSubEntityReturnFalse)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     SelectionSet* selectionSet = SelectionSet::getSingleton();
     selectionSet->clear();
 

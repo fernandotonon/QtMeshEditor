@@ -21,9 +21,7 @@ protected:
         QThread::msleep(50);
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
         // Remove leftover material so createMaterial() runs fresh
@@ -113,9 +111,7 @@ TEST_F(NormalVisualizerIntegrationTest, DoubleSetVisibleTrueNoError)
 
 TEST_F(NormalVisualizerIntegrationTest, DestructorCleansUpWhileVisible)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     auto meshPtr = createInMemoryTriangleMesh("NormVizDestructorMesh");
     ASSERT_TRUE(meshPtr);
 
@@ -141,9 +137,7 @@ TEST_F(NormalVisualizerIntegrationTest, DestructorCleansUpWhileVisible)
 
 TEST_F(NormalVisualizerIntegrationTest, BuildsOverlayForInMemoryMesh)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     auto meshPtr = createInMemoryTriangleMesh("NormalVisualizerTestMesh");
     ASSERT_TRUE(meshPtr);
 
@@ -170,12 +164,9 @@ TEST_F(NormalVisualizerIntegrationTest, BuildsOverlayForInMemoryMesh)
 
 TEST_F(NormalVisualizerIntegrationTest, OverlayCreatedForSkeletalEntity)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     Ogre::Entity* entity = createAnimatedTestEntity("NormVizAnimEntity");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     ASSERT_TRUE(entity->hasSkeleton());
 
@@ -198,9 +189,7 @@ TEST_F(NormalVisualizerIntegrationTest, OverlayCreatedForSkeletalEntity)
 // should automatically get a normal overlay via the signal connection.
 TEST_F(NormalVisualizerIntegrationTest, OnEntityCreatedWhileVisible)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
     visualizer.setVisible(true);
 
@@ -233,9 +222,7 @@ TEST_F(NormalVisualizerIntegrationTest, OnEntityCreatedWhileVisible)
 // onEntityCreated signal when visibility is off: overlay should NOT be built.
 TEST_F(NormalVisualizerIntegrationTest, OnEntityCreatedWhileNotVisible)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
     // Visibility is off by default
     ASSERT_FALSE(visualizer.isVisible());
@@ -262,9 +249,7 @@ TEST_F(NormalVisualizerIntegrationTest, OnEntityCreatedWhileNotVisible)
 // onSceneNodeDestroyed signal with visibility on: overlay should be cleaned up.
 TEST_F(NormalVisualizerIntegrationTest, OnSceneNodeDestroyedCleansUpOverlay)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     auto meshPtr = createInMemoryTriangleMesh("NormVizDestroySignalMesh");
     ASSERT_TRUE(meshPtr);
 
@@ -299,9 +284,7 @@ TEST_F(NormalVisualizerIntegrationTest, OnSceneNodeDestroyedCleansUpOverlay)
 // Verify overlay works with shared vertex data (createInMemoryTriangleMesh uses shared).
 TEST_F(NormalVisualizerIntegrationTest, OverlayWithSharedVertexData)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     // createInMemoryTriangleMesh creates a mesh with sharedVertexData and
     // sub->useSharedVertices = true, which exercises the shared vertex path.
     auto meshPtr = createInMemoryTriangleMesh("NormVizSharedMesh");
@@ -330,9 +313,7 @@ TEST_F(NormalVisualizerIntegrationTest, OverlayWithSharedVertexData)
 // Multiple entities: show normals for 3+ entities simultaneously.
 TEST_F(NormalVisualizerIntegrationTest, MultipleEntitiesSimultaneously)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     const int NUM_ENTITIES = 4;
     std::vector<Ogre::Entity*> entities;
     std::vector<Ogre::SceneNode*> nodes;
@@ -380,12 +361,9 @@ TEST_F(NormalVisualizerIntegrationTest, MultipleEntitiesSimultaneously)
 // Exercise updateAnimatedOverlays via the timer path for skeletal entities.
 TEST_F(NormalVisualizerIntegrationTest, UpdateAnimatedOverlaysViaTimer)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     Ogre::Entity* entity = createAnimatedTestEntity("NormVizAnimTimer");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     ASSERT_TRUE(entity->hasSkeleton());
 
@@ -430,9 +408,7 @@ TEST_F(NormalVisualizerIntegrationTest, UpdateAnimatedOverlaysViaTimer)
 // Multiple show/hide/show cycles to exercise repeated toggling with entities.
 TEST_F(NormalVisualizerIntegrationTest, MultipleShowHideShowCycles)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     auto meshPtr = createInMemoryTriangleMesh("NormVizCycleMesh");
     ASSERT_TRUE(meshPtr);
 
@@ -465,9 +441,7 @@ TEST_F(NormalVisualizerIntegrationTest, MultipleShowHideShowCycles)
 // Add entity while visible, then remove it -- exercises full lifecycle.
 TEST_F(NormalVisualizerIntegrationTest, AddEntityWhileVisibleThenRemove)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
     visualizer.setVisible(true);
 
@@ -503,12 +477,9 @@ TEST_F(NormalVisualizerIntegrationTest, AddEntityWhileVisibleThenRemove)
 // Animated entity overlay update with animation state changes
 TEST_F(NormalVisualizerIntegrationTest, AnimatedOverlayWithStateChanges)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     Ogre::Entity* entity = createAnimatedTestEntity("NormVizAnimState");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     ASSERT_TRUE(entity->hasSkeleton());
 
@@ -556,9 +527,7 @@ TEST_F(NormalVisualizerIntegrationTest, AnimatedOverlayWithStateChanges)
 // Toggle normals while adding/removing entities via signals.
 TEST_F(NormalVisualizerIntegrationTest, ToggleWhileAddingRemovingEntities)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     NormalVisualizer visualizer(Manager::getSingleton()->getSceneMgr());
 
     // Start with normals ON

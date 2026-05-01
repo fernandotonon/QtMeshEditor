@@ -269,20 +269,25 @@ MainWindow::~MainWindow()
     // The Manager will clean up all OGRE resources (scene manager, root, etc.)
     // Only destroy Manager if it still exists and belongs to this MainWindow
     // (In tests, Manager may be destroyed separately in TearDown)
-    // These singletons are safe to destroy unconditionally.
-    EditModeController::kill();
-    SubEntityHighlight::kill();
-    AnimationControlController::kill();
-    MeshLodController::kill();
-    MeshValidator::kill();
-    MaterialPresetLibrary::kill();
-    MaterialPreviewRenderer::kill();
-    AIChatManager::kill();
-    // Only destroy Manager if it still exists and belongs to this MainWindow
-    // (In tests, Manager may be destroyed separately in TearDown)
+    // In tests, other suites may have already destroyed Manager (and therefore
+    // Ogre resources). In that case, destroying Ogre-backed singletons can
+    // crash due to dangling SceneManager pointers — skip teardown and let the
+    // process exit cleanly.
     Manager* manager = Manager::getSingletonPtr();
-    if(manager && manager->getMainWindow() == this)
-        Manager::kill();
+    if (manager) {
+        EditModeController::kill();
+        SubEntityHighlight::kill();
+        AnimationControlController::kill();
+        MeshLodController::kill();
+        MeshValidator::kill();
+        MaterialPresetLibrary::kill();
+        MaterialPreviewRenderer::kill();
+        AIChatManager::kill();
+
+        // Only destroy Manager if it still exists and belongs to this MainWindow
+        if (manager->getMainWindow() == this)
+            Manager::kill();
+    }
 }
 
 void MainWindow::initToolBar()

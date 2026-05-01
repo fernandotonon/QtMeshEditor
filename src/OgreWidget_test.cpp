@@ -65,6 +65,8 @@ protected:
                 QThread::msleep(200 * attempt);
             }
         }
+        ASSERT_NE(mainWindow, nullptr)
+            << "MainWindow failed to initialize (Xvfb/GL required for integration tests)";
     }
 
     static void TearDownTestSuite()
@@ -82,11 +84,14 @@ protected:
 
     void SetUp() override
     {
-        if (!mainWindow) {
-            GTEST_SKIP() << "Failed to initialize MainWindow for OgreWidgetTest";
+        ASSERT_NE(mainWindow, nullptr);
+        try {
+            viewport = new EditorViewport(mainWindow, 7);
+        } catch (const std::exception& e) {
+            FAIL() << "EditorViewport creation failed: " << e.what();
+        } catch (...) {
+            FAIL() << "EditorViewport creation failed with unknown exception";
         }
-
-        viewport = new EditorViewport(mainWindow, 7);
         ASSERT_NE(viewport, nullptr);
 
         widget = viewport->getOgreWidget();

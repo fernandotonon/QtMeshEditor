@@ -62,9 +62,7 @@ protected:
         QThread::msleep(50);
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
         window = new QMainWindow();
@@ -133,9 +131,7 @@ protected:
         QThread::msleep(50);
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -151,9 +147,7 @@ protected:
 
 TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsSingleEntity)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     auto meshPtr = createInMemoryTriangleMesh("MeshInfoSingleMesh");
     ASSERT_TRUE(meshPtr);
 
@@ -191,9 +185,7 @@ TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsSingleEntity)
 
 TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsMultipleEntitiesScene)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     std::vector<Ogre::Entity*> entities;
     std::vector<Ogre::SceneNode*> nodes;
 
@@ -242,12 +234,9 @@ TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsMultipleEntitiesScene)
 
 TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsWithSkeleton)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+    ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
     Ogre::Entity* entity = createAnimatedTestEntity("MeshInfoAnimEntity");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     ASSERT_TRUE(entity->hasSkeleton());
 
@@ -269,8 +258,7 @@ TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsWithSkeleton)
 
 TEST_F(MeshInfoOverlayIntegrationTest, FormatStatsMixedNullAndValid)
 {
-    if (!canLoadMeshFiles())
-        GTEST_SKIP() << "mesh loading not supported";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     auto meshPtr = createInMemoryTriangleMesh("MeshInfoMixedMesh");
     ASSERT_TRUE(meshPtr);

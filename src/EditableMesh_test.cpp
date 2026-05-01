@@ -25,14 +25,8 @@ The MIT License
 class EditableMeshTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Ogre not available";
-            return;
-        }
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Cannot create hardware buffers";
-            return;
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Cannot create hardware buffers (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 };
@@ -84,6 +78,28 @@ namespace {
         t.indices[0] = a; t.indices[1] = b; t.indices[2] = c;
         return t;
     }
+}
+
+TEST(EditableMeshStandalone, VertexColorBrushFalloffHigherExponentWeakerAtEdge)
+{
+    EditableMesh meshLo;
+    EditableMesh meshHi;
+    EditableSubMesh subLo;
+    EditableSubMesh subHi;
+    subLo.vertices.push_back(makeV(0, 0, 0));
+    subLo.vertices.push_back(makeV(0.9f, 0, 0));
+    subHi.vertices = subLo.vertices;
+    meshLo.subMeshes().push_back(std::move(subLo));
+    meshHi.subMeshes().push_back(std::move(subHi));
+
+    const Ogre::ColourValue red(1, 0, 0, 1);
+    const Ogre::Vector3 center(0, 0, 0);
+    ASSERT_TRUE(EditModeController::applyVertexColorBrush(meshLo, center, 1.0f, red, 1.0f, 0.0f));
+    ASSERT_TRUE(EditModeController::applyVertexColorBrush(meshHi, center, 1.0f, red, 1.0f, 1.0f));
+
+    const float gLo = meshLo.subMeshes()[0].vertices[1].color.g;
+    const float gHi = meshHi.subMeshes()[0].vertices[1].color.g;
+    EXPECT_GT(gHi, gLo);
 }
 
 TEST(EditableMeshStandalone, WeldByPositionMergesCoincidentVerts) {
@@ -451,15 +467,15 @@ TEST_F(EditableMeshTest, UVManipulation) {
 class EditModeControllerTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Ogre not available";
-            return;
-        }
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Cannot create hardware buffers";
-            return;
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Cannot create hardware buffers (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
+
+        // Make tests deterministic even if the user has persisted settings.
+        auto* ctrl = EditModeController::instance();
+        ctrl->setSoftSelectionEnabled(false);
+        ctrl->setSoftSelectionRadius(2.0);
+        ctrl->setSoftSelectionFalloff(0);
     }
 };
 

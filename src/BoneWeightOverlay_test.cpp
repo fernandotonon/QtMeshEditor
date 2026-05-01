@@ -24,27 +24,21 @@ protected:
         QThread::msleep(50);
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
-        if (!canLoadMeshFiles())
-            GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+        ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
         // Remove leftover material so createMaterial() runs fresh
         auto existing = Ogre::MaterialManager::getSingleton().getByName(
             "BoneWeightOverlay/Material");
         if (existing)
             Ogre::MaterialManager::getSingleton().remove(existing);
 
-        QStringList uris{"./media/models/robot.mesh"};
-        try { MeshImporterExporter::importer(uris); }
-        catch (...) { GTEST_SKIP() << "Skipping: failed to import robot.mesh"; }
-
-        if (Manager::getSingleton()->getEntities().isEmpty())
-            GTEST_SKIP() << "Skipping: no entity after import";
-
+        const QString robotPath = testRobotMeshPath();
+        ASSERT_FALSE(robotPath.isEmpty()) << "robot.mesh not found under media/models";
+        QStringList uris{robotPath};
+        ASSERT_NO_THROW(MeshImporterExporter::importer(uris));
+        ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
         entity = Manager::getSingleton()->getEntities().last();
         ASSERT_NE(entity, nullptr);
     }
@@ -178,14 +172,10 @@ protected:
         QThread::msleep(50);
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
-        if (!canLoadMeshFiles())
-            GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-
+        ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
         // Remove leftover material so createMaterial() runs fresh
         auto existing = Ogre::MaterialManager::getSingleton().getByName(
             "BoneWeightOverlay/Material");
@@ -212,8 +202,7 @@ protected:
 TEST_F(BoneWeightOverlayInMemoryTest, SetVisibleTogglesTimerAndOverlay)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_VisToggle");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
 
@@ -240,8 +229,7 @@ TEST_F(BoneWeightOverlayInMemoryTest, SetVisibleTogglesTimerAndOverlay)
 TEST_F(BoneWeightOverlayInMemoryTest, SetSelectedBoneWithValidIndex)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_BoneValid");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     ASSERT_TRUE(entity->hasSkeleton());
     ASSERT_GE(entity->getSkeleton()->getNumBones(), 2u);
@@ -270,8 +258,7 @@ TEST_F(BoneWeightOverlayInMemoryTest, SetSelectedBoneWithValidIndex)
 TEST_F(BoneWeightOverlayInMemoryTest, SetSelectedBoneWithInvalidIndex)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_BoneInvalid");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
     overlay.setVisible(true);
@@ -292,8 +279,7 @@ TEST_F(BoneWeightOverlayInMemoryTest, SetSelectedBoneWithInvalidIndex)
 TEST_F(BoneWeightOverlayInMemoryTest, BuildOverlayOnAnimatedEntity)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_AnimBuild");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     ASSERT_TRUE(entity->hasSkeleton());
 
@@ -319,8 +305,7 @@ TEST_F(BoneWeightOverlayInMemoryTest, BuildOverlayOnAnimatedEntity)
 TEST_F(BoneWeightOverlayInMemoryTest, DestroyOverlayOnDeselect)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_Destroy");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     Ogre::SceneNode* node = entity->getParentSceneNode();
     ASSERT_NE(node, nullptr);
@@ -342,8 +327,7 @@ TEST_F(BoneWeightOverlayInMemoryTest, DestroyOverlayOnDeselect)
 TEST_F(BoneWeightOverlayInMemoryTest, MultipleShowHideCycles)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_MultiCycle");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
     Ogre::SceneNode* node = entity->getParentSceneNode();
@@ -402,8 +386,7 @@ TEST_F(BoneWeightOverlayInMemoryTest, NonSkeletalEntityDoesNotCrash)
 TEST_F(BoneWeightOverlayInMemoryTest, TimerBasedUpdatePositions)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_TimerUpdate");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     ASSERT_TRUE(entity->hasSkeleton());
 
@@ -438,8 +421,7 @@ TEST_F(BoneWeightOverlayInMemoryTest, TimerBasedUpdatePositions)
 TEST_F(BoneWeightOverlayInMemoryTest, PollBoneSelectionChanges)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_PollBone");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     ASSERT_TRUE(entity->hasSkeleton());
     ASSERT_GE(entity->getSkeleton()->getNumBones(), 2u);
@@ -484,8 +466,7 @@ TEST_F(BoneWeightOverlayInMemoryTest, PollBoneSelectionChanges)
 TEST_F(BoneWeightOverlayInMemoryTest, RapidBoneSelectionChanges)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_RapidBone");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     ASSERT_TRUE(entity->hasSkeleton());
     ASSERT_GE(entity->getSkeleton()->getNumBones(), 2u);
@@ -515,8 +496,7 @@ TEST_F(BoneWeightOverlayInMemoryTest, RapidBoneSelectionChanges)
 TEST_F(BoneWeightOverlayInMemoryTest, DoubleSetVisibleTrueNoDuplicate)
 {
     Ogre::Entity* entity = createAnimatedTestEntity("BWO_DblShow");
-    if (!entity)
-        GTEST_SKIP() << "Skipping: could not create animated test entity";
+    ASSERT_NE(entity, nullptr);
 
     BoneWeightOverlay overlay(entity, Manager::getSingleton()->getSceneMgr());
     Ogre::SceneNode* node = entity->getParentSceneNode();

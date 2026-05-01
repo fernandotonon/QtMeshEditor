@@ -20,33 +20,20 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Skipping: mesh loading not supported in headless mode";
-        }
+        ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
-        // Import robot.mesh which has a skeleton with animations
-        QStringList validUri{"./media/models/robot.mesh"};
-        try {
-            MeshImporterExporter::importer(validUri);
-        } catch (const Ogre::Exception& e) {
-            GTEST_SKIP() << "Skipping: failed to import robot.mesh ("
-                         << e.getFullDescription() << ")";
-        }
+        const QString robotPath = testRobotMeshPath();
+        ASSERT_FALSE(robotPath.isEmpty()) << "robot.mesh not found under media/models";
+        QStringList validUri{robotPath};
+        ASSERT_NO_THROW(MeshImporterExporter::importer(validUri));
 
-        entity = Manager::getSingleton()->getEntities().isEmpty()
-                     ? nullptr
-                     : Manager::getSingleton()->getEntities().last();
-        if (!entity) {
-            GTEST_SKIP() << "Skipping: no entity available after import";
-        }
-        if (!entity->hasSkeleton()) {
-            GTEST_SKIP() << "Skipping: imported entity has no skeleton";
-        }
+        ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
+        entity = Manager::getSingleton()->getEntities().last();
+        ASSERT_NE(entity, nullptr);
+        ASSERT_TRUE(entity->hasSkeleton());
     }
 
     void TearDown() override {
@@ -99,9 +86,7 @@ TEST_F(SkeletonTransformTest, RenameAnimationValidRenameReturnsTrue)
     ASSERT_NE(sk, nullptr);
 
     // Find a real animation name from the skeleton
-    if (sk->getNumAnimations() == 0) {
-        GTEST_SKIP() << "Skipping: skeleton has no animations";
-    }
+    ASSERT_GT(sk->getNumAnimations(), 0u);
     Ogre::Animation* firstAnim = sk->getAnimation(0);
     QString oldName = QString::fromStdString(firstAnim->getName());
     Ogre::Real expectedLength = firstAnim->getLength();
@@ -131,9 +116,7 @@ TEST_F(SkeletonTransformTest, RenameAnimationPreservesKeyframes)
     ASSERT_NE(sk, nullptr);
 
     // Find an animation with tracks and keyframes
-    if (sk->getNumAnimations() == 0) {
-        GTEST_SKIP() << "Skipping: skeleton has no animations";
-    }
+    ASSERT_GT(sk->getNumAnimations(), 0u);
     Ogre::Animation* firstAnim = sk->getAnimation(0);
     QString oldName = QString::fromStdString(firstAnim->getName());
 
@@ -163,9 +146,7 @@ TEST_F(SkeletonTransformTest, RenameAnimationPreservesKeyframes)
         break;
     }
 
-    if (!foundTrack) {
-        GTEST_SKIP() << "Skipping: no animation tracks found with keyframes";
-    }
+    ASSERT_TRUE(foundTrack) << "no animation tracks found with keyframes";
 
     QString newName = "KeyframePreserved_TestUnique";
     bool result = SkeletonTransform::renameAnimation(entity, oldName, newName);
@@ -192,9 +173,7 @@ TEST_F(SkeletonTransformTest, RenameAnimationAlreadyRenamedReturnsFalse)
     Ogre::Skeleton* sk = entity->getSkeleton();
     ASSERT_NE(sk, nullptr);
 
-    if (sk->getNumAnimations() == 0) {
-        GTEST_SKIP() << "Skipping: skeleton has no animations";
-    }
+    ASSERT_GT(sk->getNumAnimations(), 0u);
     Ogre::Animation* firstAnim = sk->getAnimation(0);
     QString oldName = QString::fromStdString(firstAnim->getName());
     QString newName = "AlreadyRenamed_TestUnique";
@@ -217,9 +196,7 @@ TEST_F(SkeletonTransformTest, ScaleSkeletonUniformScale)
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     // Record the initial root bone positions
     std::vector<Ogre::Vector3> initialPositions;
@@ -252,9 +229,7 @@ TEST_F(SkeletonTransformTest, ScaleSkeletonDoubleScale)
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     // Record root bone positions before scaling
     std::vector<Ogre::Vector3> initialPositions;
@@ -291,9 +266,7 @@ TEST_F(SkeletonTransformTest, TranslateSkeletonZeroVector)
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     // Record root bone positions
     std::vector<Ogre::Vector3> initialPositions;
@@ -325,9 +298,7 @@ TEST_F(SkeletonTransformTest, TranslateSkeletonAppliesOffset)
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     // Record root bone positions
     std::vector<Ogre::Vector3> initialPositions;
@@ -364,9 +335,7 @@ TEST_F(SkeletonTransformTest, RotateSkeletonZeroRotation)
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     // Record root bone orientations
     std::vector<Ogre::Quaternion> initialOrientations;
@@ -400,9 +369,7 @@ TEST_F(SkeletonTransformTest, RotateSkeletonXAxis)
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     // Record root bone orientations before rotation
     std::vector<Ogre::Quaternion> initialOrientations;
@@ -437,9 +404,7 @@ TEST_F(SkeletonTransformTest, RotateSkeletonYAxis)
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     std::vector<Ogre::Quaternion> initialOrientations;
     for (const auto& bone : bones) {
@@ -472,9 +437,7 @@ TEST_F(SkeletonTransformTest, RotateSkeletonZAxis)
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     std::vector<Ogre::Quaternion> initialOrientations;
     for (const auto& bone : bones) {
@@ -511,9 +474,7 @@ TEST_F(SkeletonTransformTest, RotateSkeletonRotatesBonePositionsAroundMeshCenter
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     Ogre::Vector3 meshCenter = entity->getMesh()->getBounds().getCenter();
 
@@ -553,9 +514,7 @@ TEST_F(SkeletonTransformTest, RotateSkeletonYAxisRotatesBonePositions)
     ASSERT_NE(sk, nullptr);
 
     auto bones = sk->getBones();
-    if (bones.empty()) {
-        GTEST_SKIP() << "Skipping: skeleton has no bones";
-    }
+    ASSERT_FALSE(bones.empty()) << "skeleton has no bones";
 
     Ogre::Vector3 meshCenter = entity->getMesh()->getBounds().getCenter();
 
@@ -598,9 +557,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -613,7 +570,7 @@ protected:
 
 TEST_F(SkeletonTransformNoSkeletonTest, ScaleSkeletonNoSkeletonDoesNotCrash)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // Create a simple mesh without a skeleton
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
@@ -681,14 +638,10 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-        }
+        ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
         // Use unique names per test to avoid resource conflicts
         static int counter = 0;
@@ -698,9 +651,7 @@ protected:
         nodeName = QString("ProgSkNode_%1").arg(counter);
 
         entity = createEntityWithSkeleton();
-        if (!entity) {
-            GTEST_SKIP() << "Skipping: failed to create programmatic skeleton entity";
-        }
+        ASSERT_NE(entity, nullptr) << "failed to create programmatic skeleton entity";
     }
 
     void TearDown() override {
@@ -931,9 +882,7 @@ TEST_F(SkeletonTransformProgrammaticTest, RotatePreservesAnimationData)
     auto* sk = entity->getSkeleton();
     ASSERT_NE(sk, nullptr);
 
-    if (sk->getNumAnimations() == 0) {
-        GTEST_SKIP() << "Skipping: no animations on skeleton";
-    }
+    ASSERT_GT(sk->getNumAnimations(), 0u);
 
     auto* anim = sk->getAnimation(static_cast<unsigned short>(0));
     Ogre::Real originalLength = anim->getLength();
@@ -1031,8 +980,7 @@ TEST_F(SkeletonTransformProgrammaticTest, ScalePreservesAnimationData)
     auto* sk = entity->getSkeleton();
     ASSERT_NE(sk, nullptr);
 
-    if (sk->getNumAnimations() == 0)
-        GTEST_SKIP() << "Skipping: no animations on skeleton";
+    ASSERT_GT(sk->getNumAnimations(), 0u);
 
     auto* anim = sk->getAnimation(static_cast<unsigned short>(0));
     Ogre::Real originalLength = anim->getLength();

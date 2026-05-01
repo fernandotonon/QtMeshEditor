@@ -6,9 +6,12 @@
 #include <OgreRoot.h>
 #include <OgreException.h>
 #include <OgreStringConverter.h>
+#include <QCoreApplication>
 #include <QGuiApplication>
 #include <QWidget>
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include "Manager.h"
 
 /**
@@ -84,6 +87,34 @@ static inline void createStandardOgreMaterials()
 }
 
 /**
+ * Absolute path to media/models/robot.mesh for tests (binary is typically
+ * under <build>/bin; two levels up reaches the repo root). Falls back to
+ * QTMESH_UT_SOURCE_ROOT when defined (UnitTests target), then ./media/...
+ */
+static inline QString testRobotMeshPath()
+{
+    const QString binDir = QCoreApplication::applicationDirPath();
+    QDir dir(binDir);
+    if (dir.cdUp() && dir.cdUp()) {
+        const QString p = dir.absoluteFilePath(QStringLiteral("media/models/robot.mesh"));
+        if (QFile::exists(p))
+            return p;
+    }
+#ifdef QTMESH_UT_SOURCE_ROOT
+    {
+        const QString p = QDir(QString::fromUtf8(QTMESH_UT_SOURCE_ROOT))
+                              .filePath(QStringLiteral("media/models/robot.mesh"));
+        if (QFile::exists(p))
+            return p;
+    }
+#endif
+    const QString legacy = QStringLiteral("./media/models/robot.mesh");
+    if (QFile::exists(legacy))
+        return QFileInfo(legacy).absoluteFilePath();
+    return {};
+}
+
+/**
  * Creates a hidden 1x1 QWidget and uses its native window handle to
  * create an Ogre RenderWindow named "TestHidden".  This provides the
  * GL context that Ogre needs for hardware buffer operations (creating
@@ -100,9 +131,9 @@ static inline bool createTestRenderWindow()
     if (!root || !root->getRenderSystem())
         return false;
 
-    // Already have a render window
+    // Already have a render window (tests use TestHidden; CLIPipeline::initOgreHeadless uses CLIHidden)
     try {
-        if (root->getRenderTarget("TestHidden"))
+        if (root->getRenderTarget("TestHidden") || root->getRenderTarget("CLIHidden"))
             return true;
     } catch (...) {
         // getRenderTarget throws if not found in some Ogre versions
@@ -115,6 +146,9 @@ static inline bool createTestRenderWindow()
         hiddenWidget->resize(1, 1);
         hiddenWidget->show();
     }
+    // Native window / valid WId for externalWindowHandle (needed on headless X11 / Xvfb).
+    if (QCoreApplication::instance())
+        QCoreApplication::processEvents();
     try {
         Ogre::NameValuePairList params;
         params["externalWindowHandle"] = Ogre::StringConverter::toString(
@@ -142,21 +176,17 @@ static inline bool createTestRenderWindow()
  * the crash is a SIGSEGV (not a C++ exception) and cannot be caught
  * here. On Linux CI with Xvfb, GL context creation succeeds.
  *
- * Returns true if Ogre initialized successfully, false otherwise.
- * Test fixtures should call this and GTEST_SKIP() on false.
+ * Returns true only if a render window exists or was created (GL context for HW buffers).
+ * Test fixtures should use ASSERT_TRUE(tryInitOgre()) in CI — never skip silently.
  */
 static inline bool tryInitOgre()
 {
-    // Already initialized — ensure render window exists
-    if (Manager::getSingletonPtr()) {
-        createTestRenderWindow();
-        return true;
-    }
+    if (Manager::getSingletonPtr())
+        return createTestRenderWindow();
 
     try {
         Manager::getSingleton();
-        createTestRenderWindow();
-        return true;
+        return createTestRenderWindow();
     } catch (const Ogre::Exception&) {
         return false;
     } catch (...) {
@@ -171,17 +201,16 @@ static inline bool tryInitOgre()
  * A GL context is available when either a RenderWindow has been created
  * (via createTestRenderWindow() or OgreWidget) or Ogre auto-created one.
  *
- * Tests that create entities or meshes should call this and GTEST_SKIP()
- * if false.
+ * Use ASSERT_TRUE(canLoadMeshFiles()) in tests — failures must fail the job, not skip.
  */
 static inline bool canLoadMeshFiles()
 {
     auto* root = Ogre::Root::getSingletonPtr();
     if (!root || !root->getRenderSystem())
         return false;
-    // Check for our test render window
+    // Check for our test / CLI headless render window
     try {
-        if (root->getRenderTarget("TestHidden"))
+        if (root->getRenderTarget("TestHidden") || root->getRenderTarget("CLIHidden"))
             return true;
     } catch (...) {}
     // Check for auto-created window (legacy path)
@@ -194,7 +223,8 @@ static inline bool canLoadMeshFiles()
 #if defined(__clang__) || defined(__GNUC__)
 #pragma GCC diagnostic pop
 #endif
-    return false;
+    // Ogre is up but no window yet — create TestHidden (Linux CI / Xvfb path).
+    return Manager::getSingletonPtr() && createTestRenderWindow();
 }
 
 /**

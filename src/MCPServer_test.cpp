@@ -207,9 +207,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
 
         server = std::make_unique<MCPServer>();
@@ -412,7 +410,7 @@ TEST_F(MCPServerTest, ListMaterials)
 
 TEST_F(MCPServerTest, CreatePrimitive)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "sphere";
     args["name"] = "TestSphere";
@@ -423,7 +421,7 @@ TEST_F(MCPServerTest, CreatePrimitive)
 
 TEST_F(MCPServerTest, CreatePrimitiveTypes)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QStringList types = {"box", "cylinder", "cone"};
     for (const QString &type : types) {
         QJsonObject args;
@@ -447,7 +445,7 @@ TEST_F(MCPServerTest, CreatePrimitiveInvalidType)
 
 TEST_F(MCPServerTest, GetSceneInfo)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "SceneInfoCube";
@@ -464,7 +462,7 @@ TEST_F(MCPServerTest, GetSceneInfo)
 
 TEST_F(MCPServerTest, GetMeshInfo)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "MeshInfoSphere";
@@ -481,7 +479,7 @@ TEST_F(MCPServerTest, GetMeshInfo)
 
 TEST_F(MCPServerTest, TransformMesh)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "TransformCube";
@@ -509,7 +507,7 @@ TEST_F(MCPServerTest, TransformMeshNotFound)
 
 TEST_F(MCPServerTest, ApplyMaterial)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // Create a material
     QJsonObject matArgs;
     matArgs["name"] = "ApplyTestMat";
@@ -577,7 +575,7 @@ TEST_F(MCPServerTest, SetTextureMaterialNotFound)
 
 TEST_F(MCPServerTest, Animate)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "AnimSphere";
@@ -593,7 +591,7 @@ TEST_F(MCPServerTest, Animate)
 
 TEST_F(MCPServerTest, AnimateStop)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "AnimStopSphere";
@@ -859,7 +857,7 @@ TEST_F(MCPServerTest, ModifyMaterialEmptyName)
 
 TEST_F(MCPServerTest, TransformMeshRotation)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "RotateCube";
@@ -875,7 +873,7 @@ TEST_F(MCPServerTest, TransformMeshRotation)
 
 TEST_F(MCPServerTest, TransformMeshScale)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "ScaleCube";
@@ -891,7 +889,7 @@ TEST_F(MCPServerTest, TransformMeshScale)
 
 TEST_F(MCPServerTest, TransformMeshAllThreeTransforms)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "FullTransformSphere";
@@ -927,7 +925,7 @@ TEST_F(MCPServerTest, TransformMeshNoNameNoSelection)
 
 TEST_F(MCPServerTest, GetSceneInfoMultipleObjects)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // Create several primitives
     QJsonObject args1;
     args1["type"] = "sphere";
@@ -1086,7 +1084,7 @@ TEST_F(MCPServerTest, CreatePrimitiveEmptyType)
 
 TEST_F(MCPServerTest, CreatePrimitivePlane)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "plane";
     args["name"] = "TestPlane";
@@ -1097,7 +1095,7 @@ TEST_F(MCPServerTest, CreatePrimitivePlane)
 
 TEST_F(MCPServerTest, CreatePrimitiveTorus)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "torus";
     args["name"] = "TestTorus";
@@ -1108,7 +1106,7 @@ TEST_F(MCPServerTest, CreatePrimitiveTorus)
 
 TEST_F(MCPServerTest, CreatePrimitiveTube)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "tube";
     args["name"] = "TestTube";
@@ -1119,7 +1117,7 @@ TEST_F(MCPServerTest, CreatePrimitiveTube)
 
 TEST_F(MCPServerTest, CreatePrimitiveCapsule)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "capsule";
     args["name"] = "TestCapsule";
@@ -1130,7 +1128,7 @@ TEST_F(MCPServerTest, CreatePrimitiveCapsule)
 
 TEST_F(MCPServerTest, CreatePrimitiveIcoSphere)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "icosphere";
     args["name"] = "TestIcoSphere";
@@ -1141,7 +1139,7 @@ TEST_F(MCPServerTest, CreatePrimitiveIcoSphere)
 
 TEST_F(MCPServerTest, CreatePrimitiveSpring)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "spring";
     args["name"] = "TestSpring";
@@ -1152,7 +1150,7 @@ TEST_F(MCPServerTest, CreatePrimitiveSpring)
 
 TEST_F(MCPServerTest, CreatePrimitiveAutoGeneratedName)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // When no name is provided, create_primitive auto-generates one
     QJsonObject args;
     args["type"] = "sphere";
@@ -1168,7 +1166,7 @@ TEST_F(MCPServerTest, CreatePrimitiveAutoGeneratedName)
 
 TEST_F(MCPServerTest, AnimateWithPitchAndRoll)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "PitchRollCube";
@@ -1188,7 +1186,7 @@ TEST_F(MCPServerTest, AnimateWithPitchAndRoll)
 
 TEST_F(MCPServerTest, AnimateZeroSpeedsDefaultsToYaw45)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "DefaultAnimSphere";
@@ -1209,7 +1207,7 @@ TEST_F(MCPServerTest, AnimateZeroSpeedsDefaultsToYaw45)
 
 TEST_F(MCPServerTest, AnimateNoSpeedsDefaultsToYaw45)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "NoSpeedAnimSphere";
@@ -1236,7 +1234,7 @@ TEST_F(MCPServerTest, AnimateEmptyName)
 
 TEST_F(MCPServerTest, AnimateTimerIsRunningAfterStart)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "TimerTestCube";
@@ -1350,7 +1348,7 @@ TEST_F(MCPServerTest, CreateMaterialWithAllColors)
 
 TEST_F(MCPServerTest, GetMeshInfoMultipleEntities)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args1;
     args1["type"] = "sphere";
     args1["name"] = "MeshInfoSphere1";
@@ -1410,7 +1408,7 @@ TEST_F(MCPServerTest, ListSkeletalAnimationsEmptyScene)
 
 TEST_F(MCPServerTest, ListSkeletalAnimationsNoSkeletonEntities)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // Primitives have no skeleton
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
@@ -1465,7 +1463,7 @@ TEST_F(MCPServerTest, GetAnimationInfoEntityNotFound)
 
 TEST_F(MCPServerTest, GetAnimationInfoNoSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "AnimInfoCube";
@@ -1536,7 +1534,7 @@ TEST_F(MCPServerTest, SetAnimationLengthEntityNotFound)
 
 TEST_F(MCPServerTest, SetAnimationLengthNoSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "AnimLenSphere";
@@ -1585,7 +1583,7 @@ TEST_F(MCPServerTest, SetAnimationTimeEntityNotFound)
 
 TEST_F(MCPServerTest, SetAnimationTimeMissingTimeAndNavigate)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // Create a primitive — it won't have the animation, but we test the param validation path
     QJsonObject primArgs;
     primArgs["type"] = "cube";
@@ -1676,7 +1674,7 @@ TEST_F(MCPServerTest, AddKeyframeEntityNotFound)
 
 TEST_F(MCPServerTest, AddKeyframeNoSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "AddKfCube";
@@ -1741,7 +1739,7 @@ TEST_F(MCPServerTest, RemoveKeyframeEntityNotFound)
 
 TEST_F(MCPServerTest, RemoveKeyframeNoSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "RemoveKfSphere";
@@ -1790,7 +1788,7 @@ TEST_F(MCPServerTest, PlayAnimationEntityNotFound)
 
 TEST_F(MCPServerTest, PlayAnimationNoAnimation)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "PlayAnimCube";
@@ -1836,7 +1834,7 @@ TEST_F(MCPServerTest, ToggleSkeletonDebugEntityNotFound)
 
 TEST_F(MCPServerTest, ToggleSkeletonDebugNoSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "SkelDebugSphere";
@@ -1852,7 +1850,7 @@ TEST_F(MCPServerTest, ToggleSkeletonDebugNoSkeleton)
 
 TEST_F(MCPServerTest, ToggleSkeletonDebugNoMainWindow)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // Server has no MainWindow set — should fail for entities with skeleton
     // But primitives have no skeleton, so test the no-skeleton path
     QJsonObject primArgs;
@@ -1900,7 +1898,7 @@ TEST_F(MCPServerTest, ToggleBoneWeightsEntityNotFound)
 
 TEST_F(MCPServerTest, ToggleBoneWeightsNoSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "BoneWeightCube";
@@ -1928,7 +1926,7 @@ TEST_F(MCPServerTest, MergeAnimationsNoEntities)
 
 TEST_F(MCPServerTest, MergeAnimationsNoSkeletonEntities)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     // Create primitives (no skeleton) — should still fail
     QJsonObject args1;
     args1["type"] = "sphere";
@@ -1962,7 +1960,7 @@ TEST_F(MCPServerTest, MergeAnimationsInvalidBaseEntity)
 
 TEST_F(MCPServerTest, ExportMeshWithSelection)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     // Create a primitive and select it
     QJsonObject primArgs;
@@ -2407,7 +2405,7 @@ TEST_F(MCPServerHttpTest, CorsHeadersOnAllResponses)
 
 TEST_F(MCPServerTest, CreatePrimitiveWithCustomParams)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "sphere";
     args["name"] = "CustomParamSphere";
@@ -2420,7 +2418,7 @@ TEST_F(MCPServerTest, CreatePrimitiveWithCustomParams)
 
 TEST_F(MCPServerTest, CreatePrimitiveCylinderWithParams)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "cylinder";
     args["name"] = "CustomCylinder";
@@ -2517,7 +2515,7 @@ TEST_F(MCPServerTest, ModifyMaterialAllColors)
 
 TEST_F(MCPServerTest, CreatePrimitiveRoundedBoxWithParams)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject args;
     args["type"] = "roundedbox";
     args["name"] = "CustomRBox";
@@ -2535,7 +2533,7 @@ TEST_F(MCPServerTest, CreatePrimitiveRoundedBoxWithParams)
 
 TEST_F(MCPServerTest, AnimateWithOnlyPitch)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "cube";
     primArgs["name"] = "PitchOnlyCube";
@@ -2557,7 +2555,7 @@ TEST_F(MCPServerTest, AnimateWithOnlyPitch)
 
 TEST_F(MCPServerTest, AnimateWithOnlyRoll)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     QJsonObject primArgs;
     primArgs["type"] = "sphere";
     primArgs["name"] = "RollOnlySphere";
@@ -2579,7 +2577,7 @@ TEST_F(MCPServerTest, AnimateWithOnlyRoll)
 
 TEST_F(MCPServerTest, GetMeshInfoWithInMemoryEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto mesh = createInMemoryTriangleMesh("MCPMeshInfoTriangle");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -2595,7 +2593,7 @@ TEST_F(MCPServerTest, GetMeshInfoWithInMemoryEntity)
 
 TEST_F(MCPServerTest, TransformMeshPositionWithInMemoryEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto mesh = createInMemoryTriangleMesh("MCPTransformTriangle");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -2618,7 +2616,7 @@ TEST_F(MCPServerTest, TransformMeshPositionWithInMemoryEntity)
 
 TEST_F(MCPServerTest, TransformMeshRotationWithInMemoryEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto mesh = createInMemoryTriangleMesh("MCPRotateTriangle");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -2636,7 +2634,7 @@ TEST_F(MCPServerTest, TransformMeshRotationWithInMemoryEntity)
 
 TEST_F(MCPServerTest, TransformMeshScaleWithInMemoryEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto mesh = createInMemoryTriangleMesh("MCPScaleTriangle");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -2658,7 +2656,7 @@ TEST_F(MCPServerTest, TransformMeshScaleWithInMemoryEntity)
 
 TEST_F(MCPServerTest, ExportMeshWithInMemoryEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto mesh = createInMemoryTriangleMesh("MCPExportTriangle");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -2682,7 +2680,7 @@ TEST_F(MCPServerTest, ExportMeshWithInMemoryEntity)
 
 TEST_F(MCPServerTest, SetMaterialOnInMemoryEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     // Create material
     QJsonObject matArgs;
@@ -2707,7 +2705,7 @@ TEST_F(MCPServerTest, SetMaterialOnInMemoryEntity)
 
 TEST_F(MCPServerTest, GetSceneInfoWithInMemoryEntities)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto mesh1 = createInMemoryTriangleMesh("MCPSceneInfo1");
     auto mesh2 = createInMemoryTriangleMesh("MCPSceneInfo2");
@@ -2731,7 +2729,7 @@ TEST_F(MCPServerTest, GetSceneInfoWithInMemoryEntities)
 
 TEST_F(MCPServerTest, ListSkeletalAnimationsWithSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("MCPSkelAnimEntity");
     ASSERT_NE(entity, nullptr);
@@ -2744,7 +2742,7 @@ TEST_F(MCPServerTest, ListSkeletalAnimationsWithSkeletonEntity)
 
 TEST_F(MCPServerTest, GetAnimationInfoWithSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("MCPAnimInfoEntity");
     ASSERT_NE(entity, nullptr);
@@ -2761,7 +2759,7 @@ TEST_F(MCPServerTest, GetAnimationInfoWithSkeletonEntity)
 
 TEST_F(MCPServerTest, SetAnimationLengthWithSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("MCPSetAnimLenEntity");
     ASSERT_NE(entity, nullptr);
@@ -2777,7 +2775,7 @@ TEST_F(MCPServerTest, SetAnimationLengthWithSkeletonEntity)
 
 TEST_F(MCPServerTest, SetAnimationTimeWithSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("MCPSetAnimTimeEntity");
     ASSERT_NE(entity, nullptr);
@@ -2792,7 +2790,7 @@ TEST_F(MCPServerTest, SetAnimationTimeWithSkeletonEntity)
 
 TEST_F(MCPServerTest, AddKeyframeWithSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("MCPAddKfEntity");
     ASSERT_NE(entity, nullptr);
@@ -2808,7 +2806,7 @@ TEST_F(MCPServerTest, AddKeyframeWithSkeletonEntity)
 
 TEST_F(MCPServerTest, RemoveKeyframeWithSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("MCPRemoveKfEntity");
     ASSERT_NE(entity, nullptr);
@@ -2825,7 +2823,7 @@ TEST_F(MCPServerTest, RemoveKeyframeWithSkeletonEntity)
 
 TEST_F(MCPServerTest, PlayAnimationWithSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("MCPPlayAnimEntity");
     ASSERT_NE(entity, nullptr);
@@ -3008,7 +3006,7 @@ TEST_F(MCPServerTest, GetMaterialWithEmptyNameReturnsError)
 
 TEST_F(MCPServerTest, MergeAnimations_WithAnimatedEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     // Create two animated entities (merge_animations needs at least 2 skeleton entities)
     Ogre::Entity* entity1 = createAnimatedTestEntity("MCPMergeAnim1");
@@ -3101,7 +3099,7 @@ TEST_F(MCPServerTest, ToggleMeshInfo_SuccessPath)
 
 TEST_F(MCPServerTest, PlayAnimation_StartAndStop)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("MCPPlayStopAnimEntity");
     ASSERT_NE(entity, nullptr);
@@ -3144,7 +3142,7 @@ TEST_F(MCPServerTest, SetOgreInitFailed_AffectsToolCalls)
 
 TEST_F(MCPServerTest, GetMeshInfo_WithSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto mesh = createInMemorySkeletonMesh("MCPMeshInfoSkelMesh");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -3164,7 +3162,7 @@ TEST_F(MCPServerTest, GetMeshInfo_WithSkeletonEntity)
 
 TEST_F(MCPServerTest, ExportMesh_ToTempFile)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto mesh = createInMemoryTriangleMesh("MCPExportTempMesh");
     auto* sceneMgr = Manager::getSingleton()->getSceneMgr();
@@ -3200,7 +3198,7 @@ TEST_F(MCPServerTest, ExportMesh_ToTempFile)
 
 TEST_F(MCPServerTest, AnimSuccPath_ListSkeletalAnimations)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccListSkel");
     ASSERT_NE(entity, nullptr);
@@ -3216,7 +3214,7 @@ TEST_F(MCPServerTest, AnimSuccPath_ListSkeletalAnimations)
 
 TEST_F(MCPServerTest, AnimSuccPath_GetAnimationInfo)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccGetInfo");
     ASSERT_NE(entity, nullptr);
@@ -3239,7 +3237,7 @@ TEST_F(MCPServerTest, AnimSuccPath_GetAnimationInfo)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationLength)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccSetLen");
     ASSERT_NE(entity, nullptr);
@@ -3265,7 +3263,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationLength)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTime)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccSetTime");
     ASSERT_NE(entity, nullptr);
@@ -3284,7 +3282,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTime)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateNext)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavNext");
     ASSERT_NE(entity, nullptr);
@@ -3310,7 +3308,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateNext)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigatePrev)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavPrev");
     ASSERT_NE(entity, nullptr);
@@ -3337,7 +3335,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigatePrev)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateFirst)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavFirst");
     ASSERT_NE(entity, nullptr);
@@ -3364,7 +3362,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateFirst)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateLast)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavLast");
     ASSERT_NE(entity, nullptr);
@@ -3384,7 +3382,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithNavigateLast)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeNavigateInvalidDirection)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavInvalid");
     ASSERT_NE(entity, nullptr);
@@ -3401,7 +3399,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeNavigateInvalidDirection)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeNavigateMissingTrack)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavNoTrack");
     ASSERT_NE(entity, nullptr);
@@ -3418,7 +3416,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeNavigateMissingTrack)
 
 TEST_F(MCPServerTest, AnimSuccPath_AddKeyframe)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccAddKf");
     ASSERT_NE(entity, nullptr);
@@ -3446,7 +3444,7 @@ TEST_F(MCPServerTest, AnimSuccPath_AddKeyframe)
 
 TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeWithExplicitTransforms)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccAddKfTransform");
     ASSERT_NE(entity, nullptr);
@@ -3472,7 +3470,7 @@ TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeWithExplicitTransforms)
 
 TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframe)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccRemoveKf");
     ASSERT_NE(entity, nullptr);
@@ -3501,7 +3499,7 @@ TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframe)
 
 TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframeNotFound)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccRemoveKfNF");
     ASSERT_NE(entity, nullptr);
@@ -3519,7 +3517,7 @@ TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframeNotFound)
 
 TEST_F(MCPServerTest, AnimSuccPath_PlayAnimation)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccPlay");
     ASSERT_NE(entity, nullptr);
@@ -3542,7 +3540,7 @@ TEST_F(MCPServerTest, AnimSuccPath_PlayAnimation)
 
 TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationStop)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccPlayStop");
     ASSERT_NE(entity, nullptr);
@@ -3573,7 +3571,7 @@ TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationStop)
 
 TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationNoLoop)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccPlayNoLoop");
     ASSERT_NE(entity, nullptr);
@@ -3596,7 +3594,7 @@ TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationNoLoop)
 
 TEST_F(MCPServerTest, AnimSuccPath_MergeAnimations)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity1 = createAnimatedTestEntity("AnimSuccMerge1");
     ASSERT_NE(entity1, nullptr);
@@ -3614,7 +3612,7 @@ TEST_F(MCPServerTest, AnimSuccPath_MergeAnimations)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithLoopDisabled)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccTimeLoop");
     ASSERT_NE(entity, nullptr);
@@ -3634,7 +3632,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeWithLoopDisabled)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeDisabled)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccTimeDisabled");
     ASSERT_NE(entity, nullptr);
@@ -3656,7 +3654,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationTimeDisabled)
 
 TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeTrackNotFound)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccAddKfNoTrack");
     ASSERT_NE(entity, nullptr);
@@ -3673,7 +3671,7 @@ TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeTrackNotFound)
 
 TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframeTrackNotFound)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccRemKfNoTrack");
     ASSERT_NE(entity, nullptr);
@@ -3690,7 +3688,7 @@ TEST_F(MCPServerTest, AnimSuccPath_RemoveKeyframeTrackNotFound)
 
 TEST_F(MCPServerTest, AnimSuccPath_GetAnimationInfoAnimNotFound)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccInfoAnimNF");
     ASSERT_NE(entity, nullptr);
@@ -3705,7 +3703,7 @@ TEST_F(MCPServerTest, AnimSuccPath_GetAnimationInfoAnimNotFound)
 
 TEST_F(MCPServerTest, AnimSuccPath_SetAnimationLengthAnimNotFound)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccLenAnimNF");
     ASSERT_NE(entity, nullptr);
@@ -3721,7 +3719,7 @@ TEST_F(MCPServerTest, AnimSuccPath_SetAnimationLengthAnimNotFound)
 
 TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationAnimNotFound)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccPlayAnimNF");
     ASSERT_NE(entity, nullptr);
@@ -3736,7 +3734,7 @@ TEST_F(MCPServerTest, AnimSuccPath_PlayAnimationAnimNotFound)
 
 TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeAnimNotFound)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccAddKfAnimNF");
     ASSERT_NE(entity, nullptr);
@@ -3753,7 +3751,7 @@ TEST_F(MCPServerTest, AnimSuccPath_AddKeyframeAnimNotFound)
 
 TEST_F(MCPServerTest, AnimSuccPath_NavigateNextAtEnd)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavNextEnd");
     ASSERT_NE(entity, nullptr);
@@ -3781,7 +3779,7 @@ TEST_F(MCPServerTest, AnimSuccPath_NavigateNextAtEnd)
 
 TEST_F(MCPServerTest, AnimSuccPath_NavigatePrevAtStart)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimSuccNavPrevStart");
     ASSERT_NE(entity, nullptr);
@@ -3808,7 +3806,7 @@ TEST_F(MCPServerTest, AnimSuccPath_NavigatePrevAtStart)
 
 TEST_F(MCPServerTest, SaveScene_EmptyPath_ReturnsError)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     QJsonObject args;
     args["file_path"] = "";
@@ -3819,7 +3817,7 @@ TEST_F(MCPServerTest, SaveScene_EmptyPath_ReturnsError)
 
 TEST_F(MCPServerTest, OpenScene_MissingFile_ReturnsError)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     QJsonObject args;
     args["file_path"] = "/tmp/nonexistent_scene_file_12345.scene.glb";
@@ -3830,7 +3828,7 @@ TEST_F(MCPServerTest, OpenScene_MissingFile_ReturnsError)
 
 TEST_F(MCPServerTest, SaveScene_ValidScene_Succeeds)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto mesh1 = createInMemoryTriangleMesh("SaveSceneMesh1");
     auto mesh2 = createInMemoryTriangleMesh("SaveSceneMesh2");
@@ -3855,7 +3853,7 @@ TEST_F(MCPServerTest, SaveScene_ValidScene_Succeeds)
 
 TEST_F(MCPServerTest, OpenScene_ValidFile_LoadsEntities)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     // Create entities and save the scene
     auto mesh1 = createInMemoryTriangleMesh("OpenSceneMesh1");
@@ -5041,7 +5039,7 @@ TEST_F(MCPServerTest, TakeScreenshot_MainWindowWithoutOgreWidgetReturnsError)
 
 TEST_F(MCPServerTest, SetAnimationLength_ClampsCurrentStateTime)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimClampLenEntity");
     ASSERT_NE(entity, nullptr);
@@ -5060,7 +5058,7 @@ TEST_F(MCPServerTest, SetAnimationLength_ClampsCurrentStateTime)
 
 TEST_F(MCPServerTest, SetAnimationTime_NavigateMissingTrackOnSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimNavMissingTrackEntity");
     ASSERT_NE(entity, nullptr);
@@ -5077,7 +5075,7 @@ TEST_F(MCPServerTest, SetAnimationTime_NavigateMissingTrackOnSkeletonEntity)
 
 TEST_F(MCPServerTest, SetAnimationTime_MissingTimeAndNavigateWithValidAnimation)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("AnimMissingTimeEntity");
     ASSERT_NE(entity, nullptr);
@@ -5092,7 +5090,7 @@ TEST_F(MCPServerTest, SetAnimationTime_MissingTimeAndNavigateWithValidAnimation)
 
 TEST_F(MCPServerTest, RemoveKeyframe_AnimationNotFoundOnSkeletonEntity)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("RemoveMissingAnimEntity");
     ASSERT_NE(entity, nullptr);
@@ -5109,7 +5107,7 @@ TEST_F(MCPServerTest, RemoveKeyframe_AnimationNotFoundOnSkeletonEntity)
 
 TEST_F(MCPServerTest, ToggleSkeletonDebug_SkeletonEntityWithoutMainWindowReturnsMainWindowError)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("SkelNoMainWindowEntity");
     ASSERT_NE(entity, nullptr);
@@ -5124,7 +5122,7 @@ TEST_F(MCPServerTest, ToggleSkeletonDebug_SkeletonEntityWithoutMainWindowReturns
 
 TEST_F(MCPServerTest, ToggleSkeletonDebug_SkeletonEntityWithoutAnimationWidgetReturnsError)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("SkelNoAnimWidgetEntity");
     ASSERT_NE(entity, nullptr);
@@ -5193,7 +5191,7 @@ TEST_F(MCPServerTest, ToggleMeshInfo_MainWindowWithoutOverlayReturnsError)
 
 TEST_F(MCPServerTest, MergeAnimations_InvalidBaseEntityWhenSkeletonEntitiesExist)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     ASSERT_NE(createAnimatedTestEntity("MergeInvalidBaseA"), nullptr);
     ASSERT_NE(createAnimatedTestEntity("MergeInvalidBaseB"), nullptr);
@@ -5207,7 +5205,7 @@ TEST_F(MCPServerTest, MergeAnimations_InvalidBaseEntityWhenSkeletonEntitiesExist
 
 TEST_F(MCPServerTest, MergeAnimations_WithoutBaseEntityUsesFallbackSelection)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     ASSERT_NE(createAnimatedTestEntity("MergeFallbackA"), nullptr);
     ASSERT_NE(createAnimatedTestEntity("MergeFallbackB"), nullptr);
@@ -5308,7 +5306,7 @@ TEST_F(MCPServerTest, SearchFiles_MaxDepthStopsRecursion)
 
 TEST_F(MCPServerTest, DuplicateEntity_Valid)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     QJsonObject primArgs;
     primArgs["type"] = "cube";
@@ -5359,7 +5357,7 @@ TEST_F(MCPServerTest, TransformSubmesh_MissingEntity)
 
 TEST_F(MCPServerTest, TransformSubmesh_InvalidIndex)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAndSelectTriangleEntity("SubMeshIdxTest");
     ASSERT_NE(entity, nullptr);
@@ -5386,7 +5384,7 @@ TEST_F(MCPServerTest, TransformSubmesh_EntityNotFound)
 
 TEST_F(MCPServerTest, TransformSubmesh_NoTransformSpecified)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAndSelectTriangleEntity("SubMeshNoTrans");
     ASSERT_NE(entity, nullptr);
@@ -5402,7 +5400,7 @@ TEST_F(MCPServerTest, TransformSubmesh_NoTransformSpecified)
 
 TEST_F(MCPServerTest, TransformSubmesh_TranslateValid)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAndSelectTriangleEntity("SubMeshTranslate");
     ASSERT_NE(entity, nullptr);
@@ -5543,7 +5541,7 @@ TEST_F(MCPServerTest, ExportPose_NoEntityInScene)
 
 TEST_F(MCPServerTest, ExportPose_EntityWithoutSkeleton)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     // Create a primitive (no skeleton)
     QJsonObject primArgs;
@@ -5562,7 +5560,7 @@ TEST_F(MCPServerTest, ExportPose_EntityWithoutSkeleton)
 
 TEST_F(MCPServerTest, ExportPose_AnimatedEntitySuccess)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("ExportPoseAnimEntity");
     ASSERT_NE(entity, nullptr);
@@ -5588,7 +5586,7 @@ TEST_F(MCPServerTest, ExportPose_AnimatedEntitySuccess)
 
 TEST_F(MCPServerTest, GroupNodes_Valid)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
@@ -5620,7 +5618,7 @@ TEST_F(MCPServerTest, GroupNodes_Valid)
 
 TEST_F(MCPServerTest, GroupNodes_TooFewNodes)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
@@ -5657,7 +5655,7 @@ TEST_F(MCPServerTest, GroupNodes_NonexistentNode)
 
 TEST_F(MCPServerTest, UngroupNode_Valid)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
@@ -5689,7 +5687,7 @@ TEST_F(MCPServerTest, UngroupNode_Valid)
 
 TEST_F(MCPServerTest, UngroupNode_NotAGroup)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
@@ -5714,7 +5712,7 @@ TEST_F(MCPServerTest, UngroupNode_NotAGroup)
 
 TEST_F(MCPServerTest, ReparentNode_Valid)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
@@ -5734,7 +5732,7 @@ TEST_F(MCPServerTest, ReparentNode_Valid)
 
 TEST_F(MCPServerTest, ReparentNode_CyclePrevented)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     auto* mgr = Manager::getSingletonPtr();
     ASSERT_NE(mgr, nullptr);
@@ -5813,7 +5811,7 @@ TEST_F(MCPServerTest, ResampleAnimation_MissingArgs)
 
 TEST_F(MCPServerTest, ResampleAnimation_Valid)
 {
-    if (!canLoadMeshFiles()) { GTEST_SKIP() << "Skipping: entity creation not supported without render window"; }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     Ogre::Entity* entity = createAnimatedTestEntity("ResampleAnimEntity");
     ASSERT_NE(entity, nullptr);

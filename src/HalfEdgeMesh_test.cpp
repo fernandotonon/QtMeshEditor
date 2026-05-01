@@ -860,14 +860,8 @@ TEST(HalfEdgeMeshStandalone, MaterialNamesPreserved) {
 class HalfEdgeMeshOgreTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Ogre not available";
-            return;
-        }
-        if (!canLoadMeshFiles()) {
-            GTEST_SKIP() << "Cannot create hardware buffers";
-            return;
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
+        ASSERT_TRUE(canLoadMeshFiles()) << "Cannot create hardware buffers (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 };
@@ -3740,7 +3734,7 @@ TEST(HalfEdgeMeshStandalone, SplitEdgePreservesSubmeshCount) {
 
     const auto beforeSubCount = he.subMeshCount();
     const int edge = findEdge(he, 0, 1);
-    if (edge < 0) GTEST_SKIP() << "v0-v1 edge not present in mesh";
+    ASSERT_GE(edge, 0) << "v0-v1 edge not present in mesh";
 
     const int vMid = he.splitEdge(edge, 0.5f);
     ASSERT_GE(vMid, 0);

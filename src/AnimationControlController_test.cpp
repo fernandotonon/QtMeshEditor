@@ -23,9 +23,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
         createStandardOgreMaterials();
     }
 
@@ -106,7 +104,7 @@ TEST_F(AnimationControlControllerTest, UpdateAnimationTreeWithNoSelectionIsEmpty
 }
 
 TEST_F(AnimationControlControllerTest, UpdateAnimationTreeWithAnimatedEntityPopulatesTree) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_TreeTest");
     ASSERT_NE(entity, nullptr);
@@ -138,7 +136,7 @@ TEST_F(AnimationControlControllerTest, SelectAnimationWithEmptyNamesResetsState)
 }
 
 TEST_F(AnimationControlControllerTest, SelectAnimationSetsState) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_SelectTest");
     ASSERT_NE(entity, nullptr);
@@ -154,7 +152,7 @@ TEST_F(AnimationControlControllerTest, SelectAnimationSetsState) {
 }
 
 TEST_F(AnimationControlControllerTest, SelectAnimationPopulatesBoneList) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_BoneListTest");
     ASSERT_NE(entity, nullptr);
@@ -167,7 +165,7 @@ TEST_F(AnimationControlControllerTest, SelectAnimationPopulatesBoneList) {
 }
 
 TEST_F(AnimationControlControllerTest, SelectAnimationEmitsSelectionChanged) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_SignalTest");
     ASSERT_NE(entity, nullptr);
@@ -183,7 +181,7 @@ TEST_F(AnimationControlControllerTest, SelectAnimationEmitsSelectionChanged) {
 // ── selectBone ─────────────────────────────────────────────────────────────────
 
 TEST_F(AnimationControlControllerTest, SelectBoneUpdatesSelectedBone) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_BoneSelectTest");
     ASSERT_NE(entity, nullptr);
@@ -199,7 +197,7 @@ TEST_F(AnimationControlControllerTest, SelectBoneUpdatesSelectedBone) {
 }
 
 TEST_F(AnimationControlControllerTest, SelectBonePopulatesKeyframeTicks) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_TicksTest");
     ASSERT_NE(entity, nullptr);
@@ -218,7 +216,7 @@ TEST_F(AnimationControlControllerTest, SelectBonePopulatesKeyframeTicks) {
 // ── Slider / timeline ──────────────────────────────────────────────────────────
 
 TEST_F(AnimationControlControllerTest, SetSliderValueUpdatesValue) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_SliderTest");
     ASSERT_NE(entity, nullptr);
@@ -234,7 +232,7 @@ TEST_F(AnimationControlControllerTest, SetSliderValueUpdatesValue) {
 }
 
 TEST_F(AnimationControlControllerTest, SetAnimationLengthUpdatesSliderMaximum) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_LenTest");
     ASSERT_NE(entity, nullptr);
@@ -251,7 +249,7 @@ TEST_F(AnimationControlControllerTest, SetAnimationLengthUpdatesSliderMaximum) {
 // ── Keyframe navigation ────────────────────────────────────────────────────────
 
 TEST_F(AnimationControlControllerTest, NextKeyframeAdvancesPosition) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_NextKfTest");
     ASSERT_NE(entity, nullptr);
@@ -268,7 +266,7 @@ TEST_F(AnimationControlControllerTest, NextKeyframeAdvancesPosition) {
 }
 
 TEST_F(AnimationControlControllerTest, PrevKeyframeGoesBack) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_PrevKfTest");
     ASSERT_NE(entity, nullptr);
@@ -285,7 +283,7 @@ TEST_F(AnimationControlControllerTest, PrevKeyframeGoesBack) {
 }
 
 TEST_F(AnimationControlControllerTest, HasNextKeyframeAtStart) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_HasNextTest");
     ASSERT_NE(entity, nullptr);
@@ -301,7 +299,7 @@ TEST_F(AnimationControlControllerTest, HasNextKeyframeAtStart) {
 }
 
 TEST_F(AnimationControlControllerTest, HasPrevKeyframeAtEnd) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_HasPrevTest");
     ASSERT_NE(entity, nullptr);
@@ -319,7 +317,7 @@ TEST_F(AnimationControlControllerTest, HasPrevKeyframeAtEnd) {
 // ── Add / Delete keyframe ──────────────────────────────────────────────────────
 
 TEST_F(AnimationControlControllerTest, AddKeyframeIncreasesCount) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_AddKfTest");
     ASSERT_NE(entity, nullptr);
@@ -343,7 +341,7 @@ TEST_F(AnimationControlControllerTest, AddKeyframeIncreasesCount) {
 }
 
 TEST_F(AnimationControlControllerTest, DeleteKeyframeDecreasesCount) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_DelKfTest");
     ASSERT_NE(entity, nullptr);
@@ -371,7 +369,7 @@ TEST_F(AnimationControlControllerTest, DeleteKeyframeDecreasesCount) {
 // ── Keyframe value setters ─────────────────────────────────────────────────────
 
 TEST_F(AnimationControlControllerTest, SetKfTransXUpdatesKeyframe) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_TransXTest");
     ASSERT_NE(entity, nullptr);
@@ -401,7 +399,7 @@ TEST_F(AnimationControlControllerTest, SetKfTransXUpdatesKeyframe) {
 }
 
 TEST_F(AnimationControlControllerTest, SetKfScaleYUpdatesKeyframe) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_ScaleYTest");
     ASSERT_NE(entity, nullptr);
@@ -430,7 +428,7 @@ TEST_F(AnimationControlControllerTest, SetKfScaleYUpdatesKeyframe) {
 }
 
 TEST_F(AnimationControlControllerTest, SetKfRotWUpdatesKeyframe) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_RotWTest");
     ASSERT_NE(entity, nullptr);
@@ -495,7 +493,7 @@ TEST_F(AnimationControlControllerTest, PollTimerDoesNotCrashWithNoAnimation) {
 }
 
 TEST_F(AnimationControlControllerTest, PollTimerDoesNotCrashWithAnimation) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_TimerTest");
     ASSERT_NE(entity, nullptr);

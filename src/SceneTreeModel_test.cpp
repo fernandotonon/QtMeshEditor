@@ -25,9 +25,7 @@ protected:
         app = qobject_cast<QApplication*>(QCoreApplication::instance());
         ASSERT_NE(app, nullptr);
 
-        if (!tryInitOgre()) {
-            GTEST_SKIP() << "Skipping: Ogre initialization failed";
-        }
+        ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
 
         createStandardOgreMaterials();
         model = new SceneTreeModel();
@@ -141,9 +139,7 @@ TEST_F(SceneTreeModelTests, RootIndexIsInvalid) {
 }
 
 TEST_F(SceneTreeModelTests, RebuildWithEntity) {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
     createStandardOgreMaterials();
 
     auto mesh = createInMemoryTriangleMesh("TreeModelTestMesh");
@@ -253,9 +249,7 @@ TEST(SceneTreeItemTests, ChildParentRowAndTypeLabelsWork)
 
 TEST_F(SceneTreeModelTests, RebuildCreatesNodeEntityAndSubEntityHierarchy)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     const auto data = createEntityHierarchy("HierarchyNode", "HierarchyEntity", "HierarchyMesh");
     ASSERT_NE(data.node, nullptr);
@@ -303,9 +297,7 @@ TEST_F(SceneTreeModelTests, RebuildCreatesNodeEntityAndSubEntityHierarchy)
 
 TEST_F(SceneTreeModelTests, SelectItemSupportsNodeEntityAndSubEntitySelection)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     const auto data = createEntityHierarchy("SelectHierarchyNode", "SelectHierarchyEntity", "SelectHierarchyMesh");
     ASSERT_NE(data.node, nullptr);
@@ -348,9 +340,7 @@ TEST_F(SceneTreeModelTests, SelectItemSupportsNodeEntityAndSubEntitySelection)
 
 TEST_F(SceneTreeModelTests, SetMaterialUpdatesEntityAndSubEntityAndEmitsDataChanged)
 {
-    if (!canLoadMeshFiles()) {
-        GTEST_SKIP() << "Skipping: entity creation not supported without render window";
-    }
+    ASSERT_TRUE(canLoadMeshFiles()) << "entity creation requires GL (Xvfb in CI)";
 
     const auto data = createEntityHierarchy("MaterialNode", "MaterialEntity", "MaterialMesh");
     ASSERT_NE(data.node, nullptr);
