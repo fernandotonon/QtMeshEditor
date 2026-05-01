@@ -34,7 +34,9 @@ protected:
         if (existing)
             Ogre::MaterialManager::getSingleton().remove(existing);
 
-        QStringList uris{"./media/models/robot.mesh"};
+        const QString robotPath = testRobotMeshPath();
+        ASSERT_FALSE(robotPath.isEmpty()) << "robot.mesh not found under media/models";
+        QStringList uris{robotPath};
         ASSERT_NO_THROW(MeshImporterExporter::importer(uris));
         ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
         entity = Manager::getSingleton()->getEntities().last();

@@ -18,6 +18,7 @@ The MIT License
 #include "HalfEdgeMesh.h"
 #include <Ogre.h>
 #include <QSignalSpy>
+#include <QThread>
 #include <QDir>
 #include <QFile>
 #include <QTextStream>
@@ -1059,6 +1060,8 @@ protected:
     std::string m_nodeName;
 
     void SetUp() override {
+        Manager::kill();
+        QThread::msleep(50);
         ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
         ASSERT_TRUE(canLoadMeshFiles());
         createStandardOgreMaterials();

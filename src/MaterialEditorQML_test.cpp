@@ -1953,6 +1953,7 @@ TEST_F(MaterialEditorQMLTest, GenerateMaterialFromPrompt_EmptyPromptEmitsError) 
 
 TEST_F(MaterialEditorQMLTest, GenerateMaterialFromPrompt_NoModelLoadedEmitsError) {
 #ifdef ENABLE_LOCAL_LLM
+    LLMManager::instance()->setAutoLoadModel(false);
     LLMManager::instance()->unloadModel();
     for (int i = 0; i < 100 && editor->llmModelLoaded(); ++i) {
         QThread::msleep(20);

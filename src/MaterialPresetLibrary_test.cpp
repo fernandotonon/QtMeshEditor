@@ -91,15 +91,12 @@ TEST_F(MaterialPresetLibraryTests, PresetNamesContainsExpected) {
 }
 
 TEST_F(MaterialPresetLibraryTests, ApplyPresetWithoutSelection) {
+    // No Ogre needed: applyPreset returns early when MaterialManager is absent
+    // and the selection resolves to no entities.
     Manager::kill();
     QThread::msleep(50);
 
-    ASSERT_TRUE(tryInitOgre()) << "Ogre init failed (Xvfb/GL required in CI)";
-    createStandardOgreMaterials();
-
     auto* inst = MaterialPresetLibrary::instance();
-
-    // With no selection, applyPreset should return early without crashing
     SelectionSet::getSingleton()->clear();
     EXPECT_NO_THROW(inst->applyPreset("Plastic (Red)"));
 }

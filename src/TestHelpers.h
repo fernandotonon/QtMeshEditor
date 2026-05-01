@@ -10,6 +10,8 @@
 #include <QGuiApplication>
 #include <QWidget>
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include "Manager.h"
 
 /**
@@ -82,6 +84,34 @@ static inline void createStandardOgreMaterials()
         guiMat->getTechnique(0)->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
         guiMat->getTechnique(0)->setDepthCheckEnabled(false);
     }
+}
+
+/**
+ * Absolute path to media/models/robot.mesh for tests (binary is typically
+ * under <build>/bin; two levels up reaches the repo root). Falls back to
+ * QTMESH_UT_SOURCE_ROOT when defined (UnitTests target), then ./media/...
+ */
+static inline QString testRobotMeshPath()
+{
+    const QString binDir = QCoreApplication::applicationDirPath();
+    QDir dir(binDir);
+    if (dir.cdUp() && dir.cdUp()) {
+        const QString p = dir.absoluteFilePath(QStringLiteral("media/models/robot.mesh"));
+        if (QFile::exists(p))
+            return p;
+    }
+#ifdef QTMESH_UT_SOURCE_ROOT
+    {
+        const QString p = QDir(QString::fromUtf8(QTMESH_UT_SOURCE_ROOT))
+                              .filePath(QStringLiteral("media/models/robot.mesh"));
+        if (QFile::exists(p))
+            return p;
+    }
+#endif
+    const QString legacy = QStringLiteral("./media/models/robot.mesh");
+    if (QFile::exists(legacy))
+        return QFileInfo(legacy).absoluteFilePath();
+    return {};
 }
 
 /**

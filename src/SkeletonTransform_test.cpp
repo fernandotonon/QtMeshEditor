@@ -25,7 +25,9 @@ protected:
 
         ASSERT_TRUE(canLoadMeshFiles()) << "mesh loading requires GL (Xvfb in CI)";
 
-        QStringList validUri{"./media/models/robot.mesh"};
+        const QString robotPath = testRobotMeshPath();
+        ASSERT_FALSE(robotPath.isEmpty()) << "robot.mesh not found under media/models";
+        QStringList validUri{robotPath};
         ASSERT_NO_THROW(MeshImporterExporter::importer(validUri));
 
         ASSERT_FALSE(Manager::getSingleton()->getEntities().isEmpty());
