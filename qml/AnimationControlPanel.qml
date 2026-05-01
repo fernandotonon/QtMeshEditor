@@ -548,7 +548,11 @@ Column {
 
             // Drag handles for loop in/out points — only visible when loop is active.
             // Sits on top of the slider so drags on the handle areas don't move the playhead.
+            // Handle x stays purely bound to the controller value; we compute the
+            // new time from mouseX deltas instead of dragging the visual item
+            // (drag.target on the rectangle would break the binding after release).
             Item {
+                id: loopHandlesLayer
                 anchors.fill: parent
                 visible: AnimationControlController.loopRegionActive
 
@@ -556,24 +560,33 @@ Column {
                 property real avail: width - pad * 2
                 property real maxMs: Math.max(1, AnimationControlController.sliderMaximum)
 
+                function pxToSec(px) {
+                    var t = (px / avail) * (maxMs / 1000.0)
+                    if (t < 0) t = 0
+                    if (t > maxMs / 1000.0) t = maxMs / 1000.0
+                    return t
+                }
+
                 Rectangle {
                     id: loopStartHandle
                     width: 10; height: parent.height
-                    x: parent.pad + (AnimationControlController.loopStart * 1000 / parent.maxMs) * parent.avail - width / 2
+                    x: loopHandlesLayer.pad
+                       + (AnimationControlController.loopStart * 1000 / loopHandlesLayer.maxMs) * loopHandlesLayer.avail
+                       - width / 2
                     color: "transparent"
                     MouseArea {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.SizeHorCursor
-                        drag.target: parent
-                        drag.axis: Drag.XAxis
-                        drag.minimumX: parent.parent.pad - parent.width / 2
-                        drag.maximumX: parent.parent.pad + parent.parent.avail - parent.width / 2
-                        onPositionChanged: {
-                            if (!drag.active) return
-                            var px = parent.x + parent.width / 2 - parent.parent.pad
-                            var t = (px / parent.parent.avail) * (parent.parent.maxMs / 1000.0)
-                            if (t < 0) t = 0
+                        preventStealing: true
+                        property bool dragging: false
+                        onPressed: dragging = true
+                        onReleased: dragging = false
+                        onPositionChanged: function(mouse) {
+                            if (!dragging) return
+                            // Convert local mouseX to layer-space, then to seconds.
+                            var layerX = loopStartHandle.x + mouse.x - loopHandlesLayer.pad
+                            var t = loopHandlesLayer.pxToSec(layerX)
                             if (t > AnimationControlController.loopEnd) t = AnimationControlController.loopEnd
                             AnimationControlController.loopStart = t
                         }
@@ -583,22 +596,23 @@ Column {
                 Rectangle {
                     id: loopEndHandle
                     width: 10; height: parent.height
-                    x: parent.pad + (AnimationControlController.loopEnd * 1000 / parent.maxMs) * parent.avail - width / 2
+                    x: loopHandlesLayer.pad
+                       + (AnimationControlController.loopEnd * 1000 / loopHandlesLayer.maxMs) * loopHandlesLayer.avail
+                       - width / 2
                     color: "transparent"
                     MouseArea {
                         anchors.fill: parent
                         hoverEnabled: true
                         cursorShape: Qt.SizeHorCursor
-                        drag.target: parent
-                        drag.axis: Drag.XAxis
-                        drag.minimumX: parent.parent.pad - parent.width / 2
-                        drag.maximumX: parent.parent.pad + parent.parent.avail - parent.width / 2
-                        onPositionChanged: {
-                            if (!drag.active) return
-                            var px = parent.x + parent.width / 2 - parent.parent.pad
-                            var t = (px / parent.parent.avail) * (parent.parent.maxMs / 1000.0)
+                        preventStealing: true
+                        property bool dragging: false
+                        onPressed: dragging = true
+                        onReleased: dragging = false
+                        onPositionChanged: function(mouse) {
+                            if (!dragging) return
+                            var layerX = loopEndHandle.x + mouse.x - loopHandlesLayer.pad
+                            var t = loopHandlesLayer.pxToSec(layerX)
                             if (t < AnimationControlController.loopStart) t = AnimationControlController.loopStart
-                            if (t > parent.parent.maxMs / 1000.0) t = parent.parent.maxMs / 1000.0
                             AnimationControlController.loopEnd = t
                         }
                     }
