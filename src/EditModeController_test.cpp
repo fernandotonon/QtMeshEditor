@@ -1060,6 +1060,10 @@ protected:
     std::string m_nodeName;
 
     void SetUp() override {
+        // EditModeController connects to SelectionSet in its ctor; Manager::kill()
+        // destroys SelectionSet — recycle the controller first so the next
+        // instance wires to the fresh SelectionSet after tryInitOgre().
+        EditModeController::kill();
         Manager::kill();
         QThread::msleep(50);
         ASSERT_TRUE(tryInitOgre()) << "Ogre not available (Xvfb/GL required in CI)";
