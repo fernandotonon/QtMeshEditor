@@ -10,6 +10,7 @@
 #include <QFile>
 #include <QJsonDocument>
 #include <QTemporaryDir>
+#include <QTemporaryFile>
 
 namespace {
 QString writeMinimalObj(const QString& dirPath, const QString& fileName)
@@ -1677,4 +1678,74 @@ TEST(ScanEngineTest, ApplyFixes_RedundantKeyframesPctDryRun)
     ScanEngine::applyFixes(config, QStringLiteral("/"), asset, findings);
     EXPECT_FALSE(findings[0].fixed);
     EXPECT_TRUE(findings[0].message.contains(QStringLiteral("dry-run")));
+}
+
+// ---------------------------------------------------------------------------
+// ScanConfig::loadFromFile (YAML/JSON + missing/invalid)
+// ---------------------------------------------------------------------------
+
+TEST(ScanConfigLoadTest, LoadFromFile_MissingPathReturnsDefaults)
+{
+    ScanConfig c = ScanConfig::loadFromFile(QStringLiteral("/nonexistent/path/qtmesh_nope.yml"));
+    ScanConfig d = ScanConfig::defaults();
+    EXPECT_EQ(c.version, d.version);
+    EXPECT_EQ(c.roots, d.roots);
+}
+
+TEST(ScanConfigLoadTest, LoadFromFile_ValidYaml)
+{
+    QTemporaryFile file(QStringLiteral("%1/scan_ut_XXXXXX.yml").arg(QDir::tempPath()));
+    file.setAutoRemove(true);
+    ASSERT_TRUE(file.open());
+    const char* yaml =
+        "version: 2\n"
+        "scan:\n"
+        "  roots:\n"
+        "    - ./assets\n"
+        "rules:\n"
+        "  max_file_size_mb: 100.5\n"
+        "  require_skeleton: true\n";
+    file.write(yaml);
+    file.flush();
+
+    ScanConfig c = ScanConfig::loadFromFile(file.fileName());
+    EXPECT_EQ(c.version, 2);
+    ASSERT_EQ(c.roots.size(), 1);
+    EXPECT_EQ(c.roots[0], QStringLiteral("./assets"));
+    EXPECT_DOUBLE_EQ(c.maxFileSizeMb, 100.5);
+    EXPECT_TRUE(c.requireSkeleton);
+}
+
+TEST(ScanConfigLoadTest, LoadFromFile_ValidJson)
+{
+    QTemporaryFile file(QStringLiteral("%1/scan_ut_XXXXXX.json").arg(QDir::tempPath()));
+    file.setAutoRemove(true);
+    ASSERT_TRUE(file.open());
+    const char* json = R"json({
+  "version": 3,
+  "scan": { "roots": ["a", "b"] },
+  "report": { "format": "json", "fail_on": "warning" }
+})json";
+    file.write(json);
+    file.flush();
+
+    ScanConfig c = ScanConfig::loadFromFile(file.fileName());
+    EXPECT_EQ(c.version, 3);
+    ASSERT_EQ(c.roots.size(), 2);
+    EXPECT_EQ(c.roots[0], QStringLiteral("a"));
+    EXPECT_EQ(c.reportFormat, QStringLiteral("json"));
+    EXPECT_EQ(c.failOn, QStringLiteral("warning"));
+}
+
+TEST(ScanConfigLoadTest, LoadFromFile_InvalidJsonFallsBackToDefaults)
+{
+    QTemporaryFile file(QStringLiteral("%1/scan_ut_XXXXXX.json").arg(QDir::tempPath()));
+    file.setAutoRemove(true);
+    ASSERT_TRUE(file.open());
+    file.write("{ not valid json");
+    file.flush();
+
+    ScanConfig c = ScanConfig::loadFromFile(file.fileName());
+    ScanConfig d = ScanConfig::defaults();
+    EXPECT_EQ(c.version, d.version);
 }
