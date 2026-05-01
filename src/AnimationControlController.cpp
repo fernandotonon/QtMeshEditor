@@ -329,13 +329,6 @@ void AnimationControlController::setLoopRegionActive(bool on)
     emit loopRegionChanged();
 }
 
-void AnimationControlController::setAutoKey(bool on)
-{
-    if (on == m_autoKey) return;
-    m_autoKey = on;
-    emit autoKeyChanged();
-}
-
 double AnimationControlController::advanceTime(double currentTime, double dt) const
 {
     double next = currentTime + dt * m_playbackSpeed;
@@ -358,13 +351,6 @@ double AnimationControlController::advanceTime(double currentTime, double dt) co
         }
     }
     return next;
-}
-
-void AnimationControlController::autoKeyOnTransform()
-{
-    if (!m_autoKey) return;
-    if (!m_selectedTrack || !m_selectedEntity || m_selectedAnimation.empty()) return;
-    addKeyframe();
 }
 
 void AnimationControlController::setAnimationFrame(int ms)

@@ -48,7 +48,6 @@ class AnimationControlController : public QObject
     Q_PROPERTY(double loopStart       READ loopStart       WRITE setLoopStart       NOTIFY loopRegionChanged)
     Q_PROPERTY(double loopEnd         READ loopEnd         WRITE setLoopEnd         NOTIFY loopRegionChanged)
     Q_PROPERTY(bool   loopRegionActive READ loopRegionActive WRITE setLoopRegionActive NOTIFY loopRegionChanged)
-    Q_PROPERTY(bool   autoKey         READ autoKey         WRITE setAutoKey         NOTIFY autoKeyChanged)
 
     // Keyframe tick marks on the timeline (list of ms positions)
     Q_PROPERTY(QVariantList keyframeTicks READ keyframeTicks NOTIFY keyframeTicksChanged)
@@ -105,26 +104,20 @@ public:
     void   setSliderValue(int ms);
     void   setAnimationLength(double length);
 
-    // Playback speed / loop region / auto-key
+    // Playback speed / loop region
     double playbackSpeed()    const { return m_playbackSpeed; }
     double loopStart()        const { return m_loopStart; }
     double loopEnd()          const { return m_loopEnd; }
     bool   loopRegionActive() const { return m_loopRegionActive; }
-    bool   autoKey()          const { return m_autoKey; }
     void   setPlaybackSpeed(double s);
     void   setLoopStart(double s);
     void   setLoopEnd(double s);
     void   setLoopRegionActive(bool on);
-    void   setAutoKey(bool on);
 
     // Compute the time after applying speed scaling and (optional) loop wrap.
     // Used by MainWindow::frameRenderingQueued. `currentTime` and `dt` are
     // in seconds; returns the new time position to assign back to the state.
     double advanceTime(double currentTime, double dt) const;
-
-    // Push a keyframe at the current slider position for the active bone if
-    // auto-key is enabled. Called from TransformOperator end-of-drag.
-    void   autoKeyOnTransform();
 
     // Keyframe ticks
     QVariantList keyframeTicks() const { return m_keyframeTicks; }
@@ -181,7 +174,6 @@ signals:
     void currentKeyframeChanged();
     void playbackSpeedChanged();
     void loopRegionChanged();
-    void autoKeyChanged();
 
 private:
     AnimationControlController();
@@ -222,7 +214,6 @@ private:
     double m_loopStart        = 0.0;
     double m_loopEnd          = 0.0;
     bool   m_loopRegionActive = false;
-    bool   m_autoKey          = false;
 };
 
 #endif // ANIMATIONCONTROLCONTROLLER_H

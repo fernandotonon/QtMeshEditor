@@ -579,59 +579,6 @@ TEST_F(AnimationControlControllerPlaybackTest, LoopStartClampsToEnd) {
     EXPECT_LE(ctrl->loopStart(), ctrl->loopEnd());
 }
 
-TEST_F(AnimationControlControllerPlaybackTest, AutoKeyDefaultsOff) {
-    auto* ctrl = AnimationControlController::instance();
-    EXPECT_FALSE(ctrl->autoKey());
-}
-
-TEST_F(AnimationControlControllerPlaybackTest, AutoKeyOnTransformNoOpWhenDisabled) {
-    auto* ctrl = AnimationControlController::instance();
-    ctrl->setAutoKey(false);
-    EXPECT_NO_THROW(ctrl->autoKeyOnTransform());
-}
-
-TEST_F(AnimationControlControllerPlaybackTest, AutoKeyOnTransformNoOpWhenNoTrack) {
-    auto* ctrl = AnimationControlController::instance();
-    ctrl->setAutoKey(true);
-    // No track selected → safely no-ops
-    EXPECT_NO_THROW(ctrl->autoKeyOnTransform());
-}
-
-TEST_F(AnimationControlControllerPlaybackTest, AutoKeyToggleEmitsSignal) {
-    auto* ctrl = AnimationControlController::instance();
-    QSignalSpy spy(ctrl, &AnimationControlController::autoKeyChanged);
-    ctrl->setAutoKey(true);
-    EXPECT_EQ(spy.count(), 1);
-    ctrl->setAutoKey(true); // unchanged — no re-emit
-    EXPECT_EQ(spy.count(), 1);
-}
-
-// ── Auto-key with a real Ogre track (Ogre-fixture) ───────────────────────────
-
-TEST_F(AnimationControlControllerTest, AutoKeyOnTransformAddsKeyframeWhenEnabled) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
-
-    Ogre::Entity* entity = setupAnimatedEntity("ACC_AutoKeyTest");
-    ASSERT_NE(entity, nullptr);
-
-    auto* ctrl = AnimationControlController::instance();
-    ctrl->updateAnimationTree();
-    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
-    ASSERT_FALSE(ctrl->boneNames().isEmpty());
-    ctrl->selectBone(ctrl->boneNames().first());
-
-    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
-                         ->_getNodeTrackList().begin()->second;
-    int before = track->getNumKeyFrames();
-
-    ctrl->setSliderValue(250); // between existing keyframes
-    ctrl->setAutoKey(true);
-    ctrl->autoKeyOnTransform();
-    app->processEvents();
-
-    EXPECT_EQ(track->getNumKeyFrames(), before + 1);
-}
-
 TEST_F(AnimationControlControllerTest, SelectAnimationResetsLoopRegion) {
     if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
 
