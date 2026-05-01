@@ -105,7 +105,11 @@ public:
     void setOffscreenThreadsafe()
     {
         qputenv("QT_QPA_PLATFORM", QByteArray("offscreen"));
-        GTEST_FLAG_SET(death_test_style, "threadsafe");
+        // "fast" re-execs the test binary in a clean process (no duplicate
+        // QApplication). "threadsafe" forks while UnitTests already has a
+        // QApplication in main(), and CLIPipeline::run() would construct a
+        // second one → abort / exit 1 instead of _exit(2).
+        GTEST_FLAG_SET(death_test_style, "fast");
     }
 
     ~ScopedDeathTestEnvironment()
