@@ -41,6 +41,7 @@
 #include "AnimationWidget.h"
 #include "AnimationMerger.h"
 #include "SelectionSet.h"
+#include "AnimationBlender.h"
 #include "AnimationControlController.h"
 #include "MaterialEditorQML.h"
 #include "LLMSettingsWidget.h"
@@ -277,6 +278,7 @@ MainWindow::~MainWindow()
     if (manager) {
         EditModeController::kill();
         SubEntityHighlight::kill();
+        AnimationBlender::kill();
         AnimationControlController::kill();
         MeshLodController::kill();
         MeshValidator::kill();
@@ -377,6 +379,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<AnimationControlController>("AnimationControl", 1, 0, "AnimationControlController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AnimationControlController::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<AnimationBlender>("AnimationControl", 1, 0, "AnimationBlender",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return AnimationBlender::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<MeshLodController>("PropertiesPanel", 1, 0, "MeshLodController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -1330,6 +1336,7 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     if(isPlaying)
     {
         const auto* animCtrl = AnimationControlController::instance();
+        auto* blender = AnimationBlender::instance();
         const std::string activeEntity = animCtrl->selectedEntityName().toStdString();
         const std::string activeAnim   = animCtrl->selectedAnimation().toStdString();
         const auto dt = static_cast<double>(evt.timeSinceLastFrame);
@@ -1344,6 +1351,11 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
 
                 auto* ent = static_cast<Ogre::Entity*>(obj);
                 const bool isActiveEntity = (!activeEntity.empty() && ent->getName() == activeEntity);
+
+                // If the blender is active and owns this entity, it sets all
+                // weights and advances time itself — skip the per-state loop.
+                if (isActiveEntity && blender->apply(ent, scaledDt)) continue;
+
                 Ogre::AnimationStateSet const* set = ent->getAllAnimationStates();
                 if(!set) continue;
                 for(const auto& [key, value] : set->getAnimationStates())

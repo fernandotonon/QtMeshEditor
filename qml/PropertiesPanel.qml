@@ -1637,6 +1637,132 @@ Rectangle {
                 }
             }
 
+            // ── Blend (two-way live blend + bake) ─────────────────────────────
+            Column {
+                width: parent.width - 16
+                spacing: 4
+                visible: AnimationControlController.hasAnimation
+                         && AnimationBlender.animations.length >= 2
+
+                Row {
+                    spacing: 8
+                    Text {
+                        text: "Blend:"; font.bold: true
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    CheckBox {
+                        text: "Active"
+                        checked: AnimationBlender.active
+                        onToggled: AnimationBlender.active = checked
+                        font.pixelSize: 11
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    width: parent.width
+
+                    ComboBox {
+                        id: animAPicker
+                        width: (parent.width - 12) / 2
+                        height: 24
+                        model: AnimationBlender.animations
+                        property string current: AnimationBlender.animA
+                        currentIndex: model.indexOf(current)
+                        onActivated: AnimationBlender.animA = model[currentIndex]
+                        Connections {
+                            target: AnimationBlender
+                            function onSelectionChanged() {
+                                animAPicker.currentIndex = animAPicker.model.indexOf(AnimationBlender.animA)
+                            }
+                            function onAnimationsChanged() {
+                                animAPicker.currentIndex = animAPicker.model.indexOf(AnimationBlender.animA)
+                            }
+                        }
+                        font.pixelSize: 11
+                    }
+
+                    ComboBox {
+                        id: animBPicker
+                        width: (parent.width - 12) / 2
+                        height: 24
+                        model: AnimationBlender.animations
+                        property string current: AnimationBlender.animB
+                        currentIndex: model.indexOf(current)
+                        onActivated: AnimationBlender.animB = model[currentIndex]
+                        Connections {
+                            target: AnimationBlender
+                            function onSelectionChanged() {
+                                animBPicker.currentIndex = animBPicker.model.indexOf(AnimationBlender.animB)
+                            }
+                            function onAnimationsChanged() {
+                                animBPicker.currentIndex = animBPicker.model.indexOf(AnimationBlender.animB)
+                            }
+                        }
+                        font.pixelSize: 11
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    width: parent.width
+                    Text {
+                        text: "Weight:"
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Slider {
+                        id: weightSlider
+                        from: 0; to: 1; stepSize: 0.01
+                        width: parent.width - 90
+                        value: AnimationBlender.weight
+                        onMoved: AnimationBlender.weight = value
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    Text {
+                        text: AnimationBlender.weight.toFixed(2)
+                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                }
+
+                Row {
+                    spacing: 6
+                    width: parent.width
+
+                    ComboBox {
+                        id: modeCombo
+                        width: 100; height: 24
+                        model: ["Mix", "Additive", "Override"]
+                        currentIndex: AnimationBlender.mode
+                        onActivated: AnimationBlender.mode = currentIndex
+                        font.pixelSize: 11
+                    }
+
+                    TextField {
+                        id: bakeNameInput
+                        width: parent.width - 100 - 6 - 70 - 12
+                        height: 24
+                        placeholderText: "BlendedClip"
+                        font.pixelSize: 11
+                    }
+
+                    Button {
+                        text: "Bake"
+                        width: 70; height: 24
+                        font.pixelSize: 11
+                        onClicked: {
+                            var name = bakeNameInput.text.length > 0
+                                       ? bakeNameInput.text
+                                       : "Blended_" + AnimationBlender.animA + "_" + AnimationBlender.animB
+                            var result = AnimationBlender.bake(name, 30)
+                            if (result.length > 0) bakeNameInput.text = ""
+                        }
+                    }
+                }
+            }
+
             // Per-entity groups
             Repeater {
                 model: entityGroups
