@@ -40,6 +40,7 @@ class AnimationBlender : public QObject
     Q_PROPERTY(double      weight   READ weight   WRITE setWeight   NOTIFY weightChanged)
     Q_PROPERTY(int         mode     READ mode     WRITE setMode     NOTIFY modeChanged)
     Q_PROPERTY(QStringList animations READ animations NOTIFY animationsChanged)
+    Q_PROPERTY(QString     activeEntityName READ activeEntityName NOTIFY animationsChanged)
 
 public:
     enum Mode {
@@ -53,12 +54,13 @@ public:
     static AnimationBlender* qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine);
     static void kill();
 
-    bool        active()     const { return m_active; }
-    QString     animA()      const;
-    QString     animB()      const;
-    double      weight()     const { return m_weight; }
-    int         mode()       const { return static_cast<int>(m_mode); }
-    QStringList animations() const { return m_animations; }
+    bool        active()           const { return m_active; }
+    QString     animA()            const;
+    QString     animB()            const;
+    double      weight()           const { return m_weight; }
+    int         mode()             const { return static_cast<int>(m_mode); }
+    QStringList animations()       const { return m_animations; }
+    QString     activeEntityName() const { return QString::fromStdString(m_activeEntityName); }
 
     void setActive(bool on);
     void setAnimA(const QString& name);

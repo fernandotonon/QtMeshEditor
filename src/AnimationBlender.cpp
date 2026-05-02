@@ -1,6 +1,7 @@
 #include "AnimationBlender.h"
 #include "AnimationControlController.h"
 #include "SelectionSet.h"
+#include "SentryReporter.h"
 
 #include <Ogre.h>
 #include <OgreSkeletonInstance.h>
@@ -37,9 +38,14 @@ void AnimationBlender::kill()
 AnimationBlender::AnimationBlender()
     : QObject(nullptr)
 {
-    const auto* ctrl = AnimationControlController::instance();
+    auto* ctrl = AnimationControlController::instance();
     connect(ctrl, &AnimationControlController::selectionChanged,
             this, &AnimationBlender::refreshFromSelection);
+    // Tell the Animation Control panel about newly baked clips so its
+    // animation tree picks them up without requiring a re-select. Inspector
+    // is wired separately in PropertiesPanelController.
+    connect(this, &AnimationBlender::clipBaked,
+            ctrl, &AnimationControlController::updateAnimationTree);
 }
 
 QString AnimationBlender::animA() const { return QString::fromStdString(m_animA); }
@@ -49,13 +55,28 @@ void AnimationBlender::setActive(bool on)
 {
     if (on == m_active) return;
     m_active = on;
-    if (!on) {
+    if (on) {
+        // Snapshot the entity's pre-blend state so deactivation can restore
+        // it, then immediately turn off every animation layer. apply() on
+        // the next frame turns A and B back on with the right weights;
+        // doing it here prevents a one-frame flash where a stale checked
+        // animation continues to play before the blend kicks in.
+        Ogre::Entity* entity = resolveActiveEntity();
+        captureSnapshot(entity);
+        if (entity) {
+            if (auto* set = entity->getAllAnimationStates()) {
+                for (const auto& [name, state] : set->getAnimationStates()) {
+                    state->setEnabled(false);
+                }
+            }
+        }
+    } else {
         // Toggling off: roll the entity's animation states back to whatever
         // they looked like before the blender started writing to them.
         restoreSnapshot();
-    } else {
-        captureSnapshot(resolveActiveEntity());
     }
+    // Inspector listens to activeChanged and refreshes its animation list,
+    // which keeps its per-anim Enable/Loop checkboxes in sync.
     emit activeChanged();
 }
 
@@ -449,7 +470,23 @@ QString AnimationBlender::bake(const QString& clipName, int fps)
     skel->setBlendMode(prevBlend);
 
     entity->refreshAvailableAnimationState();
+
+    // Deactivate so the per-frame apply() stops re-imposing blender weights
+    // on top of the restored state. Without this, the next render tick would
+    // overwrite the pre-bake configuration we just restored. setActive(false)
+    // also calls restoreSnapshot(), which is a no-op if Active was off.
+    setActive(false);
+
     refreshFromSelection();
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QString("Bake blended animation '%1' (mode=%2, weight=%3, fps=%4, length=%5s, samples=%6)")
+            .arg(clipName)
+            .arg(m_mode == ModeMix ? "mix" : (m_mode == ModeAdditive ? "additive" : "override"))
+            .arg(m_weight, 0, 'f', 2)
+            .arg(fps)
+            .arg(length, 0, 'f', 3)
+            .arg(sampleCount));
     emit clipBaked(clipName);
     return clipName;
 }

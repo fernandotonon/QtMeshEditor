@@ -110,6 +110,31 @@ TEST_F(AnimationBlenderPropertyTest, BakeWithNoSelectionReturnsEmpty) {
     EXPECT_TRUE(b->bake("MyClip", 30).isEmpty());
 }
 
+TEST_F(AnimationBlenderPropertyTest, BakeRefusesEmptyAnimAB) {
+    auto* b = AnimationBlender::instance();
+    // animA/animB unset → bake bails out before ever touching the entity.
+    EXPECT_TRUE(b->bake("X", 30).isEmpty());
+    b->setAnimA("walk");
+    EXPECT_TRUE(b->bake("X", 30).isEmpty());
+    b->setAnimA("");
+    b->setAnimB("run");
+    EXPECT_TRUE(b->bake("X", 30).isEmpty());
+}
+
+TEST_F(AnimationBlenderPropertyTest, ActiveEntityNameDefaultsEmpty) {
+    auto* b = AnimationBlender::instance();
+    EXPECT_TRUE(b->activeEntityName().isEmpty());
+}
+
+TEST_F(AnimationBlenderPropertyTest, BakeOverSourceClipReturnsEmpty) {
+    auto* b = AnimationBlender::instance();
+    b->setAnimA("walk");
+    b->setAnimB("run");
+    // Even with no entity resolved, the source-name guard should fire first.
+    EXPECT_TRUE(b->bake("walk", 30).isEmpty());
+    EXPECT_TRUE(b->bake("run", 30).isEmpty());
+}
+
 // ── Live blend + bake against a real animated entity ──────────────────────────
 //
 // Uses the standard Ogre test fixture pattern. createAnimatedTestEntity() only
@@ -290,4 +315,118 @@ TEST_F(AnimationBlenderTest, BakeOverwritesExistingClipWithSameName) {
     auto* track = skel->getAnimation("Reusable")->getNodeTrack(1);
     ASSERT_NE(track, nullptr);
     EXPECT_EQ(track->getNumKeyFrames(), 61u);
+}
+
+// ── New behavior tests (snapshot/restore + bake side effects) ─────────────────
+
+TEST_F(AnimationBlenderTest, BakeRefusesToOverwriteSourceClip) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupBlendEntity("ABT_OverwriteSourceTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* b = AnimationBlender::instance();
+    b->refreshFromSelection();
+    b->setAnimA("TestAnim");
+    b->setAnimB("TestAnimB");
+    // Both source clip names should be rejected.
+    EXPECT_TRUE(b->bake("TestAnim", 30).isEmpty());
+    EXPECT_TRUE(b->bake("TestAnimB", 30).isEmpty());
+    // Source clips remain intact.
+    EXPECT_TRUE(entity->getSkeleton()->hasAnimation("TestAnim"));
+    EXPECT_TRUE(entity->getSkeleton()->hasAnimation("TestAnimB"));
+}
+
+TEST_F(AnimationBlenderTest, ActivateDisablesEveryAnimationState) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupBlendEntity("ABT_ActivateDisablesTest");
+    ASSERT_NE(entity, nullptr);
+
+    // Pre-condition: both animations enabled before activation.
+    auto* setBefore = entity->getAllAnimationStates();
+    setBefore->getAnimationState("TestAnim")->setEnabled(true);
+    setBefore->getAnimationState("TestAnimB")->setEnabled(true);
+
+    auto* b = AnimationBlender::instance();
+    b->refreshFromSelection();
+    b->setAnimA("TestAnim");
+    b->setAnimB("TestAnimB");
+    b->setActive(true);
+
+    // After activation, every per-anim state should be disabled. apply()
+    // re-enables A and B on the next render tick — but in this test there's
+    // no tick, so we only check the immediate post-activation state.
+    auto* set = entity->getAllAnimationStates();
+    for (const auto& [name, state] : set->getAnimationStates()) {
+        EXPECT_FALSE(state->getEnabled())
+            << "expected " << name << " disabled after blender activate";
+    }
+}
+
+TEST_F(AnimationBlenderTest, DeactivateRestoresPreActivateEnabledFlags) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupBlendEntity("ABT_DeactivateRestoresTest");
+    ASSERT_NE(entity, nullptr);
+
+    // Set a known pre-blend configuration: only TestAnim enabled.
+    auto* set = entity->getAllAnimationStates();
+    set->getAnimationState("TestAnim")->setEnabled(true);
+    set->getAnimationState("TestAnimB")->setEnabled(false);
+
+    auto* b = AnimationBlender::instance();
+    b->refreshFromSelection();
+    b->setAnimA("TestAnim");
+    b->setAnimB("TestAnimB");
+    b->setActive(true);
+    // Verify activation changed things.
+    EXPECT_FALSE(set->getAnimationState("TestAnim")->getEnabled());
+
+    b->setActive(false);
+    // After deactivation, the snapshot should restore the original flags.
+    EXPECT_TRUE(set->getAnimationState("TestAnim")->getEnabled());
+    EXPECT_FALSE(set->getAnimationState("TestAnimB")->getEnabled());
+}
+
+TEST_F(AnimationBlenderTest, BakeDeactivatesBlender) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupBlendEntity("ABT_BakeDeactivatesTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* b = AnimationBlender::instance();
+    b->refreshFromSelection();
+    b->setAnimA("TestAnim");
+    b->setAnimB("TestAnimB");
+    b->setActive(true);
+    EXPECT_TRUE(b->active());
+
+    ASSERT_FALSE(b->bake("BakedClip", 30).isEmpty());
+
+    // After bake, the blender should have deactivated itself so the live
+    // preview returns to the pre-blend state.
+    EXPECT_FALSE(b->active());
+}
+
+TEST_F(AnimationBlenderTest, ClipBakedSignalEmittedOnSuccess) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupBlendEntity("ABT_ClipBakedSignalTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* b = AnimationBlender::instance();
+    b->refreshFromSelection();
+    b->setAnimA("TestAnim");
+    b->setAnimB("TestAnimB");
+
+    QSignalSpy spy(b, &AnimationBlender::clipBaked);
+    ASSERT_FALSE(b->bake("SignalClip", 30).isEmpty());
+    EXPECT_EQ(spy.count(), 1);
+    EXPECT_EQ(spy.takeFirst().at(0).toString(), "SignalClip");
+}
+
+TEST_F(AnimationBlenderTest, ActiveEntityNameTracksControllerSelection) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupBlendEntity("ABT_ActiveEntityNameTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* b = AnimationBlender::instance();
+    b->refreshFromSelection();
+    EXPECT_EQ(b->activeEntityName().toStdString(), entity->getName());
 }

@@ -318,7 +318,7 @@ Rectangle {
                 Rectangle {
                     width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                     border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                    color: editToolsCol.softSelOn ? PropertiesPanelController.highlightColor : "transparent"
+                    color: editToolsCol.softSelOn ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
                     Behavior on color { ColorAnimation { duration: 50 } }
                     Text { anchors.centerIn: parent; text: editToolsCol.softSelOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -418,7 +418,7 @@ Rectangle {
                 Rectangle {
                     width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                     border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                    color: editToolsCol.wireframeOn ? PropertiesPanelController.highlightColor : "transparent"
+                    color: editToolsCol.wireframeOn ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
                     Behavior on color { ColorAnimation { duration: 50 } }
                     Text { anchors.centerIn: parent; text: editToolsCol.wireframeOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -436,7 +436,7 @@ Rectangle {
                 Rectangle {
                     width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                     border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                    color: editToolsCol.vertexPreviewOn ? PropertiesPanelController.highlightColor : "transparent"
+                    color: editToolsCol.vertexPreviewOn ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
                     Behavior on color { ColorAnimation { duration: 50 } }
                     Text { anchors.centerIn: parent; text: editToolsCol.vertexPreviewOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
                     MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor
@@ -785,7 +785,7 @@ Rectangle {
                 Rectangle {
                     width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                     border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                    color: snapCol.snapOn ? PropertiesPanelController.highlightColor : "transparent"
+                    color: snapCol.snapOn ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
                     Behavior on color { ColorAnimation { duration: 50 } }
                     Text { anchors.centerIn: parent; text: snapCol.snapOn ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
                     MouseArea {
@@ -1637,126 +1637,191 @@ Rectangle {
                 }
             }
 
-            // ── Blend (two-way live blend + bake) ─────────────────────────────
+            // ── Blend (two-way live blend + bake) — collapsible subgroup ─────
             Column {
+                id: blendGroup
                 width: parent.width - 16
                 spacing: 4
                 visible: AnimationBlender.animations.length >= 2
 
-                Row {
-                    spacing: 8
-                    Text {
-                        text: "Blend:"; font.bold: true
-                        color: PropertiesPanelController.textColor; font.pixelSize: 11
+                property bool blendExpanded: false
+
+                Rectangle {
+                    width: parent.width
+                    height: 22
+                    color: blendHeaderMouse.containsMouse
+                           ? Qt.lighter(PropertiesPanelController.headerColor, 1.1)
+                           : PropertiesPanelController.headerColor
+                    border.color: PropertiesPanelController.borderColor
+                    border.width: 1
+
+                    Row {
                         anchors.verticalCenter: parent.verticalCenter
+                        anchors.left: parent.left; anchors.leftMargin: 6
+                        spacing: 4
+
+                        Text {
+                            text: blendGroup.blendExpanded ? "▼" : "▶"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 9
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            text: "Blend"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11; font.bold: true
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            visible: AnimationBlender.active
+                            text: "(active)"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 10; font.italic: true
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
                     }
-                    CheckBox {
-                        text: "Active"
-                        checked: AnimationBlender.active
-                        onToggled: AnimationBlender.active = checked
-                        font.pixelSize: 11
+
+                    MouseArea {
+                        id: blendHeaderMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: blendGroup.blendExpanded = !blendGroup.blendExpanded
                     }
                 }
 
-                Row {
-                    spacing: 6
+                Column {
                     width: parent.width
+                    spacing: 4
+                    visible: blendGroup.blendExpanded
 
-                    ComboBox {
-                        id: animAPicker
-                        width: (parent.width - 12) / 2
-                        height: 24
-                        model: AnimationBlender.animations
-                        property string current: AnimationBlender.animA
-                        currentIndex: model.indexOf(current)
-                        onActivated: AnimationBlender.animA = model[currentIndex]
-                        Connections {
-                            target: AnimationBlender
-                            function onSelectionChanged() {
-                                animAPicker.currentIndex = animAPicker.model.indexOf(AnimationBlender.animA)
+                    Row {
+                        spacing: 6
+                        // "Active" toggle styled like the per-anim Enable/Loop boxes
+                        Rectangle {
+                            width: 14; height: 14
+                            anchors.verticalCenter: parent.verticalCenter
+                            border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
+                            color: AnimationBlender.active
+                                   ? PropertiesPanelController.highlightColor
+                                   : PropertiesPanelController.controlBgColor
+                            Text {
+                                anchors.centerIn: parent
+                                text: AnimationBlender.active ? "✓" : ""
+                                color: "white"; font.pixelSize: 10
                             }
-                            function onAnimationsChanged() {
-                                animAPicker.currentIndex = animAPicker.model.indexOf(AnimationBlender.animA)
+                            MouseArea {
+                                anchors.fill: parent
+                                onClicked: AnimationBlender.active = !AnimationBlender.active
                             }
                         }
-                        font.pixelSize: 11
-                    }
-
-                    ComboBox {
-                        id: animBPicker
-                        width: (parent.width - 12) / 2
-                        height: 24
-                        model: AnimationBlender.animations
-                        property string current: AnimationBlender.animB
-                        currentIndex: model.indexOf(current)
-                        onActivated: AnimationBlender.animB = model[currentIndex]
-                        Connections {
-                            target: AnimationBlender
-                            function onSelectionChanged() {
-                                animBPicker.currentIndex = animBPicker.model.indexOf(AnimationBlender.animB)
-                            }
-                            function onAnimationsChanged() {
-                                animBPicker.currentIndex = animBPicker.model.indexOf(AnimationBlender.animB)
-                            }
+                        Text {
+                            text: "Active"
+                            color: PropertiesPanelController.textColor
+                            font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
                         }
-                        font.pixelSize: 11
-                    }
-                }
-
-                Row {
-                    spacing: 6
-                    width: parent.width
-                    Text {
-                        text: "Weight:"
-                        color: PropertiesPanelController.textColor; font.pixelSize: 11
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Slider {
-                        id: weightSlider
-                        from: 0; to: 1; stepSize: 0.01
-                        width: parent.width - 90
-                        value: AnimationBlender.weight
-                        onMoved: AnimationBlender.weight = value
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                    Text {
-                        text: AnimationBlender.weight.toFixed(2)
-                        color: PropertiesPanelController.textColor; font.pixelSize: 11
-                        anchors.verticalCenter: parent.verticalCenter
-                    }
-                }
-
-                Row {
-                    spacing: 6
-                    width: parent.width
-
-                    ComboBox {
-                        id: modeCombo
-                        width: 100; height: 24
-                        model: ["Mix", "Additive", "Override"]
-                        currentIndex: AnimationBlender.mode
-                        onActivated: AnimationBlender.mode = currentIndex
-                        font.pixelSize: 11
                     }
 
-                    TextField {
-                        id: bakeNameInput
-                        width: parent.width - 100 - 6 - 70 - 12
-                        height: 24
-                        placeholderText: "BlendedClip"
-                        font.pixelSize: 11
+                    Row {
+                        spacing: 6
+                        width: parent.width
+
+                        ComboBox {
+                            id: animAPicker
+                            width: (parent.width - 12) / 2
+                            height: 24
+                            model: AnimationBlender.animations
+                            property string current: AnimationBlender.animA
+                            currentIndex: model.indexOf(current)
+                            onActivated: AnimationBlender.animA = model[currentIndex]
+                            Connections {
+                                target: AnimationBlender
+                                function onSelectionChanged() {
+                                    animAPicker.currentIndex = animAPicker.model.indexOf(AnimationBlender.animA)
+                                }
+                                function onAnimationsChanged() {
+                                    animAPicker.currentIndex = animAPicker.model.indexOf(AnimationBlender.animA)
+                                }
+                            }
+                            font.pixelSize: 11
+                        }
+
+                        ComboBox {
+                            id: animBPicker
+                            width: (parent.width - 12) / 2
+                            height: 24
+                            model: AnimationBlender.animations
+                            property string current: AnimationBlender.animB
+                            currentIndex: model.indexOf(current)
+                            onActivated: AnimationBlender.animB = model[currentIndex]
+                            Connections {
+                                target: AnimationBlender
+                                function onSelectionChanged() {
+                                    animBPicker.currentIndex = animBPicker.model.indexOf(AnimationBlender.animB)
+                                }
+                                function onAnimationsChanged() {
+                                    animBPicker.currentIndex = animBPicker.model.indexOf(AnimationBlender.animB)
+                                }
+                            }
+                            font.pixelSize: 11
+                        }
                     }
 
-                    Button {
-                        text: "Bake"
-                        width: 70; height: 24
-                        font.pixelSize: 11
-                        onClicked: {
-                            var name = bakeNameInput.text.length > 0
-                                       ? bakeNameInput.text
-                                       : "Blended_" + AnimationBlender.animA + "_" + AnimationBlender.animB
-                            var result = AnimationBlender.bake(name, 30)
-                            if (result.length > 0) bakeNameInput.text = ""
+                    Row {
+                        spacing: 6
+                        width: parent.width
+                        Text {
+                            text: "Weight:"
+                            color: PropertiesPanelController.textColor; font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Slider {
+                            id: weightSlider
+                            from: 0; to: 1; stepSize: 0.01
+                            width: parent.width - 90
+                            value: AnimationBlender.weight
+                            onMoved: AnimationBlender.weight = value
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                        Text {
+                            text: AnimationBlender.weight.toFixed(2)
+                            color: PropertiesPanelController.textColor; font.pixelSize: 11
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+                    }
+
+                    Row {
+                        spacing: 6
+                        width: parent.width
+
+                        ComboBox {
+                            id: modeCombo
+                            width: 100; height: 24
+                            model: ["Mix", "Additive", "Override"]
+                            currentIndex: AnimationBlender.mode
+                            onActivated: AnimationBlender.mode = currentIndex
+                            font.pixelSize: 11
+                        }
+
+                        TextField {
+                            id: bakeNameInput
+                            width: parent.width - 100 - 6 - 70 - 12
+                            height: 24
+                            placeholderText: "BlendedClip"
+                            font.pixelSize: 11
+                        }
+
+                        Button {
+                            text: "Bake"
+                            width: 70; height: 24
+                            font.pixelSize: 11
+                            onClicked: {
+                                var name = bakeNameInput.text.length > 0
+                                           ? bakeNameInput.text
+                                           : "Blended_" + AnimationBlender.animA + "_" + AnimationBlender.animB
+                                var result = AnimationBlender.bake(name, 30)
+                                if (result.length > 0) bakeNameInput.text = ""
+                            }
                         }
                     }
                 }
@@ -1844,6 +1909,12 @@ Rectangle {
                             Rectangle {
                                 width: parent.width - 8; height: 22; color: "transparent"
 
+                                // True when this entity's per-anim toggles are owned by the blender.
+                                // While the blender is active for this entity, Enable/Loop are
+                                // disabled to avoid fighting blender::apply() each frame.
+                                property bool blenderOwns: AnimationBlender.active
+                                    && AnimationBlender.activeEntityName === grp.entity
+
                                 Row {
                                     anchors.fill: parent; spacing: 6
 
@@ -1851,18 +1922,28 @@ Rectangle {
                                     Rectangle {
                                         width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                                         border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                                        color: modelData.enabled ? PropertiesPanelController.highlightColor : "transparent"
+                                        color: modelData.enabled ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
+                                        opacity: blenderOwns ? 0.4 : 1.0
                                         Text { anchors.centerIn: parent; text: modelData.enabled ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
-                                        MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.toggleAnimationEnabled(grp.entity, modelData.name, !modelData.enabled) }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            enabled: !blenderOwns
+                                            onClicked: PropertiesPanelController.toggleAnimationEnabled(grp.entity, modelData.name, !modelData.enabled)
+                                        }
                                     }
 
                                     // Loop checkbox
                                     Rectangle {
                                         width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                                         border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 7
-                                        color: modelData.loop ? PropertiesPanelController.highlightColor : "transparent"
+                                        color: modelData.loop ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
+                                        opacity: blenderOwns ? 0.4 : 1.0
                                         Text { anchors.centerIn: parent; text: modelData.loop ? "\u21BB" : ""; color: "white"; font.pixelSize: 8 }
-                                        MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.toggleAnimationLoop(grp.entity, modelData.name, !modelData.loop) }
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            enabled: !blenderOwns
+                                            onClicked: PropertiesPanelController.toggleAnimationLoop(grp.entity, modelData.name, !modelData.loop)
+                                        }
                                     }
 
                                     // Name (double-click to rename)
@@ -1957,7 +2038,7 @@ Rectangle {
                             Rectangle {
                                 width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                                 border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                                color: grp.showSkeleton ? PropertiesPanelController.highlightColor : "transparent"
+                                color: grp.showSkeleton ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
                                 Text { anchors.centerIn: parent; text: grp.showSkeleton ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
                                 MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.toggleSkeletonDebug(grp.entity, !grp.showSkeleton) }
                             }
@@ -1966,7 +2047,7 @@ Rectangle {
                             Rectangle {
                                 width: 14; height: 14; anchors.verticalCenter: parent.verticalCenter
                                 border.color: PropertiesPanelController.borderColor; border.width: 1; radius: 2
-                                color: grp.showWeights ? PropertiesPanelController.highlightColor : "transparent"
+                                color: grp.showWeights ? PropertiesPanelController.highlightColor : PropertiesPanelController.controlBgColor
                                 Text { anchors.centerIn: parent; text: grp.showWeights ? "\u2713" : ""; color: "white"; font.pixelSize: 10 }
                                 MouseArea { anchors.fill: parent; onClicked: PropertiesPanelController.toggleBoneWeights(grp.entity, !grp.showWeights) }
                             }
