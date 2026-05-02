@@ -1585,7 +1585,7 @@ Rectangle {
                 function onAnimationStateChanged() { refreshAnimData() }
             }
 
-            // Play/Pause button
+            // Play/Pause button + playback speed (applies to selected entity only)
             Row {
                 spacing: 8
                 width: parent.width - 16
@@ -1606,6 +1606,34 @@ Rectangle {
                         id: playMouse; anchors.fill: parent; hoverEnabled: true
                         onClicked: PropertiesPanelController.playing = !PropertiesPanelController.playing
                     }
+                }
+
+                Text {
+                    text: "Speed:"
+                    color: PropertiesPanelController.textColor; font.pixelSize: 11
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                ComboBox {
+                    id: speedCombo
+                    width: 72; height: 26
+                    anchors.verticalCenter: parent.verticalCenter
+                    model: ["0.25x", "0.5x", "1x", "2x", "4x"]
+                    property var values: [0.25, 0.5, 1.0, 2.0, 4.0]
+                    // Pick the nearest preset rather than silently falling back
+                    // to 1× when the controller's value isn't an exact match.
+                    currentIndex: {
+                        var s = AnimationControlController.playbackSpeed
+                        var bestIndex = 0
+                        var bestDiff = Math.abs(values[0] - s)
+                        for (var i = 1; i < values.length; ++i) {
+                            var diff = Math.abs(values[i] - s)
+                            if (diff < bestDiff) { bestDiff = diff; bestIndex = i }
+                        }
+                        return bestIndex
+                    }
+                    onActivated: AnimationControlController.playbackSpeed = values[currentIndex]
+                    font.pixelSize: 11
                 }
             }
 
