@@ -109,6 +109,10 @@ TEST_F(PropertiesPanelControllerTests, ThemeColorsTrackApplicationPalette)
     EXPECT_EQ(controller->borderColor(), mid);
     EXPECT_EQ(controller->inputColor(), base);
     EXPECT_EQ(controller->highlightColor(), highlight);
+    // controlBgColor is a lightened Button used as the unchecked-checkbox
+    // background — must differ from the panel itself so toggles stay visible.
+    EXPECT_EQ(controller->controlBgColor(), button.lighter(115));
+    EXPECT_NE(controller->controlBgColor(), controller->panelColor());
 }
 
 TEST_F(PropertiesPanelControllerTests, PaletteChangeEmitsThemeChanged)

@@ -4,6 +4,7 @@
 #include "TransformOperator.h"
 #include "PrimitiveObject.h"
 #include "AnimationWidget.h"
+#include "AnimationBlender.h"
 #include "SkeletonTransform.h"
 #include "AnimationMerger.h"
 #include "SentryReporter.h"
@@ -52,6 +53,16 @@ PropertiesPanelController::PropertiesPanelController() : QObject(nullptr)
 {
     connect(SelectionSet::getSingleton(), &SelectionSet::selectionChanged,
             this, &PropertiesPanelController::onSelectionChanged);
+
+    // When the blender bakes a new clip, the entity's animation list grew —
+    // tell the Inspector to re-query so the new clip shows up immediately.
+    connect(AnimationBlender::instance(), &AnimationBlender::clipBaked,
+            this, [this]() { emit animationStateChanged(); });
+    // When the blender activates, it disables every per-animation enabled
+    // flag on the active entity; deactivation restores them. Either way the
+    // panel needs to re-read so its checkboxes match.
+    connect(AnimationBlender::instance(), &AnimationBlender::activeChanged,
+            this, [this]() { emit animationStateChanged(); });
 
     auto* transformOp = TransformOperator::getSingleton();
     connect(transformOp, &TransformOperator::selectedPositionChanged, this, [this](const Ogre::Vector3& pos) {
@@ -120,6 +131,15 @@ QColor PropertiesPanelController::borderColor() const
 QColor PropertiesPanelController::inputColor() const
 {
     return QApplication::palette().color(QPalette::Base);
+}
+
+QColor PropertiesPanelController::controlBgColor() const
+{
+    // A lighter shade of the panel background — gives small toggles
+    // (custom checkboxes, small buttons) a visible silhouette in dark mode
+    // without being as dark as Base (which is QColor(35,35,35) and would
+    // disappear next to QPalette::Window).
+    return QApplication::palette().color(QPalette::Button).lighter(115);
 }
 
 QColor PropertiesPanelController::highlightColor() const

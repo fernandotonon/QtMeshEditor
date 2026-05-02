@@ -4,6 +4,7 @@
 
 set(SRC_FILES
 about.cpp
+AnimationBlender.cpp
 AnimationControlController.cpp
 main.cpp
 Manager.cpp
@@ -74,6 +75,7 @@ HalfEdgeMesh.cpp
 )
 
 set(HEADER_FILES
+AnimationBlender.h
 AnimationControlController.h
 GlobalDefinitions.h
 Euler.h
