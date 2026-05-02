@@ -3,7 +3,11 @@
 #include "Manager.h"
 #include "UndoManager.h"
 #include "commands/MoveKeyframeCommand.h"
+#include "commands/BulkKeyframeCommands.h"
 #include <QApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPalette>
 #include <QTimer>
 #include <QVariantMap>
@@ -662,4 +666,197 @@ bool AnimationControlController::moveKeyframe(const QString& boneName,
     refreshSliderTicks();
     emit boneRowsChanged();
     return true;
+}
+
+// ── Bulk keyframe ops (slice D1) ──────────────────────────────────────────────
+
+namespace {
+
+constexpr float kBulkEpsilon = 0.001f;
+
+// Resolve an arbitrary bone's track on the controller's current animation.
+// Returns nullptr if any link in the chain is missing.
+Ogre::NodeAnimationTrack* resolveTrackByBone(Ogre::Skeleton* skel,
+                                             const std::string& animName,
+                                             const std::string& boneName)
+{
+    if (!skel || animName.empty() || boneName.empty()) return nullptr;
+    if (!skel->hasAnimation(animName)) return nullptr;
+    if (!skel->hasBone(boneName)) return nullptr;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    Ogre::Bone* bone = skel->getBone(boneName);
+    if (!anim || !bone) return nullptr;
+    if (!anim->hasNodeTrack(bone->getHandle())) return nullptr;
+    return anim->getNodeTrack(bone->getHandle());
+}
+
+// Convert a QML-side selection list ({bone, time} maps) into the flat
+// command-side list of items, preserving caller-supplied order.
+QVector<MoveKeyframesCommand::Item> selectionToItems(const QVariantList& sel)
+{
+    QVector<MoveKeyframesCommand::Item> out;
+    out.reserve(sel.size());
+    for (const QVariant& v : sel) {
+        const QVariantMap m = v.toMap();
+        const QString bone = m.value(QStringLiteral("bone")).toString();
+        const double  t    = m.value(QStringLiteral("time")).toDouble();
+        if (bone.isEmpty()) continue;
+        out.append({ bone.toStdString(), static_cast<float>(t) });
+    }
+    return out;
+}
+
+} // namespace
+
+bool AnimationControlController::moveKeyframes(const QVariantList& selection,
+                                                double dt)
+{
+    if (selection.isEmpty()) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (qFuzzyCompare(dt + 1.0, 1.0)) return false; // dt == 0 is a no-op
+
+    QVector<MoveKeyframesCommand::Item> items = selectionToItems(selection);
+    if (items.isEmpty()) return false;
+
+    const float dtf = static_cast<float>(dt);
+    const float length = static_cast<float>(animationLength());
+
+    // Build a quick lookup of which (bone, time) tuples are members of the
+    // selection so the collision check can ignore intra-selection overlap.
+    auto isMember = [&](const std::string& bone, float time) {
+        for (const auto& it : items) {
+            if (it.boneName == bone &&
+                std::fabs(it.originalTime - time) <= kBulkEpsilon) return true;
+        }
+        return false;
+    };
+
+    // Validate per-item: clamp window + collision with non-selected keyframes.
+    for (const auto& it : items) {
+        const float dst = it.originalTime + dtf;
+        if (dst < 0.0f || dst > length + kBulkEpsilon) return false;
+        auto* track = resolveTrackByBone(m_selectedSkeleton, m_selectedAnimation,
+                                          it.boneName);
+        if (!track) return false;
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            const float t = track->getKeyFrame(i)->getTime();
+            if (std::fabs(t - it.originalTime) <= kBulkEpsilon) continue; // self
+            if (std::fabs(t - dst) <= kBulkEpsilon &&
+                !isMember(it.boneName, t)) {
+                return false; // collision with a non-member keyframe
+            }
+        }
+    }
+
+    auto* cmd = new MoveKeyframesCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
+                                          m_selectedAnimation,
+                                          items, dtf);
+    UndoManager::getSingleton()->push(cmd);
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    return true;
+}
+
+QString AnimationControlController::serializeKeyframes(
+        const QVariantList& selection) const
+{
+    if (selection.isEmpty()) return {};
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return {};
+
+    // Find the earliest selected time so paste stays relative.
+    double t0 = std::numeric_limits<double>::infinity();
+    for (const QVariant& v : selection) {
+        const double t = v.toMap().value(QStringLiteral("time")).toDouble();
+        if (t < t0) t0 = t;
+    }
+    if (!std::isfinite(t0)) return {};
+
+    QJsonArray arr;
+    for (const QVariant& v : selection) {
+        const QVariantMap m = v.toMap();
+        const QString bone = m.value(QStringLiteral("bone")).toString();
+        const float   tabs = static_cast<float>(m.value(QStringLiteral("time")).toDouble());
+        if (bone.isEmpty()) continue;
+        auto* track = resolveTrackByBone(m_selectedSkeleton, m_selectedAnimation,
+                                          bone.toStdString());
+        if (!track) continue;
+        // Find the actual keyframe to capture its TRS values.
+        Ogre::TransformKeyFrame* kf = nullptr;
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            auto* candidate = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+            if (std::fabs(candidate->getTime() - tabs) <= kBulkEpsilon) {
+                kf = candidate;
+                break;
+            }
+        }
+        if (!kf) continue;
+
+        const Ogre::Vector3    t = kf->getTranslate();
+        const Ogre::Quaternion r = kf->getRotation();
+        const Ogre::Vector3    s = kf->getScale();
+        QJsonObject e;
+        e[QStringLiteral("bone")] = bone;
+        e[QStringLiteral("dt")]   = static_cast<double>(tabs) - t0;
+        e[QStringLiteral("tx")] = t.x; e[QStringLiteral("ty")] = t.y; e[QStringLiteral("tz")] = t.z;
+        e[QStringLiteral("rw")] = r.w; e[QStringLiteral("rx")] = r.x;
+        e[QStringLiteral("ry")] = r.y; e[QStringLiteral("rz")] = r.z;
+        e[QStringLiteral("sx")] = s.x; e[QStringLiteral("sy")] = s.y; e[QStringLiteral("sz")] = s.z;
+        arr.append(e);
+    }
+    QJsonObject root;
+    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("kind")]    = QStringLiteral("qtmesh.dopesheet.keyframes");
+    root[QStringLiteral("entries")] = arr;
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+int AnimationControlController::pasteKeyframesAt(const QString& json,
+                                                  double atTime)
+{
+    if (json.isEmpty()) return 0;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return 0;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return 0;
+
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return 0;
+    const QJsonObject root = doc.object();
+    if (root.value(QStringLiteral("kind")).toString() !=
+        QStringLiteral("qtmesh.dopesheet.keyframes")) return 0;
+
+    const float length = static_cast<float>(animationLength());
+    QVector<PasteKeyframesCommand::Entry> entries;
+    for (const QJsonValue& v : root.value(QStringLiteral("entries")).toArray()) {
+        const QJsonObject e = v.toObject();
+        const QString bone = e.value(QStringLiteral("bone")).toString();
+        const double  dt   = e.value(QStringLiteral("dt")).toDouble();
+        if (bone.isEmpty()) continue;
+        const float dst = static_cast<float>(atTime + dt);
+        if (dst < 0.0f || dst > length + kBulkEpsilon) continue; // out of range — skip
+        PasteKeyframesCommand::Entry pe;
+        pe.boneName = bone.toStdString();
+        pe.time = dst;
+        pe.tx = static_cast<float>(e.value(QStringLiteral("tx")).toDouble());
+        pe.ty = static_cast<float>(e.value(QStringLiteral("ty")).toDouble());
+        pe.tz = static_cast<float>(e.value(QStringLiteral("tz")).toDouble());
+        pe.rw = static_cast<float>(e.value(QStringLiteral("rw")).toDouble(1.0));
+        pe.rx = static_cast<float>(e.value(QStringLiteral("rx")).toDouble());
+        pe.ry = static_cast<float>(e.value(QStringLiteral("ry")).toDouble());
+        pe.rz = static_cast<float>(e.value(QStringLiteral("rz")).toDouble());
+        pe.sx = static_cast<float>(e.value(QStringLiteral("sx")).toDouble(1.0));
+        pe.sy = static_cast<float>(e.value(QStringLiteral("sy")).toDouble(1.0));
+        pe.sz = static_cast<float>(e.value(QStringLiteral("sz")).toDouble(1.0));
+        entries.append(pe);
+    }
+    if (entries.isEmpty()) return 0;
+
+    auto* cmd = new PasteKeyframesCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
+                                           m_selectedAnimation,
+                                           entries);
+    UndoManager::getSingleton()->push(cmd);
+    const int n = cmd->pastedCount();
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    return n;
 }
