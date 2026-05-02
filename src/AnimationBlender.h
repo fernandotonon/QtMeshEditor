@@ -30,7 +30,12 @@ namespace Ogre {
  * skeleton. Existing tracks per bone are extended; existing animations with
  * the same name are removed first.
  */
-class AnimationBlender : public QObject
+// NOSONAR (cpp:S1448) — Q_PROPERTY getters/setters/signals + the QML
+// singleton boilerplate (instance/qmlInstance/kill) push the method count
+// just over Sonar's threshold of 35. Splitting this into smaller classes
+// would fragment the blender's responsibilities (live preview + bake) and
+// double the QML wiring without making the code clearer.
+class AnimationBlender : public QObject // NOSONAR
 {
     Q_OBJECT
 
