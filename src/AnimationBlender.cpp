@@ -98,11 +98,11 @@ void AnimationBlender::setMode(int m)
 void AnimationBlender::refreshFromSelection()
 {
     const auto* ctrl = AnimationControlController::instance();
-    const std::string activeEntity = ctrl->selectedEntityName().toStdString();
 
     // Active entity changed — anything we'd cached or written to the previous
     // entity's states needs to be undone before we point at the new one.
-    if (activeEntity != m_activeEntityName) {
+    if (const std::string activeEntity = ctrl->selectedEntityName().toStdString();
+        activeEntity != m_activeEntityName) {
         if (m_active) restoreSnapshot();
         m_activeEntityName = activeEntity;
         if (!m_animA.empty() || !m_animB.empty()) {
@@ -114,7 +114,7 @@ void AnimationBlender::refreshFromSelection()
     }
 
     QStringList anims;
-    if (Ogre::Entity* entity = resolveActiveEntity()) {
+    if (const Ogre::Entity* entity = resolveActiveEntity()) {
         if (const auto* set = entity->getAllAnimationStates()) {
             for (const auto& [name, state] : set->getAnimationStates()) {
                 anims << QString::fromStdString(name);
@@ -130,6 +130,8 @@ void AnimationBlender::refreshFromSelection()
 Ogre::Entity* AnimationBlender::resolveActiveEntity() const
 {
     if (m_activeEntityName.empty()) return nullptr;
+    // findEntityByName lives in the anonymous namespace below; forward-declare
+    // here to keep the function above the helper without reordering.
     for (Ogre::Entity* ent : SelectionSet::getSingleton()->getResolvedEntities()) {
         if (ent && ent->getName() == m_activeEntityName) return ent;
     }
@@ -157,32 +159,93 @@ void AnimationBlender::captureSnapshot(Ogre::Entity* entity)
     m_snapshot.valid = true;
 }
 
+namespace {
+
+Ogre::Entity* findEntityByName(const std::string& name) {
+    for (Ogre::Entity* ent : SelectionSet::getSingleton()->getResolvedEntities()) {
+        if (ent && ent->getName() == name) return ent;
+    }
+    return nullptr;
+}
+
+} // namespace
+
 void AnimationBlender::restoreSnapshot()
 {
     if (!m_snapshot.valid) return;
     // Resolve by the snapshot's recorded entity name in case the active
     // selection has already moved on.
-    Ogre::Entity* entity = nullptr;
-    for (Ogre::Entity* ent : SelectionSet::getSingleton()->getResolvedEntities()) {
-        if (ent && ent->getName() == m_snapshot.entityName) { entity = ent; break; }
+    Ogre::Entity* entity = findEntityByName(m_snapshot.entityName);
+    if (!entity) {
+        m_snapshot = {};
+        return;
     }
-    if (entity) {
-        if (auto* set = entity->getAllAnimationStates()) {
-            for (const auto& [name, state] : set->getAnimationStates()) {
-                auto it = m_snapshot.states.find(name);
-                if (it == m_snapshot.states.end()) continue;
-                state->setEnabled(it->second.enabled);
-                state->setWeight(it->second.weight);
-            }
+    if (auto* set = entity->getAllAnimationStates()) {
+        for (const auto& [name, state] : set->getAnimationStates()) {
+            auto it = m_snapshot.states.find(name);
+            if (it == m_snapshot.states.end()) continue;
+            state->setEnabled(it->second.enabled);
+            state->setWeight(it->second.weight);
         }
-        if (auto* skel = entity->getSkeleton()) {
-            skel->setBlendMode(m_snapshot.blendMode);
-        }
+    }
+    if (auto* skel = entity->getSkeleton()) {
+        skel->setBlendMode(m_snapshot.blendMode);
     }
     m_snapshot = {};
 }
 
 // ── Live blend ────────────────────────────────────────────────────────────────
+
+namespace {
+
+// Apply weights + enabled flags for a single sample of the given mode.
+// Used by both live apply() and bake() to keep the math in one place.
+void configureBlend(Ogre::AnimationState* a, Ogre::AnimationState* b,
+                    int mode, double weight)
+{
+    if (mode == AnimationBlender::ModeOverride) {
+        const bool useB = (weight >= 0.5);
+        a->setEnabled(!useB);
+        b->setEnabled(useB);
+        a->setWeight(useB ? 0.0f : 1.0f);
+        b->setWeight(useB ? 1.0f : 0.0f);
+    } else {
+        a->setEnabled(true);
+        b->setEnabled(true);
+        a->setWeight(static_cast<float>(1.0 - weight));
+        b->setWeight(static_cast<float>(weight));
+    }
+}
+
+// Disable any layer that isn't A or B so the entity's pose is exactly A+B.
+// Pre-blend layer enabled-flags are restored by the snapshot pathway.
+void muteOtherLayers(Ogre::Entity* entity,
+                     const std::string& nameA, const std::string& nameB)
+{
+    auto* set = entity->getAllAnimationStates();
+    if (!set) return;
+    for (const auto& [name, state] : set->getAnimationStates()) {
+        if (name != nameA && name != nameB) state->setEnabled(false);
+    }
+}
+
+// Advance a single state, routing through advanceTime() if it's the selected
+// clip (for slice-A loop region) and using speed-scaled addTime() otherwise.
+void advanceState(Ogre::AnimationState* s, const std::string& name,
+                  const std::string& activeAnim,
+                  AnimationControlController* ctrl,
+                  double dt, double scaledDt)
+{
+    if (name == activeAnim) {
+        const auto   now  = static_cast<double>(s->getTimePosition());
+        const double next = ctrl->advanceTime(now, dt);
+        s->setTimePosition(static_cast<float>(next));
+    } else {
+        s->addTime(static_cast<float>(scaledDt));
+    }
+}
+
+} // namespace
 
 bool AnimationBlender::apply(Ogre::Entity* entity, double dt)
 {
@@ -201,47 +264,19 @@ bool AnimationBlender::apply(Ogre::Entity* entity, double dt)
                            ? Ogre::ANIMBLEND_CUMULATIVE
                            : Ogre::ANIMBLEND_AVERAGE);
     }
+    muteOtherLayers(entity, m_animA, m_animB);
+    configureBlend(a, b, m_mode, m_weight);
 
-    // Disable any non-A/B states so the blended pose is purely A+B. Snapshot
-    // taken in setActive() will reinstate them when the blender is toggled
-    // off, so this is a non-destructive override.
-    if (auto* set = entity->getAllAnimationStates()) {
-        for (const auto& [name, state] : set->getAnimationStates()) {
-            if (name != m_animA && name != m_animB) state->setEnabled(false);
-        }
-    }
-
-    // Use the controller's advance helper so the slice-A loop region still
-    // wraps the *selected* clip (which is what the user is scrubbing).
-    // `dt` here is the raw frame delta from MainWindow; advanceTime() applies
-    // playbackSpeed itself, while the non-active clip uses scaled dt directly.
     auto* ctrl = AnimationControlController::instance();
     const std::string activeAnim = ctrl->selectedAnimation().toStdString();
-    const double scaledDt = dt * ctrl->playbackSpeed();
-    auto advance = [&](Ogre::AnimationState* s, const std::string& name) {
-        if (name == activeAnim) {
-            const double now  = static_cast<double>(s->getTimePosition());
-            const double next = ctrl->advanceTime(now, dt);
-            s->setTimePosition(static_cast<float>(next));
-        } else {
-            s->addTime(static_cast<float>(scaledDt));
-        }
-    };
-
+    const double      scaledDt   = dt * ctrl->playbackSpeed();
     if (m_mode == ModeOverride) {
         const bool useB = (m_weight >= 0.5);
-        a->setEnabled(!useB);
-        b->setEnabled(useB);
-        a->setWeight(useB ? 0.0f : 1.0f);
-        b->setWeight(useB ? 1.0f : 0.0f);
-        advance(useB ? b : a, useB ? m_animB : m_animA);
+        advanceState(useB ? b : a, useB ? m_animB : m_animA,
+                     activeAnim, ctrl, dt, scaledDt);
     } else {
-        a->setEnabled(true);
-        b->setEnabled(true);
-        a->setWeight(static_cast<float>(1.0 - m_weight));
-        b->setWeight(static_cast<float>(m_weight));
-        advance(a, m_animA);
-        advance(b, m_animB);
+        advanceState(a, m_animA, activeAnim, ctrl, dt, scaledDt);
+        advanceState(b, m_animB, activeAnim, ctrl, dt, scaledDt);
     }
     return true;
 }
@@ -303,7 +338,7 @@ void positionForSample(Ogre::AnimationState* sa, Ogre::AnimationState* sb,
 
 // Sample every bone's local TRS at the current skeleton state and emit a
 // keyframe at time `t` on each node track owned by `anim`.
-void writeAllBoneKeyframes(Ogre::Animation* anim, Ogre::Skeleton* skel, float t)
+void writeAllBoneKeyframes(Ogre::Animation* anim, const Ogre::Skeleton* skel, float t)
 {
     const unsigned short numBones = skel->getNumBones();
     for (unsigned short i = 0; i < numBones; ++i) {
@@ -311,6 +346,50 @@ void writeAllBoneKeyframes(Ogre::Animation* anim, Ogre::Skeleton* skel, float t)
         if (!bone) continue;
         if (auto* track = anim->getNodeTrack(bone->getHandle())) {
             writeBoneKeyframe(track, t, bone);
+        }
+    }
+}
+
+// Capture every state's enabled/weight/time into a flat map keyed by name.
+std::unordered_map<std::string, StateRestore> captureAllStates(const Ogre::Entity* entity)
+{
+    std::unordered_map<std::string, StateRestore> out;
+    if (const auto* set = entity->getAllAnimationStates()) {
+        for (const auto& [name, state] : set->getAnimationStates()) {
+            out[name] = captureState(state);
+        }
+    }
+    return out;
+}
+
+// Inverse of captureAllStates — re-applies whatever was recorded earlier so
+// the entity's animation states look identical to before bake() ran.
+void restoreAllStates(Ogre::Entity* entity,
+                      const std::unordered_map<std::string, StateRestore>& saved)
+{
+    auto* set = entity->getAllAnimationStates();
+    if (!set) return;
+    for (const auto& [name, state] : set->getAnimationStates()) {
+        auto it = saved.find(name);
+        if (it != saved.end()) restoreState(state, it->second);
+    }
+}
+
+void disableNonAB(Ogre::Entity* entity, const std::string& a, const std::string& b)
+{
+    auto* set = entity->getAllAnimationStates();
+    if (!set) return;
+    for (const auto& [name, state] : set->getAnimationStates()) {
+        if (name != a && name != b) state->setEnabled(false);
+    }
+}
+
+void createBoneTracks(Ogre::Animation* anim, Ogre::Skeleton* skel)
+{
+    const unsigned short numBones = skel->getNumBones();
+    for (unsigned short i = 0; i < numBones; ++i) {
+        if (Ogre::Bone* bone = skel->getBone(i)) {
+            anim->createNodeTrack(bone->getHandle(), bone);
         }
     }
 }
@@ -347,31 +426,13 @@ QString AnimationBlender::bake(const QString& clipName, int fps)
     if (skel->hasAnimation(clipStd)) skel->removeAnimation(clipStd);
     Ogre::Animation* anim = skel->createAnimation(clipStd, length);
     anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
+    createBoneTracks(anim, skel);
 
-    // Track per bone — keeps the bake reproducible even for unanimated bones.
-    const unsigned short numBones = skel->getNumBones();
-    for (unsigned short i = 0; i < numBones; ++i) {
-        if (Ogre::Bone* bone = skel->getBone(i)) {
-            anim->createNodeTrack(bone->getHandle(), bone);
-        }
-    }
+    // Preserve every state's pre-bake config so the live preview is unaffected.
+    const auto live      = captureAllStates(entity);
+    const auto prevBlend = skel->getBlendMode();
 
-    // Preserve every state's pre-bake config — A, B, and any third-party
-    // layers the entity had enabled — so the live preview is unaffected.
-    std::unordered_map<std::string, StateRestore> live;
-    if (auto* set = entity->getAllAnimationStates()) {
-        for (const auto& [name, state] : set->getAnimationStates()) {
-            live[name] = captureState(state);
-        }
-    }
-    const Ogre::SkeletonAnimationBlendMode prevBlend = skel->getBlendMode();
-
-    // Disable everything except A and B so each sampled pose is purely A+B.
-    if (auto* set = entity->getAllAnimationStates()) {
-        for (const auto& [name, state] : set->getAnimationStates()) {
-            if (name != m_animA && name != m_animB) state->setEnabled(false);
-        }
-    }
+    disableNonAB(entity, m_animA, m_animB);
     skel->setBlendMode(m_mode == ModeAdditive
                        ? Ogre::ANIMBLEND_CUMULATIVE
                        : Ogre::ANIMBLEND_AVERAGE);
@@ -384,13 +445,7 @@ QString AnimationBlender::bake(const QString& clipName, int fps)
         writeAllBoneKeyframes(anim, skel, t);
     }
 
-    // Restore live state for every layer we touched.
-    if (auto* set = entity->getAllAnimationStates()) {
-        for (const auto& [name, state] : set->getAnimationStates()) {
-            auto it = live.find(name);
-            if (it != live.end()) restoreState(state, it->second);
-        }
-    }
+    restoreAllStates(entity, live);
     skel->setBlendMode(prevBlend);
 
     entity->refreshAvailableAnimationState();

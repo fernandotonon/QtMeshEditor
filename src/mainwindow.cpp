@@ -1328,53 +1328,61 @@ void MainWindow::setPlaying(bool playing)
 bool MainWindow::frameStarted(const Ogre::FrameEvent &evt)
 {    return true;   }
 
+namespace {
+
+// Advance every enabled animation state on `ent`. The selected clip on the
+// active entity goes through advanceTime() (slice-A speed + loop region);
+// everything else uses speed-scaled raw addTime().
+void advanceEntityStates(Ogre::Entity* ent, bool isActiveEntity,
+                         const std::string& activeAnim,
+                         const AnimationControlController* animCtrl,
+                         double dt, double scaledDt)
+{
+    const auto* set = ent->getAllAnimationStates();
+    if (!set) return;
+    for (const auto& [key, value] : set->getAnimationStates()) {
+        if (!value->getEnabled()) continue;
+        if (isActiveEntity && key == activeAnim) {
+            const auto   now  = static_cast<double>(value->getTimePosition());
+            const double next = animCtrl->advanceTime(now, dt);
+            value->setTimePosition(static_cast<float>(next));
+        } else {
+            value->addTime(static_cast<float>(scaledDt));
+        }
+    }
+}
+
+} // namespace
+
 bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
 {
     // Advance time for every entity that has enabled animation states.
     // Speed is global (scales dt for all states). The loop region applies only
     // to the entity+animation selected in the Animation Control panel.
-    if(isPlaying)
-    {
-        const auto* animCtrl = AnimationControlController::instance();
-        auto* blender = AnimationBlender::instance();
-        const std::string activeEntity = animCtrl->selectedEntityName().toStdString();
-        const std::string activeAnim   = animCtrl->selectedAnimation().toStdString();
-        const auto dt = static_cast<double>(evt.timeSinceLastFrame);
-        const double scaledDt = dt * animCtrl->playbackSpeed();
-        for(Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes())
-        {
-            if(!node) continue;
-            for(int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i)
-            {
-                Ogre::MovableObject* obj = node->getAttachedObject(i);
-                if(!obj || obj->getMovableType() != "Entity") continue;
+    if (!isPlaying) return true;
 
-                auto* ent = static_cast<Ogre::Entity*>(obj);
-                const bool isActiveEntity = (!activeEntity.empty() && ent->getName() == activeEntity);
+    const auto* animCtrl = AnimationControlController::instance();
+    auto*       blender  = AnimationBlender::instance();
+    const std::string activeEntity = animCtrl->selectedEntityName().toStdString();
+    const std::string activeAnim   = animCtrl->selectedAnimation().toStdString();
+    const auto   dt       = static_cast<double>(evt.timeSinceLastFrame);
+    const double scaledDt = dt * animCtrl->playbackSpeed();
 
-                // If the blender is active and owns this entity, it sets all
-                // weights and advances time itself — skip the per-state loop.
-                // Pass raw dt: the blender routes the active clip through
-                // advanceTime() (which applies speed + loop region) and falls
-                // back to scaledDt for the other clip.
-                if (isActiveEntity && blender->apply(ent, dt)) continue;
+    for (Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes()) {
+        if (!node) continue;
+        for (int i = 0; i < static_cast<int>(node->numAttachedObjects()); ++i) {
+            Ogre::MovableObject* obj = node->getAttachedObject(i);
+            if (!obj || obj->getMovableType() != "Entity") continue;
 
-                Ogre::AnimationStateSet const* set = ent->getAllAnimationStates();
-                if(!set) continue;
-                for(const auto& [key, value] : set->getAnimationStates())
-                {
-                    if(!value->getEnabled()) continue;
-                    if (isActiveEntity && key == activeAnim) {
-                        // Selected animation: speed + loop region wrap.
-                        const auto now  = static_cast<double>(value->getTimePosition());
-                        const double next = animCtrl->advanceTime(now, dt);
-                        value->setTimePosition(static_cast<float>(next));
-                    } else {
-                        // All other animations: speed only, no loop region.
-                        value->addTime(static_cast<float>(scaledDt));
-                    }
-                }
-            }
+            auto* ent = static_cast<Ogre::Entity*>(obj);
+            const bool isActiveEntity =
+                (!activeEntity.empty() && ent->getName() == activeEntity);
+
+            // The blender owns the active entity when active — it writes all
+            // weights and advances time itself. Pass raw dt so its internal
+            // advanceTime() can apply playback speed + loop region.
+            if (isActiveEntity && blender->apply(ent, dt)) continue;
+            advanceEntityStates(ent, isActiveEntity, activeAnim, animCtrl, dt, scaledDt);
         }
     }
     return true;
