@@ -622,3 +622,88 @@ TEST_F(AnimationControlControllerTest, PollTimerDoesNotCrashWithAnimation) {
     QTest::qWait(100);
     SUCCEED();
 }
+
+// ── Dope sheet API (slice C) ──────────────────────────────────────────────────
+
+TEST_F(AnimationControlControllerPlaybackTest, AllBoneRowsEmptyWithoutSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->allBoneRows().isEmpty());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframeNoOpWithoutSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->moveKeyframe("Bone", 0.5, 0.6));
+}
+
+TEST_F(AnimationControlControllerTest, AllBoneRowsReflectsTracks) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_RowsTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    QVariantList rows = ctrl->allBoneRows();
+    ASSERT_FALSE(rows.isEmpty());
+    auto firstRow = rows.first().toMap();
+    EXPECT_TRUE(firstRow.contains("bone"));
+    EXPECT_TRUE(firstRow.contains("keyTimes"));
+    // TestAnim has 3 keyframes on the Child track (handle 1)
+    auto times = firstRow["keyTimes"].toList();
+    EXPECT_EQ(times.size(), 3);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframeShiftsTime) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_MoveTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int beforeCount = track->getNumKeyFrames();
+
+    EXPECT_TRUE(ctrl->moveKeyframe(bone, 0.5, 0.7));
+
+    // Same number of keyframes, none at 0.5, one at 0.7.
+    EXPECT_EQ(track->getNumKeyFrames(), beforeCount);
+    bool foundOriginal = false, foundMoved = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float t = track->getKeyFrame(i)->getTime();
+        if (std::fabs(t - 0.5f) < 0.001f) foundOriginal = true;
+        if (std::fabs(t - 0.7f) < 0.001f) foundMoved = true;
+    }
+    EXPECT_FALSE(foundOriginal);
+    EXPECT_TRUE(foundMoved);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframeRejectsCollision) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_CollisionTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    // TestAnim has keyframes at 0.0, 0.5, 1.0. Moving 0.5 onto 1.0 must fail.
+    EXPECT_FALSE(ctrl->moveKeyframe(bone, 0.5, 1.0));
+
+    // The 0.5 keyframe is still there.
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    bool stillThere = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - 0.5f) < 0.001f) {
+            stillThere = true; break;
+        }
+    }
+    EXPECT_TRUE(stillThere);
+}
