@@ -4,7 +4,9 @@
 #include <QObject>
 #include <QStringList>
 #include <QQmlEngine>
+#include <Ogre.h>
 #include <string>
+#include <unordered_map>
 
 namespace Ogre {
     class Entity;
@@ -40,7 +42,11 @@ class AnimationBlender : public QObject
     Q_PROPERTY(QStringList animations READ animations NOTIFY animationsChanged)
 
 public:
-    enum Mode { ModeMix = 0, ModeAdditive = 1, ModeOverride = 2 };
+    enum Mode {
+        ModeMix      = 0,
+        ModeAdditive = 1,
+        ModeOverride = 2
+    };
     Q_ENUM(Mode)
 
     static AnimationBlender* instance();
@@ -93,6 +99,23 @@ private:
 
     Ogre::Entity* resolveActiveEntity() const;
 
+    // Snapshot of every animation state's enabled flag + weight, plus the
+    // skeleton's blend mode, so toggling the blender on/off (or switching
+    // entities) can return live playback to its pre-blend configuration.
+    struct StateSnapshot {
+        bool  enabled = false;
+        float weight  = 0.0f;
+    };
+    struct PreviewSnapshot {
+        std::string entityName;
+        std::unordered_map<std::string, StateSnapshot> states;
+        Ogre::SkeletonAnimationBlendMode blendMode = Ogre::ANIMBLEND_AVERAGE;
+        bool valid = false;
+    };
+
+    void captureSnapshot(Ogre::Entity* entity);
+    void restoreSnapshot();
+
     static AnimationBlender* m_pSingleton;
 
     bool        m_active = false;
@@ -102,6 +125,8 @@ private:
     Mode        m_mode   = ModeMix;
     std::string m_activeEntityName;
     QStringList m_animations;
+
+    PreviewSnapshot m_snapshot;
 };
 
 #endif // ANIMATIONBLENDER_H

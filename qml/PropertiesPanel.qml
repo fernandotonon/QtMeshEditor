@@ -1641,8 +1641,7 @@ Rectangle {
             Column {
                 width: parent.width - 16
                 spacing: 4
-                visible: AnimationControlController.hasAnimation
-                         && AnimationBlender.animations.length >= 2
+                visible: AnimationBlender.animations.length >= 2
 
                 Row {
                     spacing: 8

@@ -15,13 +15,14 @@ AnimationBlender* AnimationBlender::m_pSingleton = nullptr;
 
 AnimationBlender* AnimationBlender::instance()
 {
-    if (!m_pSingleton) m_pSingleton = new AnimationBlender();
+    if (!m_pSingleton) m_pSingleton = new AnimationBlender(); // NOSONAR — see kill()
     return m_pSingleton;
 }
 
 AnimationBlender* AnimationBlender::qmlInstance(QQmlEngine* engine, QJSEngine* scriptEngine)
 {
-    Q_UNUSED(engine); Q_UNUSED(scriptEngine);
+    Q_UNUSED(engine)
+    Q_UNUSED(scriptEngine)
     auto* inst = instance();
     QQmlEngine::setObjectOwnership(inst, QQmlEngine::CppOwnership);
     return inst;
@@ -29,14 +30,14 @@ AnimationBlender* AnimationBlender::qmlInstance(QQmlEngine* engine, QJSEngine* s
 
 void AnimationBlender::kill()
 {
-    delete m_pSingleton;
+    delete m_pSingleton; // NOSONAR — manual lifetime mirrors AnimationControlController
     m_pSingleton = nullptr;
 }
 
 AnimationBlender::AnimationBlender()
     : QObject(nullptr)
 {
-    auto* ctrl = AnimationControlController::instance();
+    const auto* ctrl = AnimationControlController::instance();
     connect(ctrl, &AnimationControlController::selectionChanged,
             this, &AnimationBlender::refreshFromSelection);
 }
@@ -48,6 +49,13 @@ void AnimationBlender::setActive(bool on)
 {
     if (on == m_active) return;
     m_active = on;
+    if (!on) {
+        // Toggling off: roll the entity's animation states back to whatever
+        // they looked like before the blender started writing to them.
+        restoreSnapshot();
+    } else {
+        captureSnapshot(resolveActiveEntity());
+    }
     emit activeChanged();
 }
 
@@ -71,7 +79,7 @@ void AnimationBlender::setWeight(double w)
 {
     if (w < 0.0) w = 0.0;
     if (w > 1.0) w = 1.0;
-    if (qFuzzyCompare(w + 1.0, m_weight + 1.0)) return; // qFuzzyCompare is iffy near zero
+    if (qFuzzyCompare(w + 1.0, m_weight + 1.0)) return;
     m_weight = w;
     emit weightChanged();
 }
@@ -89,24 +97,25 @@ void AnimationBlender::setMode(int m)
 
 void AnimationBlender::refreshFromSelection()
 {
-    auto* ctrl = AnimationControlController::instance();
+    const auto* ctrl = AnimationControlController::instance();
     const std::string activeEntity = ctrl->selectedEntityName().toStdString();
 
-    // If the active entity changed, reset selection — clip names from the
-    // previous entity may not exist on the new one.
+    // Active entity changed — anything we'd cached or written to the previous
+    // entity's states needs to be undone before we point at the new one.
     if (activeEntity != m_activeEntityName) {
+        if (m_active) restoreSnapshot();
         m_activeEntityName = activeEntity;
         if (!m_animA.empty() || !m_animB.empty()) {
             m_animA.clear();
             m_animB.clear();
             emit selectionChanged();
         }
+        if (m_active) captureSnapshot(resolveActiveEntity());
     }
 
     QStringList anims;
-    Ogre::Entity* entity = resolveActiveEntity();
-    if (entity) {
-        if (auto* set = entity->getAllAnimationStates()) {
+    if (Ogre::Entity* entity = resolveActiveEntity()) {
+        if (const auto* set = entity->getAllAnimationStates()) {
             for (const auto& [name, state] : set->getAnimationStates()) {
                 anims << QString::fromStdString(name);
             }
@@ -127,6 +136,54 @@ Ogre::Entity* AnimationBlender::resolveActiveEntity() const
     return nullptr;
 }
 
+// ── Snapshot helpers ──────────────────────────────────────────────────────────
+
+void AnimationBlender::captureSnapshot(Ogre::Entity* entity)
+{
+    m_snapshot = {};
+    if (!entity) return;
+    m_snapshot.entityName = entity->getName();
+    if (const auto* set = entity->getAllAnimationStates()) {
+        for (const auto& [name, state] : set->getAnimationStates()) {
+            StateSnapshot s;
+            s.enabled = state->getEnabled();
+            s.weight  = state->getWeight();
+            m_snapshot.states[name] = s;
+        }
+    }
+    if (auto* skel = entity->getSkeleton()) {
+        m_snapshot.blendMode = skel->getBlendMode();
+    }
+    m_snapshot.valid = true;
+}
+
+void AnimationBlender::restoreSnapshot()
+{
+    if (!m_snapshot.valid) return;
+    // Resolve by the snapshot's recorded entity name in case the active
+    // selection has already moved on.
+    Ogre::Entity* entity = nullptr;
+    for (Ogre::Entity* ent : SelectionSet::getSingleton()->getResolvedEntities()) {
+        if (ent && ent->getName() == m_snapshot.entityName) { entity = ent; break; }
+    }
+    if (entity) {
+        if (auto* set = entity->getAllAnimationStates()) {
+            for (const auto& [name, state] : set->getAnimationStates()) {
+                auto it = m_snapshot.states.find(name);
+                if (it == m_snapshot.states.end()) continue;
+                state->setEnabled(it->second.enabled);
+                state->setWeight(it->second.weight);
+            }
+        }
+        if (auto* skel = entity->getSkeleton()) {
+            skel->setBlendMode(m_snapshot.blendMode);
+        }
+    }
+    m_snapshot = {};
+}
+
+// ── Live blend ────────────────────────────────────────────────────────────────
+
 bool AnimationBlender::apply(Ogre::Entity* entity, double dt)
 {
     if (!m_active || !entity) return false;
@@ -139,14 +196,37 @@ bool AnimationBlender::apply(Ogre::Entity* entity, double dt)
     Ogre::AnimationState* b = entity->getAnimationState(m_animB);
     if (!a || !b) return false;
 
-    // Set blend mode on the skeleton up-front. We don't restore the previous
-    // mode on toggle-off — projects that need that can read the saved mode
-    // before activating the blender.
     if (auto* skel = entity->getSkeleton()) {
         skel->setBlendMode(m_mode == ModeAdditive
                            ? Ogre::ANIMBLEND_CUMULATIVE
                            : Ogre::ANIMBLEND_AVERAGE);
     }
+
+    // Disable any non-A/B states so the blended pose is purely A+B. Snapshot
+    // taken in setActive() will reinstate them when the blender is toggled
+    // off, so this is a non-destructive override.
+    if (auto* set = entity->getAllAnimationStates()) {
+        for (const auto& [name, state] : set->getAnimationStates()) {
+            if (name != m_animA && name != m_animB) state->setEnabled(false);
+        }
+    }
+
+    // Use the controller's advance helper so the slice-A loop region still
+    // wraps the *selected* clip (which is what the user is scrubbing).
+    // `dt` here is the raw frame delta from MainWindow; advanceTime() applies
+    // playbackSpeed itself, while the non-active clip uses scaled dt directly.
+    auto* ctrl = AnimationControlController::instance();
+    const std::string activeAnim = ctrl->selectedAnimation().toStdString();
+    const double scaledDt = dt * ctrl->playbackSpeed();
+    auto advance = [&](Ogre::AnimationState* s, const std::string& name) {
+        if (name == activeAnim) {
+            const double now  = static_cast<double>(s->getTimePosition());
+            const double next = ctrl->advanceTime(now, dt);
+            s->setTimePosition(static_cast<float>(next));
+        } else {
+            s->addTime(static_cast<float>(scaledDt));
+        }
+    };
 
     if (m_mode == ModeOverride) {
         const bool useB = (m_weight >= 0.5);
@@ -154,23 +234,99 @@ bool AnimationBlender::apply(Ogre::Entity* entity, double dt)
         b->setEnabled(useB);
         a->setWeight(useB ? 0.0f : 1.0f);
         b->setWeight(useB ? 1.0f : 0.0f);
-        (useB ? b : a)->addTime(static_cast<float>(dt));
+        advance(useB ? b : a, useB ? m_animB : m_animA);
     } else {
         a->setEnabled(true);
         b->setEnabled(true);
         a->setWeight(static_cast<float>(1.0 - m_weight));
         b->setWeight(static_cast<float>(m_weight));
-        a->addTime(static_cast<float>(dt));
-        b->addTime(static_cast<float>(dt));
+        advance(a, m_animA);
+        advance(b, m_animB);
     }
     return true;
 }
+
+// ── Bake ──────────────────────────────────────────────────────────────────────
+
+namespace {
+
+// Per-bake snapshot of one A or B state. Smaller than PreviewSnapshot since
+// bake() also restores the per-state-set's other layers via the entity-level
+// snapshot from setActive().
+struct StateRestore {
+    float time   = 0.0f;
+    bool  on     = false;
+    float weight = 0.0f;
+};
+
+StateRestore captureState(const Ogre::AnimationState* s) {
+    return { s->getTimePosition(), s->getEnabled(), s->getWeight() };
+}
+
+void restoreState(Ogre::AnimationState* s, const StateRestore& r) {
+    s->setTimePosition(r.time);
+    s->setEnabled(r.on);
+    s->setWeight(r.weight);
+}
+
+void writeBoneKeyframe(Ogre::NodeAnimationTrack* track, float t, const Ogre::Bone* bone) {
+    auto* kf = track->createNodeKeyFrame(t);
+    kf->setTranslate(bone->getPosition() - bone->getInitialPosition());
+    kf->setRotation(bone->getInitialOrientation().Inverse() * bone->getOrientation());
+    kf->setScale(bone->getScale() / bone->getInitialScale());
+}
+
+// Set up sa/sb state for a single bake sample at time `t` according to
+// `mode` and `weight`. Wraps t around each state's own clip length so a
+// shorter clip loops within the bake range.
+void positionForSample(Ogre::AnimationState* sa, Ogre::AnimationState* sb,
+                       float t, int mode, double weight)
+{
+    const float ta = (sa->getLength() > 0.0f) ? std::fmod(t, sa->getLength()) : 0.0f;
+    const float tb = (sb->getLength() > 0.0f) ? std::fmod(t, sb->getLength()) : 0.0f;
+    sa->setTimePosition(ta);
+    sb->setTimePosition(tb);
+
+    if (mode == AnimationBlender::ModeOverride) {
+        const bool useB = (weight >= 0.5);
+        sa->setEnabled(!useB);
+        sb->setEnabled(useB);
+        sa->setWeight(useB ? 0.0f : 1.0f);
+        sb->setWeight(useB ? 1.0f : 0.0f);
+    } else {
+        sa->setEnabled(true);
+        sb->setEnabled(true);
+        sa->setWeight(static_cast<float>(1.0 - weight));
+        sb->setWeight(static_cast<float>(weight));
+    }
+}
+
+// Sample every bone's local TRS at the current skeleton state and emit a
+// keyframe at time `t` on each node track owned by `anim`.
+void writeAllBoneKeyframes(Ogre::Animation* anim, Ogre::Skeleton* skel, float t)
+{
+    const unsigned short numBones = skel->getNumBones();
+    for (unsigned short i = 0; i < numBones; ++i) {
+        Ogre::Bone* bone = skel->getBone(i);
+        if (!bone) continue;
+        if (auto* track = anim->getNodeTrack(bone->getHandle())) {
+            writeBoneKeyframe(track, t, bone);
+        }
+    }
+}
+
+} // namespace
 
 QString AnimationBlender::bake(const QString& clipName, int fps)
 {
     if (clipName.isEmpty()) return {};
     if (fps <= 0) fps = 30;
     if (m_animA.empty() || m_animB.empty()) return {};
+
+    const std::string clipStd = clipName.toStdString();
+    // Refuse to bake over one of the source clips — sa/sb resolve to those
+    // states, and removeAnimation() would invalidate them mid-bake.
+    if (clipStd == m_animA || clipStd == m_animB) return {};
 
     Ogre::Entity* entity = resolveActiveEntity();
     if (!entity) return {};
@@ -182,42 +338,35 @@ QString AnimationBlender::bake(const QString& clipName, int fps)
 
     Ogre::AnimationState* sa = entity->getAnimationState(m_animA);
     Ogre::AnimationState* sb = entity->getAnimationState(m_animB);
-
-    // Bake length = max of the two clips, so neither side gets clipped.
     const float length = std::max(sa->getLength(), sb->getLength());
     if (length <= 0.0f) return {};
-    const int   sampleCount = std::max(2, static_cast<int>(std::ceil(length * fps)) + 1);
+    const int   sampleCount = std::max(2,
+        static_cast<int>(std::ceil(length * static_cast<float>(fps))) + 1);
     const float step        = length / static_cast<float>(sampleCount - 1);
 
-    // Replace any pre-existing clip with the same name.
-    const std::string clipStd = clipName.toStdString();
-    if (skel->hasAnimation(clipStd)) {
-        skel->removeAnimation(clipStd);
-    }
-
+    if (skel->hasAnimation(clipStd)) skel->removeAnimation(clipStd);
     Ogre::Animation* anim = skel->createAnimation(clipStd, length);
     anim->setInterpolationMode(Ogre::Animation::IM_LINEAR);
 
+    // Track per bone — keeps the bake reproducible even for unanimated bones.
     const unsigned short numBones = skel->getNumBones();
-    // One track per bone, even unanimated bones — keeps bake reproducible
-    // and avoids surprises when a downstream system iterates tracks.
     for (unsigned short i = 0; i < numBones; ++i) {
-        Ogre::Bone* bone = skel->getBone(i);
-        if (!bone) continue;
-        // Use the bone's handle as track handle (Ogre convention).
-        anim->createNodeTrack(bone->getHandle(), bone);
+        if (Ogre::Bone* bone = skel->getBone(i)) {
+            anim->createNodeTrack(bone->getHandle(), bone);
+        }
     }
 
-    // Save the current state so the live preview isn't disturbed by the bake.
-    const float saTime = sa->getTimePosition();
-    const float sbTime = sb->getTimePosition();
-    const bool  saOn   = sa->getEnabled();
-    const bool  sbOn   = sb->getEnabled();
-    const float saW    = sa->getWeight();
-    const float sbW    = sb->getWeight();
+    // Preserve every state's pre-bake config — A, B, and any third-party
+    // layers the entity had enabled — so the live preview is unaffected.
+    std::unordered_map<std::string, StateRestore> live;
+    if (auto* set = entity->getAllAnimationStates()) {
+        for (const auto& [name, state] : set->getAnimationStates()) {
+            live[name] = captureState(state);
+        }
+    }
     const Ogre::SkeletonAnimationBlendMode prevBlend = skel->getBlendMode();
 
-    // Disable everything else so the sampled pose is purely the blend of A+B.
+    // Disable everything except A and B so each sampled pose is purely A+B.
     if (auto* set = entity->getAllAnimationStates()) {
         for (const auto& [name, state] : set->getAnimationStates()) {
             if (name != m_animA && name != m_animB) state->setEnabled(false);
@@ -228,58 +377,23 @@ QString AnimationBlender::bake(const QString& clipName, int fps)
                        : Ogre::ANIMBLEND_AVERAGE);
 
     for (int s = 0; s < sampleCount; ++s) {
-        const float t = (s == sampleCount - 1) ? length : (s * step);
-        // Sample both clips at the same t (looping is naturally handled by
-        // Ogre when t > length of either side; we explicitly modulo to keep
-        // the bake deterministic regardless of state's loop flag).
-        const float ta = (sa->getLength() > 0.0f) ? std::fmod(t, sa->getLength()) : 0.0f;
-        const float tb = (sb->getLength() > 0.0f) ? std::fmod(t, sb->getLength()) : 0.0f;
-        sa->setTimePosition(ta);
-        sb->setTimePosition(tb);
-
-        if (m_mode == ModeOverride) {
-            const bool useB = (m_weight >= 0.5);
-            sa->setEnabled(!useB);
-            sb->setEnabled(useB);
-            sa->setWeight(useB ? 0.0f : 1.0f);
-            sb->setWeight(useB ? 1.0f : 0.0f);
-        } else {
-            sa->setEnabled(true);
-            sb->setEnabled(true);
-            sa->setWeight(static_cast<float>(1.0 - m_weight));
-            sb->setWeight(static_cast<float>(m_weight));
-        }
-
-        // Force the skeleton to evaluate the blended pose at this sample.
+        const float t = (s == sampleCount - 1) ? length : (static_cast<float>(s) * step);
+        positionForSample(sa, sb, t, m_mode, m_weight);
         skel->setAnimationState(*entity->getAllAnimationStates());
         skel->_updateTransforms();
-
-        // Capture each bone's local TRS (relative to its parent's bind pose),
-        // which is what TransformKeyFrame stores.
-        for (unsigned short i = 0; i < numBones; ++i) {
-            Ogre::Bone*  bone  = skel->getBone(i);
-            if (!bone) continue;
-            auto* track = anim->getNodeTrack(bone->getHandle());
-            if (!track) continue;
-            auto* kf = track->createNodeKeyFrame(t);
-            kf->setTranslate(bone->getPosition() - bone->getInitialPosition());
-            kf->setRotation(bone->getInitialOrientation().Inverse() * bone->getOrientation());
-            kf->setScale(bone->getScale() / bone->getInitialScale());
-        }
+        writeAllBoneKeyframes(anim, skel, t);
     }
 
-    // Restore previous live state.
-    sa->setTimePosition(saTime);
-    sb->setTimePosition(sbTime);
-    sa->setEnabled(saOn);
-    sb->setEnabled(sbOn);
-    sa->setWeight(saW);
-    sb->setWeight(sbW);
+    // Restore live state for every layer we touched.
+    if (auto* set = entity->getAllAnimationStates()) {
+        for (const auto& [name, state] : set->getAnimationStates()) {
+            auto it = live.find(name);
+            if (it != live.end()) restoreState(state, it->second);
+        }
+    }
     skel->setBlendMode(prevBlend);
 
-    // Make sure the new animation is exposed via the entity's state set.
     entity->refreshAvailableAnimationState();
-
     refreshFromSelection();
     emit clipBaked(clipName);
     return clipName;

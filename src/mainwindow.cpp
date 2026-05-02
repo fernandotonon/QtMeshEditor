@@ -1354,7 +1354,10 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
 
                 // If the blender is active and owns this entity, it sets all
                 // weights and advances time itself — skip the per-state loop.
-                if (isActiveEntity && blender->apply(ent, scaledDt)) continue;
+                // Pass raw dt: the blender routes the active clip through
+                // advanceTime() (which applies speed + loop region) and falls
+                // back to scaledDt for the other clip.
+                if (isActiveEntity && blender->apply(ent, dt)) continue;
 
                 Ogre::AnimationStateSet const* set = ent->getAllAnimationStates();
                 if(!set) continue;
