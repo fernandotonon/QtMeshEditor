@@ -1449,3 +1449,27 @@ TEST_F(TransformCommandsTests, SubMeshTransform_ScalePreservesCentroid) {
     EXPECT_NEAR(centerAfter.y, centerBefore.y, 0.01f);
     EXPECT_NEAR(centerAfter.z, centerBefore.z, 0.01f);
 }
+
+TEST_F(TransformCommandsTests, SubMeshTransform_NullEntityIsNoOp)
+{
+    SubMeshTransform::translateSubMesh(nullptr, 0, Ogre::Vector3::UNIT_X);
+    SubMeshTransform::scaleSubMesh(nullptr, 0, Ogre::Vector3::UNIT_SCALE);
+    SubMeshTransform::rotateSubMesh(nullptr, 0, Ogre::Quaternion::IDENTITY);
+    EXPECT_EQ(SubMeshTransform::getSubMeshCenter(nullptr, 0), Ogre::Vector3::ZERO);
+    EXPECT_TRUE(SubMeshTransform::readPositions(nullptr, 0).empty());
+    SubMeshTransform::writePositions(nullptr, 0, {});
+}
+
+TEST_F(TransformCommandsTests, SubMeshTransform_InvalidSubMeshIndex)
+{
+    ASSERT_TRUE(canLoadMeshFiles());
+
+    Manager* mgr = Manager::getSingleton();
+    auto mesh = createInMemoryTriangleMesh("SubMeshBadIdx");
+    auto* entity = mgr->getSceneMgr()->createEntity(mesh);
+    auto* node = mgr->addSceneNode("SubMeshBadIdxNode");
+    node->attachObject(entity);
+
+    EXPECT_EQ(SubMeshTransform::getSubMeshCenter(entity, 99), Ogre::Vector3::ZERO);
+    EXPECT_TRUE(SubMeshTransform::readPositions(entity, 99).empty());
+}
