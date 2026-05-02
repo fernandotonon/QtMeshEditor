@@ -54,6 +54,7 @@ UndoManager.cpp
 SubMeshTransform.cpp
 SubEntityHighlight.cpp
 commands/TransformCommands.cpp
+commands/MoveKeyframeCommand.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
 ThemeManager.cpp

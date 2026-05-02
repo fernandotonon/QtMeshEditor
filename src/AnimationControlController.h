@@ -160,6 +160,21 @@ public:
     Q_INVOKABLE void setKfRotY(double v);
     Q_INVOKABLE void setKfRotZ(double v);
 
+    // ── Dope sheet API (slice C) ─────────────────────────────────────────────
+    /// One row per animated bone on the currently selected animation.
+    /// Each row is a QVariantMap: { "bone": QString, "keyTimes": QVariantList<double seconds> }.
+    /// Returns an empty list when no animation is selected.
+    Q_INVOKABLE QVariantList allBoneRows() const;
+
+    /// Move a keyframe on `boneName`'s track from `oldTime` to `newTime`
+    /// (both seconds). Match tolerance is 1 ms — same as the existing
+    /// keyframe-tick comparison. Refuses the move if `newTime` collides
+    /// with another existing keyframe on the same track. Pushes a
+    /// MoveKeyframeCommand so the operation is undoable. Returns true
+    /// when the move was applied.
+    Q_INVOKABLE bool moveKeyframe(const QString& boneName,
+                                  double oldTime, double newTime);
+
 public slots:
     void updateAnimationTree();
 
@@ -174,6 +189,9 @@ signals:
     void currentKeyframeChanged();
     void playbackSpeedChanged();
     void loopRegionChanged();
+    /// Emitted when the dope-sheet view should refresh — track edits, clip
+    /// selection, or keyframe add/delete/move.
+    void boneRowsChanged();
 
 private:
     AnimationControlController();

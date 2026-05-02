@@ -1,9 +1,12 @@
 #include "AnimationControlController.h"
 #include "SelectionSet.h"
 #include "Manager.h"
+#include "UndoManager.h"
+#include "commands/MoveKeyframeCommand.h"
 #include <QApplication>
 #include <QPalette>
 #include <QTimer>
+#include <QVariantMap>
 #include <cmath>
 
 #include <Ogre.h>
@@ -426,6 +429,9 @@ void AnimationControlController::refreshSliderTicks()
     }
 
     emit keyframeTicksChanged();
+    // Dope-sheet view re-queries rows on the same signals as track-level
+    // changes (add/delete/move/select).
+    emit boneRowsChanged();
 }
 
 // ── Keyframe editing ──────────────────────────────────────────────────────────
@@ -579,3 +585,51 @@ KF_SET_ROT(W, w)
 KF_SET_ROT(X, x)
 KF_SET_ROT(Y, y)
 KF_SET_ROT(Z, z)
+
+// ── Dope sheet API (slice C) ──────────────────────────────────────────────────
+
+QVariantList AnimationControlController::allBoneRows() const
+{
+    QVariantList rows;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return rows;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return rows;
+
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+        Ogre::Node* node = track->getAssociatedNode();
+        if (!node) continue;
+
+        QVariantList keyTimes;
+        keyTimes.reserve(static_cast<int>(track->getNumKeyFrames()));
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            keyTimes.append(static_cast<double>(track->getKeyFrame(i)->getTime()));
+        }
+
+        QVariantMap row;
+        row[QStringLiteral("bone")] = QString::fromStdString(node->getName());
+        row[QStringLiteral("keyTimes")] = keyTimes;
+        rows.append(row);
+    }
+    return rows;
+}
+
+bool AnimationControlController::moveKeyframe(const QString& boneName,
+                                              double oldTime, double newTime)
+{
+    if (boneName.isEmpty()) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (qFuzzyCompare(oldTime + 1.0, newTime + 1.0)) return false;
+
+    auto* cmd = new MoveKeyframeCommand(m_selectedSkeleton,
+                                        m_selectedAnimation,
+                                        boneName.toStdString(),
+                                        static_cast<float>(oldTime),
+                                        static_cast<float>(newTime));
+    UndoManager::getSingleton()->push(cmd);
+    // The command's redo() ran inside push(); refresh the slider ticks for
+    // the currently-edited bone and signal QML views to re-read rows.
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    return true;
+}

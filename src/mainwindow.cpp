@@ -511,6 +511,24 @@ void MainWindow::initToolBar()
         });
     }
 
+    // Dope Sheet dock — multi-bone keyframe view (Phase 5 slice C)
+    {
+        auto* dopeSheetWidget = new QQuickWidget();
+        dopeSheetWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        dopeSheetWidget->setMinimumHeight(160);
+        dopeSheetWidget->setFocusPolicy(Qt::StrongFocus);
+        dopeSheetWidget->setSource(QUrl("qrc:/AnimationControl/AnimationDopeSheet.qml"));
+        m_dopeSheetDock = new QDockWidget(tr("Dope Sheet"), this);
+        m_dopeSheetDock->setWidget(dopeSheetWidget);
+        m_dopeSheetDock->setObjectName("DopeSheetDock");
+        addDockWidget(Qt::BottomDockWidgetArea, m_dopeSheetDock);
+        m_dopeSheetDock->hide();
+        connect(m_dopeSheetDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
+            SentryReporter::addBreadcrumb("ui.action",
+                vis ? "Dope Sheet shown" : "Dope Sheet hidden");
+        });
+    }
+
     // Welcome Screen overlay — shown on first launch or when user hasn't opted out
     {
         m_welcomeController = WelcomeScreenController::instance();
@@ -1182,6 +1200,14 @@ void MainWindow::initToolBar()
     if (m_assetBrowserDock) {
         connect(m_assetBrowserDock, &QDockWidget::visibilityChanged,
                 ui->actionAsset_Browser, &QAction::setChecked);
+    }
+
+    // Dope Sheet toggle — uses the dock's own toggleViewAction so we don't
+    // have to add a new entry to mainwindow.ui.
+    if (m_dopeSheetDock && ui->menuView) {
+        QAction* dopeAct = m_dopeSheetDock->toggleViewAction();
+        dopeAct->setText(tr("Dope Sheet"));
+        ui->menuView->addAction(dopeAct);
     }
 
     // Connect Browse button to a native file dialog (must be parented to MainWindow on macOS)

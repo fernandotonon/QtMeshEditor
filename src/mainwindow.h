@@ -147,6 +147,7 @@ private:
     QQuickWidget* m_propertiesPanel = nullptr;
     QDockWidget* m_chatDock = nullptr;
     QDockWidget* m_assetBrowserDock = nullptr;
+    QDockWidget* m_dopeSheetDock = nullptr;
 
     QMenu* m_recentFilesMenu = nullptr;
     void addToRecentFiles(const QString& filePath);
