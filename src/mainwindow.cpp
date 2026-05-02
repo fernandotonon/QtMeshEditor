@@ -1329,10 +1329,10 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
     // to the entity+animation selected in the Animation Control panel.
     if(isPlaying)
     {
-        auto* animCtrl = AnimationControlController::instance();
+        const auto* animCtrl = AnimationControlController::instance();
         const std::string activeEntity = animCtrl->selectedEntityName().toStdString();
         const std::string activeAnim   = animCtrl->selectedAnimation().toStdString();
-        const double dt = static_cast<double>(evt.timeSinceLastFrame);
+        const auto dt = static_cast<double>(evt.timeSinceLastFrame);
         const double scaledDt = dt * animCtrl->playbackSpeed();
         for(Ogre::SceneNode* node : Manager::getSingleton()->getSceneNodes())
         {
@@ -1351,7 +1351,7 @@ bool MainWindow::frameRenderingQueued(const Ogre::FrameEvent &evt)
                     if(!value->getEnabled()) continue;
                     if (isActiveEntity && key == activeAnim) {
                         // Selected animation: speed + loop region wrap.
-                        const double now  = static_cast<double>(value->getTimePosition());
+                        const auto now  = static_cast<double>(value->getTimePosition());
                         const double next = animCtrl->advanceTime(now, dt);
                         value->setTimePosition(static_cast<float>(next));
                     } else {

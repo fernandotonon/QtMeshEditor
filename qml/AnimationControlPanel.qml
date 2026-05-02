@@ -485,7 +485,10 @@ Column {
                 onPaint: {
                     var ctx = getContext("2d"); ctx.clearRect(0, 0, width, height)
                     var maxMs = AnimationControlController.sliderMaximum; if (maxMs <= 0) return
-                    var pad = 13; var avail = width - pad * 2
+                    // Use the slider's actual layout so loop shading + tick marks
+                    // track the slider groove across Qt styles, DPI, and platforms.
+                    var pad = timeSlider.leftPadding
+                    var avail = timeSlider.availableWidth
 
                     // Loop region shading (drawn under keyframe ticks)
                     if (AnimationControlController.loopRegionActive) {
@@ -537,8 +540,10 @@ Column {
                 anchors.fill: parent
                 visible: AnimationControlController.loopRegionActive
 
-                property real pad: 13
-                property real avail: width - pad * 2
+                // Bind to the slider's actual layout so handles stay aligned
+                // with the groove regardless of style/DPI.
+                property real pad: timeSlider.leftPadding
+                property real avail: timeSlider.availableWidth
                 property real maxMs: Math.max(1, AnimationControlController.sliderMaximum)
 
                 function pxToSec(px) {

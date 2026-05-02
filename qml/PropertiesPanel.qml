@@ -1620,11 +1620,17 @@ Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
                     model: ["0.25x", "0.5x", "1x", "2x", "4x"]
                     property var values: [0.25, 0.5, 1.0, 2.0, 4.0]
+                    // Pick the nearest preset rather than silently falling back
+                    // to 1× when the controller's value isn't an exact match.
                     currentIndex: {
                         var s = AnimationControlController.playbackSpeed
-                        for (var i = 0; i < values.length; i++)
-                            if (Math.abs(values[i] - s) < 1e-6) return i
-                        return 2
+                        var bestIndex = 0
+                        var bestDiff = Math.abs(values[0] - s)
+                        for (var i = 1; i < values.length; ++i) {
+                            var diff = Math.abs(values[i] - s)
+                            if (diff < bestDiff) { bestDiff = diff; bestIndex = i }
+                        }
+                        return bestIndex
                     }
                     onActivated: AnimationControlController.playbackSpeed = values[currentIndex]
                     font.pixelSize: 11

@@ -294,7 +294,7 @@ void AnimationControlController::setAnimationLength(double length)
     emit animationLengthChanged();
 }
 
-// ── Playback speed / loop region / auto-key ───────────────────────────────────
+// ── Playback speed / loop region ──────────────────────────────────────────────
 
 void AnimationControlController::setPlaybackSpeed(double s)
 {
@@ -307,9 +307,14 @@ void AnimationControlController::setPlaybackSpeed(double s)
 void AnimationControlController::setLoopStart(double s)
 {
     if (s < 0.0) s = 0.0;
+    // Clamp first, then bail out if nothing actually changed — avoids
+    // emitting loopRegionChanged when the request collapses to the
+    // existing value after clamping.
+    if (m_loopEnd > 0.0 && s > m_loopEnd) {
+        s = m_loopEnd;
+    }
     if (qFuzzyCompare(s, m_loopStart)) return;
     m_loopStart = s;
-    if (m_loopEnd > 0.0 && m_loopStart > m_loopEnd) m_loopStart = m_loopEnd;
     emit loopRegionChanged();
 }
 
@@ -318,7 +323,9 @@ void AnimationControlController::setLoopEnd(double s)
     if (s < 0.0) s = 0.0;
     if (qFuzzyCompare(s, m_loopEnd)) return;
     m_loopEnd = s;
-    if (m_loopEnd > 0.0 && m_loopStart > m_loopEnd) m_loopStart = m_loopEnd;
+    if (m_loopEnd > 0.0 && m_loopStart > m_loopEnd) {
+        m_loopStart = m_loopEnd;
+    }
     emit loopRegionChanged();
 }
 

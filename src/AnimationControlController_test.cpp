@@ -580,7 +580,7 @@ TEST_F(AnimationControlControllerPlaybackTest, LoopStartClampsToEnd) {
 }
 
 TEST_F(AnimationControlControllerTest, SelectAnimationResetsLoopRegion) {
-    if (!canLoadMeshFiles()) GTEST_SKIP() << "No GL context";
+    ASSERT_TRUE(canLoadMeshFiles());
 
     Ogre::Entity* entity = setupAnimatedEntity("ACC_LoopResetTest");
     ASSERT_NE(entity, nullptr);
