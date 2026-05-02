@@ -64,6 +64,9 @@ TEST_F(AnimationBlenderPropertyTest, ModeClampsToKnownValues) {
 
 TEST_F(AnimationBlenderPropertyTest, ActiveTogglesEmitSignal) {
     auto* b = AnimationBlender::instance();
+    // Precondition: A/B must be set + distinct for activation to be accepted.
+    b->setAnimA("walk");
+    b->setAnimB("run");
     QSignalSpy spy(b, &AnimationBlender::activeChanged);
     b->setActive(true);
     EXPECT_EQ(spy.count(), 1);
