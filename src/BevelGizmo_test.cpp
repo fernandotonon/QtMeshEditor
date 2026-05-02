@@ -3,6 +3,7 @@
 #include <OgreCamera.h>
 #include <OgreManualObject.h>
 #include <OgreRay.h>
+#include <OgreSceneNode.h>
 #include <QApplication>
 #include <QCoreApplication>
 #include <QThread>
@@ -57,8 +58,13 @@ TEST_F(BevelGizmoTest, AxisVisibilityScaleAndPick)
     EXPECT_NEAR(gizmo.origin().x, 1.0f, 1e-5f);
 
     auto* cam = sm->createCamera("BevelGizmoUT_Cam");
-    cam->setPosition(0, 0, 10);
-    cam->lookAt(Ogre::Vector3(0, 0, 0));
+    cam->setNearClipDistance(0.1f);
+    cam->setFarClipDistance(1000.0f);
+    cam->setAspectRatio(1.0f);
+    Ogre::SceneNode* camNode = sm->getRootSceneNode()->createChildSceneNode("BevelGizmoUT_CamNode");
+    camNode->attachObject(cam);
+    camNode->setPosition(0.0f, 0.0f, 10.0f);
+    camNode->lookAt(Ogre::Vector3::ZERO, Ogre::Node::TS_WORLD);
     gizmo.updateScreenSpaceScale(cam);
     gizmo.updateScreenSpaceScale(nullptr);
 

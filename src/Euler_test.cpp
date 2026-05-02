@@ -19,7 +19,7 @@ TEST(EulerTest, ToQuaternionMatchesYawPitchRollOrder)
     Quaternion expected = Quaternion(e.yaw(), Vector3::UNIT_Y)
         * Quaternion(e.pitch(), Vector3::UNIT_X)
         * Quaternion(e.roll(), Vector3::UNIT_Z);
-    EXPECT_NEAR(std::abs(q.dotProduct(expected)), 1.0f, 1e-4f);
+    EXPECT_NEAR(std::abs(q.Dot(expected)), 1.0f, 1e-4f);
 }
 
 TEST(EulerTest, QuaternionRoundTrip)
@@ -27,7 +27,7 @@ TEST(EulerTest, QuaternionRoundTrip)
     Euler e(Degree(33).valueRadians(), Degree(-12).valueRadians(), Degree(77).valueRadians());
     Quaternion q = e.toQuaternion();
     Euler e2(q);
-    EXPECT_NEAR(std::abs(q.dotProduct(e2.toQuaternion())), 1.0f, 1e-3f);
+    EXPECT_NEAR(std::abs(q.Dot(e2.toQuaternion())), 1.0f, 1e-3f);
 }
 
 TEST(EulerTest, DirectionSetsYawPitch)
