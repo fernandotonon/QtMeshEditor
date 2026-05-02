@@ -117,6 +117,11 @@ private:
 
     void captureSnapshot(Ogre::Entity* entity);
     void restoreSnapshot();
+    /// Force-deactivate the blender if the current A/B selection is unusable
+    /// (empty side or A == B). Called by the setters whenever m_animA or
+    /// m_animB changes — without this, the entity keeps playing in its last
+    /// blended configuration when the selection becomes invalid mid-run.
+    void deactivateIfInvalid();
 
     static AnimationBlender* m_pSingleton;
 

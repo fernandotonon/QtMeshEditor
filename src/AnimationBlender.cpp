@@ -99,10 +99,18 @@ void AnimationBlender::setActive(bool on)
         Ogre::Entity* entity = resolveActiveEntity();
         captureSnapshot(entity);
         disableAllStates(entity);
+        SentryReporter::addBreadcrumb(
+            "ui.action",
+            QString("Blend preview ON (A=%1, B=%2, mode=%3, weight=%4)")
+                .arg(QString::fromStdString(m_animA))
+                .arg(QString::fromStdString(m_animB))
+                .arg(modeName(m_mode))
+                .arg(m_weight, 0, 'f', 2));
     } else {
         // Toggling off: roll the entity's animation states back to whatever
         // they looked like before the blender started writing to them.
         restoreSnapshot();
+        SentryReporter::addBreadcrumb("ui.action", "Blend preview OFF");
     }
     // Inspector listens to activeChanged and refreshes its animation list,
     // which keeps its per-anim Enable/Loop checkboxes in sync.
@@ -114,6 +122,7 @@ void AnimationBlender::setAnimA(const QString& name)
     const std::string s = name.toStdString();
     if (s == m_animA) return;
     m_animA = s;
+    deactivateIfInvalid();
     emit selectionChanged();
 }
 
@@ -122,7 +131,22 @@ void AnimationBlender::setAnimB(const QString& name)
     const std::string s = name.toStdString();
     if (s == m_animB) return;
     m_animB = s;
+    deactivateIfInvalid();
     emit selectionChanged();
+}
+
+void AnimationBlender::deactivateIfInvalid()
+{
+    // Called whenever animA/animB changes. If preview is currently active and
+    // the new selection is unusable (empty side, or A == B), apply() would
+    // start returning false on the next frame and MainWindow would fall back
+    // to plain addTime(). The entity would still be in its blended enabled/
+    // weight configuration, leaving stale preview playback. Forcing a clean
+    // deactivation here restores the pre-blend snapshot.
+    if (!m_active) return;
+    if (m_animA.empty() || m_animB.empty() || m_animA == m_animB) {
+        setActive(false);
+    }
 }
 
 void AnimationBlender::setWeight(double w)
@@ -367,10 +391,21 @@ void writeBoneKeyframe(Ogre::NodeAnimationTrack* track, float t, const Ogre::Bon
 void positionForSample(Ogre::AnimationState* sa, Ogre::AnimationState* sb,
                        float t, int mode, double weight)
 {
-    const float ta = (sa->getLength() > 0.0f) ? std::fmod(t, sa->getLength()) : 0.0f;
-    const float tb = (sb->getLength() > 0.0f) ? std::fmod(t, sb->getLength()) : 0.0f;
-    sa->setTimePosition(ta);
-    sb->setTimePosition(tb);
+    // Map the bake-clock `t` onto each source clip's own timeline.
+    // t < clipLen → straight pass-through (most common case).
+    // t == clipLen → clamp to clipLen (otherwise fmod returns 0, which
+    //   writes the start pose into the closing keyframe and produces a
+    //   visible pop on equal-length inputs).
+    // t > clipLen → wrap with fmod so a shorter source clip loops within
+    //   a longer bake range.
+    auto mapTime = [](float t, float clipLen) -> float {
+        if (clipLen <= 0.0f) return 0.0f;
+        if (t < clipLen)     return t;
+        if (t > clipLen)     return std::fmod(t, clipLen);
+        return clipLen; // t == clipLen
+    };
+    sa->setTimePosition(mapTime(t, sa->getLength()));
+    sb->setTimePosition(mapTime(t, sb->getLength()));
 
     if (mode == AnimationBlender::ModeOverride) {
         const bool useB = (weight >= 0.5);

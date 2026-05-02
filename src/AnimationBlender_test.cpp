@@ -167,6 +167,28 @@ TEST_F(AnimationBlenderPropertyTest, BakeRefusedWhenAEqualsB) {
     EXPECT_TRUE(b->bake("X", 30).isEmpty());
 }
 
+TEST_F(AnimationBlenderPropertyTest, ClearingAnimAWhileActiveDeactivates) {
+    auto* b = AnimationBlender::instance();
+    b->setAnimA("walk");
+    b->setAnimB("run");
+    b->setActive(true);
+    ASSERT_TRUE(b->active());
+    // Clearing animA invalidates the blend → blender must self-deactivate.
+    b->setAnimA("");
+    EXPECT_FALSE(b->active());
+}
+
+TEST_F(AnimationBlenderPropertyTest, MakingAEqualBWhileActiveDeactivates) {
+    auto* b = AnimationBlender::instance();
+    b->setAnimA("walk");
+    b->setAnimB("run");
+    b->setActive(true);
+    ASSERT_TRUE(b->active());
+    // Setting B to the same clip as A invalidates the blend.
+    b->setAnimB("walk");
+    EXPECT_FALSE(b->active());
+}
+
 // ── Live blend + bake against a real animated entity ──────────────────────────
 //
 // Uses the standard Ogre test fixture pattern. createAnimatedTestEntity() only
