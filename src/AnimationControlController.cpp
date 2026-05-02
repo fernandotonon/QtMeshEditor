@@ -649,7 +649,9 @@ bool AnimationControlController::moveKeyframe(const QString& boneName,
         }
     }
 
-    auto* cmd = new MoveKeyframeCommand(m_selectedSkeleton,
+    // QUndoStack::push() takes ownership of the command — this raw new is
+    // the standard QUndoCommand idiom (mirrors TransformCommands callers).
+    auto* cmd = new MoveKeyframeCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
                                         m_selectedAnimation,
                                         boneStd,
                                         static_cast<float>(oldTime),

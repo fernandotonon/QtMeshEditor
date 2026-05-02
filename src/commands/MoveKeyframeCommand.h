@@ -34,8 +34,10 @@ public:
 
 private:
     /// Locate the keyframe currently at `searchTime` (± epsilon) on this
-    /// command's track. Returns nullptr if no match. Helper used by both
-    /// undo and redo to re-resolve the keyframe after a previous move.
+    /// command's track and shift it to `targetTime`. Used by both undo and
+    /// redo to re-resolve the keyframe after a previous move. Returns true
+    /// when the move was applied; false if the source keyframe wasn't
+    /// found or the target time would collide with another keyframe.
     bool moveKeyframeTo(float searchTime, float targetTime);
 
     Ogre::Skeleton* mSkeleton;

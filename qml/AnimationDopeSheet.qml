@@ -98,8 +98,15 @@ Rectangle {
         visible: root.rows.length > 0
 
         delegate: Rectangle {
+            id: rowDelegate
+            // Capture row data once at the delegate scope. The inner Repeater
+            // shadows `modelData` with the keyTime number, so we can't reach
+            // back to the row map from inside it.
+            property string boneName: modelData.bone
+            property var keyTimes: modelData.keyTimes
+
             width: rowsView.width; height: root.rowHeight
-            color: (modelData.bone === AnimationControlController.selectedBone)
+            color: (boneName === AnimationControlController.selectedBone)
                    ? Qt.lighter(AnimationControlController.panelColor, 1.15)
                    : AnimationControlController.panelColor
 
@@ -111,14 +118,14 @@ Rectangle {
                 Text {
                     anchors.left: parent.left; anchors.leftMargin: 6
                     anchors.verticalCenter: parent.verticalCenter
-                    text: modelData.bone
+                    text: rowDelegate.boneName
                     color: AnimationControlController.textColor
                     elide: Text.ElideRight; font.pixelSize: 11
                     width: parent.width - 12
                 }
                 MouseArea {
                     anchors.fill: parent
-                    onClicked: AnimationControlController.selectBone(modelData.bone)
+                    onClicked: AnimationControlController.selectBone(rowDelegate.boneName)
                 }
             }
 
@@ -141,11 +148,16 @@ Rectangle {
 
                 // Diamonds
                 Repeater {
-                    model: modelData.keyTimes
+                    model: rowDelegate.keyTimes
                     Rectangle {
+                        // The bound keyTime; while dragging we render at
+                        // `dragPreviewTime` instead of pushing a command per
+                        // pixel. The single MoveKeyframeCommand is pushed on
+                        // release, giving exactly one undoable step per gesture.
                         property real keyTime: modelData
-                        // Convert keyTime → x relative to the strip
-                        x: (keyTime - root.viewStart) * root.pxPerSec - width / 2
+                        property real dragPreviewTime: keyTime
+                        property real displayTime: dragArea.dragging ? dragPreviewTime : keyTime
+                        x: (displayTime - root.viewStart) * root.pxPerSec - width / 2
                         anchors.verticalCenter: parent.verticalCenter
                         width: 10; height: 10
                         rotation: 45
@@ -164,12 +176,19 @@ Rectangle {
                             property bool dragging: false
                             property real pressX: 0
                             property real originalTime: 0
-                            // Snapshot at press; drag updates the time live and lets
-                            // moveKeyframe push exactly one undo command per drag.
+                            // Single press snapshot; release commits one move.
                             onPressed: function(mouse) {
                                 dragging = true
                                 pressX = mouse.x
                                 originalTime = parent.keyTime
+                                parent.dragPreviewTime = parent.keyTime
+                                // Selecting the diamond's bone + jumping the
+                                // playhead is the natural "click" outcome —
+                                // do it on press so it works even if the user
+                                // drags slightly afterwards.
+                                AnimationControlController.selectBone(rowDelegate.boneName)
+                                AnimationControlController.sliderValue =
+                                        Math.round(parent.keyTime * 1000)
                             }
                             onPositionChanged: function(mouse) {
                                 if (!dragging) return
@@ -179,19 +198,16 @@ Rectangle {
                                 if (target < 0) target = 0
                                 var len = AnimationControlController.animationLength
                                 if (target > len) target = len
-                                if (Math.abs(target - parent.keyTime) > 0.001) {
-                                    if (AnimationControlController.moveKeyframe(
-                                            modelData.bone, parent.keyTime, target)) {
-                                        // The model rebuilds via boneRowsChanged; the
-                                        // new keyTime arrives in the next binding pass.
-                                    }
-                                }
+                                parent.dragPreviewTime = target
                             }
-                            onReleased: dragging = false
-                            onClicked: function(mouse) {
-                                AnimationControlController.selectBone(modelData.bone)
-                                AnimationControlController.sliderValue =
-                                        Math.round(parent.keyTime * 1000)
+                            onReleased: function(mouse) {
+                                if (!dragging) return
+                                dragging = false
+                                var target = parent.dragPreviewTime
+                                if (Math.abs(target - originalTime) > 0.001) {
+                                    AnimationControlController.moveKeyframe(
+                                        rowDelegate.boneName, originalTime, target)
+                                }
                             }
                         }
                     }

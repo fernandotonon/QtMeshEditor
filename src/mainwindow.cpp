@@ -511,14 +511,17 @@ void MainWindow::initToolBar()
         });
     }
 
-    // Dope Sheet dock — multi-bone keyframe view (Phase 5 slice C)
+    // Dope Sheet dock — multi-bone keyframe view (Phase 5 slice C).
+    // Qt takes parent ownership of QQuickWidget + QDockWidget — the same
+    // pattern the rest of mainwindow.cpp uses. Sonar's S5025 wants smart
+    // pointers, but raw `new` is idiomatic for Qt parent-owned widgets.
     {
-        auto* dopeSheetWidget = new QQuickWidget();
+        auto* dopeSheetWidget = new QQuickWidget(); // NOSONAR — Qt parent ownership
         dopeSheetWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
         dopeSheetWidget->setMinimumHeight(160);
         dopeSheetWidget->setFocusPolicy(Qt::StrongFocus);
         dopeSheetWidget->setSource(QUrl("qrc:/AnimationControl/AnimationDopeSheet.qml"));
-        m_dopeSheetDock = new QDockWidget(tr("Dope Sheet"), this);
+        m_dopeSheetDock = new QDockWidget(tr("Dope Sheet"), this); // NOSONAR — Qt parent ownership
         m_dopeSheetDock->setWidget(dopeSheetWidget);
         m_dopeSheetDock->setObjectName("DopeSheetDock");
         addDockWidget(Qt::BottomDockWidgetArea, m_dopeSheetDock);
