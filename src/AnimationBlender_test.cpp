@@ -135,6 +135,35 @@ TEST_F(AnimationBlenderPropertyTest, BakeOverSourceClipReturnsEmpty) {
     EXPECT_TRUE(b->bake("run", 30).isEmpty());
 }
 
+TEST_F(AnimationBlenderPropertyTest, ActivateRefusedWhenAnimAEmpty) {
+    auto* b = AnimationBlender::instance();
+    b->setAnimB("run"); // A still empty
+    b->setActive(true);
+    EXPECT_FALSE(b->active());
+}
+
+TEST_F(AnimationBlenderPropertyTest, ActivateRefusedWhenAnimBEmpty) {
+    auto* b = AnimationBlender::instance();
+    b->setAnimA("walk"); // B still empty
+    b->setActive(true);
+    EXPECT_FALSE(b->active());
+}
+
+TEST_F(AnimationBlenderPropertyTest, ActivateRefusedWhenAEqualsB) {
+    auto* b = AnimationBlender::instance();
+    b->setAnimA("walk");
+    b->setAnimB("walk"); // same clip both sides
+    b->setActive(true);
+    EXPECT_FALSE(b->active());
+}
+
+TEST_F(AnimationBlenderPropertyTest, BakeRefusedWhenAEqualsB) {
+    auto* b = AnimationBlender::instance();
+    b->setAnimA("walk");
+    b->setAnimB("walk");
+    EXPECT_TRUE(b->bake("X", 30).isEmpty());
+}
+
 // ── Live blend + bake against a real animated entity ──────────────────────────
 //
 // Uses the standard Ogre test fixture pattern. createAnimatedTestEntity() only

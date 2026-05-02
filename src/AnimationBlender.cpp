@@ -51,25 +51,54 @@ AnimationBlender::AnimationBlender()
 QString AnimationBlender::animA() const { return QString::fromStdString(m_animA); }
 QString AnimationBlender::animB() const { return QString::fromStdString(m_animB); }
 
+namespace {
+
+// Disable every animation state on `entity`. Pre-condition: caller already
+// captured a PreviewSnapshot so deactivate can restore the original flags.
+void disableAllStates(Ogre::Entity* entity)
+{
+    if (!entity) return;
+    auto* set = entity->getAllAnimationStates();
+    if (!set) return;
+    for (const auto& [name, state] : set->getAnimationStates()) {
+        state->setEnabled(false);
+    }
+}
+
+const char* modeName(int mode)
+{
+    switch (mode) {
+    case AnimationBlender::ModeMix:      return "mix";
+    case AnimationBlender::ModeAdditive: return "additive";
+    case AnimationBlender::ModeOverride: return "override";
+    default:                             return "mix";
+    }
+}
+
+} // namespace
+
 void AnimationBlender::setActive(bool on)
 {
     if (on == m_active) return;
+
+    // Refuse activation unless A/B are both set and distinct. apply() bails
+    // out for the same reasons, but bailing there alone leaves the entity
+    // with all-states-off until the user picks valid clips. Rejecting here
+    // keeps the toggle truthful: "Active" only sticks when it's meaningful.
+    if (on && (m_animA.empty() || m_animB.empty() || m_animA == m_animB)) {
+        return;
+    }
+
     m_active = on;
     if (on) {
         // Snapshot the entity's pre-blend state so deactivation can restore
-        // it, then immediately turn off every animation layer. apply() on
-        // the next frame turns A and B back on with the right weights;
+        // it, then turn off every animation layer immediately. apply() on
+        // the next frame re-enables A and B with the right weights;
         // doing it here prevents a one-frame flash where a stale checked
         // animation continues to play before the blend kicks in.
         Ogre::Entity* entity = resolveActiveEntity();
         captureSnapshot(entity);
-        if (entity) {
-            if (auto* set = entity->getAllAnimationStates()) {
-                for (const auto& [name, state] : set->getAnimationStates()) {
-                    state->setEnabled(false);
-                }
-            }
-        }
+        disableAllStates(entity);
     } else {
         // Toggling off: roll the entity's animation states back to whatever
         // they looked like before the blender started writing to them.
@@ -268,10 +297,10 @@ void advanceState(Ogre::AnimationState* s, const std::string& name,
 
 } // namespace
 
-bool AnimationBlender::apply(Ogre::Entity* entity, double dt)
+bool AnimationBlender::apply(Ogre::Entity* entity, double dt) // NOSONAR — mutates state via entity*; not const
 {
     if (!m_active || !entity) return false;
-    if (m_animA.empty() || m_animB.empty()) return false;
+    if (m_animA.empty() || m_animB.empty() || m_animA == m_animB) return false;
     if (!entity->hasAnimationState(m_animA) || !entity->hasAnimationState(m_animB)) {
         return false;
     }
@@ -421,7 +450,7 @@ QString AnimationBlender::bake(const QString& clipName, int fps)
 {
     if (clipName.isEmpty()) return {};
     if (fps <= 0) fps = 30;
-    if (m_animA.empty() || m_animB.empty()) return {};
+    if (m_animA.empty() || m_animB.empty() || m_animA == m_animB) return {};
 
     const std::string clipStd = clipName.toStdString();
     // Refuse to bake over one of the source clips — sa/sb resolve to those
@@ -482,7 +511,7 @@ QString AnimationBlender::bake(const QString& clipName, int fps)
         "ui.action",
         QString("Bake blended animation '%1' (mode=%2, weight=%3, fps=%4, length=%5s, samples=%6)")
             .arg(clipName)
-            .arg(m_mode == ModeMix ? "mix" : (m_mode == ModeAdditive ? "additive" : "override"))
+            .arg(modeName(m_mode))
             .arg(m_weight, 0, 'f', 2)
             .arg(fps)
             .arg(length, 0, 'f', 3)
