@@ -15,6 +15,7 @@ if(BUILD_TESTS)
     # Basic source files (excluding main.cpp for tests)
     set(TEST_SRC_FILES 
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/about.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationBlender.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationControlController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/material.cpp
@@ -85,6 +86,7 @@ if(BUILD_TESTS)
     )
 
     set(TEST_HEADER_FILES
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationBlender.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationControlController.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/GlobalDefinitions.h
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Euler.h
