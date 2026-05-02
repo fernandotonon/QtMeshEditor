@@ -621,9 +621,37 @@ bool AnimationControlController::moveKeyframe(const QString& boneName,
     if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
     if (qFuzzyCompare(oldTime + 1.0, newTime + 1.0)) return false;
 
+    // Validate up-front so we never push a no-op onto the undo stack.
+    // The command's internal validation is the source of truth, but
+    // duplicating the find-source-keyframe + collision-check here lets
+    // us return false without polluting the undo history.
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    const std::string boneStd = boneName.toStdString();
+    if (!m_selectedSkeleton->hasBone(boneStd)) return false;
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneStd);
+    if (!bone || !anim->hasNodeTrack(bone->getHandle())) return false;
+    Ogre::NodeAnimationTrack* track = anim->getNodeTrack(bone->getHandle());
+
+    constexpr float kEpsilon = 0.001f;
+    int sourceIdx = -1;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(oldTime)) <= kEpsilon) {
+            sourceIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    if (sourceIdx < 0) return false; // no keyframe at oldTime
+
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (static_cast<int>(i) == sourceIdx) continue;
+        if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(newTime)) <= kEpsilon) {
+            return false; // collision with another existing keyframe
+        }
+    }
+
     auto* cmd = new MoveKeyframeCommand(m_selectedSkeleton,
                                         m_selectedAnimation,
-                                        boneName.toStdString(),
+                                        boneStd,
                                         static_cast<float>(oldTime),
                                         static_cast<float>(newTime));
     UndoManager::getSingleton()->push(cmd);
