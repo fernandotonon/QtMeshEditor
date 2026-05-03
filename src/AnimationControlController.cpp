@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 #include <Ogre.h>
 
@@ -815,7 +816,7 @@ QString AnimationControlController::serializeKeyframes(
     for (const QVariant& v : selection) {
         const QVariantMap m = v.toMap();
         const QString bone = m.value(QStringLiteral("bone")).toString();
-        const float   tabs = static_cast<float>(m.value(QStringLiteral("time")).toDouble());
+        const auto    tabs = static_cast<float>(m.value(QStringLiteral("time")).toDouble());
         if (bone.isEmpty()) continue;
         auto* track = resolveTrackByBone(m_selectedSkeleton, m_selectedAnimation,
                                           bone.toStdString());
@@ -850,6 +851,77 @@ QString AnimationControlController::serializeKeyframes(
     return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
 }
 
+namespace {
+
+// All numeric fields that must be present on a clipboard entry. Missing or
+// non-numeric values reject the entry entirely (rather than silently
+// coercing to identity, which would paste corrupted transforms).
+const QStringList& pasteRequiredFields() {
+    static const QStringList kFields = {
+        QStringLiteral("tx"), QStringLiteral("ty"), QStringLiteral("tz"),
+        QStringLiteral("rw"), QStringLiteral("rx"), QStringLiteral("ry"),
+        QStringLiteral("rz"),
+        QStringLiteral("sx"), QStringLiteral("sy"), QStringLiteral("sz"),
+    };
+    return kFields;
+}
+
+bool entryHasAllFields(const QJsonObject& e) {
+    for (const QString& key : pasteRequiredFields()) {
+        if (!e.contains(key) || !e.value(key).isDouble()) return false;
+    }
+    return true;
+}
+
+// Parse one clipboard entry into a PasteKeyframesCommand::Entry. Returns
+// nullopt when the entry is missing required fields or its destination
+// time falls outside [0, length].
+std::optional<PasteKeyframesCommand::Entry>
+parsePasteEntry(const QJsonObject& e, double atTime, float length)
+{
+    const QString bone = e.value(QStringLiteral("bone")).toString();
+    if (bone.isEmpty()) return std::nullopt;
+    if (!entryHasAllFields(e)) return std::nullopt;
+    const auto dst = static_cast<float>(atTime + e.value(QStringLiteral("dt")).toDouble());
+    if (dst < 0.0f || dst > length + kBulkEpsilon) return std::nullopt;
+    PasteKeyframesCommand::Entry pe;
+    pe.boneName = bone.toStdString();
+    pe.time = dst;
+    pe.tx = static_cast<float>(e.value(QStringLiteral("tx")).toDouble());
+    pe.ty = static_cast<float>(e.value(QStringLiteral("ty")).toDouble());
+    pe.tz = static_cast<float>(e.value(QStringLiteral("tz")).toDouble());
+    pe.rw = static_cast<float>(e.value(QStringLiteral("rw")).toDouble());
+    pe.rx = static_cast<float>(e.value(QStringLiteral("rx")).toDouble());
+    pe.ry = static_cast<float>(e.value(QStringLiteral("ry")).toDouble());
+    pe.rz = static_cast<float>(e.value(QStringLiteral("rz")).toDouble());
+    pe.sx = static_cast<float>(e.value(QStringLiteral("sx")).toDouble());
+    pe.sy = static_cast<float>(e.value(QStringLiteral("sy")).toDouble());
+    pe.sz = static_cast<float>(e.value(QStringLiteral("sz")).toDouble());
+    return pe;
+}
+
+// Counts how many entries would actually paste — i.e. don't collide with
+// an existing keyframe on their target track.
+int countNonColliding(Ogre::Skeleton* skel, const std::string& animName,
+                      const QVector<PasteKeyframesCommand::Entry>& entries)
+{
+    int n = 0;
+    for (const auto& e : entries) {
+        auto* track = resolveTrackByBone(skel, animName, e.boneName);
+        if (!track) continue;
+        bool collides = false;
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            if (std::fabs(track->getKeyFrame(i)->getTime() - e.time) <= kBulkEpsilon) {
+                collides = true; break;
+            }
+        }
+        if (!collides) ++n;
+    }
+    return n;
+}
+
+} // namespace
+
 int AnimationControlController::pasteKeyframesAt(const QString& json,
                                                   double atTime)
 {
@@ -863,66 +935,23 @@ int AnimationControlController::pasteKeyframesAt(const QString& json,
     const QJsonObject root = doc.object();
     if (root.value(QStringLiteral("kind")).toString() !=
         QStringLiteral("qtmesh.dopesheet.keyframes")) return 0;
-    // Reject unknown clipboard versions — keeps stale clipboard payloads
-    // from a different schema out of the undo stack.
     if (root.value(QStringLiteral("version")).toInt() != 1) return 0;
 
     const auto length = static_cast<float>(animationLength());
     QVector<PasteKeyframesCommand::Entry> entries;
     for (const QJsonValue& v : root.value(QStringLiteral("entries")).toArray()) {
-        const QJsonObject e = v.toObject();
-        const QString bone = e.value(QStringLiteral("bone")).toString();
-        const double  dt   = e.value(QStringLiteral("dt")).toDouble();
-        if (bone.isEmpty()) continue;
-        // Require all the numeric fields to be present so we don't silently
-        // paste a partial/corrupted entry as identity TRS.
-        const QStringList required{ QStringLiteral("tx"), QStringLiteral("ty"),
-                                    QStringLiteral("tz"), QStringLiteral("rw"),
-                                    QStringLiteral("rx"), QStringLiteral("ry"),
-                                    QStringLiteral("rz"), QStringLiteral("sx"),
-                                    QStringLiteral("sy"), QStringLiteral("sz") };
-        bool ok = true;
-        for (const QString& key : required) {
-            if (!e.contains(key) || !e.value(key).isDouble()) { ok = false; break; }
+        if (auto pe = parsePasteEntry(v.toObject(), atTime, length)) {
+            entries.append(*pe);
         }
-        if (!ok) continue;
-
-        const auto dst = static_cast<float>(atTime + dt);
-        if (dst < 0.0f || dst > length + kBulkEpsilon) continue; // out of range — skip
-        PasteKeyframesCommand::Entry pe;
-        pe.boneName = bone.toStdString();
-        pe.time = dst;
-        pe.tx = static_cast<float>(e.value(QStringLiteral("tx")).toDouble());
-        pe.ty = static_cast<float>(e.value(QStringLiteral("ty")).toDouble());
-        pe.tz = static_cast<float>(e.value(QStringLiteral("tz")).toDouble());
-        pe.rw = static_cast<float>(e.value(QStringLiteral("rw")).toDouble());
-        pe.rx = static_cast<float>(e.value(QStringLiteral("rx")).toDouble());
-        pe.ry = static_cast<float>(e.value(QStringLiteral("ry")).toDouble());
-        pe.rz = static_cast<float>(e.value(QStringLiteral("rz")).toDouble());
-        pe.sx = static_cast<float>(e.value(QStringLiteral("sx")).toDouble());
-        pe.sy = static_cast<float>(e.value(QStringLiteral("sy")).toDouble());
-        pe.sz = static_cast<float>(e.value(QStringLiteral("sz")).toDouble());
-        entries.append(pe);
     }
     if (entries.isEmpty()) return 0;
 
-    // Pre-check collisions so we don't push a no-op command onto the undo
-    // stack when every entry would skip. The command's own redo() repeats
-    // the check authoritatively — this is purely to avoid polluting undo.
-    int wouldPaste = 0;
-    for (const auto& e : entries) {
-        auto* track = resolveTrackByBone(m_selectedSkeleton, m_selectedAnimation,
-                                          e.boneName);
-        if (!track) continue;
-        bool collides = false;
-        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
-            if (std::fabs(track->getKeyFrame(i)->getTime() - e.time) <= kBulkEpsilon) {
-                collides = true; break;
-            }
-        }
-        if (!collides) ++wouldPaste;
+    // Skip pushing the command if every entry would collide — keeps the
+    // undo history clean. The command's own redo() does the authoritative
+    // collision check; this is purely a tidiness pre-filter.
+    if (countNonColliding(m_selectedSkeleton, m_selectedAnimation, entries) == 0) {
+        return 0;
     }
-    if (wouldPaste == 0) return 0;
 
     auto* cmd = new PasteKeyframesCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
                                            m_selectedAnimation,
