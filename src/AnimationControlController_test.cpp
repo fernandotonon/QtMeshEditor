@@ -409,6 +409,14 @@ TEST_F(AnimationControlControllerTest, AutoKeyOnTransformPushesKeyframeWhenEnabl
     ctrl->autoKeyOnTransform();
     app->processEvents();
     EXPECT_EQ(track->getNumKeyFrames(), before + 1);
+
+    // Re-firing at the same scrub time must NOT stack a duplicate — it
+    // updates the existing keyframe in place. Otherwise auto-key on a
+    // single drag would balloon the track on every redundant mouse-release.
+    ctrl->autoKeyOnTransform();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), before + 1);
+    ctrl->setAutoKey(false);
 }
 
 TEST_F(AnimationControlControllerTest, DeleteKeyframeDecreasesCount) {

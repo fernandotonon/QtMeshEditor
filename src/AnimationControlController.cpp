@@ -352,16 +352,17 @@ void AnimationControlController::setAutoKey(bool on)
 {
     if (on == m_autoKey) return;
     m_autoKey = on;
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("AutoKey toggled %1").arg(on ? "on" : "off"));
     emit autoKeyChanged();
 }
 
 void AnimationControlController::autoKeyOnTransform()
 {
     if (!m_autoKey) return;
-    // addKeyframe already validates: needs a track + entity + animation +
-    // bone selected, and reads the bone's live pose. Calling it from
-    // TransformOperator's end-of-drag is safe and a no-op when conditions
-    // aren't met.
+    if (!m_selectedTrack || !m_selectedEntity || m_selectedAnimation.empty()) return;
+    if (!m_selectedSkeleton || m_selectedBone.empty()) return;
+    SentryReporter::addBreadcrumb("ui.action", "AutoKey applied keyframe");
     addKeyframe();
 }
 
@@ -518,7 +519,21 @@ void AnimationControlController::addKeyframe()
     if (!m_selectedSkeleton->hasBone(m_selectedBone)) return;
 
     const float time = m_sliderValue / 1000.0f;
-    Ogre::TransformKeyFrame* newKf = m_selectedTrack->createNodeKeyFrame(time);
+    // Reuse a keyframe at the same time if one already exists — the rest of
+    // this controller treats same-time collisions as invalid, and auto-key
+    // would otherwise stack duplicates on every drag-end at the same scrub
+    // time. Match the same epsilon used by deleteKeyframe (1 ms).
+    Ogre::TransformKeyFrame* newKf = nullptr;
+    constexpr float kKeyframeEpsilon = 0.001f;
+    for (unsigned short i = 0; i < m_selectedTrack->getNumKeyFrames(); ++i) {
+        auto* existing = static_cast<Ogre::TransformKeyFrame*>(m_selectedTrack->getKeyFrame(i));
+        if (std::fabs(existing->getTime() - time) <= kKeyframeEpsilon) {
+            newKf = existing;
+            break;
+        }
+    }
+    if (!newKf)
+        newKf = m_selectedTrack->createNodeKeyFrame(time);
 
     // Capture the bone's current LOCAL TRS (relative to its initial bind pose),
     // which is the format TransformKeyFrame stores. Previously this used

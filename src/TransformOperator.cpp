@@ -1552,6 +1552,7 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
     if((SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()) && (e->button() == Qt::LeftButton))
     {
         // Push undo command if a transform was performed on scene nodes
+        bool nodeTransformCommitted = false;
         if (SelectionSet::getSingleton()->hasNodes() && !mUndoStartPositions.isEmpty())
         {
             auto nodes = SelectionSet::getSingleton()->getNodesSelectionList();
@@ -1622,6 +1623,8 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                     UndoManager::getSingleton()->push(new ScaleCommand(nodes, totalScale));
                 }
             }
+
+            nodeTransformCommitted = changed;
         }
 
         mUndoStartPositions.clear();
@@ -1629,14 +1632,10 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         mUndoStartScales.clear();
         mStartPoint = Ogre::Vector3::ZERO;
 
-        // Auto-key: if the user enabled the toggle in the Animation Control
-        // panel and a bone-track is selected, push a keyframe at the current
-        // scrub time with the bone's live pose. No-op when conditions aren't
-        // met. Doesn't yet detect bone-direct manipulation (#358) — currently
-        // captures the bone pose at the moment of any scene-node transform
-        // commit, which is enough for users to record drag-and-snapshot
-        // animations without the dedicated bone gizmo.
-        AnimationControlController::instance()->autoKeyOnTransform();
+        // Auto-key only when an actual transform was committed — plain clicks
+        // and zero-delta releases must not pollute tracks with duplicate keys.
+        if (nodeTransformCommitted)
+            AnimationControlController::instance()->autoKeyOnTransform();
     }
 
     if(m_pSelectionBox->isVisible())
