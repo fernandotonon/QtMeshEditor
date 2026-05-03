@@ -649,9 +649,111 @@ TEST_F(AnimationControlControllerTest, AllBoneRowsReflectsTracks) {
     auto firstRow = rows.first().toMap();
     EXPECT_TRUE(firstRow.contains("bone"));
     EXPECT_TRUE(firstRow.contains("keyTimes"));
+    EXPECT_TRUE(firstRow.contains("channels"));
     // TestAnim has 3 keyframes on the Child track (handle 1)
     auto times = firstRow["keyTimes"].toList();
     EXPECT_EQ(times.size(), 3);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AllBoneRowsEmptyWhenNoAnimSelected) {
+    // Pure-data guard: with no animation selected, allBoneRows must return
+    // an empty list (not crash, not return stale shape).
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->allBoneRows().isEmpty());
+}
+
+TEST_F(AnimationControlControllerTest, AllBoneRowsReportsActiveChannels) {
+    // TestAnim's middle keyframe sets translate.x = 0.5 and rotates 30°
+    // around Y. The channel-detection should mark tx, rw, and ry as active
+    // (the rotation around Y leaves rw < 1.0 and ry > 0); ty/tz/rx/rz/s* are
+    // identity throughout and must NOT be marked active.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_ChannelsTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    QVariantList rows = ctrl->allBoneRows();
+    ASSERT_FALSE(rows.isEmpty());
+    auto channels = rows.first().toMap()["channels"].toMap();
+
+    EXPECT_TRUE(channels["tx"].toBool());
+    EXPECT_FALSE(channels["ty"].toBool());
+    EXPECT_FALSE(channels["tz"].toBool());
+
+    EXPECT_TRUE(channels["rw"].toBool());
+    EXPECT_FALSE(channels["rx"].toBool());
+    EXPECT_TRUE(channels["ry"].toBool());
+    EXPECT_FALSE(channels["rz"].toBool());
+
+    EXPECT_FALSE(channels["sx"].toBool());
+    EXPECT_FALSE(channels["sy"].toBool());
+    EXPECT_FALSE(channels["sz"].toBool());
+}
+
+TEST_F(AnimationControlControllerTest, AllBoneRowsTreatsNegatedQuaternionAsIdentity) {
+    // q and -q encode the same rotation. Set every keyframe's rotation to
+    // (-1, 0, 0, 0) — the negative of identity — and verify no rotation
+    // channel is flagged active. A naive component check would flag rw
+    // because -1 != 1, producing a bogus rotation chevron in the dope sheet.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_NegIdentityTest");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* track = skel->getAnimation("TestAnim")->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        kf->setTranslate(Ogre::Vector3::ZERO);
+        kf->setRotation(Ogre::Quaternion(-1.0f, 0.0f, 0.0f, 0.0f));
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    auto channels = ctrl->allBoneRows().first().toMap()["channels"].toMap();
+    EXPECT_FALSE(channels["rw"].toBool());
+    EXPECT_FALSE(channels["rx"].toBool());
+    EXPECT_FALSE(channels["ry"].toBool());
+    EXPECT_FALSE(channels["rz"].toBool());
+}
+
+TEST_F(AnimationControlControllerTest, AllBoneRowsAllChannelsFalseForIdentityOnlyTrack) {
+    // Build an animation whose every keyframe is identity (zero translate,
+    // identity rotation, unit scale). No channel should be flagged active —
+    // QML uses this to skip painting empty per-channel sub-rows.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_IdentityOnlyTest");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+
+    // Replace TestAnim's middle keyframe values with identity so every
+    // sample matches bind pose.
+    auto* track = skel->getAnimation("TestAnim")->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        kf->setTranslate(Ogre::Vector3::ZERO);
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    QVariantList rows = ctrl->allBoneRows();
+    ASSERT_FALSE(rows.isEmpty());
+    auto channels = rows.first().toMap()["channels"].toMap();
+    for (const QString& key : { "tx", "ty", "tz",
+                                "rw", "rx", "ry", "rz",
+                                "sx", "sy", "sz" }) {
+        EXPECT_FALSE(channels[key].toBool())
+            << "channel " << key.toStdString()
+            << " should be inactive on identity-only track";
+    }
 }
 
 TEST_F(AnimationControlControllerTest, MoveKeyframeShiftsTime) {

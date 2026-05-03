@@ -596,6 +596,56 @@ KF_SET_ROT(Z, z)
 
 // ── Dope sheet API (slice C) ──────────────────────────────────────────────────
 
+namespace {
+
+// A channel is "active" on a track if any keyframe's value differs from the
+// channel's identity (translate.x = 0, rotation = 1+0i+0j+0k, scale = 1) by
+// more than this epsilon. Tighter than kBulkEpsilon since these are values,
+// not times — a 1mm translate is meaningful.
+constexpr float kChannelEpsilon = 1e-4f;
+
+// Returns the 9 boolean channel flags for a track in TRS order:
+// {tx, ty, tz, rw, rx, ry, rz, sx, sy, sz}.
+// Only flags whose values deviate from identity are set.
+//
+// Rotation identity covers BOTH (+1, 0, 0, 0) AND (-1, 0, 0, 0) — a
+// quaternion and its negative encode the same rotation. Naive component-
+// wise comparison would flag rw as active for a sign-flipped identity,
+// producing bogus chevrons. We compare against the absolute values
+// instead: |w| ≈ 1, |x| ≈ |y| ≈ |z| ≈ 0 means identity regardless of sign.
+QVariantMap collectActiveChannels(const Ogre::NodeAnimationTrack* track)
+{
+    bool tx = false, ty = false, tz = false;
+    bool rw = false, rx = false, ry = false, rz = false;
+    bool sx = false, sy = false, sz = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const auto* kf = static_cast<const Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        const Ogre::Vector3    t = kf->getTranslate();
+        const Ogre::Quaternion r = kf->getRotation();
+        const Ogre::Vector3    s = kf->getScale();
+        if (std::fabs(t.x) > kChannelEpsilon) tx = true;
+        if (std::fabs(t.y) > kChannelEpsilon) ty = true;
+        if (std::fabs(t.z) > kChannelEpsilon) tz = true;
+        // Sign-agnostic rotation identity check — see header comment.
+        if (std::fabs(std::fabs(r.w) - 1.0f) > kChannelEpsilon) rw = true;
+        if (std::fabs(r.x) > kChannelEpsilon) rx = true;
+        if (std::fabs(r.y) > kChannelEpsilon) ry = true;
+        if (std::fabs(r.z) > kChannelEpsilon) rz = true;
+        // Scale identity = (1, 1, 1).
+        if (std::fabs(s.x - 1.0f) > kChannelEpsilon) sx = true;
+        if (std::fabs(s.y - 1.0f) > kChannelEpsilon) sy = true;
+        if (std::fabs(s.z - 1.0f) > kChannelEpsilon) sz = true;
+    }
+    QVariantMap m;
+    m[QStringLiteral("tx")] = tx; m[QStringLiteral("ty")] = ty; m[QStringLiteral("tz")] = tz;
+    m[QStringLiteral("rw")] = rw; m[QStringLiteral("rx")] = rx;
+    m[QStringLiteral("ry")] = ry; m[QStringLiteral("rz")] = rz;
+    m[QStringLiteral("sx")] = sx; m[QStringLiteral("sy")] = sy; m[QStringLiteral("sz")] = sz;
+    return m;
+}
+
+} // namespace
+
 QVariantList AnimationControlController::allBoneRows() const
 {
     QVariantList rows;
@@ -614,8 +664,9 @@ QVariantList AnimationControlController::allBoneRows() const
         }
 
         QVariantMap row;
-        row[QStringLiteral("bone")] = QString::fromStdString(node->getName());
+        row[QStringLiteral("bone")]     = QString::fromStdString(node->getName());
         row[QStringLiteral("keyTimes")] = keyTimes;
+        row[QStringLiteral("channels")] = collectActiveChannels(track);
         rows.append(row);
     }
     return rows;
