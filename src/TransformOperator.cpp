@@ -24,6 +24,7 @@
 #include "commands/TransformCommands.h"
 #include "EditModeController.h"
 #include "AnimationControlController.h"
+#include "SkeletonDebug.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -989,6 +990,31 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
         if(mTransformState == TS_SELECT)
         {
+            // Bone-pick: when the skeleton overlay is on, a click on a bone
+            // visual selects that bone in the Animation Control panel
+            // instead of starting a box-select. Box-select still kicks in
+            // when the click misses the skeleton.
+            if (m_pRayQuery)
+            {
+                m_pRayQuery->setRay(rayFromScreenPoint(e->pos()));
+                m_pRayQuery->setQueryMask(BONE_QUERY_FLAGS);
+                m_pRayQuery->setSortByDistance(true);
+                // Walk hits front-to-back: skip non-bone movables that
+                // happen to share the mask, accept the first tagged one.
+                Ogre::RaySceneQueryResult& res = m_pRayQuery->execute();
+                for (const auto& hit : res)
+                {
+                    if (!hit.movable) continue;
+                    Ogre::String boneName = SkeletonDebug::boneNameForMovable(hit.movable);
+                    if (boneName.empty()) continue;
+                    AnimationControlController::instance()->selectBone(
+                        QString::fromStdString(boneName));
+                    SentryReporter::addBreadcrumb("ui.action",
+                        QString("Bone picked: %1").arg(QString::fromStdString(boneName)));
+                    return;
+                }
+            }
+
             mScreenStart = e->pos();
             m_pSelectionBox->clear();
             m_pSelectionBox->setVisible(true);

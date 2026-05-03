@@ -34,7 +34,8 @@ THE SOFTWARE.
 #define GUI_MATERIAL_NAME "GUI_Material"
 
 #define GIZMO_QUERY_FLAGS       0x01
-#define SCENE_QUERY_FLAGS       0xFE
+#define BONE_QUERY_FLAGS        0x02
+#define SCENE_QUERY_FLAGS       0xFC
 
 #define GUI_VISIBILITY_FLAGS    0x01
 #define SCENE_VISIBILITY_FLAGS  0xFE

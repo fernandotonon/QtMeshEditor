@@ -1,7 +1,30 @@
 #include "SkeletonDebug.h"
+#include "GlobalDefinitions.h"
 
 #include <array>
 #include <cassert>
+
+namespace {
+constexpr const char* kBoneNameTag = "skeletonDebugBoneName";
+
+void tagBoneVisual(Ogre::MovableObject* obj, const Ogre::String& boneName) {
+    if (!obj) return;
+    obj->getUserObjectBindings().setUserAny(kBoneNameTag, Ogre::Any(boneName));
+    obj->setQueryFlags(BONE_QUERY_FLAGS);
+}
+}
+
+Ogre::String SkeletonDebug::boneNameForMovable(const Ogre::MovableObject* obj)
+{
+    if (!obj) return {};
+    const auto& any = obj->getUserObjectBindings().getUserAny(kBoneNameTag);
+    if (!any.has_value()) return {};
+    try {
+        return Ogre::any_cast<Ogre::String>(any);
+    } catch (const std::exception&) {
+        return {};
+    }
+}
 
 SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, float boneSize, float scaleAxes)
     : mBoneSize(boneSize)
@@ -84,6 +107,10 @@ void SkeletonDebug::createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre
         auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)lastEnt);
         mBoneEntities.push_back(lastEnt);
         tp->setScale(length, length, length);
+        // Tag every child bone visual with the parent bone's name —
+        // dragging this segment in the viewport edits the parent bone's
+        // pose (the segment visually represents that bone, not the child).
+        tagBoneVisual(lastEnt, pBone->getName());
     }
 }
 
@@ -112,6 +139,8 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
             float length = pBone->getInitialPosition().length();
             if(length >= 0.00001f)
                 tp->setScale(length, length, length);
+
+            tagBoneVisual(ent, pBone->getName());
         }
         else
         {
@@ -124,6 +153,9 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
         auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
         tp->setScale((mScaleAxes/mEntity->getParentSceneNode()->getScale().x), (mScaleAxes/mEntity->getParentSceneNode()->getScale().y), (mScaleAxes/mEntity->getParentSceneNode()->getScale().z));
         mAxisEntities.push_back(ent);
+        // Tag the axes overlay too — clicking the axis cross is the most
+        // visible target for users when scaling/rotating.
+        tagBoneVisual(ent, pBone->getName());
     }
 
     return mapEntities;
