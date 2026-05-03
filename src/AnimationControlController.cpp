@@ -607,6 +607,12 @@ constexpr float kChannelEpsilon = 1e-4f;
 // Returns the 9 boolean channel flags for a track in TRS order:
 // {tx, ty, tz, rw, rx, ry, rz, sx, sy, sz}.
 // Only flags whose values deviate from identity are set.
+//
+// Rotation identity covers BOTH (+1, 0, 0, 0) AND (-1, 0, 0, 0) — a
+// quaternion and its negative encode the same rotation. Naive component-
+// wise comparison would flag rw as active for a sign-flipped identity,
+// producing bogus chevrons. We compare against the absolute values
+// instead: |w| ≈ 1, |x| ≈ |y| ≈ |z| ≈ 0 means identity regardless of sign.
 QVariantMap collectActiveChannels(const Ogre::NodeAnimationTrack* track)
 {
     bool tx = false, ty = false, tz = false;
@@ -620,12 +626,11 @@ QVariantMap collectActiveChannels(const Ogre::NodeAnimationTrack* track)
         if (std::fabs(t.x) > kChannelEpsilon) tx = true;
         if (std::fabs(t.y) > kChannelEpsilon) ty = true;
         if (std::fabs(t.z) > kChannelEpsilon) tz = true;
-        // Rotation identity = (1, 0, 0, 0). A deviation in any component means
-        // the bone is rotated relative to bind pose.
-        if (std::fabs(r.w - 1.0f) > kChannelEpsilon) rw = true;
-        if (std::fabs(r.x)        > kChannelEpsilon) rx = true;
-        if (std::fabs(r.y)        > kChannelEpsilon) ry = true;
-        if (std::fabs(r.z)        > kChannelEpsilon) rz = true;
+        // Sign-agnostic rotation identity check — see header comment.
+        if (std::fabs(std::fabs(r.w) - 1.0f) > kChannelEpsilon) rw = true;
+        if (std::fabs(r.x) > kChannelEpsilon) rx = true;
+        if (std::fabs(r.y) > kChannelEpsilon) ry = true;
+        if (std::fabs(r.z) > kChannelEpsilon) rz = true;
         // Scale identity = (1, 1, 1).
         if (std::fabs(s.x - 1.0f) > kChannelEpsilon) sx = true;
         if (std::fabs(s.y - 1.0f) > kChannelEpsilon) sy = true;

@@ -693,6 +693,34 @@ TEST_F(AnimationControlControllerTest, AllBoneRowsReportsActiveChannels) {
     EXPECT_FALSE(channels["sz"].toBool());
 }
 
+TEST_F(AnimationControlControllerTest, AllBoneRowsTreatsNegatedQuaternionAsIdentity) {
+    // q and -q encode the same rotation. Set every keyframe's rotation to
+    // (-1, 0, 0, 0) — the negative of identity — and verify no rotation
+    // channel is flagged active. A naive component check would flag rw
+    // because -1 != 1, producing a bogus rotation chevron in the dope sheet.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_NegIdentityTest");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* track = skel->getAnimation("TestAnim")->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        kf->setTranslate(Ogre::Vector3::ZERO);
+        kf->setRotation(Ogre::Quaternion(-1.0f, 0.0f, 0.0f, 0.0f));
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    auto channels = ctrl->allBoneRows().first().toMap()["channels"].toMap();
+    EXPECT_FALSE(channels["rw"].toBool());
+    EXPECT_FALSE(channels["rx"].toBool());
+    EXPECT_FALSE(channels["ry"].toBool());
+    EXPECT_FALSE(channels["rz"].toBool());
+}
+
 TEST_F(AnimationControlControllerTest, AllBoneRowsAllChannelsFalseForIdentityOnlyTrack) {
     // Build an animation whose every keyframe is identity (zero translate,
     // identity rotation, unit scale). No channel should be flagged active —

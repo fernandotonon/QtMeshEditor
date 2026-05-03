@@ -98,6 +98,11 @@ Rectangle {
     // Used by the marquee to commit a rectangle selection. When `additive`
     // is true (Ctrl/Cmd held during marquee), the rect-hit set is unioned
     // with the existing selection instead of replacing it.
+    //
+    // Walks the rows in render order and accumulates Y top-down, factoring
+    // in any per-bone expansion (each expanded bone adds N sub-rows worth
+    // of vertical space). Without this accounting, marquee hit-testing
+    // misses keyframes whenever a bone above is expanded.
     function selectInRect(x1, y1, x2, y2, additive) {
         var lo = Math.min(x1, x2), hi = Math.max(x1, x2)
         var top = Math.min(y1, y2), bot = Math.max(y1, y2)
@@ -111,10 +116,15 @@ Rectangle {
             }
             return false
         }
+        // Cursor walks down in viewport coordinates as we visit each row.
+        var cursorY = (header.visible ? header.height : 0)
         for (var r = 0; r < rows.length; r++) {
-            // Header (24px) + r * (rowHeight + spacing 1)
-            var rowTop = (header.visible ? header.height : 0) + r * (rowHeight + 1)
-            var rowBot = rowTop + rowHeight
+            var activeChans = activeChannelsFor(rows[r])
+            var expanded = isExpanded(rows[r].bone) && activeChans.length > 0
+            var rowH = rowHeight + (expanded ? activeChans.length * rowHeight : 0)
+            var rowTop = cursorY
+            var rowBot = rowTop + rowH
+            cursorY = rowBot + 1 // ListView spacing = 1
             if (rowBot < top || rowTop > bot) continue
             var keyTimes = rows[r].keyTimes
             for (var k = 0; k < keyTimes.length; k++) {
@@ -386,14 +396,24 @@ Rectangle {
                             border.color: AnimationControlController.borderColor
                             border.width: 1
                             opacity: 0.85
+                            // Sub-row diamond click delegates to the parent
+                            // keyframe — same Ctrl/Cmd toggle and selection
+                            // semantics as the parent diamond. Per-channel
+                            // drag/edit lands in slice D3.
                             MouseArea {
                                 anchors.fill: parent
                                 anchors.margins: -2
-                                onClicked: {
+                                onPressed: function(mouse) {
+                                    root.forceActiveFocus()
                                     AnimationControlController.selectBone(rowDelegate.boneName)
                                     AnimationControlController.sliderValue =
                                             Math.round(parent.keyTime * 1000)
-                                    root.setSingleSelection(rowDelegate.boneName, parent.keyTime)
+                                    if (root.isPrimaryModifier(mouse.modifiers)) {
+                                        root.toggleInSelection(rowDelegate.boneName, parent.keyTime)
+                                    } else {
+                                        root.setSingleSelection(rowDelegate.boneName, parent.keyTime)
+                                    }
+                                    mouse.accepted = true
                                 }
                             }
                         }
