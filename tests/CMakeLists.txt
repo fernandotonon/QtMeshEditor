@@ -64,6 +64,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UndoManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MoveKeyframeCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/BulkKeyframeCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PropertiesPanelController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneTreeModel.cpp
 

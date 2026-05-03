@@ -707,3 +707,163 @@ TEST_F(AnimationControlControllerTest, MoveKeyframeRejectsCollision) {
     }
     EXPECT_TRUE(stillThere);
 }
+
+// ── Bulk keyframe ops (slice D1) ──────────────────────────────────────────────
+
+TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframesEmptySelectionReturnsFalse) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->moveKeyframes(QVariantList{}, 0.1));
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, SerializeKeyframesEmptyReturnsEmpty) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->serializeKeyframes(QVariantList{}).isEmpty());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, PasteEmptyReturnsZero) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_EQ(ctrl->pasteKeyframesAt("", 0.0), 0);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, PasteRejectsMalformedJson) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_EQ(ctrl->pasteKeyframesAt("not-json", 0.0), 0);
+    EXPECT_EQ(ctrl->pasteKeyframesAt("{\"kind\":\"wrong.kind\"}", 0.0), 0);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframesShiftsAllByDt) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_BulkMoveTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    // TestAnim has length 1.0 — extend so 0.0+0.1 / 0.5+0.1 fit.
+    ctrl->setAnimationLength(2.0);
+    QString bone = ctrl->boneNames().first();
+
+    QVariantList sel;
+    QVariantMap a; a["bone"] = bone; a["time"] = 0.0;
+    QVariantMap b; b["bone"] = bone; b["time"] = 0.5;
+    sel << a << b;
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int beforeCount = track->getNumKeyFrames();
+
+    EXPECT_TRUE(ctrl->moveKeyframes(sel, 0.1));
+
+    bool found01 = false, found06 = false;
+    bool foundOriginal00 = false, foundOriginal05 = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float t = track->getKeyFrame(i)->getTime();
+        if (std::fabs(t - 0.1f) < 0.001f) found01 = true;
+        if (std::fabs(t - 0.6f) < 0.001f) found06 = true;
+        if (std::fabs(t - 0.0f) < 0.001f) foundOriginal00 = true;
+        if (std::fabs(t - 0.5f) < 0.001f) foundOriginal05 = true;
+    }
+    EXPECT_TRUE(found01);
+    EXPECT_TRUE(found06);
+    // Originals must be gone — a faulty implementation that inserts new
+    // keyframes at the shifted times without removing the originals would
+    // double the keyframe count and break the round-trip undo.
+    EXPECT_FALSE(foundOriginal00);
+    EXPECT_FALSE(foundOriginal05);
+    EXPECT_EQ(track->getNumKeyFrames(), beforeCount);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframesClampsAtClipBoundary) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_BulkBoundsTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    // Two keyframes at 0.0 and 0.5 selected; requesting dt = -0.5 would push
+    // the first to -0.5. The controller now clamps the batch delta so the
+    // selection lands on the nearest legal time instead of snapping back.
+    // The largest legal *negative* dt for {0.0, 0.5} is 0 (since the leftmost
+    // member is already at 0); the move becomes a no-op and returns false.
+    QVariantList atZero;
+    QVariantMap a; a["bone"] = bone; a["time"] = 0.0;
+    atZero << a;
+    EXPECT_FALSE(ctrl->moveKeyframes(atZero, -0.5));
+
+    // Now try a partial-clamp case: select 0.5 and ask for -0.3. The largest
+    // legal negative dt is -0.5 (since 0.5 - 0.5 = 0), so -0.3 lands fully —
+    // the keyframe ends up at 0.2.
+    QVariantList atHalf;
+    QVariantMap b; b["bone"] = bone; b["time"] = 0.5;
+    atHalf << b;
+    EXPECT_TRUE(ctrl->moveKeyframes(atHalf, -0.3));
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    bool found02 = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - 0.2f) < 0.001f) {
+            found02 = true; break;
+        }
+    }
+    EXPECT_TRUE(found02);
+}
+
+TEST_F(AnimationControlControllerTest, SerializePasteRoundTrip) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_RoundTripTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->setAnimationLength(2.0);
+    QString bone = ctrl->boneNames().first();
+
+    // Serialize the existing keyframes at 0.0 and 0.5.
+    QVariantList sel;
+    QVariantMap a; a["bone"] = bone; a["time"] = 0.0;
+    QVariantMap b; b["bone"] = bone; b["time"] = 0.5;
+    sel << a << b;
+    QString json = ctrl->serializeKeyframes(sel);
+    EXPECT_FALSE(json.isEmpty());
+
+    // Paste at t=1.2 — copies should land at 1.2 and 1.7.
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
+    const int pasted = ctrl->pasteKeyframesAt(json, 1.2);
+    EXPECT_EQ(pasted, 2);
+    EXPECT_EQ(track->getNumKeyFrames(), before + 2);
+    bool found12 = false, found17 = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float t = track->getKeyFrame(i)->getTime();
+        if (std::fabs(t - 1.2f) < 0.001f) found12 = true;
+        if (std::fabs(t - 1.7f) < 0.001f) found17 = true;
+    }
+    EXPECT_TRUE(found12);
+    EXPECT_TRUE(found17);
+}
+
+TEST_F(AnimationControlControllerTest, PasteSkipsCollisions) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_PasteCollisionTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    // Paste back onto the existing 0.5 → collision; existing 0.0 paste lands at 0.0
+    // → also a collision. Expect 0 pasted.
+    QVariantList sel;
+    QVariantMap a; a["bone"] = bone; a["time"] = 0.0;
+    QVariantMap b; b["bone"] = bone; b["time"] = 0.5;
+    sel << a << b;
+    QString json = ctrl->serializeKeyframes(sel);
+    const int n = ctrl->pasteKeyframesAt(json, 0.0);
+    EXPECT_EQ(n, 0);
+}

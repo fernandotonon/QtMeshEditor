@@ -175,6 +175,26 @@ public:
     Q_INVOKABLE bool moveKeyframe(const QString& boneName,
                                   double oldTime, double newTime);
 
+    // ── Bulk keyframe ops (slice D1) ──────────────────────────────────────────
+    /// Move every selected keyframe by the same `dt` in seconds. Selection
+    /// is a list of QVariantMaps with "bone" + "time" keys. Atomic: a
+    /// single MoveKeyframesCommand on the undo stack. Returns false if the
+    /// shift would push any member out of [0, length] or collide with a
+    /// non-selected keyframe on the same track — in that case nothing is
+    /// pushed and the entity stays unchanged.
+    Q_INVOKABLE bool moveKeyframes(const QVariantList& selection, double dt);
+
+    /// Serialize a selection to a JSON string suitable for
+    /// QClipboard. The earliest selected time is `t0` so paste is relative.
+    /// Empty selection → empty string.
+    Q_INVOKABLE QString serializeKeyframes(const QVariantList& selection) const;
+
+    /// Paste keyframes serialized by serializeKeyframes() at absolute
+    /// `atTime` (interpreted as the destination "t0"). Skips entries whose
+    /// destination time would collide with an existing keyframe on that
+    /// track. Returns the count actually pasted.
+    Q_INVOKABLE int pasteKeyframesAt(const QString& json, double atTime);
+
 public slots:
     void updateAnimationTree();
 
