@@ -23,6 +23,7 @@
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
 #include "EditModeController.h"
+#include "AnimationControlController.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -1627,6 +1628,15 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         mUndoStartOrientations.clear();
         mUndoStartScales.clear();
         mStartPoint = Ogre::Vector3::ZERO;
+
+        // Auto-key: if the user enabled the toggle in the Animation Control
+        // panel and a bone-track is selected, push a keyframe at the current
+        // scrub time with the bone's live pose. No-op when conditions aren't
+        // met. Doesn't yet detect bone-direct manipulation (#358) — currently
+        // captures the bone pose at the moment of any scene-node transform
+        // commit, which is enough for users to record drag-and-snapshot
+        // animations without the dedicated bone gizmo.
+        AnimationControlController::instance()->autoKeyOnTransform();
     }
 
     if(m_pSelectionBox->isVisible())

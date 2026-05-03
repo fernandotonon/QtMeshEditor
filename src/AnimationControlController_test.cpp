@@ -340,6 +340,98 @@ TEST_F(AnimationControlControllerTest, AddKeyframeIncreasesCount) {
     EXPECT_EQ(track->getNumKeyFrames(), before + 1);
 }
 
+TEST_F(AnimationControlControllerTest, AddKeyframeCapturesBonePose) {
+    // Move the bone to a non-identity pose, then add a keyframe at a fresh
+    // scrub time. The new keyframe must capture the bone's current local
+    // TRS — not identity, not the curve interpolation.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_AddKfPoseTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
+    QString boneName = ctrl->boneNames().first();
+    ctrl->selectBone(boneName);
+
+    // Manually offset the bone from its initial pose. addKeyframe should
+    // capture that offset rather than re-sampling the curve.
+    auto* skel = entity->getSkeleton();
+    Ogre::Bone* bone = skel->getBone(boneName.toStdString());
+    bone->setManuallyControlled(true);
+    bone->setPosition(bone->getInitialPosition() + Ogre::Vector3(2.5f, 0, 0));
+
+    ctrl->setSliderValue(750); // a time that has no existing keyframe
+    ctrl->addKeyframe();
+    app->processEvents();
+
+    // Find the keyframe at 0.75s and verify translate.x ≈ 2.5
+    auto* track = skel->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    bool found = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.75f) < 0.001f) {
+            EXPECT_NEAR(kf->getTranslate().x, 2.5f, 1e-3);
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST_F(AnimationControlControllerTest, AutoKeyOnTransformPushesKeyframeWhenEnabled) {
+    // With autoKey enabled, calling autoKeyOnTransform must add a keyframe
+    // at the current scrub time on the active bone-track. Without it, the
+    // call is a no-op.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_AutoKeyTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->selectBone(ctrl->boneNames().first());
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
+
+    // autoKey off → no-op.
+    ctrl->setAutoKey(false);
+    ctrl->setSliderValue(250);
+    ctrl->autoKeyOnTransform();
+    EXPECT_EQ(track->getNumKeyFrames(), before);
+
+    // autoKey on → adds a keyframe.
+    ctrl->setAutoKey(true);
+    ctrl->autoKeyOnTransform();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), before + 1);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyDefaultsOff) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->autoKey());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyToggleEmitsSignal) {
+    auto* ctrl = AnimationControlController::instance();
+    QSignalSpy spy(ctrl, &AnimationControlController::autoKeyChanged);
+    ctrl->setAutoKey(true);
+    EXPECT_EQ(spy.count(), 1);
+    ctrl->setAutoKey(true); // unchanged → no re-emit
+    EXPECT_EQ(spy.count(), 1);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyOnTransformNoOpWithoutSelection) {
+    // No selection → silent no-op even when autoKey is on.
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setAutoKey(true);
+    EXPECT_NO_THROW(ctrl->autoKeyOnTransform());
+}
+
 TEST_F(AnimationControlControllerTest, DeleteKeyframeDecreasesCount) {
     ASSERT_TRUE(canLoadMeshFiles());
 

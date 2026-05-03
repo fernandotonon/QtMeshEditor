@@ -348,6 +348,23 @@ void AnimationControlController::setLoopRegionActive(bool on)
     emit loopRegionChanged();
 }
 
+void AnimationControlController::setAutoKey(bool on)
+{
+    if (on == m_autoKey) return;
+    m_autoKey = on;
+    emit autoKeyChanged();
+}
+
+void AnimationControlController::autoKeyOnTransform()
+{
+    if (!m_autoKey) return;
+    // addKeyframe already validates: needs a track + entity + animation +
+    // bone selected, and reads the bone's live pose. Calling it from
+    // TransformOperator's end-of-drag is safe and a no-op when conditions
+    // aren't met.
+    addKeyframe();
+}
+
 double AnimationControlController::advanceTime(double currentTime, double dt) const
 {
     double next = currentTime + dt * m_playbackSpeed;
@@ -497,16 +514,23 @@ void AnimationControlController::nextKeyframe()
 void AnimationControlController::addKeyframe()
 {
     if (!m_selectedTrack || !m_selectedEntity || m_selectedAnimation.empty()) return;
+    if (!m_selectedSkeleton || m_selectedBone.empty()) return;
+    if (!m_selectedSkeleton->hasBone(m_selectedBone)) return;
 
-    float time = m_sliderValue / 1000.0f;
+    const float time = m_sliderValue / 1000.0f;
     Ogre::TransformKeyFrame* newKf = m_selectedTrack->createNodeKeyFrame(time);
 
-    Ogre::TransformKeyFrame interpKf(nullptr, time);
-    m_selectedTrack->getInterpolatedKeyFrame(
-        m_selectedEntity->getAnimationState(m_selectedAnimation)->getTimePosition(), &interpKf);
-    newKf->setTranslate(interpKf.getTranslate());
-    newKf->setRotation(interpKf.getRotation());
-    newKf->setScale(interpKf.getScale());
+    // Capture the bone's current LOCAL TRS (relative to its initial bind pose),
+    // which is the format TransformKeyFrame stores. Previously this used
+    // getInterpolatedKeyFrame, which samples the existing animation curve at
+    // `time` and produces an identity-ish keyframe whenever the curve is flat
+    // there — the user-visible "blank registry" bug. With this change, hitting
+    // +KF after dragging the scene node (or, with #358's bone gizmo, the bone
+    // directly) captures the actual pose under the cursor at that scrub time.
+    const Ogre::Bone* bone = m_selectedSkeleton->getBone(m_selectedBone);
+    newKf->setTranslate(bone->getPosition() - bone->getInitialPosition());
+    newKf->setRotation(bone->getInitialOrientation().Inverse() * bone->getOrientation());
+    newKf->setScale(bone->getScale() / bone->getInitialScale());
 
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
