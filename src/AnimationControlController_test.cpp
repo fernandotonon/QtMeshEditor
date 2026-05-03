@@ -756,6 +756,72 @@ TEST_F(AnimationControlControllerTest, AllBoneRowsAllChannelsFalseForIdentityOnl
     }
 }
 
+// ── Curve editor APIs (slice D3b) ──────────────────────────────────────────────
+
+TEST_F(AnimationControlControllerPlaybackTest, ChannelValuesEmptyWhenNoSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->channelValuesAt("Bone", "tx").isEmpty());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, ChannelValuesUnknownChannelReturnsEmpty) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->channelValuesAt("Bone", "unknown").isEmpty());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, SetKeyframeValueRejectsUnknownChannel) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->setKeyframeValue("Bone", "qq", 0.5, 1.0));
+}
+
+TEST_F(AnimationControlControllerTest, ChannelValuesReadsTrack) {
+    // TestAnim's middle keyframe has translate.x = 0.5 (rest are 0). The
+    // channelValuesAt API must return [0, 0.5, 0] for "tx" in time order.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_ChannelValuesTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    QVariantList tx = ctrl->channelValuesAt(bone, "tx");
+    ASSERT_EQ(tx.size(), 3);
+    EXPECT_NEAR(tx[0].toDouble(), 0.0, 1e-4);
+    EXPECT_NEAR(tx[1].toDouble(), 0.5, 1e-4);
+    EXPECT_NEAR(tx[2].toDouble(), 0.0, 1e-4);
+}
+
+TEST_F(AnimationControlControllerTest, SetKeyframeValueWritesOneChannelOnly) {
+    // Setting tx must leave ty/tz/r*/s* on the same keyframe alone.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_SetValueTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_TRUE(ctrl->setKeyframeValue(bone, "tx", 0.5, 7.5));
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.5f) < 0.001f) {
+            EXPECT_NEAR(kf->getTranslate().x, 7.5f, 1e-4);
+            // The original middle keyframe had ty/tz = 0 — must still be 0.
+            EXPECT_NEAR(kf->getTranslate().y, 0.0f, 1e-4);
+            EXPECT_NEAR(kf->getTranslate().z, 0.0f, 1e-4);
+            // Rotation around Y (30°) — verify it survived the tx write.
+            EXPECT_NEAR(kf->getRotation().y, 0.2588f, 1e-3);
+            return;
+        }
+    }
+    FAIL() << "Keyframe at t=0.5 not found";
+}
+
 TEST_F(AnimationControlControllerTest, MoveKeyframeShiftsTime) {
     ASSERT_TRUE(canLoadMeshFiles());
     Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_MoveTest");
