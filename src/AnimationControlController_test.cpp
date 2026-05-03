@@ -655,6 +655,13 @@ TEST_F(AnimationControlControllerTest, AllBoneRowsReflectsTracks) {
     EXPECT_EQ(times.size(), 3);
 }
 
+TEST_F(AnimationControlControllerPlaybackTest, AllBoneRowsEmptyWhenNoAnimSelected) {
+    // Pure-data guard: with no animation selected, allBoneRows must return
+    // an empty list (not crash, not return stale shape).
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->allBoneRows().isEmpty());
+}
+
 TEST_F(AnimationControlControllerTest, AllBoneRowsReportsActiveChannels) {
     // TestAnim's middle keyframe sets translate.x = 0.5 and rotates 30°
     // around Y. The channel-detection should mark tx, rw, and ry as active
@@ -684,6 +691,41 @@ TEST_F(AnimationControlControllerTest, AllBoneRowsReportsActiveChannels) {
     EXPECT_FALSE(channels["sx"].toBool());
     EXPECT_FALSE(channels["sy"].toBool());
     EXPECT_FALSE(channels["sz"].toBool());
+}
+
+TEST_F(AnimationControlControllerTest, AllBoneRowsAllChannelsFalseForIdentityOnlyTrack) {
+    // Build an animation whose every keyframe is identity (zero translate,
+    // identity rotation, unit scale). No channel should be flagged active —
+    // QML uses this to skip painting empty per-channel sub-rows.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_IdentityOnlyTest");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+
+    // Replace TestAnim's middle keyframe values with identity so every
+    // sample matches bind pose.
+    auto* track = skel->getAnimation("TestAnim")->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        kf->setTranslate(Ogre::Vector3::ZERO);
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    QVariantList rows = ctrl->allBoneRows();
+    ASSERT_FALSE(rows.isEmpty());
+    auto channels = rows.first().toMap()["channels"].toMap();
+    for (const QString& key : { "tx", "ty", "tz",
+                                "rw", "rx", "ry", "rz",
+                                "sx", "sy", "sz" }) {
+        EXPECT_FALSE(channels[key].toBool())
+            << "channel " << key.toStdString()
+            << " should be inactive on identity-only track";
+    }
 }
 
 TEST_F(AnimationControlControllerTest, MoveKeyframeShiftsTime) {
