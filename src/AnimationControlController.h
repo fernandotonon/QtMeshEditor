@@ -195,6 +195,22 @@ public:
     /// track. Returns the count actually pasted.
     Q_INVOKABLE int pasteKeyframesAt(const QString& json, double atTime);
 
+    // ── Curve editor API (slice D3b) ──────────────────────────────────────────
+    /// Returns the scalar value of one channel at every keyframe of `bone`'s
+    /// track on the currently-selected animation, in keyframe-time order.
+    /// `channel` ∈ {tx, ty, tz, rw, rx, ry, rz, sx, sy, sz}.
+    /// Empty when no animation/bone selected or the channel id is unknown.
+    Q_INVOKABLE QVariantList channelValuesAt(const QString& boneName,
+                                              const QString& channel) const;
+
+    /// Write a single channel value into the keyframe at `time` on `bone`'s
+    /// track, leaving the other 9 channels untouched. Pushes a
+    /// SetKeyframeValueCommand so Ctrl+Z restores the original value.
+    /// Returns true when the keyframe was found and updated.
+    Q_INVOKABLE bool setKeyframeValue(const QString& boneName,
+                                       const QString& channel,
+                                       double time, double value);
+
 public slots:
     void updateAnimationTree();
 

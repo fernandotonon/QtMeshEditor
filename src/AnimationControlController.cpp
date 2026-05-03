@@ -5,6 +5,7 @@
 #include "UndoManager.h"
 #include "commands/MoveKeyframeCommand.h"
 #include "commands/BulkKeyframeCommands.h"
+#include "commands/SetKeyframeValueCommand.h"
 #include <QApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -1017,4 +1018,96 @@ int AnimationControlController::pasteKeyframesAt(const QString& json,
     refreshSliderTicks();
     emit boneRowsChanged();
     return n;
+}
+
+// ── Curve editor API (slice D3b) ──────────────────────────────────────────────
+
+namespace {
+
+// Resolve channel id → scalar reader on a TransformKeyFrame. Mirrors
+// SetKeyframeValueCommand's accessor without pulling that header in.
+double readChannel(const Ogre::TransformKeyFrame* kf, const QString& ch) {
+    const QString c = ch.toLower();
+    if (c == "tx") return kf->getTranslate().x;
+    if (c == "ty") return kf->getTranslate().y;
+    if (c == "tz") return kf->getTranslate().z;
+    if (c == "rw") return kf->getRotation().w;
+    if (c == "rx") return kf->getRotation().x;
+    if (c == "ry") return kf->getRotation().y;
+    if (c == "rz") return kf->getRotation().z;
+    if (c == "sx") return kf->getScale().x;
+    if (c == "sy") return kf->getScale().y;
+    if (c == "sz") return kf->getScale().z;
+    return 0.0;
+}
+
+bool isKnownChannel(const QString& ch) {
+    static const QStringList kKnown = {
+        QStringLiteral("tx"), QStringLiteral("ty"), QStringLiteral("tz"),
+        QStringLiteral("rw"), QStringLiteral("rx"),
+        QStringLiteral("ry"), QStringLiteral("rz"),
+        QStringLiteral("sx"), QStringLiteral("sy"), QStringLiteral("sz"),
+    };
+    return kKnown.contains(ch.toLower());
+}
+
+} // namespace
+
+QVariantList AnimationControlController::channelValuesAt(
+        const QString& boneName, const QString& channel) const
+{
+    QVariantList out;
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return out;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return out;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return out;
+    if (!m_selectedSkeleton->hasBone(boneName.toStdString())) return out;
+
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneName.toStdString());
+    if (!anim->hasNodeTrack(bone->getHandle())) return out;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+
+    out.reserve(static_cast<int>(track->getNumKeyFrames()));
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const auto* kf = static_cast<const Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        out.append(readChannel(kf, channel));
+    }
+    return out;
+}
+
+bool AnimationControlController::setKeyframeValue(const QString& boneName,
+                                                   const QString& channel,
+                                                   double time, double value)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (!m_selectedSkeleton->hasBone(boneName.toStdString())) return false;
+
+    // Pre-check that there's actually a keyframe at `time` — otherwise the
+    // command would push a no-op onto the undo stack. Mirrors the same
+    // tolerance the command itself uses (1 ms).
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneName.toStdString());
+    if (!anim->hasNodeTrack(bone->getHandle())) return false;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    bool found = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(time))
+                <= 0.001f) {
+            found = true; break;
+        }
+    }
+    if (!found) return false;
+
+    auto* cmd = new SetKeyframeValueCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
+                                             m_selectedAnimation,
+                                             boneName.toStdString(),
+                                             channel.toLower().toStdString(),
+                                             static_cast<float>(time),
+                                             value);
+    UndoManager::getSingleton()->push(cmd);
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    return true;
 }

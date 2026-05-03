@@ -48,8 +48,7 @@ Rectangle {
         return null
     }
 
-    function activeChannelsForSelected() {
-        var row = selectedBoneRow()
+    function activeChannelsFor(row) {
         if (!row || !row.channels) return []
         var result = []
         for (var i = 0; i < channelOrder.length; i++) {
@@ -58,12 +57,27 @@ Rectangle {
         return result
     }
 
+    function activeChannelsForSelected() {
+        return activeChannelsFor(selectedBoneRow())
+    }
+
     Connections {
         target: AnimationControlController
-        function onBoneRowsChanged()      { root.rows = AnimationControlController.allBoneRows(); curveCanvas.requestPaint() }
-        function onSelectionChanged()     { root.rows = AnimationControlController.allBoneRows(); curveCanvas.requestPaint() }
+        function onBoneRowsChanged()      {
+            root.rows = AnimationControlController.allBoneRows()
+            curveCanvas.refreshChannelValues(root.selectedBoneRow())
+            curveCanvas.requestPaint()
+        }
+        function onSelectionChanged()     {
+            root.rows = AnimationControlController.allBoneRows()
+            curveCanvas.refreshChannelValues(root.selectedBoneRow())
+            curveCanvas.requestPaint()
+        }
         function onKeyframeTicksChanged() { curveCanvas.requestPaint() }
-        function onBoneListChanged()      { curveCanvas.requestPaint() }
+        function onBoneListChanged()      {
+            curveCanvas.refreshChannelValues(root.selectedBoneRow())
+            curveCanvas.requestPaint()
+        }
     }
 
     Connections {
@@ -132,21 +146,35 @@ Rectangle {
         anchors.bottom: parent.bottom
         visible: header.visible
 
+        // Cache per-channel values keyed by channel id. Refreshed whenever
+        // the controller emits boneRowsChanged.
+        property var channelValues: ({})
+
+        function refreshChannelValues(boneRow) {
+            var cache = {}
+            var chans = root.activeChannelsFor(boneRow)
+            for (var i = 0; i < chans.length; i++) {
+                cache[chans[i].id] = AnimationControlController.channelValuesAt(
+                    boneRow.bone, chans[i].id)
+            }
+            curveCanvas.channelValues = cache
+        }
+
         function valueAtTimeForChannel(boneRow, channelId, time) {
-            // Read the channel's values directly from the keyframes via the
-            // controller. We don't have a dedicated API yet; fall back to
-            // CurveEditModel.evaluate, passing in the values we sample from
-            // the dope-sheet row's keyframe metadata. For D3a we approximate
-            // by using a single sentinel sample series — D3b will plumb the
-            // per-channel values through.
+            var values = channelValues[channelId] || []
             return CurveEditModel.evaluate(
                 AnimationControlController.selectedEntityName,
                 AnimationControlController.selectedAnimation,
                 boneRow.bone, channelId, time,
                 boneRow.keyTimes,
-                boneRow.keyTimes // placeholder; D3b reads real channel values
+                values
             )
         }
+
+        // Populate the cache up-front so the first paint shows real curves
+        // even when the view is opened after a selection is already active
+        // (no fresh boneRowsChanged signal will fire to seed it otherwise).
+        Component.onCompleted: refreshChannelValues(root.selectedBoneRow())
 
         onPaint: {
             var ctx = getContext("2d"); ctx.clearRect(0, 0, width, height)
@@ -178,11 +206,9 @@ Rectangle {
             }
             ctx.globalAlpha = 1.0
 
-            // Per-channel curve. For D3a we plot the keyframe values directly
-            // from row.keyTimes paired with the channel's values — but we
-            // don't yet have per-channel value arrays from the controller, so
-            // we sample the model's evaluate() across the visible range as a
-            // demonstration. D3b plumbs the real per-channel data through.
+            // Per-channel curve. evaluate() reads real per-channel values
+            // pulled from the controller and cached in channelValues, so the
+            // curve reflects the underlying TransformKeyFrame data.
             var chans = root.activeChannelsForSelected()
             for (var c = 0; c < chans.length; c++) {
                 var ch = chans[c]
@@ -234,23 +260,83 @@ Rectangle {
         }
     }
 
+    // ── Interp-mode picker (right-click on keyframe square) ────────────────
+    Menu {
+        id: modeMenu
+        property string boneName: ""
+        property string channelId: ""
+        property real keyTime: 0
+
+        function applyMode(mode) {
+            CurveEditModel.setMode(
+                AnimationControlController.selectedEntityName,
+                AnimationControlController.selectedAnimation,
+                boneName, channelId, keyTime, mode)
+        }
+
+        MenuItem { text: "Bezier";   onTriggered: modeMenu.applyMode(CurveEditModel.ModeBezier) }
+        MenuItem { text: "Linear";   onTriggered: modeMenu.applyMode(CurveEditModel.ModeLinear) }
+        MenuItem { text: "Stepped";  onTriggered: modeMenu.applyMode(CurveEditModel.ModeStepped) }
+        MenuItem { text: "Auto";     onTriggered: modeMenu.applyMode(CurveEditModel.ModeAuto) }
+    }
+
+    // Look up a keyframe near (px, py) and return { bone, channel, time, x, y }
+    // or null if the click missed everything. Used by the right-click handler
+    // to decide whether to open the mode picker.
+    function pickKeyframeAt(px, py) {
+        var row = selectedBoneRow()
+        if (!row) return null
+        var midY = (curveCanvas.height - 16) / 2
+        var chans = activeChannelsFor(row)
+        for (var c = 0; c < chans.length; c++) {
+            var ch = chans[c]
+            for (var k = 0; k < row.keyTimes.length; k++) {
+                var kt = row.keyTimes[k]
+                var kv = curveCanvas.valueAtTimeForChannel(row, ch.id, kt)
+                var kx = (kt - viewStart) * pxPerSec
+                var ky = midY - (kv - yCenter) * yScale
+                if (Math.abs(px - kx) < 8 && Math.abs(py - ky) < 8) {
+                    return { bone: row.bone, channel: ch.id,
+                             time: kt, x: kx, y: ky }
+                }
+            }
+        }
+        return null
+    }
+
     // Wheel = zoom horizontally (Ctrl/Cmd) or vertically (Shift), pan with
-    // middle-drag. Matches the dope sheet's input vocabulary as closely as
+    // middle-drag. Right-click on a keyframe square opens the interp-mode
+    // picker. Matches the dope sheet's input vocabulary as closely as
     // possible to keep mental load low when switching panels.
     MouseArea {
         id: panArea
         anchors.fill: parent
-        acceptedButtons: Qt.MiddleButton
+        acceptedButtons: Qt.MiddleButton | Qt.RightButton
         property real panStartX: 0
         property real panStartView: 0
         onPressed: function(mouse) {
             if (mouse.button === Qt.MiddleButton) {
                 panStartX = mouse.x; panStartView = root.viewStart
                 mouse.accepted = true
+            } else if (mouse.button === Qt.RightButton) {
+                var hit = root.pickKeyframeAt(
+                    mouse.x - curveCanvas.x, mouse.y - curveCanvas.y)
+                if (hit) {
+                    modeMenu.boneName  = hit.bone
+                    modeMenu.channelId = hit.channel
+                    modeMenu.keyTime   = hit.time
+                    modeMenu.popup()
+                    mouse.accepted = true
+                } else {
+                    mouse.accepted = false
+                }
             } else mouse.accepted = false
         }
         onPositionChanged: function(mouse) {
-            if (!pressed) return
+            // mouse.button on a move event is the event trigger, not the
+            // held buttons — check the bitmask in mouse.buttons instead.
+            // Otherwise middle-drag pan never fires after the initial press.
+            if (!pressed || !(mouse.buttons & Qt.MiddleButton)) return
             var dx = mouse.x - panStartX
             root.viewStart = panStartView - dx / root.pxPerSec
             if (root.viewStart < 0) root.viewStart = 0

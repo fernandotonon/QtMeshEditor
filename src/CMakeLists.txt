@@ -57,6 +57,7 @@ SubEntityHighlight.cpp
 commands/TransformCommands.cpp
 commands/MoveKeyframeCommand.cpp
 commands/BulkKeyframeCommands.cpp
+commands/SetKeyframeValueCommand.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
 ThemeManager.cpp
