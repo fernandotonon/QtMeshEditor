@@ -77,9 +77,18 @@ Rectangle {
 
     Connections {
         target: AnimationControlController
-        function onBoneRowsChanged()       { root.rows = AnimationControlController.allBoneRows(); root.clearSelection() }
+        // Clip change → rebuild rows AND drop selection (different keyframes
+        // entirely). Track edits (boneRowsChanged) refresh rows but preserve
+        // the user's selection — bulk-drag and bone-click both fire that
+        // signal, and dropping selection there breaks bulk drag mid-gesture.
         function onSelectionChanged()      { root.rows = AnimationControlController.allBoneRows(); root.clearSelection() }
+        function onBoneRowsChanged()       { root.rows = AnimationControlController.allBoneRows() }
         function onKeyframeTicksChanged()  { root.rows = AnimationControlController.allBoneRows() }
+    }
+
+    // Cross-platform "primary" modifier — Ctrl on Win/Linux, Cmd (Meta) on macOS.
+    function isPrimaryModifier(modifiers) {
+        return (modifiers & Qt.ControlModifier) || (modifiers & Qt.MetaModifier)
     }
 
     // ── Keyboard shortcuts (Esc / Ctrl+C / Ctrl+V) ───────────────────────────
@@ -87,7 +96,7 @@ Rectangle {
         if (event.key === Qt.Key_Escape) {
             root.clearSelection()
             event.accepted = true
-        } else if (event.key === Qt.Key_C && (event.modifiers & Qt.ControlModifier)) {
+        } else if (event.key === Qt.Key_C && root.isPrimaryModifier(event.modifiers)) {
             if (root.selection.length > 0) {
                 var json = AnimationControlController.serializeKeyframes(root.selection)
                 if (json.length > 0) {
@@ -97,7 +106,7 @@ Rectangle {
                 }
             }
             event.accepted = true
-        } else if (event.key === Qt.Key_V && (event.modifiers & Qt.ControlModifier)) {
+        } else if (event.key === Qt.Key_V && root.isPrimaryModifier(event.modifiers)) {
             clipboardHelper.clear()
             clipboardHelper.paste()
             var payload = clipboardHelper.text
@@ -186,22 +195,28 @@ Rectangle {
         model: root.rows
         spacing: 1
         visible: root.rows.length > 0
-        interactive: false // we manage scrolling via wheel/middle-drag
+        // Disabled flicking so Flickable doesn't grab presses meant for
+        // diamond MouseAreas / Ctrl+click multi-select. Wheel scrolling is
+        // handled at the root level via a WheelHandler that scrolls
+        // rowsView.contentY directly.
+        interactive: false
+        boundsBehavior: Flickable.StopAtBounds
 
-        delegate: Rectangle {
+        delegate: Item {
             id: rowDelegate
             property string boneName: modelData.bone
             property var keyTimes: modelData.keyTimes
 
             width: rowsView.width; height: root.rowHeight
-            color: (boneName === AnimationControlController.selectedBone)
-                   ? Qt.lighter(AnimationControlController.panelColor, 1.15)
-                   : AnimationControlController.panelColor
 
-            // Bone name (clickable — selects the bone)
+            // Bone name strip carries the selection-highlight tint. Track
+            // strip is transparent so timelineArea behind us catches presses
+            // on empty pixels for marquee/pan.
             Rectangle {
                 width: root.leftStripWidth; height: parent.height
-                color: "transparent"
+                color: (rowDelegate.boneName === AnimationControlController.selectedBone)
+                       ? Qt.lighter(AnimationControlController.panelColor, 1.15)
+                       : AnimationControlController.panelColor
                 border.color: AnimationControlController.borderColor; border.width: 1
                 Text {
                     anchors.left: parent.left; anchors.leftMargin: 6
@@ -241,11 +256,21 @@ Rectangle {
                         // While the gesture is active, dragSelectionDt holds the
                         // shared delta the whole selection is being shifted by.
                         property bool isSelected: root.isSelected(rowDelegate.boneName, keyTime)
-                        property real displayTime: dragArea.dragging
-                            ? (dragArea.bulkDragging
-                                ? keyTime + root.dragSelectionDt
-                                : dragPreviewTime)
-                            : keyTime
+                        // While a bulk drag is in progress, every selected
+                        // diamond renders at keyTime + dragSelectionDt — so the
+                        // visual offset follows the shared delta even though
+                        // only the originating MouseArea has dragArea.dragging.
+                        property real displayTime: {
+                            if (root.bulkDragInProgress && isSelected) {
+                                return keyTime + root.dragSelectionDt
+                            }
+                            if (dragArea.dragging) {
+                                return dragArea.bulkDragging
+                                    ? keyTime + root.dragSelectionDt
+                                    : dragPreviewTime
+                            }
+                            return keyTime
+                        }
                         x: (displayTime - root.viewStart) * root.pxPerSec - width / 2
                         anchors.verticalCenter: parent.verticalCenter
                         width: isSelected ? 14 : 10
@@ -274,10 +299,12 @@ Rectangle {
                                 root.forceActiveFocus()
                                 originalTime = parent.keyTime
                                 pressX = mouse.x
-                                if (mouse.modifiers & Qt.ControlModifier) {
+                                mouse.accepted = true
+                                if (root.isPrimaryModifier(mouse.modifiers)) {
+                                    // Ctrl/Cmd+click: toggle in/out of selection,
+                                    // don't start a drag.
                                     root.toggleInSelection(rowDelegate.boneName, parent.keyTime)
                                     AnimationControlController.selectBone(rowDelegate.boneName)
-                                    mouse.accepted = true
                                     return
                                 }
                                 if (!root.isSelected(rowDelegate.boneName, parent.keyTime)) {
@@ -286,6 +313,7 @@ Rectangle {
                                 dragging = true
                                 bulkDragging = root.selection.length > 1
                                 root.dragSelectionDt = 0
+                                root.bulkDragInProgress = bulkDragging
                                 AnimationControlController.selectBone(rowDelegate.boneName)
                                 AnimationControlController.sliderValue =
                                         Math.round(parent.keyTime * 1000)
@@ -307,6 +335,7 @@ Rectangle {
                             onReleased: function(mouse) {
                                 if (!dragging) return
                                 dragging = false
+                                root.bulkDragInProgress = false
                                 if (bulkDragging) {
                                     var dt = root.dragSelectionDt
                                     root.dragSelectionDt = 0
@@ -329,18 +358,23 @@ Rectangle {
         }
     }
 
-    // Shared bulk-drag delta — bound by all diamonds in the selection so they
-    // move together. Reset in onReleased.
+    // Shared bulk-drag delta — every selected diamond binds against this so
+    // they all animate together while one is being dragged. Reset on release.
     property real dragSelectionDt: 0
+    property bool bulkDragInProgress: false
 
     // ── Marquee select + middle-drag pan + wheel zoom over timeline area ────
+    // z: -1 puts this MouseArea behind the ListView. The row delegate roots
+    // are Items (not Rectangles), so the trackStrip is non-opaque and
+    // presses on empty pixels fall through to here. Diamonds + bone-name
+    // MouseAreas inside each row capture their own presses naturally.
     MouseArea {
         id: timelineArea
+        z: -1
         anchors.left: parent.left; anchors.leftMargin: root.leftStripWidth
         anchors.top: header.visible ? header.bottom : parent.top
         anchors.right: parent.right; anchors.bottom: parent.bottom
         acceptedButtons: Qt.MiddleButton | Qt.LeftButton
-        propagateComposedEvents: true
         property real panStartX: 0
         property real panStartView: 0
         property bool marquee: false
@@ -357,12 +391,11 @@ Rectangle {
                 mouse.accepted = true
             } else if (mouse.button === Qt.LeftButton) {
                 // Left-click on empty timeline area → start marquee selection.
-                // Click-through on diamonds is handled by their own MouseArea
-                // (preventStealing = true), so this only fires on background.
+                // Diamonds capture their own presses via preventStealing.
                 marquee = true
                 mqStartX = mouse.x; mqStartY = mouse.y
                 mqEndX = mouse.x;   mqEndY = mouse.y
-                if (!(mouse.modifiers & Qt.ControlModifier)) root.clearSelection()
+                if (!root.isPrimaryModifier(mouse.modifiers)) root.clearSelection()
                 mouse.accepted = true
             } else {
                 mouse.accepted = false
@@ -391,26 +424,10 @@ Rectangle {
             }
         }
 
-        // Marquee rectangle overlay
-        Canvas {
-            id: marqueeRect
-            anchors.fill: parent
-            visible: timelineArea.marquee
-            onPaint: {
-                var ctx = getContext("2d"); ctx.clearRect(0, 0, width, height)
-                if (!timelineArea.marquee) return
-                var x = Math.min(timelineArea.mqStartX, timelineArea.mqEndX)
-                var y = Math.min(timelineArea.mqStartY, timelineArea.mqEndY)
-                var w = Math.abs(timelineArea.mqEndX - timelineArea.mqStartX)
-                var h = Math.abs(timelineArea.mqEndY - timelineArea.mqStartY)
-                ctx.fillStyle = "rgba(64, 192, 255, 0.18)"
-                ctx.fillRect(x, y, w, h)
-                ctx.strokeStyle = "#40c0ff"; ctx.lineWidth = 1
-                ctx.strokeRect(x + 0.5, y + 0.5, w, h)
-            }
-        }
-
+        // Ctrl/Cmd+wheel zooms around the cursor; plain wheel falls through
+        // to the ListView for vertical scrolling.
         WheelHandler {
+            acceptedModifiers: Qt.ControlModifier | Qt.MetaModifier
             onWheel: function(event) {
                 var factor = event.angleDelta.y > 0 ? 1.15 : (1.0 / 1.15)
                 var newPxPerSec = root.pxPerSec * factor
@@ -421,6 +438,66 @@ Rectangle {
                 root.viewStart = tCursor - event.point.position.x / newPxPerSec
                 if (root.viewStart < 0) root.viewStart = 0
             }
+        }
+    }
+
+    // Marquee rectangle overlay — drawn at root level (z: 100) so it sits on
+    // top of rows + diamonds. timelineArea is at z: -1, so its child Canvas
+    // would be invisible behind the rows.
+    Canvas {
+        id: marqueeRect
+        z: 100
+        x: timelineArea.x
+        y: timelineArea.y
+        width: timelineArea.width
+        height: timelineArea.height
+        visible: timelineArea.marquee
+        onPaint: {
+            var ctx = getContext("2d"); ctx.clearRect(0, 0, width, height)
+            if (!timelineArea.marquee) return
+            var x1 = Math.min(timelineArea.mqStartX, timelineArea.mqEndX)
+            var y1 = Math.min(timelineArea.mqStartY, timelineArea.mqEndY)
+            var w  = Math.abs(timelineArea.mqEndX - timelineArea.mqStartX)
+            var h  = Math.abs(timelineArea.mqEndY - timelineArea.mqStartY)
+            ctx.fillStyle = "rgba(64, 192, 255, 0.18)"
+            ctx.fillRect(x1, y1, w, h)
+            ctx.strokeStyle = "#40c0ff"; ctx.lineWidth = 1
+            ctx.strokeRect(x1 + 0.5, y1 + 0.5, w, h)
+        }
+        Connections {
+            target: timelineArea
+            function onMqStartXChanged() { marqueeRect.requestPaint() }
+            function onMqStartYChanged() { marqueeRect.requestPaint() }
+            function onMqEndXChanged()   { marqueeRect.requestPaint() }
+            function onMqEndYChanged()   { marqueeRect.requestPaint() }
+            function onMarqueeChanged()  { marqueeRect.requestPaint() }
+        }
+    }
+
+    // Plain wheel anywhere in the dope sheet scrolls the bone rows. Lives at
+    // root level so it sees wheel events regardless of which child happens
+    // to be under the cursor (ListView is interactive:false and the inner
+    // diamonds/timelineArea otherwise eat the wheel). Ctrl/Cmd+wheel is
+    // claimed by timelineArea's zoom handler instead.
+    // Public method called by C++ wheel filter on the host QQuickWidget.
+    // QQuickWidget inside QDockWidget can swallow wheel events on macOS;
+    // routing them through here guarantees the rows scroll regardless.
+    function scrollByPixels(dy) {
+        if (dy === 0 || !rowsView.visible) return
+        var maxY = Math.max(0, rowsView.contentHeight - rowsView.height)
+        rowsView.contentY = Math.max(0, Math.min(maxY, rowsView.contentY - dy))
+    }
+
+    WheelHandler {
+        target: null // accept events anywhere on the root, not on a specific item
+        acceptedModifiers: Qt.NoModifier
+        onWheel: function(event) {
+            var dy = (event.pixelDelta && event.pixelDelta.y !== 0)
+                ? event.pixelDelta.y
+                : event.angleDelta.y / 120 * 40
+            if (dy === 0) return
+            root.scrollByPixels(dy)
+            event.accepted = true
         }
     }
 }

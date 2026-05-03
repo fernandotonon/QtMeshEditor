@@ -521,6 +521,37 @@ void MainWindow::initToolBar()
         dopeSheetWidget->setMinimumHeight(160);
         dopeSheetWidget->setFocusPolicy(Qt::StrongFocus);
         dopeSheetWidget->setSource(QUrl("qrc:/AnimationControl/AnimationDopeSheet.qml"));
+
+        // QQuickWidget inside a QDockWidget on macOS can swallow wheel events
+        // before they reach the QML scene's WheelHandler — Qt routes them to
+        // the dock's title bar instead. Install a viewport-level filter that
+        // calls back into the QML root's scrollByPixels() method.
+        class DopeSheetWheelFilter : public QObject {
+        public:
+            explicit DopeSheetWheelFilter(QQuickWidget* host)
+                : QObject(host), m_host(host) {}
+        protected:
+            bool eventFilter(QObject* watched, QEvent* event) override {
+                if (event->type() != QEvent::Wheel) return QObject::eventFilter(watched, event);
+                auto* we = static_cast<QWheelEvent*>(event);
+                // Cmd/Ctrl+wheel falls through to QML's zoom WheelHandler.
+                if (we->modifiers() & (Qt::ControlModifier | Qt::MetaModifier)) {
+                    return QObject::eventFilter(watched, event);
+                }
+                if (!m_host || !m_host->rootObject()) return false;
+                qreal dy = we->pixelDelta().y();
+                if (dy == 0.0) dy = we->angleDelta().y() / 120.0 * 40.0;
+                if (dy == 0.0) return false;
+                QMetaObject::invokeMethod(m_host->rootObject(), "scrollByPixels",
+                                          Q_ARG(QVariant, dy));
+                event->accept();
+                return true;
+            }
+        private:
+            QQuickWidget* m_host;
+        };
+        auto* wheelFilter = new DopeSheetWheelFilter(dopeSheetWidget); // NOSONAR — Qt parent ownership
+        dopeSheetWidget->installEventFilter(wheelFilter);
         m_dopeSheetDock = new QDockWidget(tr("Dope Sheet"), this); // NOSONAR — Qt parent ownership
         m_dopeSheetDock->setWidget(dopeSheetWidget);
         m_dopeSheetDock->setObjectName("DopeSheetDock");
@@ -530,6 +561,21 @@ void MainWindow::initToolBar()
             SentryReporter::addBreadcrumb("ui.action",
                 vis ? "Dope Sheet shown" : "Dope Sheet hidden");
         });
+
+        // Reflect the active animation in the dock title — useful when the
+        // dock is collapsed alongside other docks at the bottom.
+        auto updateDopeSheetTitle = [this]() {
+            if (!m_dopeSheetDock) return;
+            const QString anim =
+                AnimationControlController::instance()->selectedAnimation();
+            m_dopeSheetDock->setWindowTitle(
+                anim.isEmpty() ? tr("Dope Sheet")
+                               : tr("Dope Sheet — %1").arg(anim));
+        };
+        connect(AnimationControlController::instance(),
+                &AnimationControlController::selectionChanged,
+                this, updateDopeSheetTitle);
+        updateDopeSheetTitle();
     }
 
     // Welcome Screen overlay — shown on first launch or when user hasn't opted out

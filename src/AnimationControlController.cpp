@@ -1,6 +1,7 @@
 #include "AnimationControlController.h"
 #include "SelectionSet.h"
 #include "Manager.h"
+#include "SentryReporter.h"
 #include "UndoManager.h"
 #include "commands/MoveKeyframeCommand.h"
 #include "commands/BulkKeyframeCommands.h"
@@ -753,6 +754,11 @@ bool AnimationControlController::moveKeyframes(const QVariantList& selection,
                                           m_selectedAnimation,
                                           items, dtf);
     UndoManager::getSingleton()->push(cmd);
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QString("Dope Sheet: bulk-move %1 keyframe(s) by %2s")
+            .arg(items.size())
+            .arg(dt, 0, 'f', 3));
     refreshSliderTicks();
     emit boneRowsChanged();
     return true;
@@ -856,6 +862,11 @@ int AnimationControlController::pasteKeyframesAt(const QString& json,
                                            entries);
     UndoManager::getSingleton()->push(cmd);
     const int n = cmd->pastedCount();
+    const int skipped = entries.size() - n;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QString("Dope Sheet: paste %1 keyframe(s) at t=%2s (skipped %3 collision(s))")
+            .arg(n).arg(atTime, 0, 'f', 3).arg(skipped));
     refreshSliderTicks();
     emit boneRowsChanged();
     return n;
