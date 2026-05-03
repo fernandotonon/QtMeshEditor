@@ -43,6 +43,7 @@
 #include "SelectionSet.h"
 #include "AnimationBlender.h"
 #include "AnimationControlController.h"
+#include "CurveEditModel.h"
 #include "MaterialEditorQML.h"
 #include "LLMSettingsWidget.h"
 #include "MCPSettingsDialog.h"
@@ -280,6 +281,7 @@ MainWindow::~MainWindow()
         SubEntityHighlight::kill();
         AnimationBlender::kill();
         AnimationControlController::kill();
+        CurveEditModel::kill();
         MeshLodController::kill();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
@@ -383,6 +385,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<AnimationBlender>("AnimationControl", 1, 0, "AnimationBlender",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AnimationBlender::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<CurveEditModel>("AnimationControl", 1, 0, "CurveEditModel",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return CurveEditModel::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<MeshLodController>("PropertiesPanel", 1, 0, "MeshLodController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -576,6 +582,28 @@ void MainWindow::initToolBar()
                 &AnimationControlController::selectionChanged,
                 this, updateDopeSheetTitle);
         updateDopeSheetTitle();
+    }
+
+    // Curve Editor dock — Bezier-curve view (Phase 5 slice D3a, read-only).
+    {
+        auto* curveEditorWidget = new QQuickWidget(); // NOSONAR — Qt parent ownership
+        curveEditorWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        curveEditorWidget->setMinimumHeight(180);
+        curveEditorWidget->setFocusPolicy(Qt::StrongFocus);
+        curveEditorWidget->setSource(QUrl("qrc:/AnimationControl/AnimationCurveEditor.qml"));
+        m_curveEditorDock = new QDockWidget(tr("Curve Editor"), this); // NOSONAR
+        m_curveEditorDock->setWidget(curveEditorWidget);
+        m_curveEditorDock->setObjectName("CurveEditorDock");
+        addDockWidget(Qt::BottomDockWidgetArea, m_curveEditorDock);
+        // Tab on top of the dope sheet by default — the user toggles whichever
+        // they want via the View menu. tabifyDockWidget runs after both docks
+        // exist so we don't open two empty bottom strips.
+        if (m_dopeSheetDock) tabifyDockWidget(m_dopeSheetDock, m_curveEditorDock);
+        m_curveEditorDock->hide();
+        connect(m_curveEditorDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
+            SentryReporter::addBreadcrumb("ui.action",
+                vis ? "Curve Editor shown" : "Curve Editor hidden");
+        });
     }
 
     // Welcome Screen overlay — shown on first launch or when user hasn't opted out
@@ -1257,6 +1285,12 @@ void MainWindow::initToolBar()
         QAction* dopeAct = m_dopeSheetDock->toggleViewAction();
         dopeAct->setText(tr("Dope Sheet"));
         ui->menuView->addAction(dopeAct);
+    }
+    // Curve Editor toggle — same pattern, lives next to Dope Sheet.
+    if (m_curveEditorDock && ui->menuView) {
+        QAction* curveAct = m_curveEditorDock->toggleViewAction();
+        curveAct->setText(tr("Curve Editor"));
+        ui->menuView->addAction(curveAct);
     }
 
     // Connect Browse button to a native file dialog (must be parented to MainWindow on macOS)
