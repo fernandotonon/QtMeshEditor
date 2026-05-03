@@ -158,3 +158,36 @@ TEST_F(CurveEditModelTest, EvaluateAutoModeMatchesCatmullRomMidpoint) {
         vec({0.0, 1.0, 2.0, 3.0}));
     EXPECT_NEAR(v, 1.5, 1e-9);
 }
+
+TEST_F(CurveEditModelTest, EvaluateBeforeFirstKeyClampsToFirst) {
+    // A query time before the first keyframe must hold the first value, not
+    // extrapolate. Bezier mode: explicit defaults still need clamping.
+    auto* m = CurveEditModel::instance();
+    EXPECT_DOUBLE_EQ(
+        m->evaluate("skel", "Walk", "Bone", "tx", -0.5,
+                    vec({0.0, 1.0}), vec({2.0, 5.0})), 2.0);
+    // Linear shouldn't extrapolate either.
+    m->setMode("skel", "Walk", "Bone", "tx", 0.0, CurveEditModel::ModeLinear);
+    EXPECT_DOUBLE_EQ(
+        m->evaluate("skel", "Walk", "Bone", "tx", -1.0,
+                    vec({0.0, 1.0}), vec({2.0, 5.0})), 2.0);
+}
+
+TEST_F(CurveEditModelTest, EvaluateAutoModeNonUniformSpacing) {
+    // Non-uniform keyframe spacing: times {0, 1, 5} with values {0, 1, 5}
+    // is on a perfect linear ramp, so any time-normalized tangent scheme
+    // (including Catmull-Rom with proper dt-normalization) should
+    // reproduce the line within tolerance. The pre-fix code used an
+    // unnormalized half-difference and produced a wildly wrong slope at
+    // the bracket [1, 5] because the right-side neighbor is far away.
+    auto* m = CurveEditModel::instance();
+    m->setMode("skel", "Walk", "Bone", "tx", 1.0, CurveEditModel::ModeAuto);
+    const double v = m->evaluate(
+        "skel", "Walk", "Bone", "tx", 3.0,
+        vec({0.0, 1.0, 5.0}),
+        vec({0.0, 1.0, 5.0}));
+    // On a perfect line, t=3 should give value 3. Allow some Hermite
+    // smoothing (~10 % of the segment) because Auto tangents derived
+    // from only two neighbors aren't a true natural-spline solver.
+    EXPECT_NEAR(v, 3.0, 0.5);
+}

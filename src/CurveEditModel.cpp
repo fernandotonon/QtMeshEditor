@@ -120,10 +120,17 @@ double CurveEditModel::evaluate(const QString& skeleton,
                                  const QVariantList& keyframeTimes,
                                  const QVariantList& keyframeValues) const
 {
-    const int n = keyframeTimes.size();
-    if (n == 0 || n != keyframeValues.size()) return 0.0;
+    const auto n = static_cast<int>(keyframeTimes.size());
+    if (n == 0 || n != static_cast<int>(keyframeValues.size())) return 0.0;
     // Single-keyframe tracks degenerate to a constant.
     if (n == 1) return keyframeValues.first().toDouble();
+
+    // Clamp before the first keyframe — otherwise the bracket [t0, t1]
+    // would be evaluated with negative u, extrapolating outside the
+    // curve. Holding the first value matches Ogre's playback semantics.
+    if (time <= keyframeTimes.first().toDouble()) {
+        return keyframeValues.first().toDouble();
+    }
 
     // Locate the bracketing pair (i, i+1) such that t[i] <= time < t[i+1].
     int lo = 0;
@@ -160,12 +167,23 @@ double CurveEditModel::evaluate(const QString& skeleton,
         tangentIn = it->second.inTangent;
     }
     if (loEntry.mode == ModeAuto) {
-        const double neighborPrev = (lo > 0)
+        // Catmull-Rom-style auto tangent at point i =
+        //     (value[i+1] - value[i-1]) / (time[i+1] - time[i-1])
+        // With uniform spacing this collapses to the simple half-difference,
+        // but non-uniform keyframes need the actual time span in the
+        // denominator so Hermite's `tangent * dt` term scales correctly.
+        const double tPrev = (lo > 0)
+            ? keyframeTimes[lo - 1].toDouble() : tLo;
+        const double vPrev = (lo > 0)
             ? keyframeValues[lo - 1].toDouble() : vLo;
-        const double neighborNext = (hi + 1 < n)
+        const double tNext = (hi + 1 < n)
+            ? keyframeTimes[hi + 1].toDouble() : tHi;
+        const double vNext = (hi + 1 < n)
             ? keyframeValues[hi + 1].toDouble() : vHi;
-        tangentOut = (vHi - neighborPrev) * 0.5;
-        tangentIn  = (neighborNext - vLo) * 0.5;
+        const double spanLo = tHi - tPrev;
+        const double spanHi = tNext - tLo;
+        tangentOut = (spanLo > 0.0) ? (vHi - vPrev) / spanLo : 0.0;
+        tangentIn  = (spanHi > 0.0) ? (vNext - vLo) / spanHi : 0.0;
     }
 
     // Cubic Hermite spline (equivalent to Bezier with derived control
