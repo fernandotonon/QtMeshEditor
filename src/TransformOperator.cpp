@@ -998,19 +998,20 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             {
                 m_pRayQuery->setRay(rayFromScreenPoint(e->pos()));
                 m_pRayQuery->setQueryMask(BONE_QUERY_FLAGS);
+                m_pRayQuery->setSortByDistance(true);
+                // Walk hits front-to-back: skip non-bone movables that
+                // happen to share the mask, accept the first tagged one.
                 Ogre::RaySceneQueryResult& res = m_pRayQuery->execute();
-                if (!res.empty() && res.begin()->movable)
+                for (const auto& hit : res)
                 {
-                    Ogre::String boneName = SkeletonDebug::boneNameForMovable(
-                        res.begin()->movable);
-                    if (!boneName.empty())
-                    {
-                        AnimationControlController::instance()->selectBone(
-                            QString::fromStdString(boneName));
-                        SentryReporter::addBreadcrumb("ui.action",
-                            QString("Bone picked: %1").arg(QString::fromStdString(boneName)));
-                        return;
-                    }
+                    if (!hit.movable) continue;
+                    Ogre::String boneName = SkeletonDebug::boneNameForMovable(hit.movable);
+                    if (boneName.empty()) continue;
+                    AnimationControlController::instance()->selectBone(
+                        QString::fromStdString(boneName));
+                    SentryReporter::addBreadcrumb("ui.action",
+                        QString("Bone picked: %1").arg(QString::fromStdString(boneName)));
+                    return;
                 }
             }
 
