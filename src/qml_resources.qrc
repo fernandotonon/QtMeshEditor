@@ -27,6 +27,7 @@
   <qresource prefix="/AnimationControl">
     <file alias="AnimationControlPanel.qml">../qml/AnimationControlPanel.qml</file>
     <file alias="AnimationDopeSheet.qml">../qml/AnimationDopeSheet.qml</file>
+    <file alias="AnimationCurveEditor.qml">../qml/AnimationCurveEditor.qml</file>
   </qresource>
   <qresource prefix="/AIChatPanel">
     <file alias="AIChatPanel.qml">../qml/AIChatPanel.qml</file>

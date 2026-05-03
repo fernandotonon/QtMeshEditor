@@ -6,6 +6,7 @@ set(SRC_FILES
 about.cpp
 AnimationBlender.cpp
 AnimationControlController.cpp
+CurveEditModel.cpp
 main.cpp
 Manager.cpp
 material.cpp
@@ -79,6 +80,7 @@ HalfEdgeMesh.cpp
 set(HEADER_FILES
 AnimationBlender.h
 AnimationControlController.h
+CurveEditModel.h
 GlobalDefinitions.h
 Euler.h
 about.h
