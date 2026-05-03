@@ -23,6 +23,7 @@
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
 #include "EditModeController.h"
+#include "AnimationControlController.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -1551,6 +1552,7 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
     if((SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()) && (e->button() == Qt::LeftButton))
     {
         // Push undo command if a transform was performed on scene nodes
+        bool nodeTransformCommitted = false;
         if (SelectionSet::getSingleton()->hasNodes() && !mUndoStartPositions.isEmpty())
         {
             auto nodes = SelectionSet::getSingleton()->getNodesSelectionList();
@@ -1621,12 +1623,19 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                     UndoManager::getSingleton()->push(new ScaleCommand(nodes, totalScale));
                 }
             }
+
+            nodeTransformCommitted = changed;
         }
 
         mUndoStartPositions.clear();
         mUndoStartOrientations.clear();
         mUndoStartScales.clear();
         mStartPoint = Ogre::Vector3::ZERO;
+
+        // Auto-key only when an actual transform was committed — plain clicks
+        // and zero-delta releases must not pollute tracks with duplicate keys.
+        if (nodeTransformCommitted)
+            AnimationControlController::instance()->autoKeyOnTransform();
     }
 
     if(m_pSelectionBox->isVisible())

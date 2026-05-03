@@ -48,6 +48,7 @@ class AnimationControlController : public QObject
     Q_PROPERTY(double loopStart       READ loopStart       WRITE setLoopStart       NOTIFY loopRegionChanged)
     Q_PROPERTY(double loopEnd         READ loopEnd         WRITE setLoopEnd         NOTIFY loopRegionChanged)
     Q_PROPERTY(bool   loopRegionActive READ loopRegionActive WRITE setLoopRegionActive NOTIFY loopRegionChanged)
+    Q_PROPERTY(bool   autoKey         READ autoKey         WRITE setAutoKey         NOTIFY autoKeyChanged)
 
     // Keyframe tick marks on the timeline (list of ms positions)
     Q_PROPERTY(QVariantList keyframeTicks READ keyframeTicks NOTIFY keyframeTicksChanged)
@@ -109,15 +110,23 @@ public:
     double loopStart()        const { return m_loopStart; }
     double loopEnd()          const { return m_loopEnd; }
     bool   loopRegionActive() const { return m_loopRegionActive; }
+    bool   autoKey()          const { return m_autoKey; }
     void   setPlaybackSpeed(double s);
     void   setLoopStart(double s);
     void   setLoopEnd(double s);
     void   setLoopRegionActive(bool on);
+    void   setAutoKey(bool on);
 
     // Compute the time after applying speed scaling and (optional) loop wrap.
     // Used by MainWindow::frameRenderingQueued. `currentTime` and `dt` are
     // in seconds; returns the new time position to assign back to the state.
     double advanceTime(double currentTime, double dt) const;
+
+    /// Push a keyframe at the current scrub time on the active bone-track,
+    /// capturing the bone's current pose. No-op if autoKey is off, no
+    /// animation is selected, or no bone is selected. Called by
+    /// TransformOperator at the end of every transform commit.
+    void   autoKeyOnTransform();
 
     // Keyframe ticks
     QVariantList keyframeTicks() const { return m_keyframeTicks; }
@@ -225,6 +234,7 @@ signals:
     void currentKeyframeChanged();
     void playbackSpeedChanged();
     void loopRegionChanged();
+    void autoKeyChanged();
     /// Emitted when the dope-sheet view should refresh — track edits, clip
     /// selection, or keyframe add/delete/move.
     void boneRowsChanged();
@@ -268,6 +278,7 @@ private:
     double m_loopStart        = 0.0;
     double m_loopEnd          = 0.0;
     bool   m_loopRegionActive = false;
+    bool   m_autoKey          = false;
 };
 
 #endif // ANIMATIONCONTROLCONTROLLER_H

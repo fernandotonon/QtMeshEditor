@@ -348,6 +348,24 @@ void AnimationControlController::setLoopRegionActive(bool on)
     emit loopRegionChanged();
 }
 
+void AnimationControlController::setAutoKey(bool on)
+{
+    if (on == m_autoKey) return;
+    m_autoKey = on;
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("AutoKey toggled %1").arg(on ? "on" : "off"));
+    emit autoKeyChanged();
+}
+
+void AnimationControlController::autoKeyOnTransform()
+{
+    if (!m_autoKey) return;
+    if (!m_selectedTrack || !m_selectedEntity || m_selectedAnimation.empty()) return;
+    if (!m_selectedSkeleton || m_selectedBone.empty()) return;
+    SentryReporter::addBreadcrumb("ui.action", "AutoKey applied keyframe");
+    addKeyframe();
+}
+
 double AnimationControlController::advanceTime(double currentTime, double dt) const
 {
     double next = currentTime + dt * m_playbackSpeed;
@@ -497,16 +515,37 @@ void AnimationControlController::nextKeyframe()
 void AnimationControlController::addKeyframe()
 {
     if (!m_selectedTrack || !m_selectedEntity || m_selectedAnimation.empty()) return;
+    if (!m_selectedSkeleton || m_selectedBone.empty()) return;
+    if (!m_selectedSkeleton->hasBone(m_selectedBone)) return;
 
-    float time = m_sliderValue / 1000.0f;
-    Ogre::TransformKeyFrame* newKf = m_selectedTrack->createNodeKeyFrame(time);
+    const float time = m_sliderValue / 1000.0f;
+    // Reuse a keyframe at the same time if one already exists — the rest of
+    // this controller treats same-time collisions as invalid, and auto-key
+    // would otherwise stack duplicates on every drag-end at the same scrub
+    // time. Match the same epsilon used by deleteKeyframe (1 ms).
+    Ogre::TransformKeyFrame* newKf = nullptr;
+    constexpr float kKeyframeEpsilon = 0.001f;
+    for (unsigned short i = 0; i < m_selectedTrack->getNumKeyFrames(); ++i) {
+        auto* existing = static_cast<Ogre::TransformKeyFrame*>(m_selectedTrack->getKeyFrame(i));
+        if (std::fabs(existing->getTime() - time) <= kKeyframeEpsilon) {
+            newKf = existing;
+            break;
+        }
+    }
+    if (!newKf)
+        newKf = m_selectedTrack->createNodeKeyFrame(time);
 
-    Ogre::TransformKeyFrame interpKf(nullptr, time);
-    m_selectedTrack->getInterpolatedKeyFrame(
-        m_selectedEntity->getAnimationState(m_selectedAnimation)->getTimePosition(), &interpKf);
-    newKf->setTranslate(interpKf.getTranslate());
-    newKf->setRotation(interpKf.getRotation());
-    newKf->setScale(interpKf.getScale());
+    // Capture the bone's current LOCAL TRS (relative to its initial bind pose),
+    // which is the format TransformKeyFrame stores. Previously this used
+    // getInterpolatedKeyFrame, which samples the existing animation curve at
+    // `time` and produces an identity-ish keyframe whenever the curve is flat
+    // there — the user-visible "blank registry" bug. With this change, hitting
+    // +KF after dragging the scene node (or, with #358's bone gizmo, the bone
+    // directly) captures the actual pose under the cursor at that scrub time.
+    const Ogre::Bone* bone = m_selectedSkeleton->getBone(m_selectedBone);
+    newKf->setTranslate(bone->getPosition() - bone->getInitialPosition());
+    newKf->setRotation(bone->getInitialOrientation().Inverse() * bone->getOrientation());
+    newKf->setScale(bone->getScale() / bone->getInitialScale());
 
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
