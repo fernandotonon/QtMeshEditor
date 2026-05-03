@@ -32,8 +32,12 @@ protected:
     QApplication* app = nullptr;
 
     static bool hasKeyframeAt(Ogre::NodeAnimationTrack* track, float time) {
+        // Match production's <= tolerance (BulkKeyframeCommands.cpp's
+        // findKeyframeIndex uses kEpsilon = 0.001f with `<=`). Using `<`
+        // here would let an exactly-at-epsilon offset slip through the
+        // collision check in production but report false in this test.
         for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
-            if (std::fabs(track->getKeyFrame(i)->getTime() - time) < 0.001f) return true;
+            if (std::fabs(track->getKeyFrame(i)->getTime() - time) <= 0.001f) return true;
         }
         return false;
     }

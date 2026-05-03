@@ -12,7 +12,9 @@
 #include <QPalette>
 #include <QTimer>
 #include <QVariantMap>
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <Ogre.h>
 
@@ -709,22 +711,30 @@ QVector<MoveKeyframesCommand::Item> selectionToItems(const QVariantList& sel)
 
 } // namespace
 
-bool AnimationControlController::moveKeyframes(const QVariantList& selection,
-                                                double dt)
+namespace {
+
+// Clamp the batch dt so no item's destination falls outside [0, length].
+// Returns the largest legal magnitude that still has the requested sign.
+float clampBatchDt(const QVector<MoveKeyframesCommand::Item>& items,
+                   float requestedDt, float length)
 {
-    if (selection.isEmpty()) return false;
-    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
-    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
-    if (qFuzzyCompare(dt + 1.0, 1.0)) return false; // dt == 0 is a no-op
+    if (items.isEmpty()) return 0.0f;
+    float lo = -std::numeric_limits<float>::infinity();
+    float hi =  std::numeric_limits<float>::infinity();
+    for (const auto& it : items) {
+        // Each item's destination must satisfy 0 <= origT + dt <= length.
+        lo = std::max(lo, -it.originalTime);
+        hi = std::min(hi,  length - it.originalTime);
+    }
+    if (lo > hi) return 0.0f; // shouldn't happen for non-empty range
+    return std::clamp(requestedDt, lo, hi);
+}
 
-    QVector<MoveKeyframesCommand::Item> items = selectionToItems(selection);
-    if (items.isEmpty()) return false;
-
-    const float dtf = static_cast<float>(dt);
-    const float length = static_cast<float>(animationLength());
-
-    // Build a quick lookup of which (bone, time) tuples are members of the
-    // selection so the collision check can ignore intra-selection overlap.
+// Returns true if the selection's destinations would collide with any
+// non-selected keyframe on its track.
+bool batchCollides(Ogre::Skeleton* skel, const std::string& animName,
+                   const QVector<MoveKeyframesCommand::Item>& items, float dt)
+{
     auto isMember = [&](const std::string& bone, float time) {
         for (const auto& it : items) {
             if (it.boneName == bone &&
@@ -732,22 +742,45 @@ bool AnimationControlController::moveKeyframes(const QVariantList& selection,
         }
         return false;
     };
-
-    // Validate per-item: clamp window + collision with non-selected keyframes.
     for (const auto& it : items) {
-        const float dst = it.originalTime + dtf;
-        if (dst < 0.0f || dst > length + kBulkEpsilon) return false;
-        auto* track = resolveTrackByBone(m_selectedSkeleton, m_selectedAnimation,
-                                          it.boneName);
-        if (!track) return false;
+        const float dst = it.originalTime + dt;
+        auto* track = resolveTrackByBone(skel, animName, it.boneName);
+        if (!track) return true; // missing track = treat as collision; bail
         for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
             const float t = track->getKeyFrame(i)->getTime();
-            if (std::fabs(t - it.originalTime) <= kBulkEpsilon) continue; // self
+            if (std::fabs(t - it.originalTime) <= kBulkEpsilon) continue;
             if (std::fabs(t - dst) <= kBulkEpsilon &&
                 !isMember(it.boneName, t)) {
-                return false; // collision with a non-member keyframe
+                return true;
             }
         }
+    }
+    return false;
+}
+
+} // namespace
+
+bool AnimationControlController::moveKeyframes(const QVariantList& selection,
+                                                double dt)
+{
+    if (selection.isEmpty()) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (qFuzzyCompare(dt + 1.0, 1.0)) return false;
+
+    QVector<MoveKeyframesCommand::Item> items = selectionToItems(selection);
+    if (items.isEmpty()) return false;
+
+    const auto length = static_cast<float>(animationLength());
+    // Clamp the requested delta so a multi-selection sliding into a clip
+    // boundary lands on the nearest legal time instead of snapping back.
+    const float dtf = clampBatchDt(items, static_cast<float>(dt), length);
+    if (qFuzzyIsNull(dtf)) return false;
+
+    // Refuse if the (now-clamped) shift would collide with any non-selected
+    // keyframe on the same track.
+    if (batchCollides(m_selectedSkeleton, m_selectedAnimation, items, dtf)) {
+        return false;
     }
 
     auto* cmd = new MoveKeyframesCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
@@ -757,8 +790,8 @@ bool AnimationControlController::moveKeyframes(const QVariantList& selection,
     SentryReporter::addBreadcrumb(
         "ui.action",
         QString("Dope Sheet: bulk-move %1 keyframe(s) by %2s")
-            .arg(items.size())
-            .arg(dt, 0, 'f', 3));
+            .arg(static_cast<int>(items.size()))
+            .arg(static_cast<double>(dtf), 0, 'f', 3));
     refreshSliderTicks();
     emit boneRowsChanged();
     return true;
@@ -830,15 +863,31 @@ int AnimationControlController::pasteKeyframesAt(const QString& json,
     const QJsonObject root = doc.object();
     if (root.value(QStringLiteral("kind")).toString() !=
         QStringLiteral("qtmesh.dopesheet.keyframes")) return 0;
+    // Reject unknown clipboard versions — keeps stale clipboard payloads
+    // from a different schema out of the undo stack.
+    if (root.value(QStringLiteral("version")).toInt() != 1) return 0;
 
-    const float length = static_cast<float>(animationLength());
+    const auto length = static_cast<float>(animationLength());
     QVector<PasteKeyframesCommand::Entry> entries;
     for (const QJsonValue& v : root.value(QStringLiteral("entries")).toArray()) {
         const QJsonObject e = v.toObject();
         const QString bone = e.value(QStringLiteral("bone")).toString();
         const double  dt   = e.value(QStringLiteral("dt")).toDouble();
         if (bone.isEmpty()) continue;
-        const float dst = static_cast<float>(atTime + dt);
+        // Require all the numeric fields to be present so we don't silently
+        // paste a partial/corrupted entry as identity TRS.
+        const QStringList required{ QStringLiteral("tx"), QStringLiteral("ty"),
+                                    QStringLiteral("tz"), QStringLiteral("rw"),
+                                    QStringLiteral("rx"), QStringLiteral("ry"),
+                                    QStringLiteral("rz"), QStringLiteral("sx"),
+                                    QStringLiteral("sy"), QStringLiteral("sz") };
+        bool ok = true;
+        for (const QString& key : required) {
+            if (!e.contains(key) || !e.value(key).isDouble()) { ok = false; break; }
+        }
+        if (!ok) continue;
+
+        const auto dst = static_cast<float>(atTime + dt);
         if (dst < 0.0f || dst > length + kBulkEpsilon) continue; // out of range — skip
         PasteKeyframesCommand::Entry pe;
         pe.boneName = bone.toStdString();
@@ -846,23 +895,41 @@ int AnimationControlController::pasteKeyframesAt(const QString& json,
         pe.tx = static_cast<float>(e.value(QStringLiteral("tx")).toDouble());
         pe.ty = static_cast<float>(e.value(QStringLiteral("ty")).toDouble());
         pe.tz = static_cast<float>(e.value(QStringLiteral("tz")).toDouble());
-        pe.rw = static_cast<float>(e.value(QStringLiteral("rw")).toDouble(1.0));
+        pe.rw = static_cast<float>(e.value(QStringLiteral("rw")).toDouble());
         pe.rx = static_cast<float>(e.value(QStringLiteral("rx")).toDouble());
         pe.ry = static_cast<float>(e.value(QStringLiteral("ry")).toDouble());
         pe.rz = static_cast<float>(e.value(QStringLiteral("rz")).toDouble());
-        pe.sx = static_cast<float>(e.value(QStringLiteral("sx")).toDouble(1.0));
-        pe.sy = static_cast<float>(e.value(QStringLiteral("sy")).toDouble(1.0));
-        pe.sz = static_cast<float>(e.value(QStringLiteral("sz")).toDouble(1.0));
+        pe.sx = static_cast<float>(e.value(QStringLiteral("sx")).toDouble());
+        pe.sy = static_cast<float>(e.value(QStringLiteral("sy")).toDouble());
+        pe.sz = static_cast<float>(e.value(QStringLiteral("sz")).toDouble());
         entries.append(pe);
     }
     if (entries.isEmpty()) return 0;
+
+    // Pre-check collisions so we don't push a no-op command onto the undo
+    // stack when every entry would skip. The command's own redo() repeats
+    // the check authoritatively — this is purely to avoid polluting undo.
+    int wouldPaste = 0;
+    for (const auto& e : entries) {
+        auto* track = resolveTrackByBone(m_selectedSkeleton, m_selectedAnimation,
+                                          e.boneName);
+        if (!track) continue;
+        bool collides = false;
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            if (std::fabs(track->getKeyFrame(i)->getTime() - e.time) <= kBulkEpsilon) {
+                collides = true; break;
+            }
+        }
+        if (!collides) ++wouldPaste;
+    }
+    if (wouldPaste == 0) return 0;
 
     auto* cmd = new PasteKeyframesCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
                                            m_selectedAnimation,
                                            entries);
     UndoManager::getSingleton()->push(cmd);
     const int n = cmd->pastedCount();
-    const int skipped = entries.size() - n;
+    const int skipped = static_cast<int>(entries.size()) - n;
     SentryReporter::addBreadcrumb(
         "ui.action",
         QString("Dope Sheet: paste %1 keyframe(s) at t=%2s (skipped %3 collision(s))")

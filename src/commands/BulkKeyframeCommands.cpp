@@ -70,7 +70,7 @@ MoveKeyframesCommand::MoveKeyframesCommand(Ogre::Skeleton* skeleton,
     , mItems(std::move(items))
     , mDt(dt)
 {
-    setText(QObject::tr("Move %n keyframe(s)", "", mItems.size()));
+    setText(QObject::tr("Move %n keyframe(s)", "", static_cast<int>(mItems.size())));
 }
 
 bool MoveKeyframesCommand::shiftAll(float fromOffset, float toOffset)
@@ -114,7 +114,7 @@ PasteKeyframesCommand::PasteKeyframesCommand(Ogre::Skeleton* skeleton,
     , mEntries(std::move(entries))
 {
     mApplied.resize(mEntries.size());
-    setText(QObject::tr("Paste %n keyframe(s)", "", mEntries.size()));
+    setText(QObject::tr("Paste %n keyframe(s)", "", static_cast<int>(mEntries.size())));
 }
 
 void PasteKeyframesCommand::redo()

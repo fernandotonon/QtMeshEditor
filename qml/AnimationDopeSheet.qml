@@ -54,13 +54,22 @@ Rectangle {
         selection = copy
     }
 
-    // Used by the marquee to commit a rectangle selection.
-    function selectInRect(x1, y1, x2, y2) {
+    // Used by the marquee to commit a rectangle selection. When `additive`
+    // is true (Ctrl/Cmd held during marquee), the rect-hit set is unioned
+    // with the existing selection instead of replacing it.
+    function selectInRect(x1, y1, x2, y2, additive) {
         var lo = Math.min(x1, x2), hi = Math.max(x1, x2)
         var top = Math.min(y1, y2), bot = Math.max(y1, y2)
         var t1 = (lo - leftStripWidth) / pxPerSec + viewStart
         var t2 = (hi - leftStripWidth) / pxPerSec + viewStart
-        var newSel = []
+        var newSel = additive ? selection.slice() : []
+        function alreadyHas(bone, time) {
+            for (var i = 0; i < newSel.length; i++) {
+                if (newSel[i].bone === bone &&
+                    Math.abs(newSel[i].time - time) < 0.001) return true
+            }
+            return false
+        }
         for (var r = 0; r < rows.length; r++) {
             // Header (24px) + r * (rowHeight + spacing 1)
             var rowTop = (header.visible ? header.height : 0) + r * (rowHeight + 1)
@@ -69,7 +78,9 @@ Rectangle {
             var keyTimes = rows[r].keyTimes
             for (var k = 0; k < keyTimes.length; k++) {
                 var t = keyTimes[k]
-                if (t >= t1 && t <= t2) newSel.push({ bone: rows[r].bone, time: t })
+                if (t >= t1 && t <= t2 && !alreadyHas(rows[r].bone, t)) {
+                    newSel.push({ bone: rows[r].bone, time: t })
+                }
             }
         }
         selection = newSel
@@ -378,6 +389,7 @@ Rectangle {
         property real panStartX: 0
         property real panStartView: 0
         property bool marquee: false
+        property bool marqueeAdditive: false
         property real mqStartX: 0
         property real mqStartY: 0
         property real mqEndX: 0
@@ -393,9 +405,10 @@ Rectangle {
                 // Left-click on empty timeline area → start marquee selection.
                 // Diamonds capture their own presses via preventStealing.
                 marquee = true
+                marqueeAdditive = root.isPrimaryModifier(mouse.modifiers)
                 mqStartX = mouse.x; mqStartY = mouse.y
                 mqEndX = mouse.x;   mqEndY = mouse.y
-                if (!root.isPrimaryModifier(mouse.modifiers)) root.clearSelection()
+                if (!marqueeAdditive) root.clearSelection()
                 mouse.accepted = true
             } else {
                 mouse.accepted = false
@@ -419,7 +432,8 @@ Rectangle {
                 var leftPad = root.leftStripWidth
                 var topPad  = header.visible ? header.height : 0
                 root.selectInRect(mqStartX + leftPad, mqStartY + topPad,
-                                  mqEndX + leftPad,   mqEndY + topPad)
+                                  mqEndX + leftPad,   mqEndY + topPad,
+                                  marqueeAdditive)
                 marqueeRect.requestPaint()
             }
         }
