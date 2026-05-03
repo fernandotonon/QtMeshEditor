@@ -1082,6 +1082,23 @@ bool AnimationControlController::setKeyframeValue(const QString& boneName,
     if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
     if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
     if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (!m_selectedSkeleton->hasBone(boneName.toStdString())) return false;
+
+    // Pre-check that there's actually a keyframe at `time` — otherwise the
+    // command would push a no-op onto the undo stack. Mirrors the same
+    // tolerance the command itself uses (1 ms).
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneName.toStdString());
+    if (!anim->hasNodeTrack(bone->getHandle())) return false;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    bool found = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(time))
+                <= 0.001f) {
+            found = true; break;
+        }
+    }
+    if (!found) return false;
 
     auto* cmd = new SetKeyframeValueCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
                                              m_selectedAnimation,

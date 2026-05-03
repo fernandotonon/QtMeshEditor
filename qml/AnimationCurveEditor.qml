@@ -171,6 +171,11 @@ Rectangle {
             )
         }
 
+        // Populate the cache up-front so the first paint shows real curves
+        // even when the view is opened after a selection is already active
+        // (no fresh boneRowsChanged signal will fire to seed it otherwise).
+        Component.onCompleted: refreshChannelValues(root.selectedBoneRow())
+
         onPaint: {
             var ctx = getContext("2d"); ctx.clearRect(0, 0, width, height)
             var row = root.selectedBoneRow()
@@ -328,7 +333,10 @@ Rectangle {
             } else mouse.accepted = false
         }
         onPositionChanged: function(mouse) {
-            if (!pressed || mouse.button !== Qt.MiddleButton) return
+            // mouse.button on a move event is the event trigger, not the
+            // held buttons — check the bitmask in mouse.buttons instead.
+            // Otherwise middle-drag pan never fires after the initial press.
+            if (!pressed || !(mouse.buttons & Qt.MiddleButton)) return
             var dx = mouse.x - panStartX
             root.viewStart = panStartView - dx / root.pxPerSec
             if (root.viewStart < 0) root.viewStart = 0

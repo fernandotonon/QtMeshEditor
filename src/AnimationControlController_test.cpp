@@ -773,6 +773,13 @@ TEST_F(AnimationControlControllerPlaybackTest, SetKeyframeValueRejectsUnknownCha
     EXPECT_FALSE(ctrl->setKeyframeValue("Bone", "qq", 0.5, 1.0));
 }
 
+TEST_F(AnimationControlControllerPlaybackTest, SetKeyframeValueRejectsWithoutSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    // No animation selected → should return false, not silently push a
+    // no-op command onto the undo stack.
+    EXPECT_FALSE(ctrl->setKeyframeValue("Bone", "tx", 0.5, 1.0));
+}
+
 TEST_F(AnimationControlControllerTest, ChannelValuesReadsTrack) {
     // TestAnim's middle keyframe has translate.x = 0.5 (rest are 0). The
     // channelValuesAt API must return [0, 0.5, 0] for "tx" in time order.
@@ -790,6 +797,19 @@ TEST_F(AnimationControlControllerTest, ChannelValuesReadsTrack) {
     EXPECT_NEAR(tx[0].toDouble(), 0.0, 1e-4);
     EXPECT_NEAR(tx[1].toDouble(), 0.5, 1e-4);
     EXPECT_NEAR(tx[2].toDouble(), 0.0, 1e-4);
+}
+
+TEST_F(AnimationControlControllerTest, SetKeyframeValueRejectsMissingTime) {
+    // No keyframe at 0.42 — the controller must return false instead of
+    // pushing a no-op SetKeyframeValueCommand onto the undo stack.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MissingTimeTest");
+    ASSERT_NE(entity, nullptr);
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+    EXPECT_FALSE(ctrl->setKeyframeValue(bone, "tx", 0.42, 5.0));
 }
 
 TEST_F(AnimationControlControllerTest, SetKeyframeValueWritesOneChannelOnly) {
