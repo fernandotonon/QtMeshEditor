@@ -21,6 +21,47 @@ Rectangle {
     // Cached row data refreshed from the controller.
     property var rows: AnimationControlController.allBoneRows()
 
+    // Per-bone expansion state for per-channel rows. Keys are bone names,
+    // values are bool. Reset when a new clip is selected (different bones).
+    property var expandedBones: ({})
+
+    // Per-channel render order + colors. Empty rows are filtered by the
+    // controller's `channels` flags so we never paint a sub-row for a
+    // channel that doesn't deviate from bind pose.
+    readonly property var channelOrder: [
+        { id: "tx", label: "T.X", color: "#c04040" },
+        { id: "ty", label: "T.Y", color: "#40c040" },
+        { id: "tz", label: "T.Z", color: "#4040c0" },
+        { id: "rw", label: "R.W", color: "#a040a0" },
+        { id: "rx", label: "R.X", color: "#c04040" },
+        { id: "ry", label: "R.Y", color: "#40c040" },
+        { id: "rz", label: "R.Z", color: "#4040c0" },
+        { id: "sx", label: "S.X", color: "#c08040" },
+        { id: "sy", label: "S.Y", color: "#80c040" },
+        { id: "sz", label: "S.Z", color: "#4080c0" }
+    ]
+
+    function activeChannelsFor(boneRow) {
+        var result = []
+        if (!boneRow || !boneRow.channels) return result
+        for (var i = 0; i < channelOrder.length; i++) {
+            var c = channelOrder[i]
+            if (boneRow.channels[c.id]) result.push(c)
+        }
+        return result
+    }
+
+    function isExpanded(boneName) {
+        return expandedBones[boneName] === true
+    }
+
+    function toggleExpanded(boneName) {
+        var copy = {}
+        for (var k in expandedBones) copy[k] = expandedBones[k]
+        copy[boneName] = !copy[boneName]
+        expandedBones = copy
+    }
+
     // Selection state. Each entry is { bone: string, time: number }.
     // Stored as a plain array so QML bindings update on assignment.
     property var selection: []
@@ -92,7 +133,11 @@ Rectangle {
         // entirely). Track edits (boneRowsChanged) refresh rows but preserve
         // the user's selection — bulk-drag and bone-click both fire that
         // signal, and dropping selection there breaks bulk drag mid-gesture.
-        function onSelectionChanged()      { root.rows = AnimationControlController.allBoneRows(); root.clearSelection() }
+        function onSelectionChanged() {
+            root.rows = AnimationControlController.allBoneRows()
+            root.clearSelection()
+            root.expandedBones = {}
+        }
         function onBoneRowsChanged()       { root.rows = AnimationControlController.allBoneRows() }
         function onKeyframeTicksChanged()  { root.rows = AnimationControlController.allBoneRows() }
     }
@@ -217,37 +262,151 @@ Rectangle {
             id: rowDelegate
             property string boneName: modelData.bone
             property var keyTimes: modelData.keyTimes
+            property var activeChannels: root.activeChannelsFor(modelData)
+            property bool expanded: root.isExpanded(boneName) && activeChannels.length > 0
 
-            width: rowsView.width; height: root.rowHeight
+            width: rowsView.width
+            height: root.rowHeight + (expanded ? activeChannels.length * root.rowHeight : 0)
 
             // Bone name strip carries the selection-highlight tint. Track
             // strip is transparent so timelineArea behind us catches presses
             // on empty pixels for marquee/pan.
             Rectangle {
-                width: root.leftStripWidth; height: parent.height
+                width: root.leftStripWidth; height: root.rowHeight
                 color: (rowDelegate.boneName === AnimationControlController.selectedBone)
                        ? Qt.lighter(AnimationControlController.panelColor, 1.15)
                        : AnimationControlController.panelColor
                 border.color: AnimationControlController.borderColor; border.width: 1
-                Text {
-                    anchors.left: parent.left; anchors.leftMargin: 6
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: rowDelegate.boneName
-                    color: AnimationControlController.textColor
-                    elide: Text.ElideRight; font.pixelSize: 11
-                    width: parent.width - 12
-                }
-                MouseArea {
+
+                Row {
                     anchors.fill: parent
-                    onClicked: AnimationControlController.selectBone(rowDelegate.boneName)
+                    anchors.leftMargin: 4
+                    spacing: 4
+
+                    // Per-bone expansion chevron. Only shown when the bone
+                    // has at least one active channel (otherwise expanding
+                    // would just show empty rows).
+                    Rectangle {
+                        width: 16; height: parent.height
+                        color: "transparent"
+                        anchors.verticalCenter: parent.verticalCenter
+                        Text {
+                            anchors.centerIn: parent
+                            visible: rowDelegate.activeChannels.length > 0
+                            text: rowDelegate.expanded ? "▼" : "▶"
+                            color: AnimationControlController.textColor
+                            font.pixelSize: 9
+                        }
+                        MouseArea {
+                            anchors.fill: parent
+                            enabled: rowDelegate.activeChannels.length > 0
+                            onClicked: root.toggleExpanded(rowDelegate.boneName)
+                        }
+                    }
+
+                    Text {
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: rowDelegate.boneName
+                        color: AnimationControlController.textColor
+                        elide: Text.ElideRight; font.pixelSize: 11
+                        width: parent.width - 26
+                        MouseArea {
+                            anchors.fill: parent
+                            onClicked: AnimationControlController.selectBone(rowDelegate.boneName)
+                        }
+                    }
                 }
             }
 
-            // Track strip with diamond markers
+            // Per-channel sub-row strip on the left side, when expanded.
+            Column {
+                visible: rowDelegate.expanded
+                anchors.top: parent.top
+                anchors.topMargin: root.rowHeight
+                anchors.left: parent.left
+                width: root.leftStripWidth
+                Repeater {
+                    model: rowDelegate.activeChannels
+                    Rectangle {
+                        width: root.leftStripWidth; height: root.rowHeight
+                        color: AnimationControlController.panelColor
+                        border.color: AnimationControlController.borderColor; border.width: 1
+                        Row {
+                            anchors.fill: parent
+                            anchors.leftMargin: 24
+                            spacing: 4
+                            Rectangle {
+                                width: 10; height: 10; radius: 2
+                                color: modelData.color
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                            Text {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.label
+                                color: AnimationControlController.textColor
+                                font.pixelSize: 10
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Per-channel sub-row track strips (right side). Each renders the
+            // same keyframe times as the parent track but in the channel's
+            // signature color. Click on a sub-row diamond delegates to the
+            // parent keyframe (selection / playhead). Per-channel-only edits
+            // arrive in slice D3.
+            Repeater {
+                model: rowDelegate.expanded ? rowDelegate.activeChannels : []
+                Item {
+                    width: rowDelegate.width - root.leftStripWidth
+                    height: root.rowHeight
+                    x: root.leftStripWidth
+                    y: root.rowHeight + index * root.rowHeight
+                    clip: true
+
+                    // Underline, like the parent track strip
+                    Rectangle {
+                        anchors.left: parent.left; anchors.right: parent.right
+                        anchors.verticalCenter: parent.verticalCenter
+                        height: 1
+                        color: AnimationControlController.borderColor
+                        opacity: 0.3
+                    }
+
+                    Repeater {
+                        model: rowDelegate.keyTimes
+                        Rectangle {
+                            property real keyTime: modelData
+                            x: (keyTime - root.viewStart) * root.pxPerSec - width / 2
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 8; height: 8
+                            rotation: 45
+                            color: parent.parent.modelData.color
+                            border.color: AnimationControlController.borderColor
+                            border.width: 1
+                            opacity: 0.85
+                            MouseArea {
+                                anchors.fill: parent
+                                anchors.margins: -2
+                                onClicked: {
+                                    AnimationControlController.selectBone(rowDelegate.boneName)
+                                    AnimationControlController.sliderValue =
+                                            Math.round(parent.keyTime * 1000)
+                                    root.setSingleSelection(rowDelegate.boneName, parent.keyTime)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Track strip with diamond markers (parent / aggregate row)
             Item {
                 id: trackStrip
                 anchors.left: parent.left; anchors.leftMargin: root.leftStripWidth
-                anchors.top: parent.top; anchors.bottom: parent.bottom
+                anchors.top: parent.top
+                height: root.rowHeight
                 anchors.right: parent.right
                 clip: true
 

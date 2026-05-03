@@ -649,9 +649,41 @@ TEST_F(AnimationControlControllerTest, AllBoneRowsReflectsTracks) {
     auto firstRow = rows.first().toMap();
     EXPECT_TRUE(firstRow.contains("bone"));
     EXPECT_TRUE(firstRow.contains("keyTimes"));
+    EXPECT_TRUE(firstRow.contains("channels"));
     // TestAnim has 3 keyframes on the Child track (handle 1)
     auto times = firstRow["keyTimes"].toList();
     EXPECT_EQ(times.size(), 3);
+}
+
+TEST_F(AnimationControlControllerTest, AllBoneRowsReportsActiveChannels) {
+    // TestAnim's middle keyframe sets translate.x = 0.5 and rotates 30°
+    // around Y. The channel-detection should mark tx, rw, and ry as active
+    // (the rotation around Y leaves rw < 1.0 and ry > 0); ty/tz/rx/rz/s* are
+    // identity throughout and must NOT be marked active.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_ChannelsTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    QVariantList rows = ctrl->allBoneRows();
+    ASSERT_FALSE(rows.isEmpty());
+    auto channels = rows.first().toMap()["channels"].toMap();
+
+    EXPECT_TRUE(channels["tx"].toBool());
+    EXPECT_FALSE(channels["ty"].toBool());
+    EXPECT_FALSE(channels["tz"].toBool());
+
+    EXPECT_TRUE(channels["rw"].toBool());
+    EXPECT_FALSE(channels["rx"].toBool());
+    EXPECT_TRUE(channels["ry"].toBool());
+    EXPECT_FALSE(channels["rz"].toBool());
+
+    EXPECT_FALSE(channels["sx"].toBool());
+    EXPECT_FALSE(channels["sy"].toBool());
+    EXPECT_FALSE(channels["sz"].toBool());
 }
 
 TEST_F(AnimationControlControllerTest, MoveKeyframeShiftsTime) {
