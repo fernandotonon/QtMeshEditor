@@ -360,6 +360,22 @@ void MainWindow::initToolBar()
             auto* sel = SelectionSet::getSingleton();
             if (!sel->isEmpty())
                 emit sel->selectionChanged();
+            // Force the animated entity to recompute skeleton derived
+            // transforms so bone-visual TagPoints + skinning catch up
+            // immediately. Without this, undo/redo of bone TRS edits
+            // updates the data but the SkeletonDebug overlay stays at
+            // its pre-undo pose until the next animation tick.
+            auto* animCtrl = AnimationControlController::instance();
+            if (Ogre::Entity* ent = animCtrl->selectedEntity()) {
+                if (Ogre::SkeletonInstance* skel = ent->getSkeleton()) {
+                    // Manual-bone dirty + immediate transform update —
+                    // pushes derived state through to attached TagPoints
+                    // (SkeletonDebug bone visuals) on this frame.
+                    skel->_notifyManualBonesDirty();
+                    skel->_updateTransforms();
+                }
+                ent->_updateAnimation();
+            }
         });
     });
 

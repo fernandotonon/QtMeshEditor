@@ -42,7 +42,11 @@ void BoneTransformCommand::apply(const Ogre::Vector3& p,
     // the new local as the new initial keeps undo/redo round-tripping
     // the bind pose, not just the transient local TRS.
     if (mBindMode) bone->setInitialState();
-    bone->needUpdate();
+    // needUpdate(true) propagates to children, so the whole subtree's
+    // derived transforms are invalidated. Without `true`, child TagPoints
+    // (e.g. SkeletonDebug bone visuals) keep stale derived poses until
+    // the next animation tick.
+    bone->needUpdate(true);
 }
 
 void BoneTransformCommand::undo() { apply(mBeforePos, mBeforeOrient, mBeforeScale); }
