@@ -1133,6 +1133,23 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             // so our drag never visibly sticks. Manual-control mode
             // tells the skeleton to leave this bone alone.
             bone->setManuallyControlled(true);
+            // setManuallyControlled only excludes this bone from
+            // Skeleton::reset() — animation TRACKS still apply to it
+            // each frame (the Ogre docs warn about this). Mute the
+            // animation's contribution to this bone via the blend mask
+            // so per-frame _updateAnimation doesn't overwrite our edit.
+            // Restored on release.
+            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
+                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
+                    const auto numBones = static_cast<size_t>(dragEnt->getSkeleton()->getNumBones());
+                    for (const auto& pair : states->getAnimationStates()) {
+                        Ogre::AnimationState* st = pair.second;
+                        if (!st->getEnabled()) continue;
+                        if (!st->hasBlendMask()) st->createBlendMask(numBones, 1.0f);
+                        st->setBlendMaskEntry(bone->getHandle(), 0.0f);
+                    }
+                }
+            }
             // Also pause animation playback during the drag — even with
             // manualControlled=true on the picked bone, animation still
             // moves its parent bones, which compounds onto the local
@@ -1746,6 +1763,19 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 fprintf(stderr, "[BONE-DRAG RELEASE] → REVERT (preview) post=(%g,%g,%g)\n",
                     bone->getPosition().x, bone->getPosition().y, bone->getPosition().z);
                 fflush(stderr);
+            }
+
+            // Restore animation blend-mask weight on this bone so the
+            // curve drives playback again (after either commit or revert
+            // — both want playback to resume normally).
+            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
+                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
+                    for (const auto& pair : states->getAnimationStates()) {
+                        Ogre::AnimationState* st = pair.second;
+                        if (st->hasBlendMask())
+                            st->setBlendMaskEntry(bone->getHandle(), 1.0f);
+                    }
+                }
             }
         }
         // Restore playback if we paused it on press.
