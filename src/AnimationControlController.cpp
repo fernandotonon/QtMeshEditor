@@ -11,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPalette>
+#include <QSet>
 #include <QTimer>
 #include <QVariantMap>
 #include <algorithm>
@@ -106,7 +107,7 @@ void AnimationControlController::updateAnimationTree()
     QString prevEntity = QString::fromStdString(m_selectedEntityName);
     QString prevAnim   = QString::fromStdString(m_selectedAnimation);
 
-    m_animationTree.clear();
+    QVariantList newTree;
     for (Ogre::Entity* entity : SelectionSet::getSingleton()->getResolvedEntities()) {
         Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
         if (!set) continue;
@@ -120,8 +121,17 @@ void AnimationControlController::updateAnimationTree()
         QVariantMap group;
         group["entity"]     = QString::fromStdString(entity->getName());
         group["animations"] = animNames;
-        m_animationTree.append(group);
+        newTree.append(group);
     }
+
+    // Early-out when the tree hasn't actually changed: the connected
+    // signal (SelectionSet::selectionChanged) also fires whenever undo
+    // commands are pushed (mainwindow re-emits it on QUndoStack
+    // indexChanged). Without this guard, every BoneTransformCommand
+    // push would call selectAnimation() and reset slider+bone selection.
+    if (newTree == m_animationTree) return;
+
+    m_animationTree = newTree;
     emit animationTreeChanged();
 
     // Try to restore selection
@@ -223,9 +233,23 @@ void AnimationControlController::refreshBoneList()
         return;
     }
 
+    // Show every bone in the skeleton — not just the ones that already
+    // have a track in this animation. Tracks for picked-but-untracked
+    // bones get created lazily when the user adds a keyframe. Order:
+    // tracked bones first (so users see what's already animated at the
+    // top), then the rest in skeleton index order.
     Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
-    for (const auto& pair : anim->_getNodeTrackList())
-        m_boneNames << QString::fromStdString(pair.second->getAssociatedNode()->getName());
+    QSet<QString> trackedNames;
+    for (const auto& pair : anim->_getNodeTrackList()) {
+        QString name = QString::fromStdString(pair.second->getAssociatedNode()->getName());
+        m_boneNames << name;
+        trackedNames.insert(name);
+    }
+    for (unsigned short i = 0; i < m_selectedSkeleton->getNumBones(); ++i) {
+        QString name = QString::fromStdString(m_selectedSkeleton->getBone(i)->getName());
+        if (!trackedNames.contains(name))
+            m_boneNames << name;
+    }
 
     emit boneListChanged();
 
@@ -235,6 +259,41 @@ void AnimationControlController::refreshBoneList()
         emit keyframeTicksChanged();
         emit currentKeyframeChanged();
     }
+}
+
+Ogre::Bone* AnimationControlController::selectedBonePtr() const
+{
+    if (!m_selectedSkeleton || m_selectedBone.empty()) return nullptr;
+    if (!m_selectedSkeleton->hasBone(m_selectedBone)) return nullptr;
+    return m_selectedSkeleton->getBone(m_selectedBone);
+}
+
+bool AnimationControlController::boneCanTranslate(const Ogre::Bone* bone) const
+{
+    if (!bone) return true;
+    // Root bone (no parent) → always translatable (this is what moves
+    // the character around the scene).
+    if (!bone->getParent()) return true;
+    if (!m_selectedEntity) return true;
+    Ogre::MeshPtr mesh = m_selectedEntity->getMesh();
+    if (!mesh) return true;
+
+    // Walk every submesh's vertex-bone-assignment list. If any vertex
+    // is weighted to this bone's handle, translating it would tear the
+    // mesh away from the rig.
+    const auto handle = bone->getHandle();
+    auto referencesBone = [&](const Ogre::SubMesh::VertexBoneAssignmentList& list) {
+        for (auto it = list.begin(); it != list.end(); ++it)
+            if (it->second.boneIndex == handle) return true;
+        return false;
+    };
+    if (referencesBone(mesh->getBoneAssignments())) return false;
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(i);
+        if (!sub) continue;
+        if (referencesBone(sub->getBoneAssignments())) return false;
+    }
+    return true;
 }
 
 void AnimationControlController::selectBone(const QString& boneName)
@@ -250,6 +309,20 @@ void AnimationControlController::selectBone(const QString& boneName)
                 .setUserAny("selected", Ogre::Any(false));
     }
 
+    // Highlight the picked bone first — independent of whether a track
+    // exists for it in the current animation. Bones that aren't yet
+    // rigged into the active clip (no NodeAnimationTrack) should still
+    // visually select; the keyframe-editing path then no-ops cleanly
+    // since m_selectedTrack stays null until the user actually adds a
+    // keyframe (which lazily creates the track).
+    if (m_selectedSkeleton && !m_selectedBone.empty()
+        && m_selectedSkeleton->hasBone(m_selectedBone))
+    {
+        m_selectedSkeleton->getBone(m_selectedBone)
+            ->getUserObjectBindings().setUserAny("selected", Ogre::Any(true));
+    }
+
+    // Bind the existing track for this bone, if the animation has one.
     if (m_selectedSkeleton && !m_selectedAnimation.empty()
         && m_selectedSkeleton->hasAnimation(m_selectedAnimation))
     {
@@ -257,8 +330,6 @@ void AnimationControlController::selectBone(const QString& boneName)
         for (const auto& pair : anim->_getNodeTrackList()) {
             if (pair.second->getAssociatedNode()->getName() == m_selectedBone) {
                 m_selectedTrack = pair.second;
-                m_selectedSkeleton->getBone(m_selectedBone)
-                    ->getUserObjectBindings().setUserAny("selected", Ogre::Any(true));
                 break;
             }
         }
@@ -360,7 +431,10 @@ void AnimationControlController::setAutoKey(bool on)
 void AnimationControlController::autoKeyOnTransform()
 {
     if (!m_autoKey) return;
-    if (!m_selectedTrack || !m_selectedEntity || m_selectedAnimation.empty()) return;
+    // Don't require m_selectedTrack here — addKeyframe lazily creates
+    // the track for non-rigged bones. Just ensure the bone-level
+    // identity is set so addKeyframe has something to write into.
+    if (!m_selectedEntity || m_selectedAnimation.empty()) return;
     if (!m_selectedSkeleton || m_selectedBone.empty()) return;
     SentryReporter::addBreadcrumb("ui.action", "AutoKey applied keyframe");
     addKeyframe();
@@ -514,9 +588,27 @@ void AnimationControlController::nextKeyframe()
 
 void AnimationControlController::addKeyframe()
 {
-    if (!m_selectedTrack || !m_selectedEntity || m_selectedAnimation.empty()) return;
+    if (!m_selectedEntity || m_selectedAnimation.empty()) return;
     if (!m_selectedSkeleton || m_selectedBone.empty()) return;
     if (!m_selectedSkeleton->hasBone(m_selectedBone)) return;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return;
+
+    // Lazily create an animation track for this bone if it doesn't have
+    // one yet (non-rigged bones, or bones the imported animation didn't
+    // touch). Without this, the user's edit would be a runtime-only
+    // pose that vanishes on export.
+    if (!m_selectedTrack) {
+        Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+        Ogre::Bone* bone = m_selectedSkeleton->getBone(m_selectedBone);
+        m_selectedTrack = anim->createNodeTrack(bone->getHandle(), bone);
+        // Re-include this bone in the bone-list and rebuild the panel
+        // so subsequent +KF / dope-sheet operations see the new track.
+        QString boneNameStr = QString::fromStdString(m_selectedBone);
+        if (!m_boneNames.contains(boneNameStr))
+            m_boneNames << boneNameStr;
+        emit boneListChanged();
+    }
+    if (!m_selectedTrack) return;
 
     const float time = m_sliderValue / 1000.0f;
     // Reuse a keyframe at the same time if one already exists — the rest of
