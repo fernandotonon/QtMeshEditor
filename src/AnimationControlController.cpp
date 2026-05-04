@@ -546,6 +546,22 @@ void AnimationControlController::refreshSliderTicks()
     emit boneRowsChanged();
 }
 
+void AnimationControlController::onUndoRedoCommandApplied()
+{
+    // Structural undo/redo (track destroy, keyframe add/remove) can
+    // invalidate cached pointers we hold. Drop them, then rebuild the
+    // bone-list and slider ticks against the current skeleton state.
+    // refreshBoneList re-resolves m_selectedTrack against the active
+    // animation; refreshSliderTicks rebuilds the tick array from the
+    // (possibly new) track's current keyframes.
+    m_selectedTrack   = nullptr;
+    m_currentKeyframe = nullptr;
+    m_selectedTick    = -1;
+    refreshBoneList();
+    refreshSliderTicks();
+    setAnimationFrame(m_sliderValue);
+}
+
 // ── Keyframe editing ──────────────────────────────────────────────────────────
 
 bool AnimationControlController::hasPrevKeyframe() const

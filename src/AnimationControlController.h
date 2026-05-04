@@ -131,6 +131,13 @@ public:
     void   setLoopRegionActive(bool on);
     void   setAutoKey(bool on);
 
+    /// Invalidate cached track / keyframe pointers and rebuild the bone
+    /// list + slider ticks. Call after structural changes (track destroy,
+    /// keyframe add/remove) — e.g., from the QUndoStack indexChanged
+    /// handler — so subsequent slider scrubs don't read dangling
+    /// pointers from the previous state.
+    void onUndoRedoCommandApplied();
+
     // Compute the time after applying speed scaling and (optional) loop wrap.
     // Used by MainWindow::frameRenderingQueued. `currentTime` and `dt` are
     // in seconds; returns the new time position to assign back to the state.

@@ -366,6 +366,11 @@ void MainWindow::initToolBar()
             // updates the data but the SkeletonDebug overlay stays at
             // its pre-undo pose until the next animation tick.
             auto* animCtrl = AnimationControlController::instance();
+            // Drop cached track / keyframe pointers BEFORE refreshing
+            // anything: AddKeyframeCommand::undo can destroy a track
+            // entirely, and a stale m_selectedTrack would crash on the
+            // next slider scrub.
+            animCtrl->onUndoRedoCommandApplied();
             if (Ogre::Entity* ent = animCtrl->selectedEntity()) {
                 if (Ogre::SkeletonInstance* skel = ent->getSkeleton()) {
                     // Manual-bone dirty + immediate transform update —
