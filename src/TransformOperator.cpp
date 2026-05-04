@@ -1730,14 +1730,45 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                         || (afterOrient != mBoneStartOrient)
                         || (afterScale  != mBoneStartScale);
             const bool autoKeyOn = AnimationControlController::instance()->autoKey();
-            const bool hasActiveAnim = !AnimationControlController::instance()
-                                        ->selectedAnimation().isEmpty();
+            // Active = an animation state is currently ENABLED (driving
+            // bones), not just selected in the panel. With no enabled
+            // animation, the bone is at its bind pose and the user is
+            // doing T-pose authoring → setInitialState. With at least
+            // one enabled animation, the curve writes the bone each
+            // frame and a setInitialState would shift the whole curve
+            // → revert instead.
+            bool hasActiveAnim = false;
+            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
+                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
+                    for (const auto& pair : states->getAnimationStates()) {
+                        if (pair.second->getEnabled()) { hasActiveAnim = true; break; }
+                    }
+                }
+            }
 
             fprintf(stderr, "[BONE-DRAG RELEASE] autoKey=%d hasAnim=%d before=(%g,%g,%g) after=(%g,%g,%g)\n",
                 autoKeyOn ? 1 : 0, hasActiveAnim ? 1 : 0,
                 mBoneStartPos.x, mBoneStartPos.y, mBoneStartPos.z,
                 afterPos.x, afterPos.y, afterPos.z);
             fflush(stderr);
+
+            // Restore animation blend-mask weight on this bone BEFORE
+            // calling apply(). The Revert path calls _updateAnimation
+            // which runs Skeleton::reset (bone → initial) then animation
+            // tracks (initial + curve sample). With the BlendMask still
+            // muted, the curve contributes zero and the bone settles at
+            // initial (T-pose) instead of the press-time pose. Restore
+            // the mask first so curve drives the bone correctly.
+            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
+                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
+                    for (const auto& pair : states->getAnimationStates()) {
+                        Ogre::AnimationState* st = pair.second;
+                        if (st->hasBlendMask())
+                            st->setBlendMaskEntry(bone->getHandle(), 1.0f);
+                    }
+                }
+            }
+
             const auto outcome = BoneDragRelease::apply(
                 bone, mBoneStartPos, mBoneStartOrient, mBoneStartScale,
                 hasActiveAnim, autoKeyOn,
@@ -1755,19 +1786,14 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                     new BoneTransformCommand(skel, bone->getName(),
                         mBoneStartPos, mBoneStartOrient, mBoneStartScale,
                         afterPos,      afterOrient,      afterScale));
-            }
-
-            // Restore animation blend-mask weight on this bone so the
-            // curve drives playback again (after either commit or revert
-            // — both want playback to resume normally).
-            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
-                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
-                    for (const auto& pair : states->getAnimationStates()) {
-                        Ogre::AnimationState* st = pair.second;
-                        if (st->hasBlendMask())
-                            st->setBlendMaskEntry(bone->getHandle(), 1.0f);
-                    }
-                }
+            } else if (outcome == BoneDragRelease::Result::Revert) {
+                // Restore the gizmo to the press-time anchor too, so the
+                // viewport is visually back where it started — same as
+                // dropping the drag never happened.
+                m_pTransformNode->setPosition(mBoneDragGizmoOrigin);
+                fprintf(stderr, "[BONE-DRAG RELEASE] → REVERT (preview) post=(%g,%g,%g)\n",
+                    bone->getPosition().x, bone->getPosition().y, bone->getPosition().z);
+                fflush(stderr);
             }
         }
         // Restore playback if we paused it on press.
