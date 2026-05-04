@@ -373,13 +373,23 @@ void MainWindow::initToolBar()
             animCtrl->onUndoRedoCommandApplied();
             if (Ogre::Entity* ent = animCtrl->selectedEntity()) {
                 if (Ogre::SkeletonInstance* skel = ent->getSkeleton()) {
-                    // Manual-bone dirty + immediate transform update —
-                    // pushes derived state through to attached TagPoints
-                    // (SkeletonDebug bone visuals) on this frame.
+                    // Force a full skeleton refresh so SkeletonDebug
+                    // bone visuals + any TagPoint-attached entities
+                    // pick up the post-undo pose immediately.
+                    //   1. reset(true) — restore ALL bones (including
+                    //      manual ones) to their initial state.
+                    //   2. _updateAnimation — re-applies enabled
+                    //      animation states + computes derived
+                    //      transforms. Higher-level than calling
+                    //      Animation::apply ourselves and handles
+                    //      empty-track and missing-mask edge cases.
+                    //   3. _updateTransforms — extra push to make
+                    //      TagPoint-attached entities catch up.
+                    skel->reset(true);
                     skel->_notifyManualBonesDirty();
+                    ent->_updateAnimation();
                     skel->_updateTransforms();
                 }
-                ent->_updateAnimation();
             }
         });
     });

@@ -1221,3 +1221,41 @@ TEST_F(AnimationControlControllerTest, BoneCanTranslateUnriggedNonRootAllowed) {
     ASSERT_TRUE(attach->getParent());
     EXPECT_TRUE(ctrl->boneCanTranslate(attach));
 }
+
+// ── onUndoRedoCommandApplied ──────────────────────────────────────────────────
+//
+// Called from MainWindow's QUndoStack::indexChanged handler after a
+// keyframe-affecting command runs. Must invalidate stale track/keyframe
+// pointers (an AddKeyframeCommand undo can destroy a lazy-created track)
+// and preserve the user's current bone selection (rebuilding via
+// refreshBoneList would reset it to the first bone — jarring UX).
+
+TEST_F(AnimationControlControllerTest, OnUndoRedoCommandAppliedPreservesBoneSelection) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_UndoPreservesBone");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
+
+    // Pick a non-default bone (the second in the list, if any). With
+    // only one bone, this still validates "preserves selection".
+    const QString picked = ctrl->boneNames().size() > 1
+        ? ctrl->boneNames().at(1)
+        : ctrl->boneNames().first();
+    ctrl->selectBone(picked);
+    ASSERT_EQ(ctrl->selectedBone(), picked);
+
+    ctrl->onUndoRedoCommandApplied();
+    EXPECT_EQ(ctrl->selectedBone(), picked)
+        << "onUndoRedoCommandApplied reset bone selection (regression)";
+}
+
+TEST_F(AnimationControlControllerTest, OnUndoRedoCommandAppliedSurvivesMissingBone) {
+    // Defensive: if m_selectedBone is empty (no bone picked yet),
+    // the helper must not crash.
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_NO_THROW(ctrl->onUndoRedoCommandApplied());
+}

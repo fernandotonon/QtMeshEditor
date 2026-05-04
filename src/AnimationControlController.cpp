@@ -7,6 +7,7 @@
 #include "commands/BulkKeyframeCommands.h"
 #include "commands/SetKeyframeValueCommand.h"
 #include "commands/AddKeyframeCommand.h"
+#include "commands/DeleteKeyframeCommand.h"
 #include <QApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -549,15 +550,31 @@ void AnimationControlController::refreshSliderTicks()
 void AnimationControlController::onUndoRedoCommandApplied()
 {
     // Structural undo/redo (track destroy, keyframe add/remove) can
-    // invalidate cached pointers we hold. Drop them, then rebuild the
-    // bone-list and slider ticks against the current skeleton state.
-    // refreshBoneList re-resolves m_selectedTrack against the active
-    // animation; refreshSliderTicks rebuilds the tick array from the
-    // (possibly new) track's current keyframes.
+    // invalidate cached pointers we hold. Drop them and re-resolve
+    // against the current skeleton state — but preserve the user's
+    // current bone selection (refreshBoneList would reset to the
+    // first bone, which is jarring).
     m_selectedTrack   = nullptr;
     m_currentKeyframe = nullptr;
     m_selectedTick    = -1;
-    refreshBoneList();
+
+    // Re-resolve m_selectedTrack from the active animation + bone, if
+    // both are still valid (the track may have been destroyed by an
+    // AddKeyframeCommand undo on a lazy-created track).
+    if (m_selectedSkeleton && !m_selectedAnimation.empty()
+        && m_selectedSkeleton->hasAnimation(m_selectedAnimation)
+        && !m_selectedBone.empty()
+        && m_selectedSkeleton->hasBone(m_selectedBone))
+    {
+        Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+        for (const auto& pair : anim->_getNodeTrackList()) {
+            if (pair.second->getAssociatedNode()->getName() == m_selectedBone) {
+                m_selectedTrack = pair.second;
+                break;
+            }
+        }
+    }
+
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
 }
@@ -708,15 +725,23 @@ void AnimationControlController::deleteKeyframe()
 {
     if (!m_selectedTrack || !m_currentKeyframe) return;
 
-    float t = m_currentKeyframe->getTime();
-    for (unsigned short i = 0; i < m_selectedTrack->getNumKeyFrames(); ++i) {
-        if (std::fabs(m_selectedTrack->getKeyFrame(i)->getTime() - t) < 0.001f) {
-            m_selectedTrack->removeKeyFrame(i);
-            break;
-        }
-    }
+    // Capture the keyframe's TRS so the undo path can restore it.
+    const float            t = m_currentKeyframe->getTime();
+    const Ogre::Vector3    keyT = m_currentKeyframe->getTranslate();
+    const Ogre::Quaternion keyR = m_currentKeyframe->getRotation();
+    const Ogre::Vector3    keyS = m_currentKeyframe->getScale();
+
+    // Push the command — its redo() removes the keyframe. Drop our
+    // cached pointer first since the command will invalidate it.
     m_currentKeyframe = nullptr;
     m_selectedTick    = -1;
+    auto* cmd = new DeleteKeyframeCommand(  // NOSONAR — QUndoStack owns
+        m_selectedSkeleton,
+        m_selectedAnimation,
+        m_selectedBone,
+        t, keyT, keyR, keyS);
+    UndoManager::getSingleton()->push(cmd);
+
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
 }
