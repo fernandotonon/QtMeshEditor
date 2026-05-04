@@ -124,6 +124,92 @@ TEST_F(BoneDragReleaseTest, AutoKeyOnWithAnimKeepsDraggedPose) {
     EXPECT_FALSE(bone->isManuallyControlled());
 }
 
+// User report: "first moved Y down, then tried X — went down before
+// going right." Simulates that exact sequence at the helper level.
+// Without revert, the accumulated Y delta from drag 1 would leak into
+// drag 2's before-state, and the bone would re-show the Y offset.
+TEST_F(BoneDragReleaseTest, YThenXDragsDoNotLeakYIntoX) {
+    Ogre::Entity* entity = createAnimatedTestEntity("BDR_YThenX");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Bone* bone = entity->getSkeleton()->getBone("Child");
+
+    const Ogre::Vector3 origLocal = bone->getPosition();
+    const Ogre::Vector3 origDerived = bone->_getDerivedPosition();
+
+    // Drag 1: Y axis down.
+    bone->setManuallyControlled(true);
+    bone->_setDerivedPosition(origDerived + Ogre::Vector3(0, -0.7f, 0));
+    BoneDragRelease::apply(bone, origLocal, bone->getInitialOrientation(),
+                           bone->getInitialScale(),
+                           /*hasAnim=*/true, /*autoKey=*/false, entity);
+    EXPECT_EQ(bone->getPosition(), origLocal);
+    EXPECT_EQ(bone->_getDerivedPosition(), origDerived);
+
+    // Drag 2: X axis right. The bone must start fresh from origLocal,
+    // not from any leaked Y offset.
+    const Ogre::Vector3 drag2Before = bone->getPosition();
+    EXPECT_EQ(drag2Before, origLocal);
+
+    bone->setManuallyControlled(true);
+    bone->_setDerivedPosition(origDerived + Ogre::Vector3(0.7f, 0, 0));
+    BoneDragRelease::apply(bone, drag2Before, bone->getInitialOrientation(),
+                           bone->getInitialScale(),
+                           /*hasAnim=*/true, /*autoKey=*/false, entity);
+    // Final state: same origLocal (revert), no leaked Y.
+    EXPECT_EQ(bone->getPosition(), origLocal);
+    EXPECT_EQ(bone->_getDerivedPosition().y, origDerived.y) << "Y leaked from previous drag";
+}
+
+// The critical regression test: simulate the actual TransformOperator
+// flow using _setDerivedPosition (not just setPosition), with parent
+// state matching the user's "head bone with rotated parent" case, and
+// assert that two consecutive drags don't accumulate when reverted.
+TEST_F(BoneDragReleaseTest, SetDerivedPositionDragRevertsCleanly) {
+    Ogre::Entity* entity = createAnimatedTestEntity("BDR_SetDerivedTwoDrags");
+    ASSERT_NE(entity, nullptr);
+
+    // Use the child bone (parent = root). Apply a non-identity rotation
+    // to the root bone so _setDerivedPosition has to do real parent-frame
+    // math — matches the "head bone with rotated parent mid-animation"
+    // scenario where the bug shows up.
+    Ogre::Bone* root = entity->getSkeleton()->getBone("Root");
+    Ogre::Bone* child = entity->getSkeleton()->getBone("Child");
+    root->setOrientation(Ogre::Quaternion(Ogre::Radian(0.5f), Ogre::Vector3::UNIT_Y));
+    root->setManuallyControlled(true);
+
+    const Ogre::Vector3 origLocal = child->getPosition();
+    const Ogre::Vector3 origDerived = child->_getDerivedPosition();
+
+    // Drag 1: move derived +Y by 0.5 in world space.
+    child->setManuallyControlled(true);
+    child->_setDerivedPosition(origDerived + Ogre::Vector3(0, 0.5f, 0));
+    child->needUpdate(true);
+    // Local Y has changed (non-trivially) because of parent rotation.
+    EXPECT_NE(child->getPosition(), origLocal);
+
+    auto outcome1 = BoneDragRelease::apply(child, origLocal, child->getInitialOrientation(),
+                                          child->getInitialScale(),
+                                          /*hasAnim=*/true, /*autoKey=*/false, entity);
+    EXPECT_EQ(outcome1, BoneDragRelease::Result::Revert);
+    EXPECT_EQ(child->getPosition(), origLocal) << "Drag 1 revert failed";
+
+    // Drag 2 press: capture new before-state (which should equal origLocal).
+    const Ogre::Vector3 drag2Local  = child->getPosition();
+    EXPECT_EQ(drag2Local, origLocal) << "After drag 1 revert, child has shifted (accumulation)";
+
+    // Drag 2: move derived +X by 0.5
+    const Ogre::Vector3 drag2Derived = child->_getDerivedPosition();
+    child->setManuallyControlled(true);
+    child->_setDerivedPosition(drag2Derived + Ogre::Vector3(0.5f, 0, 0));
+    child->needUpdate(true);
+
+    auto outcome2 = BoneDragRelease::apply(child, drag2Local, child->getInitialOrientation(),
+                                          child->getInitialScale(),
+                                          /*hasAnim=*/true, /*autoKey=*/false, entity);
+    EXPECT_EQ(outcome2, BoneDragRelease::Result::Revert);
+    EXPECT_EQ(child->getPosition(), origLocal) << "Drag 2 revert failed (accumulation across drags)";
+}
+
 TEST_F(BoneDragReleaseTest, NoAnimSetsInitial) {
     // No active animation: drag commits to bind pose via setInitialState.
     // Subsequent reset would land at the new bind pose — confirm by
