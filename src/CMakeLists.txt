@@ -59,6 +59,7 @@ commands/MoveKeyframeCommand.cpp
 commands/BulkKeyframeCommands.cpp
 commands/SetKeyframeValueCommand.cpp
 commands/BoneTransformCommand.cpp
+commands/AddKeyframeCommand.cpp
 BoneDragRelease.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
