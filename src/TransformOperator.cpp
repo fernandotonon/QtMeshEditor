@@ -1106,15 +1106,21 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             mBoneStartScale       = bone->getScale();
             mBoneStartDerivedPos  = bone->_getDerivedPosition();
             mBoneDragGizmoOrigin  = m_pTransformNode->getPosition();
-            // Reset to ZERO so the first move event runs the gizmo-axis
-            // survey. Without this, mTransformVector persists from the
-            // previous drag — e.g. a Y drag leaves (0,1,0) and the next
-            // drag (intended X) starts moving in Y until the user
-            // happens to hover the X arrow.
-            mTransformVector = Ogre::Vector3::ZERO;
-            fprintf(stderr, "[BONE-DRAG PRESS] sliderValue=%d autoKey=%d\n",
+            // Lock the axis at PRESS time, not on first move. If the
+            // user clicked on an arrow, that's the axis they want — even
+            // if their cursor drifts onto a neighboring arrow during the
+            // drag motion. Without this, a stale axis from the previous
+            // drag could persist or the survey might hit the wrong axis
+            // mid-motion.
+            Ogre::MovableObject* pressGizmoAxis = performRaySelection(e->pos(), true);
+            if (pressGizmoAxis)
+                mTransformVector = m_pTranslationGizmo->highlightAxis(pressGizmoAxis);
+            else
+                mTransformVector = Ogre::Vector3::ZERO;
+            fprintf(stderr, "[BONE-DRAG PRESS] sliderValue=%d autoKey=%d pressAxisLock=(%g,%g,%g)\n",
                 AnimationControlController::instance()->sliderValue(),
-                AnimationControlController::instance()->autoKey() ? 1 : 0);
+                AnimationControlController::instance()->autoKey() ? 1 : 0,
+                mTransformVector.x, mTransformVector.y, mTransformVector.z);
             fflush(stderr);
             fprintf(stderr, "[BONE-DRAG PRESS] bone=%s local=(%g,%g,%g) derived=(%g,%g,%g) gizmoOrigin=(%g,%g,%g)\n",
                 bone->getName().c_str(),
@@ -1393,38 +1399,10 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
     else if (mTransformState == TS_TRANSLATE && mBoneDragActive
              && AnimationControlController::instance()->selectedBonePtr())
     {
-        // Bone-gizmo translation. Survey for axis highlight when no
-        // axis is locked yet (mTransformVector ZERO at press time);
-        // once an axis is locked, project the mouse onto the gizmo's
-        // plane and convert the world delta into the bone's
-        // parent-local frame before translating the bone.
-        if (mTransformVector.isZeroLength())
-        {
-            Ogre::MovableObject* gizmoAxis = performRaySelection(e->pos(), true);
-            if (gizmoAxis) {
-                mTransformVector = m_pTranslationGizmo->highlightAxis(gizmoAxis);
-                // Re-anchor mStartPoint and the start-derived state to
-                // the moment the axis is locked. Without this, the
-                // event uses press-time mStartPoint but the user's
-                // mouse has already moved during the survey, causing
-                // an instant jump when the axis finally engages.
-                Ogre::Ray ray2 = rayFromScreenPoint(e->pos());
-                auto r2 = ray2.intersects(
-                    Ogre::Plane(ray2.getDirection(), mBoneDragGizmoOrigin));
-                if (r2.first) mStartPoint = ray2.getPoint(r2.second);
-                Ogre::Bone* lockBone = AnimationControlController::instance()->selectedBonePtr();
-                if (lockBone) mBoneStartDerivedPos = lockBone->_getDerivedPosition();
-                fprintf(stderr, "[BONE-DRAG SURVEY] axisHit transformVector=(%g,%g,%g) re-anchor mStartPoint=(%g,%g,%g)\n",
-                    mTransformVector.x, mTransformVector.y, mTransformVector.z,
-                    mStartPoint.x, mStartPoint.y, mStartPoint.z);
-                fflush(stderr);
-            }
-            else
-            {
-                m_pTranslationGizmo->createAxis();
-            }
-            return;
-        }
+        // Axis is locked at PRESS time (see press handler). If the
+        // user pressed off all arrows, mTransformVector is ZERO and
+        // the drag is a no-op until release.
+        if (mTransformVector.isZeroLength()) return;
 
         // Project mouse onto a plane through the press-time gizmo
         // position (not the current one): otherwise the projection
