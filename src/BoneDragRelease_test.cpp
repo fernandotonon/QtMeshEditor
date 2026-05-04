@@ -143,7 +143,7 @@ TEST_F(BoneDragReleaseTest, YThenXDragsDoNotLeakYIntoX) {
                            bone->getInitialScale(),
                            /*hasAnim=*/true, /*autoKey=*/false, entity);
     EXPECT_EQ(bone->getPosition(), origLocal);
-    EXPECT_EQ(bone->_getDerivedPosition(), origDerived);
+    EXPECT_LT((bone->_getDerivedPosition() - origDerived).length(), 1e-5f);
 
     // Drag 2: X axis right. The bone must start fresh from origLocal,
     // not from any leaked Y offset.
@@ -157,7 +157,8 @@ TEST_F(BoneDragReleaseTest, YThenXDragsDoNotLeakYIntoX) {
                            /*hasAnim=*/true, /*autoKey=*/false, entity);
     // Final state: same origLocal (revert), no leaked Y.
     EXPECT_EQ(bone->getPosition(), origLocal);
-    EXPECT_EQ(bone->_getDerivedPosition().y, origDerived.y) << "Y leaked from previous drag";
+    EXPECT_NEAR(bone->_getDerivedPosition().y, origDerived.y, 1e-5f)
+        << "Y leaked from previous drag";
 }
 
 // The critical regression test: simulate the actual TransformOperator

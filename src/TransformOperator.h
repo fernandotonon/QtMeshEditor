@@ -232,6 +232,11 @@ private:
     // during a bone drag (otherwise the per-frame _updateAnimation
     // reset wipes our local-pose edit) and restore it on release.
     bool                                    mBoneDragWasPlaying = false;
+    // BlendMask weights captured at press so we can restore them
+    // exactly on release (rather than blanket-resetting to 1.0,
+    // which would destroy any layered/masked animation setup).
+    // Each entry: (animation-state name, weight before drag).
+    QList<std::pair<std::string, float>>    mBoneDragSavedMaskWeights;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;
 #else

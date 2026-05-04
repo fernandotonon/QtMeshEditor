@@ -11,6 +11,7 @@ BoneTransformCommand::BoneTransformCommand(Ogre::SkeletonInstance* skeleton,
                                            const Ogre::Vector3& afterPos,
                                            const Ogre::Quaternion& afterOrient,
                                            const Ogre::Vector3& afterScale,
+                                           bool bindMode,
                                            QUndoCommand* parent)
     : QUndoCommand(parent)
     , mSkeleton(skeleton)
@@ -21,8 +22,10 @@ BoneTransformCommand::BoneTransformCommand(Ogre::SkeletonInstance* skeleton,
     , mAfterPos(afterPos)
     , mAfterOrient(afterOrient)
     , mAfterScale(afterScale)
+    , mBindMode(bindMode)
 {
-    setText(QStringLiteral("Bone transform"));
+    setText(bindMode ? QStringLiteral("Bone bind-pose edit")
+                     : QStringLiteral("Bone transform"));
 }
 
 void BoneTransformCommand::apply(const Ogre::Vector3& p,
@@ -34,6 +37,11 @@ void BoneTransformCommand::apply(const Ogre::Vector3& p,
     bone->setPosition(p);
     bone->setOrientation(o);
     bone->setScale(s);
+    // For bind-pose edits, the durable artifact is the bone's initial
+    // state (used by Skeleton::reset → resetToInitialState). Capturing
+    // the new local as the new initial keeps undo/redo round-tripping
+    // the bind pose, not just the transient local TRS.
+    if (mBindMode) bone->setInitialState();
     bone->needUpdate();
 }
 

@@ -1127,13 +1127,20 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             // each frame (the Ogre docs warn about this). Mute the
             // animation's contribution to this bone via the blend mask
             // so per-frame _updateAnimation doesn't overwrite our edit.
-            // Restored on release.
+            // Capture the previous mask value per state so the release
+            // can restore exactly what was there (instead of blanket
+            // resetting to 1.0, which would destroy any layered/masked
+            // animation setup the user had pre-drag).
+            mBoneDragSavedMaskWeights.clear();
             if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
                 if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
                     const auto numBones = static_cast<size_t>(dragEnt->getSkeleton()->getNumBones());
                     for (const auto& pair : states->getAnimationStates()) {
                         Ogre::AnimationState* st = pair.second;
                         if (!st->getEnabled()) continue;
+                        const float before = st->hasBlendMask()
+                            ? st->getBlendMaskEntry(bone->getHandle()) : 1.0f;
+                        mBoneDragSavedMaskWeights.append({st->getAnimationName(), before});
                         if (!st->hasBlendMask()) st->createBlendMask(numBones, 1.0f);
                         st->setBlendMaskEntry(bone->getHandle(), 0.0f);
                     }
@@ -1736,22 +1743,27 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 }
             }
 
-            // Restore animation blend-mask weight on this bone BEFORE
-            // calling apply(). The Revert path calls _updateAnimation
-            // which runs Skeleton::reset (bone → initial) then animation
-            // tracks (initial + curve sample). With the BlendMask still
-            // muted, the curve contributes zero and the bone settles at
-            // initial (T-pose) instead of the press-time pose. Restore
-            // the mask first so curve drives the bone correctly.
+            // Restore the per-state BlendMask values we captured at
+            // press, BEFORE calling apply(). The Revert path calls
+            // _updateAnimation which runs Skeleton::reset (bone →
+            // initial) then animation tracks (initial + curve sample).
+            // With the BlendMask still muted, the curve contributes
+            // zero and the bone settles at initial (T-pose) instead
+            // of the press-time pose. Restoring before apply() lets
+            // the curve drive the bone correctly. Restore exactly the
+            // pre-drag weights — not a hardcoded 1.0 — to preserve
+            // any layered/masked setup the user had.
             if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
                 if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
-                    for (const auto& pair : states->getAnimationStates()) {
-                        Ogre::AnimationState* st = pair.second;
+                    for (const auto& [stateName, weight] : mBoneDragSavedMaskWeights) {
+                        if (!states->hasAnimationState(stateName)) continue;
+                        Ogre::AnimationState* st = states->getAnimationState(stateName);
                         if (st->hasBlendMask())
-                            st->setBlendMaskEntry(bone->getHandle(), 1.0f);
+                            st->setBlendMaskEntry(bone->getHandle(), weight);
                     }
                 }
             }
+            mBoneDragSavedMaskWeights.clear();
 
             const auto outcome = BoneDragRelease::apply(
                 bone, mBoneStartPos, mBoneStartOrient, mBoneStartScale,
@@ -1764,10 +1776,14 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                         afterPos,      afterOrient,      afterScale));
                 AnimationControlController::instance()->autoKeyOnTransform();
             } else if (outcome == BoneDragRelease::Result::CommitBind) {
+                // bindMode=true so undo also reverts the bone's initial
+                // (bind) state — otherwise Skeleton::reset would snap
+                // back to the new bind on the next animation update.
                 UndoManager::getSingleton()->push(
                     new BoneTransformCommand(skel, bone->getName(),
                         mBoneStartPos, mBoneStartOrient, mBoneStartScale,
-                        afterPos,      afterOrient,      afterScale));
+                        afterPos,      afterOrient,      afterScale,
+                        /*bindMode=*/true));
             } else if (outcome == BoneDragRelease::Result::Revert) {
                 // Restore the gizmo to the press-time anchor so the
                 // viewport visually returns to the start of the drag.
