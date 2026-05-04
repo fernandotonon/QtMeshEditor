@@ -271,9 +271,16 @@ Ogre::Bone* AnimationControlController::selectedBonePtr() const
 bool AnimationControlController::boneCanTranslate(const Ogre::Bone* bone) const
 {
     if (!bone) return true;
-    // Root bone (no parent) → always translatable (this is what moves
-    // the character around the scene).
+    // Skeleton roots → always translatable (these are the "this is the
+    // character" bones that move the whole rig around — Hips, Pelvis,
+    // Armature, etc. — and may also have skin weights). Some importers
+    // wrap the actual root in an additional parent bone, so we check
+    // both: parentless OR present in Skeleton::getRootBones().
     if (!bone->getParent()) return true;
+    if (m_selectedSkeleton) {
+        for (Ogre::Bone* root : m_selectedSkeleton->getRootBones())
+            if (root == bone) return true;
+    }
     if (!m_selectedEntity) return true;
     Ogre::MeshPtr mesh = m_selectedEntity->getMesh();
     if (!mesh) return true;

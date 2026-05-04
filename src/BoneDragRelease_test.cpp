@@ -231,3 +231,25 @@ TEST_F(BoneDragReleaseTest, NoAnimSetsInitial) {
     bone->resetToInitialState();
     EXPECT_EQ(bone->getPosition(), after);
 }
+
+// Documents Ogre's parentless-bone behavior that drove the
+// TransformOperator move-handler fix: _setDerivedPosition is a no-op on
+// nodes with no parent, so the bone-drag handler falls back to
+// setPosition for true skeleton roots. Without this, root bones (the
+// locomotion bones) silently refused to translate.
+TEST_F(BoneDragReleaseTest, OgreSetDerivedPositionIsNoOpOnParentlessBone) {
+    Ogre::Entity* entity = createAnimatedTestEntity("BDR_ParentlessRoot");
+    ASSERT_NE(entity, nullptr);
+    Ogre::Bone* root = entity->getSkeleton()->getBone("Root");
+    ASSERT_FALSE(root->getParent());
+
+    const Ogre::Vector3 origLocal = root->getPosition();
+    root->_setDerivedPosition(Ogre::Vector3(5, 0, 0));
+    EXPECT_EQ(root->getPosition(), origLocal)
+        << "Ogre changed _setDerivedPosition behavior for parentless nodes; "
+           "the parentless-bone fallback in TransformOperator may now be unnecessary.";
+
+    // For parentless bones, plain setPosition is the right call.
+    root->setPosition(Ogre::Vector3(5, 0, 0));
+    EXPECT_EQ(root->getPosition(), Ogre::Vector3(5, 0, 0));
+}

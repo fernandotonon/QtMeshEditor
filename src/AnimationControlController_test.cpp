@@ -1157,3 +1157,67 @@ TEST_F(AnimationControlControllerTest, PasteSkipsCollisions) {
     const int n = ctrl->pasteKeyframesAt(json, 0.0);
     EXPECT_EQ(n, 0);
 }
+
+// ── boneCanTranslate ──────────────────────────────────────────────────────────
+//
+// Translation is restricted by the gizmo's press handler so users can't tear
+// rigged bones away from their parent (which would produce broken poses on
+// playback). The rules: skeleton roots are always translatable (locomotion
+// bones), and unrigged bones — typical "attachment point" sockets for
+// swords / shields / hats — are also translatable since they don't deform
+// any geometry.
+
+TEST_F(AnimationControlControllerTest, BoneCanTranslateNullBoneIsSafe) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->boneCanTranslate(nullptr));
+}
+
+TEST_F(AnimationControlControllerTest, BoneCanTranslateRootBoneAllowed) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_BCT_Root");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    Ogre::Bone* root = entity->getSkeleton()->getBone("Root");
+    ASSERT_FALSE(root->getParent());
+    EXPECT_TRUE(ctrl->boneCanTranslate(root));
+}
+
+TEST_F(AnimationControlControllerTest, BoneCanTranslateRiggedNonRootBlocked) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_BCT_Rigged");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    // "Child" is rigged — every vertex of the test mesh weights to it.
+    Ogre::Bone* child = entity->getSkeleton()->getBone("Child");
+    ASSERT_TRUE(child->getParent());
+    EXPECT_FALSE(ctrl->boneCanTranslate(child));
+}
+
+TEST_F(AnimationControlControllerTest, BoneCanTranslateUnriggedNonRootAllowed) {
+    // Add a third bone to the test skeleton with no vertex weights — this
+    // simulates an attachment point (sword/shield/hat). Translation must
+    // be allowed since moving it doesn't deform any geometry.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_BCT_Attach");
+    ASSERT_NE(entity, nullptr);
+
+    auto* skel = entity->getSkeleton();
+    Ogre::Bone* attach = skel->createBone("AttachPoint", 2);
+    attach->setPosition(Ogre::Vector3(0, 1, 0.5f));
+    skel->getBone("Child")->addChild(attach);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    ASSERT_TRUE(attach->getParent());
+    EXPECT_TRUE(ctrl->boneCanTranslate(attach));
+}

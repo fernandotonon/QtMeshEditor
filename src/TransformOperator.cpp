@@ -1117,17 +1117,6 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
                 mTransformVector = m_pTranslationGizmo->highlightAxis(pressGizmoAxis);
             else
                 mTransformVector = Ogre::Vector3::ZERO;
-            fprintf(stderr, "[BONE-DRAG PRESS] sliderValue=%d autoKey=%d pressAxisLock=(%g,%g,%g)\n",
-                AnimationControlController::instance()->sliderValue(),
-                AnimationControlController::instance()->autoKey() ? 1 : 0,
-                mTransformVector.x, mTransformVector.y, mTransformVector.z);
-            fflush(stderr);
-            fprintf(stderr, "[BONE-DRAG PRESS] bone=%s local=(%g,%g,%g) derived=(%g,%g,%g) gizmoOrigin=(%g,%g,%g)\n",
-                bone->getName().c_str(),
-                mBoneStartPos.x, mBoneStartPos.y, mBoneStartPos.z,
-                mBoneStartDerivedPos.x, mBoneStartDerivedPos.y, mBoneStartDerivedPos.z,
-                mBoneDragGizmoOrigin.x, mBoneDragGizmoOrigin.y, mBoneDragGizmoOrigin.z);
-            fflush(stderr);
             // Without this the skeleton's animation system overwrites
             // the bone's local TRS every frame from interpolated keys,
             // so our drag never visibly sticks. Manual-control mode
@@ -1156,8 +1145,6 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             // edit and looks like the model is rotating wildly. Pausing
             // is what every DCC tool (Blender/Maya) does on bone scrub.
             mBoneDragWasPlaying = PropertiesPanelController::instance()->isPlaying();
-            fprintf(stderr, "[BONE-DRAG PRESS] wasPlaying=%d → pausing\n", mBoneDragWasPlaying ? 1 : 0);
-            fflush(stderr);
             if (mBoneDragWasPlaying)
                 PropertiesPanelController::instance()->setPlaying(false);
             SentryReporter::addBreadcrumb("ui.transform", "Translate bone");
@@ -1165,12 +1152,8 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
             Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
             auto result = mouseRay.intersects(
                 Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
-            if (result.first) {
+            if (result.first)
                 mStartPoint = mouseRay.getPoint(result.second);
-                fprintf(stderr, "[BONE-DRAG PRESS] mStartPoint=(%g,%g,%g) screenPx=(%d,%d)\n",
-                    mStartPoint.x, mStartPoint.y, mStartPoint.z, e->pos().x(), e->pos().y());
-                fflush(stderr);
-            }
         }
         else if((!SelectionSet::getSingleton()->isEmpty()) && (e->button() == Qt::LeftButton))
         {
@@ -1460,7 +1443,14 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
         // correctly for any bone regardless of parent orientation —
         // crucial when the parent itself is mid-animation pose.
         Ogre::Vector3 targetSkelPos = mBoneStartDerivedPos + skelLocalDelta;
-        bone->_setDerivedPosition(targetSkelPos);
+        // _setDerivedPosition is a no-op on parentless bones (Ogre's
+        // implementation only writes when there's a parent). For true
+        // skeleton roots, fall back to setPosition since for them
+        // local space == skeleton-local space.
+        if (bone->getParent())
+            bone->_setDerivedPosition(targetSkelPos);
+        else
+            bone->setPosition(targetSkelPos);
         bone->needUpdate(true);
         // Don't call _updateAnimation here — it triggers Skeleton::reset
         // which can re-apply animation tracks to OTHER bones each move
@@ -1746,12 +1736,6 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 }
             }
 
-            fprintf(stderr, "[BONE-DRAG RELEASE] autoKey=%d hasAnim=%d before=(%g,%g,%g) after=(%g,%g,%g)\n",
-                autoKeyOn ? 1 : 0, hasActiveAnim ? 1 : 0,
-                mBoneStartPos.x, mBoneStartPos.y, mBoneStartPos.z,
-                afterPos.x, afterPos.y, afterPos.z);
-            fflush(stderr);
-
             // Restore animation blend-mask weight on this bone BEFORE
             // calling apply(). The Revert path calls _updateAnimation
             // which runs Skeleton::reset (bone → initial) then animation
@@ -1774,26 +1758,20 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 hasActiveAnim, autoKeyOn,
                 AnimationControlController::instance()->selectedEntity());
             if (outcome == BoneDragRelease::Result::Commit) {
-                fprintf(stderr, "[BONE-DRAG RELEASE] → COMMIT (autokey)\n"); fflush(stderr);
                 UndoManager::getSingleton()->push(
                     new BoneTransformCommand(skel, bone->getName(),
                         mBoneStartPos, mBoneStartOrient, mBoneStartScale,
                         afterPos,      afterOrient,      afterScale));
                 AnimationControlController::instance()->autoKeyOnTransform();
             } else if (outcome == BoneDragRelease::Result::CommitBind) {
-                fprintf(stderr, "[BONE-DRAG RELEASE] → SET-INITIAL (T-pose)\n"); fflush(stderr);
                 UndoManager::getSingleton()->push(
                     new BoneTransformCommand(skel, bone->getName(),
                         mBoneStartPos, mBoneStartOrient, mBoneStartScale,
                         afterPos,      afterOrient,      afterScale));
             } else if (outcome == BoneDragRelease::Result::Revert) {
-                // Restore the gizmo to the press-time anchor too, so the
-                // viewport is visually back where it started — same as
-                // dropping the drag never happened.
+                // Restore the gizmo to the press-time anchor so the
+                // viewport visually returns to the start of the drag.
                 m_pTransformNode->setPosition(mBoneDragGizmoOrigin);
-                fprintf(stderr, "[BONE-DRAG RELEASE] → REVERT (preview) post=(%g,%g,%g)\n",
-                    bone->getPosition().x, bone->getPosition().y, bone->getPosition().z);
-                fflush(stderr);
             }
         }
         // Restore playback if we paused it on press.
