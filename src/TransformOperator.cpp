@@ -1755,14 +1755,6 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                     new BoneTransformCommand(skel, bone->getName(),
                         mBoneStartPos, mBoneStartOrient, mBoneStartScale,
                         afterPos,      afterOrient,      afterScale));
-            } else if (outcome == BoneDragRelease::Result::Revert) {
-                // Restore the gizmo to the press-time anchor too, so the
-                // viewport is visually back where it started — same as
-                // dropping the drag never happened.
-                m_pTransformNode->setPosition(mBoneDragGizmoOrigin);
-                fprintf(stderr, "[BONE-DRAG RELEASE] → REVERT (preview) post=(%g,%g,%g)\n",
-                    bone->getPosition().x, bone->getPosition().y, bone->getPosition().z);
-                fflush(stderr);
             }
 
             // Restore animation blend-mask weight on this bone so the

@@ -23,30 +23,24 @@ BoneDragRelease::Result BoneDragRelease::apply(Ogre::Bone* bone,
         return Result::NoOp;
     }
 
-    if (autoKeyOn && hasActiveAnim) {
+    if (autoKeyOn) {
         // Caller writes the keyframe (via AnimationControlController) and
         // pushes BoneTransformCommand. We just unfreeze the bone so the
         // curve drives playback through the new key.
         bone->setManuallyControlled(false);
+        (void)hasActiveAnim;
+        (void)entityForUpdate;
+        (void)beforePos; (void)beforeOrient; (void)beforeScale;
         return Result::Commit;
     }
 
-    if (hasActiveAnim) {
-        // Preview only: revert bone to its pre-drag local TRS so playback
-        // is unaffected. Don't call setInitialState — the curve stores
-        // deltas relative to initial; changing initial would double-apply
-        // the curve delta on next sample.
-        bone->setPosition(beforePos);
-        bone->setOrientation(beforeOrient);
-        bone->setScale(beforeScale);
-        bone->setManuallyControlled(false);
-        bone->needUpdate(true);
-        if (entityForUpdate) entityForUpdate->_updateAnimation();
-        return Result::Revert;
-    }
-
-    // No active animation: T-pose / bind-pose authoring. The dragged
-    // local TRS becomes the new bind pose.
+    // Auto-key OFF: commit to the bind pose. The dragged local TRS
+    // becomes the new initial state for this bone. Skeleton::reset()
+    // restores bones to their per-instance initial state on every
+    // _updateAnimation call, so the edit persists even after toggling
+    // animation states on/off. Animation tracks add their stored
+    // keyframe deltas on top of the new bind, so the whole animation
+    // just gets offset by the user's edit (predictable behavior).
     bone->setInitialState();
     bone->setManuallyControlled(false);
     return Result::CommitBind;
