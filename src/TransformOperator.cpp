@@ -1415,22 +1415,6 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
 
         Ogre::Vector3 point = mouseRay.getPoint(result.second);
         Ogre::Vector3 rawWorldDelta = point - mStartPoint;
-        // Probe parent state on every move to confirm whether parent
-        // is drifting (which would indicate playback is still running).
-        Ogre::Bone* dbgParent = nullptr;
-        if (Ogre::Bone* b = AnimationControlController::instance()->selectedBonePtr())
-            dbgParent = b->getParent() ? static_cast<Ogre::Bone*>(b->getParent()) : nullptr;
-        Ogre::Vector3 parentDerived = dbgParent ? dbgParent->_getDerivedPosition() : Ogre::Vector3::ZERO;
-        Ogre::Quaternion parentDerivedOri = dbgParent ? dbgParent->_getDerivedOrientation() : Ogre::Quaternion::IDENTITY;
-        fprintf(stderr, "[BONE-DRAG MOVE] screenPx=(%d,%d) point=(%g,%g,%g) rawDelta=(%g,%g,%g) tVec=(%g,%g,%g) playing=%d parentDerived=(%g,%g,%g) parentOri=(%g,%g,%g,%g)\n",
-            e->pos().x(), e->pos().y(),
-            point.x, point.y, point.z,
-            rawWorldDelta.x, rawWorldDelta.y, rawWorldDelta.z,
-            mTransformVector.x, mTransformVector.y, mTransformVector.z,
-            PropertiesPanelController::instance()->isPlaying() ? 1 : 0,
-            parentDerived.x, parentDerived.y, parentDerived.z,
-            parentDerivedOri.w, parentDerivedOri.x, parentDerivedOri.y, parentDerivedOri.z);
-        fflush(stderr);
 
         // The gizmo's frame is rotated to match the bone (so its arrows
         // visually align with the bone's axes). mTransformVector is in
@@ -1459,17 +1443,8 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
         // correctly for any bone regardless of parent orientation —
         // crucial when the parent itself is mid-animation pose.
         Ogre::Vector3 targetSkelPos = mBoneStartDerivedPos + skelLocalDelta;
-        fprintf(stderr, "[BONE-DRAG APPLY] worldDelta=(%g,%g,%g) skelDelta=(%g,%g,%g) targetSkel=(%g,%g,%g)\n",
-            worldDelta.x, worldDelta.y, worldDelta.z,
-            skelLocalDelta.x, skelLocalDelta.y, skelLocalDelta.z,
-            targetSkelPos.x, targetSkelPos.y, targetSkelPos.z);
-        fflush(stderr);
         bone->_setDerivedPosition(targetSkelPos);
         bone->needUpdate(true);
-        fprintf(stderr, "[BONE-DRAG POST] local=(%g,%g,%g) derived=(%g,%g,%g)\n",
-            bone->getPosition().x, bone->getPosition().y, bone->getPosition().z,
-            bone->_getDerivedPosition().x, bone->_getDerivedPosition().y, bone->_getDerivedPosition().z);
-        fflush(stderr);
         // Don't call _updateAnimation here — it triggers Skeleton::reset
         // which can re-apply animation tracks to OTHER bones each move
         // event, producing visible compound rotation of the rest of the
