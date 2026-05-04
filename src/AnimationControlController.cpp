@@ -6,6 +6,8 @@
 #include "commands/MoveKeyframeCommand.h"
 #include "commands/BulkKeyframeCommands.h"
 #include "commands/SetKeyframeValueCommand.h"
+#include "commands/AddKeyframeCommand.h"
+#include "commands/DeleteKeyframeCommand.h"
 #include <QApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -545,6 +547,38 @@ void AnimationControlController::refreshSliderTicks()
     emit boneRowsChanged();
 }
 
+void AnimationControlController::onUndoRedoCommandApplied()
+{
+    // Structural undo/redo (track destroy, keyframe add/remove) can
+    // invalidate cached pointers we hold. Drop them and re-resolve
+    // against the current skeleton state — but preserve the user's
+    // current bone selection (refreshBoneList would reset to the
+    // first bone, which is jarring).
+    m_selectedTrack   = nullptr;
+    m_currentKeyframe = nullptr;
+    m_selectedTick    = -1;
+
+    // Re-resolve m_selectedTrack from the active animation + bone, if
+    // both are still valid (the track may have been destroyed by an
+    // AddKeyframeCommand undo on a lazy-created track).
+    if (m_selectedSkeleton && !m_selectedAnimation.empty()
+        && m_selectedSkeleton->hasAnimation(m_selectedAnimation)
+        && !m_selectedBone.empty()
+        && m_selectedSkeleton->hasBone(m_selectedBone))
+    {
+        Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+        for (const auto& pair : anim->_getNodeTrackList()) {
+            if (pair.second->getAssociatedNode()->getName() == m_selectedBone) {
+                m_selectedTrack = pair.second;
+                break;
+            }
+        }
+    }
+
+    refreshSliderTicks();
+    setAnimationFrame(m_sliderValue);
+}
+
 // ── Keyframe editing ──────────────────────────────────────────────────────────
 
 bool AnimationControlController::hasPrevKeyframe() const
@@ -603,6 +637,11 @@ void AnimationControlController::addKeyframe()
     if (!m_selectedSkeleton->hasBone(m_selectedBone)) return;
     if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return;
 
+    // Determine the operation mode for undo: track-create vs.
+    // keyframe-create vs. keyframe-update.
+    const bool trackExisted = (m_selectedTrack != nullptr);
+    AddKeyframeCommand::Mode mode = AddKeyframeCommand::Mode::TrackCreated;
+
     // Lazily create an animation track for this bone if it doesn't have
     // one yet (non-rigged bones, or bones the imported animation didn't
     // touch). Without this, the user's edit would be a runtime-only
@@ -625,29 +664,58 @@ void AnimationControlController::addKeyframe()
     // this controller treats same-time collisions as invalid, and auto-key
     // would otherwise stack duplicates on every drag-end at the same scrub
     // time. Match the same epsilon used by deleteKeyframe (1 ms).
-    Ogre::TransformKeyFrame* newKf = nullptr;
+    Ogre::TransformKeyFrame* existingKf = nullptr;
     constexpr float kKeyframeEpsilon = 0.001f;
     for (unsigned short i = 0; i < m_selectedTrack->getNumKeyFrames(); ++i) {
         auto* existing = static_cast<Ogre::TransformKeyFrame*>(m_selectedTrack->getKeyFrame(i));
         if (std::fabs(existing->getTime() - time) <= kKeyframeEpsilon) {
-            newKf = existing;
+            existingKf = existing;
             break;
         }
     }
-    if (!newKf)
-        newKf = m_selectedTrack->createNodeKeyFrame(time);
 
-    // Capture the bone's current LOCAL TRS (relative to its initial bind pose),
-    // which is the format TransformKeyFrame stores. Previously this used
-    // getInterpolatedKeyFrame, which samples the existing animation curve at
-    // `time` and produces an identity-ish keyframe whenever the curve is flat
-    // there — the user-visible "blank registry" bug. With this change, hitting
-    // +KF after dragging the scene node (or, with #358's bone gizmo, the bone
-    // directly) captures the actual pose under the cursor at that scrub time.
+    // Capture before-TRS so undo restores the keyframe's pre-edit state.
+    // Defaults are identity for the create paths (the keyframe didn't
+    // exist; undo will remove it instead of restoring values).
+    Ogre::Vector3    beforeT = Ogre::Vector3::ZERO;
+    Ogre::Quaternion beforeR = Ogre::Quaternion::IDENTITY;
+    Ogre::Vector3    beforeS = Ogre::Vector3::UNIT_SCALE;
+    if (existingKf) {
+        beforeT = existingKf->getTranslate();
+        beforeR = existingKf->getRotation();
+        beforeS = existingKf->getScale();
+        mode = AddKeyframeCommand::Mode::KeyframeUpdated;
+    } else if (trackExisted) {
+        mode = AddKeyframeCommand::Mode::KeyframeCreated;
+    }
+    // else: trackExisted == false → Mode::TrackCreated (already set above).
+
+    // Compute the after-TRS from the bone's current local pose
+    // (relative to its initial bind pose, the format
+    // TransformKeyFrame stores). Previously this used
+    // getInterpolatedKeyFrame, which samples the existing animation
+    // curve at `time` and produces an identity-ish keyframe whenever
+    // the curve is flat there — the user-visible "blank registry"
+    // bug. With this change, hitting +KF after dragging the scene
+    // node (or, via the bone gizmo, the bone directly) captures the
+    // actual pose under the cursor at that scrub time.
     const Ogre::Bone* bone = m_selectedSkeleton->getBone(m_selectedBone);
-    newKf->setTranslate(bone->getPosition() - bone->getInitialPosition());
-    newKf->setRotation(bone->getInitialOrientation().Inverse() * bone->getOrientation());
-    newKf->setScale(bone->getScale() / bone->getInitialScale());
+    const Ogre::Vector3    afterT = bone->getPosition() - bone->getInitialPosition();
+    const Ogre::Quaternion afterR = bone->getInitialOrientation().Inverse() * bone->getOrientation();
+    const Ogre::Vector3    afterS = bone->getScale() / bone->getInitialScale();
+
+    // QUndoStack::push() executes redo() immediately, which performs the
+    // actual write. Pushing the command both creates the keyframe and
+    // makes it undoable.
+    auto* cmd = new AddKeyframeCommand(  // NOSONAR — QUndoStack owns
+        m_selectedSkeleton,
+        m_selectedAnimation,
+        m_selectedBone,
+        time,
+        mode,
+        beforeT, beforeR, beforeS,
+        afterT,  afterR,  afterS);
+    UndoManager::getSingleton()->push(cmd);
 
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
@@ -657,15 +725,23 @@ void AnimationControlController::deleteKeyframe()
 {
     if (!m_selectedTrack || !m_currentKeyframe) return;
 
-    float t = m_currentKeyframe->getTime();
-    for (unsigned short i = 0; i < m_selectedTrack->getNumKeyFrames(); ++i) {
-        if (std::fabs(m_selectedTrack->getKeyFrame(i)->getTime() - t) < 0.001f) {
-            m_selectedTrack->removeKeyFrame(i);
-            break;
-        }
-    }
+    // Capture the keyframe's TRS so the undo path can restore it.
+    const float            t = m_currentKeyframe->getTime();
+    const Ogre::Vector3    keyT = m_currentKeyframe->getTranslate();
+    const Ogre::Quaternion keyR = m_currentKeyframe->getRotation();
+    const Ogre::Vector3    keyS = m_currentKeyframe->getScale();
+
+    // Push the command — its redo() removes the keyframe. Drop our
+    // cached pointer first since the command will invalidate it.
     m_currentKeyframe = nullptr;
     m_selectedTick    = -1;
+    auto* cmd = new DeleteKeyframeCommand(  // NOSONAR — QUndoStack owns
+        m_selectedSkeleton,
+        m_selectedAnimation,
+        m_selectedBone,
+        t, keyT, keyR, keyS);
+    UndoManager::getSingleton()->push(cmd);
+
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
 }

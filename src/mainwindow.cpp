@@ -360,6 +360,37 @@ void MainWindow::initToolBar()
             auto* sel = SelectionSet::getSingleton();
             if (!sel->isEmpty())
                 emit sel->selectionChanged();
+            // Force the animated entity to recompute skeleton derived
+            // transforms so bone-visual TagPoints + skinning catch up
+            // immediately. Without this, undo/redo of bone TRS edits
+            // updates the data but the SkeletonDebug overlay stays at
+            // its pre-undo pose until the next animation tick.
+            auto* animCtrl = AnimationControlController::instance();
+            // Drop cached track / keyframe pointers BEFORE refreshing
+            // anything: AddKeyframeCommand::undo can destroy a track
+            // entirely, and a stale m_selectedTrack would crash on the
+            // next slider scrub.
+            animCtrl->onUndoRedoCommandApplied();
+            if (Ogre::Entity* ent = animCtrl->selectedEntity()) {
+                if (Ogre::SkeletonInstance* skel = ent->getSkeleton()) {
+                    // Force a full skeleton refresh so SkeletonDebug
+                    // bone visuals + any TagPoint-attached entities
+                    // pick up the post-undo pose immediately.
+                    //   1. reset(true) — restore ALL bones (including
+                    //      manual ones) to their initial state.
+                    //   2. _updateAnimation — re-applies enabled
+                    //      animation states + computes derived
+                    //      transforms. Higher-level than calling
+                    //      Animation::apply ourselves and handles
+                    //      empty-track and missing-mask edge cases.
+                    //   3. _updateTransforms — extra push to make
+                    //      TagPoint-attached entities catch up.
+                    skel->reset(true);
+                    skel->_notifyManualBonesDirty();
+                    ent->_updateAnimation();
+                    skel->_updateTransforms();
+                }
+            }
         });
     });
 
