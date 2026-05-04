@@ -124,14 +124,17 @@ void AnimationControlController::updateAnimationTree()
         newTree.append(group);
     }
 
-    // Early-out when the tree hasn't actually changed: the connected
-    // signal (SelectionSet::selectionChanged) also fires whenever undo
-    // commands are pushed (mainwindow re-emits it on QUndoStack
-    // indexChanged). Without this guard, every BoneTransformCommand
-    // push would call selectAnimation() and reset slider+bone selection.
-    if (newTree == m_animationTree) return;
+    // Early-out when the tree hasn't actually changed AFTER it's been
+    // built once: the connected signal (SelectionSet::selectionChanged)
+    // also fires whenever undo commands are pushed (mainwindow re-emits
+    // it on QUndoStack indexChanged). Without this guard, every
+    // BoneTransformCommand push would call selectAnimation() and reset
+    // slider+bone selection. We always run the first call so QML
+    // listeners get an initial signal, even if the tree is empty.
+    if (m_animationTreeBuilt && newTree == m_animationTree) return;
 
     m_animationTree = newTree;
+    m_animationTreeBuilt = true;
     emit animationTreeChanged();
 
     // Try to restore selection

@@ -280,6 +280,7 @@ private:
     int    m_selectedTick  = -1;
 
     QVariantList m_animationTree;
+    bool         m_animationTreeBuilt = false; ///< true after first updateAnimationTree
     QStringList  m_boneNames;
     QVariantList m_keyframeTicks;
 
