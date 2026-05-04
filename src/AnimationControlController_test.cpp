@@ -8,6 +8,8 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
+#include "UndoManager.h"
+#include <QUndoStack>
 #include <OgreSkeletonInstance.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -1258,4 +1260,111 @@ TEST_F(AnimationControlControllerTest, OnUndoRedoCommandAppliedSurvivesMissingBo
     // the helper must not crash.
     auto* ctrl = AnimationControlController::instance();
     EXPECT_NO_THROW(ctrl->onUndoRedoCommandApplied());
+}
+
+// ── addKeyframe + undo/redo (integration) ────────────────────────────────────
+//
+// Exercises the +KF / auto-key wiring through AnimationControlController::
+// addKeyframe() and the QUndoStack rather than the AddKeyframeCommand
+// helper directly. The TrackCreated path in particular is fragile because
+// the controller pre-creates the track before pushing the command, so a
+// pure unit test misses what production code actually runs.
+
+TEST_F(AnimationControlControllerTest, AddKeyframeIsUndoableViaQUndoStack) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_AddKfUndo");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->selectBone(ctrl->boneNames().first());
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const auto countBefore = track->getNumKeyFrames();
+
+    // Add a kf at a slider position that doesn't already have one
+    // (TestAnim has keys at 0.0, 0.5, 1.0 — pick 0.25).
+    ctrl->setSliderValue(250);
+    ctrl->addKeyframe();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore + 1);
+
+    UndoManager::getSingleton()->stack()->undo();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore);
+
+    UndoManager::getSingleton()->stack()->redo();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore + 1);
+}
+
+TEST_F(AnimationControlControllerTest, AddKeyframeOnUntrackedBoneIsUndoable) {
+    // The TrackCreated path: lazy-create a track for a bone that
+    // doesn't have one in the active animation, then undo. The
+    // whole track should be destroyed, and the controller's cached
+    // m_selectedTrack pointer must be invalidated so subsequent
+    // slider scrubs don't crash.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_AddKfTrackCreated");
+    ASSERT_NE(entity, nullptr);
+
+    auto* skel = entity->getSkeleton();
+    Ogre::Bone* extra = skel->createBone("ExtraBone", 2);
+    extra->setPosition(Ogre::Vector3(0, 0, 1));
+    skel->getBone("Root")->addChild(extra);
+    auto* anim = skel->getAnimation("TestAnim");
+    ASSERT_FALSE(anim->hasNodeTrack(extra->getHandle()));
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->selectBone("ExtraBone");
+    ctrl->setSliderValue(250);
+
+    ctrl->addKeyframe();
+    app->processEvents();
+    EXPECT_TRUE(anim->hasNodeTrack(extra->getHandle()));
+
+    UndoManager::getSingleton()->stack()->undo();
+    app->processEvents();
+    EXPECT_FALSE(anim->hasNodeTrack(extra->getHandle()));
+
+    // Slider scrub after undo must not crash on a stale m_selectedTrack
+    // (regression for the user-reported "crash after undo" bug).
+    EXPECT_NO_THROW(ctrl->setSliderValue(500));
+}
+
+TEST_F(AnimationControlControllerTest, DeleteKeyframeIsUndoableViaQUndoStack) {
+    // Verify -KF integration with the QUndoStack: deleting a keyframe,
+    // undoing restores it; redoing removes it again.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_DelKfUndo");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->selectBone(ctrl->boneNames().first());
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const auto countBefore = track->getNumKeyFrames();
+
+    // Land on the keyframe at 0.5s, then delete it.
+    ctrl->setSliderValue(500);
+    app->processEvents();
+    ASSERT_TRUE(ctrl->onKeyframe());
+    ctrl->deleteKeyframe();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore - 1);
+
+    UndoManager::getSingleton()->stack()->undo();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore);
+
+    UndoManager::getSingleton()->stack()->redo();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore - 1);
 }
