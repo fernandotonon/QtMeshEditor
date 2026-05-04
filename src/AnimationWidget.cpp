@@ -101,6 +101,13 @@ bool AnimationWidget::toggleSkeletonDebug(Ogre::Entity* entity, bool show)
         sd->showAxes(false);
         sd->showNames(false);
         mShowSkeleton.remove(entity);
+        // QMap of raw pointers doesn't own — delete explicitly. Without
+        // this, the SkeletonDebug + its QTimer (which fires every tick
+        // touching mBoneEntities) leaks. On the next enable, a *new*
+        // SkeletonDebug attaches new visuals, the leaked one's timer
+        // races with the new attachments via attachObjectToBone, and
+        // touches dangling Ogre::Entity pointers → SIGSEGV at 0xf8.
+        delete sd; // NOSONAR — manual delete needed since QMap doesn't own
     }
     else if (show && mWeightOverlays.contains(entity))
     {

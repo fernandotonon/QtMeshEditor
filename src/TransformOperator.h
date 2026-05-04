@@ -209,6 +209,34 @@ private:
 
     // Vertex paint drag state (edit mode only).
     bool                                    mVertexPaintDragActive = false;
+
+    // Bone-gizmo drag state. Active when a bone is the current selection
+    // (per AnimationControlController::selectedBonePtr) and the user
+    // mouse-presses inside the viewport with TS_TRANSLATE / TS_ROTATE /
+    // TS_SCALE. The "before" TRS is captured at press time; the BoneTransformCommand
+    // is pushed at release with the after-state.
+    bool                                    mBoneDragActive = false;
+    Ogre::Vector3                           mBoneStartPos = Ogre::Vector3::ZERO;
+    Ogre::Quaternion                        mBoneStartOrient = Ogre::Quaternion::IDENTITY;
+    Ogre::Vector3                           mBoneStartScale = Ogre::Vector3::UNIT_SCALE;
+    // Skeleton-local derived position captured at press. Used to drive
+    // the bone via _setDerivedPosition during the drag (correct for
+    // any bone in the hierarchy, regardless of parent orientation).
+    Ogre::Vector3                           mBoneStartDerivedPos = Ogre::Vector3::ZERO;
+    // World-space gizmo origin captured at press. Used to define a
+    // stable mouse-projection plane during the drag; otherwise the
+    // gizmo (which follows the bone) shifts the plane each event,
+    // producing nonlinear/cumulative drift as the user drags further.
+    Ogre::Vector3                           mBoneDragGizmoOrigin = Ogre::Vector3::ZERO;
+    // Playback state captured at press so we can pause animation
+    // during a bone drag (otherwise the per-frame _updateAnimation
+    // reset wipes our local-pose edit) and restore it on release.
+    bool                                    mBoneDragWasPlaying = false;
+    // BlendMask weights captured at press so we can restore them
+    // exactly on release (rather than blanket-resetting to 1.0,
+    // which would destroy any layered/masked animation setup).
+    // Each entry: (animation-state name, weight before drag).
+    QList<std::pair<std::string, float>>    mBoneDragSavedMaskWeights;
 #ifdef Q_OS_MACOS
     int mWindowSizeModifier = 2;
 #else

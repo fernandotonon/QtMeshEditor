@@ -47,6 +47,7 @@ private:
     Ogre::MaterialPtr mAxisMatPtr;
     Ogre::MaterialPtr mBoneMatPtr;
     Ogre::MaterialPtr mBoneMatSelectedPtr;
+    Ogre::MaterialPtr mBoneMatRootPtr;
     Ogre::MeshPtr mBoneMeshPtr;
     Ogre::MeshPtr mAxesMeshPtr;
     Ogre::SceneManager *mSceneMan;

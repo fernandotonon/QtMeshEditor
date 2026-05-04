@@ -10,6 +10,7 @@
 #include <string>
 
 namespace Ogre {
+    class Bone;
     class Entity;
     class NodeAnimationTrack;
     class SkeletonInstance;
@@ -97,6 +98,19 @@ public:
     // Bone list
     QStringList boneNames()   const { return m_boneNames; }
     QString     selectedBone() const { return QString::fromStdString(m_selectedBone); }
+
+    // Non-QML accessors used by TransformOperator's bone-gizmo path.
+    // Both return nullptr when no animated entity is selected.
+    Ogre::Entity* selectedEntity() const { return m_selectedEntity; }
+    Ogre::Bone*   selectedBonePtr() const;
+
+    /// Whether translation of the given bone is "safe" — true for the
+    /// skeleton root (locomotion) and for non-rigged bones (attachment
+    /// points like swords/shields/hats), false for any non-root bone
+    /// whose handle appears in the mesh's vertex bone assignments
+    /// (translating those breaks the rig). Returns true when bone is
+    /// null or the entity has no mesh, since we can't disprove safety.
+    bool boneCanTranslate(const Ogre::Bone* bone) const;
 
     // Timeline
     int    sliderValue()     const { return m_sliderValue; }
@@ -266,6 +280,7 @@ private:
     int    m_selectedTick  = -1;
 
     QVariantList m_animationTree;
+    bool         m_animationTreeBuilt = false; ///< true after first updateAnimationTree
     QStringList  m_boneNames;
     QVariantList m_keyframeTicks;
 
