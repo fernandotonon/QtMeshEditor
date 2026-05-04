@@ -1,6 +1,8 @@
 #include "AddKeyframeCommand.h"
 
-#include <OgreSkeleton.h>
+#include "SkeletonResolver.h"
+
+#include <OgreSkeletonInstance.h>
 #include <OgreBone.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationTrack.h>
@@ -10,7 +12,7 @@
 
 namespace { constexpr float kKeyframeEpsilon = 0.001f; }
 
-AddKeyframeCommand::AddKeyframeCommand(Ogre::Skeleton* skeleton,
+AddKeyframeCommand::AddKeyframeCommand(std::string entityName,
                                        std::string animationName,
                                        std::string boneName,
                                        float time,
@@ -23,7 +25,7 @@ AddKeyframeCommand::AddKeyframeCommand(Ogre::Skeleton* skeleton,
                                        const Ogre::Vector3& afterScale,
                                        QUndoCommand* parent)
     : QUndoCommand(parent)
-    , mSkeleton(skeleton)
+    , mEntityName(std::move(entityName))
     , mAnimationName(std::move(animationName))
     , mBoneName(std::move(boneName))
     , mTime(time)
@@ -40,10 +42,11 @@ AddKeyframeCommand::AddKeyframeCommand(Ogre::Skeleton* skeleton,
 
 Ogre::NodeAnimationTrack* AddKeyframeCommand::findTrack() const
 {
-    if (!mSkeleton || !mSkeleton->hasAnimation(mAnimationName)) return nullptr;
-    Ogre::Animation* anim = mSkeleton->getAnimation(mAnimationName);
-    if (!mSkeleton->hasBone(mBoneName)) return nullptr;
-    Ogre::Bone* bone = mSkeleton->getBone(mBoneName);
+    Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(mEntityName);
+    if (!skel || !skel->hasAnimation(mAnimationName)) return nullptr;
+    if (!skel->hasBone(mBoneName)) return nullptr;
+    Ogre::Animation* anim = skel->getAnimation(mAnimationName);
+    Ogre::Bone* bone = skel->getBone(mBoneName);
     for (const auto& pair : anim->_getNodeTrackList()) {
         if (pair.second->getAssociatedNode()->getName() == bone->getName())
             return pair.second;
@@ -63,10 +66,11 @@ Ogre::TransformKeyFrame* AddKeyframeCommand::findKeyframe(Ogre::NodeAnimationTra
 
 void AddKeyframeCommand::redo()
 {
-    if (!mSkeleton || !mSkeleton->hasAnimation(mAnimationName)) return;
-    Ogre::Animation* anim = mSkeleton->getAnimation(mAnimationName);
-    if (!mSkeleton->hasBone(mBoneName)) return;
-    Ogre::Bone* bone = mSkeleton->getBone(mBoneName);
+    Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(mEntityName);
+    if (!skel || !skel->hasAnimation(mAnimationName)) return;
+    if (!skel->hasBone(mBoneName)) return;
+    Ogre::Animation* anim = skel->getAnimation(mAnimationName);
+    Ogre::Bone* bone = skel->getBone(mBoneName);
 
     Ogre::NodeAnimationTrack* track = findTrack();
     if (!track && mMode == Mode::TrackCreated)
@@ -82,6 +86,8 @@ void AddKeyframeCommand::redo()
 
 void AddKeyframeCommand::undo()
 {
+    Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(mEntityName);
+    if (!skel) return;
     Ogre::NodeAnimationTrack* track = findTrack();
     if (!track) return;
 
@@ -89,8 +95,8 @@ void AddKeyframeCommand::undo()
         // Lazy-created track: destroy it entirely so the bone returns
         // to its "no track" state (curve doesn't drive it during
         // playback, bone holds its bind/manual pose).
-        Ogre::Animation* anim = mSkeleton->getAnimation(mAnimationName);
-        Ogre::Bone* bone = mSkeleton->getBone(mBoneName);
+        Ogre::Animation* anim = skel->getAnimation(mAnimationName);
+        Ogre::Bone* bone = skel->getBone(mBoneName);
         anim->destroyNodeTrack(bone->getHandle());
         return;
     }

@@ -5,7 +5,7 @@
 #include <string>
 
 namespace Ogre {
-    class Skeleton;
+    class SkeletonInstance;
     class NodeAnimationTrack;
 }
 
@@ -15,14 +15,14 @@ namespace Ogre {
  * original time. The track's keyframe count is unchanged either way — the
  * keyframe's identity is its index after re-sorting.
  *
- * The command stores the skeleton + animation + bone names rather than raw
- * pointers so it survives skeleton/track rebuilds (some Ogre operations
- * reallocate tracks when keyframes are inserted/removed elsewhere).
+ * Stores entity / animation / bone names so it survives entity reload
+ * and skeleton rebuild — the SkeletonInstance is resolved lazily via
+ * SkeletonResolver at apply-time.
  */
 class MoveKeyframeCommand : public QUndoCommand
 {
 public:
-    MoveKeyframeCommand(Ogre::Skeleton* skeleton,
+    MoveKeyframeCommand(std::string entityName,
                         std::string animationName,
                         std::string boneName,
                         float oldTime,
@@ -40,11 +40,11 @@ private:
     /// found or the target time would collide with another keyframe.
     bool moveKeyframeTo(float searchTime, float targetTime);
 
-    Ogre::Skeleton* mSkeleton;
-    std::string     mAnimationName;
-    std::string     mBoneName;
-    float           mOldTime;
-    float           mNewTime;
+    std::string mEntityName;
+    std::string mAnimationName;
+    std::string mBoneName;
+    float       mOldTime;
+    float       mNewTime;
 };
 
 #endif // MOVE_KEYFRAME_COMMAND_H

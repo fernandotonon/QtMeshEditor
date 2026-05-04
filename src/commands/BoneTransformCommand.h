@@ -28,7 +28,7 @@ namespace Ogre {
 class BoneTransformCommand : public QUndoCommand
 {
 public:
-    BoneTransformCommand(Ogre::SkeletonInstance* skeleton,
+    BoneTransformCommand(std::string entityName,
                          std::string boneName,
                          const Ogre::Vector3& beforePos,
                          const Ogre::Quaternion& beforeOrient,
@@ -46,7 +46,7 @@ private:
     void apply(const Ogre::Vector3& p, const Ogre::Quaternion& o,
                const Ogre::Vector3& s);
 
-    Ogre::SkeletonInstance* mSkeleton;
+    std::string             mEntityName;
     std::string             mBoneName;
     Ogre::Vector3           mBeforePos;
     Ogre::Quaternion        mBeforeOrient;

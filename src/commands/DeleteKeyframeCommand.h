@@ -7,7 +7,7 @@
 #include <string>
 
 namespace Ogre {
-    class Skeleton;
+    class SkeletonInstance;
     class NodeAnimationTrack;
     class TransformKeyFrame;
 }
@@ -17,13 +17,14 @@ namespace Ogre {
  * the keyframe at the captured time is removed; on undo the keyframe
  * is recreated with its captured TRS.
  *
- * Stores skeleton/animation/bone names (not pointers) so it survives
- * skeleton rebuilds. The mTime field is the keyframe's time in seconds.
+ * Stores entity / animation / bone names (not pointers) and resolves
+ * the SkeletonInstance lazily via SkeletonResolver, so the command
+ * survives entity reload / skeleton rebuild.
  */
 class DeleteKeyframeCommand : public QUndoCommand
 {
 public:
-    DeleteKeyframeCommand(Ogre::Skeleton* skeleton,
+    DeleteKeyframeCommand(std::string entityName,
                           std::string animationName,
                           std::string boneName,
                           float time,
@@ -38,7 +39,7 @@ public:
 private:
     Ogre::NodeAnimationTrack* findTrack() const;
 
-    Ogre::Skeleton*  mSkeleton;
+    std::string      mEntityName;
     std::string      mAnimationName;
     std::string      mBoneName;
     float            mTime;        ///< keyframe time in seconds

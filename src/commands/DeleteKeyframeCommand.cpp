@@ -1,6 +1,8 @@
 #include "DeleteKeyframeCommand.h"
 
-#include <OgreSkeleton.h>
+#include "SkeletonResolver.h"
+
+#include <OgreSkeletonInstance.h>
 #include <OgreBone.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationTrack.h>
@@ -10,7 +12,7 @@
 
 namespace { constexpr float kKeyframeEpsilon = 0.001f; }
 
-DeleteKeyframeCommand::DeleteKeyframeCommand(Ogre::Skeleton* skeleton,
+DeleteKeyframeCommand::DeleteKeyframeCommand(std::string entityName,
                                              std::string animationName,
                                              std::string boneName,
                                              float time,
@@ -19,7 +21,7 @@ DeleteKeyframeCommand::DeleteKeyframeCommand(Ogre::Skeleton* skeleton,
                                              const Ogre::Vector3& scale,
                                              QUndoCommand* parent)
     : QUndoCommand(parent)
-    , mSkeleton(skeleton)
+    , mEntityName(std::move(entityName))
     , mAnimationName(std::move(animationName))
     , mBoneName(std::move(boneName))
     , mTime(time)
@@ -32,10 +34,11 @@ DeleteKeyframeCommand::DeleteKeyframeCommand(Ogre::Skeleton* skeleton,
 
 Ogre::NodeAnimationTrack* DeleteKeyframeCommand::findTrack() const
 {
-    if (!mSkeleton || !mSkeleton->hasAnimation(mAnimationName)) return nullptr;
-    Ogre::Animation* anim = mSkeleton->getAnimation(mAnimationName);
-    if (!mSkeleton->hasBone(mBoneName)) return nullptr;
-    Ogre::Bone* bone = mSkeleton->getBone(mBoneName);
+    Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(mEntityName);
+    if (!skel || !skel->hasAnimation(mAnimationName)) return nullptr;
+    if (!skel->hasBone(mBoneName)) return nullptr;
+    Ogre::Animation* anim = skel->getAnimation(mAnimationName);
+    Ogre::Bone* bone = skel->getBone(mBoneName);
     for (const auto& pair : anim->_getNodeTrackList()) {
         if (pair.second->getAssociatedNode()->getName() == bone->getName())
             return pair.second;
@@ -60,7 +63,6 @@ void DeleteKeyframeCommand::undo()
 {
     Ogre::NodeAnimationTrack* track = findTrack();
     if (!track) return;
-    // Restore the keyframe with the captured TRS.
     auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->createNodeKeyFrame(mTime));
     kf->setTranslate(mTranslate);
     kf->setRotation(mRotation);

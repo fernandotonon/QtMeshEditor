@@ -1870,8 +1870,10 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                 // bindMode=true so undo also reverts the bone's initial
                 // (bind) state — otherwise Skeleton::reset would snap
                 // back to the new bind on the next animation update.
+                const std::string entityName =
+                    AnimationControlController::instance()->selectedEntityName().toStdString();
                 UndoManager::getSingleton()->push(
-                    new BoneTransformCommand(skel, bone->getName(),
+                    new BoneTransformCommand(entityName, bone->getName(),
                         mBoneStartPos, mBoneStartOrient, mBoneStartScale,
                         afterPos,      afterOrient,      afterScale,
                         /*bindMode=*/true));

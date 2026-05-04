@@ -43,7 +43,7 @@ TEST_F(MoveKeyframeCommandTest, RedoMovesUndoRestores) {
 
     // TestAnim has keyframes at 0.0, 0.5, 1.0 on the Child bone.
     QUndoStack stack;
-    stack.push(new MoveKeyframeCommand(skel, "TestAnim", "Child", 0.5f, 0.7f));
+    stack.push(new MoveKeyframeCommand(entity->getName(), "TestAnim", "Child", 0.5f, 0.7f));
 
     auto* track = skel->getAnimation("TestAnim")->_getNodeTrackList().begin()->second;
     bool found07 = false;
@@ -91,7 +91,7 @@ TEST_F(MoveKeyframeCommandTest, PreservesTRSValuesAcrossMove) {
     }
 
     QUndoStack stack;
-    stack.push(new MoveKeyframeCommand(skel, "TestAnim", "Child", 0.5f, 0.7f));
+    stack.push(new MoveKeyframeCommand(entity->getName(), "TestAnim", "Child", 0.5f, 0.7f));
 
     // Find the moved keyframe and verify TRS is preserved.
     bool found = false;
@@ -118,6 +118,6 @@ TEST_F(MoveKeyframeCommandTest, NoOpWhenSearchTimeMissing) {
 
     QUndoStack stack;
     // No keyframe at 0.42 — command runs but moves nothing.
-    stack.push(new MoveKeyframeCommand(skel, "TestAnim", "Child", 0.42f, 0.6f));
+    stack.push(new MoveKeyframeCommand(entity->getName(), "TestAnim", "Child", 0.42f, 0.6f));
     EXPECT_EQ(track->getNumKeyFrames(), before);
 }

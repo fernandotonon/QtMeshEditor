@@ -69,7 +69,7 @@ TEST_F(DeleteKeyframeCommandTest, RedoRemovesKeyframe) {
     ASSERT_NE(kf, nullptr);
     const auto countBefore = track->getNumKeyFrames();
 
-    DeleteKeyframeCommand cmd(skel, "TestAnim", "Child", 0.5f,
+    DeleteKeyframeCommand cmd(entity->getName(), "TestAnim", "Child", 0.5f,
                               kf->getTranslate(), kf->getRotation(), kf->getScale());
     cmd.redo();
     EXPECT_EQ(track->getNumKeyFrames(), countBefore - 1);
@@ -90,7 +90,7 @@ TEST_F(DeleteKeyframeCommandTest, UndoRestoresKeyframeWithCapturedTRS) {
     const Ogre::Quaternion origR = kf->getRotation();
     const Ogre::Vector3    origS = kf->getScale();
 
-    DeleteKeyframeCommand cmd(skel, "TestAnim", "Child", 0.5f, origT, origR, origS);
+    DeleteKeyframeCommand cmd(entity->getName(), "TestAnim", "Child", 0.5f, origT, origR, origS);
     cmd.redo();
     EXPECT_EQ(findKeyframe(track, 0.5f), nullptr);
 
@@ -112,7 +112,7 @@ TEST_F(DeleteKeyframeCommandTest, RedoAfterUndoRemovesAgain) {
     auto* kf = findKeyframe(track, 0.5f);
     ASSERT_NE(kf, nullptr);
 
-    DeleteKeyframeCommand cmd(skel, "TestAnim", "Child", 0.5f,
+    DeleteKeyframeCommand cmd(entity->getName(), "TestAnim", "Child", 0.5f,
                               kf->getTranslate(), kf->getRotation(), kf->getScale());
     cmd.redo();
     cmd.undo();
@@ -133,7 +133,7 @@ TEST_F(DeleteKeyframeCommandTest, RedoIsNoOpWhenKeyframeAlreadyMissing) {
     const auto countBefore = track->getNumKeyFrames();
 
     // Time 0.25 has no keyframe in the test data.
-    DeleteKeyframeCommand cmd(skel, "TestAnim", "Child", 0.25f,
+    DeleteKeyframeCommand cmd(entity->getName(), "TestAnim", "Child", 0.25f,
                               Ogre::Vector3::ZERO, Ogre::Quaternion::IDENTITY,
                               Ogre::Vector3::UNIT_SCALE);
     EXPECT_NO_THROW(cmd.redo());

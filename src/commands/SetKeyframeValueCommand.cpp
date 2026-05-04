@@ -1,7 +1,9 @@
 #include "SetKeyframeValueCommand.h"
 
+#include "SkeletonResolver.h"
+
 #include <Ogre.h>
-#include <OgreSkeleton.h>
+#include <OgreSkeletonInstance.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationTrack.h>
 #include <OgreKeyFrame.h>
@@ -13,12 +15,14 @@
 namespace {
 constexpr float kEpsilon = 0.001f;
 
-Ogre::TransformKeyFrame* findKeyframe(Ogre::Skeleton* skel,
+Ogre::TransformKeyFrame* findKeyframe(const std::string& entityName,
                                        const std::string& animName,
                                        const std::string& boneName,
                                        float time)
 {
-    if (!skel || animName.empty() || boneName.empty()) return nullptr;
+    if (animName.empty() || boneName.empty()) return nullptr;
+    Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(entityName);
+    if (!skel) return nullptr;
     if (!skel->hasAnimation(animName) || !skel->hasBone(boneName)) return nullptr;
     Ogre::Animation* anim = skel->getAnimation(animName);
     Ogre::Bone* bone = skel->getBone(boneName);
@@ -63,7 +67,7 @@ bool setChannel(Ogre::TransformKeyFrame* kf, const std::string& ch, double v) {
 
 } // namespace
 
-SetKeyframeValueCommand::SetKeyframeValueCommand(Ogre::Skeleton* skeleton,
+SetKeyframeValueCommand::SetKeyframeValueCommand(std::string entityName,
                                                   std::string animationName,
                                                   std::string boneName,
                                                   std::string channel,
@@ -71,7 +75,7 @@ SetKeyframeValueCommand::SetKeyframeValueCommand(Ogre::Skeleton* skeleton,
                                                   double newValue,
                                                   QUndoCommand* parent)
     : QUndoCommand(parent)
-    , mSkeleton(skeleton)
+    , mEntityName(std::move(entityName))
     , mAnimationName(std::move(animationName))
     , mBoneName(std::move(boneName))
     , mChannel(std::move(channel))
@@ -83,7 +87,7 @@ SetKeyframeValueCommand::SetKeyframeValueCommand(Ogre::Skeleton* skeleton,
 
 bool SetKeyframeValueCommand::apply(double value)
 {
-    auto* kf = findKeyframe(mSkeleton, mAnimationName, mBoneName, mTime);
+    auto* kf = findKeyframe(mEntityName, mAnimationName, mBoneName, mTime);
     if (!kf) return false;
     if (!mCaptured) {
         // First-time apply: snapshot the original so undo can restore it.

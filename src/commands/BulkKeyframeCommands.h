@@ -7,7 +7,7 @@
 #include <string>
 
 namespace Ogre {
-    class Skeleton;
+    class SkeletonInstance;
     class NodeAnimationTrack;
 }
 
@@ -30,7 +30,7 @@ public:
         float       originalTime;
     };
 
-    MoveKeyframesCommand(Ogre::Skeleton* skeleton,
+    MoveKeyframesCommand(std::string entityName,
                          std::string animationName,
                          QVector<Item> items,
                          float dt,
@@ -42,10 +42,10 @@ public:
 private:
     bool shiftAll(float fromOffset, float toOffset);
 
-    Ogre::Skeleton* mSkeleton;
-    std::string     mAnimationName;
-    QVector<Item>   mItems;
-    float           mDt;
+    std::string   mEntityName;
+    std::string   mAnimationName;
+    QVector<Item> mItems;
+    float         mDt;
 };
 
 /**
@@ -69,7 +69,7 @@ public:
         float       sx, sy, sz;
     };
 
-    PasteKeyframesCommand(Ogre::Skeleton* skeleton,
+    PasteKeyframesCommand(std::string entityName,
                           std::string animationName,
                           QVector<Entry> entries,
                           QUndoCommand* parent = nullptr);
@@ -83,13 +83,13 @@ public:
     int pastedCount() const { return mPastedCount; }
 
 private:
-    Ogre::Skeleton* mSkeleton;
-    std::string     mAnimationName;
-    QVector<Entry>  mEntries;
+    std::string    mEntityName;
+    std::string    mAnimationName;
+    QVector<Entry> mEntries;
     /// True for entries that were actually written on the last redo, so
     /// undo only removes the ones we created.
-    QVector<bool>   mApplied;
-    int             mPastedCount = 0;
+    QVector<bool>  mApplied;
+    int            mPastedCount = 0;
 };
 
 #endif // BULK_KEYFRAME_COMMANDS_H
