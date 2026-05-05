@@ -17,6 +17,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/about.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationBlender.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/AnimationControlController.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/CurveEditModel.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/Manager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/material.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/MaterialEditorQML.cpp
@@ -64,6 +65,13 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/UndoManager.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/TransformCommands.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/MoveKeyframeCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/BulkKeyframeCommands.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SetKeyframeValueCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/BoneTransformCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AddKeyframeCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/DeleteKeyframeCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SkeletonResolver.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/BoneDragRelease.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/PropertiesPanelController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/SceneTreeModel.cpp
 

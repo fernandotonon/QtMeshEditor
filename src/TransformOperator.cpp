@@ -22,7 +22,12 @@
 #include "ViewportGrid.h"
 #include "UndoManager.h"
 #include "commands/TransformCommands.h"
+#include "commands/BoneTransformCommand.h"
+#include "BoneDragRelease.h"
 #include "EditModeController.h"
+#include "AnimationControlController.h"
+#include "PropertiesPanelController.h"
+#include "SkeletonDebug.h"
 #include <Ogre.h>
 
 // TODO  create a virtual class GizmoObject & add Rotation & Translation Gizmo to have only one interface
@@ -84,6 +89,13 @@ TransformOperator::TransformOperator() : QObject(nullptr)
     m_pRayQuery = pSceneMgr->createRayQuery(Ogre::Ray());
 
     connect(SelectionSet::getSingleton(),SIGNAL(selectionChanged()),this,SLOT(onSelectionChanged()));
+
+    // Bone selection from the Animation Control panel must also re-anchor
+    // the gizmo (otherwise the gizmo stays at the previous scene-node
+    // position and only snaps to the bone on the first drag event).
+    connect(AnimationControlController::instance(),
+            &AnimationControlController::boneListChanged,
+            this, &TransformOperator::onSelectionChanged);
 
     // Update gizmo when edit mode selection changes (vertices selected/deselected)
     connect(EditModeController::instance(), &EditModeController::editSelectionChanged,
@@ -526,20 +538,30 @@ void TransformOperator::updateGizmo()
     updateGizmoPosition();
     bool editModeHasSelection = EditModeController::instance()->isEditModeActive()
         && !EditModeController::instance()->selectedVertices().empty();
+    const bool boneSelected = AnimationControlController::instance()->selectedBonePtr() != nullptr
+                              && AnimationControlController::instance()->selectedEntity() != nullptr;
 
     if(SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()
-       ||SelectionSet::getSingleton()->hasSubEntities()||editModeHasSelection)
+       ||SelectionSet::getSingleton()->hasSubEntities()||editModeHasSelection||boneSelected)
     {
-        // Determine gizmo orientation based on transform space
-        Ogre::Quaternion gizmoOrientation;
-        if (mTransformSpace == SPACE_LOCAL && SelectionSet::getSingleton()->hasNodes()
-            && SelectionSet::getSingleton()->getNodesCount() == 1)
-        {
-            gizmoOrientation = SelectionSet::getSingleton()->getSceneNode(0)->getOrientation();
-        }
-        else
-        {
-            gizmoOrientation = Manager::getSingleton()->getSceneMgr()->getRootSceneNode()->getOrientation();
+        // Determine gizmo orientation based on transform space.
+        // Bone selection: keep the orientation already set by
+        // updateGizmoPosition() (the bone's world orientation), so the
+        // gizmo arrows align with the bone's local axes — what the user
+        // actually wants when posing a bone. Without this branch the
+        // orientation gets clobbered with identity below and the gizmo
+        // shows in global axes only.
+        Ogre::Quaternion gizmoOrientation = m_pTransformNode->getOrientation();
+        if (!boneSelected) {
+            if (mTransformSpace == SPACE_LOCAL && SelectionSet::getSingleton()->hasNodes()
+                && SelectionSet::getSingleton()->getNodesCount() == 1)
+            {
+                gizmoOrientation = SelectionSet::getSingleton()->getSceneNode(0)->getOrientation();
+            }
+            else
+            {
+                gizmoOrientation = Manager::getSingleton()->getSceneMgr()->getRootSceneNode()->getOrientation();
+            }
         }
 
         switch  (mTransformState) {
@@ -594,9 +616,20 @@ void TransformOperator::tickTransformGizmoScale(const Ogre::Camera* camera)
     // Only scale when a gizmo is actually visible (something selected and
     // an active transform tool). Otherwise leave the node scale alone.
     if (mTransformState == TS_SELECT || mTransformState == TS_NONE) return;
+
+    // Re-anchor the gizmo onto the selected bone every frame so it
+    // tracks animation playback and slider scrubbing. Skip during a
+    // bone drag — the move handler is already keeping the gizmo in
+    // sync and we don't want to fight the user's input.
+    const bool boneSelected = AnimationControlController::instance()->selectedBonePtr() != nullptr
+                              && AnimationControlController::instance()->selectedEntity() != nullptr;
+    if (boneSelected && !mBoneDragActive)
+        updateGizmoPosition();
+
     if (SelectionSet::getSingleton()->isEmpty()
         && !(EditModeController::instance()->isEditModeActive()
-             && !EditModeController::instance()->selectedVertices().empty()))
+             && !EditModeController::instance()->selectedVertices().empty())
+        && !boneSelected)
     {
         return;
     }
@@ -624,6 +657,35 @@ void TransformOperator::updateGizmoPosition()
     Ogre::Vector3 currentPosition = Ogre::Vector3::ZERO;
     Ogre::Vector3 currentOrientation = Ogre::Vector3::ZERO;
     Ogre::Vector3 currentScale = Ogre::Vector3::UNIT_SCALE;
+
+    // Bone-gizmo: when a bone is the active selection (Animation Control
+    // panel), the gizmo follows the bone in world space. This takes
+    // precedence over scene-node anchoring so the user gets immediate
+    // visual feedback after picking a bone in the viewport.
+    auto* animCtrl = AnimationControlController::instance();
+    Ogre::Bone* activeBone = animCtrl->selectedBonePtr();
+    Ogre::Entity* boneEntity = animCtrl->selectedEntity();
+    if (activeBone && boneEntity && boneEntity->getParentSceneNode())
+    {
+        Ogre::SceneNode* entNode = boneEntity->getParentSceneNode();
+        Ogre::Vector3 worldBonePos =
+            entNode->convertLocalToWorldPosition(activeBone->_getDerivedPosition());
+        // Gizmo orientation honors the WORLD/LOCAL toggle (X key):
+        // WORLD → world axes (drag X = world-X). LOCAL → bone's frame
+        // (drag X = bone-local-X). Default to WORLD because users
+        // mostly want intuitive horizontal/vertical drags.
+        Ogre::Quaternion gizmoOrient = Ogre::Quaternion::IDENTITY;
+        if (mTransformSpace == SPACE_LOCAL) {
+            gizmoOrient = entNode->_getDerivedOrientation() * activeBone->_getDerivedOrientation();
+        }
+        m_pTransformNode->setPosition(worldBonePos);
+        m_pTransformNode->setOrientation(gizmoOrient);
+        currentPosition = worldBonePos;
+        emit selectedPositionChanged(currentPosition);
+        emit selectedOrientationChanged(currentOrientation);
+        emit selectedScaleChanged(currentScale);
+        return;
+    }
 
     // Edit mode: position gizmo at selected vertices centroid (world space)
     auto* editCtrl = EditModeController::instance();
@@ -988,10 +1050,132 @@ void TransformOperator::mousePressEvent(QMouseEvent *e)
 
         if(mTransformState == TS_SELECT)
         {
+            // Bone-pick: when the skeleton overlay is on, a click on a bone
+            // visual selects that bone in the Animation Control panel
+            // instead of starting a box-select. Box-select still kicks in
+            // when the click misses the skeleton.
+            if (m_pRayQuery)
+            {
+                m_pRayQuery->setRay(rayFromScreenPoint(e->pos()));
+                m_pRayQuery->setQueryMask(BONE_QUERY_FLAGS);
+                m_pRayQuery->setSortByDistance(true);
+                // Walk hits front-to-back: skip non-bone movables that
+                // happen to share the mask, accept the first tagged one.
+                Ogre::RaySceneQueryResult& res = m_pRayQuery->execute();
+                for (const auto& hit : res)
+                {
+                    if (!hit.movable) continue;
+                    Ogre::String boneName = SkeletonDebug::boneNameForMovable(hit.movable);
+                    if (boneName.empty()) continue;
+                    AnimationControlController::instance()->selectBone(
+                        QString::fromStdString(boneName));
+                    SentryReporter::addBreadcrumb("ui.action",
+                        QString("Bone picked: %1").arg(QString::fromStdString(boneName)));
+                    return;
+                }
+            }
+
             mScreenStart = e->pos();
             m_pSelectionBox->clear();
             m_pSelectionBox->setVisible(true);
 
+        }
+        else if ((mTransformState == TS_TRANSLATE
+                  || mTransformState == TS_ROTATE
+                  || mTransformState == TS_SCALE)
+                 && AnimationControlController::instance()->selectedBonePtr()
+                 && e->button() == Qt::LeftButton)
+        {
+            // Bone-gizmo press (translate/rotate/scale): drive the
+            // bone's local TRS instead of any scene-node selection.
+            // Capture before-state for undo; the actual delta is
+            // applied in mouseMoveEvent via the bone-aware path.
+            Ogre::Bone* bone = AnimationControlController::instance()->selectedBonePtr();
+            // Translation is restricted on rigged non-root bones —
+            // moving them tears the bone from its parent. Rotation
+            // and scale are always allowed (rotation is the primary
+            // posing tool; scale is uncommon but valid for stretchy
+            // rigs).
+            if (mTransformState == TS_TRANSLATE
+                && !AnimationControlController::instance()->boneCanTranslate(bone))
+            {
+                SentryReporter::addBreadcrumb("ui.transform",
+                    "Bone translate blocked: rigged non-root bone");
+                return;
+            }
+            mBoneDragActive       = true;
+            mBoneStartPos         = bone->getPosition();
+            mBoneStartOrient      = bone->getOrientation();
+            mBoneStartScale       = bone->getScale();
+            mBoneStartDerivedPos  = bone->_getDerivedPosition();
+            mBoneDragGizmoOrigin  = m_pTransformNode->getPosition();
+            // Lock the axis at PRESS time. The relevant gizmo varies
+            // by mode: translate uses arrow handles, rotate uses
+            // circle handles, scale uses cube handles.
+            Ogre::MovableObject* pressGizmoAxis = performRaySelection(e->pos(), true);
+            if (pressGizmoAxis) {
+                if (mTransformState == TS_TRANSLATE)
+                    mTransformVector = m_pTranslationGizmo->highlightAxis(pressGizmoAxis);
+                else if (mTransformState == TS_ROTATE)
+                    mTransformVector = m_pRotationGizmo->highlightCircle(pressGizmoAxis);
+                else
+                    mTransformVector = m_pScaleGizmo->highlightAxis(pressGizmoAxis);
+            } else {
+                mTransformVector = Ogre::Vector3::ZERO;
+            }
+            // Without this the skeleton's animation system overwrites
+            // the bone's local TRS every frame from interpolated keys,
+            // so our drag never visibly sticks. Manual-control mode
+            // tells the skeleton to leave this bone alone.
+            bone->setManuallyControlled(true);
+            // setManuallyControlled only excludes this bone from
+            // Skeleton::reset() — animation TRACKS still apply to it
+            // each frame (the Ogre docs warn about this). Mute the
+            // animation's contribution to this bone via the blend mask
+            // so per-frame _updateAnimation doesn't overwrite our edit.
+            // Capture the previous mask value per state so the release
+            // can restore exactly what was there (instead of blanket
+            // resetting to 1.0, which would destroy any layered/masked
+            // animation setup the user had pre-drag).
+            mBoneDragSavedMaskWeights.clear();
+            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
+                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
+                    const auto numBones = static_cast<size_t>(dragEnt->getSkeleton()->getNumBones());
+                    for (const auto& pair : states->getAnimationStates()) {
+                        Ogre::AnimationState* st = pair.second;
+                        if (!st->getEnabled()) continue;
+                        const float before = st->hasBlendMask()
+                            ? st->getBlendMaskEntry(bone->getHandle()) : 1.0f;
+                        mBoneDragSavedMaskWeights.append({st->getAnimationName(), before});
+                        if (!st->hasBlendMask()) st->createBlendMask(numBones, 1.0f);
+                        st->setBlendMaskEntry(bone->getHandle(), 0.0f);
+                    }
+                }
+            }
+            // Also pause animation playback during the drag — even with
+            // manualControlled=true on the picked bone, animation still
+            // moves its parent bones, which compounds onto the local
+            // edit and looks like the model is rotating wildly. Pausing
+            // is what every DCC tool (Blender/Maya) does on bone scrub.
+            mBoneDragWasPlaying = PropertiesPanelController::instance()->isPlaying();
+            if (mBoneDragWasPlaying)
+                PropertiesPanelController::instance()->setPlaying(false);
+            const char* breadcrumb =
+                mTransformState == TS_TRANSLATE ? "Translate bone" :
+                mTransformState == TS_ROTATE    ? "Rotate bone"    :
+                                                  "Scale bone";
+            SentryReporter::addBreadcrumb("ui.transform", breadcrumb);
+
+            Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
+            auto result = mouseRay.intersects(
+                Ogre::Plane(mouseRay.getDirection(), m_pTransformNode->getPosition()));
+            if (result.first)
+                mStartPoint = mouseRay.getPoint(result.second);
+            // Scale uses a pixel-delta model rather than world-space
+            // rays; capture the press-time pixel so the move handler
+            // can compute deltas.
+            if (mTransformState == TS_SCALE)
+                mScaleDragStartPixel = e->pos();
         }
         else if((!SelectionSet::getSingleton()->isEmpty()) && (e->button() == Qt::LeftButton))
         {
@@ -1234,6 +1418,144 @@ void TransformOperator::mouseMoveEvent(QMouseEvent *e)
             m_pSelectionBox->drawBox(xStart, yStart, xStop, yStop);
         }
     }
+    else if (mTransformState == TS_TRANSLATE && mBoneDragActive
+             && AnimationControlController::instance()->selectedBonePtr())
+    {
+        // Axis is locked at PRESS time (see press handler). If the
+        // user pressed off all arrows, mTransformVector is ZERO and
+        // the drag is a no-op until release.
+        if (mTransformVector.isZeroLength()) return;
+
+        // Project mouse onto a plane through the press-time gizmo
+        // position (not the current one): otherwise the projection
+        // plane shifts as the gizmo follows the bone, producing
+        // nonlinear drift as the user drags further from the start.
+        Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
+        auto result = mouseRay.intersects(
+            Ogre::Plane(mouseRay.getDirection(), mBoneDragGizmoOrigin));
+        if (!result.first) return;
+
+        Ogre::Vector3 point = mouseRay.getPoint(result.second);
+        Ogre::Vector3 rawWorldDelta = point - mStartPoint;
+
+        // The gizmo's frame is rotated to match the bone (so its arrows
+        // visually align with the bone's axes). mTransformVector is in
+        // gizmo-local space — convert the world delta into gizmo-local,
+        // mask with the highlighted axis, then convert back to world.
+        // This is what the scene-node code does for SPACE_LOCAL; bones
+        // always need it because their gizmo is never identity-aligned.
+        Ogre::Quaternion gizmoOri = m_pTransformNode->getOrientation();
+        Ogre::Vector3 localDelta  = gizmoOri.Inverse() * rawWorldDelta;
+        localDelta *= mTransformVector;
+        Ogre::Vector3 worldDelta  = gizmoOri * localDelta;
+
+        Ogre::Bone* bone = AnimationControlController::instance()->selectedBonePtr();
+        Ogre::Entity* ent = AnimationControlController::instance()->selectedEntity();
+        if (!ent || !ent->getParentSceneNode()) return;
+
+        // Convert world delta → skeleton-local delta (the skeleton
+        // lives in the entity's parent scene node frame).
+        Ogre::Quaternion entWorldOri   = ent->getParentSceneNode()->_getDerivedOrientation();
+        Ogre::Vector3    entWorldScale = ent->getParentSceneNode()->_getDerivedScale();
+        Ogre::Vector3 skelLocalDelta = entWorldOri.Inverse() * worldDelta;
+        skelLocalDelta /= entWorldScale;
+
+        // Drive the bone via its skeleton-local (derived) position. Ogre
+        // handles parent-frame conversion internally, so this works
+        // correctly for any bone regardless of parent orientation —
+        // crucial when the parent itself is mid-animation pose.
+        Ogre::Vector3 targetSkelPos = mBoneStartDerivedPos + skelLocalDelta;
+        // _setDerivedPosition is a no-op on parentless bones (Ogre's
+        // implementation only writes when there's a parent). For true
+        // skeleton roots, fall back to setPosition since for them
+        // local space == skeleton-local space.
+        if (bone->getParent())
+            bone->_setDerivedPosition(targetSkelPos);
+        else
+            bone->setPosition(targetSkelPos);
+        bone->needUpdate(true);
+        // Don't call _updateAnimation here — it triggers Skeleton::reset
+        // which can re-apply animation tracks to OTHER bones each move
+        // event, producing visible compound rotation of the rest of the
+        // skeleton. The next render frame's normal animation pass will
+        // refresh skinning + bone-visual TagPoints automatically.
+        updateGizmoPosition();
+        return;
+    }
+    else if (mTransformState == TS_ROTATE && mBoneDragActive
+             && AnimationControlController::instance()->selectedBonePtr())
+    {
+        // Bone-gizmo rotation: drive the bone's local orientation. The
+        // RotationGizmo's circles are anchored to the bone-world frame
+        // (via the gizmo node), so dragging a circle rotates the bone
+        // around the corresponding axis. Math mirrors the scene-node
+        // rotate handler — start/end vectors from gizmo center, get
+        // the rotation between them, mask to the highlighted circle.
+        if (mTransformVector.isZeroLength()) return;
+        Ogre::Ray mouseRay = rayFromScreenPoint(e->pos());
+        auto result = mouseRay.intersects(
+            Ogre::Plane(mouseRay.getDirection(), mBoneDragGizmoOrigin));
+        if (!result.first) return;
+
+        Ogre::Vector3 point = mouseRay.getPoint(result.second);
+        Ogre::Vector3 vectorStart = mStartPoint - mBoneDragGizmoOrigin;
+        Ogre::Vector3 vectorEnd   = point - mBoneDragGizmoOrigin;
+        Ogre::Quaternion gizmoOri = m_pTransformNode->getOrientation();
+        Ogre::Vector3 localStart  = gizmoOri.Inverse() * vectorStart;
+        Ogre::Vector3 localEnd    = gizmoOri.Inverse() * vectorEnd;
+        Ogre::Quaternion localRot = localStart.getRotationTo(localEnd);
+        localRot.x *= mTransformVector.x;
+        localRot.y *= mTransformVector.y;
+        localRot.z *= mTransformVector.z;
+        localRot.normalise();
+        // Convert to world rotation, then accumulate onto the press-time
+        // bone orientation. Re-anchor mStartPoint each event so the
+        // delta is incremental (matches the scene-node behavior).
+        Ogre::Quaternion worldRot = gizmoOri * localRot * gizmoOri.Inverse();
+        Ogre::Bone* bone = AnimationControlController::instance()->selectedBonePtr();
+        Ogre::Entity* ent = AnimationControlController::instance()->selectedEntity();
+        if (!ent || !ent->getParentSceneNode()) return;
+
+        // Map world rotation into bone-local space by composing with
+        // the entity world + parent-bone derived orientations.
+        Ogre::Quaternion entWorldOri = ent->getParentSceneNode()->_getDerivedOrientation();
+        Ogre::Quaternion parentDerOri = Ogre::Quaternion::IDENTITY;
+        if (bone->getParent())
+            parentDerOri = static_cast<Ogre::Bone*>(bone->getParent())->_getDerivedOrientation();
+        Ogre::Quaternion worldToParent = (entWorldOri * parentDerOri).Inverse();
+        Ogre::Quaternion localFrameRot = worldToParent * worldRot * (entWorldOri * parentDerOri);
+
+        bone->rotate(localFrameRot, Ogre::Node::TS_LOCAL);
+        bone->needUpdate(true);
+        mStartPoint = point;
+        updateGizmoPosition();
+        return;
+    }
+    else if (mTransformState == TS_SCALE && mBoneDragActive
+             && AnimationControlController::instance()->selectedBonePtr())
+    {
+        // Bone-gizmo scale: pixel-delta drag against the press-time
+        // pixel position, scale uniformly (or per-axis when an axis
+        // is locked) on the bone's local scale. Less common than
+        // rotation but completes the W/E/R triad.
+        if (mTransformVector.isZeroLength()) return;
+        const QPoint pixelDelta = e->pos() - mScaleDragStartPixel;
+        const float pixels = static_cast<float>(pixelDelta.x() - pixelDelta.y());
+        constexpr float kPixelsPerDouble = 100.0f;
+        float ratio = std::pow(2.0f, pixels / kPixelsPerDouble);
+        if (ratio < 0.01f) ratio = 0.01f;
+        if (ratio > 100.0f) ratio = 100.0f;
+
+        Ogre::Vector3 scaleFactor = (mTransformVector == Ogre::Vector3::ZERO)
+            ? Ogre::Vector3(ratio, ratio, ratio)
+            : Ogre::Vector3::UNIT_SCALE + (mTransformVector * (ratio - 1.0f));
+
+        Ogre::Bone* bone = AnimationControlController::instance()->selectedBonePtr();
+        bone->setScale(mBoneStartScale * scaleFactor);
+        bone->needUpdate(true);
+        updateGizmoPosition();
+        return;
+    }
     else if(mTransformState == TS_TRANSLATE && (!SelectionSet::getSingleton()->isEmpty()))
     {
         //Translate the selected object
@@ -1474,6 +1796,104 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
         return;
     }
 
+    // Bone-gizmo drag end: capture after-state, push BoneTransformCommand
+    // if the bone actually moved, fire auto-key. Bone TRS edits live
+    // outside the SelectionSet so the scene-node release path below
+    // still fires for any concurrent node selection.
+    if (mBoneDragActive && e->button() == Qt::LeftButton)
+    {
+        Ogre::Bone* bone = AnimationControlController::instance()->selectedBonePtr();
+        Ogre::SkeletonInstance* skel =
+            AnimationControlController::instance()->selectedEntity()
+                ? AnimationControlController::instance()->selectedEntity()->getSkeleton()
+                : nullptr;
+        if (bone && skel)
+        {
+            Ogre::Vector3    afterPos    = bone->getPosition();
+            Ogre::Quaternion afterOrient = bone->getOrientation();
+            Ogre::Vector3    afterScale  = bone->getScale();
+            bool changed = (afterPos    != mBoneStartPos)
+                        || (afterOrient != mBoneStartOrient)
+                        || (afterScale  != mBoneStartScale);
+            const bool autoKeyOn = AnimationControlController::instance()->autoKey();
+            // Active = an animation state is currently ENABLED (driving
+            // bones), not just selected in the panel. With no enabled
+            // animation, the bone is at its bind pose and the user is
+            // doing T-pose authoring → setInitialState. With at least
+            // one enabled animation, the curve writes the bone each
+            // frame and a setInitialState would shift the whole curve
+            // → revert instead.
+            bool hasActiveAnim = false;
+            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
+                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
+                    for (const auto& pair : states->getAnimationStates()) {
+                        if (pair.second->getEnabled()) { hasActiveAnim = true; break; }
+                    }
+                }
+            }
+
+            // Restore the per-state BlendMask values we captured at
+            // press, BEFORE calling apply(). The Revert path calls
+            // _updateAnimation which runs Skeleton::reset (bone →
+            // initial) then animation tracks (initial + curve sample).
+            // With the BlendMask still muted, the curve contributes
+            // zero and the bone settles at initial (T-pose) instead
+            // of the press-time pose. Restoring before apply() lets
+            // the curve drive the bone correctly. Restore exactly the
+            // pre-drag weights — not a hardcoded 1.0 — to preserve
+            // any layered/masked setup the user had.
+            if (Ogre::Entity* dragEnt = AnimationControlController::instance()->selectedEntity()) {
+                if (Ogre::AnimationStateSet* states = dragEnt->getAllAnimationStates()) {
+                    for (const auto& [stateName, weight] : mBoneDragSavedMaskWeights) {
+                        if (!states->hasAnimationState(stateName)) continue;
+                        Ogre::AnimationState* st = states->getAnimationState(stateName);
+                        if (st->hasBlendMask())
+                            st->setBlendMaskEntry(bone->getHandle(), weight);
+                    }
+                }
+            }
+            mBoneDragSavedMaskWeights.clear();
+
+            const auto outcome = BoneDragRelease::apply(
+                bone, mBoneStartPos, mBoneStartOrient, mBoneStartScale,
+                hasActiveAnim, autoKeyOn,
+                AnimationControlController::instance()->selectedEntity());
+            if (outcome == BoneDragRelease::Result::Commit) {
+                // autoKeyOnTransform → addKeyframe → AddKeyframeCommand
+                // captures the durable artifact (the keyframe). The
+                // bone's live local TRS is fully determined by the
+                // curve at slider time after Skeleton::reset, so we
+                // don't need a separate BoneTransformCommand here —
+                // undoing the keyframe is enough.
+                AnimationControlController::instance()->autoKeyOnTransform();
+            } else if (outcome == BoneDragRelease::Result::CommitBind) {
+                // bindMode=true so undo also reverts the bone's initial
+                // (bind) state — otherwise Skeleton::reset would snap
+                // back to the new bind on the next animation update.
+                const std::string entityName =
+                    AnimationControlController::instance()->selectedEntityName().toStdString();
+                UndoManager::getSingleton()->push(
+                    new BoneTransformCommand(entityName, bone->getName(),
+                        mBoneStartPos, mBoneStartOrient, mBoneStartScale,
+                        afterPos,      afterOrient,      afterScale,
+                        /*bindMode=*/true));
+            } else if (outcome == BoneDragRelease::Result::Revert) {
+                // Restore the gizmo to the press-time anchor so the
+                // viewport visually returns to the start of the drag.
+                m_pTransformNode->setPosition(mBoneDragGizmoOrigin);
+            }
+        }
+        // Restore playback if we paused it on press.
+        if (mBoneDragWasPlaying) {
+            PropertiesPanelController::instance()->setPlaying(true);
+            mBoneDragWasPlaying = false;
+        }
+        mBoneDragActive = false;
+        mStartPoint = Ogre::Vector3::ZERO;
+        mTransformVector = Ogre::Vector3::ZERO;
+        return;
+    }
+
     // Push undo command for edit mode vertex transforms
     if (mEditModeTransformActive && (e->button() == Qt::LeftButton))
     {
@@ -1551,6 +1971,7 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
     if((SelectionSet::getSingleton()->hasNodes()||SelectionSet::getSingleton()->hasEntities()) && (e->button() == Qt::LeftButton))
     {
         // Push undo command if a transform was performed on scene nodes
+        bool nodeTransformCommitted = false;
         if (SelectionSet::getSingleton()->hasNodes() && !mUndoStartPositions.isEmpty())
         {
             auto nodes = SelectionSet::getSingleton()->getNodesSelectionList();
@@ -1621,12 +2042,19 @@ void TransformOperator::mouseReleaseEvent(QMouseEvent *e)
                     UndoManager::getSingleton()->push(new ScaleCommand(nodes, totalScale));
                 }
             }
+
+            nodeTransformCommitted = changed;
         }
 
         mUndoStartPositions.clear();
         mUndoStartOrientations.clear();
         mUndoStartScales.clear();
         mStartPoint = Ogre::Vector3::ZERO;
+
+        // Auto-key only when an actual transform was committed — plain clicks
+        // and zero-delta releases must not pollute tracks with duplicate keys.
+        if (nodeTransformCommitted)
+            AnimationControlController::instance()->autoKeyOnTransform();
     }
 
     if(m_pSelectionBox->isVisible())

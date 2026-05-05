@@ -1,7 +1,9 @@
 #include "MoveKeyframeCommand.h"
 
+#include "SkeletonResolver.h"
+
 #include <Ogre.h>
-#include <OgreSkeleton.h>
+#include <OgreSkeletonInstance.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationTrack.h>
 #include <OgreKeyFrame.h>
@@ -13,11 +15,13 @@
 namespace {
 constexpr float kEpsilon = 0.001f; // 1 ms — same tolerance as keyframe ticks
 
-Ogre::NodeAnimationTrack* resolveTrack(Ogre::Skeleton* skel,
+Ogre::NodeAnimationTrack* resolveTrack(const std::string& entityName,
                                        const std::string& animName,
                                        const std::string& boneName)
 {
-    if (!skel || animName.empty() || boneName.empty()) return nullptr;
+    if (animName.empty() || boneName.empty()) return nullptr;
+    Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(entityName);
+    if (!skel) return nullptr;
     if (!skel->hasAnimation(animName)) return nullptr;
     if (!skel->hasBone(boneName)) return nullptr;
     Ogre::Animation* anim = skel->getAnimation(animName);
@@ -29,14 +33,14 @@ Ogre::NodeAnimationTrack* resolveTrack(Ogre::Skeleton* skel,
 
 } // namespace
 
-MoveKeyframeCommand::MoveKeyframeCommand(Ogre::Skeleton* skeleton,
+MoveKeyframeCommand::MoveKeyframeCommand(std::string entityName,
                                          std::string animationName,
                                          std::string boneName,
                                          float oldTime,
                                          float newTime,
                                          QUndoCommand* parent)
     : QUndoCommand(parent)
-    , mSkeleton(skeleton)
+    , mEntityName(std::move(entityName))
     , mAnimationName(std::move(animationName))
     , mBoneName(std::move(boneName))
     , mOldTime(oldTime)
@@ -47,7 +51,7 @@ MoveKeyframeCommand::MoveKeyframeCommand(Ogre::Skeleton* skeleton,
 
 bool MoveKeyframeCommand::moveKeyframeTo(float searchTime, float targetTime)
 {
-    auto* track = resolveTrack(mSkeleton, mAnimationName, mBoneName);
+    auto* track = resolveTrack(mEntityName, mAnimationName, mBoneName);
     if (!track) return false;
 
     // Find the keyframe at searchTime (± epsilon).

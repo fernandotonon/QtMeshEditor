@@ -6,6 +6,7 @@ set(SRC_FILES
 about.cpp
 AnimationBlender.cpp
 AnimationControlController.cpp
+CurveEditModel.cpp
 main.cpp
 Manager.cpp
 material.cpp
@@ -55,6 +56,13 @@ SubMeshTransform.cpp
 SubEntityHighlight.cpp
 commands/TransformCommands.cpp
 commands/MoveKeyframeCommand.cpp
+commands/BulkKeyframeCommands.cpp
+commands/SetKeyframeValueCommand.cpp
+commands/BoneTransformCommand.cpp
+commands/AddKeyframeCommand.cpp
+commands/DeleteKeyframeCommand.cpp
+commands/SkeletonResolver.cpp
+BoneDragRelease.cpp
 PropertiesPanelController.cpp
 SceneTreeModel.cpp
 ThemeManager.cpp
@@ -78,6 +86,7 @@ HalfEdgeMesh.cpp
 set(HEADER_FILES
 AnimationBlender.h
 AnimationControlController.h
+CurveEditModel.h
 GlobalDefinitions.h
 Euler.h
 about.h

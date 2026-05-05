@@ -8,6 +8,8 @@
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
+#include "UndoManager.h"
+#include <QUndoStack>
 #include <OgreSkeletonInstance.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationState.h>
@@ -340,6 +342,85 @@ TEST_F(AnimationControlControllerTest, AddKeyframeIncreasesCount) {
     EXPECT_EQ(track->getNumKeyFrames(), before + 1);
 }
 
+TEST_F(AnimationControlControllerTest, AddKeyframeCapturesBonePose) {
+    // Move the bone to a non-identity pose, then add a keyframe at a fresh
+    // scrub time. The new keyframe must capture the bone's current local
+    // TRS — not identity, not the curve interpolation.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_AddKfPoseTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
+    QString boneName = ctrl->boneNames().first();
+    ctrl->selectBone(boneName);
+
+    // Manually offset the bone from its initial pose. addKeyframe should
+    // capture that offset rather than re-sampling the curve.
+    auto* skel = entity->getSkeleton();
+    Ogre::Bone* bone = skel->getBone(boneName.toStdString());
+    bone->setManuallyControlled(true);
+    bone->setPosition(bone->getInitialPosition() + Ogre::Vector3(2.5f, 0, 0));
+
+    ctrl->setSliderValue(750); // a time that has no existing keyframe
+    ctrl->addKeyframe();
+    app->processEvents();
+
+    // Find the keyframe at 0.75s and verify translate.x ≈ 2.5
+    auto* track = skel->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    bool found = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.75f) < 0.001f) {
+            EXPECT_NEAR(kf->getTranslate().x, 2.5f, 1e-3);
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST_F(AnimationControlControllerTest, AutoKeyOnTransformPushesKeyframeWhenEnabled) {
+    // With autoKey enabled, calling autoKeyOnTransform must add a keyframe
+    // at the current scrub time on the active bone-track. Without it, the
+    // call is a no-op.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_AutoKeyTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->selectBone(ctrl->boneNames().first());
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
+
+    // autoKey off → no-op.
+    ctrl->setAutoKey(false);
+    ctrl->setSliderValue(250);
+    ctrl->autoKeyOnTransform();
+    EXPECT_EQ(track->getNumKeyFrames(), before);
+
+    // autoKey on → adds a keyframe.
+    ctrl->setAutoKey(true);
+    ctrl->autoKeyOnTransform();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), before + 1);
+
+    // Re-firing at the same scrub time must NOT stack a duplicate — it
+    // updates the existing keyframe in place. Otherwise auto-key on a
+    // single drag would balloon the track on every redundant mouse-release.
+    ctrl->autoKeyOnTransform();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), before + 1);
+    ctrl->setAutoKey(false);
+}
+
 TEST_F(AnimationControlControllerTest, DeleteKeyframeDecreasesCount) {
     ASSERT_TRUE(canLoadMeshFiles());
 
@@ -649,9 +730,197 @@ TEST_F(AnimationControlControllerTest, AllBoneRowsReflectsTracks) {
     auto firstRow = rows.first().toMap();
     EXPECT_TRUE(firstRow.contains("bone"));
     EXPECT_TRUE(firstRow.contains("keyTimes"));
+    EXPECT_TRUE(firstRow.contains("channels"));
     // TestAnim has 3 keyframes on the Child track (handle 1)
     auto times = firstRow["keyTimes"].toList();
     EXPECT_EQ(times.size(), 3);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AllBoneRowsEmptyWhenNoAnimSelected) {
+    // Pure-data guard: with no animation selected, allBoneRows must return
+    // an empty list (not crash, not return stale shape).
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->allBoneRows().isEmpty());
+}
+
+TEST_F(AnimationControlControllerTest, AllBoneRowsReportsActiveChannels) {
+    // TestAnim's middle keyframe sets translate.x = 0.5 and rotates 30°
+    // around Y. The channel-detection should mark tx, rw, and ry as active
+    // (the rotation around Y leaves rw < 1.0 and ry > 0); ty/tz/rx/rz/s* are
+    // identity throughout and must NOT be marked active.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_ChannelsTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    QVariantList rows = ctrl->allBoneRows();
+    ASSERT_FALSE(rows.isEmpty());
+    auto channels = rows.first().toMap()["channels"].toMap();
+
+    EXPECT_TRUE(channels["tx"].toBool());
+    EXPECT_FALSE(channels["ty"].toBool());
+    EXPECT_FALSE(channels["tz"].toBool());
+
+    EXPECT_TRUE(channels["rw"].toBool());
+    EXPECT_FALSE(channels["rx"].toBool());
+    EXPECT_TRUE(channels["ry"].toBool());
+    EXPECT_FALSE(channels["rz"].toBool());
+
+    EXPECT_FALSE(channels["sx"].toBool());
+    EXPECT_FALSE(channels["sy"].toBool());
+    EXPECT_FALSE(channels["sz"].toBool());
+}
+
+TEST_F(AnimationControlControllerTest, AllBoneRowsTreatsNegatedQuaternionAsIdentity) {
+    // q and -q encode the same rotation. Set every keyframe's rotation to
+    // (-1, 0, 0, 0) — the negative of identity — and verify no rotation
+    // channel is flagged active. A naive component check would flag rw
+    // because -1 != 1, producing a bogus rotation chevron in the dope sheet.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_NegIdentityTest");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+    auto* track = skel->getAnimation("TestAnim")->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        kf->setTranslate(Ogre::Vector3::ZERO);
+        kf->setRotation(Ogre::Quaternion(-1.0f, 0.0f, 0.0f, 0.0f));
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    auto channels = ctrl->allBoneRows().first().toMap()["channels"].toMap();
+    EXPECT_FALSE(channels["rw"].toBool());
+    EXPECT_FALSE(channels["rx"].toBool());
+    EXPECT_FALSE(channels["ry"].toBool());
+    EXPECT_FALSE(channels["rz"].toBool());
+}
+
+TEST_F(AnimationControlControllerTest, AllBoneRowsAllChannelsFalseForIdentityOnlyTrack) {
+    // Build an animation whose every keyframe is identity (zero translate,
+    // identity rotation, unit scale). No channel should be flagged active —
+    // QML uses this to skip painting empty per-channel sub-rows.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_IdentityOnlyTest");
+    ASSERT_NE(entity, nullptr);
+    auto* skel = entity->getSkeleton();
+
+    // Replace TestAnim's middle keyframe values with identity so every
+    // sample matches bind pose.
+    auto* track = skel->getAnimation("TestAnim")->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        kf->setTranslate(Ogre::Vector3::ZERO);
+        kf->setRotation(Ogre::Quaternion::IDENTITY);
+        kf->setScale(Ogre::Vector3::UNIT_SCALE);
+    }
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    QVariantList rows = ctrl->allBoneRows();
+    ASSERT_FALSE(rows.isEmpty());
+    auto channels = rows.first().toMap()["channels"].toMap();
+    for (const QString& key : { "tx", "ty", "tz",
+                                "rw", "rx", "ry", "rz",
+                                "sx", "sy", "sz" }) {
+        EXPECT_FALSE(channels[key].toBool())
+            << "channel " << key.toStdString()
+            << " should be inactive on identity-only track";
+    }
+}
+
+// ── Curve editor APIs (slice D3b) ──────────────────────────────────────────────
+
+TEST_F(AnimationControlControllerPlaybackTest, ChannelValuesEmptyWhenNoSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->channelValuesAt("Bone", "tx").isEmpty());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, ChannelValuesUnknownChannelReturnsEmpty) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->channelValuesAt("Bone", "unknown").isEmpty());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, SetKeyframeValueRejectsUnknownChannel) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->setKeyframeValue("Bone", "qq", 0.5, 1.0));
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, SetKeyframeValueRejectsWithoutSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    // No animation selected → should return false, not silently push a
+    // no-op command onto the undo stack.
+    EXPECT_FALSE(ctrl->setKeyframeValue("Bone", "tx", 0.5, 1.0));
+}
+
+TEST_F(AnimationControlControllerTest, ChannelValuesReadsTrack) {
+    // TestAnim's middle keyframe has translate.x = 0.5 (rest are 0). The
+    // channelValuesAt API must return [0, 0.5, 0] for "tx" in time order.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_ChannelValuesTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    QVariantList tx = ctrl->channelValuesAt(bone, "tx");
+    ASSERT_EQ(tx.size(), 3);
+    EXPECT_NEAR(tx[0].toDouble(), 0.0, 1e-4);
+    EXPECT_NEAR(tx[1].toDouble(), 0.5, 1e-4);
+    EXPECT_NEAR(tx[2].toDouble(), 0.0, 1e-4);
+}
+
+TEST_F(AnimationControlControllerTest, SetKeyframeValueRejectsMissingTime) {
+    // No keyframe at 0.42 — the controller must return false instead of
+    // pushing a no-op SetKeyframeValueCommand onto the undo stack.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MissingTimeTest");
+    ASSERT_NE(entity, nullptr);
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+    EXPECT_FALSE(ctrl->setKeyframeValue(bone, "tx", 0.42, 5.0));
+}
+
+TEST_F(AnimationControlControllerTest, SetKeyframeValueWritesOneChannelOnly) {
+    // Setting tx must leave ty/tz/r*/s* on the same keyframe alone.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_SetValueTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_TRUE(ctrl->setKeyframeValue(bone, "tx", 0.5, 7.5));
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.5f) < 0.001f) {
+            EXPECT_NEAR(kf->getTranslate().x, 7.5f, 1e-4);
+            // The original middle keyframe had ty/tz = 0 — must still be 0.
+            EXPECT_NEAR(kf->getTranslate().y, 0.0f, 1e-4);
+            EXPECT_NEAR(kf->getTranslate().z, 0.0f, 1e-4);
+            // Rotation around Y (30°) — verify it survived the tx write.
+            EXPECT_NEAR(kf->getRotation().y, 0.2588f, 1e-3);
+            return;
+        }
+    }
+    FAIL() << "Keyframe at t=0.5 not found";
 }
 
 TEST_F(AnimationControlControllerTest, MoveKeyframeShiftsTime) {
@@ -706,4 +975,569 @@ TEST_F(AnimationControlControllerTest, MoveKeyframeRejectsCollision) {
         }
     }
     EXPECT_TRUE(stillThere);
+}
+
+// ── Preview API (curve editor live-drag) ──────────────────────────────────────
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewRetimesWithoutUndoPush) {
+    // The curve editor calls this on every mouseMove during a keyframe
+    // drag — it must NOT push onto the undo stack (otherwise MainWindow's
+    // indexChanged handler resets the skeleton and the bone blinks to
+    // T-pose between events).
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreview");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    const int undoBefore = UndoManager::getSingleton()->stack()->count();
+
+    EXPECT_TRUE(ctrl->moveKeyframePreview(bone, 0.5, 0.7));
+
+    EXPECT_EQ(UndoManager::getSingleton()->stack()->count(), undoBefore)
+        << "moveKeyframePreview must not push undo commands";
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    bool foundMoved = false, foundOriginal = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float t = track->getKeyFrame(i)->getTime();
+        if (std::fabs(t - 0.5f) < 0.001f) foundOriginal = true;
+        if (std::fabs(t - 0.7f) < 0.001f) foundMoved = true;
+    }
+    EXPECT_FALSE(foundOriginal);
+    EXPECT_TRUE(foundMoved);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewPreservesTRS) {
+    // The retime must preserve the keyframe's translate/rotate/scale.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreservesTRS");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    Ogre::TransformKeyFrame* before = nullptr;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.5f) < 0.001f) { before = kf; break; }
+    }
+    ASSERT_NE(before, nullptr);
+    const Ogre::Vector3 t = before->getTranslate();
+    const Ogre::Quaternion r = before->getRotation();
+    const Ogre::Vector3 s = before->getScale();
+
+    EXPECT_TRUE(ctrl->moveKeyframePreview(bone, 0.5, 0.65));
+
+    Ogre::TransformKeyFrame* after = nullptr;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.65f) < 0.001f) { after = kf; break; }
+    }
+    ASSERT_NE(after, nullptr);
+    EXPECT_NEAR(after->getTranslate().x, t.x, 1e-4);
+    EXPECT_NEAR(after->getTranslate().y, t.y, 1e-4);
+    EXPECT_NEAR(after->getTranslate().z, t.z, 1e-4);
+    EXPECT_NEAR(after->getRotation().w, r.w, 1e-4);
+    EXPECT_NEAR(after->getScale().x,    s.x, 1e-4);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewRejectsCollision) {
+    // Same collision rules as moveKeyframe so the preview can't silently
+    // overwrite an adjacent keyframe mid-drag.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreviewCollision");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_FALSE(ctrl->moveKeyframePreview(bone, 0.5, 1.0));
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    bool stillThere = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - 0.5f) < 0.001f) {
+            stillThere = true; break;
+        }
+    }
+    EXPECT_TRUE(stillThere);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewRejectsMissingTime) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreviewMissing");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_FALSE(ctrl->moveKeyframePreview(bone, 0.42, 0.6));
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframePreviewNoOpOnIdenticalTime) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_MovePreviewSame");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_FALSE(ctrl->moveKeyframePreview(bone, 0.5, 0.5));
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframePreviewNoOpWithoutSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->moveKeyframePreview("Bone", 0.5, 0.6));
+}
+
+TEST_F(AnimationControlControllerTest, SetKeyframeValuePreviewWritesWithoutUndoPush) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_ValuePreview");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    const int undoBefore = UndoManager::getSingleton()->stack()->count();
+    EXPECT_TRUE(ctrl->setKeyframeValuePreview(bone, "tx", 0.5, 9.25));
+    EXPECT_EQ(UndoManager::getSingleton()->stack()->count(), undoBefore);
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - 0.5f) < 0.001f) {
+            EXPECT_NEAR(kf->getTranslate().x, 9.25f, 1e-4);
+            return;
+        }
+    }
+    FAIL() << "Keyframe at t=0.5 not found";
+}
+
+TEST_F(AnimationControlControllerTest, SetKeyframeValuePreviewRejectsUnknownChannel) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_ValuePreviewUnknown");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    EXPECT_FALSE(ctrl->setKeyframeValuePreview(bone, "qq", 0.5, 1.0));
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, SetKeyframeValuePreviewNoOpWithoutSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->setKeyframeValuePreview("Bone", "tx", 0.5, 1.0));
+}
+
+// ── Bulk keyframe ops (slice D1) ──────────────────────────────────────────────
+
+TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframesEmptySelectionReturnsFalse) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->moveKeyframes(QVariantList{}, 0.1));
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, SerializeKeyframesEmptyReturnsEmpty) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->serializeKeyframes(QVariantList{}).isEmpty());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, PasteEmptyReturnsZero) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_EQ(ctrl->pasteKeyframesAt("", 0.0), 0);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, PasteRejectsMalformedJson) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_EQ(ctrl->pasteKeyframesAt("not-json", 0.0), 0);
+    EXPECT_EQ(ctrl->pasteKeyframesAt("{\"kind\":\"wrong.kind\"}", 0.0), 0);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyDefaultsOff) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_FALSE(ctrl->autoKey());
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyToggleEmitsSignal) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setAutoKey(false);
+    QSignalSpy spy(ctrl, &AnimationControlController::autoKeyChanged);
+    ctrl->setAutoKey(true);
+    EXPECT_EQ(spy.count(), 1);
+    ctrl->setAutoKey(true);
+    EXPECT_EQ(spy.count(), 1);
+    ctrl->setAutoKey(false);
+}
+
+TEST_F(AnimationControlControllerPlaybackTest, AutoKeyOnTransformNoOpWithoutSelection) {
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->setAutoKey(true);
+    EXPECT_NO_THROW(ctrl->autoKeyOnTransform());
+    ctrl->setAutoKey(false);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframesShiftsAllByDt) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_BulkMoveTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    // TestAnim has length 1.0 — extend so 0.0+0.1 / 0.5+0.1 fit.
+    ctrl->setAnimationLength(2.0);
+    QString bone = ctrl->boneNames().first();
+
+    QVariantList sel;
+    QVariantMap a; a["bone"] = bone; a["time"] = 0.0;
+    QVariantMap b; b["bone"] = bone; b["time"] = 0.5;
+    sel << a << b;
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int beforeCount = track->getNumKeyFrames();
+
+    EXPECT_TRUE(ctrl->moveKeyframes(sel, 0.1));
+
+    bool found01 = false, found06 = false;
+    bool foundOriginal00 = false, foundOriginal05 = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float t = track->getKeyFrame(i)->getTime();
+        if (std::fabs(t - 0.1f) < 0.001f) found01 = true;
+        if (std::fabs(t - 0.6f) < 0.001f) found06 = true;
+        if (std::fabs(t - 0.0f) < 0.001f) foundOriginal00 = true;
+        if (std::fabs(t - 0.5f) < 0.001f) foundOriginal05 = true;
+    }
+    EXPECT_TRUE(found01);
+    EXPECT_TRUE(found06);
+    // Originals must be gone — a faulty implementation that inserts new
+    // keyframes at the shifted times without removing the originals would
+    // double the keyframe count and break the round-trip undo.
+    EXPECT_FALSE(foundOriginal00);
+    EXPECT_FALSE(foundOriginal05);
+    EXPECT_EQ(track->getNumKeyFrames(), beforeCount);
+}
+
+TEST_F(AnimationControlControllerTest, MoveKeyframesClampsAtClipBoundary) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_BulkBoundsTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    // Two keyframes at 0.0 and 0.5 selected; requesting dt = -0.5 would push
+    // the first to -0.5. The controller now clamps the batch delta so the
+    // selection lands on the nearest legal time instead of snapping back.
+    // The largest legal *negative* dt for {0.0, 0.5} is 0 (since the leftmost
+    // member is already at 0); the move becomes a no-op and returns false.
+    QVariantList atZero;
+    QVariantMap a; a["bone"] = bone; a["time"] = 0.0;
+    atZero << a;
+    EXPECT_FALSE(ctrl->moveKeyframes(atZero, -0.5));
+
+    // Now try a partial-clamp case: select 0.5 and ask for -0.3. The largest
+    // legal negative dt is -0.5 (since 0.5 - 0.5 = 0), so -0.3 lands fully —
+    // the keyframe ends up at 0.2.
+    QVariantList atHalf;
+    QVariantMap b; b["bone"] = bone; b["time"] = 0.5;
+    atHalf << b;
+    EXPECT_TRUE(ctrl->moveKeyframes(atHalf, -0.3));
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    bool found02 = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - 0.2f) < 0.001f) {
+            found02 = true; break;
+        }
+    }
+    EXPECT_TRUE(found02);
+}
+
+TEST_F(AnimationControlControllerTest, SerializePasteRoundTrip) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_RoundTripTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->setAnimationLength(2.0);
+    QString bone = ctrl->boneNames().first();
+
+    // Serialize the existing keyframes at 0.0 and 0.5.
+    QVariantList sel;
+    QVariantMap a; a["bone"] = bone; a["time"] = 0.0;
+    QVariantMap b; b["bone"] = bone; b["time"] = 0.5;
+    sel << a << b;
+    QString json = ctrl->serializeKeyframes(sel);
+    EXPECT_FALSE(json.isEmpty());
+
+    // Paste at t=1.2 — copies should land at 1.2 and 1.7.
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
+    const int pasted = ctrl->pasteKeyframesAt(json, 1.2);
+    EXPECT_EQ(pasted, 2);
+    EXPECT_EQ(track->getNumKeyFrames(), before + 2);
+    bool found12 = false, found17 = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const float t = track->getKeyFrame(i)->getTime();
+        if (std::fabs(t - 1.2f) < 0.001f) found12 = true;
+        if (std::fabs(t - 1.7f) < 0.001f) found17 = true;
+    }
+    EXPECT_TRUE(found12);
+    EXPECT_TRUE(found17);
+}
+
+TEST_F(AnimationControlControllerTest, PasteSkipsCollisions) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("DopeSheet_PasteCollisionTest");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    // Paste back onto the existing 0.5 → collision; existing 0.0 paste lands at 0.0
+    // → also a collision. Expect 0 pasted.
+    QVariantList sel;
+    QVariantMap a; a["bone"] = bone; a["time"] = 0.0;
+    QVariantMap b; b["bone"] = bone; b["time"] = 0.5;
+    sel << a << b;
+    QString json = ctrl->serializeKeyframes(sel);
+    const int n = ctrl->pasteKeyframesAt(json, 0.0);
+    EXPECT_EQ(n, 0);
+}
+
+// ── boneCanTranslate ──────────────────────────────────────────────────────────
+//
+// Translation is restricted by the gizmo's press handler so users can't tear
+// rigged bones away from their parent (which would produce broken poses on
+// playback). The rules: skeleton roots are always translatable (locomotion
+// bones), and unrigged bones — typical "attachment point" sockets for
+// swords / shields / hats — are also translatable since they don't deform
+// any geometry.
+
+TEST_F(AnimationControlControllerTest, BoneCanTranslateNullBoneIsSafe) {
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_TRUE(ctrl->boneCanTranslate(nullptr));
+}
+
+TEST_F(AnimationControlControllerTest, BoneCanTranslateRootBoneAllowed) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_BCT_Root");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    Ogre::Bone* root = entity->getSkeleton()->getBone("Root");
+    ASSERT_FALSE(root->getParent());
+    EXPECT_TRUE(ctrl->boneCanTranslate(root));
+}
+
+TEST_F(AnimationControlControllerTest, BoneCanTranslateRiggedNonRootBlocked) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_BCT_Rigged");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    // "Child" is rigged — every vertex of the test mesh weights to it.
+    Ogre::Bone* child = entity->getSkeleton()->getBone("Child");
+    ASSERT_TRUE(child->getParent());
+    EXPECT_FALSE(ctrl->boneCanTranslate(child));
+}
+
+TEST_F(AnimationControlControllerTest, BoneCanTranslateUnriggedNonRootAllowed) {
+    // Add a third bone to the test skeleton with no vertex weights — this
+    // simulates an attachment point (sword/shield/hat). Translation must
+    // be allowed since moving it doesn't deform any geometry.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_BCT_Attach");
+    ASSERT_NE(entity, nullptr);
+
+    auto* skel = entity->getSkeleton();
+    Ogre::Bone* attach = skel->createBone("AttachPoint", 2);
+    attach->setPosition(Ogre::Vector3(0, 1, 0.5f));
+    skel->getBone("Child")->addChild(attach);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+
+    ASSERT_TRUE(attach->getParent());
+    EXPECT_TRUE(ctrl->boneCanTranslate(attach));
+}
+
+// ── onUndoRedoCommandApplied ──────────────────────────────────────────────────
+//
+// Called from MainWindow's QUndoStack::indexChanged handler after a
+// keyframe-affecting command runs. Must invalidate stale track/keyframe
+// pointers (an AddKeyframeCommand undo can destroy a lazy-created track)
+// and preserve the user's current bone selection (rebuilding via
+// refreshBoneList would reset it to the first bone — jarring UX).
+
+TEST_F(AnimationControlControllerTest, OnUndoRedoCommandAppliedPreservesBoneSelection) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_UndoPreservesBone");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ASSERT_FALSE(ctrl->boneNames().isEmpty());
+
+    // Pick a non-default bone (the second in the list, if any). With
+    // only one bone, this still validates "preserves selection".
+    const QString picked = ctrl->boneNames().size() > 1
+        ? ctrl->boneNames().at(1)
+        : ctrl->boneNames().first();
+    ctrl->selectBone(picked);
+    ASSERT_EQ(ctrl->selectedBone(), picked);
+
+    ctrl->onUndoRedoCommandApplied();
+    EXPECT_EQ(ctrl->selectedBone(), picked)
+        << "onUndoRedoCommandApplied reset bone selection (regression)";
+}
+
+TEST_F(AnimationControlControllerTest, OnUndoRedoCommandAppliedSurvivesMissingBone) {
+    // Defensive: if m_selectedBone is empty (no bone picked yet),
+    // the helper must not crash.
+    auto* ctrl = AnimationControlController::instance();
+    EXPECT_NO_THROW(ctrl->onUndoRedoCommandApplied());
+}
+
+// ── addKeyframe + undo/redo (integration) ────────────────────────────────────
+//
+// Exercises the +KF / auto-key wiring through AnimationControlController::
+// addKeyframe() and the QUndoStack rather than the AddKeyframeCommand
+// helper directly. The TrackCreated path in particular is fragile because
+// the controller pre-creates the track before pushing the command, so a
+// pure unit test misses what production code actually runs.
+
+TEST_F(AnimationControlControllerTest, AddKeyframeIsUndoableViaQUndoStack) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_AddKfUndo");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->selectBone(ctrl->boneNames().first());
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const auto countBefore = track->getNumKeyFrames();
+
+    // Add a kf at a slider position that doesn't already have one
+    // (TestAnim has keys at 0.0, 0.5, 1.0 — pick 0.25).
+    ctrl->setSliderValue(250);
+    ctrl->addKeyframe();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore + 1);
+
+    UndoManager::getSingleton()->stack()->undo();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore);
+
+    UndoManager::getSingleton()->stack()->redo();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore + 1);
+}
+
+TEST_F(AnimationControlControllerTest, AddKeyframeOnUntrackedBoneIsUndoable) {
+    // The TrackCreated path: lazy-create a track for a bone that
+    // doesn't have one in the active animation, then undo. The
+    // whole track should be destroyed, and the controller's cached
+    // m_selectedTrack pointer must be invalidated so subsequent
+    // slider scrubs don't crash.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_AddKfTrackCreated");
+    ASSERT_NE(entity, nullptr);
+
+    auto* skel = entity->getSkeleton();
+    Ogre::Bone* extra = skel->createBone("ExtraBone", 2);
+    extra->setPosition(Ogre::Vector3(0, 0, 1));
+    skel->getBone("Root")->addChild(extra);
+    auto* anim = skel->getAnimation("TestAnim");
+    ASSERT_FALSE(anim->hasNodeTrack(extra->getHandle()));
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->selectBone("ExtraBone");
+    ctrl->setSliderValue(250);
+
+    ctrl->addKeyframe();
+    app->processEvents();
+    EXPECT_TRUE(anim->hasNodeTrack(extra->getHandle()));
+
+    UndoManager::getSingleton()->stack()->undo();
+    app->processEvents();
+    EXPECT_FALSE(anim->hasNodeTrack(extra->getHandle()));
+
+    // Slider scrub after undo must not crash on a stale m_selectedTrack
+    // (regression for the user-reported "crash after undo" bug).
+    EXPECT_NO_THROW(ctrl->setSliderValue(500));
+}
+
+TEST_F(AnimationControlControllerTest, DeleteKeyframeIsUndoableViaQUndoStack) {
+    // Verify -KF integration with the QUndoStack: deleting a keyframe,
+    // undoing restores it; redoing removes it again.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("ACC_DelKfUndo");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    ctrl->selectBone(ctrl->boneNames().first());
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const auto countBefore = track->getNumKeyFrames();
+
+    // Land on the keyframe at 0.5s, then delete it.
+    ctrl->setSliderValue(500);
+    app->processEvents();
+    ASSERT_TRUE(ctrl->onKeyframe());
+    ctrl->deleteKeyframe();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore - 1);
+
+    UndoManager::getSingleton()->stack()->undo();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore);
+
+    UndoManager::getSingleton()->stack()->redo();
+    app->processEvents();
+    EXPECT_EQ(track->getNumKeyFrames(), countBefore - 1);
 }

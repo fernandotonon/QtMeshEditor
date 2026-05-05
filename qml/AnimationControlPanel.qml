@@ -424,7 +424,7 @@ Column {
         ToolBtn { label: "-KF"; enabled: AnimationControlController.canDeleteKeyframe; onClicked: AnimationControlController.deleteKeyframe() }
     }
 
-    // ── Playback toolbar: loop toggle (speed lives next to Play button) ───
+    // ── Playback toolbar: loop toggle + auto-key (speed lives next to Play) ───
     RowLayout {
         width: parent.width; spacing: 6
 
@@ -444,6 +444,25 @@ Column {
             MouseArea {
                 id: loopMa; anchors.fill: parent; hoverEnabled: true
                 onClicked: AnimationControlController.loopRegionActive = !AnimationControlController.loopRegionActive
+            }
+        }
+
+        Rectangle {
+            Layout.preferredWidth: 96; height: 22; radius: 3
+            color: AnimationControlController.autoKey
+                ? "#c04040"
+                : (autoKeyMa.containsMouse ? Qt.lighter(AnimationControlController.buttonColor, 1.15)
+                                           : AnimationControlController.buttonColor)
+            border.color: AnimationControlController.borderColor; border.width: 1
+            Text {
+                anchors.centerIn: parent
+                text: AnimationControlController.autoKey ? "● Auto Key" : "Auto Key"
+                color: AnimationControlController.autoKey ? "white" : AnimationControlController.buttonTextColor
+                font.pixelSize: 11
+            }
+            MouseArea {
+                id: autoKeyMa; anchors.fill: parent; hoverEnabled: true
+                onClicked: AnimationControlController.autoKey = !AnimationControlController.autoKey
             }
         }
 

@@ -43,6 +43,7 @@
 #include "SelectionSet.h"
 #include "AnimationBlender.h"
 #include "AnimationControlController.h"
+#include "CurveEditModel.h"
 #include "MaterialEditorQML.h"
 #include "LLMSettingsWidget.h"
 #include "MCPSettingsDialog.h"
@@ -280,6 +281,7 @@ MainWindow::~MainWindow()
         SubEntityHighlight::kill();
         AnimationBlender::kill();
         AnimationControlController::kill();
+        CurveEditModel::kill();
         MeshLodController::kill();
         MeshValidator::kill();
         MaterialPresetLibrary::kill();
@@ -358,6 +360,37 @@ void MainWindow::initToolBar()
             auto* sel = SelectionSet::getSingleton();
             if (!sel->isEmpty())
                 emit sel->selectionChanged();
+            // Force the animated entity to recompute skeleton derived
+            // transforms so bone-visual TagPoints + skinning catch up
+            // immediately. Without this, undo/redo of bone TRS edits
+            // updates the data but the SkeletonDebug overlay stays at
+            // its pre-undo pose until the next animation tick.
+            auto* animCtrl = AnimationControlController::instance();
+            // Drop cached track / keyframe pointers BEFORE refreshing
+            // anything: AddKeyframeCommand::undo can destroy a track
+            // entirely, and a stale m_selectedTrack would crash on the
+            // next slider scrub.
+            animCtrl->onUndoRedoCommandApplied();
+            if (Ogre::Entity* ent = animCtrl->selectedEntity()) {
+                if (Ogre::SkeletonInstance* skel = ent->getSkeleton()) {
+                    // Force a full skeleton refresh so SkeletonDebug
+                    // bone visuals + any TagPoint-attached entities
+                    // pick up the post-undo pose immediately.
+                    //   1. reset(true) — restore ALL bones (including
+                    //      manual ones) to their initial state.
+                    //   2. _updateAnimation — re-applies enabled
+                    //      animation states + computes derived
+                    //      transforms. Higher-level than calling
+                    //      Animation::apply ourselves and handles
+                    //      empty-track and missing-mask edge cases.
+                    //   3. _updateTransforms — extra push to make
+                    //      TagPoint-attached entities catch up.
+                    skel->reset(true);
+                    skel->_notifyManualBonesDirty();
+                    ent->_updateAnimation();
+                    skel->_updateTransforms();
+                }
+            }
         });
     });
 
@@ -383,6 +416,10 @@ void MainWindow::initToolBar()
         qmlRegisterSingletonType<AnimationBlender>("AnimationControl", 1, 0, "AnimationBlender",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
                 return AnimationBlender::qmlInstance(engine, nullptr);
+            });
+        qmlRegisterSingletonType<CurveEditModel>("AnimationControl", 1, 0, "CurveEditModel",
+            [](QQmlEngine* engine, QJSEngine*) -> QObject* {
+                return CurveEditModel::qmlInstance(engine, nullptr);
             });
         qmlRegisterSingletonType<MeshLodController>("PropertiesPanel", 1, 0, "MeshLodController",
             [](QQmlEngine* engine, QJSEngine*) -> QObject* {
@@ -521,6 +558,37 @@ void MainWindow::initToolBar()
         dopeSheetWidget->setMinimumHeight(160);
         dopeSheetWidget->setFocusPolicy(Qt::StrongFocus);
         dopeSheetWidget->setSource(QUrl("qrc:/AnimationControl/AnimationDopeSheet.qml"));
+
+        // QQuickWidget inside a QDockWidget on macOS can swallow wheel events
+        // before they reach the QML scene's WheelHandler — Qt routes them to
+        // the dock's title bar instead. Install a viewport-level filter that
+        // calls back into the QML root's scrollByPixels() method.
+        class DopeSheetWheelFilter : public QObject {
+        public:
+            explicit DopeSheetWheelFilter(QQuickWidget* host)
+                : QObject(host), m_host(host) {}
+        protected:
+            bool eventFilter(QObject* watched, QEvent* event) override {
+                if (event->type() != QEvent::Wheel) return QObject::eventFilter(watched, event);
+                auto* we = static_cast<QWheelEvent*>(event);
+                // Cmd/Ctrl+wheel falls through to QML's zoom WheelHandler.
+                if (we->modifiers() & (Qt::ControlModifier | Qt::MetaModifier)) {
+                    return QObject::eventFilter(watched, event);
+                }
+                if (!m_host || !m_host->rootObject()) return false;
+                qreal dy = we->pixelDelta().y();
+                if (dy == 0.0) dy = we->angleDelta().y() / 120.0 * 40.0;
+                if (dy == 0.0) return false;
+                QMetaObject::invokeMethod(m_host->rootObject(), "scrollByPixels",
+                                          Q_ARG(QVariant, dy));
+                event->accept();
+                return true;
+            }
+        private:
+            QQuickWidget* m_host;
+        };
+        auto* wheelFilter = new DopeSheetWheelFilter(dopeSheetWidget); // NOSONAR — Qt parent ownership
+        dopeSheetWidget->installEventFilter(wheelFilter);
         m_dopeSheetDock = new QDockWidget(tr("Dope Sheet"), this); // NOSONAR — Qt parent ownership
         m_dopeSheetDock->setWidget(dopeSheetWidget);
         m_dopeSheetDock->setObjectName("DopeSheetDock");
@@ -529,6 +597,43 @@ void MainWindow::initToolBar()
         connect(m_dopeSheetDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
             SentryReporter::addBreadcrumb("ui.action",
                 vis ? "Dope Sheet shown" : "Dope Sheet hidden");
+        });
+
+        // Reflect the active animation in the dock title — useful when the
+        // dock is collapsed alongside other docks at the bottom.
+        auto updateDopeSheetTitle = [this]() {
+            if (!m_dopeSheetDock) return;
+            const QString anim =
+                AnimationControlController::instance()->selectedAnimation();
+            m_dopeSheetDock->setWindowTitle(
+                anim.isEmpty() ? tr("Dope Sheet")
+                               : tr("Dope Sheet — %1").arg(anim));
+        };
+        connect(AnimationControlController::instance(),
+                &AnimationControlController::selectionChanged,
+                this, updateDopeSheetTitle);
+        updateDopeSheetTitle();
+    }
+
+    // Curve Editor dock — Bezier-curve view (Phase 5 slice D3a, read-only).
+    {
+        auto* curveEditorWidget = new QQuickWidget(); // NOSONAR — Qt parent ownership
+        curveEditorWidget->setResizeMode(QQuickWidget::SizeRootObjectToView);
+        curveEditorWidget->setMinimumHeight(180);
+        curveEditorWidget->setFocusPolicy(Qt::StrongFocus);
+        curveEditorWidget->setSource(QUrl("qrc:/AnimationControl/AnimationCurveEditor.qml"));
+        m_curveEditorDock = new QDockWidget(tr("Curve Editor"), this); // NOSONAR
+        m_curveEditorDock->setWidget(curveEditorWidget);
+        m_curveEditorDock->setObjectName("CurveEditorDock");
+        addDockWidget(Qt::BottomDockWidgetArea, m_curveEditorDock);
+        // Tab on top of the dope sheet by default — the user toggles whichever
+        // they want via the View menu. tabifyDockWidget runs after both docks
+        // exist so we don't open two empty bottom strips.
+        if (m_dopeSheetDock) tabifyDockWidget(m_dopeSheetDock, m_curveEditorDock);
+        m_curveEditorDock->hide();
+        connect(m_curveEditorDock, &QDockWidget::visibilityChanged, this, [](bool vis) {
+            SentryReporter::addBreadcrumb("ui.action",
+                vis ? "Curve Editor shown" : "Curve Editor hidden");
         });
     }
 
@@ -1211,6 +1316,12 @@ void MainWindow::initToolBar()
         QAction* dopeAct = m_dopeSheetDock->toggleViewAction();
         dopeAct->setText(tr("Dope Sheet"));
         ui->menuView->addAction(dopeAct);
+    }
+    // Curve Editor toggle — same pattern, lives next to Dope Sheet.
+    if (m_curveEditorDock && ui->menuView) {
+        QAction* curveAct = m_curveEditorDock->toggleViewAction();
+        curveAct->setText(tr("Curve Editor"));
+        ui->menuView->addAction(curveAct);
     }
 
     // Connect Browse button to a native file dialog (must be parented to MainWindow on macOS)

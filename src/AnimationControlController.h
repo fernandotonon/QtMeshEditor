@@ -10,6 +10,7 @@
 #include <string>
 
 namespace Ogre {
+    class Bone;
     class Entity;
     class NodeAnimationTrack;
     class SkeletonInstance;
@@ -48,6 +49,7 @@ class AnimationControlController : public QObject
     Q_PROPERTY(double loopStart       READ loopStart       WRITE setLoopStart       NOTIFY loopRegionChanged)
     Q_PROPERTY(double loopEnd         READ loopEnd         WRITE setLoopEnd         NOTIFY loopRegionChanged)
     Q_PROPERTY(bool   loopRegionActive READ loopRegionActive WRITE setLoopRegionActive NOTIFY loopRegionChanged)
+    Q_PROPERTY(bool   autoKey         READ autoKey         WRITE setAutoKey         NOTIFY autoKeyChanged)
 
     // Keyframe tick marks on the timeline (list of ms positions)
     Q_PROPERTY(QVariantList keyframeTicks READ keyframeTicks NOTIFY keyframeTicksChanged)
@@ -97,6 +99,19 @@ public:
     QStringList boneNames()   const { return m_boneNames; }
     QString     selectedBone() const { return QString::fromStdString(m_selectedBone); }
 
+    // Non-QML accessors used by TransformOperator's bone-gizmo path.
+    // Both return nullptr when no animated entity is selected.
+    Ogre::Entity* selectedEntity() const { return m_selectedEntity; }
+    Ogre::Bone*   selectedBonePtr() const;
+
+    /// Whether translation of the given bone is "safe" — true for the
+    /// skeleton root (locomotion) and for non-rigged bones (attachment
+    /// points like swords/shields/hats), false for any non-root bone
+    /// whose handle appears in the mesh's vertex bone assignments
+    /// (translating those breaks the rig). Returns true when bone is
+    /// null or the entity has no mesh, since we can't disprove safety.
+    bool boneCanTranslate(const Ogre::Bone* bone) const;
+
     // Timeline
     int    sliderValue()     const { return m_sliderValue; }
     int    sliderMaximum()   const { return m_sliderMaximum; }
@@ -109,15 +124,30 @@ public:
     double loopStart()        const { return m_loopStart; }
     double loopEnd()          const { return m_loopEnd; }
     bool   loopRegionActive() const { return m_loopRegionActive; }
+    bool   autoKey()          const { return m_autoKey; }
     void   setPlaybackSpeed(double s);
     void   setLoopStart(double s);
     void   setLoopEnd(double s);
     void   setLoopRegionActive(bool on);
+    void   setAutoKey(bool on);
+
+    /// Invalidate cached track / keyframe pointers and rebuild the bone
+    /// list + slider ticks. Call after structural changes (track destroy,
+    /// keyframe add/remove) — e.g., from the QUndoStack indexChanged
+    /// handler — so subsequent slider scrubs don't read dangling
+    /// pointers from the previous state.
+    void onUndoRedoCommandApplied();
 
     // Compute the time after applying speed scaling and (optional) loop wrap.
     // Used by MainWindow::frameRenderingQueued. `currentTime` and `dt` are
     // in seconds; returns the new time position to assign back to the state.
     double advanceTime(double currentTime, double dt) const;
+
+    /// Push a keyframe at the current scrub time on the active bone-track,
+    /// capturing the bone's current pose. No-op if autoKey is off, no
+    /// animation is selected, or no bone is selected. Called by
+    /// TransformOperator at the end of every transform commit.
+    void   autoKeyOnTransform();
 
     // Keyframe ticks
     QVariantList keyframeTicks() const { return m_keyframeTicks; }
@@ -175,6 +205,56 @@ public:
     Q_INVOKABLE bool moveKeyframe(const QString& boneName,
                                   double oldTime, double newTime);
 
+    /// Retime a keyframe in place without pushing an undo command. The
+    /// caller commits one MoveKeyframeCommand on drag release; without
+    /// the preview path each move event triggers Skeleton::reset(true)
+    /// via MainWindow's indexChanged handler, blinking to T-pose.
+    Q_INVOKABLE bool moveKeyframePreview(const QString& boneName,
+                                         double oldTime, double newTime);
+
+    // ── Bulk keyframe ops (slice D1) ──────────────────────────────────────────
+    /// Move every selected keyframe by the same `dt` in seconds. Selection
+    /// is a list of QVariantMaps with "bone" + "time" keys. Atomic: a
+    /// single MoveKeyframesCommand on the undo stack. Returns false if the
+    /// shift would push any member out of [0, length] or collide with a
+    /// non-selected keyframe on the same track — in that case nothing is
+    /// pushed and the entity stays unchanged.
+    Q_INVOKABLE bool moveKeyframes(const QVariantList& selection, double dt);
+
+    /// Serialize a selection to a JSON string suitable for
+    /// QClipboard. The earliest selected time is `t0` so paste is relative.
+    /// Empty selection → empty string.
+    Q_INVOKABLE QString serializeKeyframes(const QVariantList& selection) const;
+
+    /// Paste keyframes serialized by serializeKeyframes() at absolute
+    /// `atTime` (interpreted as the destination "t0"). Skips entries whose
+    /// destination time would collide with an existing keyframe on that
+    /// track. Returns the count actually pasted.
+    Q_INVOKABLE int pasteKeyframesAt(const QString& json, double atTime);
+
+    // ── Curve editor API (slice D3b) ──────────────────────────────────────────
+    /// Returns the scalar value of one channel at every keyframe of `bone`'s
+    /// track on the currently-selected animation, in keyframe-time order.
+    /// `channel` ∈ {tx, ty, tz, rw, rx, ry, rz, sx, sy, sz}.
+    /// Empty when no animation/bone selected or the channel id is unknown.
+    Q_INVOKABLE QVariantList channelValuesAt(const QString& boneName,
+                                              const QString& channel) const;
+
+    /// Write a single channel value into the keyframe at `time` on `bone`'s
+    /// track, leaving the other 9 channels untouched. Pushes a
+    /// SetKeyframeValueCommand so Ctrl+Z restores the original value.
+    /// Returns true when the keyframe was found and updated.
+    Q_INVOKABLE bool setKeyframeValue(const QString& boneName,
+                                       const QString& channel,
+                                       double time, double value);
+
+    /// Write a channel value in place without pushing an undo command.
+    /// Caller commits one SetKeyframeValueCommand on drag release. See
+    /// moveKeyframePreview for the rationale.
+    Q_INVOKABLE bool setKeyframeValuePreview(const QString& boneName,
+                                              const QString& channel,
+                                              double time, double value);
+
 public slots:
     void updateAnimationTree();
 
@@ -189,6 +269,7 @@ signals:
     void currentKeyframeChanged();
     void playbackSpeedChanged();
     void loopRegionChanged();
+    void autoKeyChanged();
     /// Emitted when the dope-sheet view should refresh — track edits, clip
     /// selection, or keyframe add/delete/move.
     void boneRowsChanged();
@@ -220,6 +301,7 @@ private:
     int    m_selectedTick  = -1;
 
     QVariantList m_animationTree;
+    bool         m_animationTreeBuilt = false; ///< true after first updateAnimationTree
     QStringList  m_boneNames;
     QVariantList m_keyframeTicks;
 
@@ -232,6 +314,7 @@ private:
     double m_loopStart        = 0.0;
     double m_loopEnd          = 0.0;
     bool   m_loopRegionActive = false;
+    bool   m_autoKey          = false;
 };
 
 #endif // ANIMATIONCONTROLCONTROLLER_H

@@ -1,13 +1,25 @@
 #include "AnimationControlController.h"
 #include "SelectionSet.h"
 #include "Manager.h"
+#include "SentryReporter.h"
 #include "UndoManager.h"
 #include "commands/MoveKeyframeCommand.h"
+#include "commands/BulkKeyframeCommands.h"
+#include "commands/SetKeyframeValueCommand.h"
+#include "commands/AddKeyframeCommand.h"
+#include "commands/DeleteKeyframeCommand.h"
 #include <QApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPalette>
+#include <QSet>
 #include <QTimer>
 #include <QVariantMap>
+#include <algorithm>
 #include <cmath>
+#include <limits>
+#include <optional>
 
 #include <Ogre.h>
 
@@ -97,7 +109,7 @@ void AnimationControlController::updateAnimationTree()
     QString prevEntity = QString::fromStdString(m_selectedEntityName);
     QString prevAnim   = QString::fromStdString(m_selectedAnimation);
 
-    m_animationTree.clear();
+    QVariantList newTree;
     for (Ogre::Entity* entity : SelectionSet::getSingleton()->getResolvedEntities()) {
         Ogre::AnimationStateSet* set = entity->getAllAnimationStates();
         if (!set) continue;
@@ -111,8 +123,20 @@ void AnimationControlController::updateAnimationTree()
         QVariantMap group;
         group["entity"]     = QString::fromStdString(entity->getName());
         group["animations"] = animNames;
-        m_animationTree.append(group);
+        newTree.append(group);
     }
+
+    // Early-out when the tree hasn't actually changed AFTER it's been
+    // built once: the connected signal (SelectionSet::selectionChanged)
+    // also fires whenever undo commands are pushed (mainwindow re-emits
+    // it on QUndoStack indexChanged). Without this guard, every
+    // BoneTransformCommand push would call selectAnimation() and reset
+    // slider+bone selection. We always run the first call so QML
+    // listeners get an initial signal, even if the tree is empty.
+    if (m_animationTreeBuilt && newTree == m_animationTree) return;
+
+    m_animationTree = newTree;
+    m_animationTreeBuilt = true;
     emit animationTreeChanged();
 
     // Try to restore selection
@@ -214,9 +238,23 @@ void AnimationControlController::refreshBoneList()
         return;
     }
 
+    // Show every bone in the skeleton — not just the ones that already
+    // have a track in this animation. Tracks for picked-but-untracked
+    // bones get created lazily when the user adds a keyframe. Order:
+    // tracked bones first (so users see what's already animated at the
+    // top), then the rest in skeleton index order.
     Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
-    for (const auto& pair : anim->_getNodeTrackList())
-        m_boneNames << QString::fromStdString(pair.second->getAssociatedNode()->getName());
+    QSet<QString> trackedNames;
+    for (const auto& pair : anim->_getNodeTrackList()) {
+        QString name = QString::fromStdString(pair.second->getAssociatedNode()->getName());
+        m_boneNames << name;
+        trackedNames.insert(name);
+    }
+    for (unsigned short i = 0; i < m_selectedSkeleton->getNumBones(); ++i) {
+        QString name = QString::fromStdString(m_selectedSkeleton->getBone(i)->getName());
+        if (!trackedNames.contains(name))
+            m_boneNames << name;
+    }
 
     emit boneListChanged();
 
@@ -226,6 +264,48 @@ void AnimationControlController::refreshBoneList()
         emit keyframeTicksChanged();
         emit currentKeyframeChanged();
     }
+}
+
+Ogre::Bone* AnimationControlController::selectedBonePtr() const
+{
+    if (!m_selectedSkeleton || m_selectedBone.empty()) return nullptr;
+    if (!m_selectedSkeleton->hasBone(m_selectedBone)) return nullptr;
+    return m_selectedSkeleton->getBone(m_selectedBone);
+}
+
+bool AnimationControlController::boneCanTranslate(const Ogre::Bone* bone) const
+{
+    if (!bone) return true;
+    // Skeleton roots → always translatable (these are the "this is the
+    // character" bones that move the whole rig around — Hips, Pelvis,
+    // Armature, etc. — and may also have skin weights). Some importers
+    // wrap the actual root in an additional parent bone, so we check
+    // both: parentless OR present in Skeleton::getRootBones().
+    if (!bone->getParent()) return true;
+    if (m_selectedSkeleton) {
+        for (Ogre::Bone* root : m_selectedSkeleton->getRootBones())
+            if (root == bone) return true;
+    }
+    if (!m_selectedEntity) return true;
+    Ogre::MeshPtr mesh = m_selectedEntity->getMesh();
+    if (!mesh) return true;
+
+    // Walk every submesh's vertex-bone-assignment list. If any vertex
+    // is weighted to this bone's handle, translating it would tear the
+    // mesh away from the rig.
+    const auto handle = bone->getHandle();
+    auto referencesBone = [&](const Ogre::SubMesh::VertexBoneAssignmentList& list) {
+        for (auto it = list.begin(); it != list.end(); ++it)
+            if (it->second.boneIndex == handle) return true;
+        return false;
+    };
+    if (referencesBone(mesh->getBoneAssignments())) return false;
+    for (unsigned short i = 0; i < mesh->getNumSubMeshes(); ++i) {
+        Ogre::SubMesh* sub = mesh->getSubMesh(i);
+        if (!sub) continue;
+        if (referencesBone(sub->getBoneAssignments())) return false;
+    }
+    return true;
 }
 
 void AnimationControlController::selectBone(const QString& boneName)
@@ -241,6 +321,20 @@ void AnimationControlController::selectBone(const QString& boneName)
                 .setUserAny("selected", Ogre::Any(false));
     }
 
+    // Highlight the picked bone first — independent of whether a track
+    // exists for it in the current animation. Bones that aren't yet
+    // rigged into the active clip (no NodeAnimationTrack) should still
+    // visually select; the keyframe-editing path then no-ops cleanly
+    // since m_selectedTrack stays null until the user actually adds a
+    // keyframe (which lazily creates the track).
+    if (m_selectedSkeleton && !m_selectedBone.empty()
+        && m_selectedSkeleton->hasBone(m_selectedBone))
+    {
+        m_selectedSkeleton->getBone(m_selectedBone)
+            ->getUserObjectBindings().setUserAny("selected", Ogre::Any(true));
+    }
+
+    // Bind the existing track for this bone, if the animation has one.
     if (m_selectedSkeleton && !m_selectedAnimation.empty()
         && m_selectedSkeleton->hasAnimation(m_selectedAnimation))
     {
@@ -248,8 +342,6 @@ void AnimationControlController::selectBone(const QString& boneName)
         for (const auto& pair : anim->_getNodeTrackList()) {
             if (pair.second->getAssociatedNode()->getName() == m_selectedBone) {
                 m_selectedTrack = pair.second;
-                m_selectedSkeleton->getBone(m_selectedBone)
-                    ->getUserObjectBindings().setUserAny("selected", Ogre::Any(true));
                 break;
             }
         }
@@ -337,6 +429,27 @@ void AnimationControlController::setLoopRegionActive(bool on)
     if (on == m_loopRegionActive) return;
     m_loopRegionActive = on;
     emit loopRegionChanged();
+}
+
+void AnimationControlController::setAutoKey(bool on)
+{
+    if (on == m_autoKey) return;
+    m_autoKey = on;
+    SentryReporter::addBreadcrumb("ui.action",
+        QString("AutoKey toggled %1").arg(on ? "on" : "off"));
+    emit autoKeyChanged();
+}
+
+void AnimationControlController::autoKeyOnTransform()
+{
+    if (!m_autoKey) return;
+    // Don't require m_selectedTrack here — addKeyframe lazily creates
+    // the track for non-rigged bones. Just ensure the bone-level
+    // identity is set so addKeyframe has something to write into.
+    if (!m_selectedEntity || m_selectedAnimation.empty()) return;
+    if (!m_selectedSkeleton || m_selectedBone.empty()) return;
+    SentryReporter::addBreadcrumb("ui.action", "AutoKey applied keyframe");
+    addKeyframe();
 }
 
 double AnimationControlController::advanceTime(double currentTime, double dt) const
@@ -434,6 +547,38 @@ void AnimationControlController::refreshSliderTicks()
     emit boneRowsChanged();
 }
 
+void AnimationControlController::onUndoRedoCommandApplied()
+{
+    // Structural undo/redo (track destroy, keyframe add/remove) can
+    // invalidate cached pointers we hold. Drop them and re-resolve
+    // against the current skeleton state — but preserve the user's
+    // current bone selection (refreshBoneList would reset to the
+    // first bone, which is jarring).
+    m_selectedTrack   = nullptr;
+    m_currentKeyframe = nullptr;
+    m_selectedTick    = -1;
+
+    // Re-resolve m_selectedTrack from the active animation + bone, if
+    // both are still valid (the track may have been destroyed by an
+    // AddKeyframeCommand undo on a lazy-created track).
+    if (m_selectedSkeleton && !m_selectedAnimation.empty()
+        && m_selectedSkeleton->hasAnimation(m_selectedAnimation)
+        && !m_selectedBone.empty()
+        && m_selectedSkeleton->hasBone(m_selectedBone))
+    {
+        Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+        for (const auto& pair : anim->_getNodeTrackList()) {
+            if (pair.second->getAssociatedNode()->getName() == m_selectedBone) {
+                m_selectedTrack = pair.second;
+                break;
+            }
+        }
+    }
+
+    refreshSliderTicks();
+    setAnimationFrame(m_sliderValue);
+}
+
 // ── Keyframe editing ──────────────────────────────────────────────────────────
 
 bool AnimationControlController::hasPrevKeyframe() const
@@ -487,17 +632,90 @@ void AnimationControlController::nextKeyframe()
 
 void AnimationControlController::addKeyframe()
 {
-    if (!m_selectedTrack || !m_selectedEntity || m_selectedAnimation.empty()) return;
+    if (!m_selectedEntity || m_selectedAnimation.empty()) return;
+    if (!m_selectedSkeleton || m_selectedBone.empty()) return;
+    if (!m_selectedSkeleton->hasBone(m_selectedBone)) return;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return;
 
-    float time = m_sliderValue / 1000.0f;
-    Ogre::TransformKeyFrame* newKf = m_selectedTrack->createNodeKeyFrame(time);
+    // Determine the operation mode for undo: track-create vs.
+    // keyframe-create vs. keyframe-update.
+    const bool trackExisted = (m_selectedTrack != nullptr);
+    AddKeyframeCommand::Mode mode = AddKeyframeCommand::Mode::TrackCreated;
 
-    Ogre::TransformKeyFrame interpKf(nullptr, time);
-    m_selectedTrack->getInterpolatedKeyFrame(
-        m_selectedEntity->getAnimationState(m_selectedAnimation)->getTimePosition(), &interpKf);
-    newKf->setTranslate(interpKf.getTranslate());
-    newKf->setRotation(interpKf.getRotation());
-    newKf->setScale(interpKf.getScale());
+    // Lazily create an animation track for this bone if it doesn't have
+    // one yet (non-rigged bones, or bones the imported animation didn't
+    // touch). Without this, the user's edit would be a runtime-only
+    // pose that vanishes on export.
+    if (!m_selectedTrack) {
+        Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+        Ogre::Bone* bone = m_selectedSkeleton->getBone(m_selectedBone);
+        m_selectedTrack = anim->createNodeTrack(bone->getHandle(), bone);
+        // Re-include this bone in the bone-list and rebuild the panel
+        // so subsequent +KF / dope-sheet operations see the new track.
+        QString boneNameStr = QString::fromStdString(m_selectedBone);
+        if (!m_boneNames.contains(boneNameStr))
+            m_boneNames << boneNameStr;
+        emit boneListChanged();
+    }
+    if (!m_selectedTrack) return;
+
+    const float time = m_sliderValue / 1000.0f;
+    // Reuse a keyframe at the same time if one already exists — the rest of
+    // this controller treats same-time collisions as invalid, and auto-key
+    // would otherwise stack duplicates on every drag-end at the same scrub
+    // time. Match the same epsilon used by deleteKeyframe (1 ms).
+    Ogre::TransformKeyFrame* existingKf = nullptr;
+    constexpr float kKeyframeEpsilon = 0.001f;
+    for (unsigned short i = 0; i < m_selectedTrack->getNumKeyFrames(); ++i) {
+        auto* existing = static_cast<Ogre::TransformKeyFrame*>(m_selectedTrack->getKeyFrame(i));
+        if (std::fabs(existing->getTime() - time) <= kKeyframeEpsilon) {
+            existingKf = existing;
+            break;
+        }
+    }
+
+    // Capture before-TRS so undo restores the keyframe's pre-edit state.
+    // Defaults are identity for the create paths (the keyframe didn't
+    // exist; undo will remove it instead of restoring values).
+    Ogre::Vector3    beforeT = Ogre::Vector3::ZERO;
+    Ogre::Quaternion beforeR = Ogre::Quaternion::IDENTITY;
+    Ogre::Vector3    beforeS = Ogre::Vector3::UNIT_SCALE;
+    if (existingKf) {
+        beforeT = existingKf->getTranslate();
+        beforeR = existingKf->getRotation();
+        beforeS = existingKf->getScale();
+        mode = AddKeyframeCommand::Mode::KeyframeUpdated;
+    } else if (trackExisted) {
+        mode = AddKeyframeCommand::Mode::KeyframeCreated;
+    }
+    // else: trackExisted == false → Mode::TrackCreated (already set above).
+
+    // Compute the after-TRS from the bone's current local pose
+    // (relative to its initial bind pose, the format
+    // TransformKeyFrame stores). Previously this used
+    // getInterpolatedKeyFrame, which samples the existing animation
+    // curve at `time` and produces an identity-ish keyframe whenever
+    // the curve is flat there — the user-visible "blank registry"
+    // bug. With this change, hitting +KF after dragging the scene
+    // node (or, via the bone gizmo, the bone directly) captures the
+    // actual pose under the cursor at that scrub time.
+    const Ogre::Bone* bone = m_selectedSkeleton->getBone(m_selectedBone);
+    const Ogre::Vector3    afterT = bone->getPosition() - bone->getInitialPosition();
+    const Ogre::Quaternion afterR = bone->getInitialOrientation().Inverse() * bone->getOrientation();
+    const Ogre::Vector3    afterS = bone->getScale() / bone->getInitialScale();
+
+    // QUndoStack::push() executes redo() immediately, which performs the
+    // actual write. Pushing the command both creates the keyframe and
+    // makes it undoable.
+    auto* cmd = new AddKeyframeCommand(  // NOSONAR — QUndoStack owns
+        m_selectedEntityName,
+        m_selectedAnimation,
+        m_selectedBone,
+        time,
+        mode,
+        beforeT, beforeR, beforeS,
+        afterT,  afterR,  afterS);
+    UndoManager::getSingleton()->push(cmd);
 
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
@@ -507,15 +725,23 @@ void AnimationControlController::deleteKeyframe()
 {
     if (!m_selectedTrack || !m_currentKeyframe) return;
 
-    float t = m_currentKeyframe->getTime();
-    for (unsigned short i = 0; i < m_selectedTrack->getNumKeyFrames(); ++i) {
-        if (std::fabs(m_selectedTrack->getKeyFrame(i)->getTime() - t) < 0.001f) {
-            m_selectedTrack->removeKeyFrame(i);
-            break;
-        }
-    }
+    // Capture the keyframe's TRS so the undo path can restore it.
+    const float            t = m_currentKeyframe->getTime();
+    const Ogre::Vector3    keyT = m_currentKeyframe->getTranslate();
+    const Ogre::Quaternion keyR = m_currentKeyframe->getRotation();
+    const Ogre::Vector3    keyS = m_currentKeyframe->getScale();
+
+    // Push the command — its redo() removes the keyframe. Drop our
+    // cached pointer first since the command will invalidate it.
     m_currentKeyframe = nullptr;
     m_selectedTick    = -1;
+    auto* cmd = new DeleteKeyframeCommand(  // NOSONAR — QUndoStack owns
+        m_selectedEntityName,
+        m_selectedAnimation,
+        m_selectedBone,
+        t, keyT, keyR, keyS);
+    UndoManager::getSingleton()->push(cmd);
+
     refreshSliderTicks();
     setAnimationFrame(m_sliderValue);
 }
@@ -588,6 +814,56 @@ KF_SET_ROT(Z, z)
 
 // ── Dope sheet API (slice C) ──────────────────────────────────────────────────
 
+namespace {
+
+// A channel is "active" on a track if any keyframe's value differs from the
+// channel's identity (translate.x = 0, rotation = 1+0i+0j+0k, scale = 1) by
+// more than this epsilon. Tighter than kBulkEpsilon since these are values,
+// not times — a 1mm translate is meaningful.
+constexpr float kChannelEpsilon = 1e-4f;
+
+// Returns the 9 boolean channel flags for a track in TRS order:
+// {tx, ty, tz, rw, rx, ry, rz, sx, sy, sz}.
+// Only flags whose values deviate from identity are set.
+//
+// Rotation identity covers BOTH (+1, 0, 0, 0) AND (-1, 0, 0, 0) — a
+// quaternion and its negative encode the same rotation. Naive component-
+// wise comparison would flag rw as active for a sign-flipped identity,
+// producing bogus chevrons. We compare against the absolute values
+// instead: |w| ≈ 1, |x| ≈ |y| ≈ |z| ≈ 0 means identity regardless of sign.
+QVariantMap collectActiveChannels(const Ogre::NodeAnimationTrack* track)
+{
+    bool tx = false, ty = false, tz = false;
+    bool rw = false, rx = false, ry = false, rz = false;
+    bool sx = false, sy = false, sz = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const auto* kf = static_cast<const Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        const Ogre::Vector3    t = kf->getTranslate();
+        const Ogre::Quaternion r = kf->getRotation();
+        const Ogre::Vector3    s = kf->getScale();
+        if (std::fabs(t.x) > kChannelEpsilon) tx = true;
+        if (std::fabs(t.y) > kChannelEpsilon) ty = true;
+        if (std::fabs(t.z) > kChannelEpsilon) tz = true;
+        // Sign-agnostic rotation identity check — see header comment.
+        if (std::fabs(std::fabs(r.w) - 1.0f) > kChannelEpsilon) rw = true;
+        if (std::fabs(r.x) > kChannelEpsilon) rx = true;
+        if (std::fabs(r.y) > kChannelEpsilon) ry = true;
+        if (std::fabs(r.z) > kChannelEpsilon) rz = true;
+        // Scale identity = (1, 1, 1).
+        if (std::fabs(s.x - 1.0f) > kChannelEpsilon) sx = true;
+        if (std::fabs(s.y - 1.0f) > kChannelEpsilon) sy = true;
+        if (std::fabs(s.z - 1.0f) > kChannelEpsilon) sz = true;
+    }
+    QVariantMap m;
+    m[QStringLiteral("tx")] = tx; m[QStringLiteral("ty")] = ty; m[QStringLiteral("tz")] = tz;
+    m[QStringLiteral("rw")] = rw; m[QStringLiteral("rx")] = rx;
+    m[QStringLiteral("ry")] = ry; m[QStringLiteral("rz")] = rz;
+    m[QStringLiteral("sx")] = sx; m[QStringLiteral("sy")] = sy; m[QStringLiteral("sz")] = sz;
+    return m;
+}
+
+} // namespace
+
 QVariantList AnimationControlController::allBoneRows() const
 {
     QVariantList rows;
@@ -606,8 +882,9 @@ QVariantList AnimationControlController::allBoneRows() const
         }
 
         QVariantMap row;
-        row[QStringLiteral("bone")] = QString::fromStdString(node->getName());
+        row[QStringLiteral("bone")]     = QString::fromStdString(node->getName());
         row[QStringLiteral("keyTimes")] = keyTimes;
+        row[QStringLiteral("channels")] = collectActiveChannels(track);
         rows.append(row);
     }
     return rows;
@@ -651,7 +928,7 @@ bool AnimationControlController::moveKeyframe(const QString& boneName,
 
     // QUndoStack::push() takes ownership of the command — this raw new is
     // the standard QUndoCommand idiom (mirrors TransformCommands callers).
-    auto* cmd = new MoveKeyframeCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
+    auto* cmd = new MoveKeyframeCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
                                         m_selectedAnimation,
                                         boneStd,
                                         static_cast<float>(oldTime),
@@ -661,5 +938,484 @@ bool AnimationControlController::moveKeyframe(const QString& boneName,
     // the currently-edited bone and signal QML views to re-read rows.
     refreshSliderTicks();
     emit boneRowsChanged();
+    return true;
+}
+
+bool AnimationControlController::moveKeyframePreview(const QString& boneName,
+                                                      double oldTime, double newTime)
+{
+    if (boneName.isEmpty()) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (qFuzzyCompare(oldTime + 1.0, newTime + 1.0)) return false;
+
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    const std::string boneStd = boneName.toStdString();
+    if (!m_selectedSkeleton->hasBone(boneStd)) return false;
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneStd);
+    if (!bone || !anim->hasNodeTrack(bone->getHandle())) return false;
+    Ogre::NodeAnimationTrack* track = anim->getNodeTrack(bone->getHandle());
+
+    constexpr float kEpsilon = 0.001f;
+    int sourceIdx = -1;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(oldTime)) <= kEpsilon) {
+            sourceIdx = static_cast<int>(i);
+            break;
+        }
+    }
+    if (sourceIdx < 0) return false;
+
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (static_cast<int>(i) == sourceIdx) continue;
+        if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(newTime)) <= kEpsilon) {
+            return false;
+        }
+    }
+
+    auto* oldKf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(sourceIdx));
+    const Ogre::Vector3    t = oldKf->getTranslate();
+    const Ogre::Quaternion r = oldKf->getRotation();
+    const Ogre::Vector3    s = oldKf->getScale();
+    track->removeKeyFrame(static_cast<unsigned short>(sourceIdx));
+    auto* newKf = track->createNodeKeyFrame(static_cast<float>(newTime));
+    newKf->setTranslate(t);
+    newKf->setRotation(r);
+    newKf->setScale(s);
+    track->_keyFrameDataChanged();
+
+    // Skip refreshSliderTicks + boneRowsChanged: the release-time
+    // MoveKeyframeCommand re-emits both.
+    notifyOgreUpdate();
+    return true;
+}
+
+// ── Bulk keyframe ops (slice D1) ──────────────────────────────────────────────
+
+namespace {
+
+constexpr float kBulkEpsilon = 0.001f;
+
+// Resolve an arbitrary bone's track on the controller's current animation.
+// Returns nullptr if any link in the chain is missing.
+Ogre::NodeAnimationTrack* resolveTrackByBone(Ogre::Skeleton* skel,
+                                             const std::string& animName,
+                                             const std::string& boneName)
+{
+    if (!skel || animName.empty() || boneName.empty()) return nullptr;
+    if (!skel->hasAnimation(animName)) return nullptr;
+    if (!skel->hasBone(boneName)) return nullptr;
+    Ogre::Animation* anim = skel->getAnimation(animName);
+    Ogre::Bone* bone = skel->getBone(boneName);
+    if (!anim || !bone) return nullptr;
+    if (!anim->hasNodeTrack(bone->getHandle())) return nullptr;
+    return anim->getNodeTrack(bone->getHandle());
+}
+
+// Convert a QML-side selection list ({bone, time} maps) into the flat
+// command-side list of items, preserving caller-supplied order.
+QVector<MoveKeyframesCommand::Item> selectionToItems(const QVariantList& sel)
+{
+    QVector<MoveKeyframesCommand::Item> out;
+    out.reserve(sel.size());
+    for (const QVariant& v : sel) {
+        const QVariantMap m = v.toMap();
+        const QString bone = m.value(QStringLiteral("bone")).toString();
+        const double  t    = m.value(QStringLiteral("time")).toDouble();
+        if (bone.isEmpty()) continue;
+        out.append({ bone.toStdString(), static_cast<float>(t) });
+    }
+    return out;
+}
+
+} // namespace
+
+namespace {
+
+// Clamp the batch dt so no item's destination falls outside [0, length].
+// Returns the largest legal magnitude that still has the requested sign.
+float clampBatchDt(const QVector<MoveKeyframesCommand::Item>& items,
+                   float requestedDt, float length)
+{
+    if (items.isEmpty()) return 0.0f;
+    float lo = -std::numeric_limits<float>::infinity();
+    float hi =  std::numeric_limits<float>::infinity();
+    for (const auto& it : items) {
+        // Each item's destination must satisfy 0 <= origT + dt <= length.
+        lo = std::max(lo, -it.originalTime);
+        hi = std::min(hi,  length - it.originalTime);
+    }
+    if (lo > hi) return 0.0f; // shouldn't happen for non-empty range
+    return std::clamp(requestedDt, lo, hi);
+}
+
+// Returns true if the selection's destinations would collide with any
+// non-selected keyframe on its track.
+bool batchCollides(Ogre::Skeleton* skel, const std::string& animName,
+                   const QVector<MoveKeyframesCommand::Item>& items, float dt)
+{
+    auto isMember = [&](const std::string& bone, float time) {
+        for (const auto& it : items) {
+            if (it.boneName == bone &&
+                std::fabs(it.originalTime - time) <= kBulkEpsilon) return true;
+        }
+        return false;
+    };
+    for (const auto& it : items) {
+        const float dst = it.originalTime + dt;
+        auto* track = resolveTrackByBone(skel, animName, it.boneName);
+        if (!track) return true; // missing track = treat as collision; bail
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            const float t = track->getKeyFrame(i)->getTime();
+            if (std::fabs(t - it.originalTime) <= kBulkEpsilon) continue;
+            if (std::fabs(t - dst) <= kBulkEpsilon &&
+                !isMember(it.boneName, t)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+bool AnimationControlController::moveKeyframes(const QVariantList& selection,
+                                                double dt)
+{
+    if (selection.isEmpty()) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (qFuzzyCompare(dt + 1.0, 1.0)) return false;
+
+    QVector<MoveKeyframesCommand::Item> items = selectionToItems(selection);
+    if (items.isEmpty()) return false;
+
+    const auto length = static_cast<float>(animationLength());
+    // Clamp the requested delta so a multi-selection sliding into a clip
+    // boundary lands on the nearest legal time instead of snapping back.
+    const float dtf = clampBatchDt(items, static_cast<float>(dt), length);
+    if (qFuzzyIsNull(dtf)) return false;
+
+    // Refuse if the (now-clamped) shift would collide with any non-selected
+    // keyframe on the same track.
+    if (batchCollides(m_selectedSkeleton, m_selectedAnimation, items, dtf)) {
+        return false;
+    }
+
+    auto* cmd = new MoveKeyframesCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
+                                          m_selectedAnimation,
+                                          items, dtf);
+    UndoManager::getSingleton()->push(cmd);
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QString("Dope Sheet: bulk-move %1 keyframe(s) by %2s")
+            .arg(static_cast<int>(items.size()))
+            .arg(static_cast<double>(dtf), 0, 'f', 3));
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    return true;
+}
+
+QString AnimationControlController::serializeKeyframes(
+        const QVariantList& selection) const
+{
+    if (selection.isEmpty()) return {};
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return {};
+
+    // Find the earliest selected time so paste stays relative.
+    double t0 = std::numeric_limits<double>::infinity();
+    for (const QVariant& v : selection) {
+        const double t = v.toMap().value(QStringLiteral("time")).toDouble();
+        if (t < t0) t0 = t;
+    }
+    if (!std::isfinite(t0)) return {};
+
+    QJsonArray arr;
+    for (const QVariant& v : selection) {
+        const QVariantMap m = v.toMap();
+        const QString bone = m.value(QStringLiteral("bone")).toString();
+        const auto    tabs = static_cast<float>(m.value(QStringLiteral("time")).toDouble());
+        if (bone.isEmpty()) continue;
+        auto* track = resolveTrackByBone(m_selectedSkeleton, m_selectedAnimation,
+                                          bone.toStdString());
+        if (!track) continue;
+        // Find the actual keyframe to capture its TRS values.
+        Ogre::TransformKeyFrame* kf = nullptr;
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            auto* candidate = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+            if (std::fabs(candidate->getTime() - tabs) <= kBulkEpsilon) {
+                kf = candidate;
+                break;
+            }
+        }
+        if (!kf) continue;
+
+        const Ogre::Vector3    t = kf->getTranslate();
+        const Ogre::Quaternion r = kf->getRotation();
+        const Ogre::Vector3    s = kf->getScale();
+        QJsonObject e;
+        e[QStringLiteral("bone")] = bone;
+        e[QStringLiteral("dt")]   = static_cast<double>(tabs) - t0;
+        e[QStringLiteral("tx")] = t.x; e[QStringLiteral("ty")] = t.y; e[QStringLiteral("tz")] = t.z;
+        e[QStringLiteral("rw")] = r.w; e[QStringLiteral("rx")] = r.x;
+        e[QStringLiteral("ry")] = r.y; e[QStringLiteral("rz")] = r.z;
+        e[QStringLiteral("sx")] = s.x; e[QStringLiteral("sy")] = s.y; e[QStringLiteral("sz")] = s.z;
+        arr.append(e);
+    }
+    QJsonObject root;
+    root[QStringLiteral("version")] = 1;
+    root[QStringLiteral("kind")]    = QStringLiteral("qtmesh.dopesheet.keyframes");
+    root[QStringLiteral("entries")] = arr;
+    return QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Compact));
+}
+
+namespace {
+
+// All numeric fields that must be present on a clipboard entry. Missing or
+// non-numeric values reject the entry entirely (rather than silently
+// coercing to identity, which would paste corrupted transforms).
+const QStringList& pasteRequiredFields() {
+    static const QStringList kFields = {
+        QStringLiteral("tx"), QStringLiteral("ty"), QStringLiteral("tz"),
+        QStringLiteral("rw"), QStringLiteral("rx"), QStringLiteral("ry"),
+        QStringLiteral("rz"),
+        QStringLiteral("sx"), QStringLiteral("sy"), QStringLiteral("sz"),
+    };
+    return kFields;
+}
+
+bool entryHasAllFields(const QJsonObject& e) {
+    for (const QString& key : pasteRequiredFields()) {
+        if (!e.contains(key) || !e.value(key).isDouble()) return false;
+    }
+    return true;
+}
+
+// Parse one clipboard entry into a PasteKeyframesCommand::Entry. Returns
+// nullopt when the entry is missing required fields or its destination
+// time falls outside [0, length].
+std::optional<PasteKeyframesCommand::Entry>
+parsePasteEntry(const QJsonObject& e, double atTime, float length)
+{
+    const QString bone = e.value(QStringLiteral("bone")).toString();
+    if (bone.isEmpty()) return std::nullopt;
+    if (!entryHasAllFields(e)) return std::nullopt;
+    const auto dst = static_cast<float>(atTime + e.value(QStringLiteral("dt")).toDouble());
+    if (dst < 0.0f || dst > length + kBulkEpsilon) return std::nullopt;
+    PasteKeyframesCommand::Entry pe;
+    pe.boneName = bone.toStdString();
+    pe.time = dst;
+    pe.tx = static_cast<float>(e.value(QStringLiteral("tx")).toDouble());
+    pe.ty = static_cast<float>(e.value(QStringLiteral("ty")).toDouble());
+    pe.tz = static_cast<float>(e.value(QStringLiteral("tz")).toDouble());
+    pe.rw = static_cast<float>(e.value(QStringLiteral("rw")).toDouble());
+    pe.rx = static_cast<float>(e.value(QStringLiteral("rx")).toDouble());
+    pe.ry = static_cast<float>(e.value(QStringLiteral("ry")).toDouble());
+    pe.rz = static_cast<float>(e.value(QStringLiteral("rz")).toDouble());
+    pe.sx = static_cast<float>(e.value(QStringLiteral("sx")).toDouble());
+    pe.sy = static_cast<float>(e.value(QStringLiteral("sy")).toDouble());
+    pe.sz = static_cast<float>(e.value(QStringLiteral("sz")).toDouble());
+    return pe;
+}
+
+// Counts how many entries would actually paste — i.e. don't collide with
+// an existing keyframe on their target track.
+int countNonColliding(Ogre::Skeleton* skel, const std::string& animName,
+                      const QVector<PasteKeyframesCommand::Entry>& entries)
+{
+    int n = 0;
+    for (const auto& e : entries) {
+        auto* track = resolveTrackByBone(skel, animName, e.boneName);
+        if (!track) continue;
+        bool collides = false;
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            if (std::fabs(track->getKeyFrame(i)->getTime() - e.time) <= kBulkEpsilon) {
+                collides = true; break;
+            }
+        }
+        if (!collides) ++n;
+    }
+    return n;
+}
+
+} // namespace
+
+int AnimationControlController::pasteKeyframesAt(const QString& json,
+                                                  double atTime)
+{
+    if (json.isEmpty()) return 0;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return 0;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return 0;
+
+    QJsonParseError err{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8(), &err);
+    if (err.error != QJsonParseError::NoError || !doc.isObject()) return 0;
+    const QJsonObject root = doc.object();
+    if (root.value(QStringLiteral("kind")).toString() !=
+        QStringLiteral("qtmesh.dopesheet.keyframes")) return 0;
+    if (root.value(QStringLiteral("version")).toInt() != 1) return 0;
+
+    const auto length = static_cast<float>(animationLength());
+    QVector<PasteKeyframesCommand::Entry> entries;
+    for (const QJsonValue& v : root.value(QStringLiteral("entries")).toArray()) {
+        if (auto pe = parsePasteEntry(v.toObject(), atTime, length)) {
+            entries.append(*pe);
+        }
+    }
+    if (entries.isEmpty()) return 0;
+
+    // Skip pushing the command if every entry would collide — keeps the
+    // undo history clean. The command's own redo() does the authoritative
+    // collision check; this is purely a tidiness pre-filter.
+    if (countNonColliding(m_selectedSkeleton, m_selectedAnimation, entries) == 0) {
+        return 0;
+    }
+
+    auto* cmd = new PasteKeyframesCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
+                                           m_selectedAnimation,
+                                           entries);
+    UndoManager::getSingleton()->push(cmd);
+    const int n = cmd->pastedCount();
+    const int skipped = static_cast<int>(entries.size()) - n;
+    SentryReporter::addBreadcrumb(
+        "ui.action",
+        QString("Dope Sheet: paste %1 keyframe(s) at t=%2s (skipped %3 collision(s))")
+            .arg(n).arg(atTime, 0, 'f', 3).arg(skipped));
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    return n;
+}
+
+// ── Curve editor API (slice D3b) ──────────────────────────────────────────────
+
+namespace {
+
+// Resolve channel id → scalar reader on a TransformKeyFrame. Mirrors
+// SetKeyframeValueCommand's accessor without pulling that header in.
+double readChannel(const Ogre::TransformKeyFrame* kf, const QString& ch) {
+    const QString c = ch.toLower();
+    if (c == "tx") return kf->getTranslate().x;
+    if (c == "ty") return kf->getTranslate().y;
+    if (c == "tz") return kf->getTranslate().z;
+    if (c == "rw") return kf->getRotation().w;
+    if (c == "rx") return kf->getRotation().x;
+    if (c == "ry") return kf->getRotation().y;
+    if (c == "rz") return kf->getRotation().z;
+    if (c == "sx") return kf->getScale().x;
+    if (c == "sy") return kf->getScale().y;
+    if (c == "sz") return kf->getScale().z;
+    return 0.0;
+}
+
+bool isKnownChannel(const QString& ch) {
+    static const QStringList kKnown = {
+        QStringLiteral("tx"), QStringLiteral("ty"), QStringLiteral("tz"),
+        QStringLiteral("rw"), QStringLiteral("rx"),
+        QStringLiteral("ry"), QStringLiteral("rz"),
+        QStringLiteral("sx"), QStringLiteral("sy"), QStringLiteral("sz"),
+    };
+    return kKnown.contains(ch.toLower());
+}
+
+// Symmetric writer to readChannel — writes the requested scalar onto
+// the keyframe's TRS without touching the other 9 components.
+void writeChannel(Ogre::TransformKeyFrame* kf, const QString& ch, double v) {
+    const QString c = ch.toLower();
+    const float fv = static_cast<float>(v);
+    if (c == "tx") { auto t = kf->getTranslate(); t.x = fv; kf->setTranslate(t); return; }
+    if (c == "ty") { auto t = kf->getTranslate(); t.y = fv; kf->setTranslate(t); return; }
+    if (c == "tz") { auto t = kf->getTranslate(); t.z = fv; kf->setTranslate(t); return; }
+    if (c == "rw") { auto r = kf->getRotation();  r.w = fv; kf->setRotation(r);  return; }
+    if (c == "rx") { auto r = kf->getRotation();  r.x = fv; kf->setRotation(r);  return; }
+    if (c == "ry") { auto r = kf->getRotation();  r.y = fv; kf->setRotation(r);  return; }
+    if (c == "rz") { auto r = kf->getRotation();  r.z = fv; kf->setRotation(r);  return; }
+    if (c == "sx") { auto s = kf->getScale();     s.x = fv; kf->setScale(s);     return; }
+    if (c == "sy") { auto s = kf->getScale();     s.y = fv; kf->setScale(s);     return; }
+    if (c == "sz") { auto s = kf->getScale();     s.z = fv; kf->setScale(s);     return; }
+}
+
+} // namespace
+
+QVariantList AnimationControlController::channelValuesAt(
+        const QString& boneName, const QString& channel) const
+{
+    QVariantList out;
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return out;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return out;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return out;
+    if (!m_selectedSkeleton->hasBone(boneName.toStdString())) return out;
+
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneName.toStdString());
+    if (!anim->hasNodeTrack(bone->getHandle())) return out;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+
+    out.reserve(static_cast<int>(track->getNumKeyFrames()));
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        const auto* kf = static_cast<const Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        out.append(readChannel(kf, channel));
+    }
+    return out;
+}
+
+bool AnimationControlController::setKeyframeValue(const QString& boneName,
+                                                   const QString& channel,
+                                                   double time, double value)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (!m_selectedSkeleton->hasBone(boneName.toStdString())) return false;
+
+    // Pre-check that there's actually a keyframe at `time` — otherwise the
+    // command would push a no-op onto the undo stack. Mirrors the same
+    // tolerance the command itself uses (1 ms).
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneName.toStdString());
+    if (!anim->hasNodeTrack(bone->getHandle())) return false;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    bool found = false;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        if (std::fabs(track->getKeyFrame(i)->getTime() - static_cast<float>(time))
+                <= 0.001f) {
+            found = true; break;
+        }
+    }
+    if (!found) return false;
+
+    auto* cmd = new SetKeyframeValueCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
+                                             m_selectedAnimation,
+                                             boneName.toStdString(),
+                                             channel.toLower().toStdString(),
+                                             static_cast<float>(time),
+                                             value);
+    UndoManager::getSingleton()->push(cmd);
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    return true;
+}
+
+bool AnimationControlController::setKeyframeValuePreview(const QString& boneName,
+                                                          const QString& channel,
+                                                          double time, double value)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return false;
+    if (!m_selectedSkeleton->hasBone(boneName.toStdString())) return false;
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneName.toStdString());
+    if (!anim->hasNodeTrack(bone->getHandle())) return false;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    Ogre::TransformKeyFrame* target = nullptr;
+    for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+        auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
+        if (std::fabs(kf->getTime() - static_cast<float>(time)) <= 0.001f) {
+            target = kf; break;
+        }
+    }
+    if (!target) return false;
+    writeChannel(target, channel, value);
+    notifyOgreUpdate();
     return true;
 }

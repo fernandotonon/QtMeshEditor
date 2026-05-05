@@ -4,6 +4,7 @@
 #include <QThread>
 #include "Manager.h"
 #include "SkeletonDebug.h"
+#include "GlobalDefinitions.h"
 #include <OgreException.h>
 #include "TestHelpers.h"
 
@@ -104,6 +105,46 @@ TEST_F(SkeletonDebugTests, SelectedBoneIndexDefault)
 {
     int index = skeletonDebug->selectedBoneIndex();
     EXPECT_GE(index, -1);
+}
+
+TEST_F(SkeletonDebugTests, BoneNameForMovableReturnsEmptyForNullptr)
+{
+    EXPECT_TRUE(SkeletonDebug::boneNameForMovable(nullptr).empty());
+}
+
+TEST_F(SkeletonDebugTests, BoneNameForMovableReturnsEmptyForUntaggedEntity)
+{
+    Ogre::SceneManager* sm = Manager::getSingleton()->getSceneMgr();
+    Ogre::Entity* plain = sm->createEntity(
+        "BoneNameTest_Plain", Ogre::SceneManager::PT_CUBE);
+    EXPECT_TRUE(SkeletonDebug::boneNameForMovable(plain).empty());
+    sm->destroyEntity(plain);
+}
+
+TEST_F(SkeletonDebugTests, BoneNameForMovableReturnsBoneNameForTaggedVisuals)
+{
+    // After SkeletonDebug constructs visuals, every bone-mesh / axes entity
+    // it creates carries the bone name as a UserAny tag and the
+    // BONE_QUERY_FLAGS query mask. A ray-pick in the viewport relies on
+    // both — the mask filters out scene meshes, the tag maps the hit
+    // movable back to its bone.
+    skeletonDebug->showBones(true);
+    skeletonDebug->showAxes(true);
+
+    Ogre::SceneManager* sm = Manager::getSingleton()->getSceneMgr();
+    int taggedCount = 0;
+    for (auto it = sm->getMovableObjectIterator("Entity").begin();
+         it != sm->getMovableObjectIterator("Entity").end(); ++it)
+    {
+        auto* obj = it->second;
+        Ogre::String tag = SkeletonDebug::boneNameForMovable(obj);
+        if (!tag.empty())
+        {
+            ++taggedCount;
+            EXPECT_EQ(obj->getQueryFlags(), static_cast<Ogre::uint32>(BONE_QUERY_FLAGS));
+        }
+    }
+    EXPECT_GT(taggedCount, 0) << "no SkeletonDebug visuals were tagged";
 }
 
 TEST_F(SkeletonDebugTests, SetAxesScaleZero)

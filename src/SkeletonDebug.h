@@ -29,6 +29,11 @@ public:
     void update() const;
     short selectedBoneIndex() const { return mLastSelectedBone; }
 
+    // Bone-name tag attached to every visual entity (bone meshes + axes
+    // meshes) so a ray-pick in the viewport can map back to the bone.
+    // Returns empty string when the movable isn't a SkeletonDebug visual.
+    static Ogre::String boneNameForMovable(const Ogre::MovableObject* obj);
+
 signals:
     void boneSelected(unsigned short boneIndex);
 
@@ -42,6 +47,7 @@ private:
     Ogre::MaterialPtr mAxisMatPtr;
     Ogre::MaterialPtr mBoneMatPtr;
     Ogre::MaterialPtr mBoneMatSelectedPtr;
+    Ogre::MaterialPtr mBoneMatRootPtr;
     Ogre::MeshPtr mBoneMeshPtr;
     Ogre::MeshPtr mAxesMeshPtr;
     Ogre::SceneManager *mSceneMan;

@@ -1,7 +1,30 @@
 #include "SkeletonDebug.h"
+#include "GlobalDefinitions.h"
 
 #include <array>
 #include <cassert>
+
+namespace {
+constexpr const char* kBoneNameTag = "skeletonDebugBoneName";
+
+void tagBoneVisual(Ogre::MovableObject* obj, const Ogre::String& boneName) {
+    if (!obj) return;
+    obj->getUserObjectBindings().setUserAny(kBoneNameTag, Ogre::Any(boneName));
+    obj->setQueryFlags(BONE_QUERY_FLAGS);
+}
+}
+
+Ogre::String SkeletonDebug::boneNameForMovable(const Ogre::MovableObject* obj)
+{
+    if (!obj) return {};
+    const auto& any = obj->getUserObjectBindings().getUserAny(kBoneNameTag);
+    if (!any.has_value()) return {};
+    try {
+        return Ogre::any_cast<Ogre::String>(any);
+    } catch (const std::exception&) {
+        return {};
+    }
+}
 
 SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, float boneSize, float scaleAxes)
     : mBoneSize(boneSize)
@@ -25,6 +48,17 @@ SkeletonDebug::SkeletonDebug(Ogre::Entity* entity, Ogre::SceneManager *man, floa
         for(auto* ent: mBoneEntities){
             ent->setMaterial(mBoneMatPtr);
             ent->setVisible(mShowBones);
+        }
+        // Paint skeleton roots yellow so users can identify which bones
+        // are root (translatable). Walk getRootBones() and color the
+        // matching visual entities. Selected highlight (red) wins over
+        // root-yellow when both apply.
+        for (Ogre::Bone* root : mEntity->getSkeleton()->getRootBones()) {
+            auto it = mapEntities.find(root->getName());
+            if (it != mapEntities.end() && it->second) {
+                it->second->setMaterial(mBoneMatRootPtr);
+                it->second->setVisible(mShowBones);
+            }
         }
         for(auto* bone : mEntity->getSkeleton()->getBones())
         {
@@ -84,6 +118,10 @@ void SkeletonDebug::createChildBoneRepresentations(const Ogre::Bone* pBone, Ogre
         auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)lastEnt);
         mBoneEntities.push_back(lastEnt);
         tp->setScale(length, length, length);
+        // Tag every child bone visual with the parent bone's name —
+        // dragging this segment in the viewport edits the parent bone's
+        // pose (the segment visually represents that bone, not the child).
+        tagBoneVisual(lastEnt, pBone->getName());
     }
 }
 
@@ -112,6 +150,8 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
             float length = pBone->getInitialPosition().length();
             if(length >= 0.00001f)
                 tp->setScale(length, length, length);
+
+            tagBoneVisual(ent, pBone->getName());
         }
         else
         {
@@ -124,6 +164,9 @@ std::map<std::string, Ogre::Entity*, std::less<>> SkeletonDebug::createBoneVisua
         auto* tp = mEntity->attachObjectToBone(pBone->getName(), (Ogre::MovableObject*)ent);
         tp->setScale((mScaleAxes/mEntity->getParentSceneNode()->getScale().x), (mScaleAxes/mEntity->getParentSceneNode()->getScale().y), (mScaleAxes/mEntity->getParentSceneNode()->getScale().z));
         mAxisEntities.push_back(ent);
+        // Tag the axes overlay too — clicking the axis cross is the most
+        // visible target for users when scaling/rotating.
+        tagBoneVisual(ent, pBone->getName());
     }
 
     return mapEntities;
@@ -241,6 +284,23 @@ void SkeletonDebug::createBoneMaterial()
         p->setEmissive(1,0,0);
     }
 
+    // Yellow material for root bones — visual hint that translation is
+    // unrestricted on these bones (the rest are rotation-only when rigged).
+    Ogre::String matName3 = "SkeletonDebug/BoneMatRoot";
+    mBoneMatRootPtr = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().getByName(matName3));
+    if (!mBoneMatRootPtr) {
+        mBoneMatRootPtr = Ogre::static_pointer_cast<Ogre::Material>(Ogre::MaterialManager::getSingleton().create(matName3, Ogre::ResourceGroupManager::INTERNAL_RESOURCE_GROUP_NAME));
+        Ogre::Pass* p = mBoneMatRootPtr->getTechnique(0)->getPass(0);
+        p->setLightingEnabled(true);
+        p->setDepthWriteEnabled(false);
+        p->setDepthCheckEnabled(false);
+        p->setVertexColourTracking(Ogre::TVC_AMBIENT);
+        p->setSceneBlending(Ogre::SBT_TRANSPARENT_ALPHA);
+        p->setCullingMode(Ogre::CULL_ANTICLOCKWISE);
+        p->setDiffuse(1, 0.85f, 0, 1);
+        p->setAmbient(1, 0.85f, 0);
+        p->setEmissive(1, 0.85f, 0);
+    }
 }
 
 void SkeletonDebug::createBoneMesh()
