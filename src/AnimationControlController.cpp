@@ -1496,8 +1496,10 @@ bool AnimationControlController::resampleCurveSegment(const QString& boneName,
                                           fixedFps);
     UndoManager::getSingleton()->push(cmd);
     SentryReporter::addBreadcrumb("ui.action", "Resampled curve segment");
-    refreshSliderTicks();
-    emit boneRowsChanged();
+    if (!m_suspendRowsRefresh) {
+        refreshSliderTicks();
+        emit boneRowsChanged();
+    }
     return true;
 }
 
@@ -1573,6 +1575,10 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
 
     auto* stack = UndoManager::getSingleton()->stack();
     stack->beginMacro(QObject::tr("Resample bone curve"));
+    // Suspend per-segment QML refresh — the dope sheet + curve editor
+    // would otherwise rebuild thousands of times during the macro.
+    const bool prevSuspend = m_suspendRowsRefresh;
+    m_suspendRowsRefresh = true;
     int count = 0;
     for (size_t i = 1; i < anchors.size(); ++i) {
         if (resampleCurveSegment(boneName, channel,
@@ -1581,8 +1587,19 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
             ++count;
         }
     }
+    m_suspendRowsRefresh = prevSuspend;
     stack->endMacro();
+    if (!m_suspendRowsRefresh) {
+        refreshSliderTicks();
+        emit boneRowsChanged();
+    }
     return count;
+}
+
+void AnimationControlController::refreshAfterBulkResample()
+{
+    refreshSliderTicks();
+    emit boneRowsChanged();
 }
 
 int AnimationControlController::reduceTrackToFps(const QString& boneName,

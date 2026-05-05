@@ -8,6 +8,7 @@
 #include "SkeletonTransform.h"
 #include "AnimationControlController.h"
 #include "AnimationMerger.h"
+#include "CurveEditModel.h"
 #include "SentryReporter.h"
 #include "MeshImporterExporter.h"
 #include "UndoManager.h"
@@ -770,19 +771,41 @@ int PropertiesPanelController::bakeAnimation(const QString& entityName,
 
         auto* stack = UndoManager::getSingleton()->stack();
         stack->beginMacro(QObject::tr("Bake animation"));
+        // For fixed-FPS modes the user explicitly wants every channel
+        // densified at the target rate (export-pipeline use case).
+        // For adaptive modes, only bake channels the user authored a
+        // CurveEditModel entry for — channels without entries have no
+        // shape to preserve and densifying them just produces redundant
+        // keyframes (and froze the UI on a 50-bone skeleton).
+        const bool isFixedFps = (density == 3 || density == 4);
+        auto* model = CurveEditModel::instance();
         int trackCount = 0;
+        // Suspend the per-segment QML refresh storm — we'll emit one
+        // boneRowsChanged after the macro closes. With ~50 bones × 10
+        // channels × 30 anchor pairs at 60 FPS, that's ~15k
+        // resample pushes; without this the dope sheet rebuilds
+        // thousands of times and the UI freezes.
+        animCtrl->setRowsRefreshSuspended(true);
         for (const auto& [handle, track] : anim->_getNodeTrackList()) {
             Ogre::Node* node = track->getAssociatedNode();
             if (!node) continue;
             const QString boneName = QString::fromStdString(node->getName());
             for (const char* ch : kAllChannels) {
+                const QString chQ = QString::fromUtf8(ch);
+                if (!isFixedFps
+                    && !model->hasEntryForChannel(entityName, animName,
+                                                   boneName, chQ)) {
+                    continue;
+                }
                 if (animCtrl->resampleAllSegmentsForBone(
-                        boneName, QString::fromUtf8(ch), density) > 0) {
+                        boneName, chQ, density) > 0) {
                     ++trackCount;
                 }
             }
         }
+        animCtrl->setRowsRefreshSuspended(false);
         stack->endMacro();
+        animCtrl->refreshAfterBulkResample();
 
         // Restore the prior selection so the user's panel state stays put.
         if (prevEntity != entityName || prevAnim != animName) {

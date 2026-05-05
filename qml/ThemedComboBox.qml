@@ -73,10 +73,13 @@ ComboBox {
 
     // Pop directly under the input (no gap) — matches the SceneTreeNode
     // material typeahead. Default ComboBox.popup leaves ~5px gap on macOS.
+    // Cap height so long lists scroll inside the popup instead of getting
+    // clipped by the QQuickWidget bounds (the curve editor's bake combo
+    // hits this with 10+ items in a small editor area).
     popup: Popup {
         y: control.height
         width: control.width
-        implicitHeight: contentItem.implicitHeight
+        implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
         padding: 1
 
         contentItem: ListView {

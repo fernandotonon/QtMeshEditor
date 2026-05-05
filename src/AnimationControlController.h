@@ -301,6 +301,13 @@ public:
     Q_INVOKABLE int reduceTrackToFps(const QString& boneName,
                                      int targetFps);
 
+    /// Whole-animation bake helpers: temporarily suppress the per-
+    /// segment QML refresh emitted by resampleCurveSegment so a
+    /// thousands-of-segments macro doesn't fire thousands of dope
+    /// sheet rebuilds.
+    void setRowsRefreshSuspended(bool suspend) { m_suspendRowsRefresh = suspend; }
+    void refreshAfterBulkResample();
+
 public slots:
     void updateAnimationTree();
 
@@ -348,6 +355,10 @@ private:
 
     QVariantList m_animationTree;
     bool         m_animationTreeBuilt = false; ///< true after first updateAnimationTree
+    /// When true, resampleCurveSegment skips its per-call
+    /// refreshSliderTicks + boneRowsChanged emit. Set by whole-
+    /// animation bake to coalesce thousands of refreshes into one.
+    bool         m_suspendRowsRefresh  = false;
     QStringList  m_boneNames;
     QVariantList m_keyframeTicks;
 
