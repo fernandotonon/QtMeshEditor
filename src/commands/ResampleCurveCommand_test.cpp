@@ -28,13 +28,16 @@ protected:
     }
     void TearDown() override {
         CurveEditModel::kill();
+        Manager::kill();
         if (app) app->processEvents();
+        QThread::msleep(20);
     }
     QApplication* app = nullptr;
 
     static Ogre::NodeAnimationTrack* trackOf(Ogre::Entity* e) {
-        return e->getSkeleton()->getAnimation("TestAnim")
-                ->_getNodeTrackList().begin()->second;
+        auto* anim = e->getSkeleton()->getAnimation("TestAnim");
+        const auto& tracks = anim->_getNodeTrackList();
+        return tracks.empty() ? nullptr : tracks.begin()->second;
     }
 };
 
@@ -44,6 +47,7 @@ TEST_F(ResampleCurveCommandTest, RedoInsertsInteriorKeyframes) {
     ASSERT_NE(entity, nullptr);
 
     auto* track = trackOf(entity);
+    ASSERT_NE(track, nullptr);
     const int beforeCount = track->getNumKeyFrames();
 
     // Stepped on the upstream key produces high curvature → 60 Hz boost.
@@ -67,6 +71,7 @@ TEST_F(ResampleCurveCommandTest, UndoRestoresOriginalCount) {
     ASSERT_NE(entity, nullptr);
 
     auto* track = trackOf(entity);
+    ASSERT_NE(track, nullptr);
     const int beforeCount = track->getNumKeyFrames();
 
     CurveEditModel::instance()->setMode(
@@ -92,6 +97,7 @@ TEST_F(ResampleCurveCommandTest, AnchorKeyframesSurviveResample) {
     ASSERT_NE(entity, nullptr);
 
     auto* track = trackOf(entity);
+    ASSERT_NE(track, nullptr);
     auto findAt = [&](float t) -> Ogre::TransformKeyFrame* {
         for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
             auto* kf = static_cast<Ogre::TransformKeyFrame*>(track->getKeyFrame(i));
@@ -127,6 +133,7 @@ TEST_F(ResampleCurveCommandTest, RedoTwiceMatchesFirstResult) {
     ASSERT_NE(entity, nullptr);
 
     auto* track = trackOf(entity);
+    ASSERT_NE(track, nullptr);
     CurveEditModel::instance()->setMode(
         QString::fromStdString(entity->getName()),
         "TestAnim",
@@ -151,6 +158,7 @@ TEST_F(ResampleCurveCommandTest, MissingAnchorsAreNoOp) {
     ASSERT_NE(entity, nullptr);
 
     auto* track = trackOf(entity);
+    ASSERT_NE(track, nullptr);
     const int beforeCount = track->getNumKeyFrames();
 
     ResampleCurveCommand cmd(entity->getName(), "TestAnim",

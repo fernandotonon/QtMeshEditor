@@ -5,6 +5,7 @@
 #include <QTest>
 #include <QThread>
 #include "AnimationControlController.h"
+#include "CurveEditModel.h"
 #include "Manager.h"
 #include "SelectionSet.h"
 #include "TestHelpers.h"
@@ -1104,6 +1105,93 @@ TEST_F(AnimationControlControllerTest, MoveKeyframePreviewNoOpOnIdenticalTime) {
 TEST_F(AnimationControlControllerPlaybackTest, MoveKeyframePreviewNoOpWithoutSelection) {
     auto* ctrl = AnimationControlController::instance();
     EXPECT_FALSE(ctrl->moveKeyframePreview("Bone", 0.5, 0.6));
+}
+
+// ── editCurveAndResampleAround macro ──────────────────────────────────────────
+
+TEST_F(AnimationControlControllerTest, EditCurveAndResampleAroundIsSingleUndoStep) {
+    // CodeRabbit/codex regression: a mode/tangent change must wrap the
+    // CurveEditModel side-table edit + neighbor resamples in ONE
+    // QUndoStack macro so a single Ctrl+Z reverts everything together.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_EditMacro");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    // Anchors: TestAnim has keys at 0.0, 0.5, 1.0.
+    QVariantList anchors;
+    anchors << 0.0 << 0.5 << 1.0;
+
+    auto* stack = UndoManager::getSingleton()->stack();
+    const int before = stack->count();
+
+    EXPECT_TRUE(ctrl->editCurveAndResampleAround(
+        bone, "tx", 0.5, 0.0, 0.0,
+        CurveEditModel::ModeStepped, anchors));
+
+    // The macro plus its child commands collapse into one stack entry.
+    EXPECT_EQ(stack->count(), before + 1)
+        << "edit + 2 resamples must collapse into ONE undo entry";
+}
+
+TEST_F(AnimationControlControllerTest, EditCurveUndoRestoresModelMode) {
+    // After undo, the CurveEditModel mode must be back to its
+    // pre-edit value — not stuck on whatever the macro applied.
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_ModelUndo");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+    QString skel = QString::fromStdString(entity->getName());
+
+    QVariantList anchors;
+    anchors << 0.0 << 0.5 << 1.0;
+
+    EXPECT_TRUE(ctrl->editCurveAndResampleAround(
+        bone, "tx", 0.5, 0.0, 0.0,
+        CurveEditModel::ModeStepped, anchors));
+
+    auto* m = CurveEditModel::instance();
+    auto after = m->tangentsAt(skel, "TestAnim", bone, "tx", 0.5);
+    EXPECT_EQ(after[2].toInt(), CurveEditModel::ModeStepped);
+
+    UndoManager::getSingleton()->stack()->undo();
+
+    auto restored = m->tangentsAt(skel, "TestAnim", bone, "tx", 0.5);
+    EXPECT_EQ(restored[2].toInt(), CurveEditModel::ModeBezier)
+        << "undo must restore CurveEditModel mode to its pre-edit value";
+}
+
+TEST_F(AnimationControlControllerTest, ResampleAroundUsesAuthoredAnchors) {
+    // Pass anchors that EXCLUDE the dense post-resample frames to
+    // confirm the resampler honors the authored neighbor list (codex
+    // regression: it used to pull from row.keyTimes which contains
+    // synthetic samples after one resample pass).
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_AnchorList");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    // Two anchors only — segment 0.0..1.0. No 0.5 anchor: the resampler
+    // must NOT pretend there's a key at 0.5 even though TestAnim has one.
+    QVariantList anchors;
+    anchors << 0.0 << 1.0;
+
+    EXPECT_TRUE(ctrl->resampleAround(bone, "tx", 0.5, anchors));
+    // Function returned true because 0.5 has authored neighbors at
+    // 0.0 (prev) and 1.0 (next). The actual segments inside the call
+    // are validated by ResampleCurveCommand_test.
 }
 
 TEST_F(AnimationControlControllerTest, SetKeyframeValuePreviewWritesWithoutUndoPush) {

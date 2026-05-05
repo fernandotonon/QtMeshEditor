@@ -60,6 +60,7 @@ commands/MoveKeyframeCommand.cpp
 commands/BulkKeyframeCommands.cpp
 commands/SetKeyframeValueCommand.cpp
 commands/ResampleCurveCommand.cpp
+commands/CurveEditModelChangeCommand.cpp
 commands/BoneTransformCommand.cpp
 commands/AddKeyframeCommand.cpp
 commands/DeleteKeyframeCommand.cpp

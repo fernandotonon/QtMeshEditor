@@ -264,6 +264,30 @@ public:
                                           const QString& channel,
                                           double t0, double t1);
 
+    /// One-shot gesture: capture the CurveEditModel state at `keyTime`,
+    /// apply the new tangent/mode, then resample both adjacent
+    /// segments — all under a single QUndoStack macro so Ctrl+Z reverts
+    /// the whole thing. Use mode=-1 to leave mode unchanged.
+    /// `anchorTimes` is the authored key list (without resampled
+    /// frames) so the resample uses original anchors, not dense
+    /// neighbors from a prior pass.
+    Q_INVOKABLE bool editCurveAndResampleAround(const QString& boneName,
+                                                 const QString& channel,
+                                                 double keyTime,
+                                                 double newInTangent,
+                                                 double newOutTangent,
+                                                 int newMode,
+                                                 const QVariantList& anchorTimes);
+
+    /// Same as editCurveAndResampleAround but skips the side-table
+    /// edit — used for keyframe drag commits where the resample is
+    /// the only effect and the value/time changes are pushed by the
+    /// caller before this method runs.
+    Q_INVOKABLE bool resampleAround(const QString& boneName,
+                                    const QString& channel,
+                                    double keyTime,
+                                    const QVariantList& anchorTimes);
+
 public slots:
     void updateAnimationTree();
 

@@ -231,10 +231,13 @@ void ResampleCurveCommand::redo()
 {
     if (!mCaptured) {
         if (!captureBefore()) return;
+        // First redo: resample. Only mark `mCaptured` once the
+        // resample succeeds — otherwise a failed first redo would flip
+        // every subsequent redo into the "replay mAfter" branch with an
+        // empty mAfter, silently turning into a destructive no-op that
+        // erases the user's interior keyframes on the next play.
+        if (!resampleAndWrite()) return;
         mCaptured = true;
-        // First redo: actually resample. Subsequent redos replay the
-        // captured `mAfter` snapshot for determinism.
-        resampleAndWrite();
         return;
     }
     applySnapshot(mAfter);

@@ -81,26 +81,13 @@ Rectangle {
         curveCanvas.requestPaint()
     }
 
-    // Resample the segments adjacent to `keyTime` so Ogre playback
-    // follows the curve shape held in CurveEditModel. Skip if the
-    // keyTime sits at a track boundary (no segment to one side).
-    function resampleAround(boneName, channel, keyTime) {
+    // Snapshot the current row's keyTimes for resampler anchors. Caller
+    // captures this BEFORE any preview/resample so subsequent passes
+    // use the authored key list, not the dense post-resample one.
+    function snapshotAnchorTimes() {
         var row = selectedBoneRow()
-        if (!row || !row.keyTimes) return
-        var sorted = row.keyTimes.slice().sort(function(a, b) { return a - b })
-        var idx = -1
-        for (var i = 0; i < sorted.length; i++) {
-            if (Math.abs(sorted[i] - keyTime) < 0.001) { idx = i; break }
-        }
-        if (idx < 0) return
-        if (idx > 0) {
-            AnimationControlController.resampleCurveSegment(
-                boneName, channel, sorted[idx - 1], sorted[idx])
-        }
-        if (idx < sorted.length - 1) {
-            AnimationControlController.resampleCurveSegment(
-                boneName, channel, sorted[idx], sorted[idx + 1])
-        }
+        if (!row || !row.keyTimes) return []
+        return row.keyTimes.slice()
     }
 
     function clampViewStart() {
@@ -359,15 +346,23 @@ Rectangle {
         property string boneName: ""
         property string channelId: ""
         property real keyTime: 0
+        // Captured at popup time so the resampler uses authored anchors
+        // even after the user has resampled neighboring segments.
+        property var anchorTimes: []
 
         function applyMode(mode) {
-            CurveEditModel.setMode(
+            // Bundles the side-table edit (mode flag) + neighbor
+            // resamples under one undo macro. Single Ctrl+Z reverts
+            // both Ogre keyframes AND the model's mode entry.
+            var prev = CurveEditModel.tangentsAt(
                 AnimationControlController.selectedEntityName,
                 AnimationControlController.selectedAnimation,
-                boneName, channelId, keyTime, mode)
-            // Mode change reshapes the segments on either side of this
-            // key — resample both so playback reflects the new shape.
-            root.resampleAround(boneName, channelId, keyTime)
+                boneName, channelId, keyTime)
+            var inT  = prev.length >= 1 ? prev[0] : 0
+            var outT = prev.length >= 2 ? prev[1] : 0
+            AnimationControlController.editCurveAndResampleAround(
+                boneName, channelId, keyTime,
+                inT, outT, mode, anchorTimes)
         }
 
         MenuItem { text: "Bezier";   onTriggered: modeMenu.applyMode(CurveEditModel.ModeBezier) }
@@ -454,6 +449,17 @@ Rectangle {
         property real   dragTangentKy: 0
         property real   dragInT: 0
         property real   dragOutT: 0
+        // Authored anchor times captured at press (before any preview
+        // resample). Resample-on-release uses these instead of the
+        // current row.keyTimes, which gets densely populated.
+        property var    dragAnchorTimes: []
+        // CurveEditModel state at tangent-drag press, captured so
+        // onReleased can push a CurveEditModelChangeCommand recording
+        // the in/out tangent transition (single Ctrl+Z reverts both
+        // the model entry and the resample).
+        property real   dragTangentOrigInT: 0
+        property real   dragTangentOrigOutT: 0
+        property int    dragTangentOrigMode: 0
 
         onPressed: function(mouse) {
             if (mouse.button === Qt.MiddleButton) {
@@ -463,9 +469,13 @@ Rectangle {
                 var rhit = root.pickKeyframeAt(
                     mouse.x - curveCanvas.x, mouse.y - curveCanvas.y)
                 if (rhit) {
-                    modeMenu.boneName  = rhit.bone
-                    modeMenu.channelId = rhit.channel
-                    modeMenu.keyTime   = rhit.time
+                    modeMenu.boneName    = rhit.bone
+                    modeMenu.channelId   = rhit.channel
+                    modeMenu.keyTime     = rhit.time
+                    // Snapshot anchors NOW so a resample triggered by
+                    // a prior gesture in this same popup session uses
+                    // the authored key list.
+                    modeMenu.anchorTimes = root.snapshotAnchorTimes()
                     modeMenu.popup()
                     mouse.accepted = true
                 } else {
@@ -486,6 +496,17 @@ Rectangle {
                     panArea.dragTangentKy = thit.ky
                     panArea.dragInT = thit.inT
                     panArea.dragOutT = thit.outT
+                    // Capture pre-drag CurveEditModel state for the
+                    // release-time undo entry. Mode comes through as
+                    // a third element of tangentsAt.
+                    panArea.dragTangentOrigInT  = thit.inT
+                    panArea.dragTangentOrigOutT = thit.outT
+                    var prev = CurveEditModel.tangentsAt(
+                        AnimationControlController.selectedEntityName,
+                        AnimationControlController.selectedAnimation,
+                        thit.bone, thit.channel, thit.time)
+                    panArea.dragTangentOrigMode = prev.length >= 3 ? prev[2] : 0
+                    panArea.dragAnchorTimes = root.snapshotAnchorTimes()
                     mouse.accepted = true
                     return
                 }
@@ -504,6 +525,7 @@ Rectangle {
                     panArea.dragLastValue = khit.value
                     panArea.dragPressX = canvasX
                     panArea.dragPressY = canvasY
+                    panArea.dragAnchorTimes = root.snapshotAnchorTimes()
                     mouse.accepted = true
                     return
                 }
@@ -607,16 +629,29 @@ Rectangle {
                         panArea.dragKeyTime, panArea.dragLastValue)
                 }
                 if (valueChanged || timeChanged) {
-                    root.resampleAround(panArea.dragBone, panArea.dragChannel,
-                                         panArea.dragKeyTime)
+                    AnimationControlController.resampleAround(
+                        panArea.dragBone, panArea.dragChannel,
+                        panArea.dragKeyTime, panArea.dragAnchorTimes)
                 }
             } else if (panArea.dragMode === "tangent") {
-                // Tangent edits already wrote into CurveEditModel during
-                // drag (no undo entry per move). On release, resample the
-                // affected segments so playback follows the new shape and
-                // the resample itself is the undo entry.
-                root.resampleAround(panArea.dragBone, panArea.dragChannel,
-                                     panArea.dragKeyTime)
+                // Tangent drag wrote CurveEditModel directly during
+                // move (no undo per move). On release, restore the
+                // pre-drag tangents and push one macro that captures
+                // the model transition + resamples both neighbor
+                // segments — single Ctrl+Z reverts everything.
+                CurveEditModel.setTangents(
+                    AnimationControlController.selectedEntityName,
+                    AnimationControlController.selectedAnimation,
+                    panArea.dragBone, panArea.dragChannel,
+                    panArea.dragKeyTime,
+                    panArea.dragTangentOrigInT,
+                    panArea.dragTangentOrigOutT)
+                AnimationControlController.editCurveAndResampleAround(
+                    panArea.dragBone, panArea.dragChannel,
+                    panArea.dragKeyTime,
+                    panArea.dragInT, panArea.dragOutT,
+                    -1, // mode unchanged
+                    panArea.dragAnchorTimes)
             }
             panArea.dragMode = ""
         }

@@ -7,6 +7,8 @@
 #include "commands/BulkKeyframeCommands.h"
 #include "commands/SetKeyframeValueCommand.h"
 #include "commands/ResampleCurveCommand.h"
+#include "commands/CurveEditModelChangeCommand.h"
+#include "CurveEditModel.h"
 #include "commands/AddKeyframeCommand.h"
 #include "commands/DeleteKeyframeCommand.h"
 #include <QApplication>
@@ -1421,6 +1423,35 @@ bool AnimationControlController::setKeyframeValuePreview(const QString& boneName
     return true;
 }
 
+namespace {
+
+// Find the immediate predecessor and successor of `keyTime` in
+// `anchorTimes`. anchors is the AUTHORED key list (without resampled
+// frames) — passing the dense post-resample list here would expand the
+// segment by one synthetic neighbor on each pass and the resampler
+// would never close on a stable shape.
+bool neighborAnchors(double keyTime,
+                     const QVariantList& anchorTimes,
+                     double& prevOut, double& nextOut)
+{
+    constexpr double kEps = 0.001;
+    double prev = -1.0, next = -1.0;
+    bool havePrev = false, haveNext = false;
+    for (const QVariant& v : anchorTimes) {
+        const double t = v.toDouble();
+        if (t < keyTime - kEps) {
+            if (!havePrev || t > prev) { prev = t; havePrev = true; }
+        } else if (t > keyTime + kEps) {
+            if (!haveNext || t < next) { next = t; haveNext = true; }
+        }
+    }
+    prevOut = prev;
+    nextOut = next;
+    return havePrev || haveNext;
+}
+
+} // namespace
+
 bool AnimationControlController::resampleCurveSegment(const QString& boneName,
                                                       const QString& channel,
                                                       double t0, double t1)
@@ -1454,7 +1485,75 @@ bool AnimationControlController::resampleCurveSegment(const QString& boneName,
                                           static_cast<float>(t0),
                                           static_cast<float>(t1));
     UndoManager::getSingleton()->push(cmd);
+    SentryReporter::addBreadcrumb("ui.action", "Resampled curve segment");
     refreshSliderTicks();
     emit boneRowsChanged();
+    return true;
+}
+
+bool AnimationControlController::editCurveAndResampleAround(
+        const QString& boneName, const QString& channel,
+        double keyTime,
+        double newInTangent, double newOutTangent, int newMode,
+        const QVariantList& anchorTimes)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+    if (m_selectedEntityName.empty() || m_selectedAnimation.empty()) return false;
+
+    double prevAnchor = -1.0, nextAnchor = -1.0;
+    if (!neighborAnchors(keyTime, anchorTimes, prevAnchor, nextAnchor)) return false;
+
+    auto* m = CurveEditModel::instance();
+    const QString skel = QString::fromStdString(m_selectedEntityName);
+    const QString anim = QString::fromStdString(m_selectedAnimation);
+    const QVariantList prev = m->tangentsAt(skel, anim, boneName, channel, keyTime);
+    const double oldIn   = prev.size() >= 1 ? prev[0].toDouble() : 0.0;
+    const double oldOut  = prev.size() >= 2 ? prev[1].toDouble() : 0.0;
+    const int    oldMode = prev.size() >= 3 ? prev[2].toInt()    : 0;
+    const int    finalNewMode = (newMode < 0) ? oldMode : newMode;
+
+    // Bundle: side-table edit + neighbor-segment resamples under one
+    // QUndoStack macro so a single Ctrl+Z reverts the whole gesture.
+    auto* stack = UndoManager::getSingleton()->stack();
+    stack->beginMacro(QObject::tr("Edit curve handle"));
+
+    auto* edit = new CurveEditModelChangeCommand( // NOSONAR — stack owns
+            m_selectedEntityName, m_selectedAnimation,
+            boneName.toStdString(), channel.toLower().toStdString(),
+            keyTime,
+            oldIn, oldOut, oldMode,
+            newInTangent, newOutTangent, finalNewMode);
+    stack->push(edit);
+
+    if (prevAnchor >= 0.0) {
+        resampleCurveSegment(boneName, channel, prevAnchor, keyTime);
+    }
+    if (nextAnchor >= 0.0) {
+        resampleCurveSegment(boneName, channel, keyTime, nextAnchor);
+    }
+
+    stack->endMacro();
+    return true;
+}
+
+bool AnimationControlController::resampleAround(const QString& boneName,
+                                                 const QString& channel,
+                                                 double keyTime,
+                                                 const QVariantList& anchorTimes)
+{
+    if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
+
+    double prevAnchor = -1.0, nextAnchor = -1.0;
+    if (!neighborAnchors(keyTime, anchorTimes, prevAnchor, nextAnchor)) return false;
+
+    // Bundle two sibling resamples so one Ctrl+Z reverts both. If
+    // there's only one neighbor, skip the macro overhead — the single
+    // resample is its own undo entry.
+    auto* stack = UndoManager::getSingleton()->stack();
+    const bool both = prevAnchor >= 0.0 && nextAnchor >= 0.0;
+    if (both) stack->beginMacro(QObject::tr("Resample curve segments"));
+    if (prevAnchor >= 0.0) resampleCurveSegment(boneName, channel, prevAnchor, keyTime);
+    if (nextAnchor >= 0.0) resampleCurveSegment(boneName, channel, keyTime, nextAnchor);
+    if (both) stack->endMacro();
     return true;
 }
