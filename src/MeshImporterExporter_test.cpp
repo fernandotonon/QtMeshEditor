@@ -178,7 +178,7 @@ TEST(MeshImporterExporterStandaloneTest, FormatFileURI_UnknownFormat_ReturnsURIW
 }
 
 TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ReturnsFilterString) {
-    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;FBX Binary (*.fbx);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;STL (*.stl);;X (*.x);;glTF 2.0 (*.gltf);;glTF 2.0 Binary (*.glb)";
+    QString expected = "3DS (*.3ds);;Assimp Binary (*.assbin);;Collada (*.dae);;FBX Binary (*.fbx);;OBJ (*.obj);;OBJ without MTL (*.objnomtl);;Ogre Mesh (*.mesh);;Ogre Mesh v1.0+(*.mesh);;Ogre Mesh v1.10+(*.mesh);;Ogre Mesh v1.4+(*.mesh);;Ogre Mesh v1.7+(*.mesh);;Ogre Mesh v1.8+(*.mesh);;Ogre XML (*.mesh.xml);;PLY (*.ply);;PlayStation TMD (*.tmd);;STL (*.stl);;X (*.x);;glTF 2.0 (*.gltf);;glTF 2.0 Binary (*.glb)";
 
     QString result = MeshImporterExporter::exportFileDialogFilter();
 
@@ -548,11 +548,11 @@ TEST_F(MeshImporterExporterTest, SceneExporter_MixedEmptyAndEntityNodesOnlyCount
 
 // ── Standalone tests: export filter and format coverage ──────────
 
-TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAll18Formats) {
+TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAllFormats) {
     QString filter = MeshImporterExporter::exportFileDialogFilter();
-    // 18 formats means 17 ";;" separators
-    EXPECT_EQ(filter.count(";;"), 17);
-    // Spot-check all format keys
+    // One ";;" between each format entry (N formats => N-1 separators)
+    EXPECT_EQ(filter.count(";;"), 18);
+    // Spot-check format keys
     EXPECT_TRUE(filter.contains("3DS (*.3ds)"));
     EXPECT_TRUE(filter.contains("Assimp Binary (*.assbin)"));
     EXPECT_TRUE(filter.contains("Collada (*.dae)"));
@@ -567,6 +567,7 @@ TEST(MeshImporterExporterStandaloneTest, ExportFileDialogFilter_ContainsAll18For
     EXPECT_TRUE(filter.contains("Ogre Mesh v1.8+(*.mesh)"));
     EXPECT_TRUE(filter.contains("Ogre XML (*.mesh.xml)"));
     EXPECT_TRUE(filter.contains("PLY (*.ply)"));
+    EXPECT_TRUE(filter.contains("PlayStation TMD (*.tmd)"));
     EXPECT_TRUE(filter.contains("STL (*.stl)"));
     EXPECT_TRUE(filter.contains("X (*.x)"));
     EXPECT_TRUE(filter.contains("glTF 2.0 (*.gltf)"));

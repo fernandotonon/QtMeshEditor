@@ -618,7 +618,8 @@ QString CLIPipeline::formatForExtension(const QString& path)
         {".x", "X (*.x)"},
         {".mesh.xml", "Ogre XML (*.mesh.xml)"},
         {".mesh", "Ogre Mesh (*.mesh)"},
-        {".assbin", "Assimp Binary (*.assbin)"}
+        {".assbin", "Assimp Binary (*.assbin)"},
+        {".tmd", "PlayStation TMD (*.tmd)"}
     };
 
     for (const ExtensionFormat& entry : extensionFormats) {

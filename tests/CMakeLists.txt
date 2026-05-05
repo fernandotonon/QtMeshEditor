@@ -92,6 +92,11 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditableMesh.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/EditModeController.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/HalfEdgeMesh.cpp
+
+        # PS1 importers are referenced by core code (MaterialEditorQML, MeshImporterExporter).
+        # Include them so the MaterialEditorQML test executables link successfully.
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1TMD.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/PS1/PS1TIM.cpp
     )
 
     set(TEST_HEADER_FILES
@@ -295,6 +300,11 @@ if(BUILD_TESTS)
     if(ENABLE_LOCAL_LLM)
         list(APPEND COMMON_TEST_LIBRARIES llama ggml)
     endif()
+
+    # Link Sentry for tests if enabled (SentryReporter is part of TEST_SRC_FILES).
+    if(ENABLE_SENTRY)
+        list(APPEND COMMON_TEST_LIBRARIES sentry)
+    endif()
     
     # Helper function to create test executables
     function(create_test_executable target_name test_source_file)
@@ -397,15 +407,15 @@ if(BUILD_TESTS)
     # Discover individual Google Test cases for better reporting
     # Skip auto-discovery for QML tests in CI environments to avoid Qt platform issues
     if(TARGET MaterialEditorQML_test)
-        gtest_discover_tests(MaterialEditorQML_test)
+        gtest_discover_tests(MaterialEditorQML_test DISCOVERY_MODE PRE_TEST)
     endif()
     
     if(TARGET MaterialEditorQML_qml_test)
-        gtest_discover_tests(MaterialEditorQML_qml_test)
+        gtest_discover_tests(MaterialEditorQML_qml_test DISCOVERY_MODE PRE_TEST)
     endif()
     
     if(TARGET MaterialEditorQML_perf_test)
-        gtest_discover_tests(MaterialEditorQML_perf_test)
+        gtest_discover_tests(MaterialEditorQML_perf_test DISCOVERY_MODE PRE_TEST)
     endif()
     
     if(TARGET MaterialEditorQML_qml_test_runner)

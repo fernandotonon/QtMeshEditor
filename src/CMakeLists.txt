@@ -166,6 +166,7 @@ set(TEST_SOURCES "")
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/OgreXML")
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/Assimp")
 ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/FBX")
+ADD_SUBDIRECTORY("${CMAKE_CURRENT_SOURCE_DIR}/PS1")
 
 #file(GLOB UI_FILES ./ui_files/*.ui)
 # if we don't include this CMake will not include ui headers properly:
@@ -507,7 +508,8 @@ if(BUILD_TESTS)
     # UnitTests binary directory so that plugins.cfg (PluginFolder=../) can
     # find them.  The app bundle has these in Contents/MacOS/ via INSTALL
     # commands, but UnitTests is a plain executable — not a bundle.
-    gtest_discover_tests(UnitTests)
+    # Discover tests at ctest time (not build time) so CI can provide Xvfb/GL env.
+    gtest_discover_tests(UnitTests DISCOVERY_MODE PRE_TEST)
 
     # Copy RTSS shader resources to the UnitTests binary directory so that
     # RTSSResourcesTest can find them without requiring cmake --install.

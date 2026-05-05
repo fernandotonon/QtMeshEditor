@@ -377,6 +377,7 @@ public slots:
     Q_INVOKABLE QString getFileSizeString(const QString &path);
     Q_INVOKABLE bool pathExists(const QString &path);
     Q_INVOKABLE QString openFileDialog();
+    Q_INVOKABLE bool loadTextureFile(const QString &filePath);
     Q_INVOKABLE QString openMaterialImportDialog();
     Q_INVOKABLE QString openMaterialExportDialog(const QString &materialName = "");
     Q_INVOKABLE QString showNativeFileDialog(QObject *parentWindow);

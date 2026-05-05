@@ -84,9 +84,9 @@ GroupBox {
                     ThemedButton {
                         text: "Browse..."
                         onClicked: {
-                            var selectedFileName = MaterialEditorQML.openFileDialog()
-                            if (selectedFileName !== "") {
-                                MaterialEditorQML.setTextureName(selectedFileName)
+                            var selectedPath = MaterialEditorQML.openFileDialog()
+                            if (selectedPath !== "") {
+                                MaterialEditorQML.loadTextureFile(selectedPath)
                             }
                         }
                     }
