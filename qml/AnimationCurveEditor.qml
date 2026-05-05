@@ -84,8 +84,10 @@ Rectangle {
     function clampViewStart() {
         var maxT = AnimationControlController.animationLength
         if (maxT <= 0) { root.viewStart = 0; return }
+        // Match ScrollBar's scrollable range so panning can't drift past
+        // the thumb's end position.
         var visibleSecs = curveCanvas.width / root.pxPerSec
-        var maxStart = Math.max(0, maxT - visibleSecs * 0.5)
+        var maxStart = Math.max(0, maxT - visibleSecs)
         if (root.viewStart > maxStart) root.viewStart = maxStart
         if (root.viewStart < 0) root.viewStart = 0
     }
@@ -470,6 +472,11 @@ Rectangle {
                     panArea.dragKeyTime = khit.time
                     panArea.dragOriginalKeyTime = khit.time
                     panArea.dragOriginalValue = khit.value
+                    // Seed lastValue too — onReleased compares it to
+                    // originalValue to decide whether to commit. Without
+                    // this, a click without drag (or a Shift-X-locked
+                    // drag) would commit a stale `0` back to the curve.
+                    panArea.dragLastValue = khit.value
                     panArea.dragPressX = canvasX
                     panArea.dragPressY = canvasY
                     mouse.accepted = true
@@ -484,7 +491,7 @@ Rectangle {
             if (mouse.buttons & Qt.MiddleButton) {
                 var dx = mouse.x - panStartX
                 root.viewStart = panStartView - dx / root.pxPerSec
-                if (root.viewStart < 0) root.viewStart = 0
+                root.clampViewStart()
                 curveCanvas.requestPaint()
                 return
             }
@@ -503,20 +510,23 @@ Rectangle {
                 var dxAxis = Math.abs(canvasX - panArea.dragPressX)
                 var dyAxis = Math.abs(canvasY - panArea.dragPressY)
                 var shift = (mouse.modifiers & Qt.ShiftModifier) !== 0
-                var lockX = shift && dyAxis > dxAxis
-                var lockY = shift && dxAxis > dyAxis
+                // Shift constrains to the dominant axis. writeValue/writeTime
+                // are gated so axis-locked drags don't smear into the orthogonal
+                // channel.
+                var writeValue = !shift || dyAxis >= dxAxis
+                var writeTime  = !shift || dxAxis >  dyAxis
 
                 // Preview API skips the undo stack — pushing a command
                 // per move fires MainWindow's indexChanged handler,
                 // which calls Skeleton::reset(true) and snaps the bone
                 // to T-pose between events. Commit on release.
-                panArea.dragLastValue = newValue
-                if (!lockX) {
+                if (writeValue) {
+                    panArea.dragLastValue = newValue
                     AnimationControlController.setKeyframeValuePreview(
                         panArea.dragBone, panArea.dragChannel,
                         panArea.dragKeyTime, newValue)
                 }
-                if (!lockY) {
+                if (writeTime) {
                     var ok = AnimationControlController.moveKeyframePreview(
                         panArea.dragBone, panArea.dragKeyTime, newTime)
                     if (ok) panArea.dragKeyTime = newTime
