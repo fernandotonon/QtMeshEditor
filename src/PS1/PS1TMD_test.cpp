@@ -224,6 +224,123 @@ static QByteArray makeMinimal35NoLightTmd()
     return buf;
 }
 
+/** One flat-colored quad (mode 0x28, flag 0, ilen 4). */
+static QByteArray makeMinimal28FlatQuadTmd()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 4u * 8u;
+    const size_t pAbs = nAbs + 1u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 4u + 16u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 4);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 1);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    // Unit square in XY plane.
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(4096, 4096, 0, d + vAbs + 16);
+    writeVertex8(0, 4096, 0, d + vAbs + 24);
+
+    // +Z normal.
+    writeVertex8(0, 0, 4096, d + nAbs);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 6;
+    pkt[1] = 4;
+    pkt[2] = 0;
+    pkt[3] = 0x28;
+    uint8_t* pay = pkt + 4;
+    pay[0] = 128;
+    pay[1] = 128;
+    pay[2] = 128;
+    pay[3] = 0;
+    writeU16le(pay + 4, 0); // normal index
+    writeU16le(pay + 6, 0);
+    writeU16le(pay + 8, 1);
+    writeU16le(pay + 10, 2);
+    writeU16le(pay + 12, 3);
+    writeU16le(pay + 14, 0);
+
+    return buf;
+}
+
+/** One gradated quad (mode 0x28, flag 4, ilen 7). */
+static QByteArray makeMinimal28GradQuadTmd()
+{
+    constexpr uint32_t kTmdId = 0x41u;
+    constexpr size_t kHead = 12u;
+    constexpr size_t kObjH = 28u;
+    const size_t vAbs = kHead + kObjH;
+    const size_t nAbs = vAbs + 4u * 8u;
+    const size_t pAbs = nAbs + 1u * 8u;
+    const uint32_t vOff = static_cast<uint32_t>(vAbs - 12u);
+    const uint32_t nOff = static_cast<uint32_t>(nAbs - 12u);
+    const uint32_t pOff = static_cast<uint32_t>(pAbs - 12u);
+
+    QByteArray buf(static_cast<int>(pAbs + 4u + 28u), '\0');
+    uint8_t* d = reinterpret_cast<uint8_t*>(buf.data());
+
+    writeU32le(d, kTmdId);
+    writeU32le(d + 4, 0);
+    writeU32le(d + 8, 1);
+
+    uint8_t* oh = d + kHead;
+    writeU32le(oh, vOff);
+    writeU32le(oh + 4, 4);
+    writeU32le(oh + 8, nOff);
+    writeU32le(oh + 12, 1);
+    writeU32le(oh + 16, pOff);
+    writeU32le(oh + 20, 1);
+    writeU32le(oh + 24, 0);
+
+    // Unit square in XY plane.
+    writeVertex8(0, 0, 0, d + vAbs);
+    writeVertex8(4096, 0, 0, d + vAbs + 8);
+    writeVertex8(4096, 4096, 0, d + vAbs + 16);
+    writeVertex8(0, 4096, 0, d + vAbs + 24);
+
+    // +Z normal.
+    writeVertex8(0, 0, 4096, d + nAbs);
+
+    uint8_t* pkt = d + pAbs;
+    pkt[0] = 8;
+    pkt[1] = 7;
+    pkt[2] = 4;
+    pkt[3] = 0x28;
+    uint8_t* pay = pkt + 4;
+    // Colors (RGB + pad) * 4
+    pay[0] = 255; pay[1] = 0;   pay[2] = 0;   pay[3] = 0;
+    pay[4] = 0;   pay[5] = 255; pay[6] = 0;   pay[7] = 0;
+    pay[8] = 0;   pay[9] = 0;   pay[10] = 255; pay[11] = 0;
+    pay[12] = 255; pay[13] = 255; pay[14] = 0; pay[15] = 0;
+    writeU16le(pay + 16, 0); // normal index
+    writeU16le(pay + 18, 0);
+    writeU16le(pay + 20, 1);
+    writeU16le(pay + 22, 2);
+    writeU16le(pay + 24, 3);
+    writeU16le(pay + 26, 0);
+
+    return buf;
+}
+
 static Ogre::MeshPtr createSingleTriMesh(const std::string& name)
 {
     if (auto old = Ogre::MeshManager::getSingleton().getByName(name))
@@ -428,6 +545,78 @@ TEST_F(PS1TMDTest, ImportMode2cLitTexturedQuad)
     ASSERT_TRUE(mesh);
     ASSERT_EQ(mesh->getNumSubMeshes(), 1u);
     EXPECT_EQ(mesh->getSubMesh(0)->vertexData->vertexCount, 6u);
+}
+
+static bool posNear(const Ogre::Vector3& a, const Ogre::Vector3& b, float eps = 1e-3f)
+{
+    return std::abs(a.x - b.x) < eps && std::abs(a.y - b.y) < eps && std::abs(a.z - b.z) < eps;
+}
+
+static bool triContainsAll(const Ogre::Vector3& p0, const Ogre::Vector3& p1, const Ogre::Vector3& p2,
+                           const Ogre::Vector3& a, const Ogre::Vector3& b, const Ogre::Vector3& c)
+{
+    const Ogre::Vector3 tri[3] = {p0, p1, p2};
+    const Ogre::Vector3 exp[3] = {a, b, c};
+    for (const Ogre::Vector3& e : exp) {
+        bool found = false;
+        for (const Ogre::Vector3& t : tri) {
+            if (posNear(t, e)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            return false;
+    }
+    return true;
+}
+
+TEST_F(PS1TMDTest, ImportMode28QuadsUseRequestedTriangulation)
+{
+    auto run = [&](const QByteArray& blob, const std::string& meshName) {
+        QTemporaryFile tmp(QDir::tempPath() + "/qtmesh_ps1tmd_28_XXXXXX.tmd");
+        tmp.setAutoRemove(true);
+        ASSERT_TRUE(tmp.open());
+        ASSERT_EQ(tmp.write(blob), blob.size());
+        tmp.flush();
+
+        if (auto old = Ogre::MeshManager::getSingleton().getByName(meshName))
+            Ogre::MeshManager::getSingleton().remove(old);
+
+        Ogre::MeshPtr mesh = PS1TMD::importTmd(tmp.fileName(), meshName);
+        ASSERT_TRUE(mesh);
+        ASSERT_EQ(mesh->getNumSubMeshes(), 1u);
+        Ogre::SubMesh* sm = mesh->getSubMesh(0);
+        ASSERT_TRUE(sm->vertexData);
+        ASSERT_EQ(sm->vertexData->vertexCount, 6u);
+
+        // Expected positions after import transform: 10× then 180° about Z.
+        const Ogre::Vector3 v0(0.f, 0.f, 0.f);
+        const Ogre::Vector3 v1(-10.f, 0.f, 0.f);
+        const Ogre::Vector3 v2(-10.f, -10.f, 0.f);
+        const Ogre::Vector3 v3(0.f, -10.f, 0.f);
+
+        Ogre::VertexData* vd = sm->vertexData;
+        const auto* posEl = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
+        ASSERT_NE(posEl, nullptr);
+        auto posBuf = vd->vertexBufferBinding->getBuffer(posEl->getSource());
+        const uint8_t* vbase = static_cast<const uint8_t*>(posBuf->lock(Ogre::HardwareBuffer::HBL_READ_ONLY));
+        const size_t stride = posBuf->getVertexSize();
+        float* pf = nullptr;
+        Ogre::Vector3 p[6];
+        for (int i = 0; i < 6; ++i) {
+            posEl->baseVertexPointerToElement(const_cast<uint8_t*>(vbase + size_t(i) * stride), &pf);
+            p[i] = Ogre::Vector3(pf[0], pf[1], pf[2]);
+        }
+        posBuf->unlock();
+
+        // Triangulation should be (v0,v1,v2) + (v1,v2,v3) (order may flip per-tri).
+        EXPECT_TRUE(triContainsAll(p[0], p[1], p[2], v0, v1, v2));
+        EXPECT_TRUE(triContainsAll(p[3], p[4], p[5], v1, v2, v3));
+    };
+
+    run(makeMinimal28FlatQuadTmd(), "PS1Tmd28FlatQuad");
+    run(makeMinimal28GradQuadTmd(), "PS1Tmd28GradQuad");
 }
 
 TEST_F(PS1TMDTest, ImportMode35NoLightGouraudTexturedTriangle)

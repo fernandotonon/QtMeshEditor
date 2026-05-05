@@ -389,15 +389,15 @@ if(BUILD_TESTS)
     # Discover individual Google Test cases for better reporting
     # Skip auto-discovery for QML tests in CI environments to avoid Qt platform issues
     if(TARGET MaterialEditorQML_test)
-        gtest_discover_tests(MaterialEditorQML_test)
+        gtest_discover_tests(MaterialEditorQML_test DISCOVERY_MODE PRE_TEST)
     endif()
     
     if(TARGET MaterialEditorQML_qml_test)
-        gtest_discover_tests(MaterialEditorQML_qml_test)
+        gtest_discover_tests(MaterialEditorQML_qml_test DISCOVERY_MODE PRE_TEST)
     endif()
     
     if(TARGET MaterialEditorQML_perf_test)
-        gtest_discover_tests(MaterialEditorQML_perf_test)
+        gtest_discover_tests(MaterialEditorQML_perf_test DISCOVERY_MODE PRE_TEST)
     endif()
     
     if(TARGET MaterialEditorQML_qml_test_runner)

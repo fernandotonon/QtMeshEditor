@@ -317,10 +317,11 @@ static bool parseTmdObject(const uint8_t* data, size_t fileSize, uint32_t stored
             const uint16_t i3 = readU16le(d + 12);
             if (i0 < nVert && i1 < nVert && i2 < nVert && i3 < nVert && ni < nNorm) {
                 const Ogre::Vector3& np = norms[ni];
-                appendTriMatchWinding(out, verts[i0], verts[i2], verts[i1], np, np, np,
+                // Triangulate as requested: (v0,v1,v2) + (v1,v2,v3).
+                appendTriMatchWinding(out, verts[i0], verts[i1], verts[i2], np, np, np,
                                       Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
                                       c0, c0, c0, true, np);
-                appendTriMatchWinding(out, verts[i0], verts[i3], verts[i2], np, np, np,
+                appendTriMatchWinding(out, verts[i1], verts[i2], verts[i3], np, np, np,
                                       Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
                                       c0, c0, c0, true, np);
             }
@@ -345,20 +346,20 @@ static bool parseTmdObject(const uint8_t* data, size_t fileSize, uint32_t stored
                 // we treat the quad as a *flat-colored* face using c0.
                 const bool isCheckerLike = (c0 == c2) && (c1 == c3);
                 if (isCheckerLike) {
-                    appendTriMatchWinding(out, verts[i0], verts[i2], verts[i1], np, np, np,
+                    appendTriMatchWinding(out, verts[i0], verts[i1], verts[i2], np, np, np,
                                           Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
                                           c0, c0, c0, true, np);
-                    appendTriMatchWinding(out, verts[i0], verts[i3], verts[i2], np, np, np,
+                    appendTriMatchWinding(out, verts[i1], verts[i2], verts[i3], np, np, np,
                                           Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
                                           c0, c0, c0, true, np);
                 } else {
                     // Default: keep per-vertex colors.
-                    appendTriMatchWinding(out, verts[i0], verts[i2], verts[i1], np, np, np,
+                    appendTriMatchWinding(out, verts[i0], verts[i1], verts[i2], np, np, np,
                                           Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
-                                          c0, c2, c1, true, np);
-                    appendTriMatchWinding(out, verts[i0], verts[i3], verts[i2], np, np, np,
+                                          c0, c1, c2, true, np);
+                    appendTriMatchWinding(out, verts[i1], verts[i2], verts[i3], np, np, np,
                                           Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
-                                          c0, c3, c2, true, np);
+                                          c1, c2, c3, true, np);
                 }
             }
             continue;

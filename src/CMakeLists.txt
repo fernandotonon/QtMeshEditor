@@ -499,7 +499,8 @@ if(BUILD_TESTS)
     # UnitTests binary directory so that plugins.cfg (PluginFolder=../) can
     # find them.  The app bundle has these in Contents/MacOS/ via INSTALL
     # commands, but UnitTests is a plain executable — not a bundle.
-    gtest_discover_tests(UnitTests)
+    # Discover tests at ctest time (not build time) so CI can provide Xvfb/GL env.
+    gtest_discover_tests(UnitTests DISCOVERY_MODE PRE_TEST)
 
     # Copy RTSS shader resources to the UnitTests binary directory so that
     # RTSSResourcesTest can find them without requiring cmake --install.
