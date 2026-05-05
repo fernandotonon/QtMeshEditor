@@ -52,6 +52,7 @@ THE SOFTWARE.
 #include "Assimp/BoneProcessor.h"
 #include "Assimp/AnimationProcessor.h"
 #include "CLIPipeline.h"
+#include "PS1/PS1TMD.h"
 #include "EditableMesh.h"
 #include "EditModeController.h"
 #include <OgreMaterialManager.h>
@@ -79,7 +80,8 @@ const QMap<QString, QString> MeshImporterExporter::exportFormats = {
     {"glTF 2.0 (*.gltf)", ".gltf"},
     {"glTF 2.0 Binary (*.glb)", ".glb"},
     {"Assimp Binary (*.assbin)", ".assbin"},
-    {"FBX Binary (*.fbx)", ".fbx"}
+    {"FBX Binary (*.fbx)", ".fbx"},
+    {"PlayStation TMD (*.tmd *.TMD)", ".tmd"}
 };
 
 void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
@@ -1203,6 +1205,27 @@ void MeshImporterExporter::importer(const QStringList &_uriList, unsigned int ad
                     AnimationMerger::registerSkeletonUpAxis(en->getMesh()->getSkeleton()->getName(), 1);
                 applyNormalMapsToEntity(en);
             }
+            else if (!file.suffix().compare(QStringLiteral("tmd"), Qt::CaseInsensitive))
+            {
+                const std::string meshName = (file.baseName() + QStringLiteral("_tmd")).toStdString();
+                Ogre::MeshPtr mesh = PS1TMD::importTmd(file.filePath(), meshName);
+                if (!mesh) {
+                    QMessageBox::warning(
+                        nullptr,
+                        QStringLiteral("PlayStation TMD"),
+                        QStringLiteral("Could not import %1 — invalid file or unsupported primitive types.")
+                            .arg(file.fileName()));
+                    continue;
+                }
+
+                SentryReporter::addBreadcrumb(
+                    QStringLiteral("file.import"),
+                    QStringLiteral("Imported PlayStation TMD: %1").arg(file.fileName()));
+
+                sn = Manager::getSingleton()->addSceneNode(file.baseName());
+                en = Manager::getSingleton()->createEntity(sn, mesh);
+                applyNormalMapsToEntity(en);
+            }
             else
             {
                 AssimpToOgreImporter importer;
@@ -1435,6 +1458,11 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // .material and extracted image files next to the FBX.
         if (!ok)
             return -1;
+    } else if (_format == QStringLiteral("PlayStation TMD (*.tmd *.TMD)")) {
+        if (!PS1TMD::exportEntity(e, _uri))
+            return -1;
+        SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
+            QStringLiteral("Exported PlayStation TMD: %1").arg(_uri));
     } else {
         // Export using Assimp — build aiScene directly from Ogre mesh data
         try {

@@ -485,6 +485,12 @@ TEST(CLIPipelineFormatForExtension, Assbin)
     EXPECT_EQ(CLIPipeline::formatForExtension("model.assbin"), "Assimp Binary (*.assbin)");
 }
 
+TEST(CLIPipelineFormatForExtension, Tmd)
+{
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.tmd"), "PlayStation TMD (*.tmd *.TMD)");
+    EXPECT_EQ(CLIPipeline::formatForExtension("MODEL.TMD"), "PlayStation TMD (*.tmd *.TMD)");
+}
+
 TEST(CLIPipelineFormatForExtension, UnknownDefaultsToMesh)
 {
     EXPECT_EQ(CLIPipeline::formatForExtension("model.xyz"), "Ogre Mesh (*.mesh)");

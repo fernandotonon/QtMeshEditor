@@ -9,6 +9,7 @@
 #include "QMLMaterialHighlighter.h"
 #include "ModelDownloader.h"
 #include "RTShaderHelper.h"
+#include "PS1/PS1TIM.h"
 #include <OgreRTShaderSystem.h>
 #include <QDebug>
 #include <QFileDialog>
@@ -28,6 +29,7 @@
 #include <OgreLog.h>
 #include <OgreScriptCompiler.h>
 #include <OgreScriptTranslator.h>
+#include <OgreTextureUnitState.h>
 #include <QProcess>
 #include <QNetworkAccessManager>
 #include <QNetworkRequest>
@@ -866,6 +868,17 @@ void MaterialEditorQML::setTextureName(const QString &name)
         if (textureUnit && !name.isEmpty() && name != "*Select a texture*") {
             // Only set non-empty, valid texture names to avoid OGRE crashes
             textureUnit->setTextureName(name.toStdString());
+
+            // If this is a per-import PS1 TMD material, default to unlit single-pass once an image is present.
+            if (m_ogreMaterial) {
+                const std::string matName = m_ogreMaterial->getName();
+                if (matName.rfind("TMD/", 0) == 0) {
+                    if (Ogre::Technique* tech = getCurrentTechnique()) {
+                        while (tech->getNumPasses() > 1)
+                            tech->removePass(1);
+                    }
+                }
+            }
             updateMaterialText();
         }
         
@@ -966,7 +979,7 @@ void MaterialEditorQML::selectTexture()
         nullptr, 
         tr("Select a texture"),
         QStandardPaths::writableLocation(QStandardPaths::PicturesLocation),
-        tr("Image File (*.bmp *.jpg *.gif *.raw *.png *.tga *.dds)"));
+        tr("Texture File (*.bmp *.jpg *.jpeg *.gif *.raw *.png *.tga *.dds *.tim)"));
 
     if (filePath.isEmpty()) return;
 
@@ -984,17 +997,28 @@ void MaterialEditorQML::selectTexture()
     try {
         // Try to get existing texture
         Ogre::TextureManager::getSingleton().getByName(
-            file.fileName().toStdString(), file.path().toStdString());
+            file.fileName().toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     } catch (...) {
         // Load new texture
+        // Always register user-picked textures into the default group ("General") so materials can find them.
+        // Creating ad-hoc groups per directory makes TextureUnitState name resolution fail (yellow/black fallback).
         Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
-            file.path().toStdString(), "FileSystem", file.path().toStdString());
-        Ogre::ResourceGroupManager::getSingleton().initialiseAllResourceGroups();
+            file.path().toStdString(), "FileSystem", Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        Ogre::ResourceGroupManager::getSingleton().initialiseResourceGroup(
+            Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
         Ogre::Image image;
-        image.load(file.fileName().toStdString(), file.path().toStdString());
+        if (file.suffix().compare("tim", Qt::CaseInsensitive) == 0) {
+            QString err;
+            if (!PS1TIM::loadTimToOgreImage(filePath, image, &err)) {
+                emit errorOccurred(QString("Failed to load TIM: %1").arg(err));
+                return;
+            }
+        } else {
+            image.load(file.fileName().toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+        }
         Ogre::TextureManager::getSingleton().loadImage(
-            file.fileName().toStdString(), file.path().toStdString(), image);
+            file.fileName().toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
     }
     
     setTextureName(file.fileName());
@@ -1643,7 +1667,27 @@ QString MaterialEditorQML::getTexturePreviewPath() const
                 // Check origin (absolute path)
                 QString origin = QString::fromStdString(texPtr->getOrigin());
                 if (!origin.isEmpty() && QFileInfo::exists(origin)) {
-                    return QUrl::fromLocalFile(QFileInfo(origin).absoluteFilePath()).toString();
+                    // QML Image cannot display .tim; for those, generate a PNG preview.
+                    const QString ext = QFileInfo(origin).suffix().toLower();
+                    if (ext != "tim") {
+                        return QUrl::fromLocalFile(QFileInfo(origin).absoluteFilePath()).toString();
+                    }
+                }
+
+                // If we can't return a directly viewable file (e.g., TIM), generate a PNG preview from the GPU texture.
+                try {
+                    Ogre::Image img;
+                    texPtr->convertToImage(img, true);
+                    const QString dataPath = QStandardPaths::writableLocation(QStandardPaths::AppDataLocation);
+                    const QString outDir = QDir(dataPath).filePath("texture_previews");
+                    QDir().mkpath(outDir);
+                    const QString outPath = QDir(outDir).filePath(texName + ".png");
+                    QFile::remove(outPath); // ensure stale previews don't linger
+                    img.save(outPath.toStdString());
+                    if (QFileInfo::exists(outPath)) {
+                        return QUrl::fromLocalFile(QFileInfo(outPath).absoluteFilePath()).toString();
+                    }
+                } catch (...) {
                 }
 
                 // The resource group name is often the directory the model was loaded from
@@ -2498,15 +2542,74 @@ QString MaterialEditorQML::openFileDialog()
         QApplication::activeWindow(),
         "Select Texture File",
         startDir,
-        "Image files (*.jpg *.jpeg *.png *.dds *.tga *.bmp);;All files (*)",
+        "Texture files (*.jpg *.jpeg *.png *.dds *.tga *.bmp *.tim);;All files (*)",
         nullptr,
         QFileDialog::DontUseNativeDialog | QFileDialog::DontUseCustomDirectoryIcons
     );
 
     if (!selectedFile.isEmpty()) {
-        return QFileInfo(selectedFile).fileName();
+        return selectedFile;
     } else {
         return QString();
+    }
+}
+
+bool MaterialEditorQML::loadTextureFile(const QString &filePath)
+{
+    if (filePath.isEmpty())
+        return false;
+
+    Ogre::TextureUnitState* textureUnit = getCurrentTextureUnit();
+    if (!textureUnit) {
+        emit errorOccurred("No texture unit selected.");
+        return false;
+    }
+
+    QFileInfo file(filePath);
+    if (!file.exists()) {
+        emit errorOccurred("Texture file does not exist.");
+        return false;
+    }
+    if (file.fileName().isEmpty()) {
+        emit errorOccurred("Selected file has an empty name.");
+        return false;
+    }
+
+    const std::string texName = file.fileName().toStdString();
+    const std::string group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
+
+    try {
+        if (Ogre::TextureManager::getSingleton().getByName(texName, group)) {
+            setTextureName(QString::fromStdString(texName));
+            return true;
+        }
+    } catch (...) {
+    }
+
+    try {
+        Ogre::ResourceGroupManager::getSingleton().addResourceLocation(
+            file.path().toStdString(), "FileSystem", group);
+        Ogre::ResourceGroupManager::getSingleton().initialiseResourceGroup(group);
+
+        Ogre::Image image;
+        if (file.suffix().compare("tim", Qt::CaseInsensitive) == 0) {
+            QString err;
+            if (!PS1TIM::loadTimToOgreImage(filePath, image, &err)) {
+                emit errorOccurred(QString("Failed to load TIM: %1").arg(err));
+                return false;
+            }
+        } else {
+            image.load(texName, group);
+        }
+        Ogre::TextureManager::getSingleton().loadImage(texName, group, image);
+        setTextureName(QString::fromStdString(texName));
+        return true;
+    } catch (const std::exception& e) {
+        emit errorOccurred(QString("Texture load failed: %1").arg(e.what()));
+        return false;
+    } catch (...) {
+        emit errorOccurred("Texture load failed.");
+        return false;
     }
 }
 

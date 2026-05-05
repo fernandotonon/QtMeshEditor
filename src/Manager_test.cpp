@@ -265,6 +265,9 @@ TEST_F(ManagerHeadlessTest, IsValidFileExtention)
     QString stlFile = "print.stl";
     EXPECT_TRUE(mgr->isValidFileExtention(stlFile));
 
+    QString tmdFile = "model.tmd";
+    EXPECT_TRUE(mgr->isValidFileExtention(tmdFile));
+
     // Invalid extensions
     QString docFile = "readme.doc";
     EXPECT_FALSE(mgr->isValidFileExtention(docFile));
@@ -284,6 +287,8 @@ TEST_F(ManagerHeadlessTest, IsValidFileExtention)
     EXPECT_TRUE(validExts.contains(".mesh"));
     EXPECT_TRUE(validExts.contains(".fbx"));
     EXPECT_TRUE(validExts.contains(".vrm"));
+    EXPECT_TRUE(validExts.contains(".tmd"));
+    EXPECT_TRUE(validExts.contains(".TMD"));
 }
 
 TEST_F(ManagerHeadlessTest, CreateEmptyScene)

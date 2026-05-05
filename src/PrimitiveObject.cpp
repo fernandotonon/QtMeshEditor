@@ -593,7 +593,7 @@ Ogre::SceneNode* PrimitiveObject::createPrimitive()
     {
         Ogre::Entity* ent = Manager::getSingleton()->createEntity(mSceneNode,mp);
 
-        ent->setMaterialName("BaseWhite");
+        ent->setMaterialName("BaseOutlined");
         mSceneNode->setPosition(0,0,0);
         return mSceneNode;
     }

@@ -228,6 +228,8 @@ TEST_F(AssetBrowserControllerTests, FileTypeClassification) {
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.gltf"), "mesh");
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.vrm"), "mesh");
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.obj"), "mesh");
+    EXPECT_EQ(abc->fileTypeForPath("/foo/bar.tmd"), "mesh");
+    EXPECT_EQ(abc->fileTypeForPath("/foo/bar.TMD"), "mesh");
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.png"), "texture");
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.jpg"), "texture");
     EXPECT_EQ(abc->fileTypeForPath("/foo/bar.tga"), "texture");
@@ -248,6 +250,23 @@ TEST_F(AssetBrowserControllerTests, OpenFileMeshEmitsImportSignal) {
     abc->openFile(meshPath);
     EXPECT_EQ(spy.count(), 1);
     QStringList paths = spy.at(0).at(0).toStringList();
+    EXPECT_EQ(paths.size(), 1);
+    EXPECT_EQ(paths.at(0), meshPath);
+}
+
+TEST_F(AssetBrowserControllerTests, OpenFileTmdEmitsImportSignal) {
+    QTemporaryDir tmpDir;
+    ASSERT_TRUE(tmpDir.isValid());
+
+    const QString meshPath = tmpDir.path() + "/CAR.TMD";
+    QFile(meshPath).open(QIODevice::WriteOnly);
+
+    auto* abc = AssetBrowserController::instance();
+    QSignalSpy spy(abc, &AssetBrowserController::importMeshRequested);
+
+    abc->openFile(meshPath);
+    EXPECT_EQ(spy.count(), 1);
+    const QStringList paths = spy.at(0).at(0).toStringList();
     EXPECT_EQ(paths.size(), 1);
     EXPECT_EQ(paths.at(0), meshPath);
 }
