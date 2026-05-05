@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Window
 import ThemeManager 1.0
 
 // Themed ComboBox matching the look of the typeahead dropdowns elsewhere
@@ -74,10 +75,24 @@ ComboBox {
     // Pop directly under the input (no gap) — matches the SceneTreeNode
     // material typeahead. Default ComboBox.popup leaves ~5px gap on macOS.
     // Cap height so long lists scroll inside the popup instead of getting
-    // clipped by the QQuickWidget bounds (the curve editor's bake combo
-    // hits this with 10+ items in a small editor area).
+    // clipped by parent bounds (the curve editor's bake combo hits this
+    // with 10+ items in a small editor area).
     popup: Popup {
-        y: control.height
+        // Reparent to the Window's content item so the popup can extend
+        // beyond the host QQuickWidget's bounds — without this, a long
+        // popup spawned from the curve editor's narrow strip gets
+        // clipped by the editor's render area and the user can't scroll
+        // to the bottom items.
+        parent: control.Window.window ? control.Window.window.contentItem
+                                       : control
+        x: {
+            var pt = control.mapToItem(parent, 0, control.height)
+            return pt.x
+        }
+        y: {
+            var pt = control.mapToItem(parent, 0, control.height)
+            return pt.y
+        }
         width: control.width
         implicitHeight: Math.min(contentItem.implicitHeight + 2, 240)
         padding: 1
