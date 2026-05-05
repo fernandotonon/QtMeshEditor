@@ -393,15 +393,15 @@ void MainWindow::initToolBar()
                     // when the user has paused playback. Apply the
                     // active animation directly at the slider time so
                     // the pose survives the post-edit refresh.
-                    const std::string& activeName = animCtrl->selectedAnimation().toStdString();
-                    if (!activeName.empty() && skel->hasAnimation(activeName)) {
-                        Ogre::Animation* anim = skel->getAnimation(activeName);
-                        if (ent->hasAnimationState(activeName)) {
-                            auto* state = ent->getAnimationState(activeName);
-                            if (!state->getEnabled()) {
-                                anim->apply(skel, state->getTimePosition(),
-                                            1.0f, state->getBlendMask(), 1.0f);
-                            }
+                    const std::string activeName =
+                        animCtrl->selectedAnimation().toStdString();
+                    if (!activeName.empty() && skel->hasAnimation(activeName)
+                        && ent->hasAnimationState(activeName)) {
+                        auto* state = ent->getAnimationState(activeName);
+                        if (!state->getEnabled()) {
+                            Ogre::Animation* anim = skel->getAnimation(activeName);
+                            anim->apply(skel, state->getTimePosition(),
+                                        1.0f, state->getBlendMask(), 1.0f);
                         }
                     }
                     skel->_updateTransforms();

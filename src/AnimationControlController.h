@@ -292,6 +292,15 @@ public:
                                                const QString& channel,
                                                int density = 0);
 
+    /// Decimate an already-dense track down to a target FPS by
+    /// dropping keyframes that fall closer than 1/targetFps from a
+    /// kept neighbor. Channel-agnostic (operates on the whole
+    /// track's keyframes). Pushes ResampleCurveCommands per gap so
+    /// Ctrl+Z reverts the decimation. Returns the number of frames
+    /// removed.
+    Q_INVOKABLE int reduceTrackToFps(const QString& boneName,
+                                     int targetFps);
+
 public slots:
     void updateAnimationTree();
 

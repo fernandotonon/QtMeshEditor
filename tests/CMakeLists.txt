@@ -70,6 +70,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/SetKeyframeValueCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/ResampleCurveCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/CurveEditModelChangeCommand.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/DecimateTrackCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/BoneTransformCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/AddKeyframeCommand.cpp
         ${CMAKE_CURRENT_SOURCE_DIR}/../src/commands/DeleteKeyframeCommand.cpp

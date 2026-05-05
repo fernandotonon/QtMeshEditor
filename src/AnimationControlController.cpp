@@ -8,6 +8,7 @@
 #include "commands/SetKeyframeValueCommand.h"
 #include "commands/ResampleCurveCommand.h"
 #include "commands/CurveEditModelChangeCommand.h"
+#include "commands/DecimateTrackCommand.h"
 #include "CurveEditModel.h"
 #include "commands/AddKeyframeCommand.h"
 #include "commands/DeleteKeyframeCommand.h"
@@ -1582,5 +1583,29 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     }
     stack->endMacro();
     return count;
+}
+
+int AnimationControlController::reduceTrackToFps(const QString& boneName,
+                                                  int targetFps)
+{
+    if (boneName.isEmpty() || targetFps <= 0) return 0;
+    if (!m_selectedSkeleton || m_selectedAnimation.empty()) return 0;
+    const std::string boneStd = boneName.toStdString();
+    if (!m_selectedSkeleton->hasBone(boneStd)) return 0;
+    if (!m_selectedSkeleton->hasAnimation(m_selectedAnimation)) return 0;
+    Ogre::Animation* anim = m_selectedSkeleton->getAnimation(m_selectedAnimation);
+    Ogre::Bone* bone = m_selectedSkeleton->getBone(boneStd);
+    if (!bone || !anim->hasNodeTrack(bone->getHandle())) return 0;
+    auto* track = anim->getNodeTrack(bone->getHandle());
+    const int beforeCount = static_cast<int>(track->getNumKeyFrames());
+
+    auto* cmd = new DecimateTrackCommand( // NOSONAR — QUndoStack owns
+        m_selectedEntityName, m_selectedAnimation, boneStd, targetFps);
+    UndoManager::getSingleton()->push(cmd);
+    SentryReporter::addBreadcrumb("ui.action", "Reduced keyframes to target FPS");
+    refreshSliderTicks();
+    emit boneRowsChanged();
+    const int afterCount = static_cast<int>(track->getNumKeyFrames());
+    return std::max(0, beforeCount - afterCount);
 }
 
