@@ -108,9 +108,12 @@ std::vector<Sample> resampleSegment(const CurveEditModel* model,
 
     // Fixed-FPS mode: skip both adaptive Hz and simplification. The
     // user explicitly asked for predictable keyframe density.
+    // Honor the requested rate even on long single-segment clips
+    // (the kMaxSamples cap is for protecting adaptive bakes from
+    // pathological curvature; fixed-FPS is bounded by the clip
+    // duration × user-requested fps which is a user-controlled value).
     if (fixedFps > 0) {
         int sampleCount = static_cast<int>(std::ceil(duration * fixedFps));
-        if (sampleCount > kMaxSamples) sampleCount = kMaxSamples;
         if (sampleCount < 1) sampleCount = 1;
         const double step = duration / sampleCount;
         out.reserve(static_cast<size_t>(sampleCount));

@@ -1587,36 +1587,51 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     const bool prevSuspend = m_suspendRowsRefresh;
     m_suspendRowsRefresh = true;
 
-    // Fixed-FPS bake = "track ends up at exactly N FPS regardless of
-    // starting density". If the track is already denser than the
-    // target, the densify loop alone wouldn't change anything (each
-    // sub-segment is already shorter than 1/fps), so we decimate
-    // first to pull the density DOWN to target. Then the densify
-    // loop fills any gaps that are sparser than 1/fps. Net effect:
-    // single uniform N-FPS grid.
-    //
-    // Adaptive modes use a coarser baselineFps as the pre-decimation
-    // target so the simplifier has consistent input regardless of
-    // starting density. Repeated Sparse/Medium/Dense bakes converge
-    // to stable counts (without pre-decimation, the second bake on an
-    // already-dense track was a no-op because each anchor pair was
-    // already shorter than the simplifier's source sample interval).
-    const int decimateTo = fixedFps > 0 ? fixedFps : baselineFps;
-    if (decimateTo > 0) {
-        reduceTrackToFps(boneName, decimateTo);
-        anchors.clear();
-        anchors.reserve(track->getNumKeyFrames());
-        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
-            anchors.push_back(track->getKeyFrame(i)->getTime());
-        }
-    }
-
     int count = 0;
-    for (size_t i = 1; i < anchors.size(); ++i) {
+
+    // Fixed-FPS bake: collapse the track to first+last anchor, then
+    // resample that single segment at exactly N FPS. Net effect is a
+    // single uniform N-FPS grid regardless of starting density —
+    // works for source-already-at-N-FPS (re-grids non-uniform
+    // spacing) AND source-much-denser-than-N (drops to N) AND
+    // source-sparser-than-N (densifies to N).
+    if (fixedFps > 0 && anchors.size() >= 2) {
+        const double t0 = anchors.front();
+        const double t1 = anchors.back();
+        // Collapse to just the two endpoint anchors via reduce(1):
+        // 1 FPS minGap = 1.0s, dropping every interior key on any
+        // typical clip. DecimateTrackCommand always keeps first +
+        // last so we end up with exactly two anchors. Then a single
+        // resample at fixedFps fills the segment with a uniform
+        // N-FPS grid — works whether the source was denser, sparser,
+        // or non-uniform.
+        reduceTrackToFps(boneName, 1);
         if (resampleCurveSegment(boneName, channel,
-                                  anchors[i-1], anchors[i],
-                                  toleranceMul, fixedFps)) {
+                                  t0, t1, 1.0, fixedFps)) {
             ++count;
+        }
+    } else {
+        // Adaptive modes use a coarser baselineFps as a pre-decimate
+        // so the simplifier has consistent input regardless of
+        // starting density. Repeated Sparse/Medium/Dense bakes
+        // converge to stable counts (without pre-decimation, on an
+        // already-dense track each anchor pair was already smaller
+        // than the simplifier's source sample interval, and the
+        // bake silently no-op'd).
+        if (baselineFps > 0) {
+            reduceTrackToFps(boneName, baselineFps);
+            anchors.clear();
+            anchors.reserve(track->getNumKeyFrames());
+            for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+                anchors.push_back(track->getKeyFrame(i)->getTime());
+            }
+        }
+        for (size_t i = 1; i < anchors.size(); ++i) {
+            if (resampleCurveSegment(boneName, channel,
+                                      anchors[i-1], anchors[i],
+                                      toleranceMul, fixedFps)) {
+                ++count;
+            }
         }
     }
     m_suspendRowsRefresh = prevSuspend;
