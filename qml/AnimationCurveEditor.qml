@@ -243,6 +243,7 @@ Rectangle {
                 MenuItem { text: "30 FPS"; onTriggered: bakeMenu.bake(3) }
                 MenuItem { text: "60 FPS"; onTriggered: bakeMenu.bake(4) }
                 MenuSeparator {}
+                MenuItem { text: "Reduce → 15 FPS"; onTriggered: bakeMenu.reduce(15) }
                 MenuItem { text: "Reduce → 30 FPS"; onTriggered: bakeMenu.reduce(30) }
                 MenuItem { text: "Reduce → 60 FPS"; onTriggered: bakeMenu.reduce(60) }
             }
