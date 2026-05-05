@@ -7,7 +7,7 @@
 #include <string>
 
 namespace Ogre {
-    class Skeleton;
+    class SkeletonInstance;
     class NodeAnimationTrack;
     class TransformKeyFrame;
 }
@@ -36,7 +36,11 @@ public:
         KeyframeUpdated,     ///< Existing track, existing keyframe updated in-place
     };
 
-    AddKeyframeCommand(Ogre::Skeleton* skeleton,
+    /// `entityName` is the entity hosting the SkeletonInstance —
+    /// stored instead of a raw pointer so the command resolves the
+    /// skeleton lazily via SkeletonResolver and survives entity
+    /// reload / skeleton rebuild.
+    AddKeyframeCommand(std::string entityName,
                        std::string animationName,
                        std::string boneName,
                        float time,
@@ -56,7 +60,7 @@ private:
     Ogre::NodeAnimationTrack* findTrack() const;
     Ogre::TransformKeyFrame*  findKeyframe(Ogre::NodeAnimationTrack* track) const;
 
-    Ogre::Skeleton*  mSkeleton;
+    std::string      mEntityName;
     std::string      mAnimationName;
     std::string      mBoneName;
     float            mTime;        ///< keyframe time in seconds

@@ -708,7 +708,7 @@ void AnimationControlController::addKeyframe()
     // actual write. Pushing the command both creates the keyframe and
     // makes it undoable.
     auto* cmd = new AddKeyframeCommand(  // NOSONAR — QUndoStack owns
-        m_selectedSkeleton,
+        m_selectedEntityName,
         m_selectedAnimation,
         m_selectedBone,
         time,
@@ -736,7 +736,7 @@ void AnimationControlController::deleteKeyframe()
     m_currentKeyframe = nullptr;
     m_selectedTick    = -1;
     auto* cmd = new DeleteKeyframeCommand(  // NOSONAR — QUndoStack owns
-        m_selectedSkeleton,
+        m_selectedEntityName,
         m_selectedAnimation,
         m_selectedBone,
         t, keyT, keyR, keyS);
@@ -928,7 +928,7 @@ bool AnimationControlController::moveKeyframe(const QString& boneName,
 
     // QUndoStack::push() takes ownership of the command — this raw new is
     // the standard QUndoCommand idiom (mirrors TransformCommands callers).
-    auto* cmd = new MoveKeyframeCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
+    auto* cmd = new MoveKeyframeCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
                                         m_selectedAnimation,
                                         boneStd,
                                         static_cast<float>(oldTime),
@@ -1053,7 +1053,7 @@ bool AnimationControlController::moveKeyframes(const QVariantList& selection,
         return false;
     }
 
-    auto* cmd = new MoveKeyframesCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
+    auto* cmd = new MoveKeyframesCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
                                           m_selectedAnimation,
                                           items, dtf);
     UndoManager::getSingleton()->push(cmd);
@@ -1222,7 +1222,7 @@ int AnimationControlController::pasteKeyframesAt(const QString& json,
         return 0;
     }
 
-    auto* cmd = new PasteKeyframesCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
+    auto* cmd = new PasteKeyframesCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
                                            m_selectedAnimation,
                                            entries);
     UndoManager::getSingleton()->push(cmd);
@@ -1317,7 +1317,7 @@ bool AnimationControlController::setKeyframeValue(const QString& boneName,
     }
     if (!found) return false;
 
-    auto* cmd = new SetKeyframeValueCommand(m_selectedSkeleton, // NOSONAR — QUndoStack owns
+    auto* cmd = new SetKeyframeValueCommand(m_selectedEntityName, // NOSONAR — QUndoStack owns
                                              m_selectedAnimation,
                                              boneName.toStdString(),
                                              channel.toLower().toStdString(),

@@ -60,7 +60,7 @@ TEST_F(BulkKeyframeCommandsTest, MoveKeyframesRedoUndoRoundTrip) {
     items.append({ "Child", 1.0f });
 
     QUndoStack stack;
-    stack.push(new MoveKeyframesCommand(skel, "TestAnim", items, 0.2f));
+    stack.push(new MoveKeyframesCommand(entity->getName(), "TestAnim", items, 0.2f));
 
     // After redo: keyframes at 0.2, 0.7, 1.2.
     EXPECT_EQ(track->getNumKeyFrames(), 3u);
@@ -99,7 +99,7 @@ TEST_F(BulkKeyframeCommandsTest, MoveKeyframesPreservesIntraTrackOrdering) {
     items.append({ "Child", 0.5f });
 
     QUndoStack stack;
-    stack.push(new MoveKeyframesCommand(skel, "TestAnim", items, 0.5f));
+    stack.push(new MoveKeyframesCommand(entity->getName(), "TestAnim", items, 0.5f));
 
     EXPECT_EQ(track->getNumKeyFrames(), 3u); // 0.5, 1.0 (moved), and 1.0 (original)
     EXPECT_TRUE(hasKeyframeAt(track, 0.5f));
@@ -125,7 +125,7 @@ TEST_F(BulkKeyframeCommandsTest, PasteRedoUndoRoundTrip) {
     e2.tx = 0.2f; e2.rw = 1.0f; e2.sx = e2.sy = e2.sz = 1.0f;
     entries.append(e1); entries.append(e2);
 
-    auto* cmd = new PasteKeyframesCommand(skel, "TestAnim", entries);
+    auto* cmd = new PasteKeyframesCommand(entity->getName(), "TestAnim", entries);
     QUndoStack stack;
     stack.push(cmd);
 
@@ -162,7 +162,7 @@ TEST_F(BulkKeyframeCommandsTest, PasteSkipsCollisionsAndUndoOnlyRemovesPasted) {
     novel.rw = 1.0f; novel.sx = novel.sy = novel.sz = 1.0f;
     entries.append(collide); entries.append(novel);
 
-    auto* cmd = new PasteKeyframesCommand(skel, "TestAnim", entries);
+    auto* cmd = new PasteKeyframesCommand(entity->getName(), "TestAnim", entries);
     QUndoStack stack;
     stack.push(cmd);
 

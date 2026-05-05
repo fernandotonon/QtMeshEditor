@@ -5,7 +5,7 @@
 #include <string>
 
 namespace Ogre {
-    class Skeleton;
+    class SkeletonInstance;
 }
 
 /**
@@ -21,7 +21,7 @@ namespace Ogre {
 class SetKeyframeValueCommand : public QUndoCommand
 {
 public:
-    SetKeyframeValueCommand(Ogre::Skeleton* skeleton,
+    SetKeyframeValueCommand(std::string entityName,
                             std::string animationName,
                             std::string boneName,
                             std::string channel,
@@ -35,14 +35,14 @@ public:
 private:
     bool apply(double value);
 
-    Ogre::Skeleton* mSkeleton;
-    std::string     mAnimationName;
-    std::string     mBoneName;
-    std::string     mChannel;
-    float           mTime;
-    double          mOldValue = 0.0;
-    double          mNewValue;
-    bool            mCaptured = false;
+    std::string mEntityName;
+    std::string mAnimationName;
+    std::string mBoneName;
+    std::string mChannel;
+    float       mTime;
+    double      mOldValue = 0.0;
+    double      mNewValue;
+    bool        mCaptured = false;
 };
 
 #endif // SET_KEYFRAME_VALUE_COMMAND_H

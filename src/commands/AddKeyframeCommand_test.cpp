@@ -70,7 +70,7 @@ TEST_F(AddKeyframeCommandTest, KeyframeUpdatedRoundTrips) {
     const Ogre::Vector3 origT = kf->getTranslate();
 
     AddKeyframeCommand cmd(
-        skel, "TestAnim", "Child", 0.5f,
+        entity->getName(), "TestAnim", "Child", 0.5f,
         AddKeyframeCommand::Mode::KeyframeUpdated,
         origT, kf->getRotation(), kf->getScale(),
         Ogre::Vector3(99, 0, 0), kf->getRotation(), kf->getScale());
@@ -96,7 +96,7 @@ TEST_F(AddKeyframeCommandTest, KeyframeCreatedUndoRemovesKeyframe) {
     const auto countBefore = track->getNumKeyFrames();
 
     AddKeyframeCommand cmd(
-        skel, "TestAnim", "Child", 0.25f,
+        entity->getName(), "TestAnim", "Child", 0.25f,
         AddKeyframeCommand::Mode::KeyframeCreated,
         Ogre::Vector3::ZERO, Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE,
         Ogre::Vector3(2, 0, 0), Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE);
@@ -124,7 +124,7 @@ TEST_F(AddKeyframeCommandTest, TrackCreatedUndoDestroysTrack) {
     ASSERT_EQ(findTrack(skel, "TestAnim", "Extra"), nullptr);
 
     AddKeyframeCommand cmd(
-        skel, "TestAnim", "Extra", 0.0f,
+        entity->getName(), "TestAnim", "Extra", 0.0f,
         AddKeyframeCommand::Mode::TrackCreated,
         Ogre::Vector3::ZERO, Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE,
         Ogre::Vector3(0.5f, 0, 0), Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE);
@@ -146,7 +146,7 @@ TEST_F(AddKeyframeCommandTest, RedoAfterUndoRestoresKeyframe) {
     const auto countBefore = track->getNumKeyFrames();
 
     AddKeyframeCommand cmd(
-        skel, "TestAnim", "Child", 0.75f,
+        entity->getName(), "TestAnim", "Child", 0.75f,
         AddKeyframeCommand::Mode::KeyframeCreated,
         Ogre::Vector3::ZERO, Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE,
         Ogre::Vector3(3, 0, 0), Ogre::Quaternion::IDENTITY, Ogre::Vector3::UNIT_SCALE);

@@ -46,7 +46,7 @@ TEST_F(SetKeyframeValueCommandTest, RedoUndoRoundTrip) {
     auto* skel = entity->getSkeleton();
 
     QUndoStack stack;
-    stack.push(new SetKeyframeValueCommand(skel, "TestAnim", "Child", "tx", 0.5f, 9.0));
+    stack.push(new SetKeyframeValueCommand(entity->getName(), "TestAnim", "Child", "tx", 0.5f, 9.0));
 
     auto* kf = keyAt(entity, 0.5f);
     ASSERT_NE(kf, nullptr);
@@ -66,7 +66,7 @@ TEST_F(SetKeyframeValueCommandTest, NoOpWhenChannelUnknown) {
     auto* skel = entity->getSkeleton();
 
     QUndoStack stack;
-    stack.push(new SetKeyframeValueCommand(skel, "TestAnim", "Child", "qq", 0.5f, 9.0));
+    stack.push(new SetKeyframeValueCommand(entity->getName(), "TestAnim", "Child", "qq", 0.5f, 9.0));
     // Original 0.5 keyframe should be untouched.
     auto* kf = keyAt(entity, 0.5f);
     EXPECT_NEAR(kf->getTranslate().x, 0.5f, 1e-4);
@@ -79,7 +79,7 @@ TEST_F(SetKeyframeValueCommandTest, NoOpWhenTimeNotFound) {
     auto* skel = entity->getSkeleton();
 
     QUndoStack stack;
-    stack.push(new SetKeyframeValueCommand(skel, "TestAnim", "Child", "tx", 0.42f, 9.0));
+    stack.push(new SetKeyframeValueCommand(entity->getName(), "TestAnim", "Child", "tx", 0.42f, 9.0));
     // No keyframe at 0.42 → the original 0.0/0.5/1.0 keyframes stay intact.
     EXPECT_NEAR(keyAt(entity, 0.0f)->getTranslate().x, 0.0f, 1e-4);
     EXPECT_NEAR(keyAt(entity, 0.5f)->getTranslate().x, 0.5f, 1e-4);

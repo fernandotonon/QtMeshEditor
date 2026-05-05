@@ -1,9 +1,11 @@
 #include "BoneTransformCommand.h"
 
+#include "SkeletonResolver.h"
+
 #include <OgreSkeletonInstance.h>
 #include <OgreBone.h>
 
-BoneTransformCommand::BoneTransformCommand(Ogre::SkeletonInstance* skeleton,
+BoneTransformCommand::BoneTransformCommand(std::string entityName,
                                            std::string boneName,
                                            const Ogre::Vector3& beforePos,
                                            const Ogre::Quaternion& beforeOrient,
@@ -14,7 +16,7 @@ BoneTransformCommand::BoneTransformCommand(Ogre::SkeletonInstance* skeleton,
                                            bool bindMode,
                                            QUndoCommand* parent)
     : QUndoCommand(parent)
-    , mSkeleton(skeleton)
+    , mEntityName(std::move(entityName))
     , mBoneName(std::move(boneName))
     , mBeforePos(beforePos)
     , mBeforeOrient(beforeOrient)
@@ -32,8 +34,9 @@ void BoneTransformCommand::apply(const Ogre::Vector3& p,
                                  const Ogre::Quaternion& o,
                                  const Ogre::Vector3& s)
 {
-    if (!mSkeleton || !mSkeleton->hasBone(mBoneName)) return;
-    Ogre::Bone* bone = mSkeleton->getBone(mBoneName);
+    Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(mEntityName);
+    if (!skel || !skel->hasBone(mBoneName)) return;
+    Ogre::Bone* bone = skel->getBone(mBoneName);
     bone->setPosition(p);
     bone->setOrientation(o);
     bone->setScale(s);

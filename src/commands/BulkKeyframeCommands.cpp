@@ -1,7 +1,9 @@
 #include "BulkKeyframeCommands.h"
 
+#include "SkeletonResolver.h"
+
 #include <Ogre.h>
-#include <OgreSkeleton.h>
+#include <OgreSkeletonInstance.h>
 #include <OgreAnimation.h>
 #include <OgreAnimationTrack.h>
 #include <OgreKeyFrame.h>
@@ -13,11 +15,13 @@
 namespace {
 constexpr float kEpsilon = 0.001f;
 
-Ogre::NodeAnimationTrack* resolveTrack(Ogre::Skeleton* skel,
+Ogre::NodeAnimationTrack* resolveTrack(const std::string& entityName,
                                        const std::string& animName,
                                        const std::string& boneName)
 {
-    if (!skel || animName.empty() || boneName.empty()) return nullptr;
+    if (animName.empty() || boneName.empty()) return nullptr;
+    Ogre::SkeletonInstance* skel = SkeletonResolver::resolve(entityName);
+    if (!skel) return nullptr;
     if (!skel->hasAnimation(animName)) return nullptr;
     if (!skel->hasBone(boneName)) return nullptr;
     Ogre::Animation* anim = skel->getAnimation(animName);
@@ -59,13 +63,13 @@ bool relocateKeyframe(Ogre::NodeAnimationTrack* track, float fromT, float toT) {
 
 // ── MoveKeyframesCommand ──────────────────────────────────────────────────────
 
-MoveKeyframesCommand::MoveKeyframesCommand(Ogre::Skeleton* skeleton,
+MoveKeyframesCommand::MoveKeyframesCommand(std::string entityName,
                                            std::string animationName,
                                            QVector<Item> items,
                                            float dt,
                                            QUndoCommand* parent)
     : QUndoCommand(parent)
-    , mSkeleton(skeleton)
+    , mEntityName(std::move(entityName))
     , mAnimationName(std::move(animationName))
     , mItems(std::move(items))
     , mDt(dt)
@@ -83,7 +87,7 @@ bool MoveKeyframesCommand::shiftAll(float fromOffset, float toOffset)
     QVector<float> parkSlots;
     parkSlots.reserve(mItems.size());
     for (int i = 0; i < mItems.size(); ++i) {
-        auto* track = resolveTrack(mSkeleton, mAnimationName, mItems[i].boneName);
+        auto* track = resolveTrack(mEntityName, mAnimationName, mItems[i].boneName);
         if (!track) { parkSlots.append(0.0f); continue; }
         const float src = mItems[i].originalTime + fromOffset;
         const float park = -1.0f - static_cast<float>(i); // unique negative slot
@@ -91,7 +95,7 @@ bool MoveKeyframesCommand::shiftAll(float fromOffset, float toOffset)
         parkSlots.append(park);
     }
     for (int i = 0; i < mItems.size(); ++i) {
-        auto* track = resolveTrack(mSkeleton, mAnimationName, mItems[i].boneName);
+        auto* track = resolveTrack(mEntityName, mAnimationName, mItems[i].boneName);
         if (!track) continue;
         const float dst = mItems[i].originalTime + toOffset;
         relocateKeyframe(track, parkSlots[i], dst);
@@ -104,12 +108,12 @@ void MoveKeyframesCommand::undo() { shiftAll(mDt, 0.0f); }
 
 // ── PasteKeyframesCommand ─────────────────────────────────────────────────────
 
-PasteKeyframesCommand::PasteKeyframesCommand(Ogre::Skeleton* skeleton,
+PasteKeyframesCommand::PasteKeyframesCommand(std::string entityName,
                                              std::string animationName,
                                              QVector<Entry> entries,
                                              QUndoCommand* parent)
     : QUndoCommand(parent)
-    , mSkeleton(skeleton)
+    , mEntityName(std::move(entityName))
     , mAnimationName(std::move(animationName))
     , mEntries(std::move(entries))
 {
@@ -123,7 +127,7 @@ void PasteKeyframesCommand::redo()
     for (int i = 0; i < mEntries.size(); ++i) {
         const Entry& e = mEntries[i];
         mApplied[i] = false;
-        auto* track = resolveTrack(mSkeleton, mAnimationName, e.boneName);
+        auto* track = resolveTrack(mEntityName, mAnimationName, e.boneName);
         if (!track) continue;
         if (findKeyframeIndex(track, e.time) >= 0) continue; // collision — skip
         auto* kf = track->createNodeKeyFrame(e.time);
@@ -141,7 +145,7 @@ void PasteKeyframesCommand::undo()
     for (int i = 0; i < mEntries.size(); ++i) {
         if (!mApplied[i]) continue;
         const Entry& e = mEntries[i];
-        auto* track = resolveTrack(mSkeleton, mAnimationName, e.boneName);
+        auto* track = resolveTrack(mEntityName, mAnimationName, e.boneName);
         if (!track) continue;
         const int idx = findKeyframeIndex(track, e.time);
         if (idx < 0) continue;
