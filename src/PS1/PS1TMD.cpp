@@ -15,6 +15,7 @@ The MIT License
 #include <OgreMaterialManager.h>
 #include <OgreMeshManager.h>
 #include <OgrePass.h>
+#include <OgreRoot.h>
 #include <OgreSubMesh.h>
 #include <OgreSubEntity.h>
 #include <OgreTechnique.h>
@@ -122,7 +123,9 @@ struct TriSoup {
     std::vector<Ogre::Vector3> pos;
     std::vector<Ogre::Vector3> nrm;
     std::vector<Ogre::Vector2> uv;
+    std::vector<Ogre::ColourValue> col;
     bool hasUv{false};
+    bool hasCol{false};
 };
 
 /** Unit normal from triangle positions (no-light TMD prims have no normal indices). */
@@ -137,9 +140,23 @@ static Ogre::Vector3 flatNormalFromTri(const Ogre::Vector3& p0, const Ogre::Vect
     return n;
 }
 
+static bool triMatchesRefNormal(const Ogre::Vector3& p0, const Ogre::Vector3& p1, const Ogre::Vector3& p2,
+                                const Ogre::Vector3& ref)
+{
+    Ogre::Vector3 n = (p1 - p0).crossProduct(p2 - p0);
+    // If degenerate or ref is zero, don't try to flip.
+    if (n.squaredLength() < 1e-24f || ref.isZeroLength())
+        return true;
+    return n.dotProduct(ref) >= 0.0f;
+}
+
 static void appendTri(TriSoup& out, const Ogre::Vector3& p0, const Ogre::Vector3& p1, const Ogre::Vector3& p2,
                       const Ogre::Vector3& n0, const Ogre::Vector3& n1, const Ogre::Vector3& n2,
-                      const Ogre::Vector2& uv0, const Ogre::Vector2& uv1, const Ogre::Vector2& uv2, bool withUv)
+                      const Ogre::Vector2& uv0, const Ogre::Vector2& uv1, const Ogre::Vector2& uv2, bool withUv,
+                      const Ogre::ColourValue& c0 = Ogre::ColourValue::White,
+                      const Ogre::ColourValue& c1 = Ogre::ColourValue::White,
+                      const Ogre::ColourValue& c2 = Ogre::ColourValue::White,
+                      bool withCol = false)
 {
     out.pos.push_back(p0);
     out.pos.push_back(p1);
@@ -152,6 +169,27 @@ static void appendTri(TriSoup& out, const Ogre::Vector3& p0, const Ogre::Vector3
         out.uv.push_back(uv1);
         out.uv.push_back(uv2);
         out.hasUv = true;
+    }
+    if (withCol) {
+        out.col.push_back(c0);
+        out.col.push_back(c1);
+        out.col.push_back(c2);
+        out.hasCol = true;
+    }
+}
+
+static void appendTriMatchWinding(TriSoup& out,
+                                  const Ogre::Vector3& p0, const Ogre::Vector3& p1, const Ogre::Vector3& p2,
+                                  const Ogre::Vector3& n0, const Ogre::Vector3& n1, const Ogre::Vector3& n2,
+                                  const Ogre::Vector2& uv0, const Ogre::Vector2& uv1, const Ogre::Vector2& uv2, bool withUv,
+                                  const Ogre::ColourValue& c0, const Ogre::ColourValue& c1, const Ogre::ColourValue& c2, bool withCol,
+                                  const Ogre::Vector3& refNormal)
+{
+    if (triMatchesRefNormal(p0, p1, p2, refNormal)) {
+        appendTri(out, p0, p1, p2, n0, n1, n2, uv0, uv1, uv2, withUv, c0, c1, c2, withCol);
+    } else {
+        // Flip winding + associated per-vertex data for v1/v2.
+        appendTri(out, p0, p2, p1, n0, n2, n1, uv0, uv2, uv1, withUv, c0, c2, c1, withCol);
     }
 }
 
@@ -207,6 +245,7 @@ static bool parseTmdObject(const uint8_t* data, size_t fileSize, uint32_t stored
         (void)olen;
 
         if (mode == 0x20 && flag == 0 && ilen == 3) {
+            const Ogre::ColourValue c0(float(d[0]) / 255.0f, float(d[1]) / 255.0f, float(d[2]) / 255.0f, 1.0f);
             const uint16_t ni = readU16le(d + 4);
             const uint16_t i0 = readU16le(d + 6);
             const uint16_t i1 = readU16le(d + 8);
@@ -215,11 +254,12 @@ static bool parseTmdObject(const uint8_t* data, size_t fileSize, uint32_t stored
                 const Ogre::Vector3& np = norms[ni];
                 // Swap v1/v2 so front-face winding matches Ogre (CCW) vs PSX packet order.
                 appendTri(out, verts[i0], verts[i2], verts[i1], np, np, np, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO,
-                          Ogre::Vector2::ZERO, false);
+                          Ogre::Vector2::ZERO, false, c0, c0, c0, true);
             }
             continue;
         }
         if (mode == 0x30 && flag == 0 && ilen == 4) {
+            const Ogre::ColourValue c0(float(d[0]) / 255.0f, float(d[1]) / 255.0f, float(d[2]) / 255.0f, 1.0f);
             const uint16_t n0 = readU16le(d + 4);
             const uint16_t v0 = readU16le(d + 6);
             const uint16_t n1 = readU16le(d + 8);
@@ -228,7 +268,7 @@ static bool parseTmdObject(const uint8_t* data, size_t fileSize, uint32_t stored
             const uint16_t v2 = readU16le(d + 14);
             if (v0 < nVert && v1 < nVert && v2 < nVert && n0 < nNorm && n1 < nNorm && n2 < nNorm)
                 appendTri(out, verts[v0], verts[v2], verts[v1], norms[n0], norms[n2], norms[n1], Ogre::Vector2::ZERO,
-                          Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false);
+                          Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false, c0, c0, c0, true);
             continue;
         }
         if (mode == 0x24 && flag == 0 && ilen == 5) {
@@ -269,6 +309,7 @@ static bool parseTmdObject(const uint8_t* data, size_t fileSize, uint32_t stored
             continue;
         }
         if (mode == 0x28 && flag == 0 && ilen == 4) {
+            const Ogre::ColourValue c0(float(d[0]) / 255.0f, float(d[1]) / 255.0f, float(d[2]) / 255.0f, 1.0f);
             const uint16_t ni = readU16le(d + 4);
             const uint16_t i0 = readU16le(d + 6);
             const uint16_t i1 = readU16le(d + 8);
@@ -276,10 +317,49 @@ static bool parseTmdObject(const uint8_t* data, size_t fileSize, uint32_t stored
             const uint16_t i3 = readU16le(d + 12);
             if (i0 < nVert && i1 < nVert && i2 < nVert && i3 < nVert && ni < nNorm) {
                 const Ogre::Vector3& np = norms[ni];
-                appendTri(out, verts[i0], verts[i2], verts[i1], np, np, np, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO,
-                          Ogre::Vector2::ZERO, false);
-                appendTri(out, verts[i0], verts[i3], verts[i2], np, np, np, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO,
-                          Ogre::Vector2::ZERO, false);
+                appendTriMatchWinding(out, verts[i0], verts[i2], verts[i1], np, np, np,
+                                      Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
+                                      c0, c0, c0, true, np);
+                appendTriMatchWinding(out, verts[i0], verts[i3], verts[i2], np, np, np,
+                                      Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
+                                      c0, c0, c0, true, np);
+            }
+            continue;
+        }
+        // Net Yaroze / tmd.h: Mode 0x28 && Flag 4 — Gradated quad (per-vertex RGB), ilen 7.
+        // Use per-vertex RGB (one normal).
+        if (mode == 0x28 && flag == 4 && ilen == 7) {
+            const Ogre::ColourValue c0(float(d[0]) / 255.0f, float(d[1]) / 255.0f, float(d[2]) / 255.0f, 1.0f);
+            const Ogre::ColourValue c1(float(d[4]) / 255.0f, float(d[5]) / 255.0f, float(d[6]) / 255.0f, 1.0f);
+            const Ogre::ColourValue c2(float(d[8]) / 255.0f, float(d[9]) / 255.0f, float(d[10]) / 255.0f, 1.0f);
+            const Ogre::ColourValue c3(float(d[12]) / 255.0f, float(d[13]) / 255.0f, float(d[14]) / 255.0f, 1.0f);
+            const uint16_t ni = readU16le(d + 16);
+            const uint16_t i0 = readU16le(d + 18);
+            const uint16_t i1 = readU16le(d + 20);
+            const uint16_t i2 = readU16le(d + 22);
+            const uint16_t i3 = readU16le(d + 24);
+            if (i0 < nVert && i1 < nVert && i2 < nVert && i3 < nVert && ni < nNorm) {
+                const Ogre::Vector3& np = norms[ni];
+                // GRID.TMD uses this primitive to represent a checkerboard. Gouraud interpolation makes
+                // the triangulation diagonal very visible, so for checker-like quads (c0==c2,c1==c3)
+                // we treat the quad as a *flat-colored* face using c0.
+                const bool isCheckerLike = (c0 == c2) && (c1 == c3);
+                if (isCheckerLike) {
+                    appendTriMatchWinding(out, verts[i0], verts[i2], verts[i1], np, np, np,
+                                          Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
+                                          c0, c0, c0, true, np);
+                    appendTriMatchWinding(out, verts[i0], verts[i3], verts[i2], np, np, np,
+                                          Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
+                                          c0, c0, c0, true, np);
+                } else {
+                    // Default: keep per-vertex colors.
+                    appendTriMatchWinding(out, verts[i0], verts[i2], verts[i1], np, np, np,
+                                          Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
+                                          c0, c2, c1, true, np);
+                    appendTriMatchWinding(out, verts[i0], verts[i3], verts[i2], np, np, np,
+                                          Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, Ogre::Vector2::ZERO, false,
+                                          c0, c3, c2, true, np);
+                }
             }
             continue;
         }
@@ -447,19 +527,19 @@ static Ogre::MeshPtr buildMeshFromSoup(const std::string& meshName, const TriSou
     Ogre::MeshPtr mesh = Ogre::MeshManager::getSingleton().createManual(
         meshName, Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     Ogre::SubMesh* sm = mesh->createSubMesh();
-    // Use a unique per-import material so texture assignment doesn't mutate BaseOutlined globally.
-    // This also lets us apply TMD-specific texture scaling heuristics later (see MaterialEditorQML).
+    // Use a unique per-import material so texture assignment doesn't mutate shared defaults.
     const std::string tmdMatName = std::string("TMD/") + meshName;
     try {
         if (!Ogre::MaterialManager::getSingleton().getByName(tmdMatName)) {
-            if (auto base = Ogre::MaterialManager::getSingleton().getByName("BaseOutlined")) {
+            // Default to a simple "empty" single-pass base. Other code may add texture units later.
+            if (auto base = Ogre::MaterialManager::getSingleton().getByName("BaseMaterial")) {
                 base->clone(tmdMatName);
             }
         }
     } catch (...) {
-        // If materials aren't available yet, fall back to BaseOutlined.
+        // If materials aren't available yet, fall back to BaseMaterial.
     }
-    sm->setMaterialName(Ogre::MaterialManager::getSingleton().getByName(tmdMatName) ? tmdMatName : "BaseOutlined");
+    sm->setMaterialName(Ogre::MaterialManager::getSingleton().getByName(tmdMatName) ? tmdMatName : "BaseMaterial");
     sm->useSharedVertices = false;
 
     const size_t nVert = soup.pos.size();
@@ -476,6 +556,11 @@ static Ogre::MeshPtr buildMeshFromSoup(const std::string& meshName, const TriSou
     if (hasUv) {
         decl->addElement(0, off, Ogre::VET_FLOAT2, Ogre::VES_TEXTURE_COORDINATES);
         off += Ogre::VertexElement::getTypeSize(Ogre::VET_FLOAT2);
+    }
+    const bool hasCol = soup.hasCol && soup.col.size() == nVert;
+    if (hasCol) {
+        decl->addElement(0, off, Ogre::VET_COLOUR_ARGB, Ogre::VES_DIFFUSE);
+        off += Ogre::VertexElement::getTypeSize(Ogre::VET_COLOUR_ARGB);
     }
     const size_t vsize = decl->getVertexSize(0);
     auto vbuf = Ogre::HardwareBufferManager::getSingleton().createVertexBuffer(
@@ -497,9 +582,62 @@ static Ogre::MeshPtr buildMeshFromSoup(const std::string& meshName, const TriSou
             p[0] = soup.uv[i].x;
             p[1] = soup.uv[i].y;
         }
+        if (hasCol) {
+            Ogre::RGBA* c = nullptr;
+            decl->findElementBySemantic(Ogre::VES_DIFFUSE)->baseVertexPointerToElement(row, &c);
+            Ogre::Root::getSingleton().convertColourValue(soup.col[i], c);
+        }
     }
     vbuf->unlock();
     bind->setBinding(0, vbuf);
+
+    // If we imported vertex colors, make sure the cloned material uses them.
+    try {
+        auto mat = Ogre::MaterialManager::getSingleton().getByName(tmdMatName);
+        if (mat) {
+            if (!mat->isLoaded())
+                mat->load();
+            if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
+                Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
+                if (p0) {
+                    // Keep imported TMD materials "blank" by default (TMD primitives don't carry real material params).
+                    // If the mesh has vertex colors, we track them to diffuse; otherwise track nothing.
+                    p0->setAmbient(0.0f, 0.0f, 0.0f);
+                    // Default diffuse should remain white so non-vertex-colored meshes aren't forced black.
+                    p0->setDiffuse(1.0f, 1.0f, 1.0f, 1.0f);
+                    p0->setEmissive(0.0f, 0.0f, 0.0f);
+                    p0->setVertexColourTracking(hasCol ? Ogre::TVC_DIFFUSE : Ogre::TVC_NONE);
+                }
+            }
+        }
+    } catch (...) {
+    }
+
+    if (hasCol) {
+        try {
+            auto mat = Ogre::MaterialManager::getSingleton().getByName(tmdMatName);
+            if (mat) {
+                if (!mat->isLoaded())
+                    mat->load();
+                if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
+                    Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
+                    if (p0) {
+                        // Vertex-color-only meshes (like GRID.TMD) should render unlit by default to avoid
+                        // triangle shading artifacts. Textured meshes will keep lighting settings.
+                        if (!hasUv) {
+                            // Keep the material "blank": no baked ambient/diffuse/emissive contribution.
+                            // The visible color comes from vertex color tracking below.
+                            p0->setAmbient(0.0f, 0.0f, 0.0f);
+                            p0->setDiffuse(0.0f, 0.0f, 0.0f, 1.0f);
+                            p0->setEmissive(0.0f, 0.0f, 0.0f);
+                        }
+                        p0->setVertexColourTracking(Ogre::TVC_DIFFUSE);
+                    }
+                }
+            }
+        } catch (...) {
+        }
+    }
 
     const size_t nTri = nVert / 3;
     const bool use32 = nVert > 65535;
@@ -682,12 +820,23 @@ Ogre::MeshPtr importTmd(const QString& filePath, const std::string& meshName, fl
             for (size_t k = 0; k < part.pos.size(); ++k)
                 merged.uv.push_back(Ogre::Vector2::ZERO);
         }
+        if (part.hasCol) {
+            merged.hasCol = true;
+            merged.col.insert(merged.col.end(), part.col.begin(), part.col.end());
+        } else if (merged.hasCol) {
+            for (size_t k = 0; k < part.pos.size(); ++k)
+                merged.col.push_back(Ogre::ColourValue::White);
+        }
     }
     if (merged.pos.empty())
         return {};
     if (merged.hasUv && merged.uv.size() != merged.pos.size()) {
         merged.uv.clear();
         merged.hasUv = false;
+    }
+    if (merged.hasCol && merged.col.size() != merged.pos.size()) {
+        merged.col.clear();
+        merged.hasCol = false;
     }
 
     Ogre::MeshPtr mesh = buildMeshFromSoup(meshName, merged);
