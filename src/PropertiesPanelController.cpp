@@ -771,20 +771,17 @@ int PropertiesPanelController::bakeAnimation(const QString& entityName,
 
         auto* stack = UndoManager::getSingleton()->stack();
         stack->beginMacro(QObject::tr("Bake animation"));
-        // For fixed-FPS modes the user explicitly wants every channel
-        // densified at the target rate (export-pipeline use case).
-        // For adaptive modes, only bake channels the user authored a
-        // CurveEditModel entry for — channels without entries have no
-        // shape to preserve and densifying them just produces redundant
-        // keyframes (and froze the UI on a 50-bone skeleton).
-        const bool isFixedFps = (density >= 3 && density <= 6);
-        auto* model = CurveEditModel::instance();
-        int trackCount = 0;
+        // Bake every animated channel regardless of whether the user
+        // authored a CurveEditModel entry — adaptive modes now run a
+        // pre-decimation step (5/15/30 FPS for Sparse/Medium/Dense),
+        // which is exactly the operation the user wants on a fresh
+        // never-edited animation: compress to a uniform baseline.
         // Suspend the per-segment QML refresh storm — we'll emit one
         // boneRowsChanged after the macro closes. With ~50 bones × 10
         // channels × 30 anchor pairs at 60 FPS, that's ~15k
         // resample pushes; without this the dope sheet rebuilds
         // thousands of times and the UI freezes.
+        int trackCount = 0;
         animCtrl->setRowsRefreshSuspended(true);
         for (const auto& [handle, track] : anim->_getNodeTrackList()) {
             Ogre::Node* node = track->getAssociatedNode();
@@ -792,11 +789,6 @@ int PropertiesPanelController::bakeAnimation(const QString& entityName,
             const QString boneName = QString::fromStdString(node->getName());
             for (const char* ch : kAllChannels) {
                 const QString chQ = QString::fromUtf8(ch);
-                if (!isFixedFps
-                    && !model->hasEntryForChannel(entityName, animName,
-                                                   boneName, chQ)) {
-                    continue;
-                }
                 if (animCtrl->resampleAllSegmentsForBone(
                         boneName, chQ, density) > 0) {
                     ++trackCount;
