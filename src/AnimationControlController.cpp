@@ -1556,12 +1556,15 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
 
     // Map density level → (toleranceMul, fixedFps). Adaptive modes
     // (0/1/2) feed the Douglas-Peucker simplifier; fixed-FPS modes
-    // (3/4) bypass simplification and emit one key per 1/fps interval.
+    // (3/4/5/6) decimate-then-densify so the track lands at exactly
+    // the target rate regardless of starting density.
     double toleranceMul = 1.0;
     int    fixedFps     = 0;
     switch (density) {
-        case 4:  fixedFps = 60; break;          // 60 FPS fixed
-        case 3:  fixedFps = 30; break;          // 30 FPS fixed
+        case 6:  fixedFps = 60; break;          // 60 FPS exact
+        case 5:  fixedFps = 30; break;          // 30 FPS exact
+        case 4:  fixedFps = 15; break;          // 15 FPS exact
+        case 3:  fixedFps = 10; break;          // 10 FPS exact
         case 2:  toleranceMul = 1.0;  break;    // Dense
         case 1:  toleranceMul = 4.0;  break;    // Medium
         default: toleranceMul = 12.0; break;    // Sparse
@@ -1579,6 +1582,24 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     // would otherwise rebuild thousands of times during the macro.
     const bool prevSuspend = m_suspendRowsRefresh;
     m_suspendRowsRefresh = true;
+
+    // Fixed-FPS bake = "track ends up at exactly N FPS regardless of
+    // starting density". If the track is already denser than the
+    // target, the densify loop alone wouldn't change anything (each
+    // sub-segment is already shorter than 1/fps), so we decimate
+    // first to pull the density DOWN to target. Then the densify
+    // loop fills any gaps that are sparser than 1/fps. Net effect:
+    // single uniform N-FPS grid.
+    if (fixedFps > 0) {
+        reduceTrackToFps(boneName, fixedFps);
+        // Re-snapshot anchors after decimation since the track shrank.
+        anchors.clear();
+        anchors.reserve(track->getNumKeyFrames());
+        for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
+            anchors.push_back(track->getKeyFrame(i)->getTime());
+        }
+    }
+
     int count = 0;
     for (size_t i = 1; i < anchors.size(); ++i) {
         if (resampleCurveSegment(boneName, channel,

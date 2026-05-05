@@ -777,7 +777,7 @@ int PropertiesPanelController::bakeAnimation(const QString& entityName,
         // CurveEditModel entry for — channels without entries have no
         // shape to preserve and densifying them just produces redundant
         // keyframes (and froze the UI on a 50-bone skeleton).
-        const bool isFixedFps = (density == 3 || density == 4);
+        const bool isFixedFps = (density >= 3 && density <= 6);
         auto* model = CurveEditModel::instance();
         int trackCount = 0;
         // Suspend the per-segment QML refresh storm — we'll emit one

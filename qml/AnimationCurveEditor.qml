@@ -218,12 +218,10 @@ Rectangle {
                     "Sparse",
                     "Medium",
                     "Dense",
-                    "Bake @ 30 FPS",
-                    "Bake @ 60 FPS",
-                    "Reduce → 10 FPS",
-                    "Reduce → 15 FPS",
-                    "Reduce → 30 FPS",
-                    "Reduce → 60 FPS"
+                    "Set to 10 FPS",
+                    "Set to 15 FPS",
+                    "Set to 30 FPS",
+                    "Set to 60 FPS"
                 ]
                 ToolTip.visible: hovered
                 ToolTip.text: "Resample curves into keyframes"
@@ -239,24 +237,11 @@ Rectangle {
                         }
                     }
                 }
-                function reduce(fps) {
-                    if (root.selectedBone === "") return
-                    AnimationControlController.reduceTrackToFps(
-                        root.selectedBone, fps)
-                }
 
                 onActivated: function(index) {
-                    switch (index) {
-                        case 1: bake(0); break  // Sparse
-                        case 2: bake(1); break  // Medium
-                        case 3: bake(2); break  // Dense
-                        case 4: bake(3); break  // 30 FPS bake
-                        case 5: bake(4); break  // 60 FPS bake
-                        case 6: reduce(10); break
-                        case 7: reduce(15); break
-                        case 8: reduce(30); break
-                        case 9: reduce(60); break
-                    }
+                    // Density int passes through to the controller:
+                    // 0 Sparse / 1 Medium / 2 Dense / 3-6 = 10/15/30/60 FPS exact.
+                    if (index >= 1 && index <= 6) bake(index - 1)
                     // Snap back to the header label so the combo always
                     // shows "Bake…" — these entries are actions, not
                     // a persistent selection.
