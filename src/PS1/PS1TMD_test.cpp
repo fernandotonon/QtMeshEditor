@@ -713,7 +713,7 @@ TEST_F(PS1TMDTest, ImportMinimalG3Triangle)
     EXPECT_EQ(sm->vertexData->vertexCount, 3u);
     EXPECT_EQ(sm->indexData->indexCount, 3u);
 
-    // File verts (0,0,0), (4096,0,0), (0,4096,0) → 10× then 180° about Z: (0,0,0), (-10,0,0), (0,-10,0)
+    // After transform: v0=(0,0,0), v1=(-10,0,0), v2=(0,-10,0). Importer emits v0,v2,v1 for winding.
     Ogre::VertexData* vd = sm->vertexData;
     const auto* posEl = vd->vertexDeclaration->findElementBySemantic(Ogre::VES_POSITION);
     ASSERT_NE(posEl, nullptr);
@@ -726,12 +726,12 @@ TEST_F(PS1TMDTest, ImportMinimalG3Triangle)
     EXPECT_NEAR(pf[1], 0.f, 1e-4f);
     EXPECT_NEAR(pf[2], 0.f, 1e-4f);
     posEl->baseVertexPointerToElement(const_cast<uint8_t*>(vbase + stride), &pf);
-    EXPECT_NEAR(pf[0], -10.f, 1e-3f);
-    EXPECT_NEAR(pf[1], 0.f, 1e-4f);
+    EXPECT_NEAR(pf[0], 0.f, 1e-3f);
+    EXPECT_NEAR(pf[1], -10.f, 1e-3f);
     EXPECT_NEAR(pf[2], 0.f, 1e-4f);
     posEl->baseVertexPointerToElement(const_cast<uint8_t*>(vbase + 2 * stride), &pf);
-    EXPECT_NEAR(pf[0], 0.f, 1e-4f);
-    EXPECT_NEAR(pf[1], -10.f, 1e-3f);
+    EXPECT_NEAR(pf[0], -10.f, 1e-3f);
+    EXPECT_NEAR(pf[1], 0.f, 1e-4f);
     EXPECT_NEAR(pf[2], 0.f, 1e-4f);
     posBuf->unlock();
 }
