@@ -2026,6 +2026,47 @@ Rectangle {
                                             }
                                         }
                                     }
+
+                                    // Bake — resample / reduce every bone track in this
+                                    // animation. Mirrors the curve editor's per-bone Bake
+                                    // dropdown but applies to the whole animation in one
+                                    // undo macro. Hidden for non-skeletal entities.
+                                    ThemedComboBox {
+                                        id: bakeAnimCombo
+                                        visible: grp.hasSkeleton
+                                        width: 90; height: 18
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        font.pixelSize: 10
+                                        model: [
+                                            "Bake…",
+                                            "Sparse",
+                                            "Medium",
+                                            "Dense",
+                                            "Bake @ 30 FPS",
+                                            "Bake @ 60 FPS",
+                                            "Reduce → 10 FPS",
+                                            "Reduce → 15 FPS",
+                                            "Reduce → 30 FPS",
+                                            "Reduce → 60 FPS"
+                                        ]
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: "Bake or reduce every bone track in this animation"
+                                        onActivated: function(index) {
+                                            switch (index) {
+                                                case 1: PropertiesPanelController.bakeAnimation(grp.entity, modelData.name, 0); break
+                                                case 2: PropertiesPanelController.bakeAnimation(grp.entity, modelData.name, 1); break
+                                                case 3: PropertiesPanelController.bakeAnimation(grp.entity, modelData.name, 2); break
+                                                case 4: PropertiesPanelController.bakeAnimation(grp.entity, modelData.name, 3); break
+                                                case 5: PropertiesPanelController.bakeAnimation(grp.entity, modelData.name, 4); break
+                                                case 6: PropertiesPanelController.reduceAnimationToFps(grp.entity, modelData.name, 10); break
+                                                case 7: PropertiesPanelController.reduceAnimationToFps(grp.entity, modelData.name, 15); break
+                                                case 8: PropertiesPanelController.reduceAnimationToFps(grp.entity, modelData.name, 30); break
+                                                case 9: PropertiesPanelController.reduceAnimationToFps(grp.entity, modelData.name, 60); break
+                                            }
+                                            currentIndex = 0
+                                            simplifyBtn.cachedAnalysis = null
+                                        }
+                                    }
                                 }
                             }
                         }

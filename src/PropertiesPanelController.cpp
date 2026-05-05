@@ -6,6 +6,7 @@
 #include "AnimationWidget.h"
 #include "AnimationBlender.h"
 #include "SkeletonTransform.h"
+#include "AnimationControlController.h"
 #include "AnimationMerger.h"
 #include "SentryReporter.h"
 #include "MeshImporterExporter.h"
@@ -724,6 +725,119 @@ int PropertiesPanelController::simplifyAnimation(const QString& entityName,
 
         emit animationStateChanged();
         return removed;
+    }
+    return 0;
+}
+
+namespace {
+// Channel ids exposed by the controller's per-bone bake API. Each
+// of the 10 TRS components is its own callable channel; bake-all
+// runs through this list once per bone.
+constexpr const char* kAllChannels[] = {
+    "tx", "ty", "tz",
+    "rw", "rx", "ry", "rz",
+    "sx", "sy", "sz"
+};
+} // namespace
+
+int PropertiesPanelController::bakeAnimation(const QString& entityName,
+                                             const QString& animName,
+                                             int density)
+{
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities) {
+        if (QString::fromStdString(ent->getName()) != entityName) continue;
+        if (!ent->hasSkeleton()) return 0;
+        Ogre::SkeletonInstance* skel = ent->getSkeleton();
+        if (!skel || !skel->hasAnimation(animName.toStdString())) return 0;
+        Ogre::Animation* anim = skel->getAnimation(animName.toStdString());
+
+        // Stop playback so the bake doesn't fight running advancement.
+        if (mAnimationWidget) {
+            if (mAnimationWidget->isSkeletonDebugActive(ent))
+                mAnimationWidget->toggleSkeletonDebug(ent, false);
+        }
+        setPlaying(false);
+
+        // The bake API lives on AnimationControlController and reads
+        // its m_selectedSkeleton / m_selectedAnimation members, so
+        // route through selectAnimation to set those without
+        // disturbing playback further.
+        auto* animCtrl = AnimationControlController::instance();
+        const QString prevEntity = animCtrl->selectedEntityName();
+        const QString prevAnim   = animCtrl->selectedAnimation();
+        animCtrl->selectAnimation(entityName, animName);
+
+        auto* stack = UndoManager::getSingleton()->stack();
+        stack->beginMacro(QObject::tr("Bake animation"));
+        int trackCount = 0;
+        for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+            Ogre::Node* node = track->getAssociatedNode();
+            if (!node) continue;
+            const QString boneName = QString::fromStdString(node->getName());
+            for (const char* ch : kAllChannels) {
+                if (animCtrl->resampleAllSegmentsForBone(
+                        boneName, QString::fromUtf8(ch), density) > 0) {
+                    ++trackCount;
+                }
+            }
+        }
+        stack->endMacro();
+
+        // Restore the prior selection so the user's panel state stays put.
+        if (prevEntity != entityName || prevAnim != animName) {
+            animCtrl->selectAnimation(prevEntity, prevAnim);
+        }
+
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Bake animation '%1' (density %2): %3 tracks")
+                .arg(animName).arg(density).arg(trackCount));
+        emit animationStateChanged();
+        return trackCount;
+    }
+    return 0;
+}
+
+int PropertiesPanelController::reduceAnimationToFps(const QString& entityName,
+                                                     const QString& animName,
+                                                     int targetFps)
+{
+    if (targetFps <= 0) return 0;
+    auto entities = SelectionSet::getSingleton()->getResolvedEntities();
+    for (Ogre::Entity* ent : entities) {
+        if (QString::fromStdString(ent->getName()) != entityName) continue;
+        if (!ent->hasSkeleton()) return 0;
+        Ogre::SkeletonInstance* skel = ent->getSkeleton();
+        if (!skel || !skel->hasAnimation(animName.toStdString())) return 0;
+        Ogre::Animation* anim = skel->getAnimation(animName.toStdString());
+
+        setPlaying(false);
+
+        auto* animCtrl = AnimationControlController::instance();
+        const QString prevEntity = animCtrl->selectedEntityName();
+        const QString prevAnim   = animCtrl->selectedAnimation();
+        animCtrl->selectAnimation(entityName, animName);
+
+        auto* stack = UndoManager::getSingleton()->stack();
+        stack->beginMacro(QObject::tr("Reduce animation"));
+        int totalRemoved = 0;
+        for (const auto& [handle, track] : anim->_getNodeTrackList()) {
+            Ogre::Node* node = track->getAssociatedNode();
+            if (!node) continue;
+            const QString boneName = QString::fromStdString(node->getName());
+            totalRemoved += animCtrl->reduceTrackToFps(boneName, targetFps);
+        }
+        stack->endMacro();
+
+        if (prevEntity != entityName || prevAnim != animName) {
+            animCtrl->selectAnimation(prevEntity, prevAnim);
+        }
+
+        SentryReporter::addBreadcrumb("ui.action",
+            QString("Reduce animation '%1' to %2 FPS: %3 keyframes removed")
+                .arg(animName).arg(targetFps).arg(totalRemoved));
+        emit animationStateChanged();
+        return totalRemoved;
     }
     return 0;
 }

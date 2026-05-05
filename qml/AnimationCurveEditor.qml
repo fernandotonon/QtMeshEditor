@@ -220,6 +220,7 @@ Rectangle {
                     "Dense",
                     "Bake @ 30 FPS",
                     "Bake @ 60 FPS",
+                    "Reduce → 10 FPS",
                     "Reduce → 15 FPS",
                     "Reduce → 30 FPS",
                     "Reduce → 60 FPS"
@@ -251,9 +252,10 @@ Rectangle {
                         case 3: bake(2); break  // Dense
                         case 4: bake(3); break  // 30 FPS bake
                         case 5: bake(4); break  // 60 FPS bake
-                        case 6: reduce(15); break
-                        case 7: reduce(30); break
-                        case 8: reduce(60); break
+                        case 6: reduce(10); break
+                        case 7: reduce(15); break
+                        case 8: reduce(30); break
+                        case 9: reduce(60); break
                     }
                     // Snap back to the header label so the combo always
                     // shows "Bake…" — these entries are actions, not

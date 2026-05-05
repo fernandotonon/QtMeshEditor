@@ -214,6 +214,23 @@ public:
                                       const QString& animName,
                                       const QString& preset = QStringLiteral("balanced"));
 
+    /// Bake every bone track in `animName` at the given density level
+    /// (mirrors AnimationControlController::resampleAllSegmentsForBone:
+    /// 0=Sparse / 1=Medium / 2=Dense / 3=30 FPS / 4=60 FPS). Bundles
+    /// every per-channel resample under one undo macro so Ctrl+Z
+    /// reverts the whole animation in one step. Returns the number of
+    /// (bone, channel) tracks resampled.
+    Q_INVOKABLE int bakeAnimation(const QString& entityName,
+                                  const QString& animName,
+                                  int density);
+
+    /// Decimate every bone track in `animName` to `targetFps` keyframes
+    /// per second. Wraps DecimateTrackCommand per bone in one undo
+    /// macro. Returns the total number of keyframes removed.
+    Q_INVOKABLE int reduceAnimationToFps(const QString& entityName,
+                                          const QString& animName,
+                                          int targetFps);
+
     /// Export the current animated pose of the first selected animated entity as a static mesh.
     /// Opens a file save dialog if no path is provided.
     Q_INVOKABLE bool exportCurrentPose(const QString& path = QString());
