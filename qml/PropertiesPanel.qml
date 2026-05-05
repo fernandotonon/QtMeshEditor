@@ -2044,14 +2044,15 @@ Rectangle {
                                             "Dense",
                                             "Set to 10 FPS",
                                             "Set to 15 FPS",
-                                            "Set to 30 FPS"
+                                            "Set to 30 FPS",
+                                            "Set to 60 FPS"
                                         ]
                                         ToolTip.visible: hovered
                                         ToolTip.text: "Bake every bone track in this animation"
                                         onActivated: function(index) {
                                             // Density int passes through:
-                                            // 0 Sparse / 1 Medium / 2 Dense / 3-5 = 10/15/30 FPS exact.
-                                            if (index >= 1 && index <= 5) {
+                                            // 0 Sparse / 1 Medium / 2 Dense / 3-6 = 10/15/30/60 FPS exact.
+                                            if (index >= 1 && index < model.length) {
                                                 PropertiesPanelController.bakeAnimation(
                                                     grp.entity, modelData.name, index - 1)
                                             }

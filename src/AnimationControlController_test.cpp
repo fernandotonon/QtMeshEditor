@@ -1212,6 +1212,23 @@ TEST_F(AnimationControlControllerTest, ResampleAllSegmentsForBoneIsExplicit) {
         << "Bake should densify the track";
 }
 
+TEST_F(AnimationControlControllerTest, BakeAt60FpsRegridsTrack) {
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_Bake60");
+    ASSERT_NE(entity, nullptr);
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int before = track->getNumKeyFrames();
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 6);  // 6 = 60 FPS
+    const int after = track->getNumKeyFrames();
+    EXPECT_GT(after, before + 30) << "60 FPS bake must noticeably densify a sparse track";
+}
+
 TEST_F(AnimationControlControllerTest, BakeUndoEmitsBoneRowsChanged) {
     // Ctrl+Z after a Bake must fire boneRowsChanged so the QML
     // dope-sheet + curve-editor refresh their cached keyTimes —
