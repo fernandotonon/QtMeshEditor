@@ -80,6 +80,7 @@ ResampleCurveCommand::ResampleCurveCommand(std::string entityName,
                                              std::string boneName,
                                              std::string channel,
                                              float t0, float t1,
+                                             double toleranceMul,
                                              QUndoCommand* parent)
     : QUndoCommand(parent)
     , mEntityName(std::move(entityName))
@@ -88,6 +89,7 @@ ResampleCurveCommand::ResampleCurveCommand(std::string entityName,
     , mChannel(std::move(channel))
     , mT0(t0)
     , mT1(t1)
+    , mToleranceMul(toleranceMul)
 {
     setText(QObject::tr("Resample curve"));
 }
@@ -179,7 +181,8 @@ bool ResampleCurveCommand::resampleAndWrite()
         QString::fromStdString(mAnimationName),
         QString::fromStdString(mBoneName),
         QString::fromStdString(mChannel),
-        mT0, mT1, kfTimes, kfValues);
+        mT0, mT1, kfTimes, kfValues,
+        mToleranceMul);
     if (samples.empty()) return false;
 
     // Drop the closing endpoint sample if it lands on t1 — that anchor

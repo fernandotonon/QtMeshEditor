@@ -30,6 +30,7 @@ public:
                          std::string boneName,
                          std::string channel,
                          float t0, float t1,
+                         double toleranceMul = 1.0,
                          QUndoCommand* parent = nullptr);
 
     void undo() override;
@@ -53,6 +54,7 @@ private:
     std::string mChannel;
     float       mT0;
     float       mT1;
+    double      mToleranceMul;
     std::vector<KeyframeSnapshot> mBefore;
     std::vector<KeyframeSnapshot> mAfter;
     bool        mCaptured = false;

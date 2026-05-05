@@ -1454,7 +1454,8 @@ bool neighborAnchors(double keyTime,
 
 bool AnimationControlController::resampleCurveSegment(const QString& boneName,
                                                       const QString& channel,
-                                                      double t0, double t1)
+                                                      double t0, double t1,
+                                                      double toleranceMul)
 {
     if (boneName.isEmpty() || !isKnownChannel(channel)) return false;
     if (!m_selectedSkeleton || m_selectedAnimation.empty()) return false;
@@ -1483,7 +1484,8 @@ bool AnimationControlController::resampleCurveSegment(const QString& boneName,
                                           boneStd,
                                           channel.toLower().toStdString(),
                                           static_cast<float>(t0),
-                                          static_cast<float>(t1));
+                                          static_cast<float>(t1),
+                                          toleranceMul);
     UndoManager::getSingleton()->push(cmd);
     SentryReporter::addBreadcrumb("ui.action", "Resampled curve segment");
     refreshSliderTicks();
@@ -1527,7 +1529,8 @@ bool AnimationControlController::setCurveHandle(const QString& boneName,
 }
 
 int AnimationControlController::resampleAllSegmentsForBone(const QString& boneName,
-                                                            const QString& channel)
+                                                            const QString& channel,
+                                                            int density)
 {
     if (boneName.isEmpty() || !isKnownChannel(channel)) return 0;
     if (!m_selectedSkeleton || m_selectedAnimation.empty()) return 0;
@@ -1541,9 +1544,18 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     auto* track = anim->getNodeTrack(bone->getHandle());
     if (track->getNumKeyFrames() < 2) return 0;
 
-    // Collect authored anchor times before resampling — each
-    // ResampleCurveCommand will reshuffle the track, so iterating
-    // by index would skip frames after the first redo.
+    // Map density level → simplification tolerance multiplier. Higher
+    // tolerance = sparser bake. Sparse is the default first-click pass
+    // because most curves authored in the editor only need a handful
+    // of keys to capture the shape; users escalate to Medium/Dense
+    // when they need exact playback fidelity for sharp shapes.
+    double toleranceMul;
+    switch (density) {
+        case 2:  toleranceMul = 1.0;  break;  // Dense
+        case 1:  toleranceMul = 4.0;  break;  // Medium
+        default: toleranceMul = 12.0; break;  // Sparse
+    }
+
     std::vector<double> anchors;
     anchors.reserve(track->getNumKeyFrames());
     for (unsigned short i = 0; i < track->getNumKeyFrames(); ++i) {
@@ -1554,7 +1566,8 @@ int AnimationControlController::resampleAllSegmentsForBone(const QString& boneNa
     stack->beginMacro(QObject::tr("Resample bone curve"));
     int count = 0;
     for (size_t i = 1; i < anchors.size(); ++i) {
-        if (resampleCurveSegment(boneName, channel, anchors[i-1], anchors[i])) {
+        if (resampleCurveSegment(boneName, channel,
+                                  anchors[i-1], anchors[i], toleranceMul)) {
             ++count;
         }
     }

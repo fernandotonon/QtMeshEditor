@@ -44,6 +44,10 @@ constexpr double kSimplifyFloor = 1e-3;
 /// state. Returns the new samples in (start, end] — the start keyframe
 /// is preserved by the caller, and the end keyframe is included so the
 /// segment closes cleanly. Empty when the inputs are invalid.
+///
+/// `toleranceMul` scales the simplification tolerance: higher = fewer
+/// kept samples (sparser bake), lower = more (denser bake). Default
+/// 1.0 matches the original kSimplifyRel.
 std::vector<Sample> resampleSegment(const CurveEditModel* model,
                                     const QString& skeleton,
                                     const QString& anim,
@@ -51,7 +55,8 @@ std::vector<Sample> resampleSegment(const CurveEditModel* model,
                                     const QString& channel,
                                     double t0, double t1,
                                     const QVariantList& kfTimes,
-                                    const QVariantList& kfValues);
+                                    const QVariantList& kfValues,
+                                    double toleranceMul = 1.0);
 
 } // namespace CurveResampler
 

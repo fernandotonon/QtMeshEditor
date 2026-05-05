@@ -262,7 +262,8 @@ public:
     /// `t0` and `t1` must each be within 1ms of an existing keyframe.
     Q_INVOKABLE bool resampleCurveSegment(const QString& boneName,
                                           const QString& channel,
-                                          double t0, double t1);
+                                          double t0, double t1,
+                                          double toleranceMul = 1.0);
 
     /// Set the curve handle (in/out tangent + interp mode) for one
     /// keyframe via an undoable command, then sync Ogre's per-animation
@@ -280,9 +281,12 @@ public:
     /// Walk every adjacent-keyframe pair on `bone`'s `channel` track
     /// and resample each segment. Bundled into one undo macro so
     /// Ctrl+Z reverts the whole bake. Returns the number of segments
-    /// resampled.
+    /// resampled. `density` is 0=Sparse / 1=Medium / 2=Dense — picks
+    /// the simplification tolerance multiplier so the user can pick
+    /// keyframe density vs. fidelity per bake.
     Q_INVOKABLE int resampleAllSegmentsForBone(const QString& boneName,
-                                               const QString& channel);
+                                               const QString& channel,
+                                               int density = 0);
 
 public slots:
     void updateAnimationTree();

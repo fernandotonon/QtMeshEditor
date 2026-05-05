@@ -96,7 +96,8 @@ std::vector<Sample> resampleSegment(const CurveEditModel* model,
                                     const QString& channel,
                                     double t0, double t1,
                                     const QVariantList& kfTimes,
-                                    const QVariantList& kfValues)
+                                    const QVariantList& kfValues,
+                                    double toleranceMul)
 {
     std::vector<Sample> out;
     if (!model || t1 <= t0) return out;
@@ -140,7 +141,8 @@ std::vector<Sample> resampleSegment(const CurveEditModel* model,
         if (s.value < minV) minV = s.value;
         if (s.value > maxV) maxV = s.value;
     }
-    const double tol = std::max(kSimplifyFloor, kSimplifyRel * (maxV - minV));
+    const double tol = std::max(kSimplifyFloor * toleranceMul,
+                                 kSimplifyRel * toleranceMul * (maxV - minV));
 
     auto kept = simplify(dense, tol);
 

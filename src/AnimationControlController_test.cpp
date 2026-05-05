@@ -1204,10 +1204,45 @@ TEST_F(AnimationControlControllerTest, ResampleAllSegmentsForBoneIsExplicit) {
                          ->_getNodeTrackList().begin()->second;
     const int before = track->getNumKeyFrames();
 
-    const int segments = ctrl->resampleAllSegmentsForBone(bone, "tx");
+    // Dense level keeps fidelity at the lowest tolerance multiplier,
+    // so the bake reliably adds keys for a stepped curve.
+    const int segments = ctrl->resampleAllSegmentsForBone(bone, "tx", 2);
     EXPECT_GT(segments, 0);
     EXPECT_GT(track->getNumKeyFrames(), before)
         << "Bake should densify the track";
+}
+
+TEST_F(AnimationControlControllerTest, BakeDensityLevelsProduceDifferentCounts) {
+    // Sparse < Medium < Dense in resulting keyframe counts (for a
+    // curve sharp enough that simplification doesn't collapse the
+    // medium and dense passes to identical counts).
+    ASSERT_TRUE(canLoadMeshFiles());
+    Ogre::Entity* entity = setupAnimatedEntity("CurveEditor_BakeDensity");
+    ASSERT_NE(entity, nullptr);
+
+    auto* ctrl = AnimationControlController::instance();
+    ctrl->updateAnimationTree();
+    ctrl->selectAnimation(QString::fromStdString(entity->getName()), "TestAnim");
+    QString bone = ctrl->boneNames().first();
+    ctrl->setCurveHandle(bone, "tx", 0.0, 0.0, 0.0,
+                         CurveEditModel::ModeStepped);
+
+    auto* track = entity->getSkeleton()->getAnimation("TestAnim")
+                         ->_getNodeTrackList().begin()->second;
+    const int baseCount = track->getNumKeyFrames();
+
+    // Sparse pass.
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 0);
+    const int sparseCount = track->getNumKeyFrames();
+    UndoManager::getSingleton()->stack()->undo();
+    EXPECT_EQ(track->getNumKeyFrames(), baseCount);
+
+    // Dense pass.
+    ctrl->resampleAllSegmentsForBone(bone, "tx", 2);
+    const int denseCount = track->getNumKeyFrames();
+
+    EXPECT_GT(denseCount, sparseCount)
+        << "Dense bake must produce more keyframes than Sparse";
 }
 
 TEST_F(AnimationControlControllerTest, ResampleAllSegmentsForBoneIsSingleUndoStep) {

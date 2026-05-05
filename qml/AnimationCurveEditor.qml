@@ -203,28 +203,37 @@ Rectangle {
             }
 
             // Bake = explicit resample of every segment on the active
-            // bone/channel into dense TransformKeyFrames. Use this when
-            // Stepped or strong Bezier shapes need exact playback
-            // fidelity beyond what Ogre's IM_LINEAR/IM_SPLINE can do.
-            // Note: keyframe count grows substantially.
+            // bone/channel into dense TransformKeyFrames. The dropdown
+            // picks density: Sparse (~few keys, default), Medium, or
+            // Dense (highest fidelity, most keys). Each click bakes
+            // again at the chosen density — call it twice at Sparse +
+            // once at Medium to progressively add detail.
             Button {
-                text: "Bake"; height: 18
+                id: bakeButton
+                text: "Bake ▾"; height: 18
                 font.pixelSize: 10
                 anchors.verticalCenter: parent.verticalCenter
                 enabled: root.selectedBone !== ""
                 ToolTip.visible: hovered
-                ToolTip.text: "Resample curves into dense keyframes"
-                onClicked: {
+                ToolTip.text: "Resample curves into keyframes"
+                onClicked: bakeMenu.popup()
+            }
+            Menu {
+                id: bakeMenu
+                function bake(density) {
                     var row = root.selectedBoneRow()
                     if (!row || !row.channels) return
                     for (var i = 0; i < root.channelOrder.length; i++) {
                         var ch = root.channelOrder[i]
                         if (row.channels[ch.id]) {
                             AnimationControlController.resampleAllSegmentsForBone(
-                                root.selectedBone, ch.id)
+                                root.selectedBone, ch.id, density)
                         }
                     }
                 }
+                MenuItem { text: "Sparse"; onTriggered: bakeMenu.bake(0) }
+                MenuItem { text: "Medium"; onTriggered: bakeMenu.bake(1) }
+                MenuItem { text: "Dense";  onTriggered: bakeMenu.bake(2) }
             }
 
             Repeater {
