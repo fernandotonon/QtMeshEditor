@@ -877,6 +877,9 @@ void MaterialEditorQML::setTextureName(const QString &name)
                         while (tech->getNumPasses() > 1)
                             tech->removePass(1);
                     }
+                    // PS1 .TIM often uses color 0x0000 for transparent texels (see PS1TIM::loadTimToOgreImage).
+                    if (Ogre::Pass* pass = getCurrentPass())
+                        pass->setAlphaRejectSettings(Ogre::CMPF_GREATER_EQUAL, 1);
                 }
             }
             updateMaterialText();

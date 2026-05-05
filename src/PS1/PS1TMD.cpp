@@ -921,6 +921,10 @@ Ogre::MeshPtr importTmd(const QString& filePath, const std::string& meshName, fl
                                     Ogre::TextureManager::getSingleton().loadImage(texName, group, img);
                                     tus->setTextureName(texName);
 
+                                    // TIM / PS1 convention: palette entry 0x0000 decodes to alpha 0 (transparent).
+                                    // Without alpha rejection or blending, those fragments show as black; use a cutout mask.
+                                    pass0->setAlphaRejectSettings(Ogre::CMPF_GREATER_EQUAL, 1);
+
                                     // Simplify: single pass (remove outline/wireframe) on these per-import materials.
                                     Ogre::Technique* tech0 = mat->getTechnique(0);
                                     while (tech0 && tech0->getNumPasses() > 1) {
