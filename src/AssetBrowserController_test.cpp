@@ -258,7 +258,7 @@ TEST_F(AssetBrowserControllerTests, OpenFileTmdEmitsImportSignal) {
     QTemporaryDir tmpDir;
     ASSERT_TRUE(tmpDir.isValid());
 
-    const QString meshPath = tmpDir.path() + "/CAR.TMD";
+    const QString meshPath = tmpDir.path() + "/car.tmd";
     QFile(meshPath).open(QIODevice::WriteOnly);
 
     auto* abc = AssetBrowserController::instance();

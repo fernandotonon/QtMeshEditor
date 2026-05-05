@@ -78,6 +78,30 @@ inline int16_t clampI16(int v)
     return static_cast<int16_t>(v);
 }
 
+static QString canonicalTimResourceName(const QString& timPathOnDisk)
+{
+    return QFileInfo(timPathOnDisk).completeBaseName() + QStringLiteral(".tim");
+}
+
+/** Prefer `basename.tim`; scan directory case-insensitively for legacy uppercase `.TIM` on disk. */
+static QString findSiblingTimForTmd(const QString& tmdFilePath)
+{
+    const QFileInfo tmdFi(tmdFilePath);
+    const QString base = tmdFi.completeBaseName();
+    const QString dir = tmdFi.absolutePath();
+    const QString primary = QDir(dir).filePath(base + QStringLiteral(".tim"));
+    if (QFileInfo::exists(primary))
+        return primary;
+    const QFileInfoList files = QDir(dir).entryInfoList(QDir::Files);
+    for (const QFileInfo& fi : files) {
+        if (fi.suffix().compare(QStringLiteral("tim"), Qt::CaseInsensitive) != 0)
+            continue;
+        if (fi.completeBaseName().compare(base, Qt::CaseInsensitive) == 0)
+            return fi.absoluteFilePath();
+    }
+    return {};
+}
+
 /**
  * PS1 8-bit U/V are texel indices in the active 256×256 texture page.
  * Map to 0..1 with texel-center bias. Like most PC APIs here, increasing V moves down the image (same as PSX
@@ -357,7 +381,7 @@ static bool parseTmdObject(const uint8_t* data, size_t fileSize, uint32_t stored
             const uint16_t i3 = readU16le(d + 24);
             if (i0 < nVert && i1 < nVert && i2 < nVert && i3 < nVert && ni < nNorm) {
                 const Ogre::Vector3& np = norms[ni];
-                // GRID.TMD uses this primitive to represent a checkerboard. Gouraud interpolation makes
+                // grid.tmd-style assets use this primitive for a checkerboard. Gouraud interpolation makes
                 // the triangulation diagonal very visible, so for checker-like quads (c0==c2,c1==c3)
                 // we treat the quad as a *flat-colored* face using c0.
                 const bool isCheckerLike = (c0 == c2) && (c1 == c3);
@@ -639,7 +663,7 @@ static Ogre::MeshPtr buildMeshFromSoup(const std::string& meshName, const TriSou
                 if (mat->getNumTechniques() > 0 && mat->getTechnique(0)->getNumPasses() > 0) {
                     Ogre::Pass* p0 = mat->getTechnique(0)->getPass(0);
                     if (p0) {
-                        // Vertex-color-only meshes (like GRID.TMD) should render unlit by default to avoid
+                        // Vertex-color-only meshes (e.g. grid-style quads) should render unlit by default to avoid
                         // triangle shading artifacts. Textured meshes will keep lighting settings.
                         if (!hasUv) {
                             // Keep the material "blank": no baked ambient/diffuse/emissive contribution.
@@ -883,16 +907,9 @@ Ogre::MeshPtr importTmd(const QString& filePath, const std::string& meshName, fl
     if (!mesh)
         return {};
 
-    // Auto-apply a sibling .TIM texture when:
-    // - the TMD actually has UVs (textured primitives), and
-    // - there is a TIM file next to the TMD with the same basename (e.g., CAR.TMD -> CAR.TIM).
+    // Auto-apply a sibling .tim texture when the TMD has UVs and a matching TIM exists beside it.
     if (merged.hasUv) {
-        const QFileInfo tmdFi(filePath);
-        const QString base = tmdFi.completeBaseName();
-        const QString dir = tmdFi.absolutePath();
-        const QString timUpper = QDir(dir).filePath(base + ".TIM");
-        const QString timLower = QDir(dir).filePath(base + ".tim");
-        const QString timPath = QFileInfo::exists(timUpper) ? timUpper : (QFileInfo::exists(timLower) ? timLower : QString());
+        const QString timPath = findSiblingTimForTmd(filePath);
 
         if (!timPath.isEmpty()) {
             const std::string matName = std::string("TMD/") + meshName;
@@ -915,8 +932,7 @@ Ogre::MeshPtr importTmd(const QString& filePath, const std::string& meshName, fl
                                 Ogre::Image img;
                                 QString err;
                                 if (PS1TIM::loadTimToOgreImage(timPath, img, &err)) {
-                                    const QString timFileName = QFileInfo(timPath).fileName();
-                                    const std::string texName = timFileName.toStdString();
+                                    const std::string texName = canonicalTimResourceName(timPath).toStdString();
                                     const std::string group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
                                     Ogre::TextureManager::getSingleton().loadImage(texName, group, img);
                                     tus->setTextureName(texName);

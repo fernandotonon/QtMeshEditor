@@ -267,6 +267,7 @@ TEST_F(ManagerHeadlessTest, IsValidFileExtention)
 
     QString tmdFile = "model.tmd";
     EXPECT_TRUE(mgr->isValidFileExtention(tmdFile));
+    EXPECT_TRUE(mgr->isValidFileExtention(QStringLiteral("CAR.TMD")));
 
     // Invalid extensions
     QString docFile = "readme.doc";
@@ -288,7 +289,6 @@ TEST_F(ManagerHeadlessTest, IsValidFileExtention)
     EXPECT_TRUE(validExts.contains(".fbx"));
     EXPECT_TRUE(validExts.contains(".vrm"));
     EXPECT_TRUE(validExts.contains(".tmd"));
-    EXPECT_TRUE(validExts.contains(".TMD"));
 }
 
 TEST_F(ManagerHeadlessTest, CreateEmptyScene)

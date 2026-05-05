@@ -24,7 +24,7 @@ The MIT License
  *
  * Supported modes include lit polygons (flag 0) and “no light” textured
  * triangles (mode 0x25 / 0x35, flag 1 per Net Yaroze). Texture UVs refer to
- * PSX VRAM layout (cba/tsb select CLUT and texture page); bitmaps live in .TIM files.
+ * PSX VRAM layout (cba/tsb select CLUT and texture page); bitmaps live in .tim files.
  * UV import maps 8-bit page texels with a texel-center bias (no V flip; PSX and Ogre both treat
  * increasing V as downward in image space). Full VRAM page offsets are not baked in — match your texture
  * to the page.

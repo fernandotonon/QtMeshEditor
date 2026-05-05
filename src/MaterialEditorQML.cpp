@@ -877,7 +877,7 @@ void MaterialEditorQML::setTextureName(const QString &name)
                         while (tech->getNumPasses() > 1)
                             tech->removePass(1);
                     }
-                    // PS1 .TIM often uses color 0x0000 for transparent texels (see PS1TIM::loadTimToOgreImage).
+                    // PS1 .tim often uses color 0x0000 for transparent texels (see PS1TIM::loadTimToOgreImage).
                     if (Ogre::Pass* pass = getCurrentPass())
                         pass->setAlphaRejectSettings(Ogre::CMPF_GREATER_EQUAL, 1);
                 }
@@ -997,10 +997,13 @@ void MaterialEditorQML::selectTexture()
         return;
     }
 
+    const bool isTim = file.suffix().compare(QStringLiteral("tim"), Qt::CaseInsensitive) == 0;
+    const QString ogreTexName = isTim ? (file.completeBaseName() + QStringLiteral(".tim")) : file.fileName();
+
     try {
         // Try to get existing texture
         Ogre::TextureManager::getSingleton().getByName(
-            file.fileName().toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
+            ogreTexName.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
     } catch (...) {
         // Load new texture
         // Always register user-picked textures into the default group ("General") so materials can find them.
@@ -1011,7 +1014,7 @@ void MaterialEditorQML::selectTexture()
             Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
 
         Ogre::Image image;
-        if (file.suffix().compare("tim", Qt::CaseInsensitive) == 0) {
+        if (isTim) {
             QString err;
             if (!PS1TIM::loadTimToOgreImage(filePath, image, &err)) {
                 emit errorOccurred(QString("Failed to load TIM: %1").arg(err));
@@ -1021,10 +1024,10 @@ void MaterialEditorQML::selectTexture()
             image.load(file.fileName().toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME);
         }
         Ogre::TextureManager::getSingleton().loadImage(
-            file.fileName().toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
+            ogreTexName.toStdString(), Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME, image);
     }
     
-    setTextureName(file.fileName());
+    setTextureName(ogreTexName);
 }
 // LCOV_EXCL_STOP
 
@@ -1677,7 +1680,7 @@ QString MaterialEditorQML::getTexturePreviewPath() const
                     }
                 }
 
-                // If we can't return a directly viewable file (e.g., TIM), generate a PNG preview from the GPU texture.
+                // If we can't return a directly viewable file (e.g., .tim), generate a PNG preview from the GPU texture.
                 try {
                     Ogre::Image img;
                     texPtr->convertToImage(img, true);
@@ -2578,12 +2581,14 @@ bool MaterialEditorQML::loadTextureFile(const QString &filePath)
         return false;
     }
 
-    const std::string texName = file.fileName().toStdString();
+    const bool isTim = file.suffix().compare(QStringLiteral("tim"), Qt::CaseInsensitive) == 0;
+    const QString ogreTexName = isTim ? (file.completeBaseName() + QStringLiteral(".tim")) : file.fileName();
+    const std::string texNameStd = ogreTexName.toStdString();
     const std::string group = Ogre::ResourceGroupManager::DEFAULT_RESOURCE_GROUP_NAME;
 
     try {
-        if (Ogre::TextureManager::getSingleton().getByName(texName, group)) {
-            setTextureName(QString::fromStdString(texName));
+        if (Ogre::TextureManager::getSingleton().getByName(texNameStd, group)) {
+            setTextureName(ogreTexName);
             return true;
         }
     } catch (...) {
@@ -2595,17 +2600,17 @@ bool MaterialEditorQML::loadTextureFile(const QString &filePath)
         Ogre::ResourceGroupManager::getSingleton().initialiseResourceGroup(group);
 
         Ogre::Image image;
-        if (file.suffix().compare("tim", Qt::CaseInsensitive) == 0) {
+        if (isTim) {
             QString err;
             if (!PS1TIM::loadTimToOgreImage(filePath, image, &err)) {
                 emit errorOccurred(QString("Failed to load TIM: %1").arg(err));
                 return false;
             }
         } else {
-            image.load(texName, group);
+            image.load(file.fileName().toStdString(), group);
         }
-        Ogre::TextureManager::getSingleton().loadImage(texName, group, image);
-        setTextureName(QString::fromStdString(texName));
+        Ogre::TextureManager::getSingleton().loadImage(texNameStd, group, image);
+        setTextureName(ogreTexName);
         return true;
     } catch (const std::exception& e) {
         emit errorOccurred(QString("Texture load failed: %1").arg(e.what()));

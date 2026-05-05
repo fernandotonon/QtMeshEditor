@@ -487,8 +487,8 @@ TEST(CLIPipelineFormatForExtension, Assbin)
 
 TEST(CLIPipelineFormatForExtension, Tmd)
 {
-    EXPECT_EQ(CLIPipeline::formatForExtension("model.tmd"), "PlayStation TMD (*.tmd *.TMD)");
-    EXPECT_EQ(CLIPipeline::formatForExtension("MODEL.TMD"), "PlayStation TMD (*.tmd *.TMD)");
+    EXPECT_EQ(CLIPipeline::formatForExtension("model.tmd"), "PlayStation TMD (*.tmd)");
+    EXPECT_EQ(CLIPipeline::formatForExtension("MODEL.TMD"), "PlayStation TMD (*.tmd)");
 }
 
 TEST(CLIPipelineFormatForExtension, UnknownDefaultsToMesh)

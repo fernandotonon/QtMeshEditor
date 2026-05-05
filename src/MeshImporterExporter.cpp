@@ -81,7 +81,7 @@ const QMap<QString, QString> MeshImporterExporter::exportFormats = {
     {"glTF 2.0 Binary (*.glb)", ".glb"},
     {"Assimp Binary (*.assbin)", ".assbin"},
     {"FBX Binary (*.fbx)", ".fbx"},
-    {"PlayStation TMD (*.tmd *.TMD)", ".tmd"}
+    {"PlayStation TMD (*.tmd)", ".tmd"}
 };
 
 void MeshImporterExporter::configureCamera(const Ogre::Entity *en)
@@ -1458,7 +1458,7 @@ int MeshImporterExporter::exporter(const Ogre::SceneNode *_sn, const QString &_u
         // .material and extracted image files next to the FBX.
         if (!ok)
             return -1;
-    } else if (_format == QStringLiteral("PlayStation TMD (*.tmd *.TMD)")) {
+    } else if (_format == QStringLiteral("PlayStation TMD (*.tmd)")) {
         if (!PS1TMD::exportEntity(e, _uri))
             return -1;
         SentryReporter::addBreadcrumb(QStringLiteral("file.export"),
