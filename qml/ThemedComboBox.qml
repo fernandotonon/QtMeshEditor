@@ -87,6 +87,11 @@ ComboBox {
             implicitHeight: contentHeight
             model: control.delegateModel
             currentIndex: control ? control.highlightedIndex : 0
+            // Don't auto-scroll to currentIndex: that bound to
+            // control.highlightedIndex keeps snapping the view back
+            // to the top when the user scrolls (highlightedIndex stays
+            // 0 between hovers). Visual highlight is delegate-driven.
+            highlightFollowsCurrentItem: false
             ScrollIndicator.vertical: ScrollIndicator { }
         }
 
